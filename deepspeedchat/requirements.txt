@@ -1,0 +1,10 @@
+torch
+torchmetrics
+transformers
+tqdm
+datasets
+deepspeed
+peft
+loralib
+flash-attn
+einops
