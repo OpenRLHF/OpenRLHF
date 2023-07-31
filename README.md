@@ -75,22 +75,21 @@
 
 ## OpenLLaMA2项目
 
-OpenLLaMA2项目为OpenNLP计划的第3个正式的开源项目，也是openllmai的第一个实践项目，LLaMA2很好很强大，可惜中文能力较弱，所以本项目旨在做更好的中文LLaMA大模型。
+OpenLLaMA2项目为OpenNLP计划的第3个正式的开源项目，也是openllmai的第一个实践项目，LLaMA2很好很强大，目前开源社区还没有可实际应用 LLaMA2 SFT/RLHF 训练框架以及 SFT/RLHF 微调后的中文 LLaMA2模型，本项目旨在推进 LLaMA2 训练方案的开源化进程。
 
 ### 1.预期产出
 
-* LLaMA2复现框架
-* 中文LLaMA2模型
+* LLaMA2 SFT/RLHF 工业级训练框架
+* SFT/RLHF微调的中文LLaMA2模型
 
 ### 2.开发计划与组织分工
 
 #### 2.1 开发计划：
 
-- 学习与分享：LLaMA系列模型学习、DeepSpeed等框架学习等；
-- LLaMA2复现框架；
-- 中文LLaMA2模型；
-
-
+- 学习与分享：LLaMA系列模型学习、DeepSpeed、Ray等框架学习等；
+- LLaMA2 SFT/RLHF 高性能训练框架实现
+- 中文 LLaMA2模型 SFT/RLHF 训练数据集开发
+- 中文LLaMA2模型 SFT/RLHF 训练
 
 #### 2.2 组织分工
 
