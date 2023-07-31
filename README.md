@@ -17,7 +17,7 @@
 
 
   <p align="center">
-    <h3>Open LLaMA2 for everyone!</h3>
+    <h3>Open LLaMA2 framework for everyone!</h3>
       <a href="https://github.com/openllmai/OpenLLaMA2/graphs/contributors">
         <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/catqaq/ChatPiXiu" />
       </a>
@@ -75,39 +75,22 @@
 
 ## OpenLLaMA2项目
 
-OpenLLaMA2项目为OpenNLP计划的第3个正式的开源项目，也是openllmai的第一个实践项目，LLaMA2很好很强大，目前开源社区还没有可实际应用 LLaMA2 SFT/RLHF 训练框架以及 SFT/RLHF 微调后的中文 LLaMA2模型，本项目旨在推进 LLaMA2 训练方案的开源化进程。
+OpenLLaMA2 项目为 OpenNLP 计划的第3个正式的开源项目，也是openllmai 的第一个实践项目，LLaMA2很好很强大，但目前开源社区还没有可实际应用 LLaMA2 SFT/RLHF训练框架，本项目旨在开发一个工业级的 LLaMA2 SFT/RLHF 训练框架。
 
-### 1.预期产出
-
-* LLaMA2 SFT/RLHF 工业级训练框架
-* SFT/RLHF微调的中文LLaMA2模型
+本项目的姊妹项目为 [chinese-llama2](https://github.com/OpenLLMAI/chinese-llama2)，旨在用 SFT/RLHF 微调中文 LLaMA2。
 
 ### 2.开发计划与组织分工
 
 #### 2.1 开发计划：
 
-- 学习与分享：LLaMA系列模型学习、DeepSpeed、Ray等框架学习等；
+- 学习与分享：LLaMA2系列模型学习、DeepSpeed、Ray等框架学习等；
 - LLaMA2 SFT/RLHF 高性能训练框架实现
-- 中文 LLaMA2模型 SFT/RLHF 训练数据集开发
-- 中文LLaMA2模型 SFT/RLHF 训练
 
 #### 2.2 组织分工
 
-框架部分：
-
-- RLHF：初七等；
-- Ray分布式计算框架：qwang等；
-- 其他框架：待定；
-
-
-
-模型部分：
-
-- Pretrain：羡鱼等；
-- SFT：hope等；
-- RLHF：初七、Li等；
-- Datas：阿樊提、Longhui等；
-
+- SFT：羡鱼, Hope等
+- RLHF：初七, Li等
+- Ray分布式计算框架：qwang等
 
 
 ### 2.加入我们
