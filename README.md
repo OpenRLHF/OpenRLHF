@@ -17,7 +17,7 @@
 
 
   <p align="center">
-    <h3>Open LLaMA2 framework for everyone!</h3>
+    <h3>LLaMA2 training framework for everyone!</h3>
       <a href="https://github.com/openllmai/OpenLLaMA2/graphs/contributors">
         <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/catqaq/ChatPiXiu" />
       </a>
