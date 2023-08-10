@@ -1,6 +1,2 @@
 # RLHF
-Folder for RLHF stage
-
-## Rejected Sampling
-
-## PPO
+Folder for RLHF
