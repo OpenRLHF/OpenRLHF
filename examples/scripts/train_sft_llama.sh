@@ -1,7 +1,7 @@
 set -x
 
 deepspeed \
-     ./scripts/train_sft.py --max_len 2048 \
+     ../train_sft.py --max_len 2048 \
     --dataset 'yahma/alpaca-cleaned' \
     --train_batch_size 1 \
     --accumulated_gradient 16 \

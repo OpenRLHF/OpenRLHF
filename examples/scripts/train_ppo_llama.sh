@@ -1,7 +1,7 @@
 set -x 
 
 deepspeed \
-    ./scripts/train_ppo.py --pretrain "$HOME/scratch/data/llama_hf/13B" \
+    ../train_ppo.py --pretrain "$HOME/scratch/data/llama_hf/13B" \
     --strategy deepspeed\
     --critic_pretrain "$HOME/scratch/data/llama_hf/7B" \
     --reward_model_path "./ckpt/7b_llama/rm_model.pt" \
