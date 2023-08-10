@@ -1,5 +1,5 @@
 deepspeed \
-     ./scripts/train_rm.py \
+     ../train_rm.py \
      --save_path "./ckpt/7b_llama" \
      --train_batch_size 1 \
      --accumulated_gradient 16 \

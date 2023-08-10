@@ -1,6 +1,6 @@
 set -x
 
-PROJECT_PATH=$(cd $(dirname $0)/../; pwd)
+PROJECT_PATH=$(cd $(dirname $0)/../../; pwd)
 IMAGE_NAME="nvcr.io/nvidia/pytorch:23.07-py3"
 
 docker run --runtime=nvidia -it --rm --shm-size="1g" --cap-add=SYS_ADMIN \

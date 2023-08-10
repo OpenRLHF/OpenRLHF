@@ -1,6 +1,6 @@
 set -x 
 
-CUDA_VISIBLE_DEVICES=0 deepspeed scripts/inference.py \
+CUDA_VISIBLE_DEVICES=0 deepspeed ../inference.py \
     --pretrain "$HOME/scratch/data/llama_hf/7B" \
     --strategy deepspeed \
     --bf16 \
