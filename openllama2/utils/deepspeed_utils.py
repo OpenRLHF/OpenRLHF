@@ -3,9 +3,10 @@
 
 # DeepSpeed Team
 import os
-import torch
-import numpy as np
+
 import deepspeed
+import numpy as np
+import torch
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
 
 

@@ -1,14 +1,15 @@
-from abc import ABC
 import math
+from abc import ABC
 
 import torch
-from openllama2.datasets import SFTDataset
-from openllama2.models import GPTLMLoss
+from torch import nn
 from torch.optim import Optimizer
 from torch.utils.data import DistributedSampler
 from tqdm import tqdm
-from torch import nn
 from transformers.trainer import get_scheduler
+
+from openllama2.datasets import SFTDataset
+from openllama2.models import GPTLMLoss
 
 from .strategies import Strategy
 
@@ -31,7 +32,7 @@ class SFTTrainer(ABC):
     def __init__(
         self,
         model,
-        strategy: Strategy,
+        strategy,
         optim: Optimizer,
         train_dataloader,
         eval_dataloader,

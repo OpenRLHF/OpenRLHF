@@ -1,16 +1,14 @@
-import torch
 from abc import ABC
-
-from openllama2.models.utils import compute_reward
-from tqdm import tqdm
 from typing import Tuple
-from openllama2.models.utils import masked_mean
+
 import torch
 import torch.nn as nn
+from tqdm import tqdm
+
 from openllama2.models.actor import Actor
+from openllama2.models.utils import compute_reward, masked_mean
 
 SHOW_TIME_DETAILS = False
-SHOW_SAMPLE_DETAILS = False
 
 @dataclass
 class Experience:
@@ -109,14 +107,6 @@ class NaiveExperienceMaker(ABC):
         reward, kl = compute_reward(r, self.kl_ctl.value, action_log_probs, base_action_log_probs, action_mask=action_mask)
         advantage, returns = self.get_advantages_and_returns(
             value, reward, action_mask, generate_kwargs['gamma'], generate_kwargs['lambd'])
-
-        if SHOW_SAMPLE_DETAILS:
-            self.strategy.print('return', reward.sum(1))
-            self.strategy.print('reward', reward)
-            self.strategy.print('advantage', advantage)
-            self.strategy.print('value', value)
-            self.strategy.print('action_log_probs', action_log_probs)
-            self.strategy.print('action_mask', action_mask)
 
         info = {
             'kl': masked_mean(kl, action_mask, dim=-1),

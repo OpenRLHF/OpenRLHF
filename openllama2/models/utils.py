@@ -1,11 +1,9 @@
-from typing import Optional, Union, Tuple
+from typing import Optional, Tuple, Union
 
 import loralib as lora
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-MEAN_KL_REWARD = False
 
 def compute_approx_kl(log_probs: torch.Tensor,
                       log_probs_base: torch.Tensor,
@@ -32,20 +30,17 @@ def compute_reward(r: Union[torch.Tensor, float],
         kl_coef = 0.0
         
     kl = compute_approx_kl(log_probs, log_probs_base, action_mask=action_mask)
-    if MEAN_KL_REWARD:
-        kl_reward = -kl_coef * kl.sum(1) / action_mask.float().sum(1)
-    else:
-        kl_reward = -kl_coef * kl
+    kl_reward = -kl_coef * kl
 
     r = r.clamp(min=-10, max=10)
     last_reward = torch.zeros_like(kl)
     for i in range(last_reward.size(0)):
         for t in reversed(range(last_reward.size(1))):
             if action_mask[i][t] > 0.5:
-                last_reward[i][t] = r[i] + (kl_reward[i] if MEAN_KL_REWARD else 0)
+                last_reward[i][t] = r[i]
                 break
 
-    reward = last_reward + (0 if MEAN_KL_REWARD else kl_reward)
+    reward = last_reward + kl_reward
     return reward, kl
 
 
@@ -69,14 +64,6 @@ def masked_normalize(tensor: torch.Tensor, mask: torch.Tensor, dim: int = 1, eps
     mean_centered = tensor - mean
     var = masked_mean(mean_centered**2, mask, dim=dim)
     return mean_centered * var.clamp(min=eps).rsqrt()
-
-
-def normalize(tensor: torch.Tensor, dim: int = 0, eps: float = 1e-8) -> torch.Tensor:
-    mean = tensor.mean(dim)
-    mean_centered = tensor - mean
-    var = (mean_centered**2).mean(dim)
-    norm = mean_centered * var.clamp(min=eps).rsqrt()
-    return norm
 
 
 def convert_to_lora(model: nn.Module,

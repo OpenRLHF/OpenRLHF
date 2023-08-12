@@ -1,10 +1,13 @@
 import random
-from typing import List
 from abc import ABC
+from typing import List
 
 import torch
-from openllama2.experience_maker.base import Experience
+
 from openllama2.models.utils import masked_mean
+
+from .experience_maker import Experience
+
 
 @dataclass
 class BufferItem:

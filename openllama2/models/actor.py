@@ -3,9 +3,8 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-from transformers import AutoModelForCausalLM, AutoConfig
-from peft import get_peft_config, get_peft_model, LoraConfig, TaskType
+from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
+from transformers import AutoConfig, AutoModelForCausalLM
 
 from .utils import log_probs_from_logits
 

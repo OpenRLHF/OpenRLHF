@@ -1,19 +1,21 @@
-from typing import Union, Tuple, List
-from abc import ABC
-
 import os
+from abc import ABC
+from typing import List, Tuple, Union
+
+import deepspeed
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from openllama2.models import Actor
-from torch.optim import Optimizer
-from torch import distributed as dist
-
-import deepspeed
-from deepspeed.ops.adam import FusedAdam, DeepSpeedCPUAdam
-from .deepspeed_utils import get_optimizer_grouped_parameters, get_eval_ds_config, get_train_ds_config, _z3_params_to_fetch
+from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
 from peft import PeftModel
+from torch import distributed as dist
+from torch.optim import Optimizer
 
+from openllama2.models import Actor
+
+from .deepspeed_utils import (_z3_params_to_fetch, get_eval_ds_config,
+                              get_optimizer_grouped_parameters,
+                              get_train_ds_config)
 
 ModelOptimPair = Tuple[nn.Module, Optimizer]
 ModelOrModelOptimPair = Union[nn.Module, ModelOptimPair]

@@ -3,7 +3,7 @@ from typing import Callable
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from .utils import zero_pad_sequences, exist_and_not_none
+from .utils import exist_and_not_none, zero_pad_sequences
 
 
 def preprocess_data(data):
