@@ -1,12 +1,12 @@
 set -x 
 
 deepspeed \
-    ../train_ppo.py --pretrain "$HOME/scratch/data/llama_hf/13B" \
+    ../train_ppo.py --pretrain "$HOME/scratch/data/llama_hf/7B" \
     --strategy deepspeed\
     --critic_pretrain "$HOME/scratch/data/llama_hf/7B" \
     --reward_model_path "./ckpt/7b_llama/rm_model.pt" \
-    --sft_model_path './ckpt/13b_llama/sft_model.pt' \
-    --save_path './ckpt/13b_llama' \
+    --sft_model_path './ckpt/7b_llama/sft_model.pt' \
+    --save_path './ckpt/7b_llama' \
     --train_batch_size 1 \
     --accumulated_gradient 16 \
     --experience_batch_size 1 \
@@ -14,7 +14,7 @@ deepspeed \
     --max_epochs 1\
     --prompt_max_len 1024 \
     --generate_max_len 1024 \
-    --zero_stage 3 \
+    --zero_stage 2 \
     --bf16\
     --actor_learning_rate 5e-7\
     --critic_learning_rate 9e-6\
