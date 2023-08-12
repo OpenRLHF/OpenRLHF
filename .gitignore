@@ -147,3 +147,4 @@ core
 .vscode
 .nfs*
 *jianh/*
+*test_scripts*
