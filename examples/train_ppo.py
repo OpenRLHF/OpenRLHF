@@ -4,16 +4,16 @@ import math
 import os
 
 import torch
-from chatgpt.models import Actor, Critic, RewardModel
-from chatgpt.trainer import PPOTrainer
+from openllama2.models import Actor, Critic, RewardModel
+from openllama2.trainer import PPOTrainer
 from datasets import load_dataset
-from chatgpt.dataset import PromptDataset, SFTDataset
+from openllama2.datasets import PromptDataset, SFTDataset
 from transformers.trainer import get_scheduler
 from utils import get_strategy, get_tokenizer, blending_datasets
 import torch.distributed as dist
 import itertools
 
-# from chatgpt.models.llama_flash_attn_monkey_patch import (
+# from openllama2.models.llama_flash_attn_monkey_patch import (
 #     replace_llama_attn_with_flash_attn,
 # )
 # replace_llama_attn_with_flash_attn()

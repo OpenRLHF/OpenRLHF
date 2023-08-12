@@ -4,9 +4,9 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from chatgpt.models import Actor
+from openllama2.models import Actor
 from torch.optim import Optimizer
-from chatgpt.trainer.strategies import DDPStrategy
+from openllama2.trainer.strategies import DDPStrategy
 from torch import distributed as dist
 
 import deepspeed
@@ -207,3 +207,48 @@ class DeepspeedStrategy(DDPStrategy):
                     vv = v.data.cpu()
                     output_state_dict[k] = vv
                 torch.save(output_state_dict, path)
+
+        def all_reduce(self, data, op='mean'):
+        assert op in ('mean', 'max', 'sum')
+        if isinstance(data, dict):
+            ret = {}
+            for k, v in data.items():
+                ret[k] = self.all_reduce(v, op)
+            return ret
+        else:
+            is_tensor = True
+            if not isinstance(data, torch.Tensor):
+                data = torch.Tensor([data])
+                is_tensor = False
+            is_cpu_tensor = data.device.type == "cpu"
+            
+            if is_cpu_tensor:
+                data = data.to(torch.cuda.current_device())
+            if op == 'mean':
+                data /= self.world_size
+            dist.all_reduce(data, op=dist.ReduceOp.MAX if op == 'max' else dist.ReduceOp.SUM)
+            if is_cpu_tensor:
+                data = data.cpu()
+            return data.item() if not is_tensor else data
+
+    def all_gather(self, data):
+        if isinstance(data, dict):
+            ret = {}
+            for k, v in data.items():
+                ret[k] = self.all_gather(v)
+            return ret
+        else:
+            if not isinstance(data, torch.Tensor):
+                data = torch.Tensor([data])
+            is_cpu_tensor = data.device.type == "cpu"
+
+            ret = [torch.zeros_like(data).to(torch.cuda.current_device()) for _ in range(self.world_size)]
+            dist.all_gather(ret, data.to(torch.cuda.current_device()))
+            return torch.cat(ret).cpu() if is_cpu_tensor else torch.cat(ret)
+
+    def print(self, *msg):
+        if self.is_rank_0():
+            print(*msg)
+
+    def is_rank_0(self) -> bool:
+        return dist.get_rank() == 0

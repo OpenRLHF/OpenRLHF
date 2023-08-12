@@ -3,7 +3,7 @@ import math
 
 import loralib as lora
 import torch
-from chatgpt.models import PairWiseLoss, LogExpLoss
+from openllama2.models import PairWiseLoss, LogExpLoss
 from torch.optim import Optimizer
 from torch.utils.data import DistributedSampler
 from tqdm import tqdm
