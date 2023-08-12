@@ -1,6 +1,8 @@
 import os
 from transformers import AutoTokenizer
 from datasets import load_dataset, interleave_datasets, Dataset
+from openllama2.utils import DeepspeedStrategy
+
 
 DEFAULT_PAD_TOKEN = "[PAD]"
 DEFAULT_EOS_TOKEN = "</s>"
@@ -24,49 +26,35 @@ def get_tokenizer(pretrain, model, padding_side='left', strategy=None, use_fast=
 
 def get_strategy(args):
     if not 'seed' in args:
-         args.seed = 42
+        args.seed = 42
     if not 'max_norm' in args:
-         args.max_norm = 1.0
+        args.max_norm = 1.0
     if not 'accumulated_gradient' in args:
-         args.accumulated_gradient = 1
+        args.accumulated_gradient = 1
+    if 'train_batch_size' not in args:
+        args.train_batch_size = 1
+    if 'local_rank' not in args:
+        args.local_rank = -1
+    if 'bf16' not in args:
+        args.bf16 = True
+    if 'inference_tp_size' not in args:
+        args.inference_tp_size = 1
 
-    if args.strategy == 'naive':
-        from chatgpt.trainer.strategies import NaiveStrategy
-        strategy = NaiveStrategy(seed=args.seed, max_norm=args.max_norm, 
-                                 accumulated_gradient=args.accumulated_gradient)
-    elif args.strategy == 'ddp':
-        from chatgpt.trainer.strategies import DDPStrategy
-        strategy = DDPStrategy(seed=args.seed, max_norm=args.max_norm, 
-                               accumulated_gradient=args.accumulated_gradient)
-    elif args.strategy == 'deepspeed':
-        from chatgpt.trainer.strategies.deepspeed import DeepspeedStrategy
-
-        if 'train_batch_size' not in args:
-            args.train_batch_size = 1
-        if 'local_rank' not in args:
-            args.local_rank = -1
-        if 'bf16' not in args:
-            args.bf16 = True
-        if 'inference_tp_size' not in args:
-            args.inference_tp_size = 1
-
-        if 'max_len' in args and args.max_len is not None:
-            args.max_out_tokens = args.max_len
-        elif 'generate_max_len' in args and 'prompt_max_len' in args:
-            args.max_out_tokens = args.prompt_max_len + args.generate_max_len
-        else:
-            raise Exception("Deepspeed config: Invalid max_out_tokens")
-
-        strategy = DeepspeedStrategy(seed=args.seed, 
-                                     max_norm=args.max_norm,
-                                     accumulated_gradient=args.accumulated_gradient, 
-                                     train_batch_size=args.train_batch_size,
-                                     zero_stage=args.zero_stage,
-                                     max_out_tokens=args.max_out_tokens,
-                                     inference_tp_size=args.inference_tp_size,
-                                     args=args)
+    if 'max_len' in args and args.max_len is not None:
+        args.max_out_tokens = args.max_len
+    elif 'generate_max_len' in args and 'prompt_max_len' in args:
+        args.max_out_tokens = args.prompt_max_len + args.generate_max_len
     else:
-        raise ValueError(f'Unsupported strategy "{args.strategy}"')
+        raise Exception("Deepspeed config: Invalid max_out_tokens")
+
+    strategy = DeepspeedStrategy(seed=args.seed, 
+                                    max_norm=args.max_norm,
+                                    accumulated_gradient=args.accumulated_gradient, 
+                                    train_batch_size=args.train_batch_size,
+                                    zero_stage=args.zero_stage,
+                                    max_out_tokens=args.max_out_tokens,
+                                    inference_tp_size=args.inference_tp_size,
+                                    args=args)
 
     return strategy
 

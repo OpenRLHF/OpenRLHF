@@ -1,10 +1,10 @@
 import random
 from typing import List
+from abc import ABC
 
 import torch
-from chatgpt.experience_maker.base import Experience
-from chatgpt.models.utils import masked_mean
-from chatgpt.trainer.strategies import DDPStrategy
+from openllama2.experience_maker.base import Experience
+from openllama2.models.utils import masked_mean
 
 @dataclass
 class BufferItem:
@@ -95,7 +95,7 @@ def remove_padding_in_sequences(items):
     return items
 
 
-class NaiveReplayBuffer(ReplayBuffer):
+class NaiveReplayBuffer(ABC):
     """Naive replay buffer class. It stores experience.
 
      Args:
@@ -154,21 +154,16 @@ class NaiveReplayBuffer(ReplayBuffer):
         items_vector = torch.cat(items).float().flatten()
         action_masks_vector = torch.cat(action_masks).flatten()
         
-        # For DDP
-        if isinstance(strategy, DDPStrategy):
-            # mean
-            sum_and_count = torch.tensor([items_vector.sum(), action_masks_vector.sum()], 
-                                         device=items_vector.device)
-            all_sum, all_count = strategy.all_reduce(sum_and_count, 'sum')
-            mean = all_sum / all_count
-            # std
-            std = ((items_vector - mean).pow(2) * action_masks_vector).sum()
-            all_std = strategy.all_reduce(std, 'sum')
-            rstd = (all_std / all_count).clamp(min=1e-8).rsqrt()
-        else:
-            mean = masked_mean(items_vector, action_masks_vector, dim=0)
-            rstd = masked_mean((items_vector - mean).pow(2), action_masks_vector, dim=0).clamp(min=1e-8).rsqrt()
+        # for DP
+        # mean
+        sum_and_count = torch.tensor([items_vector.sum(), action_masks_vector.sum()], 
+                                        device=items_vector.device)
+        all_sum, all_count = strategy.all_reduce(sum_and_count, 'sum')
+        mean = all_sum / all_count
+        # std
+        std = ((items_vector - mean).pow(2) * action_masks_vector).sum()
+        all_std = strategy.all_reduce(std, 'sum')
+        rstd = (all_std / all_count).clamp(min=1e-8).rsqrt()
 
         for i, item in enumerate(self):
             setattr(item, attribute, (items[i] - mean) * rstd)
-

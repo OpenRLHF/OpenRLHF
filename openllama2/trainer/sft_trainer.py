@@ -2,8 +2,8 @@ from abc import ABC
 import math
 
 import torch
-from chatgpt.dataset import SFTDataset
-from chatgpt.models import GPTLMLoss
+from openllama2.datasets import SFTDataset
+from openllama2.models import GPTLMLoss
 from torch.optim import Optimizer
 from torch.utils.data import DistributedSampler
 from tqdm import tqdm

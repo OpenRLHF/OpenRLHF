@@ -2,16 +2,16 @@ import argparse
 import math
 import os
 
-from chatgpt.dataset import RewardDataset
-from chatgpt.models import RewardModel
-from chatgpt.trainer import RewardModelTrainer
+from openllama2.datasets import RewardDataset
+from openllama2.models import RewardModel
+from openllama2.trainer import RewardModelTrainer
 from datasets import load_dataset
 from transformers.trainer import get_scheduler
 from collections import OrderedDict
 
 from utils import get_strategy, get_tokenizer, blending_datasets
 
-# from chatgpt.models.llama_flash_attn_monkey_patch import (
+# from openllama2.models.llama_flash_attn_monkey_patch import (
 #     replace_llama_attn_with_flash_attn,
 # )
 # replace_llama_attn_with_flash_attn()

@@ -2,15 +2,15 @@ import argparse
 import math
 import os
 
-from chatgpt.dataset import SFTDataset
-from chatgpt.trainer import SFTTrainer
-from chatgpt.models import Actor
+from openllama2.datasets import SFTDataset
+from openllama2.trainer import SFTTrainer
+from openllama2.models import Actor
 from datasets import load_dataset
 from transformers.trainer import get_scheduler
 
 from utils import get_strategy, get_tokenizer, blending_datasets
 
-# from chatgpt.models.llama_flash_attn_monkey_patch import (
+# from openllama2.models.llama_flash_attn_monkey_patch import (
 #     replace_llama_attn_with_flash_attn,
 # )
 # replace_llama_attn_with_flash_attn()

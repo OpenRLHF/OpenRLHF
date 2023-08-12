@@ -1,10 +1,10 @@
 import argparse
 import torch
 
-from chatgpt.models import Actor
+from openllama2.models import Actor
 from utils import get_strategy, get_tokenizer
 
-# from chatgpt.models.llama_flash_attn_monkey_patch import (
+# from openllama2.models.llama_flash_attn_monkey_patch import (
 #     replace_llama_attn_with_flash_attn,
 # )
 # replace_llama_attn_with_flash_attn()

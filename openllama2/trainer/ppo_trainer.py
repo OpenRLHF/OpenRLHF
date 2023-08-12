@@ -1,25 +1,24 @@
 from typing import Any, Callable, Dict, List, Optional, Union
 import math
+from abc import ABC
 
 import torch
 from torch import Tensor
 import torch.nn as nn
-from chatgpt.experience_maker import Experience, NaiveExperienceMaker
-from chatgpt.models import Actor, Critic, PolicyLoss, ValueLoss, GPTLMLoss
-from chatgpt.replay_buffer import NaiveReplayBuffer
+from openllama2.experience_maker import Experience, NaiveExperienceMaker
+from openllama2.models import Actor, Critic, PolicyLoss, ValueLoss, GPTLMLoss
+from openllama2.replay_buffer import NaiveReplayBuffer
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader, DistributedSampler
 
-from .base import Trainer
-from .strategies import Strategy, DDPStrategy
 from .utils import AdaptiveKLController, FixedKLController
 
-from chatgpt.models.utils import masked_mean
+from openllama2.models.utils import masked_mean
 from tqdm import tqdm
 
 SHOW_TIME_DETAILS = False
 
-class PPOTrainer(Trainer):
+class PPOTrainer(ABC):
     """
         Trainer for PPO algorithm.
 
@@ -167,12 +166,13 @@ class PPOTrainer(Trainer):
             for experience in pbar:
                 experience.to_device(device)
                 status = self._training_step(experience)
-                # for DDP
-                if isinstance(self.strategy, DDPStrategy):
-                    # weighted mean for kl
-                    status['kl'] *= status['glen']
-                    status = self.strategy.all_reduce(status)
-                    status['kl'] /= status['glen']
+
+                # for DP
+                # weighted mean for kl
+                status['kl'] *= status['glen']
+                status = self.strategy.all_reduce(status)
+                status['kl'] /= status['glen']
+
                 status_list.append(status)
                 pbar.set_postfix(status)
 

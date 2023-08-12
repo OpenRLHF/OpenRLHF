@@ -1,13 +1,13 @@
 import torch
-from chatgpt.models.utils import compute_reward
+from abc import ABC
 
-from .base import Experience, ExperienceMaker
+from openllama2.models.utils import compute_reward
 from tqdm import tqdm
 from typing import Tuple
-from chatgpt.models.utils import masked_mean
+from openllama2.models.utils import masked_mean
 import torch
 import torch.nn as nn
-from chatgpt.models.actor import Actor
+from openllama2.models.actor import Actor
 
 SHOW_TIME_DETAILS = False
 SHOW_SAMPLE_DETAILS = False
@@ -62,7 +62,7 @@ class Experience:
             self.action_mask = self.action_mask.pin_memory()
         return self
 
-class NaiveExperienceMaker(ExperienceMaker):
+class NaiveExperienceMaker(ABC):
     """
     Naive experience maker.
     """
