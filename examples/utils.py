@@ -1,8 +1,9 @@
 import os
-from transformers import AutoTokenizer
-from datasets import load_dataset, interleave_datasets, Dataset
-from openllama2.utils import DeepspeedStrategy
 
+from datasets import Dataset, interleave_datasets, load_dataset
+from transformers import AutoTokenizer
+
+from openllama2.utils import DeepspeedStrategy
 
 DEFAULT_PAD_TOKEN = "[PAD]"
 DEFAULT_EOS_TOKEN = "</s>"

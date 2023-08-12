@@ -21,8 +21,6 @@ setup(
     version=fetch_version(),
     packages=find_packages(exclude=(
         'data',
-        'docs',
-        'deepspeedchat',
     )),
     description='A LLaMA2 implementation',
     long_description=fetch_readme(),

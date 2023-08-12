@@ -1,15 +1,14 @@
-from abc import ABC
 import math
+from abc import ABC
 
 import loralib as lora
 import torch
-from openllama2.models import PairWiseLoss, LogExpLoss
+from torch import nn
 from torch.optim import Optimizer
 from torch.utils.data import DistributedSampler
 from tqdm import tqdm
-from torch import nn
 
-from .strategies import Strategy
+from openllama2.models import LogExpLoss, PairWiseLoss
 
 
 class RewardModelTrainer(ABC):
@@ -30,7 +29,7 @@ class RewardModelTrainer(ABC):
     def __init__(
         self,
         model,
-        strategy: Strategy,
+        strategy,
         optim: Optimizer,
         train_dataloader,
         eval_dataloader,

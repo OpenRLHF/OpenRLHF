@@ -3,7 +3,8 @@ from typing import Callable
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from .utils import zero_pad_sequences, exist_and_not_none
+from .utils import exist_and_not_none, zero_pad_sequences
+
 
 def preprocess_data(data, pretrain_mode=False):
     # Dahoas/full-hh-rlhf
@@ -120,42 +121,3 @@ class SFTDataset(Dataset):
         input_ids = zero_pad_sequences(input_ids, 'right', self.tokenizer.pad_token_id)
         attention_masks = zero_pad_sequences(attention_masks, 'right')
         return prompt_ids_lens, input_ids, attention_masks
-
-
-class EvalDataset(Dataset):
-    def __init__(self, dataset, tokenizer: Callable, max_length: int, strategy) -> None:
-        super().__init__()
-        self.prompts = []
-        self.targets = []
-        self.tokenizer = tokenizer
-        self.strategy = strategy
-        self.max_length = max_length
-
-        for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
-            prompt, target = preprocess_data(data)
-            self.prompts.append(prompt)
-            self.targets.append(target)
-            
-
-    def __len__(self):
-        length = len(self.prompts)
-        return length
-
-    def __getitem__(self, idx):
-        prompt = self.prompts[idx]
-        target = self.targets[idx]
-        
-        prompt_token = self.tokenizer(prompt,
-                                    max_length=self.max_length // 2,
-                                    padding='max_length',
-                                    truncation=True,
-                                    return_tensors="pt")
-        response_token = self.tokenizer(target + " " + self.tokenizer.eos_token,
-                        max_length=self.max_length // 2,
-                        padding='max_length',
-                        truncation=True,
-                        return_tensors="pt",
-                        add_special_tokens=False)
-
-        return prompt_token["input_ids"], prompt_token["attention_mask"], \
-            response_token["input_ids"], response_token["attention_mask"]

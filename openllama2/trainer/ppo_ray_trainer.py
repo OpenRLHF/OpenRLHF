@@ -15,14 +15,14 @@ from coati.models.lora import LoRAModule
 from coati.models.loss import PolicyLoss, ValueLoss
 from coati.models.opt import OPTActor, OPTCritic
 from coati.models.utils import compute_reward
-from coati.trainer.strategies import ColossalAIStrategy, DDPStrategy, NaiveStrategy
+from coati.trainer.strategies import (ColossalAIStrategy, DDPStrategy,
+                                      NaiveStrategy)
+from colossalai.nn.optimizer import HybridAdam
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from torch.optim import Adam
 from transformers import AutoTokenizer, BloomTokenizerFast
 from transformers.models.gpt2.tokenization_gpt2 import GPT2Tokenizer
-
-from colossalai.nn.optimizer import HybridAdam
 
 
 class ExperienceCompositionRefs:

@@ -1,17 +1,18 @@
 import argparse
-from copy import deepcopy
+import itertools
 import math
 import os
+from copy import deepcopy
 
 import torch
+import torch.distributed as dist
+from datasets import load_dataset
+from transformers.trainer import get_scheduler
+from utils import blending_datasets, get_strategy, get_tokenizer
+
+from openllama2.datasets import PromptDataset, SFTDataset
 from openllama2.models import Actor, Critic, RewardModel
 from openllama2.trainer import PPOTrainer
-from datasets import load_dataset
-from openllama2.datasets import PromptDataset, SFTDataset
-from transformers.trainer import get_scheduler
-from utils import get_strategy, get_tokenizer, blending_datasets
-import torch.distributed as dist
-import itertools
 
 # from openllama2.models.llama_flash_attn_monkey_patch import (
 #     replace_llama_attn_with_flash_attn,

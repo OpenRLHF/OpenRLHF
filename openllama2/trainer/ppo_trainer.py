@@ -1,20 +1,19 @@
-from typing import Any, Callable, Dict, List, Optional, Union
 import math
 from abc import ABC
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
-from torch import Tensor
 import torch.nn as nn
-from openllama2.experience_maker import Experience, NaiveExperienceMaker
-from openllama2.models import Actor, Critic, PolicyLoss, ValueLoss, GPTLMLoss
-from openllama2.replay_buffer import NaiveReplayBuffer
+from torch import Tensor
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader, DistributedSampler
-
-from .utils import AdaptiveKLController, FixedKLController
-
-from openllama2.models.utils import masked_mean
 from tqdm import tqdm
+
+from openllama2.models import Actor, Critic, GPTLMLoss, PolicyLoss, ValueLoss
+from openllama2.models.utils import masked_mean
+
+from .ppo_utils import (AdaptiveKLController, Experience, FixedKLController,
+                        NaiveExperienceMaker, NaiveReplayBuffer)
 
 SHOW_TIME_DETAILS = False
 
@@ -46,7 +45,7 @@ class PPOTrainer(ABC):
     """
 
     def __init__(self,
-                 strategy: Strategy,
+                 strategy,
                  actor: Actor,
                  critic: Critic,
                  reward_model: nn.Module,
