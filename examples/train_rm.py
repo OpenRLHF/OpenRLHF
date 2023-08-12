@@ -126,6 +126,8 @@ if __name__ == '__main__':
     parser.add_argument('--zero_stage', type=int, default=2)
     parser.add_argument('--bf16', action='store_true', default=False)
     parser.add_argument('--learning_rate', type=float, default=1e-5)
+    parser.add_argument('--zpg', type=int, default=8)
+    parser.add_argument('--adam_offload', type=bool, default=False)
     args = parser.parse_args()
     train(args)
 

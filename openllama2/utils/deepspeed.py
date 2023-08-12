@@ -1,4 +1,5 @@
 from typing import Union, Tuple, List
+from abc import ABC
 
 import os
 import torch
@@ -6,19 +7,18 @@ import torch.nn as nn
 import torch.optim as optim
 from openllama2.models import Actor
 from torch.optim import Optimizer
-from openllama2.trainer.strategies import DDPStrategy
 from torch import distributed as dist
 
 import deepspeed
 from deepspeed.ops.adam import FusedAdam, DeepSpeedCPUAdam
-from .utils import get_optimizer_grouped_parameters, get_eval_ds_config, get_train_ds_config, _z3_params_to_fetch
+from .deepspeed_utils import get_optimizer_grouped_parameters, get_eval_ds_config, get_train_ds_config, _z3_params_to_fetch
 from peft import PeftModel
 
 
 ModelOptimPair = Tuple[nn.Module, Optimizer]
 ModelOrModelOptimPair = Union[nn.Module, ModelOptimPair]
 
-class DeepspeedStrategy(DDPStrategy):
+class DeepspeedStrategy(ABC):
     """
         The strategy for training with Accelerator.
     """
@@ -43,8 +43,9 @@ class DeepspeedStrategy(DDPStrategy):
         self.max_out_tokens = max_out_tokens
         self.inference_tp_size = inference_tp_size
         self.bf16 = bf16
-        self.adam_offload = False
+        self.adam_offload = args.adam_offload
         self.is_rlhf = False
+        self.zpg = args.zpg
 
     def model_init_context(self):
         return super().model_init_context()
@@ -93,6 +94,7 @@ class DeepspeedStrategy(DDPStrategy):
         # DS Config
         ds_config = get_train_ds_config(
             offload=False,
+            adam_offload=self.adam_offload,
             stage=stage,
             bf16=self.bf16,
             max_norm=self.max_norm, 
@@ -102,7 +104,7 @@ class DeepspeedStrategy(DDPStrategy):
             inference_tp_size=self.inference_tp_size,
             tp_gather_partition_size=self.inference_tp_size,
             max_out_tokens=self.max_out_tokens,
-            zpg=8)
+            zpg=self.zpg)
         # dummy batch size
         ds_config['train_micro_batch_size_per_gpu'] =  self.train_batch_size
         ds_config['gradient_accumulation_steps'] =  self.accumulated_gradient
