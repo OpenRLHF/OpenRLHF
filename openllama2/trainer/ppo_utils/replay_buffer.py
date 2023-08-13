@@ -3,6 +3,7 @@ from abc import ABC
 from typing import List
 
 import torch
+import torch.nn.functional as F
 
 from openllama2.models.utils import masked_mean
 

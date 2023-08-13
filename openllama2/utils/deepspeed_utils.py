@@ -34,7 +34,7 @@ def get_train_ds_config(offload,
             "device": "cpu" if offload else "none"
         },
         "offload_optimizer": {
-            "device": device "cpu" if adam_offload else "none"
+            "device": "cpu" if adam_offload else "none"
         },
         "stage3_param_persistence_threshold": 1e4,
         "stage3_max_live_parameters": 3e7,
