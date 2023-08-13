@@ -116,13 +116,13 @@ class DeepspeedStrategy(ABC):
         for arg in models_or_model_optim_pairs:
             if isinstance(arg, tuple):
                 assert len(arg) == 3, f'Expect (model, optimizer, scheduler) pair, got a tuple with size "{len(arg)}"'
-                ret.append(self.ds_init_trainable_model(*arg))
+                ret.append(self.ds_init_train_model(*arg))
             else:
-                ret.append(self.ds_init_freeze_model(arg))
+                ret.append(self.ds_init_eval_model(arg))
 
         return ret[0] if len(ret) == 1 else ret
 
-    def ds_init_trainable_model(self, model, optim, scheduler):
+    def ds_init_train_model(self, model, optim, scheduler):
         is_actor = isinstance(model, Actor)
         stage = self.stage
         # ZeRO3-based GPT generation is very slow in RLHF
@@ -159,7 +159,7 @@ class DeepspeedStrategy(ABC):
             model = engine
         return model, optim, scheduler
 
-    def ds_init_freeze_model(self, model):
+    def ds_init_eval_model(self, model):
         is_actor = isinstance(model, Actor)
         stage = self.stage
         offload = False
@@ -208,6 +208,13 @@ class DeepspeedStrategy(ABC):
                                                                     enabled=len(params_to_fetch) > 0):
                                 data = param.data.to(device)
                                 param_ema.data.copy_((1 - beta) * data + beta * param_ema.data)
+
+    def load_model(self, model: nn.Module, path: str, map_location = 'cpu', strict: bool = False, key_replace_fn=None) -> None:
+        unwrapped_model = self._unwrap_model(model)
+        state_dict = torch.load(path, map_location=map_location)
+        if key_replace_fn:
+            state_dict=key_replace_fn(state_dict)
+        unwrapped_model.load_state_dict(state_dict, strict=strict)
 
     def save_model(self, model: nn.Module, path: str, only_rank0: bool = True) -> None:
         model_to_save = self._unwrap_model(model)

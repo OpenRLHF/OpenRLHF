@@ -1,8 +1,7 @@
 set -x
 export PATH=$HOME/.local/bin/:$PATH
 
-deepspeed \
-     ../train_sft.py \
+deepspeed ../train_sft.py \
      --max_len 2048 \
     --dataset 'yahma/alpaca-cleaned' \
     --train_batch_size 1 \
