@@ -6,7 +6,7 @@ deepspeed ../train_sft.py \
     --dataset 'yahma/alpaca-cleaned' \
     --train_batch_size 1 \
     --accumulated_gradient 16 \
-    --pretrain "$HOME/scratch/data/llama_hf/7B" \
+    --pretrain "meta-llama/Llama-2-7b-hf" \
     --save_path "./ckpt/7b_llama" \
     --zero_stage 2 \
     --max_epochs 1 \
