@@ -7,10 +7,10 @@ deepspeed ../train_ppo.py \
     --reward_model_path "./ckpt/7b_llama/rm_model.pt" \
     --sft_model_path "./ckpt/7b_llama/sft_model.pt" \
     --save_path './ckpt/7b_llama' \
-    --train_batch_size 1 \
-    --accumulated_gradient 16 \
-    --experience_batch_size 1 \
-    --update_timesteps 128 \
+    --micro_train_batch_size 1 \
+    --train_batch_size 128 \
+    --micro_rollout_batch_size 1 \
+    --rollout_batch_size 1024 \
     --max_epochs 1 \
     --prompt_max_len 1024 \
     --generate_max_len 1024 \

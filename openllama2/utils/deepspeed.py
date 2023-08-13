@@ -32,7 +32,7 @@ class DeepspeedStrategy(ABC):
             self,
             seed: int = 42,
             max_norm: float = 0.0,
-            accumulated_gradient = 1,
+            micro_train_batch_size = 1,
             train_batch_size = 1,
             zero_stage = 2,
             max_out_tokens=512,
@@ -44,8 +44,9 @@ class DeepspeedStrategy(ABC):
 
         self.args = args
         self.stage = zero_stage
-        self.train_batch_size=train_batch_size
+        self.train_batch_size = train_batch_size
         self.max_out_tokens = max_out_tokens
+        self.micro_train_batch_size = micro_train_batch_size
         self.inference_tp_size = inference_tp_size
         self.bf16 = bf16
         self.adam_offload = args.adam_offload
@@ -53,7 +54,6 @@ class DeepspeedStrategy(ABC):
         self.zpg = args.zpg
         self.seed = seed
         self.max_norm = max_norm
-        self.accumulated_gradient = accumulated_gradient
         self.time_steps = defaultdict(int)
 
         self.setup_distributed()
@@ -64,6 +64,7 @@ class DeepspeedStrategy(ABC):
         if self.args.local_rank != -1:
             torch.cuda.set_device(self.args.local_rank)
         self.world_size = dist.get_world_size()
+        self.accumulated_gradient = self.train_batch_size // self.micro_train_batch_size // self.world_size
 
     def create_optimizer(self, model, **kwargs) -> Optimizer:
         if isinstance(model, Actor):
@@ -140,18 +141,18 @@ class DeepspeedStrategy(ABC):
             enable_hybrid_engine=is_actor and self.inference_tp_size > 1 and stage == 3, 
             pin_parameters=True,
             inference_tp_size=self.inference_tp_size,
-            tp_gather_partition_size=self.inference_tp_size,
+            tp_gather_partition_size=4,
             max_out_tokens=self.max_out_tokens,
             zpg=self.zpg)
         # dummy batch size
-        ds_config['train_micro_batch_size_per_gpu'] =  self.train_batch_size
-        ds_config['gradient_accumulation_steps'] =  self.accumulated_gradient
+        ds_config['train_micro_batch_size_per_gpu'] =  self.micro_train_batch_size 
+        ds_config['train_batch_size'] =  self.train_batch_size
 
         engine, optim, _, scheduler = deepspeed.initialize(model=model.model if is_actor else model,
                                                 optimizer=optim,
                                                 lr_scheduler=scheduler,
                                                 config=ds_config,
-                                                args=self.args,
+                                                args={"local_rank": self.args.local_rank},
                                                 dist_init_required=True)
         if is_actor:
             model.model = engine
@@ -179,11 +180,11 @@ class DeepspeedStrategy(ABC):
                                        inference_tp_size=self.inference_tp_size,
                                        tp_gather_partition_size=self.inference_tp_size,
                                        max_out_tokens=self.max_out_tokens)
-        ds_config['train_micro_batch_size_per_gpu'] =  self.train_batch_size
-        ds_config['gradient_accumulation_steps'] =  self.accumulated_gradient
+        ds_config['train_micro_batch_size_per_gpu'] =  self.micro_train_batch_size 
+        ds_config['train_batch_size'] =  self.train_batch_size
                             
         engine, *_ = deepspeed.initialize(model=model.model if is_actor else model, 
-                                              args=self.args,
+                                              args={"local_rank": self.args.local_rank},
                                               config=ds_config, 
                                               dist_init_required=True)
         if is_actor:
