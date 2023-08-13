@@ -42,15 +42,15 @@
 
 > **The code is open-source, feel free to use it, contributions are welcome! Note: The license of the model depends on the provider of the model.**
 
-- [💥Latest News](#Latest News)
-- [💫OpenNLP Plan](#OpenNLP-plan)
-- [💫OpenLLaMA2](#OpenLLaMA2 Project)
-- [⛏️Usage Steps](#Usage Steps)
-- [📄Running Example](#Running LLaMA2 Example)
-- [📄Result Display](#Result Display)
-- [🛠️Common Errors](#Common Errors)
-- [💐References & Acknowledgements](#References & Acknowledgements)
-- [🌟Sponsor Us](#Sponsor Us)
+- [💥Latest News](#Latest-News)
+- [💫OpenNLP Plan](#OpenNLPplan)
+- [💫OpenLLaMA2](#OpenLLaMA2-Project)
+- [⛏️Usage Steps](#Usage-Steps)
+- [📄Running Example](#Running-LLaMA2-Example)
+- [📄Result Display](#Result-Display)
+- [🛠️Common Errors](#Common-Errors)
+- [💐References & Acknowledgements](#References-&-Acknowledgements)
+- [🌟Sponsor Us](#Sponsor-Us)
 - [🌈Starchart](#Starchart)
 - [🏆Contributors](#Contributors)
 
@@ -60,7 +60,6 @@
 
 - 2023/07/30: OpenLLaMA2 project officially launched:
   - Initial code submission
-  - Division of labor among members
 
 ## OpenLLaMA2 Project
 
