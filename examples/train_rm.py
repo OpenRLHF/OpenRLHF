@@ -101,9 +101,6 @@ def train(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--strategy',
-                        choices=['naive', 'ddp', 'deepspeed'],
-                        default='naive')
     parser.add_argument('--pretrain', type=str, default='bigscience/bloomz-1b7')
     # parser.add_argument('--dataset', type=str, default='Anthropic/hh-rlhf')
     parser.add_argument('--dataset', type=str, default='Dahoas/full-hh-rlhf')

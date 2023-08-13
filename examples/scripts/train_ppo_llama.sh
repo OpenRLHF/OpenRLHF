@@ -1,11 +1,11 @@
 set -x 
+export PATH=$HOME/.local/bin/:$PATH
 
-deepspeed \
-    ../train_ppo.py --pretrain "$HOME/scratch/data/llama_hf/7B" \
-    --strategy deepspeed\
+deepspeed ../train_ppo.py \
+    --pretrain "$HOME/scratch/data/llama_hf/7B" \
     --critic_pretrain "$HOME/scratch/data/llama_hf/7B" \
     --reward_model_path "./ckpt/7b_llama/rm_model.pt" \
-    --sft_model_path './ckpt/7b_llama/sft_model.pt' \
+    --sft_model_path "./ckpt/7b_llama/sft_model.pt" \
     --save_path './ckpt/7b_llama' \
     --train_batch_size 1 \
     --accumulated_gradient 16 \
@@ -14,7 +14,7 @@ deepspeed \
     --max_epochs 1\
     --prompt_max_len 1024 \
     --generate_max_len 1024 \
-    --zero_stage 2 \
+    --zero_stage 3 \
     --bf16\
     --actor_learning_rate 5e-7\
     --critic_learning_rate 9e-6\
@@ -24,6 +24,6 @@ deepspeed \
     --prompt_data_probs "0.8,0.2" \
     --normalize_reward \
     --gradient_checkpointing
-    # --pretrain_data "EleutherAI/pile"
-    # --kl_target 0.8\
+    # --pretrain_data "EleutherAI/pile" \
+    # --kl_target 0.8 \
 

@@ -1,15 +1,18 @@
 import os
 from abc import ABC
 from typing import List, Tuple, Union
+from collections import defaultdict
 
 import deepspeed
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
-from peft import PeftModel
+from torch.utils.data import DataLoader, DistributedSampler
 from torch import distributed as dist
 from torch.optim import Optimizer
+
+from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
+from peft import PeftModel
 
 from openllama2.models import Actor
 
@@ -37,9 +40,9 @@ class DeepspeedStrategy(ABC):
             bf16=True,
             args = None,
             ) -> None:
+        super().__init__()
+
         self.args = args
-        super().__init__(seed, max_norm, accumulated_gradient)
-        
         self.stage = zero_stage
         self.train_batch_size=train_batch_size
         self.max_out_tokens = max_out_tokens
@@ -48,9 +51,12 @@ class DeepspeedStrategy(ABC):
         self.adam_offload = args.adam_offload
         self.is_rlhf = False
         self.zpg = args.zpg
+        self.seed = seed
+        self.max_norm = max_norm
+        self.accumulated_gradient = accumulated_gradient
+        self.time_steps = defaultdict(int)
 
-    def model_init_context(self):
-        return super().model_init_context()
+        self.setup_distributed()
 
     def setup_distributed(self) -> None:
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
@@ -78,6 +84,22 @@ class DeepspeedStrategy(ABC):
             model = model.model
         model.step()
 
+    def setup_dataloader(self, replay_buffer, batch_size: int, pin_memory: bool = False, shuffle=True, collate_fn=None):
+        # DDP only mode, replay buffers on each rank are different.
+        sampler = DistributedSampler(replay_buffer,
+                                        num_replicas=dist.get_world_size(),
+                                        rank=dist.get_rank(),
+                                        shuffle=shuffle,
+                                        seed=self.seed,
+                                        drop_last=True)
+        return DataLoader(
+            replay_buffer,
+            batch_size=batch_size,
+            sampler=sampler,
+            drop_last=True,
+            collate_fn=collate_fn,
+            pin_memory=pin_memory)
+
     def _unwrap_model(self, model) -> nn.Module:
         if isinstance(model, Actor):
             return self._unwrap_model(model.model)
@@ -86,7 +108,21 @@ class DeepspeedStrategy(ABC):
         else:
             return model
 
-    def _init_trainable_model(self, model, optim, scheduler):
+    def prepare(
+        self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False
+    ) -> Union[List[ModelOrModelOptimPair], ModelOrModelOptimPair]:
+        ret = []
+        self.is_rlhf = is_rlhf
+        for arg in models_or_model_optim_pairs:
+            if isinstance(arg, tuple):
+                assert len(arg) == 3, f'Expect (model, optimizer, scheduler) pair, got a tuple with size "{len(arg)}"'
+                ret.append(self.ds_init_trainable_model(*arg))
+            else:
+                ret.append(self.ds_init_freeze_model(arg))
+
+        return ret[0] if len(ret) == 1 else ret
+
+    def ds_init_trainable_model(self, model, optim, scheduler):
         is_actor = isinstance(model, Actor)
         stage = self.stage
         # ZeRO3-based GPT generation is very slow in RLHF
@@ -123,7 +159,7 @@ class DeepspeedStrategy(ABC):
             model = engine
         return model, optim, scheduler
 
-    def _init_freeze_model(self, model):
+    def ds_init_freeze_model(self, model):
         is_actor = isinstance(model, Actor)
         stage = self.stage
         offload = False
@@ -155,20 +191,6 @@ class DeepspeedStrategy(ABC):
         else:
             model = engine
         return model
-
-    def prepare(
-        self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False
-    ) -> Union[List[ModelOrModelOptimPair], ModelOrModelOptimPair]:
-        ret = []
-        self.is_rlhf = is_rlhf
-        for arg in models_or_model_optim_pairs:
-            if isinstance(arg, tuple):
-                assert len(arg) == 3, f'Expect (model, optimizer, scheduler) pair, got a tuple with size "{len(arg)}"'
-                ret.append(self._init_trainable_model(*arg))
-            else:
-                ret.append(self._init_freeze_model(arg))
-
-        return ret[0] if len(ret) == 1 else ret
 
     def moving_average(self, model, model_ema, beta=0.992, device='cpu'):
         self.time_steps['ema'] += 1
@@ -212,7 +234,7 @@ class DeepspeedStrategy(ABC):
                     output_state_dict[k] = vv
                 torch.save(output_state_dict, path)
 
-        def all_reduce(self, data, op='mean'):
+    def all_reduce(self, data, op='mean'):
         assert op in ('mean', 'max', 'sum')
         if isinstance(data, dict):
             ret = {}

@@ -11,8 +11,6 @@ from transformers.trainer import get_scheduler
 from openllama2.datasets import SFTDataset
 from openllama2.models import GPTLMLoss
 
-from .strategies import Strategy
-
 
 class SFTTrainer(ABC):
     """

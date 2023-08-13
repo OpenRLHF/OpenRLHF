@@ -1,6 +1,7 @@
 import random
 from abc import ABC
-from typing import List
+from typing import List, Optional
+from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
@@ -109,7 +110,10 @@ class NaiveReplayBuffer(ABC):
     """
 
     def __init__(self, sample_batch_size: int, limit: int = 0, cpu_offload: bool = True) -> None:
-        super().__init__(sample_batch_size, limit)
+        super().__init__()
+        self.sample_batch_size = sample_batch_size
+        # limit <= 0 means unlimited
+        self.limit = limit
         self.cpu_offload = cpu_offload
         self.target_device = torch.device(f'cuda:{torch.cuda.current_device()}')
         self.items: List[BufferItem] = []

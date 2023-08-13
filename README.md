@@ -108,25 +108,18 @@ We are Xianyu Intelligence \[xianyu.ai/openllmai\], members include butnot limit
 1. Run the example script: `python example.py`
 1. For more details, please refer to the `README.md` file in the repository.
 
-## Running Example
+## Running LLaMA Example
 
 ```python
-from OpenLLaMA2 import LLaMA2
+# launch nvidia continaer
+cd examples/scripts
+./docker_run.sh
 
-# Initialize the model
-model = LLaMA2()
-
-# Load the dataset
-data = model.load_data('dataset.txt')
-
-# Train the model
-model.train(data)
-
-# Evaluate the model
-model.evaluate('evaluation.txt')
-
-# Save the model
-model.save('llama2_model.pt')
+# train in container
+cd /openllama2/scripts
+./train_sft_llama.sh
+./train_rm_llama.sh
+./train_ppo_llama.sh
 ```
 
 ## Result Display
