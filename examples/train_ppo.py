@@ -207,6 +207,6 @@ if __name__ == '__main__':
                         action='store_true',
                         help='Enable EMA checkpoint for the model.')
     parser.add_argument('--zpg', type=int, default=8)
-    parser.add_argument('--adam_offload', type=bool, action="store_false", default=True)
+    parser.add_argument('--adam_offload', action="store_false", default=True)
     args = parser.parse_args()
     train(args)
