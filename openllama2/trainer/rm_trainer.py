@@ -37,7 +37,6 @@ class RewardModelTrainer(ABC):
         max_norm= 0.5,
         batch_size: int = 1,
         max_epochs: int = 2,
-        accumulated_gradient = 1,
         only_evaluate = False,
         loss = "sigmoid",
         gradient_checkpointing: bool =False,
@@ -46,7 +45,6 @@ class RewardModelTrainer(ABC):
         self.strategy = strategy
         self.epochs = max_epochs if not only_evaluate else 1
         self.only_evaluate = only_evaluate
-        self.accumulated_gradient = accumulated_gradient
         self.max_norm = max_norm
         self.model = model
         self.train_dataloader = train_dataloader
