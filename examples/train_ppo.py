@@ -25,41 +25,40 @@ def train(args):
     strategy = get_strategy(args)
 
     # configure model
-    with strategy.model_init_context():
-        # load huggingface model/config
-        actor_from_config = bool(args.sft_model_path or args.load_checkpoint)
-        reward_from_config = bool(args.reward_model_path)
+    # load huggingface model/config
+    actor_from_config = bool(args.sft_model_path or args.load_checkpoint)
+    reward_from_config = bool(args.reward_model_path)
 
-        actor = Actor(args.pretrain, actor_from_config)
-        critic = Critic(args.critic_pretrain, True, args.normalize_reward)
-        reward_model = RewardModel(args.critic_pretrain, reward_from_config, args.normalize_reward)
+    actor = Actor(args.pretrain, actor_from_config)
+    critic = Critic(args.critic_pretrain, True, args.normalize_reward)
+    reward_model = RewardModel(args.critic_pretrain, reward_from_config, args.normalize_reward)
 
-        # load PyTorch model
-        if args.sft_model_path:
-            strategy.load_model(actor, args.sft_model_path)
-        if args.reward_model_path:
-            strategy.load_model(reward_model, args.reward_model_path)
-        
-        # copy weights for reference actor/ema actor/critic
-        initial_model = deepcopy(actor)
-        critic.model = deepcopy(reward_model.model)
-        critic.value_head = deepcopy(reward_model.value_head)
+    # load PyTorch model
+    if args.sft_model_path:
+        strategy.load_model(actor, args.sft_model_path)
+    if args.reward_model_path:
+        strategy.load_model(reward_model, args.reward_model_path)
+    
+    # copy weights for reference actor/ema actor/critic
+    initial_model = deepcopy(actor)
+    critic.model = deepcopy(reward_model.model)
+    critic.value_head = deepcopy(reward_model.value_head)
 
-        strategy.print("reward normalization status: {}".format(args.normalize_reward))
-        strategy.print("mean: {}, std {}".format(reward_model.mean, reward_model.std))
-        critic.mean = deepcopy(reward_model.mean)
-        critic.std = deepcopy(reward_model.std)
+    strategy.print("reward normalization status: {}".format(args.normalize_reward))
+    strategy.print("mean: {}, std {}".format(reward_model.mean, reward_model.std))
+    critic.mean = deepcopy(reward_model.mean)
+    critic.std = deepcopy(reward_model.std)
 
-        # lora
-        if args.lora_rank > 0:
-            strategy.print("lora_enable")
-            actor.lora_enable(args.lora_rank)
-            critic.lora_enable(args.lora_rank)
+    # lora
+    if args.lora_rank > 0:
+        strategy.print("lora_enable")
+        actor.lora_enable(args.lora_rank)
+        critic.lora_enable(args.lora_rank)
 
-        if args.enable_ema:
-            ema_model = deepcopy(actor)
-        else:
-            ema_model = None
+    if args.enable_ema:
+        ema_model = deepcopy(actor)
+    else:
+        ema_model = None
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, actor.model, 'left', strategy)
@@ -171,9 +170,6 @@ if __name__ == '__main__':
     parser.add_argument('--prompt_data_probs', type=str, default="1.0")
     parser.add_argument('--pretrain_data', type=str, default=None)
     parser.add_argument('--pretrain_data_probs', type=str, default="1.0")
-    parser.add_argument('--strategy',
-                        choices=['naive', 'ddp', 'deepspeed'],
-                        default='naive')
     parser.add_argument('--pretrain', type=str, default=None)
     parser.add_argument('--critic_pretrain', type=str, default=None)
     parser.add_argument('--reward_model_path', type=str, default=None)

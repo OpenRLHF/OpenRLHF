@@ -1,5 +1,6 @@
 from abc import ABC
-from typing import Tuple
+from typing import Tuple, Optional
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
