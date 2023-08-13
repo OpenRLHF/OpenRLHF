@@ -2,7 +2,7 @@ set -x
 export PATH=$HOME/.local/bin/:$PATH
 
 CUDA_VISIBLE_DEVICES=0 deepspeed ../inference.py \
-    --pretrain "$HOME/scratch/data/llama_hf/7B" \
+    --pretrain "meta-llama/Llama-2-7b-hf" \
     --bf16 \
-    --load_model "./ckpt/7b_llama_1024/sft_model.pt"\
-    --input "$1"
+    --input "$1" \
+    --load_model "./ckpt/7b_llama/ppo_model.pt"

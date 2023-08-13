@@ -70,20 +70,20 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 
 ## Usage Steps
 
-1. Clone the repository: `git clone https://github.com/openllmai/OpenLLaMA2.git`
-1. Install the required dependencies: `pip install -r requirements.txt`
-1. Run the example script: `python example.py`
-1. For more details, please refer to the `README.md` file in the repository.
+Clone the repository: `git clone https://github.com/openllmai/OpenLLaMA2.git`
 
-## Running LLaMA Example
+## Running LLaMA2 Example
 
 ```python
 # launch nvidia container
 cd examples/scripts
 ./docker_run.sh
 
+# huggingface login 
+/.local/bin/huggingface-cli login
+
 # cd in container
-cd /openllama2/scripts
+cd /openllama2/examples/scripts
 
 # build OpenLLaMA2
 ./build_openllama2.sh

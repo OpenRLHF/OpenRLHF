@@ -26,11 +26,11 @@ def get_tokenizer(pretrain, model, padding_side='left', strategy=None, use_fast=
 
 
 def get_strategy(args):
-    if not 'seed' in args:
+    if 'seed' not in args:
         args.seed = 42
-    if not 'max_norm' in args:
+    if 'max_norm' not in args:
         args.max_norm = 1.0
-    if not 'accumulated_gradient' in args:
+    if 'accumulated_gradient' not in args:
         args.accumulated_gradient = 1
     if 'train_batch_size' not in args:
         args.train_batch_size = 1
@@ -40,7 +40,12 @@ def get_strategy(args):
         args.bf16 = True
     if 'inference_tp_size' not in args:
         args.inference_tp_size = 1
+    if 'adam_offload' not in args:
+        args.adam_offload = False
+    if 'zpg' not in args:
+        args.zpg = 8
 
+    # max_out_tokens for DS inference
     if 'max_len' in args and args.max_len is not None:
         args.max_out_tokens = args.max_len
     elif 'generate_max_len' in args and 'prompt_max_len' in args:
