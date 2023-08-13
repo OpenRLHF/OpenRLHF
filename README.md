@@ -68,41 +68,6 @@ OpenLLaMA2 is the third official open source project of the OpenNLP plan, and it
 
 The sister project of this project is [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2), which aims to fine-tune the Chinese LLaMA2 using SFT/RLHF.
 
-### 2. Development Plan and Organization Division of Labor
-
-#### 2.1 Development Plan:
-
-- Learning and Sharing: LLaMA2 series model learning, DeepSpeed, Ray and other framework learning, etc.;
-- Implementation of LLaMA2 SFT/RLHF High-Performance Training Framework
-
-#### 2.2 Organization Division of Labor:
-
-- SFT: Xianyu, Hope, etc.
-- RLHF: Chuqi, Li, etc.
-- Ray distributed computing framework: qwang, etc.
-
-### 2. Join Us
-
-Who are we?
-
-We are Xianyu Intelligence \[xianyu.ai/openllmai\], members include butnot limited to: researchers, engineers, students, enthusiasts from different industries and fields. We have a common goal: to promote the development of open source NLP, and make the technology more accessible and beneficial to all.
-
-**How to Join?**
-
-1. Email us at openllmai@xianyu.ai. Please include the following details:
-   - Your name
-   - Your GitHub username
-   - Your areas of interest
-   - Your skills and experience related to NLP and/or AI
-1. You can also join us through the official GitHub [OpenLLaMA2 ↗](https://github.com/openllmai/OpenLLaMA2) project page. Just create an issue about your interest to contribute and we will get back to you.
-
-**What can you do?**
-
-1. Join the team and participate in the development of OpenLLaMA2 project.
-1. Contribute to the project by submitting pull requests.
-1. Help improve documentation, fix bugs, or create new features.
-1. Share the project and help us grow the community.
-
 ## Usage Steps
 
 1. Clone the repository: `git clone https://github.com/openllmai/OpenLLaMA2.git`
@@ -119,6 +84,9 @@ cd examples/scripts
 
 # cd in container
 cd /openllama2/scripts
+
+# build OpenLLaMA2
+./build_openllama2.sh
 
 # train SFT model
 ./train_sft_llama.sh
@@ -147,6 +115,35 @@ Here are some common errors that you might encounter when using OpenLLaMA2:
 1. **Dependency issues:** Make sure you have installed all the required dependencies listed in `requirements.txt`.
 1. **Data loading issues:** Make sure your dataset is in the correct format and that the file path is correct.
 1. **Memory issues:** Training large models can be memory-intensive. Consider reducing the batch size or using a machine with more memory if you encounter memory errors.
+
+### Development Plan:
+
+- Learning and Sharing: LLaMA2 series model learning, DeepSpeed, Ray and other framework learning, etc.
+- Implementation of LLaMA2 SFT/RLHF High-Performance Training Framework.
+- Develope the RLHF datasets for Multiple reward models.
+
+### Join Us
+
+Who are we?
+
+We are Xianyu Intelligence \[xianyu.ai/openllmai\], members include butnot limited to: researchers, engineers, students, enthusiasts from different industries and fields. We have a common goal: to promote the development of open source NLP, and make the technology more accessible and beneficial to all.
+
+**How to Join?**
+
+1. Email us at openllmai@xianyu.ai. Please include the following details:
+   - Your name
+   - Your GitHub username
+   - Your areas of interest
+   - Your skills and experience related to NLP and/or AI
+1. You can also join us through the official GitHub [OpenLLaMA2 ↗](https://github.com/openllmai/OpenLLaMA2) project page. Just create an issue about your interest to contribute and we will get back to you.
+
+**What can you do?**
+
+1. Join the team and participate in the development of OpenLLaMA2 project.
+1. Contribute to the project by submitting pull requests.
+1. Help improve documentation, fix bugs, or create new features.
+1. Share the project and help us grow the community.
+
 
 ## References & Acknowledgements
 
