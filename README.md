@@ -42,21 +42,21 @@
 
 > **The code is open-source, feel free to use it, contributions are welcome! Note: The license of the model depends on the provider of the model.**
 
-- [💥Latest News](#latest-news)
+- [💥Latest News](#Latest News)
 - [💫OpenNLP Plan](#OpenNLP-plan)
-- [💫OpenLLaMA2](#OpenLLaMA2-project)
-- [⛏️Usage Steps](#usage-steps)
-- [📄Running Example](#running-example)
-- [📄Result Display](#result-display)
-- [🛠️Common Errors](#common-errors)
-- [💐References & Acknowledgements](#references--acknowledgements)
-- [🌟Sponsor Us](#sponsor-us)
-- [🌈Starchart](#starchart)
-- [🏆Contributors](#contributors)
+- [💫OpenLLaMA2](#OpenLLaMA2 Project)
+- [⛏️Usage Steps](#Usage Steps)
+- [📄Running Example](#Running LLaMA2 Example)
+- [📄Result Display](#Result Display)
+- [🛠️Common Errors](#Common Errors)
+- [💐References & Acknowledgements](#References & Acknowledgements)
+- [🌟Sponsor Us](#Sponsor Us)
+- [🌈Starchart](#Starchart)
+- [🏆Contributors](#Contributors)
 
 ## Latest News
 
-- 2023/8/13: LLaMA 7B + SFT+ RM PPO + DeepSpeed training features finished
+- 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed training features finished
 
 - 2023/07/30: OpenLLaMA2 project officially launched:
   - Initial code submission
@@ -130,7 +130,7 @@ We are Xianyu Intelligence \[xianyu.ai/openllmai\], members include butnot limit
 
 **How to Join?**
 
-1. Email us at openllmai@xianyu.ai. Please include the following details:
+1. Email us at janhu9527@gmail.com. Please include the following details:
    - Your name
    - Your GitHub username
    - Your areas of interest
