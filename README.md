@@ -1,8 +1,8 @@
 # OpenLLaMA2
 
 <div style="font-size: 1.5rem;">
-  <a href="./README.md">Chinese</a> |
-  <a href="./readme_en.md">English</a>
+  <a href="./README.md">English</a> |
+  <a href="./readme_cn.md">Chinese</a>
 </div>
 
 </br>
