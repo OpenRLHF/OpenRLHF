@@ -137,7 +137,7 @@ def train(args):
         value_clip=None,
         eps_clip=0.2,
         gamma=1,
-        lambd=1,
+        lambd=0.95,
         init_kl_coef=args.init_kl_coef,
         kl_target=args.kl_target,
         ema_beta=0.992,
@@ -179,8 +179,8 @@ if __name__ == '__main__':
     parser.add_argument('--update_timesteps', type=int, default=16)
     parser.add_argument('--experience_batch_size', type=int, default=8)
     parser.add_argument('--max_epochs', type=int, default=2)
-    parser.add_argument('--prompt_max_len', type=int, default=None)
-    parser.add_argument('--generate_max_len', type=int, default=None)
+    parser.add_argument('--prompt_max_len', type=int, default=1024)
+    parser.add_argument('--generate_max_len', type=int, default=1024)
     parser.add_argument('--max_len', type=int, default=None)
     parser.add_argument('--max_norm', type=float, default=1.0)
     parser.add_argument('--l2', type=float, default=0.)
@@ -198,7 +198,7 @@ if __name__ == '__main__':
     parser.add_argument('--inference_tp_size', type=int, default=1)
     parser.add_argument('--gradient_checkpointing', action='store_true', default=False)
     parser.add_argument('--bf16', action='store_true', default=False)
-    parser.add_argument('--actor_learning_rate', type=float, default=2e-6)
+    parser.add_argument('--actor_learning_rate', type=float, default=1e-6)
     parser.add_argument('--critic_learning_rate', type=float, default=9e-6)
     parser.add_argument('--kl_target', type=float, default=None)
     parser.add_argument('--init_kl_coef', type=float, default=0.02)
@@ -207,6 +207,6 @@ if __name__ == '__main__':
                         action='store_true',
                         help='Enable EMA checkpoint for the model.')
     parser.add_argument('--zpg', type=int, default=8)
-    parser.add_argument('--adam_offload', type=bool, default=True)
+    parser.add_argument('--adam_offload', type=bool, action="store_false", default=True)
     args = parser.parse_args()
     train(args)

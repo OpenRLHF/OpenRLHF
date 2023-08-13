@@ -56,6 +56,8 @@
 
 ## Latest News
 
+- 2023/8/13: LLaMA 7B + SFT+ RM PPO + DeepSpeed training features finished
+
 - 2023/07/30: OpenLLaMA2 project officially launched:
   - Initial code submission
   - Division of labor among members
@@ -111,23 +113,29 @@ We are Xianyu Intelligence \[xianyu.ai/openllmai\], members include butnot limit
 ## Running LLaMA Example
 
 ```python
-# launch nvidia continaer
+# launch nvidia container
 cd examples/scripts
 ./docker_run.sh
 
-# train in container
+# cd in container
 cd /openllama2/scripts
+
+# train SFT model
 ./train_sft_llama.sh
+
+# train RM model
 ./train_rm_llama.sh
+
+# train PPO model
 ./train_ppo_llama.sh
 ```
 
 ## Result Display
 
-After completing the training and evaluation, you can check the performance of your model by using the `show_results` function:
+After completing the training and evaluation, you can evaluate of your model by using the `generate` function:
 
 ```python
-model.show_results()
+./inference_llama.sh "Please introduce GPT model."
 ```
 
 This will display a table with the results of your model, including metrics like loss, accuracy, F1 score, and more.
