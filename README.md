@@ -56,7 +56,7 @@
 
 ## Latest News
 
-- 2023/8/13: LLaMA 7B + SFT+ RM PPO + DeepSpeed training features finished
+- 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed training features finished
 
 - 2023/07/30: OpenLLaMA2 project officially launched:
   - Initial code submission
@@ -64,7 +64,7 @@
 
 ## OpenLLaMA2 Project
 
-OpenLLaMA2 is the third official open source project of the OpenNLP plan, and it is the first practice project of openllmai. LLaMA2 is great and powerful, but there are currently no practical LLaMA2 SFT/RLHF training frameworks in the open source community. This project aims to develop an industrial-grade LLaMA2 SFT/RLHF training framework.
+OpenLLaMA2 is the third official open-source project of the OpenNLP plan, and it is the first practice project of openllmai. LLaMA2 is great and powerful, but there are currently no practical LLaMA2 SFT/RLHF training frameworks in the open-source community. This project aims to develop an industrial-grade LLaMA2 SFT/RLHF training framework.
 
 The sister project of this project is [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2), which aims to fine-tune the Chinese LLaMA2 using SFT/RLHF.
 
@@ -100,10 +100,10 @@ cd /openllama2/examples/scripts
 
 ## Result Display
 
-After completing the training and evaluation, you can evaluate of your model by using the `generate` function:
+After completing the training and evaluation, you can evaluate your model by using the `generate` function:
 
 ```python
-./inference_llama.sh "Please introduce GPT model."
+./inference_llama.sh "Please introduce the GPT model."
 ```
 
 This will display a table with the results of your model, including metrics like loss, accuracy, F1 score, and more.
@@ -118,15 +118,15 @@ Here are some common errors that you might encounter when using OpenLLaMA2:
 
 ### Development Plan:
 
-- Learning and Sharing: LLaMA2 series model learning, DeepSpeed, Ray and other framework learning, etc.
+- Learning and Sharing: LLaMA2 series model learning, DeepSpeed, Ray, and other framework learning, etc.
 - Implementation of LLaMA2 SFT/RLHF High-Performance Training Framework.
-- Develope the RLHF datasets for Multiple reward models.
+- Develop the RLHF datasets for Multiple reward models.
 
 ### Join Us
 
 Who are we?
 
-We are Xianyu Intelligence \[xianyu.ai/openllmai\], members include butnot limited to: researchers, engineers, students, enthusiasts from different industries and fields. We have a common goal: to promote the development of open source NLP, and make the technology more accessible and beneficial to all.
+We are Xianyu Intelligence \[xianyu.ai/openllmai\], members include but are not limited to researchers, engineers, students, and enthusiasts from different industries and fields. We have a common goal: to promote the development of open-source NLP and make the technology more accessible and beneficial to all.
 
 **How to Join?**
 
@@ -139,7 +139,7 @@ We are Xianyu Intelligence \[xianyu.ai/openllmai\], members include butnot limit
 
 **What can you do?**
 
-1. Join the team and participate in the development of OpenLLaMA2 project.
+1. Join the team and participate in the development of the OpenLLaMA2 project.
 1. Contribute to the project by submitting pull requests.
 1. Help improve documentation, fix bugs, or create new features.
 1. Share the project and help us grow the community.
