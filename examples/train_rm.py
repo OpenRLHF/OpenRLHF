@@ -22,25 +22,24 @@ def train(args):
     strategy = get_strategy(args)
 
     # configure model
-    with strategy.model_init_context():
-        # load huggingface model/config
-        from_config = bool(args.load_model or args.load_checkpoint)
-        model = RewardModel(args.pretrain, from_config)
+    # load huggingface model/config
+    from_config = bool(args.load_model or args.load_checkpoint)
+    model = RewardModel(args.pretrain, from_config)
 
-        # load SFT model
-        if args.load_model and not args.load_checkpoint:
-            def key_replace_fn(states_dict):
-                new_state_dict = OrderedDict()
-                for k, v in states_dict.items():
-                    new_state_dict[k.replace('transformer.', 'model.')] = v
-                return new_state_dict
+    # load SFT model
+    if args.load_model and not args.load_checkpoint:
+        def key_replace_fn(states_dict):
+            new_state_dict = OrderedDict()
+            for k, v in states_dict.items():
+                new_state_dict[k.replace('transformer.', 'model.')] = v
+            return new_state_dict
 
-            strategy.load_model(model, args.load_model, strict=False, key_replace_fn=key_replace_fn)
-            strategy.print("Load model: ", args.load_model)
+        strategy.load_model(model, args.load_model, strict=False, key_replace_fn=key_replace_fn)
+        strategy.print("Load model: ", args.load_model)
 
-        # lora
-        if args.lora_rank > 0:
-            model.lora_enable(args.lora_rank)
+    # lora
+    if args.lora_rank > 0:
+        model.lora_enable(args.lora_rank)
         
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, 'left', strategy)
