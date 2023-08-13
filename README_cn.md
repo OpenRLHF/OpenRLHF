@@ -315,3 +315,7 @@ git clone https://github.com/openllmai/OpenLLaMA2.git
 <a href="https://github.com/openllmai/OpenLLaMA2/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=openllmai/OpenLLaMA2" />
 </a>
+
+______________________________________________________________________
+
+*OpenLLaMA2 © 2023 OpenLLMAI. All Rights Reserved.*
