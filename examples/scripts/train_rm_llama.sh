@@ -8,8 +8,7 @@ deepspeed ../train_rm.py \
      --pretrain "meta-llama/Llama-2-7b-hf" \
      --bf16 \
      --max_len 2048 \
-     --zero_stage 2 \
-     --gradient_checkpointing \
+     --zero_stage 3 \
      --learning_rate 9e-6 \
      --dataset 'Anthropic/hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward' \
      --dataset_probs '0.9,0.1' \

@@ -45,13 +45,13 @@ def train(args):
     train_dataset = SFTDataset(train_data, tokenizer, args.max_len, strategy, pretrain_mode=args.pretrain_mode)
     eval_dataset = SFTDataset(eval_data, tokenizer, args.max_len, strategy, pretrain_mode=args.pretrain_mode)
 
-    train_dataloader = strategy.setup_dataloader(train_dataset, args.train_batch_size, 
+    train_dataloader = strategy.setup_dataloader(train_dataset, args.micro_train_batch_size, 
                                                         True, True, train_dataset.collate_fn)
-    eval_dataloader = strategy.setup_dataloader(eval_dataset, args.train_batch_size,
+    eval_dataloader = strategy.setup_dataloader(eval_dataset, args.micro_train_batch_size,
                                                             True, False, eval_dataset.collate_fn)
 
     # scheduler
-    num_update_steps_per_epoch = len(train_dataloader) * args.max_epochs // args.train_batch_size
+    num_update_steps_per_epoch = len(train_dataloader) // strategy.accumulated_gradient
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
 
     scheduler = get_scheduler("cosine",

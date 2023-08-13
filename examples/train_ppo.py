@@ -77,13 +77,13 @@ def train(args):
         pretrain_max_len =  args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
         pretrain_dataset = SFTDataset(pretrain_data.select(range(min(len(pretrain_data), args.max_epochs * len(prompts_dataset)))), 
                     tokenizer, pretrain_max_len, strategy, pretrain_mode=True)
-        pretrain_dataloader = itertools.cycle(iter(strategy.setup_dataloader(pretrain_dataset, args.train_batch_size, 
+        pretrain_dataloader = itertools.cycle(iter(strategy.setup_dataloader(pretrain_dataset, args.micro_train_batch_size, 
                                                     True, True, pretrain_dataset.collate_fn)))
     else:
         pretrain_dataloader = None
 
     # configure scheduler
-    num_update_steps_per_episodes = len(prompts_dataloader) * args.max_epochs // args.train_batch_size
+    num_update_steps_per_episodes = len(prompts_dataloader) * args.max_epochs // strategy.accumulated_gradient
     max_steps = math.ceil(args.num_episodes * num_update_steps_per_episodes)
 
     actor_scheduler = get_scheduler("constant_with_warmup",

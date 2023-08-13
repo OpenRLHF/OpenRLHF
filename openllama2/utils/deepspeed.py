@@ -141,7 +141,7 @@ class DeepspeedStrategy(ABC):
             enable_hybrid_engine=is_actor and self.inference_tp_size > 1 and stage == 3, 
             pin_parameters=True,
             inference_tp_size=self.inference_tp_size,
-            tp_gather_partition_size=self.inference_tp_size,
+            tp_gather_partition_size=4,
             max_out_tokens=self.max_out_tokens,
             zpg=self.zpg)
         # dummy batch size
@@ -152,7 +152,7 @@ class DeepspeedStrategy(ABC):
                                                 optimizer=optim,
                                                 lr_scheduler=scheduler,
                                                 config=ds_config,
-                                                args=self.args,
+                                                args={"local_rank": self.args.local_rank},
                                                 dist_init_required=True)
         if is_actor:
             model.model = engine
@@ -181,10 +181,10 @@ class DeepspeedStrategy(ABC):
                                        tp_gather_partition_size=self.inference_tp_size,
                                        max_out_tokens=self.max_out_tokens)
         ds_config['train_micro_batch_size_per_gpu'] =  self.micro_train_batch_size 
-        ds_config['accumulated_gradient'] =  self.accumulated_gradient
+        ds_config['train_batch_size'] =  self.train_batch_size
                             
         engine, *_ = deepspeed.initialize(model=model.model if is_actor else model, 
-                                              args=self.args,
+                                              args={"local_rank": self.args.local_rank},
                                               config=ds_config, 
                                               dist_init_required=True)
         if is_actor:
