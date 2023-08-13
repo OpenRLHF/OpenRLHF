@@ -2,7 +2,7 @@
 
 <div style="font-size: 1.5rem;">
   <a href="./README.md">English</a> |
-  <a href="./readme_cn.md">Chinese</a>
+  <a href="./README_cn.md">Chinese</a>
 </div>
 
 </br>
@@ -32,9 +32,9 @@
       <br/>
       <em>Open-source ChatGPT / Comprehensive / Lightweight / Easy-to-use</em>
       <br/>
-      <a href="https://zhuanlan.zhihu.com/p/622065348/"><strong>Article Interpretation</strong></a>
+      <a href="https://zhuanlan.zhihu.com/p/622065348/"><strong>Articles</strong></a>
         ·
-      <a href="https://zhuanlan.zhihu.com/p/622065348"><strong>Video Interpretation</strong></a>
+      <a href="https://zhuanlan.zhihu.com/p/622065348"><strong>Videos</strong></a>
     </p>
 
 </p>
@@ -162,13 +162,16 @@ Your sponsorship can help us maintain and improve OpenLLaMA2. If you find this p
 
 ## Starchart
 
-Check out our growing community on the [starchart ↗](https://starchart.cc/openllmai/OpenLLaMA2).
+
+[![Star History Chart](https://api.star-history.com/svg?repos=openllmai/OpenLLaMA2&type=Date)](https://star-history.com/#openllmai/OpenLLaMA2&Date)
 
 ## Contributors
 
 A big thank you to all our contributors! If you want to contribute, feel free to make a pull request or create an issue.
 
-[![Contributors ↗](<>)](%5Bhttps://github.com/openllmai/OpenLLaMA2/graphs/contributors) ↗\](https://github.com/openllmai/OpenLLaMA2/graphs/contributors))
+<a href="https://github.com/openllmai/OpenLLaMA2/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=openllmai/OpenLLaMA2" />
+</a>
 
 ______________________________________________________________________
 
