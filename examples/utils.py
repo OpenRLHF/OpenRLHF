@@ -65,7 +65,7 @@ def get_strategy(args):
     return strategy
 
 
-def blending_datasets(datasets, probabilities, strategy=None, seed=42, max_count=2000000, return_eval=True):
+def blending_datasets(datasets, probabilities, strategy=None, seed=42, max_count=2000000, return_eval=True, stopping_strategy="first_exhausted"):
     datasets = datasets.split(',')
     probabilities = list(map(float, probabilities.split(',')))
     assert len(probabilities) == len(datasets)
@@ -84,14 +84,19 @@ def blending_datasets(datasets, probabilities, strategy=None, seed=42, max_count
                 eval_data = data["test"].select(range(min(int(max_count * 0.1), len(data["test"]))))
             elif 'validation' in data:
                 eval_data = data["validation"].select(range(min(int(max_count * 0.1), len(data["validation"]))))
+            elif "train" in data:
+                eval_data = data["train"].select(range(min(int(max_count * 0.1), int(len(data["train"]) * 0.01))))
             else:
-                eval_data = Dataset.from_dict({})
+                eval_data = data.select(range(min(int(max_count * 0.1), int(len(data) * 0.01))))
             eval_data_list.append(eval_data)
     
     # merge datasets
-    train_dataset = interleave_datasets(train_data_list, probabilities=probabilities, seed=seed)
+    if strategy.is_rank_0():
+        print(train_data_list)
+        
+    train_dataset = interleave_datasets(train_data_list, probabilities=probabilities, seed=seed, stopping_strategy=stopping_strategy)
     if return_eval:
-        eval_dataset = interleave_datasets(eval_data_list, probabilities=probabilities, seed=seed)
+        eval_dataset = interleave_datasets(eval_data_list, probabilities=probabilities, seed=seed, stopping_strategy=stopping_strategy)
         return train_dataset, eval_dataset
     else:
         return train_dataset

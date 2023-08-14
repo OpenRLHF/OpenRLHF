@@ -20,8 +20,8 @@ deepspeed ../train_ppo.py \
     --critic_learning_rate 9e-6\
     --inference_tp_size 1 \
     --init_kl_coef 0.01\
-    --prompt_data "Dahoas/full-hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward" \
-    --prompt_data_probs "0.8,0.2" \
+    --dataset 'Anthropic/hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward,lmsys/chatbot_arena_conversations,openai/webgpt_comparisons' \
+    --dataset_probs '0.5,0.2,0.15,0.15' \
     --normalize_reward \
     --gradient_checkpointing
 

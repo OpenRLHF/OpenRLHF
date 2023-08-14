@@ -29,6 +29,15 @@ def preprocess_data(data, pretrain_mode=False):
     elif exist_and_not_none(data, 'prompt') and exist_and_not_none(data, 'response'):
         prompt = 'Human: ' + data['prompt'] + "\nAssistant: "
         target = data['response']
+    # FreedomIntelligence/phoenix-sft-data-v1 
+    elif exist_and_not_none(data, 'conversations'):
+        prompt = ""
+        target = ""
+        for item in data['conversations']:
+            if item['from'] == 'human':
+                prompt = 'Human: ' + item['value'] + "\nAssistant: "
+            elif item['from'] == 'gpt':
+                target = item['value']
     # REAL PRETRAIN datasets
     # EleutherAI/pile
     elif exist_and_not_none(data, 'text') and exist_and_not_none(data, 'meta'):
@@ -76,9 +85,12 @@ class SFTDataset(Dataset):
             else:
                 prompt_ids_len = 0
 
-            # filter the sample whose length is greater than max_length
-            if prompt_ids_len >= self.max_length:
-                continue
+            if not self.pretrain_mode:
+                # filter the sample whose length is greater than max_length
+                if prompt_ids_len >= self.max_length:
+                    continue
+                if not prompt or not target:
+                    continue
 
             self.prompt_ids_lens.append(prompt_ids_len)
             self.prompts.append(prompt)

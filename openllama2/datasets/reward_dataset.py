@@ -27,6 +27,24 @@ def preprocess_data(data):
         prompt = "Human: " +  data['question'] + "\nAssistant: "
         chosen = data['response_j']
         reject = data['response_k']
+    # lmsys/chatbot_arena_conversations
+    elif exist_and_not_none(data, 'winner') and exist_and_not_none(data, 'conversation_a'):
+        def process_chatbot_arena_conversations(lll):
+            result = []
+            for l in lll:
+                result.append(l['role'].replace('user', 'Human:').replace('assistant', 'Assistant:'))
+                result.append(l['content'])
+            return "\n".join(result)
+        prompt = ""
+        chosen = data['conversation_a'] if data['winner'] == 'model_a' else data['conversation_b']
+        reject = data['conversation_b'] if data['winner'] == 'model_a' else data['conversation_a']
+        chosen = process_chatbot_arena_conversations(chosen)
+        reject = process_chatbot_arena_conversations(reject)
+    # openai/webgpt_comparisons
+    elif exist_and_not_none(data, 'answer_0') and exist_and_not_none(data, 'answer_1'):
+        prompt = "Human: " +  data['question']['full_text'] + "\nAssistant: "
+        chosen = data['answer_0'] if data['score_0'] > data['score_1'] else data['answer_1']
+        reject = data['answer_1'] if data['score_0'] > data['score_1'] else data['answer_0']
     else:
         raise ValueError("reward_dataset key error")
     return prompt, chosen, reject

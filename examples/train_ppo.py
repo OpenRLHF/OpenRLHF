@@ -69,6 +69,7 @@ def train(args):
 
     # prepare datasets
     prompts_data = blending_datasets(args.prompt_data, args.prompt_data_probs, strategy, args.seed, max_count=100000, return_eval=False)
+    prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_dataset))))
     prompts_dataset = PromptDataset(prompts_data, strategy)
     prompts_dataloader = strategy.setup_dataloader(prompts_dataset, args.micro_rollout_batch_size, True, True)
 
@@ -131,10 +132,10 @@ def train(args):
         gradient_checkpointing=args.gradient_checkpointing,
         tokenizer=tokenizer,
         prompt_max_len=args.prompt_max_len,
-        value_clip=None,
-        eps_clip=0.2,
-        gamma=1,
-        lambd=0.95,
+        value_clip=args.value_clip,
+        eps_clip=args.eps_clip,
+        gamma=args.gamma,
+        lambd=args.lambd,
         init_kl_coef=args.init_kl_coef,
         kl_target=args.kl_target,
         ema_beta=0.992,
@@ -179,9 +180,14 @@ if __name__ == '__main__':
     parser.add_argument('--prompt_max_len', type=int, default=1024)
     parser.add_argument('--generate_max_len', type=int, default=1024)
     parser.add_argument('--max_len', type=int, default=None)
+    parser.add_argument('--max_samples', type=int, default=100000)
     parser.add_argument('--max_norm', type=float, default=1.0)
     parser.add_argument('--l2', type=float, default=0.)
     parser.add_argument('--ptx_coef', type=float, default=0.05)
+    parser.add_argument('--eps_clip', type=float, default=0.2)
+    parser.add_argument('--value_clip', type=float, default=0.2)
+    parser.add_argument('--lambd', type=float, default=0.95)
+    parser.add_argument('--gamma', type=float, default=1)
     parser.add_argument('--micro_train_batch_size', type=int, default=4)
     parser.add_argument('--train_batch_size', type=int, default=128)
     parser.add_argument('--load_checkpoint', action='store_true', default=False)
