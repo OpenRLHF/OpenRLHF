@@ -12,7 +12,7 @@ def preprocess_data(data):
         prompt = data['prompt']
         # tasksource/oasst1_pairwise_rlhf_reward
         if prompt.startswith('prompter:'):
-            prompt = prompt.replace('prompter:', '\nHuman:').replace('assistant:', '\nAssistant:') + '\nAssistant:\n'
+            prompt = prompt.replace('prompter:', '\nHuman:\n').replace('assistant:', '\nAssistant:\n') + '\nAssistant:\n'
     # BelleGroup/train_0.5M_CN
     elif exist_and_not_none(data, 'instruction'):
         prompt = 'Human:\n' +  data['instruction'] + "\nAssistant:\n"

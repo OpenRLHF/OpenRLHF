@@ -18,7 +18,7 @@ def preprocess_data(data):
     elif exist_and_not_none(data, 'chosen') and exist_and_not_none(data, 'rejected'):
         prompt = data['prompt'] if exist_and_not_none(data, 'prompt') else ""
         if prompt.startswith('prompter:'):
-            prompt = prompt.replace('prompter:', 'Human:\n').replace('assistant:', '\nAssistant:\n') + '\nAssistant:\n'
+            prompt = prompt.replace('prompter:', '\nHuman:\n').replace('assistant:', '\nAssistant:\n') + '\nAssistant:\n'
 
         chosen = data['chosen']
         reject = data['rejected']
