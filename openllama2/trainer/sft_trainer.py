@@ -85,9 +85,6 @@ class SFTTrainer(ABC):
                         label[:source_len] = self.loss_fn.IGNORE_INDEX
 
                 loss = self.loss_fn(logits, labels)
-                # a patch for empty loss (the lenght of prompt > max_length)
-                if torch.isnan(loss):
-                    loss *= 0
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
                 
