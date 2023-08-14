@@ -48,7 +48,8 @@ def train(args):
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)
 
     # prepare for data and dataset
-    train_data, eval_data = blending_datasets(args.dataset, args.dataset_probs, strategy, args.seed, max_count=500000)
+    train_data, eval_data = blending_datasets(args.dataset, args.dataset_probs, \
+        strategy, args.seed, max_count=2000000, stopping_strategy='all_exhausted')
     train_dataset = RewardDataset(train_data, tokenizer, args.max_len, strategy) if not args.only_evaluate else None
     eval_dataset = RewardDataset(eval_data, tokenizer, args.max_len, strategy)
 
