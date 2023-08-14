@@ -69,14 +69,16 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 
 ### Development Progress:
 
-- [✓] Develop a fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
-- [] Develop a fast LLaMA2 SFT/PPO Training Framework based on Ray+DeepSpeed.
-- [] Develop the Rejection Sampling.
-- [] Develop the Context Distillation.
-- [] Develop the Multi-nodes training scripts for Slurm.
-- [] Multi-nodes Performance Optimization
-- [] Develop the RLHF datasets for Multiple reward models.
-- [] Train a [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2) RLHF model.
+- [✔️] Develop a fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
+- [WIP] Support Multiple RM models.
+- [WIP] Develop Multi-nodes RLHF based on Ray.
+- [WIP] Develop the Rejection Sampling.
+- [TODO] Develop the DPO.
+- [TODO] Develop the Context Distillation.
+- [TODO]Develop the Multi-nodes training scripts for Slurm.
+- [TODO] Multi-nodes Performance Optimization
+- [TODO] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
+- [TODO]Train a [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2) RLHF model.
 
 
 ## Usage Steps
