@@ -31,7 +31,7 @@ def preprocess_data(data):
                 result.append(l['content'])
             return "\n".join(result)
         prompt = data['conversation_a'][:-1]
-        chosen = process_chatbot_arena_conversations(prompt) + "\nAssistant:\n"
+        prompt = process_chatbot_arena_conversations(prompt) + "\nAssistant:\n"
     # openai/webgpt_comparisons
     elif exist_and_not_none(data, 'question') and exist_and_not_none(data, 'answer_1'):
         prompt = "Human:\n" +  data['question']['full_text'] + "\nAssistant:\n"
