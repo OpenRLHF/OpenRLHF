@@ -15,7 +15,7 @@ def preprocess_data(data):
         reject = data['human_ref_B'] if preferA else data['human_ref_A']
     # Anthropic/hh-rlhf
     # tasksource/oasst1_pairwise_rlhf_reward
-    elif exist_and_not_none(data, 'chosen'):
+    elif exist_and_not_none(data, 'chosen') and exist_and_not_none(data, 'rejected'):
         prompt = data['prompt'] if exist_and_not_none(data, 'prompt') else ""
         if prompt.startswith('prompter:'):
             prompt = prompt.replace('prompter:', 'Human:\n').replace('assistant:', '\nAssistant:\n') + '\nAssistant:\n'
@@ -32,7 +32,7 @@ def preprocess_data(data):
         def process_chatbot_arena_conversations(lll):
             result = []
             for l in lll:
-                result.append(l['role'].replace('user', 'Human:').replace('assistant', 'Assistant:\n'))
+                result.append(l['role'].replace('user', 'Human:').replace('assistant', 'Assistant:'))
                 result.append(l['content'])
             return "\n".join(result)
         prompt = ""
