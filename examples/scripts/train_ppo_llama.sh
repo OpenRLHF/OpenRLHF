@@ -3,8 +3,8 @@ export PATH=$HOME/.local/bin/:$PATH
 export CUDA_LAUNCH_BLOCKING=1
 
 deepspeed ../train_ppo.py \
-    --pretrain "meta-llama/Llama-2-7b-chat-hf" \
-    --critic_pretrain "meta-llama/Llama-2-7b-chat-hf" \
+    --pretrain "meta-llama/Llama-2-7b-hf" \
+    --critic_pretrain "meta-llama/Llama-2-7b-hf" \
     --reward_model_path "./ckpt/7b_llama/rm_model.pt" \
     --sft_model_path "./ckpt/7b_llama/sft_model.pt" \
     --save_path './ckpt/7b_llama' \
