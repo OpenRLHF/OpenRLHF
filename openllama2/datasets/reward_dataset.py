@@ -9,22 +9,22 @@ from .utils import exist_and_not_none, zero_pad_sequences
 def preprocess_data(data):
     # stanfordnlp/SHP
     if exist_and_not_none(data, 'human_ref_A'):
-        prompt = "Human: " +  data['history'] + "\nAssistant: "
+        prompt = "Human:\n" +  data['history'] + "\nAssistant:\n"
         preferA = bool(data['labels'])
         chosen = data['human_ref_A'] if preferA else data['human_ref_B']
         reject = data['human_ref_B'] if preferA else data['human_ref_A']
     # Anthropic/hh-rlhf
     # tasksource/oasst1_pairwise_rlhf_reward
-    elif exist_and_not_none(data, 'chosen'):
+    elif exist_and_not_none(data, 'chosen') and exist_and_not_none(data, 'rejected'):
         prompt = data['prompt'] if exist_and_not_none(data, 'prompt') else ""
         if prompt.startswith('prompter:'):
-            prompt = prompt.replace('prompter:', 'Human:').replace('assistant:', '\nAssistant:') + '\nAssistant:'
+            prompt = prompt.replace('prompter:', '\nHuman:\n').replace('assistant:', '\nAssistant:\n') + '\nAssistant:\n'
 
         chosen = data['chosen']
         reject = data['rejected']
     # lvwerra/stack-exchange-paired
     elif exist_and_not_none(data, 'response_j'):
-        prompt = "Human: " +  data['question'] + "\nAssistant: "
+        prompt = "Human:\n" +  data['question'] + "\nAssistant:\n"
         chosen = data['response_j']
         reject = data['response_k']
     # lmsys/chatbot_arena_conversations
@@ -42,7 +42,7 @@ def preprocess_data(data):
         reject = process_chatbot_arena_conversations(reject)
     # openai/webgpt_comparisons
     elif exist_and_not_none(data, 'answer_0') and exist_and_not_none(data, 'answer_1'):
-        prompt = "Human: " +  data['question']['full_text'] + "\nAssistant: "
+        prompt = "Human:\n" +  data['question']['full_text'] + "\nAssistant:\n"
         chosen = data['answer_0'] if data['score_0'] > data['score_1'] else data['answer_1']
         reject = data['answer_1'] if data['score_0'] > data['score_1'] else data['answer_0']
     else:

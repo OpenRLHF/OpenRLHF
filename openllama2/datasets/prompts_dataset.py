@@ -12,16 +12,16 @@ def preprocess_data(data):
         prompt = data['prompt']
         # tasksource/oasst1_pairwise_rlhf_reward
         if prompt.startswith('prompter:'):
-            prompt = prompt.replace('prompter:', '\nHuman:').replace('assistant:', '\nAssistant:') + '\nAssistant: '
+            prompt = prompt.replace('prompter:', '\nHuman:\n').replace('assistant:', '\nAssistant:\n') + '\nAssistant:\n'
     # BelleGroup/train_0.5M_CN
     elif exist_and_not_none(data, 'instruction'):
-        prompt = 'Human: ' +  data['instruction'] + "\nAssistant: "
+        prompt = 'Human:\n' +  data['instruction'] + "\nAssistant:\n"
     # stanfordnlp/SHP
     elif exist_and_not_none(data, 'history'):
-        prompt = "Human: " +  data['history'] + "\nAssistant: "
+        prompt = "Human:\n" +  data['history'] + "\nAssistant:\n"
     # lvwerra/stack-exchange-paired
     elif exist_and_not_none(data, 'question') and exist_and_not_none(data, 'response_j'):
-        prompt = "Human: " +  data['question'] + "\nAssistant: "
+        prompt = "Human:\n" +  data['question'] + "\nAssistant:\n"
     # lmsys/chatbot_arena_conversations
     elif exist_and_not_none(data, 'winner') and exist_and_not_none(data, 'conversation_a'):
         def process_chatbot_arena_conversations(lll):
@@ -31,10 +31,10 @@ def preprocess_data(data):
                 result.append(l['content'])
             return "\n".join(result)
         prompt = data['conversation_a'][:-1]
-        chosen = process_chatbot_arena_conversations(prompt) + "\nAssistant: "
+        prompt = process_chatbot_arena_conversations(prompt) + "\nAssistant:\n"
     # openai/webgpt_comparisons
     elif exist_and_not_none(data, 'question') and exist_and_not_none(data, 'answer_1'):
-        prompt = "Human: " +  data['question']['full_text'] + "\nAssistant: "
+        prompt = "Human:\n" +  data['question']['full_text'] + "\nAssistant:\n"
     else:
         raise ValueError("prompt dataset key error")
     return prompt

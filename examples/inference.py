@@ -12,7 +12,7 @@ from openllama2.models import Actor
 
 def eval(args):
     # get input prompt
-    input = "\nHuman: " + args.input + "\nAssistant: "
+    input = "\nHuman:\n" + args.input + "\nAssistant:\n"
     if args.ta_prompt:
         with open(args.ta_prompt, "r") as f:
             ta_prompt = f.read()
