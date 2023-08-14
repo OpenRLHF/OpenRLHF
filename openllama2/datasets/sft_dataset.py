@@ -14,7 +14,7 @@ def preprocess_data(data, pretrain_mode=False):
         target = data['chosen']
     # pvduy/sharegpt_alpaca_oa_vicuna_format
     elif exist_and_not_none(data, 'prompt') and exist_and_not_none(data, 'label'):
-        prompt = data['prompt'].replace('USER:', 'Human:\n').replace('ASSISTANT:', '\nAssistant:\n')
+        prompt = data['prompt'].replace('USER:', 'Human: ').replace('ASSISTANT:', '\nAssistant: ')
         target = data['label'].replace('</s>', '')
     # BelleGroup/train_0.5M_CN
     # LLMs/Alpaca-ShareGPT
@@ -22,16 +22,16 @@ def preprocess_data(data, pretrain_mode=False):
     # QingyiSi/Alpaca-CoT
     elif exist_and_not_none(data, 'instruction') and exist_and_not_none(data, 'output'):
         input =  ' ' + data['input'] if exist_and_not_none(data, 'input') else ''
-        prompt = 'Human:\n' +  data['instruction'] + input + "\nAssistant:\n"
+        prompt = 'Human: ' +  data['instruction'] + input + "\nAssistant: "
         target = data['output']
     # crumb/gpt4all-clean
     # nomic-ai/gpt4all-j-prompt-generations
     elif exist_and_not_none(data, 'system_prompt') and exist_and_not_none(data, 'response'):
-        prompt = 'Human:\n' + data['system_prompt'] + "\n" + data['question'] + "\nAssistant:\n"
+        prompt = 'Human: ' + data['system_prompt'] + "\n" + data['question'] + "\nAssistant: "
         target = data['response']
     # Open-Orca/OpenOrca
     elif exist_and_not_none(data, 'prompt') and exist_and_not_none(data, 'response'):
-        prompt = 'Human:\n' + data['prompt'] + "\nAssistant:\n"
+        prompt = 'Human: ' + data['prompt'] + "\nAssistant: "
         target = data['response']
     # FreedomIntelligence/phoenix-sft-data-v1 
     elif exist_and_not_none(data, 'conversations'):
@@ -39,7 +39,7 @@ def preprocess_data(data, pretrain_mode=False):
         target = ""
         for item in data['conversations']:
             if item['from'] == 'human':
-                prompt = 'Human:\n' + item['value'] + "\nAssistant:\n"
+                prompt = 'Human: ' + item['value'] + "\nAssistant: "
             elif item['from'] == 'gpt':
                 target = item['value']
     # REAL PRETRAIN datasets
