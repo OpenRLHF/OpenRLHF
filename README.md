@@ -97,15 +97,13 @@ cd /openllama2/examples/scripts
 ./train_ppo_llama.sh
 ```
 
-## Result Display
+## Inference
 
-After completing the training and evaluation, you can evaluate of your model by using the `generate` function:
+After completing the training, you can evaluate of your model by using the `generate` function:
 
 ```python
 ./inference_llama.sh "Please introduce GPT model."
 ```
-
-This will display a table with the results of your model, including metrics like loss, accuracy, F1 score, and more.
 
 ## Common Errors
 
