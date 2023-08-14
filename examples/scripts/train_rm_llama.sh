@@ -1,5 +1,6 @@
 set -x 
 export PATH=$HOME/.local/bin/:$PATH
+export CUDA_LAUNCH_BLOCKING=1
 
 deepspeed ../train_rm.py \
      --save_path "./ckpt/7b_llama" \
