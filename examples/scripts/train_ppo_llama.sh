@@ -21,7 +21,7 @@ deepspeed ../train_ppo.py \
     --inference_tp_size 1 \
     --init_kl_coef 0.01\
     --dataset 'Anthropic/hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward,lmsys/chatbot_arena_conversations,openai/webgpt_comparisons' \
-    --dataset_probs '0.5,0.2,0.15,0.15' \
+    --dataset_probs '0.5,0.15,0.2,0.15' \
     --normalize_reward \
     --gradient_checkpointing
 

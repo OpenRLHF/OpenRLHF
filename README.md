@@ -14,7 +14,7 @@
   </a>
 
 <p align="center">
-    <h3>LLaMA2 training framework for everyone!</h3>
+    <h3>A Deepspeed/Ray based High-performance LLaMA2 SFT/RLHF framework!</h3>
       <a href="https://github.com/openllmai/OpenLLaMA2/graphs/contributors">
         <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/catqaq/ChatPiXiu" />
       </a>
@@ -42,17 +42,17 @@
 
 > **The code is open-source, feel free to use it, contributions are welcome! Note: The license of the model depends on the provider of the model.**
 
-- [💥Latest News](#Latest-News)
-- [💫OpenNLP Plan](#OpenNLPplan)
-- [💫OpenLLaMA2](#OpenLLaMA2-Project)
-- [⛏️Usage Steps](#Usage-Steps)
-- [📄Running Example](#Running-LLaMA2-Example)
-- [📄Result Display](#Result-Display)
-- [🛠️Common Errors](#Common-Errors)
-- [💐References & Acknowledgements](#References-&-Acknowledgements)
-- [🌟Sponsor Us](#Sponsor-Us)
-- [🌈Starchart](#Starchart)
-- [🏆Contributors](#Contributors)
+- [💥Latest News](#latest-news)
+- [💫OpenNLP Plan](#opennlp-plan)
+- [💫OpenLLaMA2](#openllama2-project)
+- [⛏️Usage Steps](#Uuage-steps)
+- [📄Running Example](#running-llama2-example)
+- [📄Result Display](#inference)
+- [🛠️Common Errors](#common-errors)
+- [💐References & Acknowledgements](#references-&-acknowledgements)
+- [🌟Sponsor Us](#sponsor-us)
+- [🌈Starchart](#starchart)
+- [🏆Contributors](#contributors)
 
 ## Latest News
 
@@ -63,9 +63,21 @@
 
 ## OpenLLaMA2 Project
 
-OpenLLaMA2 is the third official open source project of the OpenNLP plan, and it is the first practice project of openllmai. LLaMA2 is great and powerful, but there are currently no practical LLaMA2 SFT/RLHF training frameworks in the open source community. This project aims to develop an industrial-grade LLaMA2 SFT/RLHF training framework.
+OpenLLaMA2 is the third official open source project of the OpenNLP plan, and it is the first practice project of openllmai. OpenLLaMA2 aims to develop a high-performance distributed LLaMA2 SFT/RLHF training framework.
 
 The sister project of this project is [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2), which aims to fine-tune the Chinese LLaMA2 using SFT/RLHF.
+
+### Development Progress:
+
+- [✓] Develop a fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
+- [] Develop a fast LLaMA2 SFT/PPO Training Framework based on Ray+DeepSpeed.
+- [] Develop the Rejection Sampling.
+- [] Develop the Context Distillation.
+- [] Develop the Multi-nodes training scripts for Slurm.
+- [] Multi-nodes Performance Optimization
+- [] Develop the RLHF datasets for Multiple reward models.
+- [] Train a [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2) RLHF model.
+
 
 ## Usage Steps
 
@@ -99,25 +111,11 @@ cd /openllama2/examples/scripts
 
 ## Inference
 
-After completing the training, you can evaluate of your model by using the `generate` function:
+After completing the training, you can evaluate of your model by using the `inference` script:
 
 ```python
 ./inference_llama.sh "Please introduce GPT model."
 ```
-
-## Common Errors
-
-Here are some common errors that you might encounter when using OpenLLaMA2:
-
-1. **Dependency issues:** Make sure you have installed all the required dependencies listed in `requirements.txt`.
-1. **Data loading issues:** Make sure your dataset is in the correct format and that the file path is correct.
-1. **Memory issues:** Training large models can be memory-intensive. Consider reducing the batch size or using a machine with more memory if you encounter memory errors.
-
-### Development Plan:
-
-- Learning and Sharing: LLaMA2 series model learning, DeepSpeed, Ray and other framework learning, etc.
-- Implementation of LLaMA2 SFT/RLHF High-Performance Training Framework.
-- Develope the RLHF datasets for Multiple reward models.
 
 ### Join Us
 
@@ -148,6 +146,7 @@ We would like to express our gratitude to the following projects and organizatio
 
 - [Hugging Face Transformers ↗](https://github.com/huggingface/transformers)
 - [OpenAI GPT ↗](https://github.com/openai/gpt-3)
+- [LLaMA2 ↗](https://ai.meta.com/llama/)
 - [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
 - [Ray ↗](https://github.com/ray-project/ray)
 
