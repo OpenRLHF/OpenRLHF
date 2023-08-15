@@ -9,17 +9,17 @@
 
 <h1 align="center">OpenLLaMA2</h1>
 <div align="center">
-  <a href="[https://github.com/catqaq/ChatPiXiu ↗](https://github.com/catqaq/ChatPiXiu)">
-    <img src="./docs/imgs/pixiu.png" alt="Logo" height="210">
+  <a href="[https://github.com/openllmai/OpenLLaMA2 ↗](https://github.com/openllmai/OpenLLaMA2)">
+    <img src="./docs/imgs/openllama2.png" alt="Logo" height="210">
   </a>
 
 <p align="center">
     <h3>A Deepspeed/Ray based High-performance LLaMA2 SFT/RLHF framework!</h3>
       <a href="https://github.com/openllmai/OpenLLaMA2/graphs/contributors">
-        <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/catqaq/ChatPiXiu" />
+        <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/openllmai/OpenLLaMA2" />
       </a>
-      <a href="https://github.com/catqaq/ChatPiXiu/issues">
-        <img alt="Issues" src="https://img.shields.io/github/issues/catqaq/ChatPiXiu?color=0088ff" />
+      <a href="https://github.com/openllmai/OpenLLaMA2/issues">
+        <img alt="Issues" src="https://img.shields.io/github/issues/openllmai/OpenLLaMA2?color=0088ff" />
       </a>
       <a href="https://github.com/openllmai/OpenLLaMA2/discussions">
         <img alt="Issues" src="https://img.shields.io/github/discussions/openllmai/OpenLLaMA2?color=0088ff" />
@@ -32,9 +32,6 @@
       <br/>
       <em>Open-source ChatGPT / Comprehensive / Lightweight / Easy-to-use</em>
       <br/>
-      <a href="https://zhuanlan.zhihu.com/p/622065348/"><strong>Articles</strong></a>
-        ·
-      <a href="https://zhuanlan.zhihu.com/p/622065348"><strong>Videos</strong></a>
     </p>
 
 </p>
@@ -43,12 +40,11 @@
 > **The code is open-source, feel free to use it, contributions are welcome! Note: The license of the model depends on the provider of the model.**
 
 - [💥Latest News](#latest-news)
-- [💫OpenNLP Plan](#opennlp-plan)
 - [💫OpenLLaMA2](#openllama2-project)
+- [💫Development Plan](#development-plan)
 - [⛏️Usage Steps](#usage-steps)
 - [📄Running Example](#running-llama2-example)
 - [📄Result Display](#inference)
-- [🛠️Common Errors](#common-errors)
 - [💐References & Acknowledgements](#references-&-acknowledgements)
 - [🌟Sponsor Us](#sponsor-us)
 - [🌈Starchart](#starchart)
@@ -77,8 +73,8 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 - [TODO] Add wandb log support.
 - [TODO] Develop the DPO.
 - [TODO] Develop the Context Distillation.
-- [TODO] Training kernel optimization (such as flashattention)
-- [TODO] Inference kernel fusion optimization
+- [TODO] Training/Inference kernel fusion (such as DS inference)
+- [TODO] Large-scale model (> 70B) support with ZeRO++ and FasterTransformer inference.
 - [TODO] Better docs and examples
 - [TODO] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
 - [TODO] Train a [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2) RLHF model.
@@ -123,10 +119,6 @@ After completing the training, you can evaluate of your model by using the `infe
 ```
 
 ### Join Us
-
-Who are we?
-
-We are Xianyu Intelligence \[xianyu.ai/openllmai\], members include butnot limited to: researchers, engineers, students, enthusiasts from different industries and fields. We have a common goal: to promote the development of open source NLP, and make the technology more accessible and beneficial to all.
 
 **How to Join?**
 
