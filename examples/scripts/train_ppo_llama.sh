@@ -17,10 +17,10 @@ deepspeed ../train_ppo.py \
     --generate_max_len 1024 \
     --zero_stage 2 \
     --bf16 \
-    --actor_learning_rate 5e-7\
-    --critic_learning_rate 9e-6\
+    --actor_learning_rate 5e-7 \
+    --critic_learning_rate 9e-6 \
     --inference_tp_size 1 \
-    --init_kl_coef 0.01\
+    --init_kl_coef 0.01 \
     --prompt_data 'Anthropic/hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward,lmsys/chatbot_arena_conversations,openai/webgpt_comparisons' \
     --prompt_data_probs '0.5,0.15,0.2,0.15' \
     --normalize_reward \
