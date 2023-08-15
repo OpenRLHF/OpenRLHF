@@ -3,8 +3,8 @@ export PATH=$HOME/.local/bin/:$PATH
 export CUDA_LAUNCH_BLOCKING=1
 
 deepspeed ../train_ppo.py \
-    --pretrain "meta-llama/Llama-2-7b-chat-hf" \
-    --critic_pretrain "meta-llama/Llama-2-7b-chat-hf" \
+    --pretrain "meta-llama/Llama-2-7b-hf" \
+    --critic_pretrain "meta-llama/Llama-2-7b-hf" \
     --reward_model_path "./ckpt/7b_llama/rm_model.pt" \
     --sft_model_path "./ckpt/7b_llama/sft_model.pt" \
     --save_path './ckpt/7b_llama' \
@@ -21,8 +21,8 @@ deepspeed ../train_ppo.py \
     --critic_learning_rate 9e-6 \
     --inference_tp_size 1 \
     --init_kl_coef 0.01 \
-    --prompt_data 'Dahoas/full-hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward,lmsys/chatbot_arena_conversations,openai/webgpt_comparisons' \
-    --prompt_data_probs '0.5,0.15,0.2,0.15' \
+    --prompt_data 'yahma/alpaca-cleaned,Dahoas/full-hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward' \
+    --prompt_data_probs '0.3,0.5,0.2' \
     --normalize_reward \
     --gradient_checkpointing
 
