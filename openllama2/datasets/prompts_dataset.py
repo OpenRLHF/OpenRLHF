@@ -14,8 +14,12 @@ def preprocess_data(data):
         if prompt.startswith('prompter:'):
             prompt = prompt.replace('prompter:', '\nHuman: ').replace('assistant:', '\nAssistant: ') + '\nAssistant: '
     # BelleGroup/train_0.5M_CN
-    elif exist_and_not_none(data, 'instruction'):
-        prompt = 'Human: ' +  data['instruction'] + "\nAssistant: "
+    # LLMs/Alpaca-ShareGPT
+    # yahma/alpaca-cleaned
+    # QingyiSi/Alpaca-CoT
+    elif exist_and_not_none(data, 'instruction') and exist_and_not_none(data, 'output'):
+        input =  ' ' + data['input'] if exist_and_not_none(data, 'input') else ''
+        prompt = 'Human: ' +  data['instruction'] + input + "\nAssistant: "
     # stanfordnlp/SHP
     elif exist_and_not_none(data, 'history'):
         prompt = "Human: " +  data['history'] + "\nAssistant: "
