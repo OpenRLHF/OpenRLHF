@@ -24,12 +24,12 @@ def preprocess_data(data, pretrain_mode=False):
         input =  ' ' + data['input'] if exist_and_not_none(data, 'input') else ''
         prompt = 'Human: ' +  data['instruction'] + input + "\nAssistant: "
         target = data['output']
-    # crumb/gpt4all-clean
-    # nomic-ai/gpt4all-j-prompt-generations
+    # Open-Orca/OpenOrca
     elif exist_and_not_none(data, 'system_prompt') and exist_and_not_none(data, 'response'):
         prompt = 'Human: ' + data['system_prompt'] + "\n" + data['question'] + "\nAssistant: "
         target = data['response']
-    # Open-Orca/OpenOrca
+    # crumb/gpt4all-clean
+    # nomic-ai/gpt4all-j-prompt-generations
     elif exist_and_not_none(data, 'prompt') and exist_and_not_none(data, 'response'):
         prompt = 'Human: ' + data['prompt'] + "\nAssistant: "
         target = data['response']

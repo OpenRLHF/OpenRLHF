@@ -7,12 +7,10 @@ from .utils import exist_and_not_none, zero_pad_sequences
 
 
 def preprocess_data(data):
-    # Dahoas/full-hh-rlhf
-    if exist_and_not_none(data, 'prompt'):
-        prompt = data['prompt']
-        # tasksource/oasst1_pairwise_rlhf_reward
-        if prompt.startswith('prompter:'):
-            prompt = prompt.replace('prompter:', '\nHuman: ').replace('assistant:', '\nAssistant: ') + '\nAssistant: '
+    # Open-Orca/OpenOrca
+    if exist_and_not_none(data, 'system_prompt') and exist_and_not_none(data, 'response'):
+        prompt = 'Human: ' + data['system_prompt'] + "\n" + data['question'] + "\nAssistant: "
+        target = data['response']
     # BelleGroup/train_0.5M_CN
     # LLMs/Alpaca-ShareGPT
     # yahma/alpaca-cleaned
@@ -39,6 +37,12 @@ def preprocess_data(data):
     # openai/webgpt_comparisons
     elif exist_and_not_none(data, 'question') and exist_and_not_none(data, 'answer_1'):
         prompt = "Human: " +  data['question']['full_text'] + "\nAssistant: "
+    # Dahoas/full-hh-rlhf
+    elif exist_and_not_none(data, 'prompt'):
+        prompt = data['prompt']
+        # tasksource/oasst1_pairwise_rlhf_reward
+        if prompt.startswith('prompter:'):
+            prompt = prompt.replace('prompter:', '\nHuman: ').replace('assistant:', '\nAssistant: ') + '\nAssistant: '
     else:
         raise ValueError("prompt dataset key error")
     return prompt

@@ -42,6 +42,7 @@ def train(args):
     
     # prepare for data and dataset
     train_data, eval_data = blending_datasets(args.dataset, args.dataset_probs, strategy, args.seed)
+    train_data = train_data.select(range(min(args.max_samples, len(train_data))))
     train_dataset = SFTDataset(train_data, tokenizer, args.max_len, strategy, pretrain_mode=args.pretrain_mode)
     eval_dataset = SFTDataset(eval_data, tokenizer, args.max_len, strategy, pretrain_mode=args.pretrain_mode)
 
@@ -99,6 +100,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_epochs', type=int, default=2)
     parser.add_argument('--micro_train_batch_size', type=int, default=8)
     parser.add_argument('--train_batch_size', type=int, default=128)
+    parser.add_argument('--max_samples', type=int, default=1000000)
     parser.add_argument('--max_len', type=int, default=512)
     parser.add_argument('--max_norm', type=float, default=1.0)
     parser.add_argument('--l2', type=float, default=0)
