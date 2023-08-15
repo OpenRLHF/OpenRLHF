@@ -165,9 +165,9 @@ def train(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--prompt_data', type=str, default=None)
-    parser.add_argument('--prompt_data_probs', type=str, default="1.0")
+    parser.add_argument('--prompt_data_probs', type=str, default="1.0", help="sampling probs for datasets")
     parser.add_argument('--pretrain_data', type=str, default=None)
-    parser.add_argument('--pretrain_data_probs', type=str, default="1.0")
+    parser.add_argument('--pretrain_data_probs', type=str, default="1.0", help="sampling probs for datasets")
     parser.add_argument('--pretrain', type=str, default=None)
     parser.add_argument('--critic_pretrain', type=str, default=None)
     parser.add_argument('--reward_model_path', type=str, default=None)
@@ -209,7 +209,7 @@ if __name__ == '__main__':
     parser.add_argument('--enable_ema',
                         action='store_true',
                         help='Enable EMA checkpoint for the model.')
-    parser.add_argument('--zpg', type=int, default=8)
+    parser.add_argument('--zpg', type=int, default=8, help="ZeRO++ max partition size")
     parser.add_argument('--adam_offload', action="store_false", default=True)
     args = parser.parse_args()
     train(args)
