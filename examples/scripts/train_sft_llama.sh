@@ -13,4 +13,4 @@ deepspeed ../train_sft.py \
     --max_epochs 2 \
     --bf16 \
     --learning_rate 5e-6 \
-    # --gradient_checkpointing
+    --gradient_checkpointing
