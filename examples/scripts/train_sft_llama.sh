@@ -12,7 +12,7 @@ deepspeed ../train_sft.py \
     --pretrain "meta-llama/Llama-2-7b-hf" \
     --save_path "./ckpt/7b_llama" \
     --zero_stage 2 \
-    --max_epochs 2 \
+    --max_epochs 1 \
     --bf16 \
     --learning_rate 5e-6 \
     --gradient_checkpointing
