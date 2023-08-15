@@ -69,7 +69,7 @@ def train(args):
 
     # prepare datasets
     prompts_data = blending_datasets(args.prompt_data, args.prompt_data_probs, strategy, args.seed, max_count=100000, return_eval=False)
-    prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_dataset))))
+    prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
     prompts_dataset = PromptDataset(prompts_data, strategy)
     prompts_dataloader = strategy.setup_dataloader(prompts_dataset, args.micro_rollout_batch_size, True, True)
 
