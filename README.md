@@ -45,7 +45,7 @@
 - [💥Latest News](#latest-news)
 - [💫OpenNLP Plan](#opennlp-plan)
 - [💫OpenLLaMA2](#openllama2-project)
-- [⛏️Usage Steps](#Uuage-steps)
+- [⛏️Usage Steps](#usage-steps)
 - [📄Running Example](#running-llama2-example)
 - [📄Result Display](#inference)
 - [🛠️Common Errors](#common-errors)
@@ -67,17 +67,19 @@ OpenLLaMA2 is the third official open source project of the OpenNLP plan, and it
 
 The sister project of this project is [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2), which aims to fine-tune the Chinese LLaMA2 using SFT/RLHF.
 
-### Development Progress:
+### Development Plan:
 
 - [✔️] Develop a fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
 - [WIP] Support Multiple RM models.
 - [WIP] Develop Multi-nodes RLHF based on Ray.
 - [WIP] Develop the Rejection Sampling.
+- [TODO] Develop the Multi-nodes training scripts for Slurm.
 - [TODO] Add wandb log support.
 - [TODO] Develop the DPO.
 - [TODO] Develop the Context Distillation.
-- [TODO] Develop the Multi-nodes training scripts for Slurm.
-- [TODO] Multi-nodes Performance Optimization
+- [TODO] Training kernel optimization (such as flashattention)
+- [TODO] Inference kernel fusion optimization
+- [TODO] Better docs and examples
 - [TODO] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
 - [TODO] Train a [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2) RLHF model.
 

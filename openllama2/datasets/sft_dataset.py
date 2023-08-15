@@ -14,7 +14,7 @@ def preprocess_data(data, pretrain_mode=False):
         target = data['chosen']
     # pvduy/sharegpt_alpaca_oa_vicuna_format
     elif exist_and_not_none(data, 'prompt') and exist_and_not_none(data, 'label'):
-        prompt = data['prompt'].replace('USER:', 'Human: ').replace('ASSISTANT:', '\nAssistant: ')
+        prompt = data['prompt'].replace('USER:', '\nHuman: ').replace('ASSISTANT:', '\nAssistant: ')
         target = data['label'].replace('</s>', '')
     # BelleGroup/train_0.5M_CN
     # LLMs/Alpaca-ShareGPT
