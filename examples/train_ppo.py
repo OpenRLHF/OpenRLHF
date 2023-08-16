@@ -127,7 +127,7 @@ def train(args):
         actor_scheduler,
         critic_scheduler,
         max_epochs=args.max_epochs,
-        train_batch_size=args.train_batch_size,
+        micro_train_batch_size=args.micro_train_batch_size,
         micro_rollout_batch_size=args.micro_rollout_batch_size,
         gradient_checkpointing=args.gradient_checkpointing,
         tokenizer=tokenizer,

@@ -60,7 +60,7 @@ class PPOTrainer(ABC):
                  kl_target: float = None,
                  kl_horizon: int = 10000,
                  ptx_coef: float = 0,
-                 train_batch_size: int = 8,
+                 micro_train_batch_size: int = 8,
                  buffer_limit: int = 0,
                  buffer_cpu_offload: bool = True,
                  eps_clip: float = 0.2,
@@ -82,7 +82,7 @@ class PPOTrainer(ABC):
         self.dataloader_pin_memory = dataloader_pin_memory
         self.max_norm = max_norm
         self.ptx_coef = ptx_coef
-        self.train_batch_size = train_batch_size
+        self.micro_train_batch_size = micro_train_batch_size
         self.kl_target = kl_target
         self.prompt_max_len = prompt_max_len
         self.ema_beta = ema_beta
@@ -106,7 +106,7 @@ class PPOTrainer(ABC):
             self.kl_ctl = FixedKLController(init_kl_coef)
 
         self.experience_maker = NaiveExperienceMaker(actor, critic, reward_model, initial_model, self.kl_ctl, strategy)
-        self.replay_buffer = NaiveReplayBuffer(train_batch_size, buffer_limit, buffer_cpu_offload)
+        self.replay_buffer = NaiveReplayBuffer(micro_train_batch_size, buffer_limit, buffer_cpu_offload)
 
         if self.gradient_checkpointing:
             self.actor.gradient_checkpointing_enable()
