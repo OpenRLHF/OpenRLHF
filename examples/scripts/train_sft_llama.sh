@@ -1,6 +1,5 @@
 set -x
 export PATH=$HOME/.local/bin/:$PATH
-export CUDA_LAUNCH_BLOCKING=1
 
 deepspeed ../train_sft.py \
     --max_len 2048 \
