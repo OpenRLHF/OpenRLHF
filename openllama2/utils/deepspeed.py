@@ -242,6 +242,19 @@ class DeepspeedStrategy(ABC):
                     output_state_dict[k] = vv
                 torch.save(output_state_dict, path)
 
+    def save_hf_format(self, model, tokenizer, output_dir):
+        # used to save huggingface format, so we can use it for hf.from_pretrained
+        CONFIG_NAME = "config.json"
+        WEIGHTS_NAME = "pytorch_model.bin"
+        # save model weights for ZeRO2/3
+        self.save_model(model,os.path.join(output_dir, WEIGHTS_NAME))
+        # save config
+        model_to_save = self._unwrap_model(model)
+        output_config_file = os.path.join(output_dir, CONFIG_NAME)
+        model_to_save.config.to_json_file(output_config_file)
+        # save tokenizer
+        tokenizer.save_vocabulary(output_dir)
+
     def all_reduce(self, data, op='mean'):
         assert op in ('mean', 'max', 'sum')
         if isinstance(data, dict):

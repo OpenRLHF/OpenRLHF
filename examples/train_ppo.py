@@ -162,6 +162,11 @@ def train(args):
                         args.save_path + '/ppo_model.pt', 
                         only_rank0=True)
 
+    if args.save_hf_model:  
+        strategy.save_hf_format(ema_model if args.enable_ema else actor, 
+                                tokenizer, args.save_path + '/ppo_hf')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--prompt_data', type=str, default=None)
@@ -211,5 +216,6 @@ if __name__ == '__main__':
                         help='Enable EMA checkpoint for the model.')
     parser.add_argument('--zpg', type=int, default=8, help="ZeRO++ max partition size")
     parser.add_argument('--adam_offload', action="store_true", default=False)
+    parser.add_argument('--save_hf_model', action='store_true', default=False)
     args = parser.parse_args()
     train(args)
