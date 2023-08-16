@@ -22,7 +22,8 @@ deepspeed ../train_ppo.py \
     --inference_tp_size 1 \
     --init_kl_coef 0.01 \
     --prompt_data 'yahma/alpaca-cleaned,Dahoas/full-hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward' \
-    --prompt_data_probs '0.3,0.5,0.2' \
+    --prompt_data_probs '0.3,0.6,0.1' \
     --normalize_reward \
+    --adam_offload \
     --gradient_checkpointing
 

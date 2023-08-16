@@ -11,15 +11,15 @@ from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
 
 
 def get_train_ds_config(offload,
+                        adam_offload=True,
                         stage=2,
                         bf16=True,
-                        adam_offload=False,
                         max_norm = 1.0,
                         enable_hybrid_engine=False,
                         inference_tp_size=1,
                         release_inference_cache=True,
                         pin_parameters=True,
-                        tp_gather_partition_size=1,
+                        tp_gather_partition_size=4,
                         max_out_tokens=512,
                         zpg=8):
 
@@ -28,13 +28,14 @@ def get_train_ds_config(offload,
             stage == 3
         ), "Zero stage 3 must be used to do Tensor sharding in the hybrid engine"
 
+    device = "cpu" if offload else "none"
     zero_opt_dict = {
         "stage": stage,
         "offload_param": {
-            "device": "cpu" if offload else "none"
+            "device": device
         },
         "offload_optimizer": {
-            "device": "cpu" if adam_offload else "none"
+            "device": "cpu" if adam_offload else "none",
         },
         "stage3_param_persistence_threshold": 1e4,
         "stage3_max_live_parameters": 3e7,
@@ -79,12 +80,12 @@ def get_eval_ds_config(offload,
         ), "Zero stage 3 must be used to do Tensor sharding in the hybrid engine"
 
     
-    device = "cpu" if offload else "none"
+    
     zero_opt_dict = {
         "stage": stage,
         "stage3_param_persistence_threshold": 1e4,
         "offload_param": {
-            "device": device
+            "device": "cpu" if offload else "none",
         },
     }
     return {

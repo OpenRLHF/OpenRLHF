@@ -57,9 +57,6 @@ def eval(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--strategy',
-                    choices=['naive', 'ddp', 'deepspeed'],
-                    default='naive')
     parser.add_argument('--pretrain', type=str, default=None)
     parser.add_argument('--load_model', type=str, default=None)
     parser.add_argument('--input', type=str, default='Question: How are you ? Answer:')
