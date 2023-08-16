@@ -90,6 +90,9 @@ def train(args):
     # save model checkpoint after fitting on only rank0
     strategy.save_model(model, args.save_path + '/sft_model.pt', only_rank0=True)
 
+    if args.save_hf_model:  
+        strategy.save_hf_format(model, tokenizer, args.save_path + '/sft_hf')
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -116,5 +119,6 @@ if __name__ == '__main__':
     parser.add_argument('--learning_rate', type=float, default=2e-6)
     parser.add_argument('--zpg', type=int, default=8, help="ZeRO++ max partition size")
     parser.add_argument('--adam_offload', action="store_true", default=False)
+    parser.add_argument('--save_hf_model', action='store_true', default=False)
     args = parser.parse_args()
     train(args)
