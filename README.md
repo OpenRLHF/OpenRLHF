@@ -53,6 +53,7 @@
 ## Latest News
 
 - 2023/8/18: **support LLaMA2 7B PPO training on Single A100**
+
 pretraind SFT/RM checkpoint: https://huggingface.co/chuyi777/openllama2_checkpoint
 
 - 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed training features finished
@@ -95,14 +96,14 @@ Clone the repository: `git clone https://github.com/openllmai/OpenLLaMA2.git`
 cd examples/scripts
 ./docker_run.sh
 
-# huggingface login 
-/.local/bin/huggingface-cli login
-
 # cd in container
 cd /openllama2/examples/scripts
 
 # build OpenLLaMA2
 ./build_openllama2.sh
+
+# huggingface login 
+~/.local/bin/huggingface-cli login
 
 # train SFT model
 ./train_sft_llama.sh
@@ -167,6 +168,16 @@ A big thank you to all our contributors! If you want to contribute, feel free to
 <a href="https://github.com/openllmai/OpenLLaMA2/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=openllmai/OpenLLaMA2" />
 </a>
+
+## Citation
+```
+@misc{openllmai23,
+   author = {OpenLLMAI},
+   title = {OpenLLaMA2},
+   year={2023},
+   howpublished = {\url{https://github.com/OpenLLMAI/OpenLLaMA2}}
+}
+```
 
 ______________________________________________________________________
 
