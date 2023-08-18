@@ -9,17 +9,17 @@
 
 <h1 align="center">OpenLLaMA2</h1>
 <div align="center">
-  <a href="[https://github.com/catqaq/ChatPiXiu ↗](https://github.com/catqaq/ChatPiXiu)">
-    <img src="./docs/imgs/pixiu.png" alt="Logo" height="210">
+  <a href="[https://github.com/openllmai/OpenLLaMA2 ↗](https://github.com/openllmai/OpenLLaMA2)">
+    <img src="./docs/imgs/openllama2.png" alt="Logo" height="210">
   </a>
 
 <p align="center">
-    <h3>LLaMA2 training framework for everyone!</h3>
+    <h3>A Deepspeed/Ray based High-performance LLaMA2 SFT/RLHF framework!</h3>
       <a href="https://github.com/openllmai/OpenLLaMA2/graphs/contributors">
-        <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/catqaq/ChatPiXiu" />
+        <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/openllmai/OpenLLaMA2" />
       </a>
-      <a href="https://github.com/catqaq/ChatPiXiu/issues">
-        <img alt="Issues" src="https://img.shields.io/github/issues/catqaq/ChatPiXiu?color=0088ff" />
+      <a href="https://github.com/openllmai/OpenLLaMA2/issues">
+        <img alt="Issues" src="https://img.shields.io/github/issues/openllmai/OpenLLaMA2?color=0088ff" />
       </a>
       <a href="https://github.com/openllmai/OpenLLaMA2/discussions">
         <img alt="Issues" src="https://img.shields.io/github/discussions/openllmai/OpenLLaMA2?color=0088ff" />
@@ -32,9 +32,6 @@
       <br/>
       <em>Open-source ChatGPT / Comprehensive / Lightweight / Easy-to-use</em>
       <br/>
-      <a href="https://zhuanlan.zhihu.com/p/622065348/"><strong>Articles</strong></a>
-        ·
-      <a href="https://zhuanlan.zhihu.com/p/622065348"><strong>Videos</strong></a>
     </p>
 
 </p>
@@ -43,30 +40,50 @@
 > **The code is open-source, feel free to use it, contributions are welcome! Note: The license of the model depends on the provider of the model.**
 
 - [💥Latest News](#latest-news)
-- [💫OpenNLP Plan](#OpenNLP-plan)
-- [💫OpenLLaMA2](#OpenLLaMA2-project)
+- [💫OpenLLaMA2](#openllama2-project)
+- [💫Development Plan](#development-plan)
 - [⛏️Usage Steps](#usage-steps)
-- [📄Running Example](#running-example)
-- [📄Result Display](#result-display)
-- [🛠️Common Errors](#common-errors)
-- [💐References & Acknowledgements](#references--acknowledgements)
+- [📄Running Example](#running-llama2-example)
+- [📄Result Display](#inference)
+- [💐References & Acknowledgements](#references-&-acknowledgements)
 - [🌟Sponsor Us](#sponsor-us)
 - [🌈Starchart](#starchart)
 - [🏆Contributors](#contributors)
 
 ## Latest News
 
-- 2023/8/13: LLaMA 7B + SFT+ RM PPO + DeepSpeed training features finished
+- 2023/8/18: **support LLaMA2 7B PPO training on Single A100**
+
+pretraind SFT/RM checkpoint: https://huggingface.co/chuyi777/openllama2_checkpoint
+
+- 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed training features finished
 
 - 2023/07/30: OpenLLaMA2 project officially launched:
   - Initial code submission
-  - Division of labor among members
 
 ## OpenLLaMA2 Project
 
-OpenLLaMA2 is the third official open source project of the OpenNLP plan, and it is the first practice project of openllmai. LLaMA2 is great and powerful, but there are currently no practical LLaMA2 SFT/RLHF training frameworks in the open source community. This project aims to develop an industrial-grade LLaMA2 SFT/RLHF training framework.
+OpenLLaMA2 aims to develop a high-performance distributed LLaMA2 SFT/RLHF training framework.
 
 The sister project of this project is [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2), which aims to fine-tune the Chinese LLaMA2 using SFT/RLHF.
+
+### Development Plan:
+
+- [✔️] Develop a fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
+- [WIP] Support Multiple RM models.
+- [WIP] Develop Multi-nodes RLHF based on Ray.
+- [WIP] Develop the Rejection Sampling.
+- [TODO] Develop the Multi-nodes training scripts for Slurm.
+- [TODO] Support Qlora/GPTQ.
+- [TODO] Add wandb log support.
+- [TODO] Develop the DPO.
+- [TODO] Develop the Context Distillation.
+- [TODO] Training/Inference kernel fusion (such as DS inference)
+- [TODO] Large-scale model (> 70B) support with ZeRO++ and FasterTransformer inference.
+- [TODO] Better docs and examples
+- [TODO] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
+- [TODO] Train a [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2) RLHF model.
+
 
 ## Usage Steps
 
@@ -79,14 +96,14 @@ Clone the repository: `git clone https://github.com/openllmai/OpenLLaMA2.git`
 cd examples/scripts
 ./docker_run.sh
 
-# huggingface login 
-/.local/bin/huggingface-cli login
-
 # cd in container
 cd /openllama2/examples/scripts
 
 # build OpenLLaMA2
 ./build_openllama2.sh
+
+# huggingface login 
+~/.local/bin/huggingface-cli login
 
 # train SFT model
 ./train_sft_llama.sh
@@ -98,39 +115,19 @@ cd /openllama2/examples/scripts
 ./train_ppo_llama.sh
 ```
 
-## Result Display
+## Inference
 
-After completing the training and evaluation, you can evaluate of your model by using the `generate` function:
+After completing the training, you can evaluate of your model by using the `inference` script:
 
 ```python
 ./inference_llama.sh "Please introduce GPT model."
 ```
 
-This will display a table with the results of your model, including metrics like loss, accuracy, F1 score, and more.
-
-## Common Errors
-
-Here are some common errors that you might encounter when using OpenLLaMA2:
-
-1. **Dependency issues:** Make sure you have installed all the required dependencies listed in `requirements.txt`.
-1. **Data loading issues:** Make sure your dataset is in the correct format and that the file path is correct.
-1. **Memory issues:** Training large models can be memory-intensive. Consider reducing the batch size or using a machine with more memory if you encounter memory errors.
-
-### Development Plan:
-
-- Learning and Sharing: LLaMA2 series model learning, DeepSpeed, Ray and other framework learning, etc.
-- Implementation of LLaMA2 SFT/RLHF High-Performance Training Framework.
-- Develope the RLHF datasets for Multiple reward models.
-
 ### Join Us
-
-Who are we?
-
-We are Xianyu Intelligence \[xianyu.ai/openllmai\], members include butnot limited to: researchers, engineers, students, enthusiasts from different industries and fields. We have a common goal: to promote the development of open source NLP, and make the technology more accessible and beneficial to all.
 
 **How to Join?**
 
-1. Email us at openllmai@xianyu.ai. Please include the following details:
+1. Email us at janhu9527@gmail.com. Please include the following details:
    - Your name
    - Your GitHub username
    - Your areas of interest
@@ -151,6 +148,7 @@ We would like to express our gratitude to the following projects and organizatio
 
 - [Hugging Face Transformers ↗](https://github.com/huggingface/transformers)
 - [OpenAI GPT ↗](https://github.com/openai/gpt-3)
+- [LLaMA2 ↗](https://ai.meta.com/llama/)
 - [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
 - [Ray ↗](https://github.com/ray-project/ray)
 
@@ -170,6 +168,16 @@ A big thank you to all our contributors! If you want to contribute, feel free to
 <a href="https://github.com/openllmai/OpenLLaMA2/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=openllmai/OpenLLaMA2" />
 </a>
+
+## Citation
+```
+@misc{openllmai23,
+   author = {OpenLLMAI},
+   title = {OpenLLaMA2},
+   year={2023},
+   howpublished = {\url{https://github.com/OpenLLMAI/OpenLLaMA2}}
+}
+```
 
 ______________________________________________________________________
 

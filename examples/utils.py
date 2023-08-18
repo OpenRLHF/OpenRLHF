@@ -26,12 +26,13 @@ def get_tokenizer(pretrain, model, padding_side='left', strategy=None, use_fast=
 
 
 def get_strategy(args):
+    # default args for deepspeed
     if 'seed' not in args:
         args.seed = 42
     if 'max_norm' not in args:
         args.max_norm = 1.0
-    if 'accumulated_gradient' not in args:
-        args.accumulated_gradient = 1
+    if 'micro_train_batch_size' not in args:
+        args.micro_train_batch_size = 1
     if 'train_batch_size' not in args:
         args.train_batch_size = 1
     if 'local_rank' not in args:
@@ -44,7 +45,6 @@ def get_strategy(args):
         args.adam_offload = False
     if 'zpg' not in args:
         args.zpg = 8
-
     # max_out_tokens for DS inference
     if 'max_len' in args and args.max_len is not None:
         args.max_out_tokens = args.max_len
@@ -55,7 +55,7 @@ def get_strategy(args):
 
     strategy = DeepspeedStrategy(seed=args.seed, 
                                     max_norm=args.max_norm,
-                                    accumulated_gradient=args.accumulated_gradient, 
+                                    micro_train_batch_size=args.micro_train_batch_size, 
                                     train_batch_size=args.train_batch_size,
                                     zero_stage=args.zero_stage,
                                     max_out_tokens=args.max_out_tokens,
@@ -65,7 +65,7 @@ def get_strategy(args):
     return strategy
 
 
-def blending_datasets(datasets, probabilities, strategy=None, seed=42, max_count=2000000, return_eval=True):
+def blending_datasets(datasets, probabilities, strategy=None, seed=42, max_count=2000000, return_eval=True, stopping_strategy="first_exhausted"):
     datasets = datasets.split(',')
     probabilities = list(map(float, probabilities.split(',')))
     assert len(probabilities) == len(datasets)
@@ -84,14 +84,19 @@ def blending_datasets(datasets, probabilities, strategy=None, seed=42, max_count
                 eval_data = data["test"].select(range(min(int(max_count * 0.1), len(data["test"]))))
             elif 'validation' in data:
                 eval_data = data["validation"].select(range(min(int(max_count * 0.1), len(data["validation"]))))
+            elif "train" in data:
+                eval_data = data["train"].select(range(min(int(max_count * 0.1), int(len(data["train"]) * 0.01))))
             else:
-                eval_data = Dataset.from_dict({})
+                eval_data = data.select(range(min(int(max_count * 0.1), int(len(data) * 0.001))))
             eval_data_list.append(eval_data)
     
     # merge datasets
-    train_dataset = interleave_datasets(train_data_list, probabilities=probabilities, seed=seed)
+    if strategy.is_rank_0():
+        print(train_data_list)
+        
+    train_dataset = interleave_datasets(train_data_list, probabilities=probabilities, seed=seed, stopping_strategy=stopping_strategy)
     if return_eval:
-        eval_dataset = interleave_datasets(eval_data_list, probabilities=probabilities, seed=seed)
+        eval_dataset = interleave_datasets(eval_data_list, probabilities=probabilities, seed=seed, stopping_strategy=stopping_strategy)
         return train_dataset, eval_dataset
     else:
         return train_dataset

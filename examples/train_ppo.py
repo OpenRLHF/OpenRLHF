@@ -69,23 +69,22 @@ def train(args):
 
     # prepare datasets
     prompts_data = blending_datasets(args.prompt_data, args.prompt_data_probs, strategy, args.seed, max_count=100000, return_eval=False)
-    prompts_data = prompts_data.select(range(min(100000, len(prompts_data))))
+    prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
     prompts_dataset = PromptDataset(prompts_data, strategy)
-    prompts_dataloader = strategy.setup_dataloader(prompts_dataset, args.experience_batch_size, True, True)
+    prompts_dataloader = strategy.setup_dataloader(prompts_dataset, args.micro_rollout_batch_size, True, True)
 
     if args.pretrain_data:
         pretrain_data = blending_datasets(args.pretrain_data, args.pretrain_data_probs, strategy, args.seed, return_eval=False)
         pretrain_max_len =  args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
         pretrain_dataset = SFTDataset(pretrain_data.select(range(min(len(pretrain_data), args.max_epochs * len(prompts_dataset)))), 
                     tokenizer, pretrain_max_len, strategy, pretrain_mode=True)
-        pretrain_dataloader = itertools.cycle(iter(strategy.setup_dataloader(pretrain_dataset, args.train_batch_size, 
+        pretrain_dataloader = itertools.cycle(iter(strategy.setup_dataloader(pretrain_dataset, args.micro_train_batch_size, 
                                                     True, True, pretrain_dataset.collate_fn)))
     else:
         pretrain_dataloader = None
 
     # configure scheduler
-    num_update_steps_per_episodes = len(prompts_dataloader) * \
-        (args.experience_batch_size / args.train_batch_size) * args.max_epochs // args.accumulated_gradient
+    num_update_steps_per_episodes = len(prompts_dataloader) * args.max_epochs // strategy.accumulated_gradient
     max_steps = math.ceil(args.num_episodes * num_update_steps_per_episodes)
 
     actor_scheduler = get_scheduler("constant_with_warmup",
@@ -128,16 +127,15 @@ def train(args):
         actor_scheduler,
         critic_scheduler,
         max_epochs=args.max_epochs,
-        train_batch_size=args.train_batch_size,
-        experience_batch_size=args.experience_batch_size,
-        accumulated_gradient=args.accumulated_gradient,
+        micro_train_batch_size=args.micro_train_batch_size,
+        micro_rollout_batch_size=args.micro_rollout_batch_size,
         gradient_checkpointing=args.gradient_checkpointing,
         tokenizer=tokenizer,
         prompt_max_len=args.prompt_max_len,
-        value_clip=None,
-        eps_clip=0.2,
-        gamma=1,
-        lambd=0.95,
+        value_clip=args.value_clip,
+        eps_clip=args.eps_clip,
+        gamma=args.gamma,
+        lambd=args.lambd,
         init_kl_coef=args.init_kl_coef,
         kl_target=args.kl_target,
         ema_beta=0.992,
@@ -157,36 +155,46 @@ def train(args):
     trainer.fit(prompts_dataloader,
                 pretrain_dataloader,
                 num_episodes=args.num_episodes,
-                update_timesteps=args.update_timesteps)
+                rollout_batch_size=args.rollout_batch_size)
     
     # save model checkpoint after fitting on only rank0
     strategy.save_model(ema_model if args.enable_ema else actor, 
                         args.save_path + '/ppo_model.pt', 
                         only_rank0=True)
 
+    if args.save_hf_model:  
+        strategy.save_hf_format(ema_model if args.enable_ema else actor, 
+                                tokenizer, args.save_path + '/ppo_hf')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--prompt_data', type=str, default=None)
-    parser.add_argument('--prompt_data_probs', type=str, default="1.0")
+    parser.add_argument('--prompt_data_probs', type=str, default="1.0", help="sampling probs for datasets")
     parser.add_argument('--pretrain_data', type=str, default=None)
-    parser.add_argument('--pretrain_data_probs', type=str, default="1.0")
+    parser.add_argument('--pretrain_data_probs', type=str, default="1.0", help="sampling probs for datasets")
     parser.add_argument('--pretrain', type=str, default=None)
     parser.add_argument('--critic_pretrain', type=str, default=None)
     parser.add_argument('--reward_model_path', type=str, default=None)
     parser.add_argument('--sft_model_path', type=str, default=None)
     parser.add_argument('--save_path', type=str, default='./ckpt')
     parser.add_argument('--num_episodes', type=int, default=1)
-    parser.add_argument('--update_timesteps', type=int, default=16)
-    parser.add_argument('--experience_batch_size', type=int, default=8)
-    parser.add_argument('--max_epochs', type=int, default=2)
+    parser.add_argument('--rollout_batch_size', type=int, default=512)
+    parser.add_argument('--micro_rollout_batch_size', type=int, default=8)
+    parser.add_argument('--max_epochs', type=int, default=1)
     parser.add_argument('--prompt_max_len', type=int, default=1024)
     parser.add_argument('--generate_max_len', type=int, default=1024)
     parser.add_argument('--max_len', type=int, default=None)
+    parser.add_argument('--max_samples', type=int, default=100000)
     parser.add_argument('--max_norm', type=float, default=1.0)
     parser.add_argument('--l2', type=float, default=0.)
     parser.add_argument('--ptx_coef', type=float, default=0.05)
-    parser.add_argument('--train_batch_size', type=int, default=4)
-    parser.add_argument('--accumulated_gradient', type=int, default=32)
+    parser.add_argument('--eps_clip', type=float, default=0.2)
+    parser.add_argument('--value_clip', type=float, default=0.2)
+    parser.add_argument('--lambd', type=float, default=0.95)
+    parser.add_argument('--gamma', type=float, default=1)
+    parser.add_argument('--micro_train_batch_size', type=int, default=4)
+    parser.add_argument('--train_batch_size', type=int, default=128)
     parser.add_argument('--load_checkpoint', action='store_true', default=False)
     parser.add_argument('--normalize_reward', action='store_true', default=False)
     parser.add_argument('--top_k', type=int, default=None)
@@ -206,7 +214,8 @@ if __name__ == '__main__':
     parser.add_argument('--enable_ema',
                         action='store_true',
                         help='Enable EMA checkpoint for the model.')
-    parser.add_argument('--zpg', type=int, default=8)
-    parser.add_argument('--adam_offload', action="store_false", default=True)
+    parser.add_argument('--zpg', type=int, default=8, help="ZeRO++ max partition size")
+    parser.add_argument('--adam_offload', action="store_true", default=False)
+    parser.add_argument('--save_hf_model', action='store_true', default=False)
     args = parser.parse_args()
     train(args)

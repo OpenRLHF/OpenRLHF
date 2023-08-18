@@ -48,17 +48,18 @@ def train(args):
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)
 
     # prepare for data and dataset
-    train_data, eval_data = blending_datasets(args.dataset, args.dataset_probs, strategy, args.seed, max_count=500000)
+    train_data, eval_data = blending_datasets(args.dataset, args.dataset_probs, \
+        strategy, args.seed, max_count=2000000, stopping_strategy='all_exhausted')
     train_dataset = RewardDataset(train_data, tokenizer, args.max_len, strategy) if not args.only_evaluate else None
     eval_dataset = RewardDataset(eval_data, tokenizer, args.max_len, strategy)
 
     train_dataloader = strategy.setup_dataloader(
-        train_dataset, args.train_batch_size, True, True, train_dataset.collate_fn) if not args.only_evaluate else None
+        train_dataset, args.micro_train_batch_size, True, True, train_dataset.collate_fn) if not args.only_evaluate else None
     eval_dataloader = strategy.setup_dataloader(
-        eval_dataset, args.train_batch_size, True, False, eval_dataset.collate_fn)
+        eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn)
 
     # scheduler
-    num_update_steps_per_epoch = len(train_dataloader) // args.accumulated_gradient
+    num_update_steps_per_epoch = len(train_dataloader) * args.max_epochs // strategy.accumulated_gradient
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
     
     scheduler = get_scheduler("cosine",
@@ -86,7 +87,6 @@ def train(args):
                                  max_norm=args.max_norm,
                                  batch_size=args.train_batch_size,
                                  max_epochs=args.max_epochs,
-                                 accumulated_gradient=args.accumulated_gradient,
                                  gradient_checkpointing=args.gradient_checkpointing,
                                  only_evaluate= args.only_evaluate,
                                  loss=args.loss)
@@ -103,10 +103,11 @@ if __name__ == '__main__':
     parser.add_argument('--pretrain', type=str, default='bigscience/bloomz-1b7')
     # parser.add_argument('--dataset', type=str, default='Anthropic/hh-rlhf')
     parser.add_argument('--dataset', type=str, default='Dahoas/full-hh-rlhf')
-    parser.add_argument('--dataset_probs', type=str, default='1.0')
+    parser.add_argument('--dataset_probs', type=str, default='1.0', help="sampling probs for datasets")
     parser.add_argument('--save_path', type=str, default='./ckpt')
     parser.add_argument('--max_epochs', type=int, default=1)
-    parser.add_argument('--train_batch_size', type=int, default=8)
+    parser.add_argument('--micro_train_batch_size', type=int, default=8)
+    parser.add_argument('--train_batch_size', type=int, default=128)
     parser.add_argument('--only_evaluate', action='store_true', default=False)
     parser.add_argument('--load_checkpoint', action='store_true', default=False)
     parser.add_argument('--load_model', type=str, default=None)
@@ -114,7 +115,6 @@ if __name__ == '__main__':
     parser.add_argument('--max_len', type=int, default=512)
     parser.add_argument('--l2', type=float, default=0.)
     parser.add_argument('--loss', type=str, default='sigmoid')
-    parser.add_argument('--accumulated_gradient', type=int, default=32)
     parser.add_argument('--gradient_checkpointing', action='store_true', default=False)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--lora_rank', type=int, default=0, help="low-rank adaptation matrices rank")
@@ -122,7 +122,7 @@ if __name__ == '__main__':
     parser.add_argument('--zero_stage', type=int, default=2)
     parser.add_argument('--bf16', action='store_true', default=False)
     parser.add_argument('--learning_rate', type=float, default=1e-5)
-    parser.add_argument('--zpg', type=int, default=8)
+    parser.add_argument('--zpg', type=int, default=8, help="ZeRO++ max partition size")
     parser.add_argument('--adam_offload', action="store_true", default=False)
     args = parser.parse_args()
     train(args)

@@ -14,7 +14,7 @@ def preprocess_data(data, pretrain_mode=False):
         target = data['chosen']
     # pvduy/sharegpt_alpaca_oa_vicuna_format
     elif exist_and_not_none(data, 'prompt') and exist_and_not_none(data, 'label'):
-        prompt = data['prompt'].replace('USER:', 'Human:').replace('ASSISTANT:', '\nAssistant:')
+        prompt = data['prompt'].replace('USER:', '\nHuman: ').replace('ASSISTANT:', '\nAssistant: ')
         target = data['label'].replace('</s>', '')
     # BelleGroup/train_0.5M_CN
     # LLMs/Alpaca-ShareGPT
@@ -24,11 +24,24 @@ def preprocess_data(data, pretrain_mode=False):
         input =  ' ' + data['input'] if exist_and_not_none(data, 'input') else ''
         prompt = 'Human: ' +  data['instruction'] + input + "\nAssistant: "
         target = data['output']
+    # Open-Orca/OpenOrca
+    elif exist_and_not_none(data, 'system_prompt') and exist_and_not_none(data, 'response'):
+        prompt = 'Human: ' + data['system_prompt'] + "\n" + data['question'] + "\nAssistant: "
+        target = data['response']
     # crumb/gpt4all-clean
     # nomic-ai/gpt4all-j-prompt-generations
     elif exist_and_not_none(data, 'prompt') and exist_and_not_none(data, 'response'):
         prompt = 'Human: ' + data['prompt'] + "\nAssistant: "
         target = data['response']
+    # FreedomIntelligence/phoenix-sft-data-v1 
+    elif exist_and_not_none(data, 'conversations'):
+        prompt = ""
+        target = ""
+        for item in data['conversations']:
+            if item['from'] == 'human':
+                prompt = 'Human: ' + item['value'] + "\nAssistant: "
+            elif item['from'] == 'gpt':
+                target = item['value']
     # REAL PRETRAIN datasets
     # EleutherAI/pile
     elif exist_and_not_none(data, 'text') and exist_and_not_none(data, 'meta'):
@@ -76,9 +89,12 @@ class SFTDataset(Dataset):
             else:
                 prompt_ids_len = 0
 
-            # filter the sample whose length is greater than max_length
-            if prompt_ids_len >= self.max_length:
-                continue
+            if not self.pretrain_mode:
+                # filter the sample whose length is greater than max_length
+                if prompt_ids_len >= self.max_length:
+                    continue
+                if not prompt or not target:
+                    continue
 
             self.prompt_ids_lens.append(prompt_ids_len)
             self.prompts.append(prompt)

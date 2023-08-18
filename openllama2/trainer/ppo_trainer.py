@@ -60,13 +60,12 @@ class PPOTrainer(ABC):
                  kl_target: float = None,
                  kl_horizon: int = 10000,
                  ptx_coef: float = 0,
-                 train_batch_size: int = 8,
+                 micro_train_batch_size: int = 8,
                  buffer_limit: int = 0,
                  buffer_cpu_offload: bool = True,
                  eps_clip: float = 0.2,
                  value_clip: float = 0.2,
-                 experience_batch_size: int = 8,
-                 accumulated_gradient: int = 1,
+                 micro_rollout_batch_size: int = 8,
                  gradient_checkpointing: bool = False,
                  max_epochs: int = 1,
                  max_norm: float = 1.0,
@@ -76,15 +75,14 @@ class PPOTrainer(ABC):
                  **generate_kwargs) -> None:
         super().__init__()
         self.strategy = strategy
-        self.experience_batch_size = experience_batch_size
+        self.micro_rollout_batch_size = micro_rollout_batch_size
         self.max_epochs = max_epochs
         self.tokenizer = tokenizer
         self.generate_kwargs = generate_kwargs
         self.dataloader_pin_memory = dataloader_pin_memory
-        self.accumulated_gradient = accumulated_gradient
         self.max_norm = max_norm
         self.ptx_coef = ptx_coef
-        self.train_batch_size = train_batch_size
+        self.micro_train_batch_size = micro_train_batch_size
         self.kl_target = kl_target
         self.prompt_max_len = prompt_max_len
         self.ema_beta = ema_beta
@@ -108,16 +106,15 @@ class PPOTrainer(ABC):
             self.kl_ctl = FixedKLController(init_kl_coef)
 
         self.experience_maker = NaiveExperienceMaker(actor, critic, reward_model, initial_model, self.kl_ctl, strategy)
-        self.replay_buffer = NaiveReplayBuffer(train_batch_size, buffer_limit, buffer_cpu_offload)
+        self.replay_buffer = NaiveReplayBuffer(micro_train_batch_size, buffer_limit, buffer_cpu_offload)
 
         if self.gradient_checkpointing:
             self.actor.gradient_checkpointing_enable()
             self.critic.gradient_checkpointing_enable()
 
-    def fit(self, prompts_dataloader, pretrain_dataloader, num_episodes: int = 1, update_timesteps: int = 32) -> None:
+    def fit(self, prompts_dataloader, pretrain_dataloader, num_episodes: 1, rollout_batch_size: 1024) -> None:
         self.prompts_dataloader = prompts_dataloader
         self.pretrain_dataloader = pretrain_dataloader
-        total_batch_size = self.strategy.world_size * self.experience_batch_size * update_timesteps
 
         # tokenizer
         def tokenize_fn(texts):
@@ -125,7 +122,9 @@ class PPOTrainer(ABC):
                                    padding=True, truncation=True)
             return {k: v.to(torch.cuda.current_device()) for k, v in batch.items()}
 
+        update_timesteps = rollout_batch_size // self.strategy.world_size * self.micro_rollout_batch_size
         time_step = 0
+
         for episode in range(num_episodes):
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
                 self.prompts_dataloader.sampler.set_epoch(episode)
@@ -141,14 +140,14 @@ class PPOTrainer(ABC):
                 time_step = (time_step + 1) % update_timesteps
                 if time_step % update_timesteps == 0:
                     self.replay_buffer.normalize('advantages', self.strategy)
-                    status = self._ppo_train()
+                    status = self.ppo_train()
                     self.replay_buffer.clear() 
 
-                    self.kl_ctl.update(status['kl'], total_batch_size)
+                    self.kl_ctl.update(status['kl'], rollout_batch_size)
                     status['k_coef'] = self.kl_ctl.value
                     self.strategy.print(status)
 
-    def _ppo_train(self):
+    def ppo_train(self):
         # replay buffer may be empty at first, we should rebuild at each training
         dataloader = DataLoader(self.replay_buffer,
                           batch_size=self.replay_buffer.sample_batch_size,
@@ -164,7 +163,7 @@ class PPOTrainer(ABC):
             pbar = tqdm(dataloader, desc=f'Train epoch [{epoch+1}/{self.max_epochs}]', disable=not self.strategy.is_rank_0())
             for experience in pbar:
                 experience.to_device(device)
-                status = self._training_step(experience)
+                status = self.training_step(experience)
 
                 # for DP
                 # weighted mean for kl
@@ -184,7 +183,7 @@ class PPOTrainer(ABC):
                 status_mean[k] /= len(status_list)
         return status_mean
 
-    def _training_step(self, experience: Experience) -> Dict[str, float]:
+    def training_step(self, experience: Experience) -> Dict[str, float]:
         self.actor.train()
         self.critic.train()
 

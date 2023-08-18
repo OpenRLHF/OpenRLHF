@@ -40,7 +40,6 @@ class SFTTrainer(ABC):
         batch_size: int = 1,
         max_epochs: int = 2,
         tokenizer = None,
-        accumulated_gradient: int = 1,
         gradient_checkpointing: bool = False,
     ) -> None:
         super().__init__()
@@ -55,7 +54,6 @@ class SFTTrainer(ABC):
         self.model = model
         self.tokenizer = tokenizer
         self.optimizer = optim
-        self.accumulated_gradient = accumulated_gradient
         self.gradient_checkpointing = gradient_checkpointing
 
         # misc
@@ -87,9 +85,6 @@ class SFTTrainer(ABC):
                         label[:source_len] = self.loss_fn.IGNORE_INDEX
 
                 loss = self.loss_fn(logits, labels)
-                # a patch for empty loss (the lenght of prompt > max_length)
-                if torch.isnan(loss):
-                    loss *= 0
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
                 
