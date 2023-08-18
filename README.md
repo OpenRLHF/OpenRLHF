@@ -52,6 +52,9 @@
 
 ## Latest News
 
+- 2023/8/18: **support LLaMA2 7B PPO training on Single A100**
+pretraind SFT/RM checkpoint: https://huggingface.co/chuyi777/openllama2_checkpoint
+
 - 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed training features finished
 
 - 2023/07/30: OpenLLaMA2 project officially launched:
@@ -59,7 +62,7 @@
 
 ## OpenLLaMA2 Project
 
-OpenLLaMA2 is the third official open source project of the OpenNLP plan, and it is the first practice project of openllmai. OpenLLaMA2 aims to develop a high-performance distributed LLaMA2 SFT/RLHF training framework.
+OpenLLaMA2 aims to develop a high-performance distributed LLaMA2 SFT/RLHF training framework.
 
 The sister project of this project is [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2), which aims to fine-tune the Chinese LLaMA2 using SFT/RLHF.
 
@@ -70,6 +73,7 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 - [WIP] Develop Multi-nodes RLHF based on Ray.
 - [WIP] Develop the Rejection Sampling.
 - [TODO] Develop the Multi-nodes training scripts for Slurm.
+- [TODO] Support Qlora/GPTQ.
 - [TODO] Add wandb log support.
 - [TODO] Develop the DPO.
 - [TODO] Develop the Context Distillation.
