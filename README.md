@@ -89,6 +89,15 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 
 Clone the repository: `git clone https://github.com/openllmai/OpenLLaMA2.git`
 
+## Installation
+
+This repository needs the latest version of `deepspeed`.
+```bash
+git clone https://github.com/microsoft/DeepSpeed.git
+cd DeepSpeed
+pip install .
+```
+
 ## Running LLaMA2 Example
 
 ```python
