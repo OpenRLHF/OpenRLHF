@@ -94,7 +94,7 @@ Clone the repository: `git clone https://github.com/openllmai/OpenLLaMA2.git`
 
 * Single-node training
 
-```python
+```shell
 # launch nvidia container
 cd examples/scripts
 ./docker_run.sh
@@ -120,18 +120,23 @@ cd /openllama2/examples/scripts
 
 * Multi-nodes training on Slurm
 
-```python
+```shell
 cd examples/scripts
 
 # huggingface login on Slurm 
 pip install transformers
 huggingface-cli login
 
+# Moidfy the Slurm Account/Nodes ... in `train_ppo_llama_slurm.sh`
+
 # For SFT, RM and PPO training stage:
 # Modify the variable `training_script` in `train_ppo_llama_slurm.sh` to
 readonly training_script="train_sft_llama.sh"
 readonly training_script="train_rm_llama.sh"
 readonly training_script="train_ppo_llama.sh"
+
+# set `GPUS_PER_NODE` in `train_ppo_llama_slurm.sh`
+readonly GPUS_PER_NODE=8
 
 # run multi-nodes training script
 # train_llama_slurm.sh will load the training args from `training_script`
