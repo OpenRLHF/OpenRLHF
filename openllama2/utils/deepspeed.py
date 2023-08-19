@@ -59,10 +59,13 @@ class DeepspeedStrategy(ABC):
         self.setup_distributed()
 
     def setup_distributed(self) -> None:
-        # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        deepspeed.init_distributed()
+        if 'SLURM_PROCID' in os.environ: # for slurm scheduler
+            self.args.local_rank = int(os.environ['LOCAL_RANK'])
+
         if self.args.local_rank != -1:
             torch.cuda.set_device(self.args.local_rank)
+        # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
+        deepspeed.init_distributed()
         self.world_size = dist.get_world_size()
         self.accumulated_gradient = self.train_batch_size // self.micro_train_batch_size // self.world_size
 
