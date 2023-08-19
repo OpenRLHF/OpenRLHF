@@ -17,7 +17,7 @@ readonly training_script="train_ppo_llama.sh"
 readonly GPUS_PER_NODE=8
 
 readonly PROJECT_PATH=$(cd ../../; pwd)
-readonly IMAGE_NAME="nvcr.io/nvidia/pytorch:23.05-py3"
+readonly IMAGE_NAME="nvcr.io/nvidia/pytorch:23.06-py3"
 readonly JOBLOG="$(pwd)/logs/$training_script-$SLURM_JOB_ID.log"
 mkdir logs
 
@@ -36,7 +36,7 @@ export MASTER_PORT=9901
 srun --container-image="$IMAGE_NAME" \
     --container-mounts="$PROJECT_PATH:/root/openllama2,$HOME/.cache:/root/.cache,$HOME/.local:/root/.local,\
 $HOME/.triton:/root/.triton,/dev/null:/root/.bashrc" \
-    bash -c "cd /root/openllama2/examples/test_scripts; ./build_openllama2.sh; python -m torch.distributed.run \
+    bash -c "cd /root/openllama2/examples/scripts; ./build_openllama2.sh; python -m torch.distributed.run \
 --nproc_per_node $GPUS_PER_NODE --nnodes $SLURM_NNODES --node_rank $SLURM_PROCID \
 --master_addr $MASTER_ADDR --master_port $MASTER_PORT ${training_commands}" &>> ${JOBLOG}
 
