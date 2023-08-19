@@ -70,12 +70,13 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 ### Development Plan:
 
 - [✔️] Develop a fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
+- [✔️] Develop the Multi-nodes training scripts for Slurm.
 - [WIP] Support Multiple RM models.
 - [WIP] Develop Multi-nodes RLHF based on Ray.
 - [WIP] Develop the Rejection Sampling.
-- [TODO] Develop the Multi-nodes training scripts for Slurm.
-- [TODO] Support Qlora/GPTQ.
-- [TODO] Add wandb log support.
+- [WIP] Support Qlora/GPTQ.
+- [WIP] Add wandb log support.
+- [WIP] Support FlashAttention.
 - [TODO] Develop the DPO.
 - [TODO] Develop the Context Distillation.
 - [TODO] Training/Inference kernel fusion (such as DS inference)
@@ -90,6 +91,8 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 Clone the repository: `git clone https://github.com/openllmai/OpenLLaMA2.git`
 
 ## Running LLaMA2 Example
+
+* Single-node training
 
 ```python
 # launch nvidia container
@@ -113,6 +116,26 @@ cd /openllama2/examples/scripts
 
 # train PPO model
 ./train_ppo_llama.sh
+```
+
+* Multi-nodes training on Slurm
+
+```python
+cd examples/scripts
+
+# huggingface login on Slurm 
+pip install transformers
+huggingface-cli login
+
+# For SFT, RM and PPO training stage:
+# Modify the variable `training_script` in `train_ppo_llama_slurm.sh` to
+readonly training_script="train_sft_llama.sh"
+readonly training_script="train_rm_llama.sh"
+readonly training_script="train_ppo_llama.sh"
+
+# run multi-nodes training script
+# train_llama_slurm.sh will load the training args from `training_script`
+sbatch ./train_llama_slurm.sh
 ```
 
 ## Inference
