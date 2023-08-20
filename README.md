@@ -52,9 +52,10 @@
 
 ## Latest News
 
-- 2023/8/18: **support LLaMA2 7B PPO training on Single A100**
+- 2023/8/20: Add some PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
 
-pretraind SFT/RM checkpoint: https://huggingface.co/chuyi777/openllama2_checkpoint
+- 2023/8/18: **support LLaMA2 7B PPO training on Single A100**
+> pretraind SFT/RM checkpoint: https://huggingface.co/chuyi777/openllama2_checkpoint
 
 - 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed training features finished
 
@@ -74,7 +75,7 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 - [WIP] Support Multiple RM models.
 - [WIP] Develop Multi-nodes RLHF based on Ray.
 - [WIP] Develop the Rejection Sampling.
-- [WIP] Support Qlora/GPTQ.
+- [WIP] Support QLora/GPTQ.
 - [WIP] Add wandb log support.
 - [WIP] Support FlashAttention.
 - [TODO] Develop the DPO.
@@ -102,7 +103,7 @@ cd examples/scripts
 # cd in container
 cd /openllama2/examples/scripts
 
-# build OpenLLaMA2
+# build OpenLLaMA2 (i.e, pip install)
 ./build_openllama2.sh
 
 # huggingface login 
@@ -117,6 +118,8 @@ cd /openllama2/examples/scripts
 # train PPO model
 ./train_ppo_llama.sh
 ```
+
+Tips: If you don't want to use NVIDIA Docker, you could try using Anaconda3 + Python 3.10 + Torch 2.0. However, this may lead to various environment issues.
 
 * Multi-nodes training on Slurm
 
@@ -147,9 +150,21 @@ sbatch ./train_llama_slurm.sh
 
 After completing the training, you can evaluate of your model by using the `inference` script:
 
-```python
-./inference_llama.sh "Please introduce GPT model."
+```shell
+./inference_llama.sh { model_path } "Please introduce the GTA5 game."
 ```
+
+
+## References & Acknowledgements
+
+We would like to express our gratitude to the following projects and organizations for their contributions to the field of AI and NLP:
+
+- [Hugging Face Transformers ↗](https://github.com/huggingface/transformers)
+- [OpenAI GPT ↗](https://github.com/openai/gpt-3)
+- [LLaMA2 ↗](https://ai.meta.com/llama/)
+- [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
+- [Ray ↗](https://github.com/ray-project/ray)
+
 
 ### Join Us
 
@@ -168,17 +183,6 @@ After completing the training, you can evaluate of your model by using the `infe
 1. Contribute to the project by submitting pull requests.
 1. Help improve documentation, fix bugs, or create new features.
 1. Share the project and help us grow the community.
-
-
-## References & Acknowledgements
-
-We would like to express our gratitude to the following projects and organizations for their contributions to the field of AI and NLP:
-
-- [Hugging Face Transformers ↗](https://github.com/huggingface/transformers)
-- [OpenAI GPT ↗](https://github.com/openai/gpt-3)
-- [LLaMA2 ↗](https://ai.meta.com/llama/)
-- [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
-- [Ray ↗](https://github.com/ray-project/ray)
 
 ## Sponsor Us
 
