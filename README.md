@@ -130,15 +130,15 @@ cd examples/scripts
 pip install transformers
 huggingface-cli login
 
-# Moidfy the Slurm Account/Nodes ... in `train_ppo_llama_slurm.sh`
+# Moidfy the Slurm Account/Nodes ... in `train_llama_slurm.sh`
 
 # For SFT, RM and PPO training stage:
-# Modify the variable `training_script` in `train_ppo_llama_slurm.sh` to
+# Modify the variable `training_script` in `train_llama_slurm.sh` to
 readonly training_script="train_sft_llama.sh"
 readonly training_script="train_rm_llama.sh"
 readonly training_script="train_ppo_llama.sh"
 
-# set `GPUS_PER_NODE` in `train_ppo_llama_slurm.sh`
+# set `GPUS_PER_NODE` in `train_llama_slurm.sh`
 readonly GPUS_PER_NODE=8
 
 # run multi-nodes training script
