@@ -1,9 +1,11 @@
 import os
+import random
 from abc import ABC
 from typing import List, Tuple, Union
 from collections import defaultdict
 
 import deepspeed
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -56,7 +58,14 @@ class DeepspeedStrategy(ABC):
         self.max_norm = max_norm
         self.time_steps = defaultdict(int)
 
+        self.set_seed(seed)
         self.setup_distributed()
+
+    def set_seed(self, seed: int) -> None:
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
 
     def setup_distributed(self) -> None:
         if self.args.local_rank != -1:
