@@ -52,9 +52,10 @@
 
 ## Latest News
 
-- 2023/8/18: **support LLaMA2 7B PPO training on Single A100**
+- 2023/8/20: Add some PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
 
-pretraind SFT/RM checkpoint: https://huggingface.co/chuyi777/openllama2_checkpoint
+- 2023/8/18: **support LLaMA2 7B PPO training on Single A100**
+> pretraind SFT/RM checkpoint: https://huggingface.co/chuyi777/openllama2_checkpoint
 
 - 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed training features finished
 
@@ -74,7 +75,7 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 - [WIP] Support Multiple RM models.
 - [WIP] Develop Multi-nodes RLHF based on Ray.
 - [WIP] Develop the Rejection Sampling.
-- [WIP] Support Qlora/GPTQ.
+- [WIP] Support QLora/GPTQ.
 - [WIP] Add wandb log support.
 - [WIP] Support FlashAttention.
 - [TODO] Develop the DPO.
@@ -102,7 +103,7 @@ cd examples/scripts
 # cd in container
 cd /openllama2/examples/scripts
 
-# build OpenLLaMA2
+# build OpenLLaMA2 (i.e, pip install)
 ./build_openllama2.sh
 
 # huggingface login 
@@ -117,6 +118,8 @@ cd /openllama2/examples/scripts
 # train PPO model
 ./train_ppo_llama.sh
 ```
+
+Tips: If you don't want to use NVIDIA Docker, you could try using Anaconda3 + Python 3.10 + Torch 2.0. However, this may lead to various environment issues.
 
 * Multi-nodes training on Slurm
 
