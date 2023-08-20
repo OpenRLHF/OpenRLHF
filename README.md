@@ -150,9 +150,21 @@ sbatch ./train_llama_slurm.sh
 
 After completing the training, you can evaluate of your model by using the `inference` script:
 
-```python
-./inference_llama.sh "Please introduce GPT model."
+```shell
+./inference_llama.sh { model_path } "Please introduce the GTA5 game."
 ```
+
+
+## References & Acknowledgements
+
+We would like to express our gratitude to the following projects and organizations for their contributions to the field of AI and NLP:
+
+- [Hugging Face Transformers ↗](https://github.com/huggingface/transformers)
+- [OpenAI GPT ↗](https://github.com/openai/gpt-3)
+- [LLaMA2 ↗](https://ai.meta.com/llama/)
+- [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
+- [Ray ↗](https://github.com/ray-project/ray)
+
 
 ### Join Us
 
@@ -171,17 +183,6 @@ After completing the training, you can evaluate of your model by using the `infe
 1. Contribute to the project by submitting pull requests.
 1. Help improve documentation, fix bugs, or create new features.
 1. Share the project and help us grow the community.
-
-
-## References & Acknowledgements
-
-We would like to express our gratitude to the following projects and organizations for their contributions to the field of AI and NLP:
-
-- [Hugging Face Transformers ↗](https://github.com/huggingface/transformers)
-- [OpenAI GPT ↗](https://github.com/openai/gpt-3)
-- [LLaMA2 ↗](https://ai.meta.com/llama/)
-- [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
-- [Ray ↗](https://github.com/ray-project/ray)
 
 ## Sponsor Us
 
