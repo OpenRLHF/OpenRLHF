@@ -24,7 +24,6 @@ read -r -d '' training_commands <<EOF
     --prompt_data_probs 0.3,0.6,0.1 \
     --normalize_reward \
     --adam_offload \
-    --actor_init_on_gpu \
     --gradient_checkpointing
 EOF
 
