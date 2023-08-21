@@ -31,7 +31,7 @@ def train(args):
 
     actor = Actor(args.pretrain, actor_from_config)
     if args.actor_init_on_gpu:
-        actor = actor.cuda()
+        actor = actor.to(torch.cuda.current_device())
 
     critic = Critic(args.critic_pretrain, True, args.normalize_reward)
     reward_model = RewardModel(args.critic_pretrain, reward_from_config, args.normalize_reward)
