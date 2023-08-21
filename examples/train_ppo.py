@@ -30,6 +30,9 @@ def train(args):
     reward_from_config = bool(args.reward_model_path)
 
     actor = Actor(args.pretrain, actor_from_config)
+    if args.actor_init_on_gpu:
+        actor = actor.cuda()
+
     critic = Critic(args.critic_pretrain, True, args.normalize_reward)
     reward_model = RewardModel(args.critic_pretrain, reward_from_config, args.normalize_reward)
 
@@ -216,6 +219,7 @@ if __name__ == '__main__':
                         help='Enable EMA checkpoint for the model.')
     parser.add_argument('--zpg', type=int, default=8, help="ZeRO++ max partition size")
     parser.add_argument('--adam_offload', action="store_true", default=False)
+    parser.add_argument('--actor_init_on_gpu', action="store_true", default=False)
     parser.add_argument('--save_hf_model', action='store_true', default=False)
     args = parser.parse_args()
     train(args)
