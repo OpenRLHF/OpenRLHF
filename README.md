@@ -119,7 +119,7 @@ cd /openllama2/examples/scripts
 ./train_ppo_llama.sh
 ```
 
-Tips: If you don't want to use NVIDIA Docker, you could try using Anaconda3 + Python 3.10 + Torch 2.0. However, this may lead to various environment issues.
+Tips: If you don't want to use NVIDIA Docker, you could try using Anaconda3 + Python 3.10 + Torch 2.0 + CUDA 12.0+. However, this may lead to various environment issues.
 
 * Multi-nodes training on Slurm
 
