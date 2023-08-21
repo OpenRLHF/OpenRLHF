@@ -122,7 +122,7 @@ class PPOTrainer(ABC):
                                    padding=True, truncation=True)
             return {k: v.to(torch.cuda.current_device()) for k, v in batch.items()}
 
-        update_timesteps = rollout_batch_size // self.strategy.world_size * self.micro_rollout_batch_size
+        update_timesteps = rollout_batch_size // (self.strategy.world_size * self.micro_rollout_batch_size)
         time_step = 0
 
         for episode in range(num_episodes):
