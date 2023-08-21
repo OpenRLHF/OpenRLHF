@@ -68,7 +68,7 @@ class DeepspeedStrategy(ABC):
         torch.cuda.manual_seed_all(seed)
 
     def setup_distributed(self) -> None:
-        if "SLURM_PROCID" in os.environ: # for slurm
+        if self.args.local_rank == -1 and "LOCAL_RANK" in os.environ: # for slurm
             self.args.local_rank = int(os.environ['LOCAL_RANK'])
 
         if self.args.local_rank != -1:
@@ -311,3 +311,6 @@ class DeepspeedStrategy(ABC):
 
     def is_rank_0(self) -> bool:
         return dist.get_rank() == 0
+    
+    def get_rank(self) -> int:
+        return dist.get_rank()
