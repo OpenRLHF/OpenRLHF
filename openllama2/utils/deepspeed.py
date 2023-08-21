@@ -68,6 +68,9 @@ class DeepspeedStrategy(ABC):
         torch.cuda.manual_seed_all(seed)
 
     def setup_distributed(self) -> None:
+        if "SLURM_PROCID" in os.environ: # for slurm
+            self.args.local_rank = int(os.environ['LOCAL_RANK'])
+
         if self.args.local_rank != -1:
             torch.cuda.set_device(self.args.local_rank)
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
