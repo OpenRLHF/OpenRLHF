@@ -73,7 +73,17 @@ def blending_datasets(datasets, probabilities, strategy=None, seed=42, max_count
     train_data_list = []
     eval_data_list = []
     for i, dataset in enumerate(datasets):
-        data = load_dataset(dataset.strip())
+        dataset_subfold_list = dataset.split('@')
+        if len(dataset_subfold_list) == 2:
+            dataset = dataset_subfold_list[0]
+            subfold = dataset_subfold_list[1]
+            data = load_dataset(dataset.strip(), data_dir=subfold.strip())
+        elif len(dataset_subfold_list) == 1:
+            dataset = dataset_subfold_list[0]
+            data = load_dataset(dataset.strip())
+        else:
+            Exception("Dataset Name: Format error")
+            
         if "train" in data:
             train_data_list.append(data["train"].select(range(min(max_count, len(data["train"])))))
         else:
