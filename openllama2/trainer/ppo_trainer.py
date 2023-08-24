@@ -156,7 +156,10 @@ class PPOTrainer(ABC):
                 if time_step % update_timesteps == 0:
                     self.replay_buffer.normalize('advantages', self.strategy)
                     status = self.ppo_train()
-                    self.replay_buffer.clear() 
+                    self.replay_buffer.clear()
+                    if self._wandb is not None and self.strategy.is_rank_0():
+                        logs = {'train/%s' % k: v for k, v in {**status, "time_step": time_step}.items()}
+                        self._wandb.log(logs)
 
                     self.kl_ctl.update(status['kl'], rollout_batch_size)
                     status['k_coef'] = self.kl_ctl.value
