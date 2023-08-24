@@ -3,7 +3,7 @@ torchmetrics
 transformers
 tqdm
 datasets
-deepspeed
+deepspeed==0.10.0
 peft
 loralib
 flash-attn
