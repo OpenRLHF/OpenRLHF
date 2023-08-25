@@ -96,7 +96,7 @@ if __name__ == "__main__":
 
     args.cot = args.cot == "True"
     args.few_shot = args.few_shot == "True"
-    args.with_prompt = args.with_prompt == "False" #False for base model
+    args.with_prompt = args.with_prompt == "True"
     args.constrained_decoding = args.constrained_decoding == "True"
     args.do_test = args.do_test == "True"
     args.do_save_csv = args.do_save_csv == "True"
