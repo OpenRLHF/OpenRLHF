@@ -132,7 +132,7 @@ if __name__ == '__main__':
     parser.add_argument('--wandb_org', type=str, default="openllama2")
     parser.add_argument('--wandb_project', type=str, default="openllama2_train_rm")
     parser.add_argument('--wandb_group', type=str, default="train_rm")
-    parser.add_argument('--wandb_run_name', type=str, default="train_rm_%s" % datetime.now().strftime('%m%dT%H:%M'))
+    parser.add_argument('--wandb_run_name', type=str, default="rm_%s" % datetime.now().strftime('%m%dT%H:%M'))
 
     args = parser.parse_args()
     train(args)

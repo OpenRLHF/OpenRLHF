@@ -78,7 +78,7 @@ class RewardModelTrainer(ABC):
             wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
 
     def fit(self, use_lora):
-        gloabl_step = 0
+        global_step = 0
         epoch_bar = tqdm(range(self.epochs), desc='Train epoch', disable=not self.strategy.is_rank_0())
         for epoch in range(self.epochs):
             #  train
@@ -108,9 +108,9 @@ class RewardModelTrainer(ABC):
                     bar_dict = {'train loss': loss.item()}
                     logs = self.strategy.all_reduce(bar_dict)
                     step_bar.set_postfix(logs)
-                    gloabl_step += 1
-                    if self._wandb is not None and self.strategy.is_rank_0() and gloabl_step % 1000 == 0:
-                        logs = {'train/%s' % k: v for k, v in {**logs, "global_step": gloabl_step}.items()}
+                    global_step += 1
+                    if self._wandb is not None and self.strategy.is_rank_0() and global_step % 1000 == 0:
+                        logs = {'train/%s' % k: v for k, v in {**logs, "global_step": global_step}.items()}
                         self._wandb.log(logs)
 
             step_bar = tqdm(range(self.eval_dataloader.__len__()),
