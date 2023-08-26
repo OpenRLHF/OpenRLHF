@@ -52,6 +52,8 @@
 
 ## Latest News
 
+- 2023/8/26: Support wandb logs
+
 - 2023/8/20: Add some PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
 
 - 2023/8/18: **support LLaMA2 7B PPO training on Single A100**
@@ -72,19 +74,19 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 
 - [✔️] Develop a fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
 - [✔️] Develop the Multi-nodes training scripts for Slurm.
-- [WIP] Support Multiple RM models.
+- [✔️] Add wandb log support.
 - [WIP] Develop Multi-nodes RLHF based on Ray.
+- [WIP] Support Multiple RM models.
 - [WIP] Develop the Rejection Sampling.
-- [WIP] Support QLora/GPTQ.
-- [WIP] Add wandb log support.
+- [WIP] Support QLora.
 - [WIP] Support FlashAttention.
-- [TODO] Develop the DPO.
+- [WIP] Develop the DPO.
+- [WIP] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
+- [WIP] Train a [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2) RLHF model.
 - [TODO] Develop the Context Distillation.
 - [TODO] Training/Inference kernel fusion (such as DS inference)
 - [TODO] Large-scale model (> 70B) support with ZeRO++ and FasterTransformer inference.
 - [TODO] Better docs and examples
-- [TODO] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
-- [TODO] Train a [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2) RLHF model.
 
 
 ## Usage Steps

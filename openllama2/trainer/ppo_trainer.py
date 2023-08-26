@@ -112,7 +112,8 @@ class PPOTrainer(ABC):
             self.actor.gradient_checkpointing_enable()
             self.critic.gradient_checkpointing_enable()
 
-        if self.strategy.args.use_wandb:
+        self._wandb = None
+        if self.strategy.args.use_wandb and self.strategy.is_rank_0():
             import wandb
             self._wandb = wandb
             wandb.login(key=strategy.args.use_wandb)
@@ -160,6 +161,10 @@ class PPOTrainer(ABC):
                     self.kl_ctl.update(status['kl'], rollout_batch_size)
                     status['k_coef'] = self.kl_ctl.value
                     self.strategy.print(status)
+
+                    if self._wandb is not None and self.strategy.is_rank_0():
+                        logs = {'train/%s' % k: v for k, v in {**status, "global_step": global_step}.items()}
+                        self._wandb.log(logs)
 
     def ppo_train(self):
         # replay buffer may be empty at first, we should rebuild at each training

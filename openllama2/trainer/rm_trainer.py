@@ -64,7 +64,7 @@ class RewardModelTrainer(ABC):
             self.model.gradient_checkpointing_enable()
 
         self._wandb = None
-        if self.strategy.args.use_wandb:
+        if self.strategy.args.use_wandb and self.strategy.is_rank_0():
             import wandb
             self._wandb = wandb
             wandb.login(key=strategy.args.use_wandb)
@@ -109,7 +109,8 @@ class RewardModelTrainer(ABC):
                     logs = self.strategy.all_reduce(bar_dict)
                     step_bar.set_postfix(logs)
                     global_step += 1
-                    if self._wandb is not None and self.strategy.is_rank_0() and global_step % 1000 == 0:
+                    if self._wandb is not None and self.strategy.is_rank_0() \
+                        and global_step % self.strategy.accumulated_gradient == 0:
                         logs = {'train/%s' % k: v for k, v in {**logs, "global_step": global_step}.items()}
                         self._wandb.log(logs)
 

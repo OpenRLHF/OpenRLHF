@@ -63,7 +63,8 @@ class SFTTrainer(ABC):
             self.model.gradient_checkpointing_enable()
 
         # wandb setting
-        if self.strategy.args.use_wandb:
+        self._wandb = None
+        if self.strategy.args.use_wandb and self.strategy.is_rank_0():
             import wandb
             self._wandb = wandb
             wandb.login(key=strategy.args.use_wandb)
@@ -107,9 +108,10 @@ class SFTTrainer(ABC):
                 global_step += 1
                 bar_dict = {'train loss': loss.item()}
                 logs = self.strategy.all_reduce(bar_dict)
-                step_bar.set_postfix()
+                step_bar.set_postfix(logs)
 
-                if self._wandb is not None and self.strategy.is_rank_0() and global_step % 1000 == 0:
+                if self._wandb is not None and self.strategy.is_rank_0() \
+                    and global_step % self.strategy.accumulated_gradient == 0:
                     logs = {'train/%s' % k: v for k, v in {**logs, "global_step": global_step}.items()}
                     self._wandb.log(logs)
 
@@ -137,10 +139,10 @@ class SFTTrainer(ABC):
                     loss_sum += loss.item()
                     bar_dict ={'eval loss': loss_sum / times}
                     step_bar.update()
-                    step_bar.set_postfix(self.strategy.all_reduce(bar_dict))
+                    logs = self.strategy.all_reduce(bar_dict)
+                    step_bar.set_postfix(logs)
 
                 if self._wandb is not None and self.strategy.is_rank_0():
-                    logs = {'eval loss': loss_sum/times}
                     logs = {'eval/%s' % k: v for k, v in {**logs, "epoch": epoch}.items()}
                     self._wandb.log(logs)
 
