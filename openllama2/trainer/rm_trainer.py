@@ -27,19 +27,19 @@ class RewardModelTrainer(ABC):
     """
 
     def __init__(
-        self,
-        model,
-        strategy,
-        optim: Optimizer,
-        train_dataloader,
-        eval_dataloader,
-        scheduler,
-        max_norm= 0.5,
-        batch_size: int = 1,
-        max_epochs: int = 2,
-        only_evaluate = False,
-        loss = "sigmoid",
-        gradient_checkpointing: bool =False,
+            self,
+            model,
+            strategy,
+            optim: Optimizer,
+            train_dataloader,
+            eval_dataloader,
+            scheduler,
+            max_norm=0.5,
+            batch_size: int = 1,
+            max_epochs: int = 2,
+            only_evaluate=False,
+            loss="sigmoid",
+            gradient_checkpointing: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -63,8 +63,22 @@ class RewardModelTrainer(ABC):
         if self.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
+        self._wandb = None
+        if self.strategy.args.use_wandb:
+            import wandb
+            self._wandb = wandb
+            wandb.login(key=strategy.args.use_wandb)
+            wandb.init(entity=strategy.args.wandb_org, project=strategy.args.wandb_project,
+                       group=strategy.args.wandb_group, name=strategy.args.wandb_run_name,
+                       config=strategy.args.__dict__, reinit=True)
+
+            wandb.define_metric("train/global_step")
+            wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
+            wandb.define_metric("eval/epoch")
+            wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
 
     def fit(self, use_lora):
+        global_step = 0
         epoch_bar = tqdm(range(self.epochs), desc='Train epoch', disable=not self.strategy.is_rank_0())
         for epoch in range(self.epochs):
             #  train
@@ -92,12 +106,16 @@ class RewardModelTrainer(ABC):
 
                     step_bar.update()
                     bar_dict = {'train loss': loss.item()}
-                    step_bar.set_postfix(self.strategy.all_reduce(bar_dict))
-
+                    logs = self.strategy.all_reduce(bar_dict)
+                    step_bar.set_postfix(logs)
+                    global_step += 1
+                    if self._wandb is not None and self.strategy.is_rank_0() and global_step % 1000 == 0:
+                        logs = {'train/%s' % k: v for k, v in {**logs, "global_step": global_step}.items()}
+                        self._wandb.log(logs)
 
             step_bar = tqdm(range(self.eval_dataloader.__len__()),
-                desc='Eval stage of epoch %d' % epoch,
-                disable=not self.strategy.is_rank_0())
+                            desc='Eval stage of epoch %d' % epoch,
+                            disable=not self.strategy.is_rank_0())
             # eval
             self.model.eval()
             with torch.no_grad():
@@ -132,11 +150,19 @@ class RewardModelTrainer(ABC):
                 self.model.mean[0] = reward_mean
                 self.model.std[0] = reward_std
 
-                bar_dict = {'eval loss': loss_mean, 'acc_mean': acc_mean, 'reward_mean': reward_mean.item(), 'reward_std': reward_std.item()}
-                step_bar.set_postfix(self.strategy.all_reduce(bar_dict))
+                bar_dict = {'eval loss': loss_mean, 'acc_mean': acc_mean, 'reward_mean': reward_mean.item(),
+                            'reward_std': reward_std.item()}
+                logs = self.strategy.all_reduce(bar_dict)
+                step_bar.set_postfix(logs)
 
                 histgram = torch.histogram(rewards.cpu(), bins=10, range=(-10, 10), density=True) * 2
                 self.strategy.print('histgram')
                 self.strategy.print(histgram)
 
+                if self._wandb is not None and self.strategy.is_rank_0():
+                    logs = {'eval/%s' % k: v for k, v in {**logs, "epoch": epoch}.items()}
+                    self._wandb.log(logs)
+
             epoch_bar.update()
+        if self._wandb is not None and self.strategy.is_rank_0():
+            self._wandb.finish()

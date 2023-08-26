@@ -62,7 +62,22 @@ class SFTTrainer(ABC):
         if self.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
+        # wandb setting
+        if self.strategy.args.use_wandb:
+            import wandb
+            self._wandb = wandb
+            wandb.login(key=strategy.args.use_wandb)
+            wandb.init(entity=strategy.args.wandb_org, project=strategy.args.wandb_project,
+                       group=strategy.args.wandb_group, name=strategy.args.wandb_run_name,
+                       config=strategy.args.__dict__, reinit=True)
+
+            wandb.define_metric("train/global_step")
+            wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
+            wandb.define_metric("eval/epoch")
+            wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
+
     def fit(self, use_lora):
+        global_step = 0
         epoch_bar = tqdm(range(self.epochs), desc='Train epoch', disable=not self.strategy.is_rank_0())
         for epoch in range(self.epochs):
             if isinstance(self.train_dataloader.sampler, DistributedSampler):
@@ -87,10 +102,16 @@ class SFTTrainer(ABC):
                 loss = self.loss_fn(logits, labels)
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
-                
+
                 step_bar.update()
+                global_step += 1
                 bar_dict = {'train loss': loss.item()}
-                step_bar.set_postfix(self.strategy.all_reduce(bar_dict))
+                logs = self.strategy.all_reduce(bar_dict)
+                step_bar.set_postfix()
+
+                if self._wandb is not None and self.strategy.is_rank_0() and global_step % 1000 == 0:
+                    logs = {'train/%s' % k: v for k, v in {**logs, "global_step": global_step}.items()}
+                    self._wandb.log(logs)
 
             # eval
             times= 0
@@ -115,9 +136,13 @@ class SFTTrainer(ABC):
                     times += 1
                     loss_sum += loss.item()
                     bar_dict ={'eval loss': loss_sum / times}
-
                     step_bar.update()
                     step_bar.set_postfix(self.strategy.all_reduce(bar_dict))
-                    
+
+                if self._wandb is not None and self.strategy.is_rank_0():
+                    logs = {'eval loss': loss_sum/times}
+                    logs = {'eval/%s' % k: v for k, v in {**logs, "epoch": epoch}.items()}
+                    self._wandb.log(logs)
+
             epoch_bar.update()
 
