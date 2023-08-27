@@ -53,7 +53,7 @@
 ## Latest News
 
 - 2023/8/26: Support wandb logs
-
+- 2023/8/22: Support ceval
 - 2023/8/20: Add some PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
 
 - 2023/8/18: **support LLaMA2 7B PPO training on Single A100**
@@ -172,7 +172,7 @@ We would like to express our gratitude to the following projects and organizatio
 
 **How to Join?**
 
-1. Email us at janhu9527@gmail.com. Please include the following details:
+1. Email us at xuanai@openllmai.top(official email) or janhu9527@gmail.com/jjgxw@outlook.com(PIC). Please include the following details:
    - Your name
    - Your GitHub username
    - Your areas of interest
