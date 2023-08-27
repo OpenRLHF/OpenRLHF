@@ -27,6 +27,9 @@ def train(args):
     from_config = bool(args.load_model or args.load_checkpoint)
     model = RewardModel(args.pretrain, from_config)
 
+    # configure tokenizer
+    tokenizer = get_tokenizer(args.pretrain, model.model, 'left', strategy)
+
     # load SFT model
     if args.load_model and not args.load_checkpoint:
         def key_replace_fn(states_dict):
@@ -41,9 +44,6 @@ def train(args):
     # lora
     if args.lora_rank > 0:
         model.lora_enable(args.lora_rank)
-
-    # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model.model, 'left', strategy)
 
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)

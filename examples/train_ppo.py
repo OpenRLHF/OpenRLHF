@@ -37,6 +37,11 @@ def train(args):
     critic = Critic(args.critic_pretrain, True, args.normalize_reward)
     reward_model = RewardModel(args.critic_pretrain, reward_from_config, args.normalize_reward)
 
+    # configure tokenizer
+    tokenizer = get_tokenizer(args.pretrain, actor.model, 'left', strategy)
+    get_tokenizer(args.critic_pretrain, critic.model, 'left', strategy)
+    get_tokenizer(args.critic_pretrain, reward_model.model, 'left', strategy)
+
     # load PyTorch model
     if args.sft_model_path:
         strategy.load_model(actor, args.sft_model_path)
@@ -63,9 +68,6 @@ def train(args):
         ema_model = deepcopy(actor)
     else:
         ema_model = None
-
-    # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, actor.model, 'left', strategy)
 
     # configure optimizer
     actor_optim = strategy.create_optimizer(actor, lr=args.actor_learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)
