@@ -172,7 +172,7 @@ We would like to express our gratitude to the following projects and organizatio
 
 **How to Join?**
 
-1. Email us at xuanai@openllmai.top(official email) or janhu9527@gmail.com/jjgxw@outlook.com(PIC). Please include the following details:
+1. Email us at xianyuai@openllmai.top(official email) or janhu9527@gmail.com/jjgxw@outlook.com(PIC). Please include the following details:
    - Your name
    - Your GitHub username
    - Your areas of interest
