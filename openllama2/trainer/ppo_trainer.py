@@ -138,7 +138,7 @@ class PPOTrainer(ABC):
 
         update_timesteps = rollout_batch_size // (self.strategy.world_size * self.micro_rollout_batch_size)
         global_step = 0
-        
+
         for episode in range(num_episodes):
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
                 self.prompts_dataloader.sampler.set_epoch(episode)
@@ -158,19 +158,9 @@ class PPOTrainer(ABC):
                     self.replay_buffer.clear() 
                     self.kl_ctl.update(status['kl'], rollout_batch_size)
 
-                    # format logs 
-                    logs = {'policy_loss': status['pg'],
-                            'critic_loss': status['cri'],
-                            'values': status['vals'],
-                            'reward': status['rm'],
-                            'return': status['ret'],
-                            'response_length': status['glen'],
-                            'total_length': status['tlen'],
-                            'kl_penalty': status['kl'],
-                            'k_coef': self.kl_ctl.value}
                     self.strategy.print(logs)
                     if self._wandb is not None and self.strategy.is_rank_0():
-                        logs = {'train/%s' % k: v for k, v in {**logs, "global_step": global_step}.items()}
+                        logs = {'train/%s' % k: v for k, v in {**status, "global_step": global_step}.items()}
                         self._wandb.log(logs)
 
     def ppo_train(self):
@@ -193,12 +183,23 @@ class PPOTrainer(ABC):
 
                 # for DP
                 # weighted mean for kl
-                status['kl'] *= status['glen']
+                status['kl'] *= status['response_length']
                 status = self.strategy.all_reduce(status)
-                status['kl'] /= status['glen']
+                status['kl'] /= status['response_length']
 
                 status_list.append(status)
-                pbar.set_postfix(status)
+                short_status = {
+                    'pg': status['policy_loss'],
+                    'cri': status['critic_loss'],
+                    'vals': status['values'],
+                    'rm': status['reward'],
+                    'ret': status['return'],
+                    'glen': status['response_length'],
+                    'tlen': status['total_length'],
+                    'kl': status['kl'],
+                    'ptx': status['ptx_loss'],
+                }
+                pbar.set_postfix(short_status)
 
         if status_list:
             status_mean = status_list[0]
@@ -252,15 +253,15 @@ class PPOTrainer(ABC):
             self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
 
         # status
-        status = {'pg': raw_actor_loss.item(), 
-                'cri': critic_loss.item(),
-                'vals':  masked_mean(values, experience.action_mask, dim=(0, 1)).item(),
+        status = {'policy_loss': raw_actor_loss.item(), 
+                'critic_loss': critic_loss.item(),
+                'values':  masked_mean(values, experience.action_mask, dim=(0, 1)).item(),
                 }
         if self.pretrain_dataloader is not None:
-            status['ptx'] = ptx_loss.item()
+            status['ptx_loss'] = ptx_loss.item()
         for k, v in experience.info.items():
             if k == 'kl':
-                status[k] = ((v * experience.info['glen']).sum() / experience.info['glen'].sum()).item()
+                status[k] = ((v * experience.info['response_length']).sum() / experience.info['response_length'].sum()).item()
             else:
                 status[k] = v.mean().item()
         return status

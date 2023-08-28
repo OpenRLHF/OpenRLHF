@@ -111,10 +111,10 @@ class NaiveExperienceMaker(ABC):
 
         info = {
             'kl': masked_mean(kl, action_mask, dim=-1),
-            'rm': r,
-            'ret': reward.sum(dim=-1),
-            'glen': action_mask.float().sum(dim=-1),
-            'tlen': attention_mask.float().sum(dim=-1)
+            'reward': r,
+            'return': reward.sum(dim=-1),
+            'response_length': action_mask.float().sum(dim=-1),
+            'total_length': attention_mask.float().sum(dim=-1)
         }
         
         return Experience(sequences, action_log_probs, value, returns, advantage, attention_mask, action_mask, info)
