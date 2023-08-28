@@ -115,6 +115,20 @@ class PPOTrainer(ABC):
             self.actor.gradient_checkpointing_enable()
             self.critic.gradient_checkpointing_enable()
 
+        self._wandb = None
+        if self.strategy.args.use_wandb and self.strategy.is_rank_0():
+            import wandb
+            self._wandb = wandb
+            wandb.login(key=strategy.args.use_wandb)
+            wandb.init(entity=strategy.args.wandb_org, project=strategy.args.wandb_project,
+                       group=strategy.args.wandb_group, name=strategy.args.wandb_run_name,
+                       config=strategy.args.__dict__, reinit=True)
+
+            wandb.define_metric("train/global_step")
+            wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
+            wandb.define_metric("eval/epoch")
+            wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
+
     def fit(self, prompts_dataloader, pretrain_dataloader, num_episodes: 1, rollout_batch_size: 1024) -> None:
         self.prompts_dataloader = prompts_dataloader
         self.pretrain_dataloader = pretrain_dataloader
@@ -124,10 +138,11 @@ class PPOTrainer(ABC):
             batch = self.tokenizer(texts, return_tensors='pt', max_length=self.prompt_max_len, 
                                    padding=True, truncation=True)
             return {k: v.to(torch.cuda.current_device()) for k, v in batch.items()}
-        
-        update_timesteps = rollout_batch_size // self.strategy.world_size * self.micro_rollout_batch_size
+
+        update_timesteps = rollout_batch_size // (self.strategy.world_size * self.micro_rollout_batch_size)
         time_step = 0
 
+        global_step = 0
         for episode in range(num_episodes):
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
                 self.prompts_dataloader.sampler.set_epoch(episode)
@@ -149,6 +164,10 @@ class PPOTrainer(ABC):
                     self.kl_ctl.update(status['kl'], rollout_batch_size)
                     status['k_coef'] = self.kl_ctl.value
                     self.strategy.print(status)
+
+                    if self._wandb is not None and self.strategy.is_rank_0():
+                        logs = {'train/%s' % k: v for k, v in {**status, "global_step": global_step}.items()}
+                        self._wandb.log(logs)
 
     def ppo_train(self):
         # replay buffer may be empty at first, we should rebuild at each training

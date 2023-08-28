@@ -23,6 +23,7 @@ def get_tokenizer(pretrain, model, padding_side='left', strategy=None, use_fast=
         special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
         strategy.print('add pad_token')
         tokenizer.add_special_tokens(special_tokens_dict)
+    model.resize_token_embeddings(len(tokenizer))
 
     assert tokenizer.pad_token_id != tokenizer.eos_token_id
     return tokenizer
@@ -37,7 +38,7 @@ def get_strategy(args):
     if 'micro_train_batch_size' not in args:
         args.micro_train_batch_size = 1
     if 'train_batch_size' not in args:
-        args.train_batch_size = 1
+        args.train_batch_size = 8
     if 'local_rank' not in args:
         args.local_rank = -1
     if 'bf16' not in args:
@@ -54,7 +55,7 @@ def get_strategy(args):
     elif 'generate_max_len' in args and 'prompt_max_len' in args:
         args.max_out_tokens = args.prompt_max_len + args.generate_max_len
     else:
-        raise Exception("Deepspeed config: Invalid max_out_tokens")
+        args.max_out_tokens = 2048
 
     strategy = DeepspeedStrategy(seed=args.seed, 
                                     max_norm=args.max_norm,

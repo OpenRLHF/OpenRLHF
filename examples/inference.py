@@ -25,13 +25,13 @@ def eval(args):
     from_config = bool(args.load_model)
     model = Actor(args.pretrain, from_config)
 
+    # configure tokenizer
+    tokenizer = get_tokenizer(args.pretrain, model.model, 'left', strategy)
+
     # load Pytorch model
     if args.load_model:
         strategy.print("Load model: ", args.load_model)
         strategy.load_model(model, args.load_model)
-
-    # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model.model, 'left', strategy)
 
     # prepare models
     model = strategy.prepare(model)

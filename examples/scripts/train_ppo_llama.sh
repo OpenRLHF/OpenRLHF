@@ -1,5 +1,4 @@
 set -x 
-export PATH=$HOME/.local/bin/:$PATH
 
 
 deepspeed ../train_ppo.py \

@@ -1,9 +1,11 @@
 import os
+import random
 from abc import ABC
 from typing import List, Tuple, Union
 from collections import defaultdict
 
 import deepspeed
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -56,13 +58,23 @@ class DeepspeedStrategy(ABC):
         self.max_norm = max_norm
         self.time_steps = defaultdict(int)
 
+        self.set_seed(seed)
         self.setup_distributed()
 
+    def set_seed(self, seed: int) -> None:
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
     def setup_distributed(self) -> None:
-        # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        deepspeed.init_distributed()
+        if self.args.local_rank == -1 and "LOCAL_RANK" in os.environ: # for slurm
+            self.args.local_rank = int(os.environ['LOCAL_RANK'])
+
         if self.args.local_rank != -1:
             torch.cuda.set_device(self.args.local_rank)
+        # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
+        deepspeed.init_distributed()
         self.world_size = dist.get_world_size()
         self.accumulated_gradient = self.train_batch_size // self.micro_train_batch_size // self.world_size
 
@@ -299,3 +311,6 @@ class DeepspeedStrategy(ABC):
 
     def is_rank_0(self) -> bool:
         return dist.get_rank() == 0
+    
+    def get_rank(self) -> int:
+        return dist.get_rank()

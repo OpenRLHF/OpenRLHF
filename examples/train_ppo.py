@@ -3,6 +3,7 @@ import itertools
 import math
 import os
 from copy import deepcopy
+from datetime import datetime
 
 import torch
 import torch.distributed as dist
@@ -225,6 +226,15 @@ if __name__ == '__main__':
                         help='Enable EMA checkpoint for the model.')
     parser.add_argument('--zpg', type=int, default=8, help="ZeRO++ max partition size")
     parser.add_argument('--adam_offload', action="store_true", default=False)
+    parser.add_argument('--actor_init_on_gpu', action="store_true", default=False)
     parser.add_argument('--save_hf_model', action='store_true', default=False)
+
+    # wandb pamameters
+    parser.add_argument('--use_wandb', type=str, default=None)
+    parser.add_argument('--wandb_org', type=str, default=None)
+    parser.add_argument('--wandb_group', type=str, default=None)
+    parser.add_argument('--wandb_project', type=str, default="openllama2_train_ppo")
+    parser.add_argument('--wandb_run_name', type=str, default="ppo_%s" % datetime.now().strftime('%m%dT%H:%M'))
+
     args = parser.parse_args()
     train(args)
