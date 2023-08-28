@@ -137,9 +137,8 @@ class PPOTrainer(ABC):
             return {k: v.to(torch.cuda.current_device()) for k, v in batch.items()}
 
         update_timesteps = rollout_batch_size // (self.strategy.world_size * self.micro_rollout_batch_size)
-        time_step = 0
-
         global_step = 0
+        
         for episode in range(num_episodes):
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
                 self.prompts_dataloader.sampler.set_epoch(episode)
@@ -152,18 +151,26 @@ class PPOTrainer(ABC):
                 experience = self.experience_maker.make_experience(**inputs, **self.generate_kwargs)
                 self.replay_buffer.append(experience)
 
-                time_step = (time_step + 1) % update_timesteps
-                if time_step % update_timesteps == 0:
+                global_step = global_step + 1
+                if global_step % update_timesteps == 0:
                     self.replay_buffer.normalize('advantages', self.strategy)
                     status = self.ppo_train()
                     self.replay_buffer.clear() 
-
                     self.kl_ctl.update(status['kl'], rollout_batch_size)
-                    status['k_coef'] = self.kl_ctl.value
-                    self.strategy.print(status)
 
+                    # format logs 
+                    logs = {'policy_loss': status['pg'],
+                            'critic_loss': status['cri'],
+                            'values': status['vals'],
+                            'reward': status['rm'],
+                            'return': status['ret'],
+                            'response_length': status['glen'],
+                            'total_length': status['tlen'],
+                            'kl_penalty': status['kl'],
+                            'k_coef': self.kl_ctl.value}
+                    self.strategy.print(logs)
                     if self._wandb is not None and self.strategy.is_rank_0():
-                        logs = {'train/%s' % k: v for k, v in {**status, "global_step": global_step}.items()}
+                        logs = {'train/%s' % k: v for k, v in {**logs, "global_step": global_step}.items()}
                         self._wandb.log(logs)
 
     def ppo_train(self):
