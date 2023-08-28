@@ -196,9 +196,10 @@ class PPOTrainer(ABC):
                     'ret': status['return'],
                     'glen': status['response_length'],
                     'tlen': status['total_length'],
-                    'kl': status['kl'],
-                    'ptx': status['ptx_loss'],
+                    'kl': status['kl']
                 }
+                if 'ptx_loss' in status:
+                    short_status['ptx'] = status['ptx_loss']
                 pbar.set_postfix(short_status)
 
         if status_list:
