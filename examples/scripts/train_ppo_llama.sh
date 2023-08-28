@@ -1,18 +1,18 @@
 set -x 
 export PATH=$HOME/.local/bin/:$PATH
 
+
 deepspeed ../train_ppo.py \
-    --pretrain "meta-llama/Llama-2-7b-hf" \
-    --critic_pretrain "meta-llama/Llama-2-7b-hf" \
-    --reward_model_path "./ckpt/7b_llama/rm_model.pt" \
-    --sft_model_path "./ckpt/7b_llama/sft_model.pt" \
-    --save_path './ckpt/7b_llama' \
-    --micro_train_batch_size 1 \
+    --pretrain "/data/model/alpaca-7b" \
+    --critic_pretrain "/data/model/alpaca-7b" \
+    --reward_pretrain "OpenAssistant/reward-model-deberta-v3-large-v2"\
+    --save_path '/data/model/ppo_model_baseline_80K' \
+    --micro_train_batch_size 8 \
     --train_batch_size 128 \
     --micro_rollout_batch_size 1 \
-    --rollout_batch_size 1024 \
+    --rollout_batch_size 512 \
     --max_epochs 1 \
-    --prompt_max_len 1024 \
+    --prompt_max_len 512 \
     --generate_max_len 1024 \
     --zero_stage 2 \
     --bf16 \
@@ -20,9 +20,11 @@ deepspeed ../train_ppo.py \
     --critic_learning_rate 9e-6 \
     --inference_tp_size 1 \
     --init_kl_coef 0.01 \
-    --prompt_data 'yahma/alpaca-cleaned,Dahoas/full-hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward' \
-    --prompt_data_probs '0.3,0.6,0.1' \
+    --prompt_data '/data/datasets/finals.json' \
+    --prompt_data_probs '1'\
     --normalize_reward \
     --adam_offload \
-    --gradient_checkpointing
+    --gradient_checkpointing \
+
+
 

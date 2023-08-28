@@ -26,28 +26,33 @@ def train(args):
 
     # configure model
     # load huggingface model/config
-    actor_from_config = bool(args.sft_model_path or args.load_checkpoint)
-    reward_from_config = bool(args.reward_model_path)
+    # actor_from_config = bool(args.sft_model_path or args.load_checkpoint)
+    # reward_from_config = bool(args.critic_model_path)
 
-    actor = Actor(args.pretrain, actor_from_config)
-    critic = Critic(args.critic_pretrain, True, args.normalize_reward)
-    reward_model = RewardModel(args.critic_pretrain, reward_from_config, args.normalize_reward)
-
+    actor = Actor(args.pretrain, False).cuda()
+    critic = Critic(args.critic_pretrain, False, args.normalize_reward)
+    reward_model = RewardModel(args.reward_pretrain, False, args.normalize_reward)
+    
     # load PyTorch model
-    if args.sft_model_path:
-        strategy.load_model(actor, args.sft_model_path)
-    if args.reward_model_path:
-        strategy.load_model(reward_model, args.reward_model_path)
+    # if args.sft_model_path:
+    #     strategy.print("load in sft model...")
+    #     strategy.load_model(actor, args.sft_model_path)
+
+    # if args.critic_model_path:
+    #     strategy.print("load in critic model...")
+    #     strategy.load_model(critic, args.critic_model_path)
     
     # copy weights for reference actor/ema actor/critic
     initial_model = deepcopy(actor)
-    critic.model = deepcopy(reward_model.model)
-    critic.value_head = deepcopy(reward_model.value_head)
+    # critic.model = deepcopy(actor.model)
+
+    # critic.value_head = deepcopy(reward_model.value_head)
 
     strategy.print("reward normalization status: {}".format(args.normalize_reward))
     strategy.print("mean: {}, std {}".format(reward_model.mean, reward_model.std))
-    critic.mean = deepcopy(reward_model.mean)
-    critic.std = deepcopy(reward_model.std)
+    
+    # critic.mean = deepcopy(reward_model.mean)
+    # critic.std = deepcopy(reward_model.std)
 
     # lora
     if args.lora_rank > 0:
@@ -62,6 +67,7 @@ def train(args):
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, actor.model, 'left', strategy)
+    reward_tokenizer = get_tokenizer(args.reward_pretrain, reward_model.model, 'left', strategy)
 
     # configure optimizer
     actor_optim = strategy.create_optimizer(actor, lr=args.actor_learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)
@@ -73,6 +79,7 @@ def train(args):
     prompts_dataset = PromptDataset(prompts_data, strategy)
     prompts_dataloader = strategy.setup_dataloader(prompts_dataset, args.micro_rollout_batch_size, True, True)
 
+    # TODO: ignore pretrain dataloader now
     if args.pretrain_data:
         pretrain_data = blending_datasets(args.pretrain_data, args.pretrain_data_probs, strategy, args.seed, return_eval=False)
         pretrain_max_len =  args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
@@ -131,6 +138,7 @@ def train(args):
         micro_rollout_batch_size=args.micro_rollout_batch_size,
         gradient_checkpointing=args.gradient_checkpointing,
         tokenizer=tokenizer,
+        reward_tokenizer=reward_tokenizer,
         prompt_max_len=args.prompt_max_len,
         value_clip=args.value_clip,
         eps_clip=args.eps_clip,
@@ -175,7 +183,8 @@ if __name__ == '__main__':
     parser.add_argument('--pretrain_data_probs', type=str, default="1.0", help="sampling probs for datasets")
     parser.add_argument('--pretrain', type=str, default=None)
     parser.add_argument('--critic_pretrain', type=str, default=None)
-    parser.add_argument('--reward_model_path', type=str, default=None)
+    parser.add_argument('--reward_pretrain', type=str, default=None)
+    parser.add_argument('--critic_model_path', type=str, default=None)
     parser.add_argument('--sft_model_path', type=str, default=None)
     parser.add_argument('--save_path', type=str, default='./ckpt')
     parser.add_argument('--num_episodes', type=int, default=1)

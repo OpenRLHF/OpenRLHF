@@ -3,7 +3,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
-from transformers import AutoConfig, AutoModel
+from transformers import AutoConfig, AutoModel, AutoModelForSequenceClassification
 
 
 class RewardModel(nn.Module):
@@ -27,7 +27,7 @@ class RewardModel(nn.Module):
                 config = AutoConfig.from_pretrained(pretrain_or_model, torch_dtype="auto")
                 self.model = AutoModel.from_config(config)
             else:
-                self.model = AutoModel.from_pretrained(pretrain_or_model, torch_dtype="auto", trust_remote_code=True)
+                self.model = AutoModelForSequenceClassification.from_pretrained(pretrain_or_model)
         else:
             self.model = pretrain_or_model
 
@@ -41,28 +41,31 @@ class RewardModel(nn.Module):
         self.register_buffer('std', torch.ones(1))
         
 
-    def forward(self, sequences: torch.LongTensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        outputs = self.model(sequences, attention_mask=attention_mask)
-        last_hidden_states = outputs['last_hidden_state']
-        values = self.value_head(last_hidden_states).squeeze(-1)
+    def forward(self, **inputs):
+        return self.model(**inputs)
 
-        # left padding in training mode
-        if self.training:
-            reward = values[:, -1]
-        else:
-            # assume that there is some padding on both sides
-            last_value = []
-            for i in range(sequences.size(0)):
-                for t in reversed(range(sequences.size(1))):
-                    if attention_mask[i][t] > 0.5:
-                        last_value.append(values[i][t])
-                        break
-            reward = torch.stack(last_value)
+    # def forward(self, sequences: torch.LongTensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    #     outputs = self.model(sequences, attention_mask=attention_mask)
+    #     last_hidden_states = outputs['last_hidden_state']
+    #     values = self.value_head(last_hidden_states).squeeze(-1)
+
+    #     # left padding in training mode
+    #     if self.training:
+    #         reward = values[:, -1]
+    #     else:
+    #         # assume that there is some padding on both sides
+    #         last_value = []
+    #         for i in range(sequences.size(0)):
+    #             for t in reversed(range(sequences.size(1))):
+    #                 if attention_mask[i][t] > 0.5:
+    #                     last_value.append(values[i][t])
+    #                     break
+    #         reward = torch.stack(last_value)
             
-            # normalize reward in eval mode
-            if self.normalize_reward:
-                reward = (reward - self.mean) / self.std
-        return reward
+    #         # normalize reward in eval mode
+    #         if self.normalize_reward:
+    #             reward = (reward - self.mean) / self.std
+    #     return reward
 
 
     def gradient_checkpointing_enable(self):

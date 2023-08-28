@@ -17,7 +17,7 @@ def preprocess_data(data):
     # QingyiSi/Alpaca-CoT
     elif exist_and_not_none(data, 'instruction') and exist_and_not_none(data, 'output'):
         input =  ' ' + data['input'] if exist_and_not_none(data, 'input') else ''
-        prompt = 'Human: ' +  data['instruction'] + input + "\nAssistant: "
+        prompt = 'Below is an instruction that describes a task.\nWrite a response that appropriately completes the request.\n\n### Instruction:\n' +  data['instruction'] + input + "### Response:\n"
     # stanfordnlp/SHP
     elif exist_and_not_none(data, 'history'):
         prompt = "Human: " +  data['history'] + "\nAssistant: "

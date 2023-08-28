@@ -1,7 +1,10 @@
 import os
-
-from datasets import Dataset, interleave_datasets, load_dataset
+import datasets as hf_datasets
 from transformers import AutoTokenizer
+
+import sys
+sys.path.append('/data/OpenLLaMA2')
+
 
 from openllama2.utils import DeepspeedStrategy
 
@@ -73,7 +76,7 @@ def blending_datasets(datasets, probabilities, strategy=None, seed=42, max_count
     train_data_list = []
     eval_data_list = []
     for i, dataset in enumerate(datasets):
-        data = load_dataset(dataset.strip())
+        data = hf_datasets.load_dataset('json', data_files=dataset.strip())
         if "train" in data:
             train_data_list.append(data["train"].select(range(min(max_count, len(data["train"])))))
         else:
@@ -94,9 +97,9 @@ def blending_datasets(datasets, probabilities, strategy=None, seed=42, max_count
     if strategy.is_rank_0():
         print(train_data_list)
         
-    train_dataset = interleave_datasets(train_data_list, probabilities=probabilities, seed=seed, stopping_strategy=stopping_strategy)
+    train_dataset = hf_datasets.interleave_datasets(train_data_list, probabilities=probabilities, seed=seed, stopping_strategy=stopping_strategy)
     if return_eval:
-        eval_dataset = interleave_datasets(eval_data_list, probabilities=probabilities, seed=seed, stopping_strategy=stopping_strategy)
+        eval_dataset = hf_datasets.interleave_datasets(eval_data_list, probabilities=probabilities, seed=seed, stopping_strategy=stopping_strategy)
         return train_dataset, eval_dataset
     else:
         return train_dataset

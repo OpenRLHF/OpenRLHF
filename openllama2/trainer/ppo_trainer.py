@@ -37,7 +37,8 @@ class PPOTrainer(ABC):
         value_clip (float, defaults to 0.4): the clip coefficient of value loss
         experience_batch_size (int, defaults to 8): the batch size to use for experience generation
         max_epochs (int, defaults to 1): the number of epochs of training process
-        tokenier (Callable, optional): the tokenizer to use for tokenizing the input
+        tokenizer (Callable, optional): the tokenizer to use for tokenizing the input
+        reward_tokenizer (Callable, optional): the tokenizer to use for tokenizing the input for reward model
         sample_replay_buffer (bool, defaults to False): whether to sample from replay buffer
         dataloader_pin_memory (bool, defaults to True): whether to pin memory for data loader
         callbacks (List[Callback], defaults to []): the callbacks to call during training process
@@ -70,6 +71,7 @@ class PPOTrainer(ABC):
                  max_epochs: int = 1,
                  max_norm: float = 1.0,
                  tokenizer: Optional[Callable[[Any], dict]] = None,
+                 reward_tokenizer: Optional[Callable[[Any], dict]] = None,
                  prompt_max_len: int = 128, 
                  dataloader_pin_memory: bool = True,
                  **generate_kwargs) -> None:
@@ -78,6 +80,7 @@ class PPOTrainer(ABC):
         self.micro_rollout_batch_size = micro_rollout_batch_size
         self.max_epochs = max_epochs
         self.tokenizer = tokenizer
+        self.reward_tokenizer = reward_tokenizer
         self.generate_kwargs = generate_kwargs
         self.dataloader_pin_memory = dataloader_pin_memory
         self.max_norm = max_norm
@@ -121,7 +124,7 @@ class PPOTrainer(ABC):
             batch = self.tokenizer(texts, return_tensors='pt', max_length=self.prompt_max_len, 
                                    padding=True, truncation=True)
             return {k: v.to(torch.cuda.current_device()) for k, v in batch.items()}
-
+        
         update_timesteps = rollout_batch_size // self.strategy.world_size * self.micro_rollout_batch_size
         time_step = 0
 
@@ -134,7 +137,7 @@ class PPOTrainer(ABC):
             
             for rand_prompts in pbar:
                 inputs = tokenize_fn(rand_prompts)
-                experience = self.experience_maker.make_experience(**inputs, **self.generate_kwargs)
+                experience = self.experience_maker.make_experience(self.tokenizer, self.reward_tokenizer, **inputs, **self.generate_kwargs)
                 self.replay_buffer.append(experience)
 
                 time_step = (time_step + 1) % update_timesteps

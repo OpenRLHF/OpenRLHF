@@ -32,6 +32,7 @@ class Critic(nn.Module):
             self.model = pretrain_or_model
         
         self.value_head = nn.Linear(self.model.config.hidden_size, 1)
+        self.value_head.weight.data.normal_(mean=0.0, std=1/(self.model.config.hidden_size + 1))
 
         # mean std
         self.normalize_reward = normalize_reward
@@ -42,7 +43,7 @@ class Critic(nn.Module):
                 sequences: torch.LongTensor,
                 action_mask: Optional[torch.Tensor] = None,
                 attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        outputs = self.model(sequences, attention_mask=attention_mask)
+        outputs = self.model(sequences, attention_mask=attention_mask, output_hidden_states=True)
         last_hidden_states = outputs['last_hidden_state']
 
         values = self.value_head(last_hidden_states).squeeze(-1)[:, :-1]

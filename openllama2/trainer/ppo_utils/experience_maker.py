@@ -83,7 +83,7 @@ class NaiveExperienceMaker(ABC):
         self.strategy = strategy
 
     @torch.no_grad()
-    def make_experience(self, input_ids: torch.Tensor, **generate_kwargs) -> Experience:
+    def make_experience(self, tokenizer, reward_tokenizer, input_ids: torch.Tensor, **generate_kwargs) -> Experience:
         self.actor.eval()
         self.critic.eval()
         self.initial_model.eval()
@@ -92,6 +92,25 @@ class NaiveExperienceMaker(ABC):
         for i in tqdm(range(1), desc=f'Generate sequence', disable=not SHOW_TIME_DETAILS or not self.strategy.is_rank_0()):
             sequences, attention_mask, action_mask = self.actor.generate(input_ids, **generate_kwargs)
             
+        def re_tokenize(input_ids: torch.Tensor, sequences: torch.Tensor, decode_tokenizer, encode_tokenizer):
+            
+            decoded_texts = decode_tokenizer.batch_decode(sequences, skip_special_tokens=True)
+            decoded_question = decode_tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+            decoded_response = [text[len(prefix):] for text, prefix in zip(decoded_texts, decoded_question)]
+            # alpaca template
+            decoded_question = [text.split("\n\n### Instruction:\n")[1] for text in decoded_question]
+            decoded_question = [text.split("### Response:\n")[0] for text in decoded_question]
+
+            input_list = []
+            for question, response in zip(decoded_question, decoded_response):
+                inputs = encode_tokenizer(question, response, return_tensors="pt")
+                inputs = {key: tensor.cuda() for key, tensor in inputs.items()} 
+                input_list.append(inputs)
+
+            return input_list
+        
+        input_list = re_tokenize(input_ids, sequences, tokenizer, reward_tokenizer)
+
         num_actions = action_mask.size(1)
         for i in tqdm(range(1), desc=f'Actor forward', disable=not SHOW_TIME_DETAILS or not self.strategy.is_rank_0()):
             action_log_probs = self.actor(sequences, num_actions, attention_mask)
@@ -103,8 +122,9 @@ class NaiveExperienceMaker(ABC):
             value = self.critic(sequences, action_mask, attention_mask)
         
         for i in tqdm(range(1), desc=f'Reward model forward', disable=not SHOW_TIME_DETAILS or not self.strategy.is_rank_0()):
-            r = self.reward_model(sequences, attention_mask)
-
+            # TODO: now only available for micro_rollout_batch_size = 1
+            r = self.reward_model(**(input_list[0])).logits[0].cpu().detach()
+            # print("reward score: ",r)
         reward, kl = compute_reward(r, self.kl_ctl.value, action_log_probs, base_action_log_probs, action_mask=action_mask)
         advantage, returns = self.get_advantages_and_returns(
             value, reward, action_mask, generate_kwargs['gamma'], generate_kwargs['lambd'])
