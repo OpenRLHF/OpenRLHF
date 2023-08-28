@@ -158,7 +158,7 @@ class PPOTrainer(ABC):
                     self.replay_buffer.clear() 
                     self.kl_ctl.update(status['kl'], rollout_batch_size)
 
-                    self.strategy.print(logs)
+                    self.strategy.print(status)
                     if self._wandb is not None and self.strategy.is_rank_0():
                         logs = {'train/%s' % k: v for k, v in {**status, "global_step": global_step}.items()}
                         self._wandb.log(logs)
