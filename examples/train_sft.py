@@ -29,6 +29,8 @@ def train(args):
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, 'right', strategy)
 
+    strategy.print(model)
+
     # load Pytorch model
     if args.load_model and not args.load_checkpoint:
         strategy.print("Load model: ", args.load_model)

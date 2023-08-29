@@ -42,6 +42,9 @@ def train(args):
     get_tokenizer(args.critic_pretrain, critic.model, 'left', strategy)
     get_tokenizer(args.critic_pretrain, reward_model.model, 'left', strategy)
 
+    strategy.print(actor)
+    strategy.print(critic)
+
     # load PyTorch model
     if args.sft_model_path:
         strategy.load_model(actor, args.sft_model_path)

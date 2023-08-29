@@ -30,6 +30,8 @@ def train(args):
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, 'left', strategy)
 
+    strategy.print(model)
+
     # load SFT model
     if args.load_model and not args.load_checkpoint:
         def key_replace_fn(states_dict):
