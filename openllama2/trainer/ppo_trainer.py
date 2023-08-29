@@ -160,7 +160,7 @@ class PPOTrainer(ABC):
 
                     self.strategy.print(status)
                     if self._wandb is not None and self.strategy.is_rank_0():
-                        logs = {'train/%s' % k: v for k, v in {**status, "global_step": global_step}.items()}
+                        logs = {'train/%s' % k: v for k, v in {**status, "global_step": global_step // update_timesteps}.items()}
                         self._wandb.log(logs)
 
     def ppo_train(self):
