@@ -156,9 +156,13 @@ class DeepspeedStrategy(ABC):
             tp_gather_partition_size=4,
             max_out_tokens=self.max_out_tokens,
             zpg=self.zpg)
-        # dummy batch size
+        
         ds_config['train_micro_batch_size_per_gpu'] =  self.micro_train_batch_size 
-        ds_config['train_batch_size'] =  self.train_batch_size
+        train_batch_size = self.train_batch_size
+        # corner case for ptx loss (backward twice)
+        if self.is_rlhf and is_actor and self.args.pretrain_data is not None:
+             train_batch_size *= 2
+        ds_config['train_batch_size'] =  train_batch_size
 
         engine, optim, _, scheduler = deepspeed.initialize(model=model.model if is_actor else model,
                                                 optimizer=optim,

@@ -15,8 +15,6 @@ from openllama2.models.utils import masked_mean
 from .ppo_utils import (AdaptiveKLController, Experience, FixedKLController,
                         NaiveExperienceMaker, NaiveReplayBuffer)
 
-SHOW_TIME_DETAILS = False
-
 class PPOTrainer(ABC):
     """
         Trainer for PPO algorithm.
@@ -216,48 +214,45 @@ class PPOTrainer(ABC):
         self.critic.train()
 
         num_actions = experience.action_mask.size(1)
-        for _ in tqdm(range(1), desc=f'Actor forward', disable=not SHOW_TIME_DETAILS or not self.strategy.is_rank_0()):
-            action_log_probs = self.actor(experience.sequences, num_actions, attention_mask=experience.attention_mask)
-            actor_loss = raw_actor_loss = self.actor_loss_fn(action_log_probs,
-                                            experience.action_log_probs,
-                                            experience.advantages,
-                                            action_mask=experience.action_mask)
-            # ptx loss
-            if self.pretrain_dataloader is not None:
-                data = next(self.pretrain_dataloader)
-                inputs = data[1].squeeze(1).to(torch.cuda.current_device())
-                attention_mask = data[2].squeeze(1).to(torch.cuda.current_device())
-                label = torch.where(inputs.eq(self.tokenizer.pad_token_id), self.ptx_loss_fn.IGNORE_INDEX, inputs)
+        # actor loss
+        action_log_probs = self.actor(experience.sequences, num_actions, attention_mask=experience.attention_mask)
+        actor_loss = raw_actor_loss = self.actor_loss_fn(action_log_probs,
+                                        experience.action_log_probs,
+                                        experience.advantages,
+                                        action_mask=experience.action_mask)
+        self.strategy.backward(actor_loss, self.actor, self.actor_optim)
+        
+        # ptx loss
+        if self.pretrain_dataloader is not None:
+            data = next(self.pretrain_dataloader)
+            inputs = data[1].squeeze(1).to(torch.cuda.current_device())
+            attention_mask = data[2].squeeze(1).to(torch.cuda.current_device())
+            label = torch.where(inputs.eq(self.tokenizer.pad_token_id), self.ptx_loss_fn.IGNORE_INDEX, inputs)
 
-                ptx_log_probs = self.actor(inputs, attention_mask=attention_mask, return_output=True)['logits']
-                ptx_loss = self.ptx_loss_fn(ptx_log_probs, label)
-                actor_loss = ptx_loss * self.ptx_coef + raw_actor_loss
+            ptx_log_probs = self.actor(inputs, attention_mask=attention_mask, return_output=True)['logits']
+            ptx_loss = self.ptx_loss_fn(ptx_log_probs, label)
+            self.strategy.backward(ptx_loss, self.actor, self.actor_optim)
+
+        self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
+        if self.ema_model:
+            self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, 'cpu')
+
+        # critic loss
+        values = self.critic(experience.sequences,
+                            action_mask=experience.action_mask,
+                            attention_mask=experience.attention_mask)
+        critic_loss = self.critic_loss_fn(values,
+                                        experience.values,
+                                        experience.returns,
+                                        action_mask=experience.action_mask)
             
-        for _ in tqdm(range(1), desc=f'Actor backward', disable=not SHOW_TIME_DETAILS or not self.strategy.is_rank_0()):
-            self.strategy.backward(actor_loss, self.actor, self.actor_optim)
-            self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
-
-            if self.ema_model:
-                self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, 'cpu')
-
-        for _ in tqdm(range(1), desc=f'Critic forward', disable=not SHOW_TIME_DETAILS or not self.strategy.is_rank_0()):
-            values = self.critic(experience.sequences,
-                                action_mask=experience.action_mask,
-                                attention_mask=experience.attention_mask)
-            critic_loss = self.critic_loss_fn(values,
-                                            experience.values,
-                                            experience.returns,
-                                            action_mask=experience.action_mask)
-            
-        for _ in tqdm(range(1), desc=f'Critic backward', disable=not SHOW_TIME_DETAILS or not self.strategy.is_rank_0()):
-            self.strategy.backward(critic_loss, self.critic, self.critic_optim)
-            self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
+        self.strategy.backward(critic_loss, self.critic, self.critic_optim)
+        self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
 
         # status
         status = {'policy_loss': raw_actor_loss.item(), 
                 'critic_loss': critic_loss.item(),
-                'values':  masked_mean(values, experience.action_mask, dim=(0, 1)).item(),
-                }
+                'values':  masked_mean(values, experience.action_mask, dim=(0, 1)).item()}
         if self.pretrain_dataloader is not None:
             status['ptx_loss'] = ptx_loss.item()
         for k, v in experience.info.items():
