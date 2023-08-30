@@ -216,7 +216,7 @@ class PPOTrainer(ABC):
         num_actions = experience.action_mask.size(1)
         # actor loss
         action_log_probs = self.actor(experience.sequences, num_actions, attention_mask=experience.attention_mask)
-        actor_loss = raw_actor_loss = self.actor_loss_fn(action_log_probs,
+        actor_loss = self.actor_loss_fn(action_log_probs,
                                         experience.action_log_probs,
                                         experience.advantages,
                                         action_mask=experience.action_mask)
@@ -250,7 +250,7 @@ class PPOTrainer(ABC):
         self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
 
         # status
-        status = {'policy_loss': raw_actor_loss.item(), 
+        status = {'policy_loss': actor_loss.item(), 
                 'critic_loss': critic_loss.item(),
                 'values':  masked_mean(values, experience.action_mask, dim=(0, 1)).item()}
         if self.pretrain_dataloader is not None:
