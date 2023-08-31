@@ -75,6 +75,7 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 - [✔️] Develop a fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
 - [✔️] Develop the Multi-nodes training scripts for Slurm.
 - [✔️] Add wandb log support.
+- [✔️] Support conda env.
 - [WIP] Develop Multi-nodes RLHF based on Ray.
 - [WIP] Support Multiple RM models.
 - [WIP] Develop the Rejection Sampling.
@@ -102,7 +103,7 @@ You can build openllama2 from nvidia docker(recomended) or from conda envs.
   * CUDA: 12.0+(recomended)/11.8/11.7
 
 
-* Single-node training
+* Single-node training with nvidia-docker
 
 ```shell
 cd examples/scripts
@@ -111,7 +112,6 @@ cd examples/scripts
 ./nvidia_docker_install.sh
 
 # launch nvidia container
-# Tips: If you don't want to use NVIDIA Docker, you could try using Python 3.10/PyTorch 2.0+/CUDA 12.0+. However, this may lead to various environmental issues.
 ./docker_run.sh
 
 # cd in container
@@ -181,7 +181,7 @@ pip install flash-attn --no-build-isolation
 
 ## Inference
 
-After completing the training, you can evaluate of your model by using the `inference` script:
+After completing the training, you can evaluate your model by using the `inference` script:
 
 ```shell
 ./inference_llama.sh { model_path } "Please introduce the GTA5 game."
