@@ -95,6 +95,13 @@ Clone the repository: `git clone https://github.com/openllmai/OpenLLaMA2.git`
 
 ## Running LLaMA2 Example
 
+* Verified envs
+You can build openllama2 from nvidia docker(recomended) or from conda envs.
+  * Python: 3.8/3.9/3.10
+  * Torch: 2.0.0/2.0.1
+  * CUDA: 12.0+(recomended)/11.8/11.7
+
+
 * Single-node training
 
 ```shell
@@ -149,6 +156,27 @@ readonly GPUS_PER_NODE=8
 # run multi-nodes training script
 # train_llama_slurm.sh will load the training args from `training_script`
 sbatch ./train_llama_slurm.sh
+```
+
+* build openllama2 from conda envs 
+
+If you really don't want to use nvidia docker, we also provide tutorials for building openllama2 from a conda environment 
+```shell
+# we need conda
+conda create -n llama2 python=3.8
+# now requirements.txt seems incomplete for a conda env
+pip install -r requirements.txt
+# so, we need install some package manualy: when installing torch, you may need to match the corresponding cuda version.
+pip install packaging ninja
+pip install torch --index-url https://download.pytorch.org/whl/cu118
+# check ninjia
+ninja --version
+echo $? 
+# install flash-attn: may take some time
+pip install flash-attn --no-build-isolation
+# build: may need to remove --use-feature=in-tree-build
+./build_openllama2.sh
+# enjoy it!
 ```
 
 ## Inference
