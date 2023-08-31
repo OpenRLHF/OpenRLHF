@@ -98,7 +98,7 @@ Clone the repository: `git clone https://github.com/openllmai/OpenLLaMA2.git`
 * Single-node training
 
 ```shell
-# launch nvidia container
+# launch nvidia container (Installation script: examples/scripts/nvidia_docker_install.sh)
 cd examples/scripts
 ./docker_run.sh
 
