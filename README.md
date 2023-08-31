@@ -98,8 +98,13 @@ Clone the repository: `git clone https://github.com/openllmai/OpenLLaMA2.git`
 * Single-node training
 
 ```shell
-# launch nvidia container (Installation script: examples/scripts/nvidia_docker_install.sh)
 cd examples/scripts
+
+# install nvidia-docker (Optional)
+./nvidia_docker_install.sh
+
+# launch nvidia container
+# Tips: If you don't want to use NVIDIA Docker, you could try using Python 3.10/PyTorch 2.0+/CUDA 12.0+. However, this may lead to various environmental issues.
 ./docker_run.sh
 
 # cd in container
@@ -121,8 +126,6 @@ cd /openllama2/examples/scripts
 ./train_ppo_llama.sh
 ```
 
-Tips: If you don't want to use NVIDIA Docker, you could try using Anaconda3 + Python 3.10 + Torch 2.0 + CUDA 12.0+. However, this may lead to various environment issues.
-
 * Multi-nodes training on Slurm
 
 ```shell
@@ -134,7 +137,7 @@ huggingface-cli login
 
 # Moidfy the Slurm Account/Nodes ... in `train_llama_slurm.sh`
 
-# For SFT, RM and PPO training stage:
+# For SFT, RM, and PPO training stage:
 # Modify the variable `training_script` in `train_llama_slurm.sh` to
 readonly training_script="train_sft_llama.sh"
 readonly training_script="train_rm_llama.sh"
@@ -181,7 +184,7 @@ We would like to express our gratitude to the following projects and organizatio
 
 **What can you do?**
 
-1. Join the team and participate in the development of OpenLLaMA2 project.
+1. Join the team and participate in the development of the OpenLLaMA2 project.
 1. Contribute to the project by submitting pull requests.
 1. Help improve documentation, fix bugs, or create new features.
 1. Share the project and help us grow the community.
