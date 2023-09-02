@@ -94,9 +94,8 @@ def blending_datasets(datasets, probabilities, strategy=None, seed=42, max_count
         elif len(dataset_subfold_list) == 2:
             dataset = dataset_subfold_list[0]
             subfold = dataset_subfold_list[1]
-            data = load_dataset(dataset, data_dir=subfold.strip())
+            data = load_dataset(dataset.strip(), data_dir=subfold.strip())
         elif len(dataset_subfold_list) == 1:
-            dataset = dataset_subfold_list[0]
             data = load_dataset(dataset)
         else:
             Exception("Dataset Name: Format error")
