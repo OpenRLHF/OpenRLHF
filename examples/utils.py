@@ -80,15 +80,17 @@ def blending_datasets(datasets, probabilities, strategy=None, seed=42, max_count
         dataset = dataset.strip()
         dataset_subfold_list = dataset.split('@')
         strategy.print(f'dataset: {dataset}')
-        if os.path.isdir(os.path.join(os.getcwd(), dataset)) or dataset.endswith('.json') or dataset.endswith('.jsonl'):
-            strategy.print(f'load local json/jsonl data: ')
-            if dataset.endswith('.json') or dataset.endswith('.jsonl'):
-                files = dataset
-            else:
-                path = Path(dataset)
-                files = [os.path.join(path, file.name) for file in
-                         itertools.chain(path.glob("*.json"), path.glob("*.jsonl"))]
-            data = load_dataset("json", data_files=files)
+
+        # local json
+        if dataset.endswith('.json') or dataset.endswith('.jsonl'):
+            data = load_dataset("json", data_files=dataset)
+        elif os.path.isdir(dataset):
+            path = Path(dataset)
+            files = [os.path.join(path, file.name) for file in
+                        itertools.chain(path.glob("*.json"), path.glob("*.jsonl"))]
+            strategy.print(f'load local dir data: {files}')
+            data = load_dataset("json", data_files=dataset)
+        # hf datasets
         elif len(dataset_subfold_list) == 2:
             dataset = dataset_subfold_list[0]
             subfold = dataset_subfold_list[1]
