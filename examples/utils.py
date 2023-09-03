@@ -89,7 +89,7 @@ def blending_datasets(datasets, probabilities, strategy=None, seed=42, max_count
             files = [os.path.join(path, file.name) for file in
                         itertools.chain(path.glob("*.json"), path.glob("*.jsonl"))]
             strategy.print(f'load local dir data: {files}')
-            data = load_dataset("json", data_files=dataset)
+            data = load_dataset("json", data_files=files)
         # hf datasets
         elif len(dataset_subfold_list) == 2:
             dataset = dataset_subfold_list[0]
