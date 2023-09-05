@@ -1,4 +1,5 @@
 # This code is modified from C-Eval Project: https://github.com/SJTU-LIT/ceval
+# and https://github.com/ymcui/Chinese-LLaMA-Alpaca-2
 
 import os
 import re
@@ -10,23 +11,34 @@ from transformers import LlamaForCausalLM, LlamaTokenizer
 from transformers import GenerationConfig
 from evaluator import Evaluator
 
+import sys
+
+sys.path.append("../../")
+from examples.utils import get_tokenizer
+
 DEFAULT_SYSTEM_PROMPT = """You are a helpful assistant. 你是一个乐于助人的助手。"""
 
 
 class Llama_Evaluator(Evaluator):
-    def __init__(self, choices, k, model_path, device, temperature=0.2, verbose=False):
-        super(Llama_Evaluator, self).__init__(choices, model_path, k)
+    def __init__(self, args, choices, k, pretrain_model_path, ckpt_path, device, temperature=0.2, verbose=False):
+        super(Llama_Evaluator, self).__init__(choices, pretrain_model_path, k)
         load_type = torch.float16
-        self.model_path = model_path
+        self.pretrain_model_path = pretrain_model_path
         self.device = device
         self.verbose = verbose
-        self.tokenizer = LlamaTokenizer.from_pretrained(model_path, legacy=True)
+        self.tokenizer = LlamaTokenizer.from_pretrained(pretrain_model_path, legacy=True)
         self.model = LlamaForCausalLM.from_pretrained(
-            model_path,
+            pretrain_model_path,
             load_in_8bit=False,
             torch_dtype=load_type,
             low_cpu_mem_usage=True,
             device_map='auto')
+
+        # load ckpt
+        if ckpt_path and ckpt_path != pretrain_model_path:
+            # resize tokenizer and model embedding
+            self.tokenizer = get_tokenizer(args.pretrain_model_path, self.model, 'left')
+            self.model.load_state_dict(torch.load(ckpt_path, map_location=self.device))
         self.generation_config = GenerationConfig(
             temperature=temperature,
             top_k=40,
@@ -46,16 +58,15 @@ class Llama_Evaluator(Evaluator):
         self.C_id = self.tokenizer.encode("：C")[-1]
         self.D_id = self.tokenizer.encode("：D")[-1]
 
-
     def eval_subject(self, subject_name,
-            test_df,
-            dev_df=None,
-            few_shot=False,
-            cot=False,
-            save_result_dir=None,
-            with_prompt=False,
-            constrained_decoding=False,
-            do_test=False):
+                     test_df,
+                     dev_df=None,
+                     few_shot=False,
+                     cot=False,
+                     save_result_dir=None,
+                     with_prompt=False,
+                     constrained_decoding=False,
+                     do_test=False):
         all_answers = {}
         if constrained_decoding is True:
             self.generation_config.output_scores = True
@@ -74,34 +85,35 @@ class Llama_Evaluator(Evaluator):
             history = ''
         answers = ['NA'] * len(test_df) if do_test is True else list(test_df['answer'])
         for row_index, row in tqdm(test_df.iterrows(), total=len(test_df)):
-            question = self.format_example(row, include_answer=False, cot=cot,with_prompt=with_prompt)
+            question = self.format_example(row, include_answer=False, cot=cot, with_prompt=with_prompt)
             instruction = history + question
             if with_prompt:
                 prompt_template = (
-                                        "[INST] <<SYS>>\n"
-                                        "{system_prompt}\n"
-                                        "<</SYS>>\n\n"
-                                        "{instruction} [/INST]"
-                                    )
+                    "[INST] <<SYS>>\n"
+                    "{system_prompt}\n"
+                    "<</SYS>>\n\n"
+                    "{instruction} [/INST]"
+                )
 
-                instruction = prompt_template.format_map({'instruction': instruction,'system_prompt':DEFAULT_SYSTEM_PROMPT})
+                instruction = prompt_template.format_map(
+                    {'instruction': instruction, 'system_prompt': DEFAULT_SYSTEM_PROMPT})
 
             inputs = self.tokenizer(instruction, return_tensors="pt")
             generation_output = self.model.generate(
-                    input_ids = inputs["input_ids"].to(self.device),
-                    attention_mask = inputs['attention_mask'].to(self.device),
-                    eos_token_id=self.tokenizer.eos_token_id,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                    generation_config = self.generation_config
-                )
+                input_ids=inputs["input_ids"].to(self.device),
+                attention_mask=inputs['attention_mask'].to(self.device),
+                eos_token_id=self.tokenizer.eos_token_id,
+                pad_token_id=self.tokenizer.pad_token_id,
+                generation_config=self.generation_config
+            )
 
             batch_size, length = inputs.input_ids.shape
             if constrained_decoding is True:
                 logits = generation_output.scores[0][0]
 
                 logits = logits.float().cpu().detach()
-                choices1_logits = logits[[self.sA_id,self.sB_id,self.sC_id,self.sD_id]]
-                choices2_logits = logits[[self.A_id,self.B_id,self.C_id,self.D_id]]
+                choices1_logits = logits[[self.sA_id, self.sB_id, self.sC_id, self.sD_id]]
+                choices2_logits = logits[[self.A_id, self.B_id, self.C_id, self.D_id]]
                 choicesAll_logits = (choices1_logits + choices2_logits).numpy()
                 assert not (np.any(np.isinf(choicesAll_logits)) or np.any(np.isnan(choicesAll_logits)))
                 ans = {0: "A", 1: "B", 2: "C", 3: "D"}[np.argmax(choicesAll_logits)]
@@ -126,7 +138,7 @@ class Llama_Evaluator(Evaluator):
 
             all_answers[str(row_index)] = ans
 
-        correct_ratio = 100*correct_num/len(answers)
+        correct_ratio = 100 * correct_num / len(answers)
 
         if save_result_dir:
             test_df['model_output'] = result
@@ -142,7 +154,7 @@ class Llama_Evaluator(Evaluator):
         if include_answer:
             if cot:
                 example += "\n答案：让我们一步一步思考，\n" + \
-                    line["explanation"] + f"\n所以答案是{line['answer']}。\n\n"
+                           line["explanation"] + f"\n所以答案是{line['answer']}。\n\n"
             else:
                 example += '\n答案：' + line["answer"] + '\n\n'
         else:
@@ -201,11 +213,11 @@ class Llama_Evaluator(Evaluator):
         pattern = ""
         for c in self.choices:
             choices_dict[str(line[f'{c}'])] = c
-            pattern += re.escape(str(line[f'{c}']))+"|"
+            pattern += re.escape(str(line[f'{c}'])) + "|"
         pattern = pattern[:-1]
         m = re.findall(pattern, gen_ans, re.M)
-        print("w/ escape:",repr(pattern),gen_ans,(len(m)>=1))
+        print("w/ escape:", repr(pattern), gen_ans, (len(m) >= 1))
         if len(m) >= 1:
             answer = choices_dict[m[0]]
             return answer, False
-        return  random.choice('ABCD'), False
+        return random.choice('ABCD'), False

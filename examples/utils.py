@@ -20,7 +20,8 @@ def get_tokenizer(pretrain, model, padding_side='left', strategy=None, use_fast=
     special_tokens_dict = dict()
     if tokenizer.pad_token is None or tokenizer.pad_token_id == tokenizer.eos_token_id:
         special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
-        strategy.print('add pad_token')
+        if strategy is not None:
+            strategy.print('add pad_token')
         tokenizer.add_special_tokens(special_tokens_dict)
     model.resize_token_embeddings(len(tokenizer))
 
@@ -80,22 +81,21 @@ def blending_datasets(datasets, probabilities, strategy=None, seed=42, max_count
         dataset = dataset.strip()
         dataset_subfold_list = dataset.split('@')
         strategy.print(f'dataset: {dataset}')
-
-        # local json
-        if dataset.endswith('.json') or dataset.endswith('.jsonl'):
-            data = load_dataset("json", data_files=dataset)
-        elif os.path.isdir(dataset):
-            path = Path(dataset)
-            files = [os.path.join(path, file.name) for file in
-                        itertools.chain(path.glob("*.json"), path.glob("*.jsonl"))]
-            strategy.print(f'load local dir data: {files}')
+        if os.path.isdir(os.path.join(os.getcwd(), dataset)) or dataset.endswith('.json') or dataset.endswith('.jsonl'):
+            strategy.print(f'load local json/jsonl data: ')
+            if dataset.endswith('.json') or dataset.endswith('.jsonl'):
+                files = dataset
+            else:
+                path = Path(dataset)
+                files = [os.path.join(path, file.name) for file in
+                         itertools.chain(path.glob("*.json"), path.glob("*.jsonl"))]
             data = load_dataset("json", data_files=files)
-        # hf datasets
         elif len(dataset_subfold_list) == 2:
             dataset = dataset_subfold_list[0]
             subfold = dataset_subfold_list[1]
-            data = load_dataset(dataset.strip(), data_dir=subfold.strip())
+            data = load_dataset(dataset, data_dir=subfold.strip())
         elif len(dataset_subfold_list) == 1:
+            dataset = dataset_subfold_list[0]
             data = load_dataset(dataset)
         else:
             Exception("Dataset Name: Format error")
