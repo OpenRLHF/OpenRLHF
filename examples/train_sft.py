@@ -11,15 +11,17 @@ from openllama2.datasets import SFTDataset
 from openllama2.models import Actor
 from openllama2.trainer import SFTTrainer
 
-# from openllama2.models.llama_flash_attn_monkey_patch import (
-#     replace_llama_attn_with_flash_attn,
-# )
-# replace_llama_attn_with_flash_attn()
-
 
 def train(args):
     # configure strategy
     strategy = get_strategy(args)
+
+    # configure flash attention
+    if args.flash_attn:
+        from openllama2.models.llama2_flash_attn_monkey_patch import (
+            replace_llama_attn_with_flash_attn,
+        )
+        replace_llama_attn_with_flash_attn()
 
     # configure model
     # load huggingface model/config
@@ -123,6 +125,7 @@ if __name__ == '__main__':
     parser.add_argument('--zpg', type=int, default=8, help="ZeRO++ max partition size")
     parser.add_argument('--adam_offload', action="store_true", default=False)
     parser.add_argument('--save_hf_model', action='store_true', default=False)
+    parser.add_argument('--flash_attn', action="store_true", default=False)
 
     # wandb pamameters
     parser.add_argument('--use_wandb', type=str, default=None)
