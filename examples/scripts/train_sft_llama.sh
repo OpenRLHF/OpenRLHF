@@ -14,9 +14,10 @@ read -r -d '' training_commands <<EOF
     --max_epochs 1 \
     --bf16 \
     --learning_rate 5e-6 \
-    --gradient_checkpointing
+    --gradient_checkpointing \
+    --flash_attn
 EOF
-    # --flash_attn [Flash Attention 2]
+    # --wandb [WANDB_TOKENS]
 
 if [[ ${1} != "slurm" ]]; then
     export PATH=$HOME/.local/bin/:$PATH

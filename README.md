@@ -121,9 +121,6 @@ cd /openllama2/examples/scripts
 # build OpenLLaMA2 (i.e, pip install)
 ./build_openllama2.sh
 
-# install FlashAttention2 (Optional, config --flash_attn)
-./install_flash_attn.sh
-
 # huggingface login 
 ~/.local/bin/huggingface-cli login
 
@@ -167,9 +164,7 @@ sbatch ./train_llama_slurm.sh
 If you really don't want to use nvidia docker, we also provide tutorials for building openllama2 from a conda environment 
 ```shell
 # we need conda
-conda create -n llama2 python=3.8
-# now requirements.txt seems incomplete for a conda env
-pip install -r requirements.txt
+conda create -n llama2 python=3.10
 # so, we need install some package manualy: when installing torch, you may need to match the corresponding cuda version.
 pip install packaging ninja
 pip install torch --index-url https://download.pytorch.org/whl/cu118
@@ -177,8 +172,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cu118
 ninja --version
 echo $? 
 # install flash-attn: may take some time
-pip install flash-attn --no-build-isolation
-# build: may need to remove --use-feature=in-tree-build
+pip install flash-attn=2.1.1 --no-build-isolation
 ./build_openllama2.sh
 # enjoy it!
 ```
