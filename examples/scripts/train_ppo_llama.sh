@@ -23,9 +23,11 @@ read -r -d '' training_commands <<EOF
     --prompt_data yahma/alpaca-cleaned,Dahoas/full-hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward \
     --prompt_data_probs 0.3,0.6,0.1 \
     --normalize_reward \
+    --actor_init_on_gpu \
     --adam_offload \
     --gradient_checkpointing
 EOF
+    # --flash_attn [Flash Attention 2]
 
 if [[ ${1} != "slurm" ]]; then
     export PATH=$HOME/.local/bin/:$PATH

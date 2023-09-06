@@ -15,6 +15,7 @@ read -r -d '' training_commands <<EOF
      --dataset_probs 0.72,0.08,0.12,0.08 \
      --load_model ./ckpt/7b_llama/sft_model_ocra.pt
 EOF
+     # --flash_attn [Flash Attention 2]
      # --gradient_checkpointing [BUG] https://github.com/microsoft/DeepSpeedExamples/issues/458
 
 

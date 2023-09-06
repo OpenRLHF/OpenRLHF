@@ -52,6 +52,7 @@
 
 ## Latest News
 
+- 2023/9/6: Support FlashAttention2
 - 2023/8/26: Support wandb logs
 - 2023/8/22: Support ceval
 - 2023/8/20: Add some PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
@@ -76,11 +77,11 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 - [✔️] Develop the Multi-nodes training scripts for Slurm.
 - [✔️] Add wandb log support.
 - [✔️] Support conda env.
+- [✔️] Support FlashAttention2.
 - [WIP] Develop Multi-nodes RLHF based on Ray.
 - [WIP] Support Multiple RM models.
 - [WIP] Develop the Rejection Sampling.
 - [WIP] Support QLora.
-- [WIP] Support FlashAttention.
 - [WIP] Develop the DPO.
 - [WIP] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
 - [WIP] Train a [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2) RLHF model.
@@ -119,6 +120,9 @@ cd /openllama2/examples/scripts
 
 # build OpenLLaMA2 (i.e, pip install)
 ./build_openllama2.sh
+
+# install FlashAttention2 (Optional, config --flash_attn)
+./install_flash_attn.sh
 
 # huggingface login 
 ~/.local/bin/huggingface-cli login

@@ -16,6 +16,7 @@ read -r -d '' training_commands <<EOF
     --learning_rate 5e-6 \
     --gradient_checkpointing
 EOF
+    # --flash_attn [Flash Attention 2]
 
 if [[ ${1} != "slurm" ]]; then
     export PATH=$HOME/.local/bin/:$PATH
