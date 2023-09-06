@@ -1,9 +1,11 @@
 import os
+import random
 from abc import ABC
 from typing import List, Tuple, Union
 from collections import defaultdict
 
 import deepspeed
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -56,13 +58,23 @@ class DeepspeedStrategy(ABC):
         self.max_norm = max_norm
         self.time_steps = defaultdict(int)
 
+        self.set_seed(seed)
         self.setup_distributed()
 
+    def set_seed(self, seed: int) -> None:
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
     def setup_distributed(self) -> None:
-        # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        deepspeed.init_distributed()
+        if self.args.local_rank == -1 and "LOCAL_RANK" in os.environ: # for slurm
+            self.args.local_rank = int(os.environ['LOCAL_RANK'])
+
         if self.args.local_rank != -1:
             torch.cuda.set_device(self.args.local_rank)
+        # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
+        deepspeed.init_distributed()
         self.world_size = dist.get_world_size()
         self.accumulated_gradient = self.train_batch_size // self.micro_train_batch_size // self.world_size
 
@@ -144,9 +156,13 @@ class DeepspeedStrategy(ABC):
             tp_gather_partition_size=4,
             max_out_tokens=self.max_out_tokens,
             zpg=self.zpg)
-        # dummy batch size
+        
         ds_config['train_micro_batch_size_per_gpu'] =  self.micro_train_batch_size 
-        ds_config['train_batch_size'] =  self.train_batch_size
+        train_batch_size = self.train_batch_size
+        # corner case for ptx loss (backward twice)
+        if self.is_rlhf and is_actor and self.args.pretrain_data is not None:
+             train_batch_size *= 2
+        ds_config['train_batch_size'] =  train_batch_size
 
         engine, optim, _, scheduler = deepspeed.initialize(model=model.model if is_actor else model,
                                                 optimizer=optim,
@@ -299,3 +315,6 @@ class DeepspeedStrategy(ABC):
 
     def is_rank_0(self) -> bool:
         return dist.get_rank() == 0
+    
+    def get_rank(self) -> int:
+        return dist.get_rank()

@@ -3,6 +3,7 @@ import itertools
 import math
 import os
 from copy import deepcopy
+from datetime import datetime
 
 import torch
 import torch.distributed as dist
@@ -24,14 +25,32 @@ def train(args):
     # configure strategy
     strategy = get_strategy(args)
 
+    # configure flash attention
+    if args.flash_attn:
+        from openllama2.models.llama2_flash_attn_monkey_patch import (
+            replace_llama_attn_with_flash_attn,
+        )
+        replace_llama_attn_with_flash_attn()
+
     # configure model
     # load huggingface model/config
     actor_from_config = bool(args.sft_model_path or args.load_checkpoint)
     reward_from_config = bool(args.reward_model_path)
 
     actor = Actor(args.pretrain, actor_from_config)
+    if args.actor_init_on_gpu:
+        actor = actor.to(torch.cuda.current_device())
+
     critic = Critic(args.critic_pretrain, True, args.normalize_reward)
     reward_model = RewardModel(args.critic_pretrain, reward_from_config, args.normalize_reward)
+
+    # configure tokenizer
+    tokenizer = get_tokenizer(args.pretrain, actor.model, 'left', strategy)
+    get_tokenizer(args.critic_pretrain, critic.model, 'left', strategy)
+    get_tokenizer(args.critic_pretrain, reward_model.model, 'left', strategy)
+
+    strategy.print(actor)
+    strategy.print(critic)
 
     # load PyTorch model
     if args.sft_model_path:
@@ -59,9 +78,6 @@ def train(args):
         ema_model = deepcopy(actor)
     else:
         ema_model = None
-
-    # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, actor.model, 'left', strategy)
 
     # configure optimizer
     actor_optim = strategy.create_optimizer(actor, lr=args.actor_learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)
@@ -216,6 +232,16 @@ if __name__ == '__main__':
                         help='Enable EMA checkpoint for the model.')
     parser.add_argument('--zpg', type=int, default=8, help="ZeRO++ max partition size")
     parser.add_argument('--adam_offload', action="store_true", default=False)
+    parser.add_argument('--actor_init_on_gpu', action="store_true", default=False)
     parser.add_argument('--save_hf_model', action='store_true', default=False)
+    parser.add_argument('--flash_attn', action="store_true", default=False)
+
+    # wandb pamameters
+    parser.add_argument('--use_wandb', type=str, default=None)
+    parser.add_argument('--wandb_org', type=str, default=None)
+    parser.add_argument('--wandb_group', type=str, default=None)
+    parser.add_argument('--wandb_project', type=str, default="openllama2_train_ppo")
+    parser.add_argument('--wandb_run_name', type=str, default="ppo_%s" % datetime.now().strftime('%m%dT%H:%M'))
+
     args = parser.parse_args()
     train(args)

@@ -2,6 +2,7 @@ import argparse
 import math
 import os
 
+from datetime import datetime
 from datasets import load_dataset
 from transformers.trainer import get_scheduler
 from utils import blending_datasets, get_strategy, get_tokenizer
@@ -10,20 +11,27 @@ from openllama2.datasets import SFTDataset
 from openllama2.models import Actor
 from openllama2.trainer import SFTTrainer
 
-# from openllama2.models.llama_flash_attn_monkey_patch import (
-#     replace_llama_attn_with_flash_attn,
-# )
-# replace_llama_attn_with_flash_attn()
-
 
 def train(args):
     # configure strategy
     strategy = get_strategy(args)
 
+    # configure flash attention
+    if args.flash_attn:
+        from openllama2.models.llama2_flash_attn_monkey_patch import (
+            replace_llama_attn_with_flash_attn,
+        )
+        replace_llama_attn_with_flash_attn()
+
     # configure model
     # load huggingface model/config
     from_config = bool(args.load_model or args.load_checkpoint)
     model = Actor(args.pretrain, from_config)
+
+    # configure tokenizer
+    tokenizer = get_tokenizer(args.pretrain, model.model, 'right', strategy)
+
+    strategy.print(model)
 
     # load Pytorch model
     if args.load_model and not args.load_checkpoint:
@@ -33,9 +41,6 @@ def train(args):
     # lora
     if args.lora_rank > 0:
         model.lora_enable(args.lora_rank)
-
-    # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model.model, 'right', strategy)
 
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)
@@ -120,5 +125,14 @@ if __name__ == '__main__':
     parser.add_argument('--zpg', type=int, default=8, help="ZeRO++ max partition size")
     parser.add_argument('--adam_offload', action="store_true", default=False)
     parser.add_argument('--save_hf_model', action='store_true', default=False)
+    parser.add_argument('--flash_attn', action="store_true", default=False)
+
+    # wandb pamameters
+    parser.add_argument('--use_wandb', type=str, default=None)
+    parser.add_argument('--wandb_org', type=str, default=None)
+    parser.add_argument('--wandb_group', type=str, default=None)
+    parser.add_argument('--wandb_project', type=str, default="openllama2_train_sft")
+    parser.add_argument('--wandb_run_name', type=str, default="sft_%s" % datetime.now().strftime('%m%dT%H:%M'))
+
     args = parser.parse_args()
     train(args)

@@ -52,9 +52,13 @@
 
 ## Latest News
 
-- 2023/8/18: **support LLaMA2 7B PPO training on Single A100**
+- 2023/9/6: Support FlashAttention2
+- 2023/8/26: Support wandb logs
+- 2023/8/22: Support ceval
+- 2023/8/20: Add some PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
 
-pretraind SFT/RM checkpoint: https://huggingface.co/chuyi777/openllama2_checkpoint
+- 2023/8/18: **support LLaMA2 7B PPO training on Single A100**
+> pretraind SFT/RM checkpoint: https://huggingface.co/chuyi777/openllama2_checkpoint
 
 - 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed training features finished
 
@@ -70,19 +74,21 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 ### Development Plan:
 
 - [✔️] Develop a fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
-- [WIP] Support Multiple RM models.
+- [✔️] Develop the Multi-nodes training scripts for Slurm.
+- [✔️] Add wandb log support.
+- [✔️] Support conda env.
+- [✔️] Support FlashAttention2.
 - [WIP] Develop Multi-nodes RLHF based on Ray.
+- [WIP] Support Multiple RM models.
 - [WIP] Develop the Rejection Sampling.
-- [TODO] Develop the Multi-nodes training scripts for Slurm.
-- [TODO] Support Qlora/GPTQ.
-- [TODO] Add wandb log support.
-- [TODO] Develop the DPO.
+- [WIP] Support QLora.
+- [WIP] Develop the DPO.
+- [WIP] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
+- [WIP] Train a [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2) RLHF model.
 - [TODO] Develop the Context Distillation.
 - [TODO] Training/Inference kernel fusion (such as DS inference)
 - [TODO] Large-scale model (> 70B) support with ZeRO++ and FasterTransformer inference.
 - [TODO] Better docs and examples
-- [TODO] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
-- [TODO] Train a [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2) RLHF model.
 
 
 ## Usage Steps
@@ -100,15 +106,28 @@ pip install .
 
 ## Running LLaMA2 Example
 
-```python
-# launch nvidia container
+* Verified envs
+You can build openllama2 from nvidia docker(recomended) or from conda envs.
+  * Python: 3.8/3.9/3.10
+  * Torch: 2.0.0/2.0.1
+  * CUDA: 12.0+(recomended)/11.8/11.7
+
+
+* Single-node training with nvidia-docker
+
+```shell
 cd examples/scripts
+
+# install nvidia-docker (Optional)
+./nvidia_docker_install.sh
+
+# launch nvidia container
 ./docker_run.sh
 
 # cd in container
 cd /openllama2/examples/scripts
 
-# build OpenLLaMA2
+# build OpenLLaMA2 (i.e, pip install)
 ./build_openllama2.sh
 
 # huggingface login 
@@ -124,31 +143,56 @@ cd /openllama2/examples/scripts
 ./train_ppo_llama.sh
 ```
 
-## Inference
+* Multi-nodes training on Slurm
 
-After completing the training, you can evaluate of your model by using the `inference` script:
+```shell
+cd examples/scripts
 
-```python
-./inference_llama.sh "Please introduce GPT model."
+# huggingface login on Slurm 
+pip install transformers
+huggingface-cli login
+
+# Moidfy the Slurm Account/Nodes ... in `train_llama_slurm.sh`
+
+# For SFT, RM, and PPO training stage:
+# Modify the variable `training_script` in `train_llama_slurm.sh` to
+readonly training_script="train_sft_llama.sh"
+readonly training_script="train_rm_llama.sh"
+readonly training_script="train_ppo_llama.sh"
+
+# set `GPUS_PER_NODE` in `train_llama_slurm.sh`
+readonly GPUS_PER_NODE=8
+
+# run multi-nodes training script
+# train_llama_slurm.sh will load the training args from `training_script`
+sbatch ./train_llama_slurm.sh
 ```
 
-### Join Us
+* build openllama2 from conda envs 
 
-**How to Join?**
+If you really don't want to use nvidia docker, we also provide tutorials for building openllama2 from a conda environment 
+```shell
+# we need conda
+conda create -n llama2 python=3.10
+# so, we need install some package manualy: when installing torch, you may need to match the corresponding cuda version.
+pip install packaging ninja
+pip install torch --index-url https://download.pytorch.org/whl/cu118
+# check ninjia
+ninja --version
+echo $? 
+# install flash-attn: may take some time
+pip install flash-attn=2.1.1 --no-build-isolation
+./build_openllama2.sh
+# enjoy it!
+```
 
-1. Email us at janhu9527@gmail.com. Please include the following details:
-   - Your name
-   - Your GitHub username
-   - Your areas of interest
-   - Your skills and experience related to NLP and/or AI
-1. You can also join us through the official GitHub [OpenLLaMA2 ↗](https://github.com/openllmai/OpenLLaMA2) project page. Just create an issue about your interest to contribute and we will get back to you.
+## Inference
 
-**What can you do?**
+After completing the training, you can evaluate your model by using the `inference` script:
 
-1. Join the team and participate in the development of OpenLLaMA2 project.
-1. Contribute to the project by submitting pull requests.
-1. Help improve documentation, fix bugs, or create new features.
-1. Share the project and help us grow the community.
+```shell
+./inference_llama.sh { model_path } "Please introduce the GTA5 game."
+```
 
 
 ## References & Acknowledgements
@@ -160,6 +204,25 @@ We would like to express our gratitude to the following projects and organizatio
 - [LLaMA2 ↗](https://ai.meta.com/llama/)
 - [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
 - [Ray ↗](https://github.com/ray-project/ray)
+
+
+### Join Us
+
+**How to Join?**
+
+1. Email us at xianyuai@openllmai.top(official email) or janhu9527@gmail.com/jjgxw@outlook.com(PIC). Please include the following details:
+   - Your name
+   - Your GitHub username
+   - Your areas of interest
+   - Your skills and experience related to NLP and/or AI
+1. You can also join us through the official GitHub [OpenLLaMA2 ↗](https://github.com/openllmai/OpenLLaMA2) project page. Just create an issue about your interest to contribute and we will get back to you.
+
+**What can you do?**
+
+1. Join the team and participate in the development of the OpenLLaMA2 project.
+1. Contribute to the project by submitting pull requests.
+1. Help improve documentation, fix bugs, or create new features.
+1. Share the project and help us grow the community.
 
 ## Sponsor Us
 

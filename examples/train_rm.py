@@ -3,7 +3,7 @@ import math
 import os
 from collections import OrderedDict
 
-from datasets import load_dataset
+from datetime import datetime
 from transformers.trainer import get_scheduler
 from utils import blending_datasets, get_strategy, get_tokenizer
 
@@ -11,20 +11,27 @@ from openllama2.datasets import RewardDataset
 from openllama2.models import RewardModel
 from openllama2.trainer import RewardModelTrainer
 
-# from openllama2.models.llama_flash_attn_monkey_patch import (
-#     replace_llama_attn_with_flash_attn,
-# )
-# replace_llama_attn_with_flash_attn()
-
 
 def train(args):
     # configure strategy
     strategy = get_strategy(args)
 
+    # configure flash attention
+    if args.flash_attn:
+        from openllama2.models.llama2_flash_attn_monkey_patch import (
+            replace_llama_attn_with_flash_attn,
+        )
+        replace_llama_attn_with_flash_attn()
+
     # configure model
     # load huggingface model/config
     from_config = bool(args.load_model or args.load_checkpoint)
     model = RewardModel(args.pretrain, from_config)
+
+    # configure tokenizer
+    tokenizer = get_tokenizer(args.pretrain, model.model, 'left', strategy)
+
+    strategy.print(model)
 
     # load SFT model
     if args.load_model and not args.load_checkpoint:
@@ -40,39 +47,37 @@ def train(args):
     # lora
     if args.lora_rank > 0:
         model.lora_enable(args.lora_rank)
-        
-    # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model.model, 'left', strategy)
 
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)
 
     # prepare for data and dataset
     train_data, eval_data = blending_datasets(args.dataset, args.dataset_probs, \
-        strategy, args.seed, max_count=2000000, stopping_strategy='all_exhausted')
+                                              strategy, args.seed, max_count=2000000, stopping_strategy='all_exhausted')
     train_dataset = RewardDataset(train_data, tokenizer, args.max_len, strategy) if not args.only_evaluate else None
     eval_dataset = RewardDataset(eval_data, tokenizer, args.max_len, strategy)
 
     train_dataloader = strategy.setup_dataloader(
-        train_dataset, args.micro_train_batch_size, True, True, train_dataset.collate_fn) if not args.only_evaluate else None
+        train_dataset, args.micro_train_batch_size, True, True,
+        train_dataset.collate_fn) if not args.only_evaluate else None
     eval_dataloader = strategy.setup_dataloader(
         eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn)
 
     # scheduler
     num_update_steps_per_epoch = len(train_dataloader) * args.max_epochs // strategy.accumulated_gradient
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
-    
+
     scheduler = get_scheduler("cosine",
-                                optim,
-                                num_warmup_steps=math.ceil(max_steps * 0.03),
-                                num_training_steps=max_steps)  
+                              optim,
+                              num_warmup_steps=math.ceil(max_steps * 0.03),
+                              num_training_steps=max_steps)
 
     # strategy prepare
     (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
 
     if args.load_checkpoint:
         strategy.print('Load checkpoint: ', args.save_path)
-         # strategy.load_checkpoint(args.save_path + '/rm_model.pt')
+        # strategy.load_checkpoint(args.save_path + '/rm_model.pt')
 
     os.makedirs(args.save_path, exist_ok=True)
 
@@ -88,7 +93,7 @@ def train(args):
                                  batch_size=args.train_batch_size,
                                  max_epochs=args.max_epochs,
                                  gradient_checkpointing=args.gradient_checkpointing,
-                                 only_evaluate= args.only_evaluate,
+                                 only_evaluate=args.only_evaluate,
                                  loss=args.loss)
 
     trainer.fit(use_lora=args.lora_rank)
@@ -124,7 +129,14 @@ if __name__ == '__main__':
     parser.add_argument('--learning_rate', type=float, default=1e-5)
     parser.add_argument('--zpg', type=int, default=8, help="ZeRO++ max partition size")
     parser.add_argument('--adam_offload', action="store_true", default=False)
+    parser.add_argument('--flash_attn', action="store_true", default=False)
+
+    # wandb pamameters
+    parser.add_argument('--use_wandb', type=str, default=None)
+    parser.add_argument('--wandb_org', type=str, default=None)
+    parser.add_argument('--wandb_group', type=str, default=None)
+    parser.add_argument('--wandb_project', type=str, default="openllama2_train_rm")
+    parser.add_argument('--wandb_run_name', type=str, default="rm_%s" % datetime.now().strftime('%m%dT%H:%M'))
+
     args = parser.parse_args()
     train(args)
-
-
