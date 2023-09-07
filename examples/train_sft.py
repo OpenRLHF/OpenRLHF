@@ -3,6 +3,7 @@ import math
 import os
 from datetime import datetime
 
+import torch
 from datasets import load_dataset
 from transformers.trainer import get_scheduler
 from utils import blending_datasets, get_strategy, get_tokenizer
@@ -16,6 +17,11 @@ def train(args):
     # configure strategy
     strategy = get_strategy(args)
 
+    if args.lora_args:
+        lora_args = args.lora_args.parse_args()
+    else:
+        lora_args = None
+
     # configure flash attention
     if args.flash_attn:
         from openllama2.models.llama2_flash_attn_monkey_patch import replace_llama_attn_with_flash_attn
@@ -25,7 +31,8 @@ def train(args):
     # configure model
     # load huggingface model/config
     from_config = bool(args.load_model or args.load_checkpoint)
-    model = Actor(args.pretrain, from_config)
+    compute_dtype = torch.bfloat16 if args.bf16 else torch.float32
+    model = Actor(args.pretrain, from_config, lora_args, compute_dtype, args.gradient_checkpointing)
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy)
@@ -141,6 +148,17 @@ if __name__ == "__main__":
         type=str,
         default="sft_%s" % datetime.now().strftime("%m%dT%H:%M"),
     )
+    # Lora config
+    lora_parser = argparse.ArgumentParser(description="Lora Argument Parser")
+    lora_parser.add_argument("--lora", taction="store_true", default=False, help="Lora rank enabled. default False")
+    lora_parser.add_argument("--lora_r", type=int, default=8, help="Lora r value")
+    lora_parser.add_argument("--lora_alpha", type=int, default=16, help="Lora alpha value")
+    lora_parser.add_argument("--lora_target_modules", type=str, default="qv", help="Lora target modules")
+    lora_parser.add_argument("--lora_dropout", type=float, default=0.05, help="Lora dropout value")
+    lora_parser.add_argument("--lora_bias", type=bool, default=False, help="Lora bias value")
+
+    # QLora config
+    lora_parser.add_argument("--q_lora", action="store_true", default=False, help="Enable q_lora")
 
     args = parser.parse_args()
     train(args)
