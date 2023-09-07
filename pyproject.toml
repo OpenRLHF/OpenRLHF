@@ -2,9 +2,7 @@
 profile = "black"  # black-compatible
 line_length = 119  # should match black parameters
 ignore_whitespace = true  # ignore whitespace for compatibility with the initial style
-py_version = 38  # python 3.8 as a target version
-known_first_party = ["nemo", "nemo_rlhf"]  # FIRSTPARTY section
-known_third_party = ["nemo_text_processing", "examples", "scripts"]  # THIRDPARTY section
+py_version = 310  # python 3.10 as a target version
 sections = ["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
 default_section = "THIRDPARTY"
 extend_skip = ["setup.py", "docs/source/conf.py"]
@@ -23,8 +21,6 @@ addopts = "--verbose --pyargs --durations=0 --strict-markers"  # always add thes
 testpaths = ["./tests"]  # must be an explicit path to avoid importing another "tests" module
 # directories to ignore when discovering tests
 norecursedirs = [
-    "nemo",
-    "nemo_text_processing",
     "external",
     "examples",
     "docs",
@@ -39,7 +35,6 @@ norecursedirs = [
     "dist",
     "venv",
     "{arch}",
-    "nemo_rlhf"
 ]
 # markers to select tests, use `pytest --markers` to see all available markers, `pytest -m "<marker>"` to select tests
 markers = [
