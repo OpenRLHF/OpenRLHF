@@ -90,6 +90,7 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 ## Running LLaMA2 Example
 
 * Verified envs
+
 You can build openllama2 from **nvidia-docker(recomended)** or from conda envs.
 
 ```shell
@@ -158,7 +159,7 @@ sbatch ./train_llama_slurm.sh
 
 * build openllama2 from conda envs 
 
-If you really don't want to use nvidia docker, we also provide tutorials for building openllama2 from a conda environment 
+If you really don't want to use nvidia-docker, we also provide tutorials for building openllama2 from a conda environment. (We prefer nvidia-docker to avoid errors caused by the environment.)
 ```shell
 # we need conda
 conda create -n llama2 python=3.10
