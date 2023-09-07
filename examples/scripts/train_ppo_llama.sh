@@ -25,9 +25,9 @@ read -r -d '' training_commands <<EOF
     --normalize_reward \
     --actor_init_on_gpu \
     --adam_offload \
-    --flash_attn \
     --gradient_checkpointing
 EOF
+    # --flash_attn
     # --wandb [WANDB_TOKENS]
 
 if [[ ${1} != "slurm" ]]; then
