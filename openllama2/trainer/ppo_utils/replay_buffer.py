@@ -1,7 +1,7 @@
 import random
 from abc import ABC
-from typing import List, Optional
 from dataclasses import dataclass
+from typing import List, Optional
 
 import torch
 import torch.nn.functional as F
@@ -26,6 +26,7 @@ class BufferItem:
 
     "A" is the number of actions.
     """
+
     sequences: torch.Tensor
     action_log_probs: torch.Tensor
     values: torch.Tensor
@@ -39,7 +40,15 @@ class BufferItem:
 def split_experience_batch(experience: Experience) -> List[BufferItem]:
     batch_size = experience.sequences.size(0)
     batch_kwargs = [{} for _ in range(batch_size)]
-    keys = ('sequences', 'action_log_probs', 'values', 'returns', 'advantages', 'attention_mask', 'action_mask')
+    keys = (
+        "sequences",
+        "action_log_probs",
+        "values",
+        "returns",
+        "advantages",
+        "attention_mask",
+        "action_mask",
+    )
     for key in keys:
         value = getattr(experience, key)
         vals = torch.unbind(value)
@@ -48,65 +57,93 @@ def split_experience_batch(experience: Experience) -> List[BufferItem]:
             batch_kwargs[i][key] = v
 
     for i in range(batch_size):
-        batch_kwargs[i]['info'] = {}
+        batch_kwargs[i]["info"] = {}
     for k, v in experience.info.items():
         vals = torch.unbind(v)
         assert batch_size == len(vals)
         for i, vv in enumerate(vals):
-            batch_kwargs[i]['info'][k] = vv.item()
+            batch_kwargs[i]["info"][k] = vv.item()
 
     items = [BufferItem(**kwargs) for kwargs in batch_kwargs]
     return items
 
-def zero_pad_sequences(sequences: List[torch.Tensor], side: str = 'left') -> torch.Tensor:
-    assert side in ('left', 'right')
+
+def zero_pad_sequences(sequences: List[torch.Tensor], side: str = "left") -> torch.Tensor:
+    assert side in ("left", "right")
     max_len = max(seq.size(0) for seq in sequences)
     padded_sequences = []
     for seq in sequences:
         pad_len = max_len - seq.size(0)
-        padding = (pad_len, 0) if side == 'left' else (0, pad_len)
+        padding = (pad_len, 0) if side == "left" else (0, pad_len)
         padded_sequences.append(F.pad(seq, padding))
     return torch.stack(padded_sequences, dim=0)
 
 
 def make_experience_batch(items: List[BufferItem]) -> Experience:
     kwargs = {}
-    keys = ('sequences', 'action_log_probs', 'values', 'returns', 'advantages', 'attention_mask', 'action_mask')
+    keys = (
+        "sequences",
+        "action_log_probs",
+        "values",
+        "returns",
+        "advantages",
+        "attention_mask",
+        "action_mask",
+    )
     for key in keys:
         vals = [getattr(item, key) for item in items]
-        batch_data = zero_pad_sequences(vals, 'left')
+        batch_data = zero_pad_sequences(vals, "left")
         kwargs[key] = batch_data
 
-    kwargs['info'] = {}
+    kwargs["info"] = {}
     for key in items[0].info.keys():
         vals = torch.tensor([item.info[key] for item in items])
-        kwargs['info'][key] = vals
+        kwargs["info"][key] = vals
     return Experience(**kwargs)
 
 
 def remove_padding_in_sequences(items):
     for item in items:
-        seq, act_log_prob, value, ret, adv, att_mask, act_mask = \
-            item.sequences, item.action_log_probs, item.values, item.returns, \
-            item.advantages, item.attention_mask, item.action_mask
+        seq, act_log_prob, value, ret, adv, att_mask, act_mask = (
+            item.sequences,
+            item.action_log_probs,
+            item.values,
+            item.returns,
+            item.advantages,
+            item.attention_mask,
+            item.action_mask,
+        )
         right_pad = (1 - act_mask.int()).sum()
         left_pad = (1 - att_mask.int()).sum() - right_pad
 
         right_pad = None if right_pad == 0 else -right_pad
-        item.sequences, item.action_log_probs, item.values, item.returns, \
-        item.advantages, item.attention_mask, item.action_mask = \
-            seq[left_pad:right_pad], act_log_prob[:right_pad], value[:right_pad], ret[:right_pad], \
-            adv[:right_pad], att_mask[left_pad:right_pad], act_mask[:right_pad]
+        (
+            item.sequences,
+            item.action_log_probs,
+            item.values,
+            item.returns,
+            item.advantages,
+            item.attention_mask,
+            item.action_mask,
+        ) = (
+            seq[left_pad:right_pad],
+            act_log_prob[:right_pad],
+            value[:right_pad],
+            ret[:right_pad],
+            adv[:right_pad],
+            att_mask[left_pad:right_pad],
+            act_mask[:right_pad],
+        )
     return items
 
 
 class NaiveReplayBuffer(ABC):
     """Naive replay buffer class. It stores experience.
 
-     Args:
-         sample_batch_size (int): Batch size when sampling.
-         limit (int, optional): Limit of number of experience samples. A number <= 0 means unlimited. Defaults to 0.
-         cpu_offload (bool, optional): Whether to offload experience to cpu when sampling. Defaults to True.
+    Args:
+        sample_batch_size (int): Batch size when sampling.
+        limit (int, optional): Limit of number of experience samples. A number <= 0 means unlimited. Defaults to 0.
+        cpu_offload (bool, optional): Whether to offload experience to cpu when sampling. Defaults to True.
     """
 
     def __init__(self, sample_batch_size: int, limit: int = 0, cpu_offload: bool = True) -> None:
@@ -115,13 +152,13 @@ class NaiveReplayBuffer(ABC):
         # limit <= 0 means unlimited
         self.limit = limit
         self.cpu_offload = cpu_offload
-        self.target_device = torch.device(f'cuda:{torch.cuda.current_device()}')
+        self.target_device = torch.device(f"cuda:{torch.cuda.current_device()}")
         self.items: List[BufferItem] = []
 
     @torch.no_grad()
     def append(self, experience: Experience) -> None:
         if self.cpu_offload:
-            experience.to_device(torch.device('cpu'))
+            experience.to_device(torch.device("cpu"))
         items = split_experience_batch(experience)
         items = remove_padding_in_sequences(items)
         self.items.extend(items)
@@ -152,7 +189,7 @@ class NaiveReplayBuffer(ABC):
         return experience
 
     def normalize(self, attribute: str, strategy) -> None:
-        assert attribute == 'advantages'
+        assert attribute == "advantages"
         items = []
         action_masks = []
         for item in self:
@@ -161,16 +198,15 @@ class NaiveReplayBuffer(ABC):
 
         items_vector = torch.cat(items).float().flatten()
         action_masks_vector = torch.cat(action_masks).flatten()
-        
+
         # for DP
         # mean
-        sum_and_count = torch.tensor([items_vector.sum(), action_masks_vector.sum()], 
-                                        device=items_vector.device)
-        all_sum, all_count = strategy.all_reduce(sum_and_count, 'sum')
+        sum_and_count = torch.tensor([items_vector.sum(), action_masks_vector.sum()], device=items_vector.device)
+        all_sum, all_count = strategy.all_reduce(sum_and_count, "sum")
         mean = all_sum / all_count
         # std
         std = ((items_vector - mean).pow(2) * action_masks_vector).sum()
-        all_std = strategy.all_reduce(std, 'sum')
+        all_std = strategy.all_reduce(std, "sum")
         rstd = (all_std / all_count).clamp(min=1e-8).rsqrt()
 
         for i, item in enumerate(self):

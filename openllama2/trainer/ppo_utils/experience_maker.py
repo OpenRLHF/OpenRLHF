@@ -1,6 +1,6 @@
 from abc import ABC
-from typing import Tuple, Optional
 from dataclasses import dataclass
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -10,6 +10,7 @@ from openllama2.models.actor import Actor
 from openllama2.models.utils import compute_reward, masked_mean
 
 SHOW_TIME_DETAILS = False
+
 
 @dataclass
 class Experience:
@@ -28,6 +29,7 @@ class Experience:
 
     "A" is the number of actions.
     """
+
     sequences: torch.Tensor
     action_log_probs: torch.Tensor
     values: torch.Tensor
@@ -61,19 +63,21 @@ class Experience:
             self.action_mask = self.action_mask.pin_memory()
         return self
 
+
 class NaiveExperienceMaker(ABC):
     """
     Naive experience maker.
     """
 
-    
-    def __init__(self,
-                 actor: Actor,
-                 critic: nn.Module,
-                 reward_model: nn.Module,
-                 initial_model: Actor,
-                 kl_controller,
-                 strategy=None) -> None:
+    def __init__(
+        self,
+        actor: Actor,
+        critic: nn.Module,
+        reward_model: nn.Module,
+        initial_model: Actor,
+        kl_controller,
+        strategy=None,
+    ) -> None:
         super().__init__()
         self.actor = actor
         self.critic = critic
@@ -89,35 +93,77 @@ class NaiveExperienceMaker(ABC):
         self.initial_model.eval()
         self.reward_model.eval()
 
-        for i in tqdm(range(1), desc=f'Generate sequence', disable=not SHOW_TIME_DETAILS or not self.strategy.is_rank_0()):
+        tqdm_disable = not SHOW_TIME_DETAILS or not self.strategy.is_rank_0()
+
+        for i in tqdm(
+            range(1),
+            desc=f"Generate sequence",
+            disable=tqdm_disable,
+        ):
             sequences, attention_mask, action_mask = self.actor.generate(input_ids, **generate_kwargs)
-            
+
         num_actions = action_mask.size(1)
-        for i in tqdm(range(1), desc=f'Actor forward', disable=not SHOW_TIME_DETAILS or not self.strategy.is_rank_0()):
+        for i in tqdm(
+            range(1),
+            desc=f"Actor forward",
+            disable=tqdm_disable,
+        ):
             action_log_probs = self.actor(sequences, num_actions, attention_mask)
-        
-        for i in tqdm(range(1), desc=f'Init model forward', disable=not SHOW_TIME_DETAILS or not self.strategy.is_rank_0()):
+
+        for i in tqdm(
+            range(1),
+            desc=f"Init model forward",
+            disable=tqdm_disable,
+        ):
             base_action_log_probs = self.initial_model(sequences, num_actions, attention_mask)
 
-        for i in tqdm(range(1), desc=f'Value model forward', disable=not SHOW_TIME_DETAILS or not self.strategy.is_rank_0()):
+        for i in tqdm(
+            range(1),
+            desc=f"Value model forward",
+            disable=tqdm_disable,
+        ):
             value = self.critic(sequences, action_mask, attention_mask)
-        
-        for i in tqdm(range(1), desc=f'Reward model forward', disable=not SHOW_TIME_DETAILS or not self.strategy.is_rank_0()):
+
+        for i in tqdm(
+            range(1),
+            desc=f"Reward model forward",
+            disable=tqdm_disable,
+        ):
             r = self.reward_model(sequences, attention_mask)
 
-        reward, kl = compute_reward(r, self.kl_ctl.value, action_log_probs, base_action_log_probs, action_mask=action_mask)
+        reward, kl = compute_reward(
+            r,
+            self.kl_ctl.value,
+            action_log_probs,
+            base_action_log_probs,
+            action_mask=action_mask,
+        )
         advantage, returns = self.get_advantages_and_returns(
-            value, reward, action_mask, generate_kwargs['gamma'], generate_kwargs['lambd'])
+            value,
+            reward,
+            action_mask,
+            generate_kwargs["gamma"],
+            generate_kwargs["lambd"],
+        )
 
         info = {
-            'kl': masked_mean(kl, action_mask, dim=-1),
-            'reward': r,
-            'return': reward.sum(dim=-1),
-            'response_length': action_mask.float().sum(dim=-1),
-            'total_length': attention_mask.float().sum(dim=-1)
+            "kl": masked_mean(kl, action_mask, dim=-1),
+            "reward": r,
+            "return": reward.sum(dim=-1),
+            "response_length": action_mask.float().sum(dim=-1),
+            "total_length": attention_mask.float().sum(dim=-1),
         }
-        
-        return Experience(sequences, action_log_probs, value, returns, advantage, attention_mask, action_mask, info)
+
+        return Experience(
+            sequences,
+            action_log_probs,
+            value,
+            returns,
+            advantage,
+            attention_mask,
+            action_mask,
+            info,
+        )
 
     @torch.no_grad()
     def get_advantages_and_returns(

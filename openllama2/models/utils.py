@@ -5,9 +5,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-def compute_approx_kl(log_probs: torch.Tensor,
-                      log_probs_base: torch.Tensor,
-                      action_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+
+def compute_approx_kl(
+    log_probs: torch.Tensor,
+    log_probs_base: torch.Tensor,
+    action_mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
     """
     Compute the approximate KL divergence between two distributions.
     Schulman blog: http://joschu.net/blog/kl-approx.html
@@ -21,14 +24,17 @@ def compute_approx_kl(log_probs: torch.Tensor,
     log_ratio = log_probs - log_probs_base
     return log_ratio * action_mask
 
-def compute_reward(r: Union[torch.Tensor, float],
-                   kl_coef: float,
-                   log_probs: torch.Tensor,
-                   log_probs_base: torch.Tensor,
-                   action_mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+
+def compute_reward(
+    r: Union[torch.Tensor, float],
+    kl_coef: float,
+    log_probs: torch.Tensor,
+    log_probs_base: torch.Tensor,
+    action_mask: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
     if kl_coef <= 0.0:
         kl_coef = 0.0
-        
+
     kl = compute_approx_kl(log_probs, log_probs_base, action_mask=action_mask)
     kl_reward = -kl_coef * kl
 
@@ -66,23 +72,27 @@ def masked_normalize(tensor: torch.Tensor, mask: torch.Tensor, dim: int = 1, eps
     return mean_centered * var.clamp(min=eps).rsqrt()
 
 
-def convert_to_lora(model: nn.Module,
-                    input_size: int,
-                    output_size: int,
-                    lora_rank: int = 16,
-                    lora_alpha: int = 1,
-                    lora_dropout: float = 0.,
-                    fan_in_fan_out: bool = False,
-                    merge_weights: bool = True):
+def convert_to_lora(
+    model: nn.Module,
+    input_size: int,
+    output_size: int,
+    lora_rank: int = 16,
+    lora_alpha: int = 1,
+    lora_dropout: float = 0.0,
+    fan_in_fan_out: bool = False,
+    merge_weights: bool = True,
+):
     if lora_rank > min(input_size, output_size):
         raise ValueError(f"LoRA rank {lora_rank} must be less or equal than {min(input_size, output_size)}")
 
     for name, module in model.named_modules():
         if isinstance(module, nn.Linear):
-            module._modules[name] = lora.Linear(input_size,
-                                                output_size,
-                                                r=lora_rank,
-                                                lora_alpha=lora_alpha,
-                                                lora_dropout=lora_dropout,
-                                                fan_in_fan_out=fan_in_fan_out,
-                                                merge_weights=merge_weights)
+            module._modules[name] = lora.Linear(
+                input_size,
+                output_size,
+                r=lora_rank,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+                fan_in_fan_out=fan_in_fan_out,
+                merge_weights=merge_weights,
+            )

@@ -12,10 +12,10 @@ class Evaluator:
         self.puncs = list(string.punctuation)
 
     def format_example(self, line, include_answer=True):
-        example = line['question']
+        example = line["question"]
         for choice in self.choices:
             example += f'\n{choice}. {line[f"{choice}"]}'
-        example += '\n答案：'
+        example += "\n答案："
         if include_answer:
             example += f'{line["answer"]}\n\n'
         return example
@@ -33,13 +33,12 @@ class Evaluator:
         pass
 
     def normalize_answer(self, s):
-
         def white_space_fix(text):
-            return ' '.join(text.split())
+            return " ".join(text.split())
 
         def remove_punc(text):
             exclude = set(self.puncs)
-            return ''.join(ch for ch in text if ch not in exclude)
+            return "".join(ch for ch in text if ch not in exclude)
 
         def lower(text):
             return text.lower()

@@ -25,7 +25,7 @@ repos:
         exclude: docs/
 
   - repo: https://github.com/psf/black
-    rev: 19.10b0
+    rev: 23.7.0
     hooks:
       - id: black
         name: Format code
