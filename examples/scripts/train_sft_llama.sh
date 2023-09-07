@@ -13,10 +13,10 @@ read -r -d '' training_commands <<EOF
     --zero_stage 2 \
     --max_epochs 1 \
     --bf16 \
+    --flash_attn \
     --learning_rate 5e-6 \
     --gradient_checkpointing \
 EOF
-    # --flash_attn
     # --wandb [WANDB_TOKENS]
 
 if [[ ${1} != "slurm" ]]; then
