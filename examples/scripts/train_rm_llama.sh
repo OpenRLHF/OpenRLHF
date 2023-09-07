@@ -8,7 +8,7 @@ read -r -d '' training_commands <<EOF
      --pretrain meta-llama/Llama-2-7b-hf \
      --bf16 \
      --max_epochs 1 \
-     --max_len 1024 \
+     --max_len 2048 \
      --zero_stage 3 \
      --learning_rate 9e-6 \
      --dataset Anthropic/hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward,lmsys/chatbot_arena_conversations,openai/webgpt_comparisons \
