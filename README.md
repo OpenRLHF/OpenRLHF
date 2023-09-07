@@ -57,14 +57,9 @@
 - 2023/8/26: Support wandb logs
 - 2023/8/22: Support ceval
 - 2023/8/20: Add some PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
-
-- 2023/8/18: **support LLaMA2 7B PPO training on Single A100**
-> Pre-trained SFT/RM checkpoints: https://huggingface.co/chuyi777/openllama2_checkpoint
-
+- 2023/8/18: **support LLaMA2 7B PPO training on Single A100**, add pre-trained SFT/RM checkpoints
 - 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed training features finished
-
-- 2023/07/30: OpenLLaMA2 project officially launched:
-  - Initial code submission
+- 2023/07/30: OpenLLaMA2 project officially launched
 
 ## OpenLLaMA2 Project
 
