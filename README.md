@@ -41,10 +41,10 @@
 
 - [💥Latest News](#latest-news)
 - [💫OpenLLaMA2](#openllama2-project)
-- [💫Development Plan](#development-plan)
-- [⛏️Usage Steps](#usage-steps)
+- [💫Features](#features)
 - [📄Running Example](#running-llama2-example)
 - [📄Result Display](#inference)
+- [⛏️Pull Request](#pull-request)
 - [💐References & Acknowledgements](#references-&-acknowledgements)
 - [🌟Sponsor Us](#sponsor-us)
 - [🌈Starchart](#starchart)
@@ -52,13 +52,14 @@
 
 ## Latest News
 
+- 2023/9/7: Add pre-commit
 - 2023/9/6: Support FlashAttention2
 - 2023/8/26: Support wandb logs
 - 2023/8/22: Support ceval
 - 2023/8/20: Add some PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
 
 - 2023/8/18: **support LLaMA2 7B PPO training on Single A100**
-> pretraind SFT/RM checkpoint: https://huggingface.co/chuyi777/openllama2_checkpoint
+> Pre-trained SFT/RM checkpoints: https://huggingface.co/chuyi777/openllama2_checkpoint
 
 - 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed training features finished
 
@@ -71,38 +72,39 @@ OpenLLaMA2 aims to develop a high-performance distributed LLaMA2 SFT/RLHF traini
 
 The sister project of this project is [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2), which aims to fine-tune the Chinese LLaMA2 using SFT/RLHF.
 
-### Development Plan:
+### Features
 
-- [✔️] Develop a fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
-- [✔️] Develop the Multi-nodes training scripts for Slurm.
-- [✔️] Add wandb log support.
+- [✔️] A fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
+- [✔️] Multi-nodes training scripts for Slurm.
+- [✔️] Wandb log.
 - [✔️] Support conda env.
-- [✔️] Support FlashAttention2.
-- [WIP] Develop Multi-nodes RLHF based on Ray.
-- [WIP] Support Multiple RM models.
-- [WIP] Develop the Rejection Sampling.
+- [✔️] FlashAttention2.
+- [WIP] Multi-nodes RLHF based on Ray.
+- [WIP] Multiple RM models.
+- [WIP] Rejection Sampling.
 - [WIP] Support QLora.
-- [WIP] Develop the DPO.
+- [WIP] Support DPO.
+- [WIP] Better docs and examples
 - [WIP] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
 - [WIP] Train a [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2) RLHF model.
-- [TODO] Develop the Context Distillation.
-- [TODO] Training/Inference kernel fusion (such as DS inference)
+- [TODO] Support Context Distillation.
+- [TODO] Inference kernel fusion (such as DS inference)
 - [TODO] Large-scale model (> 70B) support with ZeRO++ and FasterTransformer inference.
-- [TODO] Better docs and examples
 
-
-## Usage Steps
-
-Clone the repository: `git clone https://github.com/openllmai/OpenLLaMA2.git`
 
 ## Running LLaMA2 Example
 
 * Verified envs
-You can build openllama2 from nvidia docker(recomended) or from conda envs.
-  * Python: 3.8/3.9/3.10
-  * Torch: 2.0.0/2.0.1
-  * CUDA: 12.0+(recomended)/11.8/11.7
+You can build openllama2 from **nvidia-docker(recomended)** or from conda envs.
 
+```shell
+Clone the repository: 
+git clone https://github.com/openllmai/OpenLLaMA2.git
+
+# Download the pre-trained SFT/RM checkpoints (Optional)
+git lfs install
+git clone https://huggingface.co/chuyi777/openllama2_checkpoint
+```
 
 * Single-node training with nvidia-docker
 
@@ -185,6 +187,15 @@ After completing the training, you can evaluate your model by using the `inferen
 ./inference_llama.sh { model_path } "Please introduce the GTA5 game."
 ```
 
+## Pull Request
+If you want to contribute code please format the code using the following command,
+
+```
+pip install pre-commit
+pre-commit install
+git add .
+git commit -m "xxx"
+```
 
 ## References & Acknowledgements
 
