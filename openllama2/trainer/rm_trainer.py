@@ -101,7 +101,9 @@ class RewardModelTrainer(ABC):
 
                 if isinstance(self.train_dataloader.sampler, DistributedSampler):
                     self.train_dataloader.sampler.set_epoch(epoch)
-
+                acc = 0
+                loss_sum = 0
+                reward_diff_sum = 0
                 self.model.train()
                 for chosen_ids, c_mask, reject_ids, r_mask in self.train_dataloader:
                     chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
@@ -112,7 +114,9 @@ class RewardModelTrainer(ABC):
                     chosen_reward = self.model(chosen_ids, attention_mask=c_mask)
                     reject_reward = self.model(reject_ids, attention_mask=r_mask)
                     loss = self.loss_fn(chosen_reward, reject_reward)
-
+                    acc += (chosen_reward > reject_reward).float().mean().item()
+                    loss_sum += loss.item()
+                    reward_diff_sum += (chosen_reward - reject_reward).item()
                     self.strategy.backward(loss, self.model, self.optimizer)
                     self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
@@ -121,6 +125,14 @@ class RewardModelTrainer(ABC):
                     logs = self.strategy.all_reduce(bar_dict)
                     step_bar.set_postfix(logs)
                     global_step += 1
+
+                    logs["chosen_reward"] = chosen_reward.item()
+                    logs["reject_reward"] = reject_reward.item()
+                    logs["reward_diff"] = (chosen_reward - reject_reward).item()
+                    logs["acc"] = (chosen_reward > reject_reward).float().mean().item()
+                    logs["acc_avg"] = acc / global_step
+                    logs["loss_avg"] = loss_sum / global_step
+                    logs["reward_diff_avg"] = reward_diff_sum / global_step
                     if (
                         self._wandb is not None
                         and self.strategy.is_rank_0()
@@ -173,7 +185,9 @@ class RewardModelTrainer(ABC):
                     "acc_mean": acc_mean,
                     "reward_mean": reward_mean.item(),
                     "reward_std": reward_std.item(),
+                    "reward_diff": (chosen_reward - reject_reward).item(),
                 }
+
                 logs = self.strategy.all_reduce(bar_dict)
                 step_bar.set_postfix(logs)
 
