@@ -39,7 +39,7 @@ class SFTTrainer(ABC):
         pretrain_mode: bool = False,
         batch_size: int = 1,
         max_epochs: int = 2,
-        tokenizer = None,
+        tokenizer=None,
         gradient_checkpointing: bool = False,
     ) -> None:
         super().__init__()
@@ -66,11 +66,17 @@ class SFTTrainer(ABC):
         self._wandb = None
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():
             import wandb
+
             self._wandb = wandb
             wandb.login(key=strategy.args.use_wandb)
-            wandb.init(entity=strategy.args.wandb_org, project=strategy.args.wandb_project,
-                       group=strategy.args.wandb_group, name=strategy.args.wandb_run_name,
-                       config=strategy.args.__dict__, reinit=True)
+            wandb.init(
+                entity=strategy.args.wandb_org,
+                project=strategy.args.wandb_project,
+                group=strategy.args.wandb_group,
+                name=strategy.args.wandb_run_name,
+                config=strategy.args.__dict__,
+                reinit=True,
+            )
 
             wandb.define_metric("train/global_step")
             wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
@@ -79,23 +85,33 @@ class SFTTrainer(ABC):
 
     def fit(self, use_lora):
         global_step = 0
-        epoch_bar = tqdm(range(self.epochs), desc='Train epoch', disable=not self.strategy.is_rank_0())
+        epoch_bar = tqdm(
+            range(self.epochs),
+            desc="Train epoch",
+            disable=not self.strategy.is_rank_0(),
+        )
         for epoch in range(self.epochs):
             if isinstance(self.train_dataloader.sampler, DistributedSampler):
                 self.train_dataloader.sampler.set_epoch(epoch)
 
-            step_bar = tqdm(range(self.train_dataloader.__len__()),
-            desc='Train step of epoch %d' % epoch,
-            disable=not self.strategy.is_rank_0())
+            step_bar = tqdm(
+                range(self.train_dataloader.__len__()),
+                desc="Train step of epoch %d" % epoch,
+                disable=not self.strategy.is_rank_0(),
+            )
 
             # train
             self.model.train()
             for prompts_id_len, inputs, attention_masks in self.train_dataloader:
                 inputs = inputs.squeeze(1).to(torch.cuda.current_device())
                 attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
-                logits = self.model(inputs, attention_mask=attention_mask, return_output=True)['logits']
+                logits = self.model(inputs, attention_mask=attention_mask, return_output=True)["logits"]
 
-                labels = torch.where(inputs.eq(self.tokenizer.pad_token_id), self.loss_fn.IGNORE_INDEX, inputs)
+                labels = torch.where(
+                    inputs.eq(self.tokenizer.pad_token_id),
+                    self.loss_fn.IGNORE_INDEX,
+                    inputs,
+                )
                 if not self.pretrain_mode:
                     for label, source_len in zip(labels, prompts_id_len):
                         label[:source_len] = self.loss_fn.IGNORE_INDEX
@@ -106,30 +122,39 @@ class SFTTrainer(ABC):
 
                 step_bar.update()
                 global_step += 1
-                bar_dict = {'train loss': loss.item()}
+                bar_dict = {"train loss": loss.item()}
                 logs = self.strategy.all_reduce(bar_dict)
                 step_bar.set_postfix(logs)
 
-                if self._wandb is not None and self.strategy.is_rank_0() \
-                    and global_step % self.strategy.accumulated_gradient == 0:
-                    logs = {'train/%s' % k: v for k, v in {**logs, "global_step": global_step}.items()}
+                if (
+                    self._wandb is not None
+                    and self.strategy.is_rank_0()
+                    and global_step % self.strategy.accumulated_gradient == 0
+                ):
+                    logs = {"train/%s" % k: v for k, v in {**logs, "global_step": global_step}.items()}
                     self._wandb.log(logs)
 
             # eval
-            times= 0
+            times = 0
             self.model.eval()
             with torch.no_grad():
                 loss_sum = 0
-                step_bar = tqdm(range(self.eval_dataloader.__len__()),
-                desc='Eval stage + ',
-                disable=not self.strategy.is_rank_0())
+                step_bar = tqdm(
+                    range(self.eval_dataloader.__len__()),
+                    desc="Eval stage + ",
+                    disable=not self.strategy.is_rank_0(),
+                )
 
                 for prompts_id_len, inputs, attention_masks in self.eval_dataloader:
                     inputs = inputs.squeeze(1).to(torch.cuda.current_device())
                     attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
-                    logits = self.model(inputs, attention_mask=attention_mask, return_output=True)['logits']
+                    logits = self.model(inputs, attention_mask=attention_mask, return_output=True)["logits"]
 
-                    labels = torch.where(inputs.eq(self.tokenizer.pad_token_id), self.loss_fn.IGNORE_INDEX, inputs)
+                    labels = torch.where(
+                        inputs.eq(self.tokenizer.pad_token_id),
+                        self.loss_fn.IGNORE_INDEX,
+                        inputs,
+                    )
                     if not self.pretrain_mode:
                         for label, source_len in zip(labels, prompts_id_len):
                             label[:source_len] = self.loss_fn.IGNORE_INDEX
@@ -137,14 +162,13 @@ class SFTTrainer(ABC):
 
                     times += 1
                     loss_sum += loss.item()
-                    bar_dict ={'eval loss': loss_sum / times}
+                    bar_dict = {"eval loss": loss_sum / times}
                     step_bar.update()
                     logs = self.strategy.all_reduce(bar_dict)
                     step_bar.set_postfix(logs)
 
                 if self._wandb is not None and self.strategy.is_rank_0():
-                    logs = {'eval/%s' % k: v for k, v in {**logs, "epoch": epoch}.items()}
+                    logs = {"eval/%s" % k: v for k, v in {**logs, "epoch": epoch}.items()}
                     self._wandb.log(logs)
 
             epoch_bar.update()
-

@@ -27,19 +27,19 @@ class RewardModelTrainer(ABC):
     """
 
     def __init__(
-            self,
-            model,
-            strategy,
-            optim: Optimizer,
-            train_dataloader,
-            eval_dataloader,
-            scheduler,
-            max_norm=0.5,
-            batch_size: int = 1,
-            max_epochs: int = 2,
-            only_evaluate=False,
-            loss="sigmoid",
-            gradient_checkpointing: bool = False,
+        self,
+        model,
+        strategy,
+        optim: Optimizer,
+        train_dataloader,
+        eval_dataloader,
+        scheduler,
+        max_norm=0.5,
+        batch_size: int = 1,
+        max_epochs: int = 2,
+        only_evaluate=False,
+        loss="sigmoid",
+        gradient_checkpointing: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -55,10 +55,10 @@ class RewardModelTrainer(ABC):
 
         if loss == "sigmoid":
             self.loss_fn = PairWiseLoss()
-            self.strategy.print('LogSigmoid Loss')
+            self.strategy.print("LogSigmoid Loss")
         else:
             self.loss_fn = LogExpLoss()
-            self.strategy.print('LogExp Loss')
+            self.strategy.print("LogExp Loss")
 
         if self.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
@@ -66,11 +66,17 @@ class RewardModelTrainer(ABC):
         self._wandb = None
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():
             import wandb
+
             self._wandb = wandb
             wandb.login(key=strategy.args.use_wandb)
-            wandb.init(entity=strategy.args.wandb_org, project=strategy.args.wandb_project,
-                       group=strategy.args.wandb_group, name=strategy.args.wandb_run_name,
-                       config=strategy.args.__dict__, reinit=True)
+            wandb.init(
+                entity=strategy.args.wandb_org,
+                project=strategy.args.wandb_project,
+                group=strategy.args.wandb_group,
+                name=strategy.args.wandb_run_name,
+                config=strategy.args.__dict__,
+                reinit=True,
+            )
 
             wandb.define_metric("train/global_step")
             wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
@@ -79,13 +85,19 @@ class RewardModelTrainer(ABC):
 
     def fit(self, use_lora):
         global_step = 0
-        epoch_bar = tqdm(range(self.epochs), desc='Train epoch', disable=not self.strategy.is_rank_0())
+        epoch_bar = tqdm(
+            range(self.epochs),
+            desc="Train epoch",
+            disable=not self.strategy.is_rank_0(),
+        )
         for epoch in range(self.epochs):
             #  train
             if not self.only_evaluate:
-                step_bar = tqdm(range(self.train_dataloader.__len__()),
-                                desc='Train step of epoch %d' % epoch,
-                                disable=not self.strategy.is_rank_0())
+                step_bar = tqdm(
+                    range(self.train_dataloader.__len__()),
+                    desc="Train step of epoch %d" % epoch,
+                    disable=not self.strategy.is_rank_0(),
+                )
 
                 if isinstance(self.train_dataloader.sampler, DistributedSampler):
                     self.train_dataloader.sampler.set_epoch(epoch)
@@ -109,26 +121,31 @@ class RewardModelTrainer(ABC):
                     self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                     step_bar.update()
-                    bar_dict = {'train loss': loss.item()}
+                    bar_dict = {"train loss": loss.item()}
                     logs = self.strategy.all_reduce(bar_dict)
                     step_bar.set_postfix(logs)
                     global_step += 1
 
-                    logs['chosen_reward'] = chosen_reward.item()
-                    logs['reject_reward'] = reject_reward.item()
-                    logs['reward_diff'] = (chosen_reward - reject_reward).item()
-                    logs['acc'] = (chosen_reward > reject_reward).float().mean().item()
-                    logs['acc_avg'] = acc / global_step
-                    logs['loss_avg'] = loss_sum / global_step
-                    logs['reward_diff_avg'] = reward_diff_sum / global_step
-                    if self._wandb is not None and self.strategy.is_rank_0() \
-                        and global_step % self.strategy.accumulated_gradient == 0:
-                        logs = {'train/%s' % k: v for k, v in {**logs, "global_step": global_step}.items()}
+                    logs["chosen_reward"] = chosen_reward.item()
+                    logs["reject_reward"] = reject_reward.item()
+                    logs["reward_diff"] = (chosen_reward - reject_reward).item()
+                    logs["acc"] = (chosen_reward > reject_reward).float().mean().item()
+                    logs["acc_avg"] = acc / global_step
+                    logs["loss_avg"] = loss_sum / global_step
+                    logs["reward_diff_avg"] = reward_diff_sum / global_step
+                    if (
+                        self._wandb is not None
+                        and self.strategy.is_rank_0()
+                        and global_step % self.strategy.accumulated_gradient == 0
+                    ):
+                        logs = {"train/%s" % k: v for k, v in {**logs, "global_step": global_step}.items()}
                         self._wandb.log(logs)
 
-            step_bar = tqdm(range(self.eval_dataloader.__len__()),
-                            desc='Eval stage of epoch %d' % epoch,
-                            disable=not self.strategy.is_rank_0())
+            step_bar = tqdm(
+                range(self.eval_dataloader.__len__()),
+                desc="Eval stage of epoch %d" % epoch,
+                disable=not self.strategy.is_rank_0(),
+            )
             # eval
             self.model.eval()
             with torch.no_grad():
@@ -163,17 +180,23 @@ class RewardModelTrainer(ABC):
                 self.model.mean[0] = reward_mean
                 self.model.std[0] = reward_std
 
-                bar_dict = {'eval loss': loss_mean, 'acc_mean': acc_mean, 'reward_mean': reward_mean.item(),
-                            'reward_std': reward_std.item(), 'reward_diff': (chosen_reward - reject_reward).item()}
+                bar_dict = {
+                    "eval loss": loss_mean,
+                    "acc_mean": acc_mean,
+                    "reward_mean": reward_mean.item(),
+                    "reward_std": reward_std.item(),
+                    "reward_diff": (chosen_reward - reject_reward).item(),
+                }
+
                 logs = self.strategy.all_reduce(bar_dict)
                 step_bar.set_postfix(logs)
 
                 histgram = torch.histogram(rewards.cpu(), bins=10, range=(-10, 10), density=True) * 2
-                self.strategy.print('histgram')
+                self.strategy.print("histgram")
                 self.strategy.print(histgram)
 
                 if self._wandb is not None and self.strategy.is_rank_0():
-                    logs = {'eval/%s' % k: v for k, v in {**logs, "epoch": epoch}.items()}
+                    logs = {"eval/%s" % k: v for k, v in {**logs, "epoch": epoch}.items()}
                     self._wandb.log(logs)
 
             epoch_bar.update()

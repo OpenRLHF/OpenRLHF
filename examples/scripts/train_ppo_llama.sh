@@ -25,10 +25,10 @@ read -r -d '' training_commands <<EOF
     --normalize_reward \
     --actor_init_on_gpu \
     --adam_offload \
-    --flash_attn \
     --gradient_checkpointing
 EOF
     # --wandb [WANDB_TOKENS]
+    # --flash_attn, there is a bug for micro_rollout_batch_size >= 2
 
 if [[ ${1} != "slurm" ]]; then
     export PATH=$HOME/.local/bin/:$PATH

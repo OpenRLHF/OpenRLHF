@@ -4,27 +4,15 @@ from typing import Optional, Tuple
 
 import torch
 from flash_attn.bert_padding import pad_input, unpad_input
-from flash_attn.flash_attn_interface import (
-    flash_attn_func,
-    flash_attn_varlen_kvpacked_func,
-)
-from transformers.models.llama.modeling_llama import (
-    LlamaAttention,
-    LlamaModel,
-    rotate_half,
-)
+from flash_attn.flash_attn_interface import flash_attn_func, flash_attn_varlen_kvpacked_func
+from transformers.models.llama.modeling_llama import LlamaAttention, LlamaModel, rotate_half
 
 
 def apply_rotary_pos_emb(q, k, cos_sin, position_ids):
     gather_indices = position_ids[:, :, None, None]  # [bsz, seq_len, 1, 1]
-    gather_indices = gather_indices.repeat(
-        1, 1, cos_sin[0].shape[1], cos_sin[0].shape[3]
-    )
+    gather_indices = gather_indices.repeat(1, 1, cos_sin[0].shape[1], cos_sin[0].shape[3])
     bsz = gather_indices.shape[0]
-    cos, sin = (
-        torch.gather(x.transpose(1, 2).repeat(bsz, 1, 1, 1), 1, gather_indices)
-        for x in cos_sin
-    )
+    cos, sin = (torch.gather(x.transpose(1, 2).repeat(bsz, 1, 1, 1), 1, gather_indices) for x in cos_sin)
     q, k = ((x * cos) + (rotate_half(x) * sin) for x in (q, k))
     return q, k
 
@@ -39,9 +27,7 @@ def forward(
     use_cache: bool = False,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     if output_attentions:
-        warnings.warn(
-            "Output attentions is not supported for patched `LlamaAttention`, returning `None` instead."
-        )
+        warnings.warn("Output attentions is not supported for patched `LlamaAttention`, returning `None` instead.")
 
     bsz, q_len, _ = hidden_states.size()
     kv_heads = getattr(self, "num_key_value_heads", self.num_heads)
@@ -95,15 +81,11 @@ def forward(
         )
 
     if key_padding_mask is None:
-        output = flash_attn_func(q, k, v, 0.0, softmax_scale=None, causal=True).view(
-            bsz, q_len + past_kv_len, -1
-        )
+        output = flash_attn_func(q, k, v, 0.0, softmax_scale=None, causal=True).view(bsz, q_len + past_kv_len, -1)
     else:
         q, indices, cu_q_lens, max_s = unpad_input(q, key_padding_mask)
         # We can skip concat and call unpad twice but seems better to call unpad only once.
-        kv, _, cu_k_lens, max_k = unpad_input(
-            torch.stack((k, v), dim=2), key_padding_mask
-        )
+        kv, _, cu_k_lens, max_k = unpad_input(torch.stack((k, v), dim=2), key_padding_mask)
         output_unpad = flash_attn_varlen_kvpacked_func(
             q,
             kv,
@@ -127,9 +109,7 @@ def forward(
 
 # Disable the transformation of the attention mask in LlamaModel as flash attention
 # takes a boolean key_padding_mask. Fills in the past kv length for use in forward.
-def _prepare_decoder_attention_mask(
-    self, attention_mask, input_shape, inputs_embeds, past_key_values_length
-):
+def _prepare_decoder_attention_mask(self, attention_mask, input_shape, inputs_embeds, past_key_values_length):
     # [bsz, seq_len]
     if past_key_values_length > 0 and attention_mask is not None:
         attention_mask = torch.cat(
@@ -178,9 +158,7 @@ def test():
     model = LlamaModel(config)
     attn = LlamaAttention(config).to(device).half()
     bsz, hs, seqlen = 2, config.hidden_size, config.max_position_embeddings
-    position_ids = torch.arange(seqlen, dtype=torch.long, device=device).view(
-        -1, seqlen
-    )
+    position_ids = torch.arange(seqlen, dtype=torch.long, device=device).view(-1, seqlen)
 
     mask = torch.full((bsz, seqlen), True, dtype=torch.bool, device=device)
     for i in range(4):
@@ -190,20 +168,12 @@ def test():
             mask[1, :i] = False
 
         lmask = model._prepare_decoder_attention_mask(mask, hidden.shape[:2], hidden, 0)
-        ref, _, _ = attn.forward(
-            hidden, attention_mask=lmask, position_ids=position_ids
-        )
+        ref, _, _ = attn.forward(hidden, attention_mask=lmask, position_ids=position_ids)
 
-        fast, _, _ = fastchat_forward(
-            attn, hidden, attention_mask=mask, position_ids=position_ids
-        )
+        fast, _, _ = fastchat_forward(attn, hidden, attention_mask=mask, position_ids=position_ids)
 
-        lmask = _prepare_decoder_attention_mask(
-            model, mask, hidden.shape[:2], hidden, 0
-        )
-        test, _, _ = forward(
-            attn, hidden, attention_mask=lmask, position_ids=position_ids
-        )
+        lmask = _prepare_decoder_attention_mask(model, mask, hidden.shape[:2], hidden, 0)
+        test, _, _ = forward(attn, hidden, attention_mask=lmask, position_ids=position_ids)
 
         print(f"Mean(abs(ref)) = {torch.mean(torch.abs(ref))}")
         print(f"Mean(abs(ref - fast)) = {torch.mean(torch.abs(ref - fast))}")
@@ -218,12 +188,8 @@ def test():
         assert part_len * 4 == seqlen
         mask = torch.full((bsz, seqlen), True, dtype=torch.bool, device=device)
         mask[0, -2:] = False
-        lmask = _prepare_decoder_attention_mask(
-            model, mask, hidden.shape[:2], hidden, 0
-        )
-        oneshot, _, _ = forward(
-            attn, hidden, attention_mask=lmask, position_ids=position_ids
-        )
+        lmask = _prepare_decoder_attention_mask(model, mask, hidden.shape[:2], hidden, 0)
+        oneshot, _, _ = forward(attn, hidden, attention_mask=lmask, position_ids=position_ids)
         parts = []
         past_kv, past_kv_len = None, 0
         for i in range(4):
@@ -248,12 +214,8 @@ def test():
             parts.append(part)
             past_kv_len = past_kv[0].shape[1]
 
-        print(
-            f"allclose(oneshot[:, 0], parts[0]) = {torch.allclose(oneshot[:, :part_len], parts[0])}"
-        )
-        print(
-            f"allclose(oneshot, parts) = {torch.allclose(oneshot, torch.cat(parts, dim=1))}"
-        )
+        print(f"allclose(oneshot[:, 0], parts[0]) = {torch.allclose(oneshot[:, :part_len], parts[0])}")
+        print(f"allclose(oneshot, parts) = {torch.allclose(oneshot, torch.cat(parts, dim=1))}")
 
 
 if __name__ == "__main__":

@@ -9,50 +9,50 @@ from .utils import exist_and_not_none, zero_pad_sequences
 def preprocess_data(data, pretrain_mode=False):
     # Dahoas/full-hh-rlhf
     # iamketan25/open-assistant-instructions
-    if exist_and_not_none(data, 'prompt') and exist_and_not_none(data, 'chosen'):
-        prompt = data['prompt']
-        target = data['chosen']
+    if exist_and_not_none(data, "prompt") and exist_and_not_none(data, "chosen"):
+        prompt = data["prompt"]
+        target = data["chosen"]
     # pvduy/sharegpt_alpaca_oa_vicuna_format
-    elif exist_and_not_none(data, 'prompt') and exist_and_not_none(data, 'label'):
-        prompt = data['prompt'].replace('USER:', '\nHuman: ').replace('ASSISTANT:', '\nAssistant: ')
-        target = data['label'].replace('</s>', '')
+    elif exist_and_not_none(data, "prompt") and exist_and_not_none(data, "label"):
+        prompt = data["prompt"].replace("USER:", "\nHuman: ").replace("ASSISTANT:", "\nAssistant: ")
+        target = data["label"].replace("</s>", "")
     # BelleGroup/train_0.5M_CN
     # LLMs/Alpaca-ShareGPT
     # yahma/alpaca-cleaned
     # QingyiSi/Alpaca-CoT
-    elif exist_and_not_none(data, 'instruction') and exist_and_not_none(data, 'output'):
-        input =  ' ' + data['input'] if exist_and_not_none(data, 'input') else ''
-        prompt = 'Human: ' +  data['instruction'] + input + "\nAssistant: "
-        target = data['output']
+    elif exist_and_not_none(data, "instruction") and exist_and_not_none(data, "output"):
+        input = " " + data["input"] if exist_and_not_none(data, "input") else ""
+        prompt = "Human: " + data["instruction"] + input + "\nAssistant: "
+        target = data["output"]
     # Open-Orca/OpenOrca
-    elif exist_and_not_none(data, 'system_prompt') and exist_and_not_none(data, 'response'):
-        prompt = 'Human: ' + data['system_prompt'] + "\n" + data['question'] + "\nAssistant: "
-        target = data['response']
+    elif exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
+        prompt = "Human: " + data["system_prompt"] + "\n" + data["question"] + "\nAssistant: "
+        target = data["response"]
     # crumb/gpt4all-clean
     # nomic-ai/gpt4all-j-prompt-generations
-    elif exist_and_not_none(data, 'prompt') and exist_and_not_none(data, 'response'):
-        prompt = 'Human: ' + data['prompt'] + "\nAssistant: "
-        target = data['response']
-    # FreedomIntelligence/phoenix-sft-data-v1 
-    elif exist_and_not_none(data, 'conversations'):
+    elif exist_and_not_none(data, "prompt") and exist_and_not_none(data, "response"):
+        prompt = "Human: " + data["prompt"] + "\nAssistant: "
+        target = data["response"]
+    # FreedomIntelligence/phoenix-sft-data-v1
+    elif exist_and_not_none(data, "conversations"):
         prompt = ""
         target = ""
-        for item in data['conversations']:
-            if item['from'] == 'human':
-                prompt = 'Human: ' + item['value'] + "\nAssistant: "
-            elif item['from'] == 'gpt':
-                target = item['value']
+        for item in data["conversations"]:
+            if item["from"] == "human":
+                prompt = "Human: " + item["value"] + "\nAssistant: "
+            elif item["from"] == "gpt":
+                target = item["value"]
     # REAL PRETRAIN datasets
     # EleutherAI/pile
-    elif exist_and_not_none(data, 'text') and exist_and_not_none(data, 'meta'):
+    elif exist_and_not_none(data, "text") and exist_and_not_none(data, "meta"):
         prompt = ""
         target = data["text"]
-        pretrain_mode = False # ignore prompt.replace(xxx)
+        pretrain_mode = False  # ignore prompt.replace(xxx)
     else:
         raise ValueError("sft_dataset key error")
 
     if pretrain_mode:
-        prompt.replace('Human:', ' ').replace('\nAssistant:', ' ')
+        prompt.replace("Human:", " ").replace("\nAssistant:", " ")
     return prompt, target
 
 
@@ -66,7 +66,14 @@ class SFTDataset(Dataset):
         max_length: max length of input
     """
 
-    def __init__(self, dataset, tokenizer: Callable, max_length: int, strategy, pretrain_mode=False) -> None:
+    def __init__(
+        self,
+        dataset,
+        tokenizer: Callable,
+        max_length: int,
+        strategy,
+        pretrain_mode=False,
+    ) -> None:
         super().__init__()
         self.prompts = []
         self.targets = []
@@ -80,12 +87,14 @@ class SFTDataset(Dataset):
             prompt, target = preprocess_data(data, pretrain_mode)
 
             if not self.pretrain_mode:
-                prompt_token = self.tokenizer(prompt,
-                                    max_length=self.max_length,
-                                    padding=False,
-                                    truncation=True,
-                                    return_tensors="pt")
-                prompt_ids_len = prompt_token['input_ids'].ne(self.tokenizer.pad_token_id).sum().item()
+                prompt_token = self.tokenizer(
+                    prompt,
+                    max_length=self.max_length,
+                    padding=False,
+                    truncation=True,
+                    return_tensors="pt",
+                )
+                prompt_ids_len = prompt_token["input_ids"].ne(self.tokenizer.pad_token_id).sum().item()
             else:
                 prompt_ids_len = 0
 
@@ -109,11 +118,13 @@ class SFTDataset(Dataset):
         target = self.targets[idx]
         prompt_ids_len = self.prompt_ids_lens[idx]
 
-        input_token = self.tokenizer(prompt + target + " " + self.tokenizer.eos_token,
-                        max_length=self.max_length,
-                        padding=False,
-                        truncation=True,
-                        return_tensors="pt")
+        input_token = self.tokenizer(
+            prompt + target + " " + self.tokenizer.eos_token,
+            max_length=self.max_length,
+            padding=False,
+            truncation=True,
+            return_tensors="pt",
+        )
 
         # if self.strategy.is_rank_0():
         #     print(prompt + target + " " + self.tokenizer.eos_token)
@@ -122,7 +133,7 @@ class SFTDataset(Dataset):
         #     print(self.tokenizer.batch_decode(input_token['input_ids'], skip_special_tokens=False))
         # exit(1)
 
-        return prompt_ids_len, input_token['input_ids'], input_token["attention_mask"]
+        return prompt_ids_len, input_token["input_ids"], input_token["attention_mask"]
 
     def collate_fn(self, item_list):
         prompt_ids_lens = []
@@ -134,6 +145,6 @@ class SFTDataset(Dataset):
             input_ids.append(input_id)
             attention_masks.append(attention_mask)
 
-        input_ids = zero_pad_sequences(input_ids, 'right', self.tokenizer.pad_token_id)
-        attention_masks = zero_pad_sequences(attention_masks, 'right')
+        input_ids = zero_pad_sequences(input_ids, "right", self.tokenizer.pad_token_id)
+        attention_masks = zero_pad_sequences(attention_masks, "right")
         return prompt_ids_lens, input_ids, attention_masks

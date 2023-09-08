@@ -8,41 +8,43 @@ from .utils import exist_and_not_none, zero_pad_sequences
 
 def preprocess_data(data):
     # Open-Orca/OpenOrca
-    if exist_and_not_none(data, 'system_prompt') and exist_and_not_none(data, 'response'):
-        prompt = 'Human: ' + data['system_prompt'] + "\n" + data['question'] + "\nAssistant: "
-        target = data['response']
+    if exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
+        prompt = "Human: " + data["system_prompt"] + "\n" + data["question"] + "\nAssistant: "
+        target = data["response"]
     # BelleGroup/train_0.5M_CN
     # LLMs/Alpaca-ShareGPT
     # yahma/alpaca-cleaned
     # QingyiSi/Alpaca-CoT
-    elif exist_and_not_none(data, 'instruction') and exist_and_not_none(data, 'output'):
-        input =  ' ' + data['input'] if exist_and_not_none(data, 'input') else ''
-        prompt = 'Human: ' +  data['instruction'] + input + "\nAssistant: "
+    elif exist_and_not_none(data, "instruction") and exist_and_not_none(data, "output"):
+        input = " " + data["input"] if exist_and_not_none(data, "input") else ""
+        prompt = "Human: " + data["instruction"] + input + "\nAssistant: "
     # stanfordnlp/SHP
-    elif exist_and_not_none(data, 'history'):
-        prompt = "Human: " +  data['history'] + "\nAssistant: "
+    elif exist_and_not_none(data, "history"):
+        prompt = "Human: " + data["history"] + "\nAssistant: "
     # lvwerra/stack-exchange-paired
-    elif exist_and_not_none(data, 'question') and exist_and_not_none(data, 'response_j'):
-        prompt = "Human: " +  data['question'] + "\nAssistant: "
+    elif exist_and_not_none(data, "question") and exist_and_not_none(data, "response_j"):
+        prompt = "Human: " + data["question"] + "\nAssistant: "
     # lmsys/chatbot_arena_conversations
-    elif exist_and_not_none(data, 'winner') and exist_and_not_none(data, 'conversation_a'):
+    elif exist_and_not_none(data, "winner") and exist_and_not_none(data, "conversation_a"):
+
         def process_chatbot_arena_conversations(lll):
             result = []
             for l in lll:
-                result.append(l['role'].replace('user', 'Human: ').replace('assistant', 'Assistant: '))
-                result.append(l['content'])
+                result.append(l["role"].replace("user", "Human: ").replace("assistant", "Assistant: "))
+                result.append(l["content"])
             return "\n".join(result)
-        prompt = data['conversation_a'][:-1]
+
+        prompt = data["conversation_a"][:-1]
         prompt = process_chatbot_arena_conversations(prompt) + "\nAssistant: "
     # openai/webgpt_comparisons
-    elif exist_and_not_none(data, 'question') and exist_and_not_none(data, 'answer_1'):
-        prompt = "Human: " +  data['question']['full_text'] + "\nAssistant: "
+    elif exist_and_not_none(data, "question") and exist_and_not_none(data, "answer_1"):
+        prompt = "Human: " + data["question"]["full_text"] + "\nAssistant: "
     # Dahoas/full-hh-rlhf
-    elif exist_and_not_none(data, 'prompt'):
-        prompt = data['prompt']
+    elif exist_and_not_none(data, "prompt"):
+        prompt = data["prompt"]
         # tasksource/oasst1_pairwise_rlhf_reward
-        if prompt.startswith('prompter:'):
-            prompt = prompt.replace('prompter:', '\nHuman: ').replace('assistant:', '\nAssistant: ') + '\nAssistant: '
+        if prompt.startswith("prompter:"):
+            prompt = prompt.replace("prompter:", "\nHuman: ").replace("assistant:", "\nAssistant: ") + "\nAssistant: "
     else:
         raise ValueError("prompt dataset key error")
     return prompt
@@ -74,4 +76,3 @@ class PromptDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.prompts[idx]
-

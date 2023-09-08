@@ -26,15 +26,12 @@ if __name__ == "__main__":
         required=True,
         help="The job name and path to logging file (exp_name.log).",
     )
-    parser.add_argument(
-        "--num-nodes", "-n", type=int, default=1, help="Number of nodes to use."
-    )
+    parser.add_argument("--num-nodes", "-n", type=int, default=1, help="Number of nodes to use.")
     parser.add_argument(
         "--node",
         "-w",
         type=str,
-        help="The specified nodes to use. Same format as the "
-        "return of 'sinfo'. Default: ''.",
+        help="The specified nodes to use. Same format as the " "return of 'sinfo'. Default: ''.",
     )
     parser.add_argument(
         "--num-gpus",
@@ -69,13 +66,9 @@ if __name__ == "__main__":
     else:
         node_info = ""
 
-    job_name = "{}_{}".format(
-        args.exp_name, time.strftime("%m%d-%H%M", time.localtime())
-    )
+    job_name = "{}_{}".format(args.exp_name, time.strftime("%m%d-%H%M", time.localtime()))
 
-    partition_option = (
-        "#SBATCH --partition={}".format(args.partition) if args.partition else ""
-    )
+    partition_option = "#SBATCH --partition={}".format(args.partition) if args.partition else ""
 
     # ===== Modified the template script =====
     with open(template_file, "r") as f:
@@ -89,8 +82,7 @@ if __name__ == "__main__":
     text = text.replace(GIVEN_NODE, node_info)
     text = text.replace(
         "# THIS FILE IS A TEMPLATE AND IT SHOULD NOT BE DEPLOYED TO " "PRODUCTION!",
-        "# THIS FILE IS MODIFIED AUTOMATICALLY FROM TEMPLATE AND SHOULD BE "
-        "RUNNABLE!",
+        "# THIS FILE IS MODIFIED AUTOMATICALLY FROM TEMPLATE AND SHOULD BE " "RUNNABLE!",
     )
 
     # ===== Save the script =====
@@ -102,8 +94,6 @@ if __name__ == "__main__":
     print("Starting to submit job!")
     subprocess.Popen(["sbatch", script_file])
     print(
-        "Job submitted! Script file is at: <{}>. Log file is at: <{}>".format(
-            script_file, "{}.log".format(job_name)
-        )
+        "Job submitted! Script file is at: <{}>. Log file is at: <{}>".format(script_file, "{}.log".format(job_name))
     )
     sys.exit(0)
