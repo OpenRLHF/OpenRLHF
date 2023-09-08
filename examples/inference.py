@@ -12,7 +12,7 @@ from openllama2.models import Actor, RewardModel
 # replace_llama_attn_with_flash_attn()
 
 
-def eval(args):
+def generate(args):
     # configure strategy
     strategy = get_strategy(args)
 
@@ -66,13 +66,13 @@ def eval(args):
         print(output)
 
 
-def eval_rm(args):
+def rm(args):
     # configure strategy
     strategy = get_strategy(args)
 
     # configure model
     # load huggingface model/config
-    from_config = bool(args.load_model or args.load_checkpoint)
+    from_config = bool(args.load_model)
     model = RewardModel(args.pretrain, from_config)
 
     # configure tokenizer
@@ -130,7 +130,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_task", type=str, default=None)
     parser.add_argument("--pretrain", type=str, default=None)
     parser.add_argument("--load_model", type=str, default=None)
-    parser.add_argument("--max_len", type=int, default=1024)
+    parser.add_argument("--max_len", type=int, default=2048)
     parser.add_argument("--zero_stage", type=int, default=0)
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--bf16", action="store_true", default=False)
@@ -138,8 +138,8 @@ if __name__ == "__main__":
     parser.add_argument("--ta_prompt", type=str, default=None)
     args = parser.parse_args()
     if args.eval_task and args.eval_task == "generate":
-        eval(args)
+        generate(args)
     elif args.eval_task and args.eval_task == "rm":
-        eval_rm(args)
+        rm(args)
     else:
         print("Invalid or missing '--eval_task' argument. Please specify either 'generate' or 'rm'.")

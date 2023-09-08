@@ -180,7 +180,7 @@ pip install flash-attn=2.1.1 --no-build-isolation
 After completing the training, you can evaluate your model by using the `inference` script:
 
 ```shell
-./inference_llama.sh { model_path } "Please introduce the GTA5 game."
+./inference_llama.sh { model_path }
 ```
 
 ## Pull Request
