@@ -143,6 +143,10 @@ class NaiveExperienceMaker(ABC):
         Input:
         - values: Tensor of shape (batch_size, response_size)
         - rewards: Tensor of shape (batch_size, response_size)
+
+        Output:
+        - advantages: Tensor of shape (batch_size, response_size)
+        - returns: Tensor of shape (batch_size, response_size)
         """
         lastgaelam = 0
         advantages_reversed = []
@@ -160,3 +164,5 @@ class NaiveExperienceMaker(ABC):
         advantages = torch.stack(advantages_reversed[::-1], dim=1)
         returns = advantages + values
         return advantages.detach(), returns
+        
+    
