@@ -36,7 +36,7 @@ class PolicyLoss(nn.Module):
                 old_log_probs: torch.Tensor,
                 advantages: torch.Tensor,
                 action_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        ratio = (log_probs - old_log_probs).exp()
+        ratio = (log_probs - old_log_probs).exp() 
         surr1 = ratio * advantages
         surr2 = ratio.clamp(1 - self.clip_eps, 1 + self.clip_eps) * advantages
         loss = -torch.min(surr1, surr2)
@@ -75,9 +75,10 @@ class PairWiseLoss(nn.Module):
     """
 
     def forward(self, chosen_reward: torch.Tensor, reject_reward: torch.Tensor) -> torch.Tensor:
-        probs = torch.sigmoid(chosen_reward - reject_reward)
-        log_probs = torch.log(probs)
-        loss = -log_probs.mean()
+        # probs = torch.sigmoid(chosen_reward - reject_reward)
+        # log_probs = torch.log(probs)
+        # loss = -log_probs.mean()
+        loss = -torch.nn.functional.logsigmoid(chosen_reward - reject_reward).mean()
         return loss
 
 class LogExpLoss(nn.Module):
