@@ -32,19 +32,21 @@ def generate(args):
     model = strategy.prepare(model)
 
     model.eval()
+    if args.ta_prompt:
+        with open(args.ta_prompt, "r") as f:
+            user_prompt = f.read()
+    else:
+        user_prompt = ""
+
     while True:
-        user_prompt = input("Please enter a prompt (or type 'exit' to quit): ")
-        if user_prompt.strip().lower() == "exit":
+        inputs = input("Please enter a prompt (or type 'exit' to quit): ")
+        if inputs.strip().lower() == "exit":
             print("Exiting program...")
             break
 
         # get input prompt
-        user_prompt = "\nHuman: " + user_prompt + "\nAssistant: "
-
-        if args.ta_prompt:
-            with open(args.ta_prompt, "r") as f:
-                ta_prompt = f.read()
-            user_prompt = ta_prompt + user_prompt
+        user_prompt = user_prompt + "\nHuman: " + inputs + "\nAssistant: "
+        user_prompt_len = len(user_prompt)
 
         input_ids = tokenizer.encode(user_prompt, return_tensors="pt").to(torch.cuda.current_device())
         outputs = model.generate(
@@ -60,9 +62,8 @@ def generate(args):
             eos_token_id=tokenizer.eos_token_id,
         )
         output = tokenizer.batch_decode(outputs[0], skip_special_tokens=True)
-        output = output[0].replace(r"\n", "\n")
-        if args.ta_prompt:
-            output = output[len(ta_prompt) - 1 :]
+        user_prompt = output[0]
+        output = output[0][user_prompt_len:].replace(r"\n", "\n")
         print(output)
 
 
