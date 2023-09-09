@@ -126,11 +126,9 @@ class RewardModelTrainer(ABC):
                     logs = {"train_loss": loss.item()}
                     logs["chosen_reward"] = chosen_reward.item()
                     logs["reject_reward"] = reject_reward.item()
-                    logs["reward_diff"] = (chosen_reward - reject_reward).item()
-                    logs["acc"] = (chosen_reward > reject_reward).float().mean().item()
-                    logs["acc_avg"] = acc / global_step
-                    logs["loss_avg"] = loss_sum / global_step
-                    logs["reward_diff_avg"] = reward_diff_sum / global_step
+                    logs["acc_mean"] = acc / global_step
+                    logs["loss_mean"] = loss_sum / global_step
+                    logs["reward_diff_mean"] = reward_diff_sum / global_step
                     logs = self.strategy.all_reduce(logs)
                     step_bar.set_postfix(logs)
                     if (
