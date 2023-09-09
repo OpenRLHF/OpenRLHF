@@ -100,8 +100,8 @@ class DPOTrainer(ABC):
 
             self.model.train()
             self.ref_model.eval()
-            acc = 0
-            loss_sum = 0
+            acc_mean = 0
+            loss_mean = 0
             # train
             for chosen_ids, c_mask, reject_ids, r_mask in self.train_dataloader:
                 chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
@@ -124,13 +124,13 @@ class DPOTrainer(ABC):
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 global_step += 1
-                acc += (chosen_reward > reject_reward).float().mean().item()
-                loss_sum += loss.item()
+                acc_mean = acc_mean * 0.9 + 0.1 * (chosen_reward > reject_reward).float().mean().item()
+                loss_mean = loss_mean * 0.9 + 0.1 * loss.item()
                 logs = {"train_loss": loss.item()}
                 logs["chosen_reward"] = chosen_reward.mean().item()
                 logs["reject_reward"] = reject_reward.mean().item()
-                logs["acc_mean"] = acc / global_step
-                logs["loss_mean"] = loss_sum / global_step
+                logs["acc_mean"] = acc_mean
+                logs["loss_mean"] = loss_mean
                 logs = self.strategy.all_reduce(logs)
                 step_bar.set_postfix(logs)
                 step_bar.update()

@@ -100,6 +100,7 @@ def train(args):
     strategy.save_model(model, args.save_path + "/sft_model.pt", only_rank0=True)
 
     if args.save_hf_model:
+        os.makedirs(args.save_path + "/sft_hf", exist_ok=True)
         strategy.save_hf_format(model, tokenizer, args.save_path + "/sft_hf")
 
 

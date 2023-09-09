@@ -101,9 +101,9 @@ class RewardModelTrainer(ABC):
 
                 if isinstance(self.train_dataloader.sampler, DistributedSampler):
                     self.train_dataloader.sampler.set_epoch(epoch)
-                acc = 0
-                loss_sum = 0
-                reward_diff_sum = 0
+                acc_mean = 0
+                loss_mean = 0
+                reward_diff_mean = 0
                 self.model.train()
                 for chosen_ids, c_mask, reject_ids, r_mask in self.train_dataloader:
                     chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
@@ -114,9 +114,9 @@ class RewardModelTrainer(ABC):
                     chosen_reward = self.model(chosen_ids, attention_mask=c_mask)
                     reject_reward = self.model(reject_ids, attention_mask=r_mask)
                     loss = self.loss_fn(chosen_reward, reject_reward)
-                    acc += (chosen_reward > reject_reward).float().mean().item()
-                    loss_sum += loss.item()
-                    reward_diff_sum += (chosen_reward - reject_reward).item()
+                    acc_mean = acc_mean * 0.9 + 0.1 * (chosen_reward > reject_reward).float().mean().item()
+                    loss_mean = loss_mean * 0.9 + 0.1 * loss.item()
+                    reward_diff_mean = reward_diff_mean * 0.9 + 0.1 * (chosen_reward - reject_reward).mean().item()
 
                     self.strategy.backward(loss, self.model, self.optimizer)
                     self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
@@ -126,9 +126,9 @@ class RewardModelTrainer(ABC):
                     logs = {"train_loss": loss.item()}
                     logs["chosen_reward"] = chosen_reward.item()
                     logs["reject_reward"] = reject_reward.item()
-                    logs["acc_mean"] = acc / global_step
-                    logs["loss_mean"] = loss_sum / global_step
-                    logs["reward_diff_mean"] = reward_diff_sum / global_step
+                    logs["acc_mean"] = acc_mean
+                    logs["loss_mean"] = loss_mean
+                    logs["reward_diff_mean"] = reward_diff_mean
                     logs = self.strategy.all_reduce(logs)
                     step_bar.set_postfix(logs)
                     if (

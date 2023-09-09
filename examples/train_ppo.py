@@ -221,6 +221,7 @@ def train(args):
     )
 
     if args.save_hf_model:
+        os.makedirs(args.save_path + "/ppo_hf", exist_ok=True)
         strategy.save_hf_format(
             ema_model if args.enable_ema else actor,
             tokenizer,
