@@ -52,10 +52,11 @@
 
 ## Latest News
 
+- 2023/9/9: Add [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh)
 - 2023/9/7: Add pre-commit
-- 2023/9/6: Support FlashAttention2
-- 2023/8/26: Support wandb logs
-- 2023/8/22: Support ceval
+- 2023/9/6: Support FlashAttention2 (--flash_attn)
+- 2023/8/26: Support wandb logs (--wandb)
+- 2023/8/22: Support Ceval
 - 2023/8/20: Add some PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
 - 2023/8/18: **support LLaMA2 7B PPO training on Single A100**, [add pre-trained SFT/RM checkpoints](https://huggingface.co/chuyi777/openllama2_checkpoint)
 - 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed training features finished
@@ -74,11 +75,11 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 - [✔️] Wandb log.
 - [✔️] Support conda env.
 - [✔️] FlashAttention2.
+- [✔️] Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh).
 - [WIP] Multi-nodes RLHF based on Ray.
-- [WIP] Multiple RM models.
+- [WIP] Multiple Reward models.
 - [WIP] Rejection Sampling.
 - [WIP] Support QLora.
-- [WIP] Support DPO.
 - [WIP] Better docs and examples
 - [WIP] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
 - [WIP] Train a [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2) RLHF model.

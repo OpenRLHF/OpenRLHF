@@ -115,8 +115,8 @@ class DPOLoss(nn.Module):
     ) -> torch.Tensor:
         pi_logratios = policy_chosen_logps - policy_rejected_logps
         ref_logratios = reference_chosen_logps - reference_rejected_logps
-        logits = pi_logratios - ref_logratios
 
+        logits = pi_logratios - ref_logratios
         losses = -F.logsigmoid(self.beta * logits)
         chosen_rewards = self.beta * (policy_chosen_logps - reference_chosen_logps).detach()
         rejected_rewards = self.beta * (policy_rejected_logps - reference_rejected_logps).detach()

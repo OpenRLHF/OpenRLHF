@@ -120,7 +120,6 @@ class DPOTrainer(ABC):
 
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
-                step_bar.update()
 
                 global_step += 1
                 reward_accuracies = (chosen_reward > reject_reward).float()
@@ -130,6 +129,8 @@ class DPOTrainer(ABC):
                 logs["accuracy"] = reward_accuracies.item()
                 logs = self.strategy.all_reduce(logs)
                 step_bar.set_postfix(logs)
+                step_bar.update()
+
                 if (
                     self._wandb is not None
                     and self.strategy.is_rank_0()
