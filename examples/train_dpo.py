@@ -29,7 +29,7 @@ def train(args):
     model = Actor(args.pretrain, from_config)
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy)
+    tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy)
     strategy.print(model)
 
     # load SFT model
@@ -54,7 +54,7 @@ def train(args):
         max_count=2000000,
         stopping_strategy="all_exhausted",
     )
-    train_dataset = RewardDataset(train_data, tokenizer, args.max_len, strategy) if not args.only_evaluate else None
+    train_dataset = RewardDataset(train_data, tokenizer, args.max_len, strategy)
     eval_dataset = RewardDataset(eval_data, tokenizer, args.max_len, strategy)
 
     train_dataloader = strategy.setup_dataloader(
@@ -63,6 +63,10 @@ def train(args):
         True,
         True,
         train_dataset.collate_fn,
+    )
+
+    eval_dataloader = strategy.setup_dataloader(
+        eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn
     )
 
     # scheduler
@@ -77,7 +81,7 @@ def train(args):
     )
 
     # strategy prepare
-    (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
+    ((model, optim, scheduler), ref_model) = strategy.prepare((model, optim, scheduler), ref_model)
 
     if args.load_checkpoint:
         strategy.print("Load checkpoint: ", args.save_path)
@@ -90,15 +94,16 @@ def train(args):
     trainer = DPOTrainer(
         model=model,
         ref_model=ref_model,
+        tokenizer=tokenizer,
         strategy=strategy,
         optim=optim,
         train_dataloader=train_dataloader,
+        eval_dataloader=eval_dataloader,
         scheduler=scheduler,
         max_norm=args.max_norm,
         beta=args.beta,
         max_epochs=args.max_epochs,
         gradient_checkpointing=args.gradient_checkpointing,
-        loss=args.loss,
     )
 
     trainer.fit(use_lora=args.lora_rank)
