@@ -22,6 +22,7 @@ read -r -d '' training_commands <<EOF
     --init_kl_coef 0.01 \
     --prompt_data yahma/alpaca-cleaned,Dahoas/full-hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward \
     --prompt_data_probs 0.3,0.6,0.1 \
+    --max_samples 60000 \
     --normalize_reward \
     --actor_init_on_gpu \
     --adam_offload \
