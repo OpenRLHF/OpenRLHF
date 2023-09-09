@@ -2,6 +2,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .utils import masked_mean
 
@@ -81,10 +82,7 @@ class PairWiseLoss(nn.Module):
     """
 
     def forward(self, chosen_reward: torch.Tensor, reject_reward: torch.Tensor) -> torch.Tensor:
-        # probs = torch.sigmoid(chosen_reward - reject_reward)
-        # log_probs = torch.log(probs)
-        # loss = -log_probs.mean()
-        loss = -torch.nn.functional.logsigmoid(chosen_reward - reject_reward).mean()
+        loss = -F.logsigmoid(chosen_reward - reject_reward).mean()
         return loss
 
 
@@ -97,3 +95,30 @@ class LogExpLoss(nn.Module):
     def forward(self, chosen_reward: torch.Tensor, reject_reward: torch.Tensor) -> torch.Tensor:
         loss = torch.log(1 + torch.exp(reject_reward - chosen_reward)).mean()
         return loss
+
+
+class DPOLoss(nn.Module):
+    """
+    DPO Loss
+    """
+
+    def __init__(self, beta: float = None) -> None:
+        super().__init__()
+        self.beta = beta
+
+    def forward(
+        self,
+        policy_chosen_logps: torch.Tensor,
+        policy_rejected_logps: torch.Tensor,
+        reference_chosen_logps: torch.Tensor,
+        reference_rejected_logps: torch.Tensor,
+    ) -> torch.Tensor:
+        pi_logratios = policy_chosen_logps - policy_rejected_logps
+        ref_logratios = reference_chosen_logps - reference_rejected_logps
+        logits = pi_logratios - ref_logratios
+
+        losses = -F.logsigmoid(self.beta * logits)
+        chosen_rewards = self.beta * (policy_chosen_logps - reference_chosen_logps).detach()
+        rejected_rewards = self.beta * (policy_rejected_logps - reference_rejected_logps).detach()
+
+        return losses, chosen_rewards, rejected_rewards

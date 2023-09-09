@@ -15,11 +15,6 @@ from openllama2.datasets import PromptDataset, SFTDataset
 from openllama2.models import Actor, Critic, RewardModel
 from openllama2.trainer import PPOTrainer
 
-# from openllama2.models.llama_flash_attn_monkey_patch import (
-#     replace_llama_attn_with_flash_attn,
-# )
-# replace_llama_attn_with_flash_attn()
-
 
 def train(args):
     # configure strategy
