@@ -9,7 +9,7 @@ read -r -d '' training_commands <<EOF
     --save_path ./ckpt/7b_llama \
     --micro_train_batch_size 1 \
     --train_batch_size 128 \
-    --micro_rollout_batch_size 2 \
+    --micro_rollout_batch_size 1 \
     --rollout_batch_size 1024 \
     --max_epochs 1 \
     --prompt_max_len 1024 \
@@ -26,6 +26,7 @@ read -r -d '' training_commands <<EOF
     --normalize_reward \
     --actor_init_on_gpu \
     --adam_offload \
+    --flash_attn \
     --gradient_checkpointing
 EOF
     # --wandb [WANDB_TOKENS]
