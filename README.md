@@ -14,7 +14,7 @@
   </a>
 
 <p align="center">
-    <h3>A Deepspeed/Ray based High-performance LLaMA2 SFT/RLHF framework!</h3>
+    <h3>A High-performance LLaMA2 RLHF framework!</h3>
       <a href="https://github.com/openllmai/OpenLLaMA2/graphs/contributors">
         <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/openllmai/OpenLLaMA2" />
       </a>
@@ -59,12 +59,12 @@
 - 2023/8/22: Support Ceval
 - 2023/8/20: Add some PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
 - 2023/8/18: **support LLaMA2 7B PPO training on Single A100**, [add pre-trained SFT/RM checkpoints](https://huggingface.co/chuyi777/openllama2_checkpoint)
-- 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed training features finished
+- 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed training features
 - 2023/07/30: OpenLLaMA2 project officially launched
 
 ## OpenLLaMA2 Project
 
-OpenLLaMA2 aims to develop a high-performance distributed LLaMA2 SFT/RLHF training framework.
+OpenLLaMA2 aims to develop a high-performance distributed LLaMA2 RLHF training framework (for > 30B models).
 
 The sister project of this project is [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2), which aims to fine-tune the Chinese LLaMA2 using SFT/RLHF.
 
@@ -76,16 +76,16 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 - [✔️] Support conda env.
 - [✔️] FlashAttention2.
 - [✔️] Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh).
-- [WIP] Multi-nodes RLHF based on Ray.
-- [WIP] Multiple Reward models.
+- [WIP] Distributed RLHF based on HTTP server (for > 30B models).
+- [WIP] Distributed RLHF based on Ray (for > 30B models).
 - [WIP] Rejection Sampling.
+- [WIP] Multiple Reward models.
 - [WIP] Support QLora.
 - [WIP] Better docs and examples
 - [WIP] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
 - [WIP] Train a [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2) RLHF model.
 - [TODO] Support Context Distillation.
-- [TODO] Inference kernel fusion (such as DS inference)
-- [TODO] Large-scale model (> 70B) support with ZeRO++ and FasterTransformer inference.
+- [TODO] Large-scale model (> 70B) support with ZeRO++ and TRT-LLM inference.
 
 
 ## Running LLaMA2 Example
@@ -184,7 +184,7 @@ After completing the training, you can evaluate your model by using the `inferen
 ./inference_llama.sh { model_path }
 ```
 
-## Pull Request
+## Contribution
 If you want to contribute code please format the code using the following command,
 
 ```
