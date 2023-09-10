@@ -64,9 +64,9 @@
 
 ## OpenLLaMA2 Project
 
-OpenLLaMA2 aims to develop a high-performance distributed LLaMA2 RLHF training framework (for > 30B models).
+OpenLLaMA2 aims to develop a high-performance LLaMA2 RLHF training framework **(for > 30B models)**.
 
-The sister project of this project is [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2), which aims to fine-tune the Chinese LLaMA2 using SFT/RLHF.
+The sister project of this project is [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2), which aims to fine-tune a Chinese LLaMA2 based on OpenLLaMA2.
 
 ### Features
 
