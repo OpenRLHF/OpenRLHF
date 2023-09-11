@@ -20,9 +20,9 @@ read -r -d '' training_commands <<EOF
     --critic_learning_rate 9e-6 \
     --inference_tp_size 1 \
     --init_kl_coef 0.01 \
-    --prompt_data yahma/alpaca-cleaned,Dahoas/full-hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward \
-    --prompt_data_probs 0.3,0.6,0.1 \
-    --max_samples 60000 \
+    --prompt_data Open-Orca/OpenOrca,Dahoas/full-hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward \
+    --prompt_data_probs 0.4,0.5,0.1 \
+    --max_samples 80000 \
     --normalize_reward \
     --actor_init_on_gpu \
     --adam_offload \

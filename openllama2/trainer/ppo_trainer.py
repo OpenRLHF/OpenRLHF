@@ -156,7 +156,6 @@ class PPOTrainer(ABC):
         update_timesteps = rollout_batch_size // (self.strategy.world_size * self.micro_rollout_batch_size)
         global_step = 0
 
-        torch.cuda.empty_cache()
         for episode in range(num_episodes):
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
                 self.prompts_dataloader.sampler.set_epoch(episode)
@@ -189,7 +188,6 @@ class PPOTrainer(ABC):
                             }.items()
                         }
                         self._wandb.log(logs)
-                    torch.cuda.empty_cache()
 
     def ppo_train(self):
         # replay buffer may be empty at first, we should rebuild at each training

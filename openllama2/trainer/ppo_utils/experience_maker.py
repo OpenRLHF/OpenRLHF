@@ -9,8 +9,6 @@ from tqdm import tqdm
 from openllama2.models.actor import Actor
 from openllama2.models.utils import compute_reward, masked_mean
 
-SHOW_TIME_DETAILS = False
-
 
 @dataclass
 class Experience:
@@ -93,43 +91,21 @@ class NaiveExperienceMaker(ABC):
         self.initial_model.eval()
         self.reward_model.eval()
 
-        tqdm_disable = not SHOW_TIME_DETAILS or not self.strategy.is_rank_0()
-
-        for i in tqdm(
-            range(1),
-            desc=f"Generate sequence",
-            disable=tqdm_disable,
-        ):
-            sequences, attention_mask, action_mask = self.actor.generate(input_ids, **generate_kwargs)
-
+        # generate seq
+        sequences, attention_mask, action_mask = self.actor.generate(input_ids, **generate_kwargs)
         num_actions = action_mask.size(1)
-        for i in tqdm(
-            range(1),
-            desc=f"Actor forward",
-            disable=tqdm_disable,
-        ):
-            action_log_probs = self.actor(sequences, num_actions, attention_mask)
 
-        for i in tqdm(
-            range(1),
-            desc=f"Init model forward",
-            disable=tqdm_disable,
-        ):
-            base_action_log_probs = self.initial_model(sequences, num_actions, attention_mask)
+        # log probs
+        action_log_probs = self.actor(sequences, num_actions, attention_mask)
 
-        for i in tqdm(
-            range(1),
-            desc=f"Value model forward",
-            disable=tqdm_disable,
-        ):
-            value = self.critic(sequences, action_mask, attention_mask)
+        # init log probs
+        base_action_log_probs = self.initial_model(sequences, num_actions, attention_mask)
 
-        for i in tqdm(
-            range(1),
-            desc=f"Reward model forward",
-            disable=tqdm_disable,
-        ):
-            r = self.reward_model(sequences, attention_mask)
+        # values
+        value = self.critic(sequences, action_mask, attention_mask)
+
+        # rewards
+        r = self.reward_model(sequences, attention_mask)
 
         reward, kl = compute_reward(
             r,

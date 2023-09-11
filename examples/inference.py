@@ -43,6 +43,9 @@ def generate(args):
         if inputs.strip().lower() == "exit":
             print("Exiting program...")
             break
+        if inputs.strip().lower() == "clear":
+            user_prompt = ""
+            continue
 
         # get input prompt
         user_prompt = user_prompt + "\nHuman: " + inputs + "\nAssistant: "
