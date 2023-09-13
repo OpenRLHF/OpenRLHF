@@ -135,40 +135,45 @@ class SFTTrainer(ABC):
                     self._wandb.log(logs)
 
             # eval
-            times = 0
-            self.model.eval()
-            with torch.no_grad():
-                loss_sum = 0
-                step_bar = tqdm(
-                    range(self.eval_dataloader.__len__()),
-                    desc="Eval stage + ",
-                    disable=not self.strategy.is_rank_0(),
-                )
-
-                for prompts_id_len, inputs, attention_masks in self.eval_dataloader:
-                    inputs = inputs.squeeze(1).to(torch.cuda.current_device())
-                    attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
-                    logits = self.model(inputs, attention_mask=attention_mask, return_output=True)["logits"]
-
-                    labels = torch.where(
-                        inputs.eq(self.tokenizer.pad_token_id),
-                        self.loss_fn.IGNORE_INDEX,
-                        inputs,
-                    )
-                    if not self.pretrain_mode:
-                        for label, source_len in zip(labels, prompts_id_len):
-                            label[:source_len] = self.loss_fn.IGNORE_INDEX
-                    loss = self.loss_fn(logits, labels)
-
-                    times += 1
-                    loss_sum += loss.item()
-                    bar_dict = {"eval loss": loss_sum / times}
-                    step_bar.update()
-                    logs = self.strategy.all_reduce(bar_dict)
-                    step_bar.set_postfix(logs)
-
-                if self._wandb is not None and self.strategy.is_rank_0():
-                    logs = {"eval/%s" % k: v for k, v in {**logs, "epoch": epoch}.items()}
-                    self._wandb.log(logs)
-
+            self.evaluate(self.eval_dataloader, epoch)
             epoch_bar.update()
+
+    def evaluate(self, eval_dataloader, epoch_in_training=None):
+        times = 0
+        self.model.eval()
+        with torch.no_grad():
+            loss_sum = 0
+            step_bar = tqdm(
+                range(eval_dataloader.__len__()),
+                desc="Eval stage of epoch %d" % epoch_in_training if epoch_in_training is not None else "Eval ",
+                disable=not self.strategy.is_rank_0(),
+            )
+
+            for prompts_id_len, inputs, attention_masks in eval_dataloader:
+                inputs = inputs.squeeze(1).to(torch.cuda.current_device())
+                attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
+                logits = self.model(inputs, attention_mask=attention_mask, return_output=True)["logits"]
+
+                labels = torch.where(
+                    inputs.eq(self.tokenizer.pad_token_id),
+                    self.loss_fn.IGNORE_INDEX,
+                    inputs,
+                )
+                if not self.pretrain_mode:
+                    for label, source_len in zip(labels, prompts_id_len):
+                        label[:source_len] = self.loss_fn.IGNORE_INDEX
+                loss = self.loss_fn(logits, labels)
+
+                times += 1
+                loss_sum += loss.item()
+                bar_dict = {"eval loss": loss_sum / times}
+                step_bar.update()
+                logs = self.strategy.all_reduce(bar_dict)
+                step_bar.set_postfix(logs)
+
+            if self._wandb is not None and self.strategy.is_rank_0():
+                if epoch_in_training is not None:
+                    logs = {"eval/%s" % k: v for k, v in {**logs, "epoch": epoch_in_training}.items()}
+                else:
+                    logs = {"eval/%s" % k: v for k, v in logs.items()}
+                self._wandb.log(logs)

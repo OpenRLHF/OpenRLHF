@@ -85,11 +85,7 @@ class RewardModelTrainer(ABC):
 
     def fit(self, use_lora):
         global_step = 0
-        epoch_bar = tqdm(
-            range(self.epochs),
-            desc="Train epoch",
-            disable=not self.strategy.is_rank_0(),
-        )
+        epoch_bar = tqdm(range(self.epochs), desc="Train epoch", disable=not self.strategy.is_rank_0())
         for epoch in range(self.epochs):
             #  train
             if not self.only_evaluate:
@@ -101,9 +97,7 @@ class RewardModelTrainer(ABC):
 
                 if isinstance(self.train_dataloader.sampler, DistributedSampler):
                     self.train_dataloader.sampler.set_epoch(epoch)
-                acc_mean = 0
-                loss_mean = 0
-                reward_diff_mean = 0
+
                 self.model.train()
                 for chosen_ids, c_mask, reject_ids, r_mask in self.train_dataloader:
                     chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
@@ -114,23 +108,15 @@ class RewardModelTrainer(ABC):
                     chosen_reward = self.model(chosen_ids, attention_mask=c_mask)
                     reject_reward = self.model(reject_ids, attention_mask=r_mask)
                     loss = self.loss_fn(chosen_reward, reject_reward)
-                    acc_mean = acc_mean * 0.9 + 0.1 * (chosen_reward > reject_reward).float().mean().item()
-                    loss_mean = loss_mean * 0.9 + 0.1 * loss.item()
-                    reward_diff_mean = reward_diff_mean * 0.9 + 0.1 * (chosen_reward - reject_reward).mean().item()
 
                     self.strategy.backward(loss, self.model, self.optimizer)
                     self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                     step_bar.update()
-                    global_step += 1
-                    logs = {"train_loss": loss.item()}
-                    logs["chosen_reward"] = chosen_reward.item()
-                    logs["reject_reward"] = reject_reward.item()
-                    logs["acc_mean"] = acc_mean
-                    logs["loss_mean"] = loss_mean
-                    logs["reward_diff_mean"] = reward_diff_mean
-                    logs = self.strategy.all_reduce(logs)
+                    bar_dict = {"train loss": loss.item()}
+                    logs = self.strategy.all_reduce(bar_dict)
                     step_bar.set_postfix(logs)
+                    global_step += 1
                     if (
                         self._wandb is not None
                         and self.strategy.is_rank_0()
@@ -139,64 +125,68 @@ class RewardModelTrainer(ABC):
                         logs = {"train/%s" % k: v for k, v in {**logs, "global_step": global_step}.items()}
                         self._wandb.log(logs)
 
-            step_bar = tqdm(
-                range(self.eval_dataloader.__len__()),
-                desc="Eval stage of epoch %d" % epoch,
-                disable=not self.strategy.is_rank_0(),
-            )
             # eval
-            self.model.eval()
-            with torch.no_grad():
-                acc = 0
-                rewards = []
-                loss_sum = 0
-                for chosen_ids, c_mask, reject_ids, r_mask in self.eval_dataloader:
-                    chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
-                    c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
-                    reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
-                    r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
-
-                    chosen_reward = self.model(chosen_ids, attention_mask=c_mask)
-                    reject_reward = self.model(reject_ids, attention_mask=r_mask)
-                    loss = self.loss_fn(chosen_reward, reject_reward)
-
-                    rewards += [chosen_reward.flatten(), reject_reward.flatten()]
-                    acc += (chosen_reward > reject_reward).float().mean().item()
-                    loss_sum += loss.item()
-                    step_bar.update()
-
-                acc_mean = acc / self.eval_dataloader.__len__()
-                loss_mean = loss_sum / self.eval_dataloader.__len__()
-
-                rewards = torch.cat(rewards).float()
-                rewards = self.strategy.all_gather(rewards)
-                reward_mean = torch.mean(rewards)
-                reward_std = torch.std(rewards).clamp(min=1e-8)
-
-                # save mean std
-                self.strategy.print("Set reward mean std")
-                self.model.mean[0] = reward_mean
-                self.model.std[0] = reward_std
-
-                bar_dict = {
-                    "eval loss": loss_mean,
-                    "acc_mean": acc_mean,
-                    "reward_mean": reward_mean.item(),
-                    "reward_std": reward_std.item(),
-                    "reward_diff": (chosen_reward - reject_reward).item(),
-                }
-
-                logs = self.strategy.all_reduce(bar_dict)
-                step_bar.set_postfix(logs)
-
-                histgram = torch.histogram(rewards.cpu(), bins=10, range=(-10, 10), density=True) * 2
-                self.strategy.print("histgram")
-                self.strategy.print(histgram)
-
-                if self._wandb is not None and self.strategy.is_rank_0():
-                    logs = {"eval/%s" % k: v for k, v in {**logs, "epoch": epoch}.items()}
-                    self._wandb.log(logs)
+            self.evaluate(self.eval_dataloader, epoch)
 
             epoch_bar.update()
         if self._wandb is not None and self.strategy.is_rank_0():
             self._wandb.finish()
+
+    def evaluate(self, eval_dataloader, epoch_in_training=None):
+        step_bar = tqdm(
+            range(self.eval_dataloader.__len__()),
+            desc="Eval stage of epoch %d" % epoch_in_training if epoch_in_training is not None else "Eval ",
+            disable=not self.strategy.is_rank_0(),
+        )
+        self.model.eval()
+        with torch.no_grad():
+            acc = 0
+            rewards = []
+            loss_sum = 0
+            for chosen_ids, c_mask, reject_ids, r_mask in eval_dataloader:
+                chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
+                c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
+                reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
+                r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
+
+                chosen_reward = self.model(chosen_ids, attention_mask=c_mask)
+                reject_reward = self.model(reject_ids, attention_mask=r_mask)
+                loss = self.loss_fn(chosen_reward, reject_reward)
+
+                rewards += [chosen_reward.flatten(), reject_reward.flatten()]
+                acc += (chosen_reward > reject_reward).float().mean().item()
+                loss_sum += loss.item()
+                step_bar.update()
+
+            acc_mean = acc / self.eval_dataloader.__len__()
+            loss_mean = loss_sum / self.eval_dataloader.__len__()
+
+            rewards = torch.cat(rewards).float()
+            rewards = self.strategy.all_gather(rewards)
+            reward_mean = torch.mean(rewards)
+            reward_std = torch.std(rewards).clamp(min=1e-8)
+
+            # save mean std
+            self.strategy.print("Set reward mean std")
+            self.model.mean[0] = reward_mean
+            self.model.std[0] = reward_std
+
+            bar_dict = {
+                "eval loss": loss_mean,
+                "acc_mean": acc_mean,
+                "reward_mean": reward_mean.item(),
+                "reward_std": reward_std.item(),
+            }
+            logs = self.strategy.all_reduce(bar_dict)
+            step_bar.set_postfix(logs)
+
+            histgram = torch.histogram(rewards.cpu(), bins=10, range=(-10, 10), density=True) * 2
+            self.strategy.print("histgram")
+            self.strategy.print(histgram)
+
+            if self._wandb is not None and self.strategy.is_rank_0():
+                if epoch_in_training is not None:
+                    logs = {"eval/%s" % k: v for k, v in {**logs, "epoch": epoch_in_training}.items()}
+                else:
+                    logs = {"eval/%s" % k: v for k, v in logs.items()}
+                self._wandb.log(logs)
