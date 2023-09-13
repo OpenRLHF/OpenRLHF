@@ -145,7 +145,7 @@ class SFTTrainer(ABC):
             loss_sum = 0
             step_bar = tqdm(
                 range(eval_dataloader.__len__()),
-                desc="Eval stage of epoch %d" % epoch_in_training if epoch_in_training is not None else "Eval ",
+                desc="Eval stage of epoch %d" % epoch_in_training,
                 disable=not self.strategy.is_rank_0(),
             )
 
@@ -172,8 +172,5 @@ class SFTTrainer(ABC):
                 step_bar.set_postfix(logs)
 
             if self._wandb is not None and self.strategy.is_rank_0():
-                if epoch_in_training is not None:
-                    logs = {"eval/%s" % k: v for k, v in {**logs, "epoch": epoch_in_training}.items()}
-                else:
-                    logs = {"eval/%s" % k: v for k, v in logs.items()}
+                logs = {"eval/%s" % k: v for k, v in {**logs, "epoch": epoch_in_training}.items()}
                 self._wandb.log(logs)

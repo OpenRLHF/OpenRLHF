@@ -150,12 +150,12 @@ class DPOTrainer(ABC):
         if self._wandb is not None and self.strategy.is_rank_0():
             self._wandb.finish()
 
-    def evaluate(self, eval_dataloader, epoch_in_training=None):
+    def evaluate(self, eval_dataloader, epoch_in_training):
         self.model.eval()
         with torch.no_grad():
             step_bar = tqdm(
                 range(eval_dataloader.__len__()),
-                desc="Eval stage of epoch %d" % epoch_in_training if epoch_in_training is not None else "Eval ",
+                desc="Eval stage of epoch %d" % epoch_in_training,
                 disable=not self.strategy.is_rank_0(),
             )
             acc = 0
@@ -189,10 +189,7 @@ class DPOTrainer(ABC):
             logs = self.strategy.all_reduce(logs)
             step_bar.set_postfix(logs)
             if self._wandb is not None and self.strategy.is_rank_0():
-                if epoch_in_training is not None:
-                    logs = {"eval/%s" % k: v for k, v in {**logs, "epoch": epoch_in_training}.items()}
-                else:
-                    logs = {"eval/%s" % k: v for k, v in logs.items()}
+                logs = {"eval/%s" % k: v for k, v in {**logs, "epoch": epoch_in_training}.items()}
                 self._wandb.log(logs)
 
     def concatenated_forward(self, model, chosen_ids, c_mask, reject_ids, r_mask):
