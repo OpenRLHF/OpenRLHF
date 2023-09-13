@@ -144,46 +144,56 @@ class DPOTrainer(ABC):
                     self._wandb.log(logs)
 
             # eval
-            self.model.eval()
-            with torch.no_grad():
-                acc = 0
-                loss_sum = 0
-                for chosen_ids, c_mask, reject_ids, r_mask in self.eval_dataloader:
-                    chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
-                    c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
-                    reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
-                    r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
-
-                    chosen_logps, rejected_logps = self.concatenated_forward(
-                        self.model, chosen_ids, c_mask, reject_ids, r_mask
-                    )
-                    reference_chosen_logps, reference_rejected_logps = self.concatenated_forward(
-                        self.ref_model, chosen_ids, c_mask, reject_ids, r_mask
-                    )
-                    loss, chosen_reward, reject_reward = self.loss_fn(
-                        chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
-                    )
-                    acc += (chosen_reward > reject_reward).float().mean().item()
-                    loss_sum += loss.item()
-                    step_bar.update()
-
-                acc_mean = acc / self.eval_dataloader.__len__()
-                loss_mean = loss_sum / self.eval_dataloader.__len__()
-
-                logs = {
-                    "eval loss": loss_mean,
-                    "acc_mean": acc_mean,
-                }
-                logs = self.strategy.all_reduce(logs)
-                step_bar.set_postfix(logs)
-                if self._wandb is not None and self.strategy.is_rank_0():
-                    logs = {"eval/%s" % k: v for k, v in {**logs, "epoch": epoch}.items()}
-                    self._wandb.log(logs)
-
+            self.evaluate(self.eval_dataloader, epoch)
             epoch_bar.update()
 
         if self._wandb is not None and self.strategy.is_rank_0():
             self._wandb.finish()
+
+    def evaluate(self, eval_dataloader, epoch_in_training=None):
+        self.model.eval()
+        with torch.no_grad():
+            step_bar = tqdm(
+                range(eval_dataloader.__len__()),
+                desc="Eval stage of epoch %d" % epoch_in_training if epoch_in_training is not None else "Eval ",
+                disable=not self.strategy.is_rank_0(),
+            )
+            acc = 0
+            loss_sum = 0
+            for chosen_ids, c_mask, reject_ids, r_mask in eval_dataloader:
+                chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
+                c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
+                reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
+                r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
+
+                chosen_logps, rejected_logps = self.concatenated_forward(
+                    self.model, chosen_ids, c_mask, reject_ids, r_mask
+                )
+                reference_chosen_logps, reference_rejected_logps = self.concatenated_forward(
+                    self.ref_model, chosen_ids, c_mask, reject_ids, r_mask
+                )
+                loss, chosen_reward, reject_reward = self.loss_fn(
+                    chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
+                )
+                acc += (chosen_reward > reject_reward).float().mean().item()
+                loss_sum += loss.item()
+                step_bar.update()
+
+            acc_mean = acc / self.eval_dataloader.__len__()
+            loss_mean = loss_sum / self.eval_dataloader.__len__()
+
+            logs = {
+                "eval loss": loss_mean,
+                "acc_mean": acc_mean,
+            }
+            logs = self.strategy.all_reduce(logs)
+            step_bar.set_postfix(logs)
+            if self._wandb is not None and self.strategy.is_rank_0():
+                if epoch_in_training is not None:
+                    logs = {"eval/%s" % k: v for k, v in {**logs, "epoch": epoch_in_training}.items()}
+                else:
+                    logs = {"eval/%s" % k: v for k, v in logs.items()}
+                self._wandb.log(logs)
 
     def concatenated_forward(self, model, chosen_ids, c_mask, reject_ids, r_mask):
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
