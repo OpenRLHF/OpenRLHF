@@ -52,7 +52,7 @@
 
 ## Latest News
 
-- 2023/9/11: Upload [DPO checkpoint](https://huggingface.co/chuyi777/openllama2_checkpoint)
+- 2023/9/13: Upload [DPO/PPO checkpoint](https://huggingface.co/chuyi777/openllama2_checkpoint)
 - 2023/9/9: Add [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh)
 - 2023/9/7: Add pre-commit
 - 2023/9/6: Support FlashAttention2 (--flash_attn)
