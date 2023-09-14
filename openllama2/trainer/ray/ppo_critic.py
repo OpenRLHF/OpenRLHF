@@ -81,7 +81,7 @@ class CriticModelRayActor(BasePPORole):
         )
 
         # prepare models/optimizers...
-        critic, critic_optim, critic_scheduler = strategy.prepare(
+        self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare(
             (critic, critic_optim, critic_scheduler),
             is_rlhf=True,
         )
@@ -92,14 +92,14 @@ class CriticModelRayActor(BasePPORole):
         self.trainer = CriticPPOTrainer(
             strategy,
             actor=None,
-            critic=critic,
+            critic=self.critic,
             reward_model=None,
             initial_model=None,
             ema_model=None,
             actor_optim=None,
-            critic_optim=critic_optim,
+            critic_optim=self.critic_optim,
             actor_scheduler=None,
-            critic_scheduler=critic_scheduler,
+            critic_scheduler=self.critic_scheduler,
             max_epochs=args.max_epochs,
             micro_train_batch_size=args.micro_train_batch_size,
             micro_rollout_batch_size=args.micro_rollout_batch_size,

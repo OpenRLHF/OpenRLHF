@@ -58,6 +58,8 @@ class ActorModelRayActor(BasePPORole):
             ema_model.is_ema = True
             self.ema_model = strategy.prepare(ema_model, is_rlhf=True)
             del ema_model.is_ema
+        else:
+            self.ema_model = None
 
     def prepare_datasets(self):
         strategy = self.strategy

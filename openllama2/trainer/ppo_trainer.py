@@ -115,12 +115,16 @@ class PPOTrainer(ABC):
         else:
             self.kl_ctl = FixedKLController(init_kl_coef)
 
-        self.experience_maker = NaiveExperienceMaker(actor, critic, reward_model, initial_model, self.kl_ctl, strategy)
         # if reference/reward/critic models are ray actor handle, we should use RemoteExperienceMaker.
         if not isinstance(critic, ray.actor.ActorHandle):
-            self.replay_buffer = NaiveReplayBuffer(micro_train_batch_size, buffer_limit, buffer_cpu_offload)
+            self.experience_maker = NaiveExperienceMaker(
+                actor, critic, reward_model, initial_model, self.kl_ctl, strategy
+            )
         else:
-            self.replay_buffer = RemoteExperienceMaker(micro_train_batch_size, buffer_limit, buffer_cpu_offload)
+            self.experience_maker = RemoteExperienceMaker(
+                actor, critic, reward_model, initial_model, self.kl_ctl, strategy
+            )
+        self.replay_buffer = NaiveReplayBuffer(micro_train_batch_size, buffer_limit, buffer_cpu_offload)
 
         if self.gradient_checkpointing:
             # For ray critic trainer, actor_optim is None
