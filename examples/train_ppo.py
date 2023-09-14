@@ -6,19 +6,18 @@ from copy import deepcopy
 from datetime import datetime
 
 import torch
-import torch.distributed as dist
-from datasets import load_dataset
 from transformers.trainer import get_scheduler
-from utils import blending_datasets, get_strategy, get_tokenizer
 
 from openllama2.datasets import PromptDataset, SFTDataset
 from openllama2.models import Actor, Critic, RewardModel
 from openllama2.trainer import PPOTrainer
+from openllama2.utils import blending_datasets, get_strategy, get_tokenizer
 
 
 def train(args):
     # configure strategy
     strategy = get_strategy(args)
+    strategy.setup_distributed()
 
     # configure flash attention
     if args.flash_attn:

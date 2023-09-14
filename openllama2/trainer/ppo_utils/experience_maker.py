@@ -1,7 +1,9 @@
 from abc import ABC
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+import ray
 import torch
 import torch.nn as nn
 from tqdm import tqdm
@@ -186,3 +188,74 @@ class NaiveExperienceMaker(ABC):
         advantages = torch.stack(advantages_reversed[::-1], dim=1)
         returns = advantages + values
         return advantages.detach(), returns
+
+
+class RemoteExperienceMaker(NaiveExperienceMaker):
+    @torch.no_grad()
+    def make_experience(self, input_ids: torch.Tensor, **generate_kwargs) -> Experience:
+        self.actor.eval()
+
+        # generate seq
+        sequences, attention_mask, action_mask = self.actor.generate(input_ids, **generate_kwargs)
+        num_actions = action_mask.size(1)
+        sequences_cpu, attention_mask_cpu, action_mask_cpu = (
+            sequences.to("cpu"),
+            attention_mask.to("cpu"),
+            action_mask.to("cpu"),
+        )
+
+        # init log probs
+        base_action_log_probs_ref = self.initial_model.forward.remote(sequences_cpu, num_actions, attention_mask_cpu)
+
+        # values
+        value_ref = self.critic.forward.remote(sequences_cpu, action_mask_cpu, attention_mask_cpu)
+
+        # rewards
+        r_ref = self.reward_model.forward.remote(sequences_cpu, attention_mask_cpu)
+
+        # log probs
+        action_log_probs = self.actor(sequences, num_actions, attention_mask)
+
+        # wait initial/critic/reward model done
+        base_action_log_probs, value, r = ray.get([base_action_log_probs_ref, value_ref, r_ref])
+
+        reward, kl = compute_reward(
+            r,
+            self.kl_ctl.value,
+            action_log_probs,
+            base_action_log_probs,
+            action_mask=action_mask,
+        )
+        advantage, returns = self.get_advantages_and_returns(
+            value,
+            reward,
+            action_mask,
+            generate_kwargs["gamma"],
+            generate_kwargs["lambd"],
+        )
+
+        info = {
+            "kl": masked_mean(kl, action_mask, dim=-1),
+            "reward": r,
+            "return": reward.sum(dim=-1),
+            "response_length": action_mask.float().sum(dim=-1),
+            "total_length": attention_mask.float().sum(dim=-1),
+        }
+
+        experience = Experience(
+            sequences,
+            action_log_probs,
+            value,
+            returns,
+            advantage,
+            attention_mask,
+            action_mask,
+            info,
+        )
+
+        # send experience to critic
+        experience_cpu = deepcopy(experience)
+        experience_cpu.to_device("cpu")
+        self.critic.append.remote(experience_cpu)
+
+        return experience

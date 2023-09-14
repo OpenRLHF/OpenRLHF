@@ -61,9 +61,6 @@ class DeepspeedStrategy(ABC):
         self.max_norm = max_norm
         self.time_steps = defaultdict(int)
 
-        self.set_seed(seed)
-        self.setup_distributed()
-
     def set_seed(self, seed: int) -> None:
         random.seed(seed)
         np.random.seed(seed)
@@ -71,6 +68,8 @@ class DeepspeedStrategy(ABC):
         torch.cuda.manual_seed_all(seed)
 
     def setup_distributed(self) -> None:
+        self.set_seed(self.seed)
+
         if self.args.local_rank == -1 and "LOCAL_RANK" in os.environ:  # for slurm
             self.args.local_rank = int(os.environ["LOCAL_RANK"])
 
