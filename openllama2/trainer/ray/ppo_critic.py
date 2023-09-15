@@ -39,6 +39,10 @@ class CriticPPOTrainer(PPOTrainer):
             for experience in pbar:
                 experience.to_device(device)
                 status = self.training_step(experience)
+
+                # for DP
+                status = self.strategy.all_reduce(status)
+
                 status_list.append(status)
                 pbar.set_postfix(status)
 
@@ -118,7 +122,8 @@ class CriticModelRayActor(BasePPORole):
     ) -> torch.Tensor:
         """Generates critic values."""
         device = torch.cuda.current_device()
-        value = self.critic(sequences.to(device), action_mask.to(device), attention_mask.to(device))
+        with torch.no_grad():
+            value = self.critic(sequences.to(device), action_mask.to(device), attention_mask.to(device))
         return value.to("cpu")
 
     def append(self, experience):

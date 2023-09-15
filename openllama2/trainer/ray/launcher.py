@@ -96,7 +96,8 @@ class ReferenceModelRayActor(BasePPORole):
         return_output=False,
     ) -> torch.Tensor:
         device = torch.cuda.current_device()
-        log_probs = self.model(sequences.to(device), num_actions, attention_mask.to(device), return_output)
+        with torch.no_grad():
+            log_probs = self.model(sequences.to(device), num_actions, attention_mask.to(device), return_output)
         return log_probs.to("cpu")
 
 
@@ -111,7 +112,8 @@ class RewardModelRayActor(BasePPORole):
 
     def forward(self, sequences: torch.LongTensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         device = torch.cuda.current_device()
-        reward = self.model(sequences.to(device), attention_mask.to(device))
+        with torch.no_grad():
+            reward = self.model(sequences.to(device), attention_mask.to(device))
         return reward.to("cpu")
 
 
@@ -184,7 +186,7 @@ class PPORayActorGroup:
                 critic_actors[i % len(critic_actors)],
                 reward_model,
                 initial_model,
-                critic_train_remote=(i % len(critic_actors) == 0),
+                critic_train_remote=(i < len(critic_actors)),
             )
             for i, actor in enumerate(self._actor_handlers)
         ]

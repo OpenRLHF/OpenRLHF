@@ -195,18 +195,11 @@ class PPOTrainer(ABC):
 
                 global_step = global_step + 1
                 if global_step % update_timesteps == 0:
-                    # trigger critic model train
-                    if self.critic_train_remote:
-                        critic_status_ref = self.critic.fit.remote()
-
                     torch.cuda.empty_cache()
                     self.replay_buffer.normalize("advantages", self.strategy)
                     status = self.ppo_train()
                     self.replay_buffer.clear()
                     self.kl_ctl.update(status["kl"], rollout_batch_size)
-
-                    if self.critic_train_remote:
-                        status.update(ray.get(critic_status_ref))
 
                     self.strategy.print(status)
                     if self._wandb is not None and self.strategy.is_rank_0():
@@ -258,7 +251,7 @@ class PPOTrainer(ABC):
                     "tlen": status["total_length"],
                     "kl": status["kl"],
                 }
-                if self.critic_optim is not None:
+                if "critic_loss" in status:
                     short_status["cri"] = status["critic_loss"]
                     short_status["vals"] = status["values"]
 
@@ -277,11 +270,7 @@ class PPOTrainer(ABC):
 
     def training_step(self, experience: Experience) -> Dict[str, float]:
         status = self.training_step_actor(experience)
-
-        # For ray actor trainer, critic_optim is None
-        if self.critic_optim is not None:
-            status.update(self.training_step_critic(experience))
-
+        status.update(self.training_step_critic(experience))
         return status
 
     def training_step_actor(self, experience: Experience) -> Dict[str, float]:

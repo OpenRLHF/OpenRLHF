@@ -194,6 +194,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
     @torch.no_grad()
     def make_experience(self, input_ids: torch.Tensor, **generate_kwargs) -> Experience:
         self.actor.eval()
+        device = torch.cuda.current_device()
 
         # generate seq
         sequences, attention_mask, action_mask = self.actor.generate(input_ids, **generate_kwargs)
@@ -218,6 +219,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         # wait initial/critic/reward model done
         base_action_log_probs, value, r = ray.get([base_action_log_probs_ref, value_ref, r_ref])
+        base_action_log_probs, value, r = base_action_log_probs.to(device), value.to(device), r.to(device)
 
         reward, kl = compute_reward(
             r,

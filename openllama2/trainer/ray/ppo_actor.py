@@ -1,6 +1,7 @@
 import itertools
 import math
 from copy import deepcopy
+from typing import Dict
 
 import ray
 from transformers.trainer import get_scheduler
@@ -8,9 +9,25 @@ from transformers.trainer import get_scheduler
 from openllama2.datasets import PromptDataset, SFTDataset
 from openllama2.models import Actor, Critic, RewardModel
 from openllama2.trainer import PPOTrainer
+from openllama2.trainer.ppo_utils import Experience
 from openllama2.utils import DeepspeedStrategy, blending_datasets, get_tokenizer
 
 from .launcher import BasePPORole
+
+
+class ActorPPOTrainer(PPOTrainer):
+    def ppo_train(self):
+        # triger remote critic model training
+        critic_status_ref = self.critic.fit.remote()
+
+        status = super().ppo_train()
+
+        # wait remote critic model training done
+        status.update(ray.get(critic_status_ref))
+        return status
+
+    def training_step(self, experience: Experience) -> Dict[str, float]:
+        return self.training_step_actor(experience)
 
 
 @ray.remote(num_gpus=1)
@@ -124,7 +141,7 @@ class ActorModelRayActor(BasePPORole):
         args = self.strategy.args
 
         # configure Trainer
-        trainer = PPOTrainer(
+        trainer = ActorPPOTrainer(
             strategy,
             self.actor,
             critic,
