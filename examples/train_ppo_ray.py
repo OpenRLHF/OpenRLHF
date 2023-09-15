@@ -57,7 +57,8 @@ def train(args):
     refs = actor_model.async_fit_actor_model(critic_model, ref_model_0, reward_model_0)
     ray.get(refs)
 
-    # TODO(@wuxibin): save model
+    # save model
+    ray.get(actor_model.async_save_actor_model())
 
 
 if __name__ == "__main__":

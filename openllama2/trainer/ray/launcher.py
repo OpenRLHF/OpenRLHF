@@ -190,3 +190,6 @@ class PPORayActorGroup:
             )
             for i, actor in enumerate(self._actor_handlers)
         ]
+
+    def async_save_actor_model(self):
+        return [actor.save_model.remote() for actor in self._actor_handlers]

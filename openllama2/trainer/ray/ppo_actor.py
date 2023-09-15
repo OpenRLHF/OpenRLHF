@@ -1,5 +1,6 @@
 import itertools
 import math
+import os
 from copy import deepcopy
 from typing import Dict
 
@@ -18,12 +19,14 @@ from .launcher import BasePPORole
 class ActorPPOTrainer(PPOTrainer):
     def ppo_train(self):
         # triger remote critic model training
-        critic_status_ref = self.critic.fit.remote()
+        if self.critic_train_remote:
+            critic_status_ref = self.critic.fit.remote()
 
         status = super().ppo_train()
 
         # wait remote critic model training done
-        status.update(ray.get(critic_status_ref))
+        if self.critic_train_remote:
+            status.update(ray.get(critic_status_ref))
         return status
 
     def training_step(self, experience: Experience) -> Dict[str, float]:
@@ -185,3 +188,21 @@ class ActorModelRayActor(BasePPORole):
             num_episodes=args.num_episodes,
             rollout_batch_size=args.rollout_batch_size,
         )
+
+    def save_model(self):
+        args = self.strategy.args
+
+        # save model checkpoint after fitting on only rank0
+        self.strategy.save_model(
+            self.ema_model if args.enable_ema else self.actor,
+            args.save_path + "/ppo_model.pt",
+            only_rank0=True,
+        )
+
+        if args.save_hf_model:
+            os.makedirs(args.save_path + "/ppo_hf", exist_ok=True)
+            self.strategy.save_hf_format(
+                self.ema_model if args.enable_ema else self.actor,
+                self.tokenizer,
+                args.save_path + "/ppo_hf",
+            )
