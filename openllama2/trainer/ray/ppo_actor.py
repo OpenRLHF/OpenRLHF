@@ -38,6 +38,7 @@ class ActorModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, model_path):
         self._setup_distributed(strategy)
         actor, self.tokenizer = self._from_pretrained(Actor, pretrain, model_path)
+        strategy.print(actor)
         self.prepare_datasets()
 
         args = strategy.args
@@ -73,6 +74,9 @@ class ActorModelRayActor(BasePPORole):
             (actor, actor_optim, actor_scheduler),
             is_rlhf=True,
         )
+
+        if args.gradient_checkpointing:
+            self.actor.gradient_checkpointing_enable()
 
         if ema_model:
             ema_model.is_ema = True

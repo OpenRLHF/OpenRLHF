@@ -86,6 +86,8 @@ class ReferenceModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, model_path):
         self._setup_distributed(strategy)
         model, _ = self._from_pretrained(Actor, pretrain, model_path)
+        strategy.print(model)
+
         self.model = self.strategy.prepare(model, is_rlhf=True)
 
     def forward(
@@ -108,6 +110,10 @@ class RewardModelRayActor(BasePPORole):
         model, _ = self._from_pretrained(
             RewardModel, pretrain, model_path, normalize_reward=strategy.args.normalize_reward
         )
+        strategy.print(model)
+        strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
+        strategy.print("mean: {}, std {}".format(model.mean, model.std))
+
         self.model = self.strategy.prepare(model, is_rlhf=True)
 
     def forward(self, sequences: torch.LongTensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:

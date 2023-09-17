@@ -126,15 +126,6 @@ class PPOTrainer(ABC):
             )
         self.replay_buffer = NaiveReplayBuffer(micro_train_batch_size, buffer_limit, buffer_cpu_offload)
 
-        if self.gradient_checkpointing:
-            # For ray critic trainer, actor_optim is None
-            if self.actor_optim is not None:
-                self.actor.gradient_checkpointing_enable()
-
-            # For ray actor trainer, critic_optim is None
-            if self.critic_optim is not None:
-                self.critic.gradient_checkpointing_enable()
-
         self._wandb = None
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():
             import wandb
@@ -199,6 +190,7 @@ class PPOTrainer(ABC):
                     self.replay_buffer.normalize("advantages", self.strategy)
                     status = self.ppo_train()
                     self.replay_buffer.clear()
+                    torch.cuda.empty_cache()
                     self.kl_ctl.update(status["kl"], rollout_batch_size)
 
                     self.strategy.print(status)

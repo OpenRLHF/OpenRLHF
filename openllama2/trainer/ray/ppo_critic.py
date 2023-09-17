@@ -63,7 +63,12 @@ class CriticPPOTrainer(PPOTrainer):
 class CriticModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, model_path, max_steps):
         self._setup_distributed(strategy)
-        critic, tokenizer = self._from_pretrained(Critic, pretrain, model_path)
+        critic, tokenizer = self._from_pretrained(
+            Critic, pretrain, model_path, normalize_reward=strategy.args.normalize_reward
+        )
+        strategy.print(critic)
+        strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
+        strategy.print("mean: {}, std {}".format(critic.mean, critic.std))
 
         args = strategy.args
         # lora
@@ -89,6 +94,9 @@ class CriticModelRayActor(BasePPORole):
             (critic, critic_optim, critic_scheduler),
             is_rlhf=True,
         )
+
+        if args.gradient_checkpointing:
+            self.critic.gradient_checkpointing_enable()
 
         # configure Trainer
         # only use wandb at actor model
@@ -135,4 +143,5 @@ class CriticModelRayActor(BasePPORole):
         torch.cuda.empty_cache()
         status = self.trainer.ppo_train()
         self.trainer.replay_buffer.clear()
+        torch.cuda.empty_cache()
         return status

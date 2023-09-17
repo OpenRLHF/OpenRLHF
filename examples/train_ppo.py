@@ -155,6 +155,10 @@ def train(args):
         is_rlhf=True,
     )
 
+    if args.gradient_checkpointing:
+        actor.gradient_checkpointing_enable()
+        critic.gradient_checkpointing_enable()
+
     if ema_model:
         ema_model.is_ema = True
         ema_model = strategy.prepare(ema_model, is_rlhf=True)
