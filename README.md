@@ -52,6 +52,7 @@
 
 ## Latest News
 
+- 2023/9/20: Support [Ray-based RLHF](./examples/scripts/train_ppo_llama_ray.sh)
 - 2023/9/13: Upload [DPO/PPO checkpoint](https://huggingface.co/chuyi777/openllama2_checkpoint)
 - 2023/9/9: Add [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh)
 - 2023/9/7: Add pre-commit
@@ -77,8 +78,7 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 - [✔️] Support conda env.
 - [✔️] FlashAttention2.
 - [✔️] Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh).
-- [WIP] Distributed RLHF based on HTTP server (for > 30B models).
-- [WIP] Distributed RLHF based on Ray (for > 30B models).
+- [✔️] Distributed RLHF based on Ray (for 30B models).
 - [WIP] Rejection Sampling.
 - [WIP] Multiple Reward models.
 - [WIP] Support QLora.
@@ -86,7 +86,6 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 - [WIP] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
 - [WIP] Train a [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2) RLHF model.
 - [TODO] Support Context Distillation.
-- [TODO] Large-scale model (> 70B) support with ZeRO++ and TRT-LLM inference.
 
 
 ## Running LLaMA2 Example
