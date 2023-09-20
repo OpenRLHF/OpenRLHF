@@ -2,9 +2,9 @@ import argparse
 from collections import OrderedDict
 
 import torch
-from utils import get_strategy, get_tokenizer
 
 from openllama2.models import Actor, RewardModel
+from openllama2.utils import blending_datasets, get_strategy, get_tokenizer
 
 # from openllama2.models.llama_flash_attn_monkey_patch import (
 #     replace_llama_attn_with_flash_attn,
@@ -15,6 +15,7 @@ from openllama2.models import Actor, RewardModel
 def generate(args):
     # configure strategy
     strategy = get_strategy(args)
+    strategy.setup_distributed()
 
     # configure model
     from_config = bool(args.load_model)

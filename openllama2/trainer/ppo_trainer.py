@@ -2,6 +2,7 @@ import math
 from abc import ABC
 from typing import Any, Callable, Dict, List, Optional, Union
 
+import ray
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -12,7 +13,14 @@ from tqdm import tqdm
 from openllama2.models import Actor, Critic, GPTLMLoss, PolicyLoss, ValueLoss
 from openllama2.models.utils import masked_mean
 
-from .ppo_utils import AdaptiveKLController, Experience, FixedKLController, NaiveExperienceMaker, NaiveReplayBuffer
+from .ppo_utils import (
+    AdaptiveKLController,
+    Experience,
+    FixedKLController,
+    NaiveExperienceMaker,
+    NaiveReplayBuffer,
+    RemoteExperienceMaker,
+)
 
 
 class PPOTrainer(ABC):
@@ -71,6 +79,7 @@ class PPOTrainer(ABC):
         tokenizer: Optional[Callable[[Any], dict]] = None,
         prompt_max_len: int = 128,
         dataloader_pin_memory: bool = True,
+        critic_train_remote: bool = False,
         **generate_kwargs,
     ) -> None:
         super().__init__()
@@ -87,6 +96,7 @@ class PPOTrainer(ABC):
         self.prompt_max_len = prompt_max_len
         self.ema_beta = ema_beta
         self.gradient_checkpointing = gradient_checkpointing
+        self.critic_train_remote = critic_train_remote
 
         self.actor = actor
         self.critic = critic
@@ -105,12 +115,16 @@ class PPOTrainer(ABC):
         else:
             self.kl_ctl = FixedKLController(init_kl_coef)
 
-        self.experience_maker = NaiveExperienceMaker(actor, critic, reward_model, initial_model, self.kl_ctl, strategy)
+        # if reference/reward/critic models are ray actor handle, we should use RemoteExperienceMaker.
+        if not isinstance(critic, ray.actor.ActorHandle):
+            self.experience_maker = NaiveExperienceMaker(
+                actor, critic, reward_model, initial_model, self.kl_ctl, strategy
+            )
+        else:
+            self.experience_maker = RemoteExperienceMaker(
+                actor, critic, reward_model, initial_model, self.kl_ctl, strategy
+            )
         self.replay_buffer = NaiveReplayBuffer(micro_train_batch_size, buffer_limit, buffer_cpu_offload)
-
-        if self.gradient_checkpointing:
-            self.actor.gradient_checkpointing_enable()
-            self.critic.gradient_checkpointing_enable()
 
         self._wandb = None
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():
@@ -176,6 +190,7 @@ class PPOTrainer(ABC):
                     self.replay_buffer.normalize("advantages", self.strategy)
                     status = self.ppo_train()
                     self.replay_buffer.clear()
+                    torch.cuda.empty_cache()
                     self.kl_ctl.update(status["kl"], rollout_batch_size)
 
                     self.strategy.print(status)
@@ -222,14 +237,16 @@ class PPOTrainer(ABC):
                 status_list.append(status)
                 short_status = {
                     "pg": status["policy_loss"],
-                    "cri": status["critic_loss"],
-                    "vals": status["values"],
                     "rm": status["reward"],
                     "ret": status["return"],
                     "glen": status["response_length"],
                     "tlen": status["total_length"],
                     "kl": status["kl"],
                 }
+                if "critic_loss" in status:
+                    short_status["cri"] = status["critic_loss"]
+                    short_status["vals"] = status["values"]
+
                 if "ptx_loss" in status:
                     short_status["ptx"] = status["ptx_loss"]
                 pbar.set_postfix(short_status)
@@ -244,8 +261,12 @@ class PPOTrainer(ABC):
         return status_mean
 
     def training_step(self, experience: Experience) -> Dict[str, float]:
+        status = self.training_step_actor(experience)
+        status.update(self.training_step_critic(experience))
+        return status
+
+    def training_step_actor(self, experience: Experience) -> Dict[str, float]:
         self.actor.train()
-        self.critic.train()
 
         num_actions = experience.action_mask.size(1)
         # actor loss
@@ -277,6 +298,24 @@ class PPOTrainer(ABC):
         if self.ema_model:
             self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cpu")
 
+        # status
+        status = {
+            "policy_loss": actor_loss.item(),
+        }
+        if self.pretrain_dataloader is not None:
+            status["ptx_loss"] = ptx_loss.item()
+        for k, v in experience.info.items():
+            if k == "kl":
+                status[k] = (
+                    (v * experience.info["response_length"]).sum() / experience.info["response_length"].sum()
+                ).item()
+            else:
+                status[k] = v.mean().item()
+        return status
+
+    def training_step_critic(self, experience: Experience) -> Dict[str, float]:
+        self.critic.train()
+
         # critic loss
         values = self.critic(
             experience.sequences,
@@ -295,17 +334,7 @@ class PPOTrainer(ABC):
 
         # status
         status = {
-            "policy_loss": actor_loss.item(),
             "critic_loss": critic_loss.item(),
             "values": masked_mean(values, experience.action_mask, dim=(0, 1)).item(),
         }
-        if self.pretrain_dataloader is not None:
-            status["ptx_loss"] = ptx_loss.item()
-        for k, v in experience.info.items():
-            if k == "kl":
-                status[k] = (
-                    (v * experience.info["response_length"]).sum() / experience.info["response_length"].sum()
-                ).item()
-            else:
-                status[k] = v.mean().item()
         return status
