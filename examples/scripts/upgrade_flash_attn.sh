@@ -1,1 +1,0 @@
-pip install --user https://github.com/Dao-AILab/flash-attention/releases/download/v2.2.0/flash_attn-2.2.0+cu122torch2.1cxx11abiTRUE-cp310-cp310-linux_x86_64.whl
