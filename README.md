@@ -136,22 +136,26 @@ cd /openllama2/examples/scripts
 * PPO training with Ray
 
 ```shell
-cd examples/scripts
-
 # launch nvidia container
 ./docker_run.sh
 
+# cd in container
+cd /openllama2/examples/scripts
+
+# build OpenLLaMA2 (i.e, pip install)
+./build_openllama2.sh
+
 # huggingface login 
+export PATH=$HOME/.local/bin/:$PATH
 ~/.local/bin/huggingface-cli login
 
 # launch ray in container
-export PATH=$HOME/.local/bin/:$PATH
 nohup ray start --head --node-ip-address 0.0.0.0 --num-cpus 128 --num-gpus 8 --block &> ray.log &
 
-# if you want to launch ray on multiple nodes, use
+# if you want to launch ray on more nodes, use
 # ray start --address {MASTER-NODE-ADDRESS}:6379 --num-cpus 128 --num-gpus 8 --block
 
-# train ray PPO model, requires 8 gpus in default
+# train ray PPO model, requires 8 gpus in default config
 ./train_ppo_llama_ray.sh
 ```
 
