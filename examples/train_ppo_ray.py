@@ -52,9 +52,7 @@ def train(args):
     )
 
     # train actor and critic mdoel
-    ref_model_0 = ref_model._actor_handlers[0]
-    reward_model_0 = reward_model._actor_handlers[0]
-    refs = actor_model.async_fit_actor_model(critic_model, ref_model_0, reward_model_0)
+    refs = actor_model.async_fit_actor_model(critic_model, ref_model, reward_model)
     ray.get(refs)
 
     # save model

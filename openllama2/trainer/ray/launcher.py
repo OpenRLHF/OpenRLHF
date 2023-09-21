@@ -183,15 +183,15 @@ class PPORayActorGroup:
     def async_fit_actor_model(
         self,
         critic_model_group: "PPORayActorGroup",
-        initial_model: ray.actor.ActorHandle,
-        reward_model: ray.actor.ActorHandle,
+        initial_model: "PPORayActorGroup",
+        reward_model: "PPORayActorGroup",
     ):
         critic_actors = critic_model_group._actor_handlers
         return [
             actor.fit.remote(
                 critic_actors[i % len(critic_actors)],
-                reward_model,
-                initial_model,
+                reward_model[i % len(reward_model)],
+                initial_model[i % len(initial_model)],
                 critic_train_remote=(i < len(critic_actors)),
             )
             for i, actor in enumerate(self._actor_handlers)
