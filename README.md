@@ -14,7 +14,7 @@
   </a>
 
 <p align="center">
-    <h3>A High-performance LLaMA2 RLHF framework!</h3>
+    <h3>A Ray-based High-performance LLaMA2 RLHF framework!</h3>
       <a href="https://github.com/openllmai/OpenLLaMA2/graphs/contributors">
         <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/openllmai/OpenLLaMA2" />
       </a>
@@ -66,7 +66,7 @@
 
 ## OpenLLaMA2 Project
 
-OpenLLaMA2 aims to develop a high-performance LLaMA2 RLHF training framework **(for > 30B models)**.
+OpenLLaMA2 aims to develop a high-performance LLaMA2 RLHF training framework based on Ray and DeepSpeed **(for 30B+ models)**.
 
 The sister project of this project is [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2), which aims to fine-tune a Chinese LLaMA2 based on OpenLLaMA2.
 
@@ -131,6 +131,28 @@ cd /openllama2/examples/scripts
 
 # train PPO model
 ./train_ppo_llama.sh
+```
+
+* PPO training with Ray
+
+```shell
+cd examples/scripts
+
+# launch nvidia container
+./docker_run.sh
+
+# huggingface login 
+~/.local/bin/huggingface-cli login
+
+# launch ray in container
+export PATH=$HOME/.local/bin/:$PATH
+nohup ray start --head --node-ip-address 0.0.0.0 --num-cpus 128 --num-gpus 8 --block &> ray.log &
+
+# if you want to launch ray on multiple nodes, use
+# ray start --address {MASTER-NODE-ADDRESS}:6379 --num-cpus 128 --num-gpus 8 --block
+
+# train ray PPO model, requires 8 gpus in default
+./train_ppo_llama_ray.sh
 ```
 
 * Multi-nodes training on Slurm

@@ -1,17 +1,22 @@
 set -x 
+export PATH=$HOME/.local/bin/:$PATH
 
-ray job submit --address="http://[fdbd:dc03:13:20a::138]:11077" \
-    --runtime-env-json='{"working_dir": ".", "pip": "./requirements.txt"}' \
+ray job submit --address="http://127.0.0.1:8265" \
+    --runtime-env-json='{"working_dir": "/openllama2", "pip": "/openllama2/requirements.txt"}' \
     -- python3 examples/train_ppo_ray.py \
     --ref_num_nodes 1 \
-    --ref_num_gpus_per_node 4 \
+    --ref_num_gpus_per_node 1 \
+    --reward_num_nodes 1 \
+    --reward_num_gpus_per_node 1 \
+    --critic_num_nodes 1 \
+    --critic_num_gpus_per_node 2 \
     --actor_num_nodes 1 \
     --actor_num_gpus_per_node 4 \
     --pretrain meta-llama/Llama-2-7b-hf \
     --critic_pretrain meta-llama/Llama-2-7b-hf \
-    --reward_model_path ./ckpt/7b_llama/rm_model_anthropic_oasst_lmsys_webgpt.pt \
-    --sft_model_path ./ckpt/7b_llama/sft_model_ocra.pt \
-    --save_path ./ckpt/7b_llama \
+    --reward_model_path /openllama2/examples/test_scripts/ckpt/7b_llama/rm_model_anthropic_oasst_lmsys_webgpt.pt \
+    --sft_model_path /openllama2/examples/test_scripts/ckpt/7b_llama/sft_model_ocra.pt \
+    --save_path /openllama2/examples/test_scripts/ckpt/7b_llama \
     --micro_train_batch_size 1 \
     --train_batch_size 128 \
     --micro_rollout_batch_size 1 \

@@ -1,10 +1,10 @@
 datasets
-deepspeed==0.10.0
+deepspeed==0.10.3
 einops
 isort
 loralib
 peft
-ray
+ray[default]
 torch
 torchmetrics
 tqdm

@@ -61,9 +61,11 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ref_num_nodes", type=int, default=1, help="number of nodes for reference and reward model")
+    parser.add_argument("--ref_num_nodes", type=int, default=1, help="number of nodes for reference")
+    parser.add_argument("--ref_num_gpus_per_node", type=int, default=1, help="number of gpus per node for reference")
+    parser.add_argument("--reward_num_nodes", type=int, default=1, help="number of nodes for reward model")
     parser.add_argument(
-        "--ref_num_gpus_per_node", type=int, default=1, help="number of gpus per node for reference and reward model"
+        "--reward_num_gpus_per_node", type=int, default=1, help="number of gpus per node for reward model"
     )
     parser.add_argument("--actor_num_nodes", type=int, default=1, help="number of nodes for actor")
     parser.add_argument("--actor_num_gpus_per_node", type=int, default=1, help="number of gpus per node for actor")

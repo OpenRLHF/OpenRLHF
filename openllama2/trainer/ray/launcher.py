@@ -187,11 +187,13 @@ class PPORayActorGroup:
         reward_model: "PPORayActorGroup",
     ):
         critic_actors = critic_model_group._actor_handlers
+        reward_actors = reward_model._actor_handlers
+        initial_actors = initial_model._actor_handlers
         return [
             actor.fit.remote(
                 critic_actors[i % len(critic_actors)],
-                reward_model[i % len(reward_model)],
-                initial_model[i % len(initial_model)],
+                reward_actors[i % len(reward_actors)],
+                initial_actors[i % len(initial_actors)],
                 critic_train_remote=(i < len(critic_actors)),
             )
             for i, actor in enumerate(self._actor_handlers)
