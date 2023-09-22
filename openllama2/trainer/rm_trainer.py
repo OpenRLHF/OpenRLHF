@@ -100,6 +100,8 @@ class RewardModelTrainer(ABC):
                     self.train_dataloader.sampler.set_epoch(epoch)
 
                 self.model.train()
+                acc_mean = 0
+                loss_mean = 0
                 for chosen_ids, c_mask, reject_ids, r_mask in self.train_dataloader:
                     chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
                     c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
