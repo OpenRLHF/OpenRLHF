@@ -1,3 +1,4 @@
+import time
 from abc import ABC
 from copy import deepcopy
 from dataclasses import dataclass
@@ -196,8 +197,10 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         self.actor.eval()
         device = torch.cuda.current_device()
 
+        start = time.time()
         # generate seq
         sequences, attention_mask, action_mask = self.actor.generate(input_ids, **generate_kwargs)
+        generate_time = time.time() - start
         num_actions = action_mask.size(1)
         sequences_cpu, attention_mask_cpu, action_mask_cpu = (
             sequences.to("cpu"),
@@ -215,10 +218,14 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         r_ref = self.reward_model.forward.remote(sequences_cpu, attention_mask_cpu)
 
         # log probs
+        start = time.time()
         action_log_probs = self.actor(sequences, num_actions, attention_mask)
+        actor_time = time.time() - start
 
         # wait initial/critic/reward model done
+        start = time.time()
         base_action_log_probs, value, r = ray.get([base_action_log_probs_ref, value_ref, r_ref])
+        wait_time = time.time() - start
         base_action_log_probs, value, r = base_action_log_probs.to(device), value.to(device), r.to(device)
 
         reward, kl = compute_reward(
@@ -243,6 +250,12 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             "response_length": action_mask.float().sum(dim=-1),
             "total_length": attention_mask.float().sum(dim=-1),
         }
+
+        if self.strategy.args.perf:
+            batch_size = input_ids.size(0)
+            info["generate_time"] = torch.full((batch_size,), generate_time, device=device)
+            info["actor_time"] = torch.full((batch_size,), actor_time, device=device)
+            info["wait_time"] = torch.full((batch_size,), wait_time, device=device)
 
         experience = Experience(
             sequences,

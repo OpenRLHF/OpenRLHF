@@ -142,5 +142,8 @@ if __name__ == "__main__":
         default="ppo_%s" % datetime.now().strftime("%m%dT%H:%M"),
     )
 
+    # performance tuning
+    parser.add_argument("--perf", action="store_true", default=False)
+
     args = parser.parse_args()
     train(args)
