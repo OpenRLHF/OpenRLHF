@@ -115,11 +115,18 @@ class RewardModelTrainer(ABC):
                     self.strategy.backward(loss, self.model, self.optimizer)
                     self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-                    step_bar.update()
-                    bar_dict = {"train loss": loss.item()}
-                    logs = self.strategy.all_reduce(bar_dict)
-                    step_bar.set_postfix(logs)
                     global_step += 1
+                    acc_mean = acc_mean * 0.9 + 0.1 * (chosen_reward > reject_reward).float().mean().item()
+                    loss_mean = loss_mean * 0.9 + 0.1 * loss.item()
+                    logs = {"train_loss": loss.item()}
+                    logs["chosen_reward"] = chosen_reward.mean().item()
+                    logs["reject_reward"] = reject_reward.mean().item()
+                    logs["acc_mean"] = acc_mean
+                    logs["loss_mean"] = loss_mean
+                    logs = self.strategy.all_reduce(logs)
+                    step_bar.set_postfix(logs)
+                    step_bar.update()
+
                     if (
                         self._wandb is not None
                         and self.strategy.is_rank_0()
@@ -176,7 +183,7 @@ class RewardModelTrainer(ABC):
             self.model.std[0] = reward_std
 
             bar_dict = {
-                "eval loss": loss_mean,
+                "eval_loss": loss_mean,
                 "acc_mean": acc_mean,
                 "reward_mean": reward_mean.item(),
                 "reward_std": reward_std.item(),

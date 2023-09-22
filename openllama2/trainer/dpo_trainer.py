@@ -183,7 +183,7 @@ class DPOTrainer(ABC):
             loss_mean = loss_sum / self.eval_dataloader.__len__()
 
             logs = {
-                "eval loss": loss_mean,
+                "eval_loss": loss_mean,
                 "acc_mean": acc_mean,
             }
             logs = self.strategy.all_reduce(logs)
