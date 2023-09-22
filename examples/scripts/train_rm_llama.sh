@@ -14,10 +14,10 @@ read -r -d '' training_commands <<EOF
      --dataset Anthropic/hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward,lmsys/chatbot_arena_conversations,openai/webgpt_comparisons \
      --dataset_probs 0.72,0.08,0.12,0.08 \
      --flash_attn \
+     --gradient_checkpointing \
      --load_model ./ckpt/7b_llama/sft_model_ocra.pt
 EOF
      # --wandb [WANDB_TOKENS]
-     # --gradient_checkpointing [BUG] https://github.com/microsoft/DeepSpeedExamples/issues/458
 
 
 if [[ ${1} != "slurm" ]]; then

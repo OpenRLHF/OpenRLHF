@@ -34,8 +34,8 @@ class RewardModelTrainer(ABC):
         train_dataloader,
         eval_dataloader,
         scheduler,
+        tokenizer,
         max_norm=0.5,
-        batch_size: int = 1,
         max_epochs: int = 2,
         only_evaluate=False,
         loss="sigmoid",
@@ -52,6 +52,7 @@ class RewardModelTrainer(ABC):
         self.scheduler = scheduler
         self.optimizer = optim
         self.gradient_checkpointing = gradient_checkpointing
+        self.tokenizer = tokenizer
 
         if loss == "sigmoid":
             self.loss_fn = PairWiseLoss()
@@ -105,8 +106,10 @@ class RewardModelTrainer(ABC):
                     reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
                     r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
 
-                    chosen_reward = self.model(chosen_ids, attention_mask=c_mask)
-                    reject_reward = self.model(reject_ids, attention_mask=r_mask)
+                    chosen_reward, reject_reward = self.concatenated_forward(
+                        self.model, chosen_ids, c_mask, reject_ids, r_mask
+                    )
+
                     loss = self.loss_fn(chosen_reward, reject_reward)
 
                     self.strategy.backward(loss, self.model, self.optimizer)
@@ -149,8 +152,9 @@ class RewardModelTrainer(ABC):
                 reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
                 r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
 
-                chosen_reward = self.model(chosen_ids, attention_mask=c_mask)
-                reject_reward = self.model(reject_ids, attention_mask=r_mask)
+                chosen_reward, reject_reward = self.concatenated_forward(
+                    self.model, chosen_ids, c_mask, reject_ids, r_mask
+                )
                 loss = self.loss_fn(chosen_reward, reject_reward)
 
                 rewards += [chosen_reward.flatten(), reject_reward.flatten()]
@@ -187,3 +191,47 @@ class RewardModelTrainer(ABC):
             if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {"eval/%s" % k: v for k, v in {**logs, "epoch": epoch_in_training}.items()}
                 self._wandb.log(logs)
+
+    def concatenated_forward(self, model, chosen_ids, c_mask, reject_ids, r_mask):
+        """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
+
+        We do this to avoid doing two forward passes, because it's faster for FSDP.
+        """
+        input_ids, att_masks = self.concatenated_inputs(chosen_ids, c_mask, reject_ids, r_mask)
+        all_values = model(input_ids, attention_mask=att_masks)
+        chosen_rewards = all_values[: chosen_ids.shape[0]]
+        rejected_rewards = all_values[chosen_ids.shape[0] :]
+        return chosen_rewards, rejected_rewards
+
+    def concatenated_inputs(self, chosen_ids, c_mask, reject_ids, r_mask):
+        """Concatenate the chosen and rejected inputs into a single tensor.
+
+        Args:
+            batch: A batch of data. Must contain the keys 'chosen_input_ids' and 'rejected_input_ids', which are tensors of shape (batch_size, sequence_length).
+
+        Returns:
+            A dictionary containing the concatenated inputs under the key 'concatenated_input_ids'.
+        """
+
+        def pad_to_length(tensor, length, pad_value, dim=-1):
+            if tensor.size(dim) >= length:
+                return tensor
+            else:
+                pad_size = list(tensor.shape)
+                pad_size[dim] = length - tensor.size(dim)
+                # left pad
+                return torch.cat(
+                    [pad_value * torch.ones(*pad_size, dtype=tensor.dtype, device=tensor.device), tensor], dim=dim
+                )
+
+        max_length = max(chosen_ids.shape[1], reject_ids.shape[1])
+        inputs_ids = torch.cat(
+            (
+                pad_to_length(chosen_ids, max_length, self.tokenizer.pad_token_id),
+                pad_to_length(reject_ids, max_length, self.tokenizer.pad_token_id),
+            ),
+            dim=0,
+        )
+        max_length = max(c_mask.shape[1], r_mask.shape[1])
+        att_masks = torch.cat((pad_to_length(c_mask, max_length, 0), pad_to_length(r_mask, max_length, 0)), dim=0)
+        return inputs_ids, att_masks
