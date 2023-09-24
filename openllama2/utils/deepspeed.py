@@ -158,8 +158,8 @@ class DeepspeedStrategy(ABC):
         is_actor = isinstance(model, Actor)
         stage = self.stage
         # ZeRO3-based GPT generation is very slow in RLHF
-        if self.is_rlhf and is_actor and stage == 3 and self.inference_tp_size <= 1:
-            stage = 2
+        # if self.is_rlhf and is_actor and stage == 3 and self.inference_tp_size <= 1:
+        #     stage = 2
 
         # DS Config
         ds_config = get_train_ds_config(
@@ -270,7 +270,7 @@ class DeepspeedStrategy(ABC):
         if isinstance(model_to_save, PeftModel):
             model_to_save = model_to_save.merge_and_unload()
 
-        if self.stage != 3 or self.is_rlhf:
+        if self.stage != 3:
             if self.is_rank_0():
                 save_dict = model_to_save.state_dict()
                 torch.save(save_dict, path)
