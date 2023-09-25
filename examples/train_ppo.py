@@ -203,7 +203,6 @@ def train(args):
         max_new_tokens=args.generate_max_len,
         max_length=args.max_len,
         temperature=1,
-        top_k=args.top_k,
         top_p=args.top_p,
         pad_token_id=tokenizer.pad_token_id,
         eos_token_id=tokenizer.eos_token_id,
@@ -272,7 +271,6 @@ if __name__ == "__main__":
     parser.add_argument("--train_batch_size", type=int, default=128)
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
     parser.add_argument("--normalize_reward", action="store_true", default=False)
-    parser.add_argument("--top_k", type=int, default=None)
     parser.add_argument("--top_p", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--lora_rank", type=int, default=0, help="low-rank adaptation matrices rank")

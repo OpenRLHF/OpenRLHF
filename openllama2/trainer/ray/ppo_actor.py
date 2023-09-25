@@ -180,7 +180,6 @@ class ActorModelRayActor(BasePPORole):
             max_new_tokens=args.generate_max_len,
             max_length=args.max_len,
             temperature=1,
-            top_k=args.top_k,
             top_p=args.top_p,
             pad_token_id=self.tokenizer.pad_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
