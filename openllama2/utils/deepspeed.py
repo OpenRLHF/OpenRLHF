@@ -113,6 +113,7 @@ class DeepspeedStrategy(ABC):
         pin_memory: bool = False,
         shuffle=True,
         collate_fn=None,
+        drop_last=True,
     ):
         # DDP only mode, replay buffers on each rank are different.
         sampler = DistributedSampler(
@@ -121,13 +122,13 @@ class DeepspeedStrategy(ABC):
             rank=dist.get_rank(),
             shuffle=shuffle,
             seed=self.seed,
-            drop_last=True,
+            drop_last=drop_last,
         )
         return DataLoader(
             replay_buffer,
             batch_size=batch_size,
             sampler=sampler,
-            drop_last=True,
+            drop_last=drop_last,
             collate_fn=collate_fn,
             pin_memory=pin_memory,
         )

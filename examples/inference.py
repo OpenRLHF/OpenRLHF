@@ -39,7 +39,7 @@ def batch_generate(model, tokenizer, strategy):
         return_eval=False,
     )
     prompts_dataset = PromptDataset(prompts_data, strategy)
-    prompts_dataloader = strategy.setup_dataloader(prompts_dataset, args.batch_size, True, False)
+    prompts_dataloader = strategy.setup_dataloader(prompts_dataset, args.batch_size, True, False, drop_last=False)
     pbar = tqdm(
         prompts_dataloader,
         disable=not strategy.is_rank_0(),
