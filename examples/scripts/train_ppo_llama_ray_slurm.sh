@@ -29,15 +29,29 @@ nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST") # Getting the node names
 nodes_array=($nodes)
 node_1=${nodes_array[0]}
 port=6379
-ip_head=$node_1:$port
+ip=$(srun --nodes=1 --ntasks=1 -w "$node_1" hostname --ip-address) # making redis-address
+
+# if we detect a space character in the head node IP, we'll
+# convert it to an ipv4 address. This step is optional.
+if [[ "$ip" == *" "* ]]; then
+  IFS=' ' read -ra ADDR <<< "$ip"
+  if [[ ${#ADDR[0]} -gt 16 ]]; then
+    ip=${ADDR[1]}
+  else
+    ip=${ADDR[0]}
+  fi
+  echo "IPV6 address detected. We split the IPV4 address as $ip" &>> ${JOBLOG}
+fi
+
+ip_head=$ip:$port
 export ip_head
 echo "IP Head: $ip_head"  &>> ${JOBLOG}
 
 echo "STARTING HEAD at $node_1"  &>> ${JOBLOG}
 srun --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" \
-  sudo pip uninstall xgboost -y; \
-  pip install ray[default] -y; \
-  ray start --head --node-ip-address="0.0.0.0" --port=$port --redis-password="$redis_password" --block &>> ${JOBLOG} &
+  pip uninstall xgboost -y; \
+  pip install ray[default]; \
+  ray start --head --node-ip-address="$ip" --port=$port --redis-password="$redis_password" --block &>> ${JOBLOG} &
 sleep 10s
 
 worker_num=$((SLURM_JOB_NUM_NODES - 1)) #number of nodes other than the head node
@@ -45,8 +59,8 @@ for ((i = 1; i <= worker_num; i++)); do
   node_i=${nodes_array[$i]}
   echo "STARTING WORKER $i at $node_i"  &>> ${JOBLOG}
   srun --nodes=1 --ntasks=1 -w "$node_i" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" \
-    sudo pip uninstall xgboost -y; \
-    pip install ray[default] -y; \
+    pip uninstall xgboost -y; \
+    pip install ray[default]; \
     ray start --address "$ip_head" --redis-password="$redis_password" --block &>> ${JOBLOG} &
 done
 
