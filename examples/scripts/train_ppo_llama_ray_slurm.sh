@@ -54,8 +54,8 @@ srun --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --contain
   ray start --head --node-ip-address="$ip" --port=$port --redis-password="$redis_password" --block &>> ${JOBLOG} &
 sleep 10s
 
-worker_num=$((SLURM_JOB_NUM_NODES - 1)) #number of nodes other than the head node
-for ((i = 1; i <= worker_num; i++)); do
+worker_num=$((SLURM_JOB_NUM_NODES)) #number of nodes other than the head node
+for ((i = 1; i < worker_num; i++)); do
   node_i=${nodes_array[$i]}
   echo "STARTING WORKER $i at $node_i"  &>> ${JOBLOG}
   srun --nodes=1 --ntasks=1 -w "$node_i" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" \
@@ -64,13 +64,13 @@ for ((i = 1; i <= worker_num; i++)); do
     ray start --address "$ip_head" --redis-password="$redis_password" --block &>> ${JOBLOG} &
 done
 
-sleep 60s
+sleep 30s
 
 # ===== submit ray job =====
 # Job start
 
-pip install ray[default] &>> ${JOBLOG}
-
+srun --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" \
+pip install ray[default] \
 ray job submit --address="http://$ip:8265" \
     --runtime-env-json='{"working_dir": "/openllama2", "pip": "/openllama2/requirements.txt"}' \
     -- python3 examples/train_ppo_ray.py \
