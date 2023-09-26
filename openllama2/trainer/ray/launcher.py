@@ -5,7 +5,7 @@ from typing import Optional, Type
 
 import ray
 import torch
-from ray.util.placement_group import placement_group
+from ray.util.placement_group import PlacementGroup, placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from openllama2.models import Actor, Critic, RewardModel
@@ -127,19 +127,34 @@ class PPORayActorGroup:
     """
     A group of ray actors
     Functions start with 'async' should return list of object refs
+
+    Args:
+        num_nodes (int): Number of nodes for this actor group.
+        num_gpus_per_node (int): Number of gpus for this actor group.
+        ray_actor_type (Type[BasePPORole]): PPO model type that this actor group serve on.
+        pg (PlacementGroup, optional): Placement group to schedule actor on.
+            If none, create new placement group automatically. Defaults to None.
+        num_gpus_per_actor (float, optional): Number of gpus allocated for each actor.
+            If < 1.0, multiple models can share same gpu. Defaults to 1.
     """
 
-    def __init__(self, num_nodes, num_gpus_per_node, ray_actor_type: Type[BasePPORole]) -> None:
+    def __init__(
+        self,
+        num_nodes,
+        num_gpus_per_node,
+        ray_actor_type: Type[BasePPORole],
+        pg: PlacementGroup = None,
+        num_gpus_per_actor=1,
+    ) -> None:
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
         self.ray_actor_type = ray_actor_type
-        self._initiate_actors()
+        self._initiate_actors(pg, num_gpus_per_actor)
 
-    def _initiate_actors(self):
+    def _initiate_actors(self, pg, num_gpus_per_actor):
         world_size = self._num_nodes * self._num_gpus_per_node
         # Use placement group to lock resources for models of same type
-        pg = None
-        if self._num_gpus_per_node > 1:
+        if self._num_gpus_per_node > 1 and pg is None:
             bundles = [
                 {"GPU": self._num_gpus_per_node, "CPU": self._num_gpus_per_node} for _ in range(self._num_nodes)
             ]
@@ -147,12 +162,16 @@ class PPORayActorGroup:
             ray.get(pg.ready())
         if pg:
             master_actor = self.ray_actor_type.options(
+                num_cpus=num_gpus_per_actor,
+                num_gpus=num_gpus_per_actor,
                 scheduling_strategy=PlacementGroupSchedulingStrategy(
                     placement_group=pg, placement_group_bundle_index=0
-                )
+                ),
             ).remote(world_size, 0, 0, None, None)
         else:
-            master_actor = self.ray_actor_type.options(num_gpus=1).remote(world_size, 0, 0, None, None)
+            master_actor = self.ray_actor_type.options(
+                num_cpus=num_gpus_per_actor, num_gpus=num_gpus_per_actor
+            ).remote(world_size, 0, 0, None, None)
         self._actor_handlers = [master_actor]
 
         # Create worker actors
@@ -162,15 +181,17 @@ class PPORayActorGroup:
                 local_rank = rank % self._num_gpus_per_node
                 if pg:
                     worker_actor = self.ray_actor_type.options(
+                        num_cpus=num_gpus_per_actor,
+                        num_gpus=num_gpus_per_actor,
                         scheduling_strategy=PlacementGroupSchedulingStrategy(
                             placement_group=pg,
                             placement_group_bundle_index=rank // self._num_gpus_per_node,
-                        )
+                        ),
                     ).remote(world_size, rank, local_rank, master_addr, master_port)
                 else:
-                    worker_actor = self.ray_actor_type.options(num_gpus=1).remote(
-                        world_size, rank, local_rank, master_addr, master_port
-                    )
+                    worker_actor = self.ray_actor_type.options(
+                        num_cpus=num_gpus_per_actor, num_gpus=num_gpus_per_actor
+                    ).remote(world_size, rank, local_rank, master_addr, master_port)
                 self._actor_handlers.append(worker_actor)
 
     def async_init_model_from_pretrained(
@@ -178,17 +199,32 @@ class PPORayActorGroup:
         *args,
         **kwargs,
     ):
+        """Init model from pretrained checkpoint.
+
+        Returns:
+            List: list of remote object refs.
+        """
         return [actor.init_model_from_pretrained.remote(*args, **kwargs) for actor in self._actor_handlers]
 
     def async_fit_actor_model(
         self,
         critic_model_group: "PPORayActorGroup",
-        initial_model: "PPORayActorGroup",
-        reward_model: "PPORayActorGroup",
+        initial_model_group: "PPORayActorGroup",
+        reward_model_group: "PPORayActorGroup",
     ):
+        """Train actor model.
+
+        Args:
+            critic_model_group (PPORayActorGroup): critic model group.
+            initial_model (PPORayActorGroup): reference model group.
+            reward_model (PPORayActorGroup): reward model group.
+
+        Returns:
+            List: list of remote object refs.
+        """
         critic_actors = critic_model_group._actor_handlers
-        reward_actors = reward_model._actor_handlers
-        initial_actors = initial_model._actor_handlers
+        reward_actors = reward_model_group._actor_handlers
+        initial_actors = initial_model_group._actor_handlers
         return [
             actor.fit.remote(
                 critic_actors[i % len(critic_actors)],
@@ -200,4 +236,9 @@ class PPORayActorGroup:
         ]
 
     def async_save_actor_model(self):
+        """Save actor model on rank 0.
+
+        Returns:
+            List: list of remote object refs.
+        """
         return [actor.save_model.remote() for actor in self._actor_handlers]
