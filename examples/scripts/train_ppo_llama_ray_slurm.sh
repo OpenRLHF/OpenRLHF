@@ -12,6 +12,7 @@
 #SBATCH --overcommit               # needed for pytorch
 #SBATCH --output=out.log
 
+
 # project settings
 PROJECT_PATH=$(cd ../../; realpath .)
 IMAGE_NAME="nvcr.io/nvidia/pytorch:23.08-py3"
@@ -22,57 +23,42 @@ mkdir logs
 echo "$(date '+%Y-%m-%d %H:%M:%S') Job ${SLURM_JOB_ID} started ..." &>> ${JOBLOG}
 
 # launch ray daemon
-redis_password=$(uuidgen)
-export redis_password
-
 nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST") # Getting the node names
-nodes_array=($nodes)
+nodes_array=( $nodes )
 node_1=${nodes_array[0]}
+ip=$node_1
+
 port=6379
-ip=$(srun --nodes=1 --ntasks=1 -w "$node_1" hostname --ip-address) # making redis-address
-
-# if we detect a space character in the head node IP, we'll
-# convert it to an ipv4 address. This step is optional.
-if [[ "$ip" == *" "* ]]; then
-  IFS=' ' read -ra ADDR <<< "$ip"
-  if [[ ${#ADDR[0]} -gt 16 ]]; then
-    ip=${ADDR[1]}
-  else
-    ip=${ADDR[0]}
-  fi
-  echo "IPV6 address detected. We split the IPV4 address as $ip" &>> ${JOBLOG}
-fi
-
 ip_head=$ip:$port
 export ip_head
 echo "IP Head: $ip_head"  &>> ${JOBLOG}
 
 echo "STARTING HEAD at $node_1"  &>> ${JOBLOG}
-srun --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" \
-  pip uninstall xgboost -y; \
-  pip install ray[default]; \
-  ray start --head --node-ip-address="$ip" --port=$port --redis-password="$redis_password" --block &>> ${JOBLOG} &
+srun --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" bash -c \
+  "pip uninstall xgboost -y \
+  && pip install ray[default] \
+  && /root/.local/bin/ray start --head --node-ip-address=0.0.0.0 --port=$port --block" &>> ${JOBLOG} &
 sleep 10s
 
 worker_num=$((SLURM_JOB_NUM_NODES)) #number of nodes other than the head node
 for ((i = 1; i < worker_num; i++)); do
   node_i=${nodes_array[$i]}
   echo "STARTING WORKER $i at $node_i"  &>> ${JOBLOG}
-  srun --nodes=1 --ntasks=1 -w "$node_i" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" \
-    pip uninstall xgboost -y; \
-    pip install ray[default]; \
-    ray start --address "$ip_head" --redis-password="$redis_password" --block &>> ${JOBLOG} &
+  srun --nodes=1 --ntasks=1 -w "$node_i" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" bash -c \
+    "pip uninstall xgboost -y \
+    && pip install ray[default] \
+    && /root/.local/bin/ray start --address "$ip_head" --block" &>> ${JOBLOG} &
+  sleep 1s;
 done
 
-sleep 30s
+sleep 10s
 
 # ===== submit ray job =====
 # Job start
-
-srun --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" \
-pip install ray[default] \
-ray job submit --address="http://$ip:8265" \
-    --runtime-env-json='{"working_dir": "/openllama2", "pip": "/openllama2/requirements.txt"}' \
+srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" bash -c \
+"pip install ray[default] \
+&& /root/.local/bin/ray job submit --address=http://$ip:8265 \
+    --runtime-env-json='{working_dir: /openllama2, pip: /openllama2/requirements.txt}' \
     -- python3 examples/train_ppo_ray.py \
     --ref_num_nodes 1 \
     --ref_num_gpus_per_node 2 \
@@ -106,8 +92,9 @@ ray job submit --address="http://$ip:8265" \
     --normalize_reward \
     --actor_init_on_gpu \
     --gradient_checkpointing \
-    --use_wandb add91d3d4ff79fc8b80686bba5c1e8192a199586 &>> ${JOBLOG}
+    --use_wandb add91d3d4ff79fc8b80686bba5c1e8192a199586" &>> ${JOBLOG}
 
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') Job ${SLURM_JOB_ID} stopped ..." &>> ${JOBLOG}
+
 
