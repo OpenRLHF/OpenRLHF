@@ -16,7 +16,7 @@
 # project settings
 PROJECT_PATH=$(cd ../../; realpath .)
 IMAGE_NAME="nvcr.io/nvidia/pytorch:23.08-py3"
-MOUNT="$PROJECT_PATH:/root/openllama2,$HOME/.cache:/root/.cache,/dev/null:/root/.bashrc"
+MOUNT="$PROJECT_PATH:/openllama2,$HOME/.cache:/root/.cache,/dev/null:/root/.bashrc"
 
 JOBLOG="$(realpath .)/logs/train_ppo_llama_ray-$SLURM_JOB_ID.log"
 mkdir logs
@@ -37,7 +37,7 @@ echo "STARTING HEAD at $node_1"  &>> ${JOBLOG}
 srun --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" bash -c \
   "pip uninstall xgboost -y \
   && pip install ray[default] \
-  && /root/.local/bin/ray start --head --node-ip-address=0.0.0.0 --port=$port --block" &>> ${JOBLOG} &
+  && /root/.local/bin/ray start --head --node-ip-address=$ip --port=$port --block" &>> ${JOBLOG} &
 sleep 10s
 
 worker_num=$((SLURM_JOB_NUM_NODES)) #number of nodes other than the head node
@@ -51,14 +51,14 @@ for ((i = 1; i < worker_num; i++)); do
   sleep 1s;
 done
 
-sleep 10s
+sleep 30s
 
 # ===== submit ray job =====
 # Job start
 srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" bash -c \
-"pip install ray[default] \
-&& /root/.local/bin/ray job submit --address=http://$ip:8265 \
-    --runtime-env-json='{working_dir: /openllama2, pip: /openllama2/requirements.txt}' \
+  "pip install ray[default] \
+  && /root/.local/bin/ray job submit --address=http://localhost:8265 \
+    --runtime-env-json='{\"working_dir\": \"/openllama2\", \"pip\": \"/openllama2/requirements.txt\"}' \
     -- python3 examples/train_ppo_ray.py \
     --ref_num_nodes 1 \
     --ref_num_gpus_per_node 2 \
