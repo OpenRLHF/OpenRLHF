@@ -195,9 +195,10 @@ pip install packaging ninja
 pip install torch --index-url https://download.pytorch.org/whl/cu118
 # check ninjia
 ninja --version
-echo $? 
-# install flash-attn: may take some time
-pip install flash-attn=2.1.1 --no-build-isolation
+echo $? # output: 0
+# install flash-attn: may take some time.
+# For network error: you can download sepecified version from https://github.com/Dao-AILab/flash-attention/releases.
+pip install flash-attn==2.1.1 --no-build-isolation
 ./build_openllama2.sh
 # enjoy it!
 ```
