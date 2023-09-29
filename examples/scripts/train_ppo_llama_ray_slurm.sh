@@ -75,7 +75,7 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --save_path /openllama2/examples/test_scripts/ckpt/13b_llama \
     --micro_train_batch_size 1 \
     --train_batch_size 128 \
-    --micro_rollout_batch_size 8 \
+    --micro_rollout_batch_size 4 \
     --rollout_batch_size 1024 \
     --max_epochs 1 \
     --prompt_max_len 1024 \
