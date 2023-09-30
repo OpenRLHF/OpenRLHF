@@ -89,6 +89,7 @@ class ReferenceModelRayActor(BasePPORole):
         strategy.print(model)
 
         self.model = self.strategy.prepare(model, is_rlhf=True)
+        self.model.eval()
 
     def forward(
         self,
@@ -115,6 +116,7 @@ class RewardModelRayActor(BasePPORole):
         strategy.print("mean: {}, std {}".format(model.mean, model.std))
 
         self.model = self.strategy.prepare(model, is_rlhf=True)
+        self.model.eval()
 
     def forward(self, sequences: torch.LongTensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         device = torch.cuda.current_device()

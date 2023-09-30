@@ -130,6 +130,7 @@ class CriticModelRayActor(BasePPORole):
     ) -> torch.Tensor:
         """Generates critic values."""
         device = torch.cuda.current_device()
+        self.critic.eval()
         with torch.no_grad():
             value = self.critic(sequences.to(device), action_mask.to(device), attention_mask.to(device))
         return value.to("cpu")
@@ -141,6 +142,7 @@ class CriticModelRayActor(BasePPORole):
     def fit(self):
         """Train critic model with the replay buffer."""
         torch.cuda.empty_cache()
+        self.critic.train()
         status = self.trainer.ppo_train()
         self.trainer.replay_buffer.clear()
         torch.cuda.empty_cache()
