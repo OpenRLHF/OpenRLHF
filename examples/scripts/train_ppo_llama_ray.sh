@@ -17,9 +17,9 @@ ray job submit --address="http://127.0.0.1:8265" \
     --reward_model_path /openllama2/examples/test_scripts/ckpt/7b_llama/rm_model_anthropic_oasst_lmsys_webgpt.pt \
     --sft_model_path /openllama2/examples/test_scripts/ckpt/7b_llama/sft_model_ocra.pt \
     --save_path /openllama2/examples/test_scripts/ckpt/7b_llama \
-    --micro_train_batch_size 1 \
+    --micro_train_batch_size 4 \
     --train_batch_size 128 \
-    --micro_rollout_batch_size 1 \
+    --micro_rollout_batch_size 8 \
     --rollout_batch_size 1024 \
     --max_epochs 1 \
     --prompt_max_len 1024 \

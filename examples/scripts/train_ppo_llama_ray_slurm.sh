@@ -73,9 +73,9 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --reward_model_path /openllama2/examples/test_scripts/ckpt/13b_llama/rm_model.pt \
     --sft_model_path /openllama2/examples/test_scripts/ckpt/13b_llama/sft_model.pt \
     --save_path /openllama2/examples/test_scripts/ckpt/13b_llama \
-    --micro_train_batch_size 1 \
+    --micro_train_batch_size 4 \
     --train_batch_size 128 \
-    --micro_rollout_batch_size 4 \
+    --micro_rollout_batch_size 8 \
     --rollout_batch_size 1024 \
     --max_epochs 1 \
     --prompt_max_len 1024 \
@@ -91,6 +91,7 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --max_samples 80000 \
     --normalize_reward \
     --actor_init_on_gpu \
+    --adam_offload \
     --gradient_checkpointing \
     --use_wandb add91d3d4ff79fc8b80686bba5c1e8192a199586" &>> ${JOBLOG}
 
