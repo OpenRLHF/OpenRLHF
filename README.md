@@ -52,10 +52,13 @@
 
 ## Latest News
 
+- 2023/10/2: 34B codellama model with Ray-based RLHF + 1 DGX A100 test passed!
+  - Adam Offload = True
+  - micro_batch_size = 1
+  - Enable FlashAttention to support 4096 seq length
 - 2023/9/20: Support [Ray-based RLHF](./examples/scripts/train_ppo_llama_ray.sh)
 - 2023/9/13: Upload [DPO/PPO checkpoint](https://huggingface.co/chuyi777/openllama2_checkpoint)
 - 2023/9/9: Add [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh)
-- 2023/9/7: Add pre-commit
 - 2023/9/6: Support FlashAttention2 (--flash_attn)
 - 2023/8/26: Support wandb logs (--wandb)
 - 2023/8/22: Support Ceval
@@ -78,14 +81,13 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 - [✔️] Support conda env.
 - [✔️] FlashAttention2.
 - [✔️] Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh).
-- [✔️] Distributed RLHF based on Ray (for 30B models).
+- [✔️] Distributed RLHF based on Ray (for 34B models).
 - [WIP] Rejection Sampling.
+- [WIP] Decision Transformer Alignment.
 - [WIP] Multiple Reward models.
 - [WIP] Support QLora.
-- [WIP] Better docs and examples
 - [WIP] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
 - [WIP] Train a [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2) RLHF model.
-- [TODO] Support Context Distillation.
 
 
 ## Running LLaMA2 Example

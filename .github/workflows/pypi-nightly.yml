@@ -15,10 +15,10 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
-    - name: Set up Python 3.9
+    - name: Set up Python 3.10
       uses: actions/setup-python@v1
       with:
-        python-version: 3.9
+        python-version: 3.10
 
     - name: days since the commit date
       run: |
@@ -33,8 +33,8 @@ jobs:
       env:
         OPENLLAMA2_BUILD_MODE: nightly
       run: |
-          pip install pytest torch cloudpickle cryptography # TODO(qwang): installing dev requirements.
-          pip install ray==2.7.0
+          pip install pytest torch cloudpickle cryptography deepspeed # TODO(qwang): installing dev requirements.
+          pip install ray[default]==2.7.0
           python setup.py bdist_wheel
     - name: Upload
       if: env.COMMIT_TODAY == 'true'

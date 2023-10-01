@@ -8,5 +8,5 @@ ray[default]
 torch
 torchmetrics
 tqdm
-transformers
+transformers==4.33.3
 wandb

@@ -35,5 +35,4 @@ ray job submit --address="http://127.0.0.1:8265" \
     --max_samples 80000 \
     --normalize_reward \
     --actor_init_on_gpu \
-    --flash_attn \
     --gradient_checkpointing
