@@ -114,9 +114,6 @@ def remove_padding_in_sequences(items):
             item.action_mask,
         )
         right_pad = (1 - act_mask.int()).sum()
-        # - 1 to ignore the pad of eos_token
-        if right_pad > 0:
-            right_pad -= 1
         right_pad = None if right_pad == 0 else -right_pad
 
         # left_pad for seq and att_mask
