@@ -1,20 +1,11 @@
 # OpenLLaMA2
 
-<div style="font-size: 1.5rem;">
-  <a href="./README.md">English</a> |
-  <a href="./README_cn.md">Chinese</a>
-</div>
-
 </br>
 
 <h1 align="center">OpenLLaMA2</h1>
 <div align="center">
-  <a href="[https://github.com/openllmai/OpenLLaMA2 ↗](https://github.com/openllmai/OpenLLaMA2)">
-    <img src="./docs/imgs/openllama2.png" alt="Logo" height="210">
-  </a>
-
 <p align="center">
-    <h3>A Ray-based High-performance LLaMA2 RLHF framework!</h3>
+    <h3>A Ray-based High-performance RLHF framework!</h3>
       <a href="https://github.com/openllmai/OpenLLaMA2/graphs/contributors">
         <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/openllmai/OpenLLaMA2" />
       </a>
@@ -52,26 +43,42 @@
 
 ## Latest News
 
-- 2023/10/2: 34B codellama model with Ray-based RLHF + 1 DGX A100 test passed!
+- 2023/10/2: 34B codellama model with Ray-based RLHF + 1 DGX A100 test passed! Configs:
   - Adam Offload = True
   - micro_batch_size = 1
   - Enable FlashAttention to support 4096 seq length
 - 2023/9/20: Support [Ray-based RLHF](./examples/scripts/train_ppo_llama_ray.sh)
-- 2023/9/13: Upload [DPO/PPO checkpoint](https://huggingface.co/chuyi777/openllama2_checkpoint)
-- 2023/9/9: Add [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh)
+- 2023/9/13: Upload [7B/13B SFT/RM/DPO/PPO checkpoint](https://huggingface.co/chuyi777/openllama2_checkpoint)
+- 2023/9/9: Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh)
 - 2023/9/6: Support FlashAttention2 (--flash_attn)
 - 2023/8/26: Support wandb logs (--wandb)
-- 2023/8/22: Support Ceval
-- 2023/8/20: Add some PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
-- 2023/8/18: **support LLaMA2 7B PPO training on Single A100**, [add pre-trained SFT/RM checkpoints](https://huggingface.co/chuyi777/openllama2_checkpoint)
-- 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed training features
+- 2023/8/20: Upload PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
+- 2023/8/18: Support **LLaMA2 7B PPO fintune on Single A100**
+- 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed test passed
 - 2023/07/30: OpenLLaMA2 project officially launched
 
 ## OpenLLaMA2 Project
 
-OpenLLaMA2 aims to develop a high-performance LLaMA2 RLHF training framework based on Ray and DeepSpeed **(for 30B+ models)**.
+OpenLLaMA2 aims to develop a **High-performance RLHF training framework** based on Ray and DeepSpeed/HuggingFace.
+OpenLlaMA2 is the **simplest** high-performance RLHF library that supports 34B models RLHF training with Single DGXA100.
 
-The sister project of this project is [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2), which aims to fine-tune a Chinese LLaMA2 based on OpenLLaMA2.
+|        | PPO-max & Best Hyperparameters  | Ray (Distributed RL) | 34B full tuning with 1 DGXA100   |
+|  ----  | ----  |  ----  | ----  | 
+| OpenLLaMA2  | ✔ | ✔  | ✔ |
+| DeepSpeedChat  | ✖️ | ✖️  | ✖️ |
+| ColossalAIChat  | ✖️ | ✖️  | ✖️ |
+| TRL  | ✖️ | ✖️  | ✖️ |
+
+
+### Performance
+
+DeepSpeed Config: 4 A100 80G for Actor / 2 for Critic / 1 for Reward / 1 for InitPolicy + ZeRO2 + Adam Offload + Seq length: 2048 
+
+- 7B llama2: 0.105 samples/gpu/secs     (micro_batch_size=16[generate],8[train]; generation_length = 100~300)
+- 13B llama2: 0.04 samples/gpu/secs     (micro_batch_size=8[generate],4[train]; generation_length = 200~400)
+- 34B codellama: 0.007 samples/gpu/secs (micro_batch_size=2[generate],1[train]; generation_length = 300~800)
+
+samples/gpu/secs = Number of PPO Samples / Number of GPUS / Seconds
 
 ### Features
 
@@ -87,7 +94,6 @@ The sister project of this project is [chinese-llama2 ↗](https://github.com/Op
 - [WIP] Multiple Reward models.
 - [WIP] Support QLora.
 - [WIP] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
-- [WIP] Train a [chinese-llama2 ↗](https://github.com/OpenLLMAI/chinese-llama2) RLHF model.
 
 
 ## Running LLaMA2 Example
