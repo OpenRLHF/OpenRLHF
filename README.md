@@ -33,7 +33,7 @@
 - [💥Latest News](#latest-news)
 - [💫OpenLLaMA2](#openllama2-project)
 - [💫Features](#features)
-- [📄Running Example](#running-llama2-example)
+- [📄Running Example](#running-example)
 - [📄Result Display](#inference)
 - [⛏️Pull Request](#pull-request)
 - [💐References & Acknowledgements](#references-&-acknowledgements)
@@ -60,6 +60,7 @@
 ## OpenLLaMA2 Project
 
 OpenLLaMA2 aims to develop a **High-performance RLHF training framework** based on Ray and DeepSpeed/HuggingFace.
+
 OpenLlaMA2 is the **simplest** high-performance RLHF library that supports 34B models RLHF training with Single DGXA100.
 
 |        | PPO-max & Best Hyperparameters  | Ray (Distributed RL) | 34B full tuning with 1 DGXA100   |
@@ -72,11 +73,13 @@ OpenLlaMA2 is the **simplest** high-performance RLHF library that supports 34B m
 
 ### Performance
 
-DeepSpeed Config: 4 A100 80G for Actor / 2 for Critic / 1 for Reward / 1 for InitPolicy + ZeRO2 + Adam Offload + Seq length: 2048 
+DeepSpeed Config: 
 
-- 7B llama2: 0.105 samples/gpu/secs     (micro_batch_size=16[generate],8[train]; generation_length = 100~300)
-- 13B llama2: 0.04 samples/gpu/secs     (micro_batch_size=8[generate],4[train]; generation_length = 200~400)
-- 34B codellama: 0.007 samples/gpu/secs (micro_batch_size=2[generate],1[train]; generation_length = 300~800)
+4 A100 80G for Actor / 2 for Critic / 1 for Reward / 1 for InitPolicy + ZeRO2 + Adam Offload + Seq length: 2048 
+
+- 7B llama2: 0.105 samples/gpu/secs (micro_batch_size = 16[generate],8[train]; generation_length = 100~300)
+- 13B llama2: 0.04 samples/gpu/secs (micro_batch_size = 8[generate],4[train]; generation_length = 200~400)
+- 34B codellama: 0.007 samples/gpu/secs (micro_batch_size = 2[generate],1[train]; generation_length = 300~800)
 
 samples/gpu/secs = Number of PPO Samples / Number of GPUS / Seconds
 
@@ -96,7 +99,7 @@ samples/gpu/secs = Number of PPO Samples / Number of GPUS / Seconds
 - [WIP] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
 
 
-## Running LLaMA2 Example
+## Running Example
 
 * Verified envs
 
@@ -219,7 +222,7 @@ After completing the training, you can evaluate your model by using the `inferen
 ./inference_llama.sh { model_path }
 ```
 
-## Contribution
+## Pull Request
 If you want to contribute code please format the code using the following command,
 
 ```
