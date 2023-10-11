@@ -35,7 +35,6 @@
 - [💫Features](#features)
 - [💫Performance](#performance)
 - [📄Running Example](#running-example)
-- [📄Result Display](#inference)
 - [⛏️Pull Request](#pull-request)
 - [💐References & Acknowledgements](#references-&-acknowledgements)
 - [🌟Sponsor Us](#sponsor-us)
@@ -81,6 +80,9 @@ OpenLlaMA2 is the **Simplest** high-performance RLHF library that supports 34B m
 - [WIP] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
 
 
+Support Matrix
+
+
 |        | PPO-max & Best Hyperparameters  | Ray (Distributed RL) | 34B Full Tuning with 1 DGXA100   | 7B Full Tuning with 1 A100  |
 |  ----  | ----  |  ----  | ----  | ----  | 
 | OpenLLaMA2  | ✔ | ✔  | ✔ | ✔ |
@@ -101,8 +103,6 @@ Ray/DeepSpeed Config:
 samples/gpu/secs = Number of PPO Samples / Number of A100 GPUS / Seconds
 
 ## Running Example
-
-* Verified envs
 
 You can build openllama2 from **nvidia-docker(recomended)** or from conda envs.
 
@@ -145,7 +145,7 @@ cd /openllama2/examples/scripts
 ./train_ppo_llama.sh
 ```
 
-* PPO training with Ray
+* PPO training with Ray (for 13B/34B models)
 
 ```shell
 # launch nvidia container
@@ -215,7 +215,7 @@ pip install flash-attn==2.1.1 --no-build-isolation
 # enjoy it!
 ```
 
-## Inference
+* Inference and Evaluation
 
 After completing the training, you can evaluate your model by using the `inference` script:
 
