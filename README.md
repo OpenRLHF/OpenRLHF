@@ -67,13 +67,6 @@ OpenLlaMA2 is the **Simplest** high-performance RLHF library that supports 34B m
 
 ### Features
 
-|        | PPO-max & Best Hyperparameters  | Ray (Distributed RL) | 34B Full Tuning with 1 DGXA100   | 7B Full Tuning with 1 A100  |
-|  ----  | ----  |  ----  | ----  | ----  | 
-| OpenLLaMA2  | ✔ | ✔  | ✔ | ✔ |
-| DeepSpeedChat  | ✖️ | ✖️  | ✖️ | ✖️ |
-| ColossalAIChat  | ✖️ | ✖️  | ✖️ |✖️ | 
-| TRL  | ✖️ | ✖️  | ✖️ | ✖️ |
-
 - [✔️] A fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
 - [✔️] Multi-nodes training scripts for Slurm.
 - [✔️] Wandb log.
@@ -87,6 +80,13 @@ OpenLlaMA2 is the **Simplest** high-performance RLHF library that supports 34B m
 - [WIP] Support QLora.
 - [WIP] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
 
+
+|        | PPO-max & Best Hyperparameters  | Ray (Distributed RL) | 34B Full Tuning with 1 DGXA100   | 7B Full Tuning with 1 A100  |
+|  ----  | ----  |  ----  | ----  | ----  | 
+| OpenLLaMA2  | ✔ | ✔  | ✔ | ✔ |
+| DeepSpeedChat  | ✖️ | ✖️  | ✖️ | ✖️ |
+| ColossalAIChat  | ✖️ | ✖️  | ✖️ |✖️ | 
+| TRL  | ✖️ | ✖️  | ✖️ | ✖️ |
 
 ### Performance
 
