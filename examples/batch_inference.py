@@ -1,7 +1,7 @@
 import argparse
 import json
 import os
-from collections import OrderedDict
+from datetime import timedelta
 
 import torch
 from torch import distributed as dist
@@ -20,7 +20,7 @@ from openllama2.utils import blending_datasets, get_strategy, get_tokenizer
 def batch_generate(args):
     # configure strategy
     strategy = get_strategy(args)
-    strategy.setup_distributed()
+    strategy.setup_distributed(timeout=timedelta(minutes=99999))
 
     # configure model
     from_config = bool(args.load_model)

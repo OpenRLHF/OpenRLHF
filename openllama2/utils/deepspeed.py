@@ -2,6 +2,7 @@ import os
 import random
 from abc import ABC
 from collections import defaultdict
+from datetime import timedelta
 from typing import List, Tuple, Union
 
 import deepspeed
@@ -67,7 +68,7 @@ class DeepspeedStrategy(ABC):
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
-    def setup_distributed(self) -> None:
+    def setup_distributed(self, timeout=timedelta(minutes=30)) -> None:
         self.set_seed(self.seed)
 
         if self.args.local_rank == -1 and "LOCAL_RANK" in os.environ:  # for slurm
@@ -76,7 +77,7 @@ class DeepspeedStrategy(ABC):
         if self.args.local_rank != -1:
             torch.cuda.set_device(self.args.local_rank)
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        deepspeed.init_distributed()
+        deepspeed.init_distributed(timeout=timeout)
         self.world_size = dist.get_world_size()
         self.accumulated_gradient = self.train_batch_size // self.micro_train_batch_size // self.world_size
 
