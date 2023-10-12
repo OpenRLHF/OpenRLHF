@@ -42,7 +42,10 @@ def preprocess_data(data, pretrain_mode=False):
                 prompt = "Human: " + item["value"] + "\nAssistant: "
             elif item["from"] == "gpt":
                 target = item["value"]
-    # REAL PRETRAIN datasets
+    # JSON files for decision transformer and rejection sampling
+    elif exist_and_not_none(data, "input") and exist_and_not_none(data, "output"):
+        prompt = data["input"]
+        target = data["output"]
     # EleutherAI/pile
     elif exist_and_not_none(data, "text") and exist_and_not_none(data, "meta"):
         prompt = ""
@@ -114,9 +117,9 @@ class SFTDataset(Dataset):
         return length
 
     def __getitem__(self, idx):
+        prompt_ids_len = self.prompt_ids_lens[idx]
         prompt = self.prompts[idx]
         target = self.targets[idx]
-        prompt_ids_len = self.prompt_ids_lens[idx]
 
         input_token = self.tokenizer(
             prompt + target + " " + self.tokenizer.eos_token,
@@ -125,22 +128,22 @@ class SFTDataset(Dataset):
             truncation=True,
             return_tensors="pt",
         )
-        raw_info = {"input": prompt, "output": target}
+        info = {"input": prompt, "output": target}
 
-        return prompt_ids_len, input_token["input_ids"], input_token["attention_mask"], raw_info
+        return prompt_ids_len, input_token["input_ids"], input_token["attention_mask"], info
 
     def collate_fn(self, item_list):
         prompt_ids_lens = []
         input_ids = []
         attention_masks = []
-        raw_info = []
+        infos = []
 
         for prompt_ids_len, input_id, attention_mask, info in item_list:
             prompt_ids_lens.append(prompt_ids_len)
             input_ids.append(input_id)
             attention_masks.append(attention_mask)
-            raw_info.append(info)
+            infos.append(info)
 
         input_ids = zero_pad_sequences(input_ids, "right", self.tokenizer.pad_token_id)
         attention_masks = zero_pad_sequences(attention_masks, "right")
-        return prompt_ids_lens, input_ids, attention_masks, raw_info
+        return prompt_ids_lens, input_ids, attention_masks, infos

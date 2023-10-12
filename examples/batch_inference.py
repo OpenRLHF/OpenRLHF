@@ -52,6 +52,7 @@ def batch_generate(args):
         args.seed,
         return_eval=False,
     )
+    prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
     prompts_dataset = PromptDataset(prompts_data, strategy)
     prompts_dataloader = strategy.setup_dataloader(
         prompts_dataset, args.micro_batch_size, True, False, drop_last=False
@@ -131,6 +132,7 @@ def batch_rm_inference(args):
         args.seed,
         return_eval=False,
     )
+    dataset = dataset.select(range(min(args.max_samples, len(dataset))))
     dataset = SFTDataset(dataset, tokenizer, args.max_len, strategy, pretrain_mode=False)
     dataloader = strategy.setup_dataloader(dataset, args.micro_batch_size, True, False, drop_last=False)
     pbar = tqdm(
@@ -139,9 +141,9 @@ def batch_rm_inference(args):
     )
 
     output_dataset = []
-    for _, input_ids, attention_masks, raw_info in pbar:
+    for _, input_ids, attention_masks, info in pbar:
         rewards = model(input_ids, attention_masks)
-        for prompt, output, reward in zip(raw_info["input"], raw_info["output"], rewards):
+        for prompt, output, reward in zip(info["input"], info["output"], rewards):
             output_dataset.append({"input": prompt, "output": output, "reward": reward})
 
     with open(args.output_path + str(strategy.get_rank()), "w") as f:
@@ -162,14 +164,12 @@ def batch_rm_inference(args):
                 output_dataset += data
             os.remove(file)
 
-        if args.post_processor == "decision_transformer":
+        if args.post_processor == "dt":
+            strategy.print("Use Decision Transformer")
             decesion_transformer_processor(args, output_dataset)
 
         with open(args.output_path, "w") as f:
             json.dump(output_dataset, f)
-
-
-DEFAULT_REWARD_PROMPT = "Human: {input} Assistant: <rm_score>: {reward}"
 
 
 def reward_normalization(objs):
@@ -178,6 +178,9 @@ def reward_normalization(objs):
     rewards = (rewards - rewards.mean()) / rewards.std()
     for i, obj in enumerate(objs):
         obj["reward"] = rewards[i].item()
+
+
+DEFAULT_REWARD_PROMPT = "{input} <rm_score>: {reward} "
 
 
 def decesion_transformer_processor(args, objs):
@@ -219,6 +222,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--dataset_probs", type=str, default="1.0")
     parser.add_argument("--output_path", type=str, default=None)
+    parser.add_argument("--max_samples", type=int, default=500000)
 
     # decision transformer
     parser.add_argument("--post_processor", type=str, default=None)
