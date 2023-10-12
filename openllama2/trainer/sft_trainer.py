@@ -102,7 +102,7 @@ class SFTTrainer(ABC):
 
             # train
             self.model.train()
-            for prompts_id_len, inputs, attention_masks in self.train_dataloader:
+            for prompts_id_len, inputs, attention_masks, _ in self.train_dataloader:
                 inputs = inputs.squeeze(1).to(torch.cuda.current_device())
                 attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
                 logits = self.model(inputs, attention_mask=attention_mask, return_output=True)["logits"]
@@ -149,7 +149,7 @@ class SFTTrainer(ABC):
                 disable=not self.strategy.is_rank_0(),
             )
 
-            for prompts_id_len, inputs, attention_masks in eval_dataloader:
+            for prompts_id_len, inputs, attention_masks, _ in eval_dataloader:
                 inputs = inputs.squeeze(1).to(torch.cuda.current_device())
                 attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
                 logits = self.model(inputs, attention_mask=attention_mask, return_output=True)["logits"]

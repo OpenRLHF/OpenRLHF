@@ -1,15 +1,10 @@
 import argparse
-import json
-import os
-from collections import OrderedDict
-
 import torch
 from torch import distributed as dist
 from tqdm import tqdm
 
-from openllama2.datasets import PromptDataset, SFTDataset
-from openllama2.models import Actor, RewardModel
-from openllama2.utils import blending_datasets, get_strategy, get_tokenizer
+from openllama2.models import Actor
+from openllama2.utils import get_strategy, get_tokenizer
 
 # from openllama2.models.llama_flash_attn_monkey_patch import (
 #     replace_llama_attn_with_flash_attn,
@@ -36,8 +31,8 @@ def generate(args):
 
     # prepare models
     model = strategy.prepare(model)
-
     model.eval()
+
     if args.ta_prompt:
         with open(args.ta_prompt, "r") as f:
             user_prompt = f.read()
@@ -60,6 +55,7 @@ def generate(args):
         input_ids = tokenizer.encode(user_prompt, return_tensors="pt").to(torch.cuda.current_device())
         outputs = model.generate(
             input_ids=input_ids,
+            use_cache=True,
             max_length=args.max_len,
             do_sample=True,
             top_p=0.9,
@@ -87,11 +83,5 @@ if __name__ == "__main__":
     parser.add_argument("--bf16", action="store_true", default=False)
     parser.add_argument("--inference_tp_size", type=int, default=1)
     parser.add_argument("--ta_prompt", type=str, default=None)
-
-    # batch inference
-    parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--prompt_data", type=str, default=None)
-    parser.add_argument("--output_path", type=str, default=None)
-
     args = parser.parse_args()
     generate(args)

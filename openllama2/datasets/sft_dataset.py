@@ -125,26 +125,22 @@ class SFTDataset(Dataset):
             truncation=True,
             return_tensors="pt",
         )
+        raw_info = {"input": prompt, "output": target}
 
-        # if self.strategy.is_rank_0():
-        #     print(prompt + target + " " + self.tokenizer.eos_token)
-        #     print(prompt_ids_len)
-        #     print(input_token['input_ids'])
-        #     print(self.tokenizer.batch_decode(input_token['input_ids'], skip_special_tokens=False))
-        # exit(1)
-
-        return prompt_ids_len, input_token["input_ids"], input_token["attention_mask"]
+        return prompt_ids_len, input_token["input_ids"], input_token["attention_mask"], raw_info
 
     def collate_fn(self, item_list):
         prompt_ids_lens = []
         input_ids = []
         attention_masks = []
+        raw_info = []
 
-        for prompt_ids_len, input_id, attention_mask in item_list:
+        for prompt_ids_len, input_id, attention_mask, info in item_list:
             prompt_ids_lens.append(prompt_ids_len)
             input_ids.append(input_id)
             attention_masks.append(attention_mask)
+            raw_info.append(info)
 
         input_ids = zero_pad_sequences(input_ids, "right", self.tokenizer.pad_token_id)
         attention_masks = zero_pad_sequences(attention_masks, "right")
-        return prompt_ids_lens, input_ids, attention_masks
+        return prompt_ids_lens, input_ids, attention_masks, raw_info
