@@ -6,14 +6,14 @@ RM_OUTPUT=./ckpt/7b_llama_dt/rm.jsonl
 
 read -r -d '' generate_commands <<EOF
 ../batch_inference.py
-    --eval_task "generate" \
-    --pretrain "meta-llama/Llama-2-7b-chat-hf" \
+    --eval_task generate \
+    --pretrain meta-llama/Llama-2-7b-hf \
     --bf16 \
-    --load_model "./ckpt/7b_llama/sft_model_ocra.pt"
+    --load_model ./ckpt/7b_llama/sft_model_ocra.pt
     --max_len 2048 \
     --dataset Open-Orca/OpenOrca \
     --dataset_probs 1.0 \
-    --max_samples 10000 \
+    --max_samples 50000 \
     --zero_stage 0 \
     --micro_batch_size 16 \
     --output_path $GENERATE_OUTPUT
@@ -22,13 +22,13 @@ EOF
 
 read -r -d '' get_rewards_commands <<EOF
 ../batch_inference.py
-    --eval_task "rm" \
-    --pretrain "meta-llama/Llama-2-7b-chat-hf" \
+    --eval_task rm \
+    --pretrain meta-llama/Llama-2-7b-hf \
     --bf16 \
-    --load_model "./ckpt/7b_llama/rm_model_anthropic_oasst_lmsys_webgpt.pt"
+    --load_model ./ckpt/7b_llama/rm_model_anthropic_oasst_lmsys_webgpt.pt
     --max_len 2048 \
-    --prompt_data $GENERATE_OUTPUT,Open-Orca/OpenOrca,Dahoas/full-hh-rlhf \
-    --prompt_data_probs 0.3,0.2,0.5 \
+    --dataset $GENERATE_OUTPUT,Open-Orca/OpenOrca,Dahoas/full-hh-rlhf \
+    --dataset_probs 0.3,0.2,0.5 \
     --max_samples 256000 \
     --zero_stage 0 \
     --bf16 \
@@ -55,16 +55,24 @@ read -r -d '' sft_commands <<EOF
     --save_hf_model
 EOF
 
+
+checkSuccess() {
+    if [[ $? != 0 ]]; then
+        echo "FAILED $1"
+        exit 1
+    fi
+}
+
 if [[ ${1} != "slurm" ]]; then
     export PATH=$HOME/.local/bin/:$PATH
 
     if [ ! -e $GENERATE_OUTPUT ]; then
         deepspeed $generate_commands
+        checkSuccess "GENERATE"
     fi
-
     if [ ! -e $RM_OUTPUT ]; then
         deepspeed $get_rewards_commands
+        checkSuccess "RM"
     fi
-
     deepspeed $sft_commands
 fi
