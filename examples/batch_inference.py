@@ -123,7 +123,7 @@ def batch_rm_inference(args):
 
     # load RM
     if args.load_model:
-        strategy.load_model(model, args.load_model, strict=True)
+        strategy.load_model(model, args.load_model)
         strategy.print("Load model: ", args.load_model)
 
     # prepare models
