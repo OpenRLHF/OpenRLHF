@@ -34,6 +34,10 @@ def batch_generate(args):
         strategy.print("Load model: ", args.load_model)
         strategy.load_model(model, args.load_model)
 
+    # prepare models
+    model = strategy.prepare(model)
+    model.eval()
+
     # tokenizer
     def tokenize_fn(texts):
         batch = tokenizer(
