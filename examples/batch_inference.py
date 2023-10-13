@@ -69,7 +69,7 @@ def batch_generate(args):
     output_dataset = []
     for prompts in pbar:
         inputs = tokenize_fn(prompts)
-        outputs = model.generate(
+        outputs = model.model.generate(
             **inputs,
             use_cache=True,
             max_length=args.max_len,
@@ -148,7 +148,7 @@ def batch_rm_inference(args):
     for _, input_ids, attention_masks, info in pbar:
         rewards = model(input_ids, attention_masks)
         for prompt, output, reward in zip(info["input"], info["output"], rewards):
-            output_dataset.append({"input": prompt, "output": output, "reward": reward})
+            output_dataset.append({"input": prompt, "output": output, "reward": reward.item()})
 
     with open(args.output_path + str(strategy.get_rank()), "w") as f:
         json.dump(output_dataset, f)
