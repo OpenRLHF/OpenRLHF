@@ -24,7 +24,7 @@ def batch_generate(args):
 
     # configure model
     from_config = bool(args.load_model)
-    model = Actor(args.pretrain, from_config)
+    model = Actor(args.pretrain, from_config, use_flash_attention_2=args.flash_attn)
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy)
@@ -111,7 +111,7 @@ def batch_rm_inference(args):
     # configure model
     # load huggingface model/config
     from_config = bool(args.load_model)
-    model = RewardModel(args.pretrain, from_config)
+    model = RewardModel(args.pretrain, from_config, use_flash_attention_2=args.flash_attn)
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy)
@@ -216,6 +216,7 @@ if __name__ == "__main__":
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--repetition_penalty", type=float, default=1.2)
+    parser.add_argument("--flash_attn", action="store_true", default=False)
 
     # batch inference
     parser.add_argument("--micro_batch_size", type=int, default=16)

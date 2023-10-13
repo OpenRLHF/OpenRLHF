@@ -19,7 +19,7 @@ def generate(args):
 
     # configure model
     from_config = bool(args.load_model)
-    model = Actor(args.pretrain, from_config)
+    model = Actor(args.pretrain, from_config, use_flash_attention_2=args.flash_attn)
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy)
@@ -83,5 +83,6 @@ if __name__ == "__main__":
     parser.add_argument("--bf16", action="store_true", default=False)
     parser.add_argument("--inference_tp_size", type=int, default=1)
     parser.add_argument("--ta_prompt", type=str, default=None)
+    parser.add_argument("--flash_attn", action="store_true", default=False)
     args = parser.parse_args()
     generate(args)

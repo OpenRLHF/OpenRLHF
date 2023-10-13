@@ -23,17 +23,21 @@ class Actor(nn.Module):
         self,
         pretrain_or_model,
         from_config=False,
-        lora_rank: int = 0,
-        lora_train_bias: str = "none",
+        use_flash_attention_2=False,
     ) -> None:
         super().__init__()
         if isinstance(pretrain_or_model, str):
             if from_config:
-                config = AutoConfig.from_pretrained(pretrain_or_model, torch_dtype="auto")
+                config = AutoConfig.from_pretrained(
+                    pretrain_or_model, torch_dtype="auto", use_flash_attention_2=use_flash_attention_2
+                )
                 self.model = AutoModelForCausalLM.from_config(config)
             else:
                 self.model = AutoModelForCausalLM.from_pretrained(
-                    pretrain_or_model, torch_dtype="auto", trust_remote_code=True
+                    pretrain_or_model,
+                    torch_dtype="auto",
+                    trust_remote_code=True,
+                    use_flash_attention_2=use_flash_attention_2,
                 )
         else:
             self.model = pretrain_or_model

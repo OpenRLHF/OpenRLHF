@@ -17,14 +17,23 @@ class Critic(nn.Module):
         lora_train_bias (str): LoRA bias training mode.
     """
 
-    def __init__(self, pretrain_or_model, from_config=False, normalize_reward=True) -> None:
+    def __init__(
+        self, pretrain_or_model, from_config=False, normalize_reward=True, use_flash_attention_2=False
+    ) -> None:
         super().__init__()
         if isinstance(pretrain_or_model, str):
             if from_config:
-                config = AutoConfig.from_pretrained(pretrain_or_model, torch_dtype="auto")
+                config = AutoConfig.from_pretrained(
+                    pretrain_or_model, torch_dtype="auto", use_flash_attention_2=use_flash_attention_2
+                )
                 self.model = AutoModel.from_config(config)
             else:
-                self.model = AutoModel.from_pretrained(pretrain_or_model, torch_dtype="auto", trust_remote_code=True)
+                self.model = AutoModel.from_pretrained(
+                    pretrain_or_model,
+                    torch_dtype="auto",
+                    trust_remote_code=True,
+                    use_flash_attention_2=use_flash_attention_2,
+                )
         else:
             self.model = pretrain_or_model
 
