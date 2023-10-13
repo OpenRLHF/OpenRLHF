@@ -111,6 +111,7 @@ def batch_generate(args):
 def batch_rm_inference(args):
     # configure strategy
     strategy = get_strategy(args)
+    strategy.setup_distributed(timeout=timedelta(minutes=99999))
 
     # configure model
     # load huggingface model/config
