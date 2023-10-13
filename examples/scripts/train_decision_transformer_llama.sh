@@ -13,7 +13,7 @@ read -r -d '' generate_commands <<EOF
     --max_len 2048 \
     --dataset Open-Orca/OpenOrca \
     --dataset_probs 1.0 \
-    --max_samples 76800 \
+    --max_samples 10000 \
     --zero_stage 0 \
     --micro_batch_size 16 \
     --output_path $GENERATE_OUTPUT
