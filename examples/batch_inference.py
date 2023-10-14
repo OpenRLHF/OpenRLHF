@@ -82,8 +82,8 @@ def batch_generate(args):
             output = output[len(prompt) :]
             output_dataset.append({"input": prompt, "output": output})
 
-        with jsonlines.open(args.output_path + str(strategy.get_rank()), mode="w") as writer:
-            writer.write_all(output_dataset)
+    with jsonlines.open(args.output_path + str(strategy.get_rank()), mode="w") as writer:
+        writer.write_all(output_dataset)
 
     # wait unitl all processes generate done
     dist.barrier()
@@ -143,15 +143,16 @@ def batch_rm_inference(args):
     )
 
     output_dataset = []
-    for _, input_ids, attention_masks, info in pbar:
-        input_ids = input_ids.squeeze(1).to(torch.cuda.current_device())
-        attention_masks = attention_masks.squeeze(1).to(torch.cuda.current_device())
-        rewards = model(input_ids, attention_masks)
-        for prompt, output, reward in zip(info["input"], info["output"], rewards):
-            output_dataset.append({"input": prompt, "output": output, "reward": reward.item()})
+    with torch.no_grad():
+        for _, input_ids, attention_masks, info in pbar:
+            input_ids = input_ids.squeeze(1).to(torch.cuda.current_device())
+            attention_masks = attention_masks.squeeze(1).to(torch.cuda.current_device())
+            rewards = model(input_ids, attention_masks)
+            for prompt, output, reward in zip(info["input"], info["output"], rewards):
+                output_dataset.append({"input": prompt, "output": output, "reward": reward.item()})
 
-        with jsonlines.open(args.output_path + str(strategy.get_rank()), mode="w") as writer:
-            writer.write_all(output_dataset)
+    with jsonlines.open(args.output_path + str(strategy.get_rank()), mode="w") as writer:
+        writer.write_all(output_dataset)
 
     # wait unitl all processes generate done
     dist.barrier()

@@ -17,7 +17,6 @@ read -r -d '' generate_commands <<EOF
     --zero_stage 0 \
     --micro_batch_size 16 \
     --output_path $GENERATE_OUTPUT
-    --bf16
 EOF
 
 read -r -d '' get_rewards_commands <<EOF
@@ -31,7 +30,6 @@ read -r -d '' get_rewards_commands <<EOF
     --dataset_probs 0.2,0.3,0.5 \
     --max_samples 128000 \
     --zero_stage 0 \
-    --bf16 \
     --post_processor dt \
     --micro_batch_size 4 \
     --output_path $RM_OUTPUT
