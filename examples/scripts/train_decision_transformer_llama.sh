@@ -13,7 +13,7 @@ read -r -d '' generate_commands <<EOF
     --max_len 2048 \
     --dataset Open-Orca/OpenOrca \
     --dataset_probs 1.0 \
-    --max_samples 50000 \
+    --max_samples 51200 \
     --zero_stage 0 \
     --micro_batch_size 16 \
     --output_path $GENERATE_OUTPUT
@@ -29,11 +29,11 @@ read -r -d '' get_rewards_commands <<EOF
     --max_len 2048 \
     --dataset $GENERATE_OUTPUT,Open-Orca/OpenOrca,Dahoas/full-hh-rlhf \
     --dataset_probs 0.3,0.2,0.5 \
-    --max_samples 256000 \
+    --max_samples 180000 \
     --zero_stage 0 \
     --bf16 \
     --post_processor dt \
-    --micro_batch_size 8 \
+    --micro_batch_size 4 \
     --output_path $RM_OUTPUT
     --normalize_reward
 EOF
