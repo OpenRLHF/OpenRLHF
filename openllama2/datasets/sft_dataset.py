@@ -136,13 +136,14 @@ class SFTDataset(Dataset):
         prompt_ids_lens = []
         input_ids = []
         attention_masks = []
-        infos = []
+        infos = {"input": [], "output": []}
 
         for prompt_ids_len, input_id, attention_mask, info in item_list:
             prompt_ids_lens.append(prompt_ids_len)
             input_ids.append(input_id)
             attention_masks.append(attention_mask)
-            infos.append(info)
+            infos["input"].append(info["input"])
+            infos["output"].append(info["output"])
 
         input_ids = zero_pad_sequences(input_ids, "right", self.tokenizer.pad_token_id)
         attention_masks = zero_pad_sequences(attention_masks, "right")
