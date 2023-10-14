@@ -235,6 +235,7 @@ if __name__ == "__main__":
     # decision transformer
     parser.add_argument("--post_processor", type=str, default=None)
     parser.add_argument("--normalize_reward", action="store_true", default=False)
+    parser.add_argument("--reward_template", type=str, default=None)
 
     args = parser.parse_args()
     if args.eval_task and args.eval_task == "generate":
