@@ -11,9 +11,10 @@ read -r -d '' generate_commands <<EOF
     --bf16 \
     --load_model ./ckpt/7b_llama/sft_model_ocra.pt
     --max_len 2048 \
-    --dataset Open-Orca/OpenOrca \
-    --dataset_probs 1.0 \
-    --max_samples 25600 \
+    --dataset Open-Orca/OpenOrca,Dahoas/full-hh-rlhf \
+    --dataset_probs 0.5,0.5 \
+    --max_samples 38400 \
+    --temperature 0.5 \
     --zero_stage 0 \
     --micro_batch_size 16 \
     --output_path $GENERATE_OUTPUT
@@ -27,7 +28,7 @@ read -r -d '' get_rewards_commands <<EOF
     --load_model ./ckpt/7b_llama/rm_model_anthropic_oasst_lmsys_webgpt.pt
     --max_len 2048 \
     --dataset $GENERATE_OUTPUT,Open-Orca/OpenOrca,Dahoas/full-hh-rlhf \
-    --dataset_probs 0.2,0.3,0.5 \
+    --dataset_probs 0.3,0.3,0.4 \
     --max_samples 128000 \
     --zero_stage 0 \
     --post_processor dt \
