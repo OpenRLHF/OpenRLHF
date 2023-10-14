@@ -134,7 +134,9 @@ def batch_rm_inference(args):
     )
     dataset = dataset.select(range(min(args.max_samples, len(dataset))))
     dataset = SFTDataset(dataset, tokenizer, args.max_len, strategy, pretrain_mode=False)
-    dataloader = strategy.setup_dataloader(dataset, args.micro_batch_size, True, False, drop_last=False)
+    dataloader = strategy.setup_dataloader(
+        dataset, args.micro_batch_size, True, False, dataset.collate_fn, drop_last=False
+    )
     pbar = tqdm(
         dataloader,
         disable=not strategy.is_rank_0(),
