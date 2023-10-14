@@ -43,10 +43,10 @@
 
 ## Latest News
 
-- 2023/10/14: Support [Decision Transformer Alignment](./examples/scripts/train_decision_transformer_llama.sh).
+- 2023/10/14: Support [Decision Transformer Alignment](./examples/scripts/train_decision_transformer_llama.sh) (https://arxiv.org/abs/2308.12050).
 - 2023/10/2: 34B codellama model with Ray-based RLHF + 1 DGX A100 test passed! Configs:
   - Adam Offload = True
-  - micro_batch_size = 1
+  - micro_batch_size = 2/1 (rollout/train)
   - Enable FlashAttention2 to support 4096 seq length
 - 2023/9/20: Support [Ray-based RLHF](./examples/scripts/train_ppo_llama_ray.sh)
 - 2023/9/13: Upload [7B/13B SFT/RM/DPO/PPO checkpoint](https://huggingface.co/chuyi777/openllama2_checkpoint)
@@ -92,6 +92,11 @@ Support Matrix
 | TRL  | ✖️ | ✖️  | ✖️ | ✖️ | ✖️ |
 
 ### Performance
+
+|        | 7B llama2 RLHF | 13B llama2 RLHF (50k samples) | 
+|  ----  | ----  |  ----  |
+| OpenLLaMA2  | - | 22 hours with 8 A100  | 
+| DeepSpeedChat  | - | 48 hours with 16 A100  |
 
 Ray/DeepSpeed Config: 
 
