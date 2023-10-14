@@ -2,6 +2,7 @@ datasets
 deepspeed==0.11.1
 einops
 isort
+jsonlines
 loralib
 peft
 ray[default]

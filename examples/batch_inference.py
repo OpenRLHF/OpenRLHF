@@ -79,7 +79,7 @@ def batch_generate(args):
         )
         outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
         for prompt, output in zip(prompts, outputs):
-            output = output[len(prompt) :].replace(r"\n", "\n")
+            output = output[len(prompt) :]
             output_dataset.append({"input": prompt, "output": output})
 
         with jsonlines.open(args.output_path + str(strategy.get_rank()), mode="w") as writer:
