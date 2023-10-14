@@ -50,6 +50,9 @@ def generate(args):
 
         # get input prompt
         user_prompt = user_prompt + "\nHuman: " + inputs + "\nAssistant: "
+        if args.dt_prompt:
+            user_prompt += args.dt_prompt
+
         user_prompt_len = len(user_prompt)
 
         input_ids = tokenizer.encode(user_prompt, return_tensors="pt").to(torch.cuda.current_device())
@@ -83,6 +86,9 @@ if __name__ == "__main__":
     parser.add_argument("--bf16", action="store_true", default=False)
     parser.add_argument("--inference_tp_size", type=int, default=1)
     parser.add_argument("--ta_prompt", type=str, default=None)
+    parser.add_argument(
+        "--dt_prompt", type=str, default=None, help="decision transformer prompt, such as <rm_score>: 5.00 "
+    )
     parser.add_argument("--flash_attn", action="store_true", default=False)
     args = parser.parse_args()
     generate(args)
