@@ -146,7 +146,7 @@ def batch_rm_inference(args):
     for _, input_ids, attention_masks, info in pbar:
         inputs = inputs.squeeze(1).to(torch.cuda.current_device())
         attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
-        rewards = model(input_ids, attention_masks)
+        rewards = model(input_ids, attention_mask)
         for prompt, output, reward in zip(info["input"], info["output"], rewards):
             output_dataset.append({"input": prompt, "output": output, "reward": reward.item()})
 
