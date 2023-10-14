@@ -6,11 +6,6 @@ from tqdm import tqdm
 from openllama2.models import Actor
 from openllama2.utils import get_strategy, get_tokenizer
 
-# from openllama2.models.llama_flash_attn_monkey_patch import (
-#     replace_llama_attn_with_flash_attn,
-# )
-# replace_llama_attn_with_flash_attn()
-
 
 def generate(args):
     # configure strategy
@@ -50,9 +45,8 @@ def generate(args):
 
         # get input prompt
         user_prompt = user_prompt + "\nHuman: " + inputs + "\nAssistant: "
-        if args.dt_prompt:
-            user_prompt += args.dt_prompt
-
+        if args.enable_dt:
+            user_prompt += args.dt_prompt.strip() + " "
         user_prompt_len = len(user_prompt)
 
         input_ids = tokenizer.encode(user_prompt, return_tensors="pt").to(torch.cuda.current_device())
@@ -60,12 +54,12 @@ def generate(args):
             input_ids=input_ids,
             use_cache=True,
             max_length=args.max_len,
-            do_sample=True,
-            top_p=0.9,
+            do_sample=not args.greedy_sampling,
+            top_p=args.top_p,
             early_stopping=True,
             num_beams=1,
-            temperature=0.5,
-            repetition_penalty=1.2,
+            temperature=args.temperature,
+            repetition_penalty=args.repetition_penalty,
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
@@ -79,16 +73,22 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--pretrain", type=str, default=None)
     parser.add_argument("--load_model", type=str, default=None)
-    parser.add_argument("--prompt_max_len", type=int, default=1024)
     parser.add_argument("--max_len", type=int, default=2048)
     parser.add_argument("--zero_stage", type=int, default=0)
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--bf16", action="store_true", default=False)
     parser.add_argument("--inference_tp_size", type=int, default=1)
-    parser.add_argument("--ta_prompt", type=str, default=None)
-    parser.add_argument(
-        "--dt_prompt", type=str, default=None, help="decision transformer prompt, such as <rm_score>: 5.00 "
-    )
     parser.add_argument("--flash_attn", action="store_true", default=False)
+
+    parser.add_argument("--greedy_sampling", action="store_true", default=False)
+    parser.add_argument("--top_p", type=float, default=0.9)
+    parser.add_argument("--temperature", type=float, default=0.5)
+    parser.add_argument("--repetition_penalty", type=float, default=1.2)
+
+    parser.add_argument("--ta_prompt", type=str, default=None)
+    parser.add_argument("--enable_dt", action="store_true", default=False)
+    parser.add_argument("--dt_prompt", type=str, default="<rm_score>: 5.00", help="decision transformer prompt")
     args = parser.parse_args()
+
+    print(args)
     generate(args)
