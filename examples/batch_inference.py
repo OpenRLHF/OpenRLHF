@@ -1,8 +1,8 @@
 import argparse
-import json
 import os
 from datetime import timedelta
 
+import jsonlines
 import torch
 from torch import distributed as dist
 from tqdm import tqdm
@@ -10,11 +10,6 @@ from tqdm import tqdm
 from openllama2.datasets import PromptDataset, SFTDataset
 from openllama2.models import Actor, RewardModel
 from openllama2.utils import blending_datasets, get_strategy, get_tokenizer
-
-# from openllama2.models.llama_flash_attn_monkey_patch import (
-#     replace_llama_attn_with_flash_attn,
-# )
-# replace_llama_attn_with_flash_attn()
 
 
 def batch_generate(args):
@@ -87,8 +82,8 @@ def batch_generate(args):
             output = output[len(prompt) :].replace(r"\n", "\n")
             output_dataset.append({"input": prompt, "output": output})
 
-    with open(args.output_path + str(strategy.get_rank()), "w") as f:
-        json.dump(output_dataset, f)
+        with jsonlines.open(args.output_path + str(strategy.get_rank()), mode="w") as writer:
+            writer.write_all(output_dataset)
 
     # wait unitl all processes generate done
     dist.barrier()
@@ -99,13 +94,13 @@ def batch_generate(args):
         world_size = dist.get_world_size()
         files = [args.output_path + str(rank) for rank in range(world_size)]
         for file in files:
-            with open(file, "r") as infile:
-                data = json.load(infile)
-                output_dataset += data
+            with jsonlines.open(filename, mode="r") as reader:
+                for obj in reader:
+                    output_dataset.append(obj)
             os.remove(file)
 
-        with open(args.output_path, "w") as f:
-            json.dump(output_dataset, f)
+        with jsonlines.open(args.output_path, mode="w") as writer:
+            writer.write_all(output_dataset)
 
 
 def batch_rm_inference(args):
@@ -147,12 +142,14 @@ def batch_rm_inference(args):
 
     output_dataset = []
     for _, input_ids, attention_masks, info in pbar:
+        inputs = inputs.squeeze(1).to(torch.cuda.current_device())
+        attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
         rewards = model(input_ids, attention_masks)
         for prompt, output, reward in zip(info["input"], info["output"], rewards):
             output_dataset.append({"input": prompt, "output": output, "reward": reward.item()})
 
-    with open(args.output_path + str(strategy.get_rank()), "w") as f:
-        json.dump(output_dataset, f)
+        with jsonlines.open(args.output_path + str(strategy.get_rank()), mode="w") as writer:
+            writer.write_all(output_dataset)
 
     # wait unitl all processes generate done
     dist.barrier()
@@ -160,21 +157,20 @@ def batch_rm_inference(args):
     # concate multiple output files in rank 0
     if strategy.is_rank_0():
         output_dataset = []
-
         world_size = dist.get_world_size()
         files = [args.output_path + str(rank) for rank in range(world_size)]
         for file in files:
-            with open(file, "r") as infile:
-                data = json.load(infile)
-                output_dataset += data
+            with jsonlines.open(filename, mode="r") as reader:
+                for obj in reader:
+                    output_dataset.append(obj)
             os.remove(file)
 
         if args.post_processor == "dt":
             strategy.print("Use Decision Transformer")
             decesion_transformer_processor(args, output_dataset)
 
-        with open(args.output_path, "w") as f:
-            json.dump(output_dataset, f)
+        with jsonlines.open(args.output_path, mode="w") as writer:
+            writer.write_all(output_dataset)
 
 
 def reward_normalization(objs):

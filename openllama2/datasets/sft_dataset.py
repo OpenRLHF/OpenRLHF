@@ -42,15 +42,15 @@ def preprocess_data(data, pretrain_mode=False):
                 prompt = "Human: " + item["value"] + "\nAssistant: "
             elif item["from"] == "gpt":
                 target = item["value"]
-    # JSON files for decision transformer and rejection sampling
-    elif exist_and_not_none(data, "input") and exist_and_not_none(data, "output"):
-        prompt = data["input"]
-        target = data["output"]
     # EleutherAI/pile
     elif exist_and_not_none(data, "text") and exist_and_not_none(data, "meta"):
         prompt = ""
         target = data["text"]
         pretrain_mode = False  # ignore prompt.replace(xxx)
+    # JSON files for decision transformer
+    elif exist_and_not_none(data, "input") and exist_and_not_none(data, "output"):
+        prompt = data["input"]
+        target = data["output"]
     else:
         raise ValueError("sft_dataset key error")
 
