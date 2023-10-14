@@ -42,12 +42,15 @@ def preprocess_data(data, pretrain_mode=False):
                 prompt = "Human: " + item["value"] + "\nAssistant: "
             elif item["from"] == "gpt":
                 target = item["value"]
-    # REAL PRETRAIN datasets
     # EleutherAI/pile
     elif exist_and_not_none(data, "text") and exist_and_not_none(data, "meta"):
         prompt = ""
         target = data["text"]
         pretrain_mode = False  # ignore prompt.replace(xxx)
+    # JSON files for decision transformer
+    elif exist_and_not_none(data, "input") and exist_and_not_none(data, "output"):
+        prompt = data["input"]
+        target = data["output"]
     else:
         raise ValueError("sft_dataset key error")
 
@@ -114,9 +117,9 @@ class SFTDataset(Dataset):
         return length
 
     def __getitem__(self, idx):
+        prompt_ids_len = self.prompt_ids_lens[idx]
         prompt = self.prompts[idx]
         target = self.targets[idx]
-        prompt_ids_len = self.prompt_ids_lens[idx]
 
         input_token = self.tokenizer(
             prompt + target + " " + self.tokenizer.eos_token,
@@ -125,26 +128,23 @@ class SFTDataset(Dataset):
             truncation=True,
             return_tensors="pt",
         )
+        info = {"input": prompt, "output": target}
 
-        # if self.strategy.is_rank_0():
-        #     print(prompt + target + " " + self.tokenizer.eos_token)
-        #     print(prompt_ids_len)
-        #     print(input_token['input_ids'])
-        #     print(self.tokenizer.batch_decode(input_token['input_ids'], skip_special_tokens=False))
-        # exit(1)
-
-        return prompt_ids_len, input_token["input_ids"], input_token["attention_mask"]
+        return prompt_ids_len, input_token["input_ids"], input_token["attention_mask"], info
 
     def collate_fn(self, item_list):
         prompt_ids_lens = []
         input_ids = []
         attention_masks = []
+        infos = {"input": [], "output": []}
 
-        for prompt_ids_len, input_id, attention_mask in item_list:
+        for prompt_ids_len, input_id, attention_mask, info in item_list:
             prompt_ids_lens.append(prompt_ids_len)
             input_ids.append(input_id)
             attention_masks.append(attention_mask)
+            infos["input"].append(info["input"])
+            infos["output"].append(info["output"])
 
         input_ids = zero_pad_sequences(input_ids, "right", self.tokenizer.pad_token_id)
         attention_masks = zero_pad_sequences(attention_masks, "right")
-        return prompt_ids_lens, input_ids, attention_masks
+        return prompt_ids_lens, input_ids, attention_masks, infos

@@ -57,12 +57,6 @@ class BasePPORole(DistributedTorchRayActor):
         self.strategy = strategy
         strategy.setup_distributed()
 
-        # configure flash attention
-        if strategy.args.flash_attn:
-            from openllama2.models.llama2_flash_attn_monkey_patch import replace_llama_attn_with_flash_attn
-
-            replace_llama_attn_with_flash_attn()
-
     def _from_pretrained(self, model_type, pretrain, model_path, **kwargs):
         # load huggingface model/config
         from_config = bool(model_path)
@@ -85,7 +79,7 @@ class BasePPORole(DistributedTorchRayActor):
 class ReferenceModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, model_path):
         self._setup_distributed(strategy)
-        model, _ = self._from_pretrained(Actor, pretrain, model_path)
+        model, _ = self._from_pretrained(Actor, pretrain, model_path, use_flash_attention_2=strategy.args.flash_attn)
         strategy.print(model)
 
         self.model = self.strategy.prepare(model, is_rlhf=True)
@@ -109,7 +103,11 @@ class RewardModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, model_path):
         self._setup_distributed(strategy)
         model, _ = self._from_pretrained(
-            RewardModel, pretrain, model_path, normalize_reward=strategy.args.normalize_reward
+            RewardModel,
+            pretrain,
+            model_path,
+            normalize_reward=strategy.args.normalize_reward,
+            use_flash_attention_2=strategy.args.flash_attn,
         )
         strategy.print(model)
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))

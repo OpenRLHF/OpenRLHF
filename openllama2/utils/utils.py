@@ -97,7 +97,7 @@ def blending_datasets(
             strategy.print(f"load local data(json/jsonl/csv/parquet/txt): ")
             if dataset.endswith((".json", ".jsonl", ".csv", ".parquet", ".txt")):
                 files = dataset
-                path = os.path.splitext(files[0])[1][1:]
+                data_type = os.path.splitext(files)[1][1:]
             else:
                 path = Path(dataset)
                 script = [str(file) for file in Path(path).rglob("*.py")]
@@ -105,18 +105,16 @@ def blending_datasets(
                 files = [str(file) for ext in extensions for file in Path(path).rglob(ext)]
                 strategy.print(f"script: {script}")
                 strategy.print(f"files: {files}")
-                path = os.path.splitext(files[0])[1][1:]
-            if path == "json" or path == "jsonl":
-                path = "json"
-            elif path == "csv" or path == "parquet":
-                pass
-            elif path == "txt":
-                path = "text"
+                data_type = os.path.splitext(files[0])[1][1:]
+
+            if data_type == "json" or data_type == "jsonl":
+                data_type = "json"
+            elif data_type == "txt":
+                data_type = "text"
             else:
-                strategy.print(f"Unsupported file types: {path}")
-            if len(script) == 1:
-                path = script[0]
-            data = load_dataset(path, data_files=files)
+                strategy.print(f"Unsupported file types: {data_type}")
+
+            data = load_dataset(data_type, data_files=files)
         elif len(dataset_subfold_list) == 2:
             dataset = dataset_subfold_list[0]
             subfold = dataset_subfold_list[1]

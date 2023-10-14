@@ -16,16 +16,10 @@ def train(args):
     strategy = get_strategy(args)
     strategy.setup_distributed()
 
-    # configure flash attention
-    if args.flash_attn:
-        from openllama2.models.llama2_flash_attn_monkey_patch import replace_llama_attn_with_flash_attn
-
-        replace_llama_attn_with_flash_attn()
-
     # configure model
     # load huggingface model/config
     from_config = bool(args.load_model or args.load_checkpoint)
-    model = Actor(args.pretrain, from_config)
+    model = Actor(args.pretrain, from_config, use_flash_attention_2=args.flash_attn)
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy)

@@ -64,7 +64,11 @@ class CriticModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, model_path, max_steps):
         self._setup_distributed(strategy)
         critic, tokenizer = self._from_pretrained(
-            Critic, pretrain, model_path, normalize_reward=strategy.args.normalize_reward
+            Critic,
+            pretrain,
+            model_path,
+            normalize_reward=strategy.args.normalize_reward,
+            use_flash_attention_2=strategy.args.flash_attn,
         )
         strategy.print(critic)
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))

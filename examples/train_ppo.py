@@ -19,23 +19,19 @@ def train(args):
     strategy = get_strategy(args)
     strategy.setup_distributed()
 
-    # configure flash attention
-    if args.flash_attn:
-        from openllama2.models.llama2_flash_attn_monkey_patch import replace_llama_attn_with_flash_attn
-
-        replace_llama_attn_with_flash_attn()
-
     # configure model
     # load huggingface model/config
     actor_from_config = bool(args.sft_model_path or args.load_checkpoint)
     reward_from_config = bool(args.reward_model_path)
 
-    actor = Actor(args.pretrain, actor_from_config)
+    actor = Actor(args.pretrain, actor_from_config, use_flash_attention_2=args.flash_attn)
     if args.actor_init_on_gpu:
         actor = actor.to(torch.cuda.current_device())
 
-    critic = Critic(args.critic_pretrain, True, args.normalize_reward)
-    reward_model = RewardModel(args.critic_pretrain, reward_from_config, args.normalize_reward)
+    critic = Critic(args.critic_pretrain, True, args.normalize_reward, use_flash_attention_2=args.flash_attn)
+    reward_model = RewardModel(
+        args.critic_pretrain, reward_from_config, args.normalize_reward, use_flash_attention_2=args.flash_attn
+    )
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, actor.model, "left", strategy)
