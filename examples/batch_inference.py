@@ -188,9 +188,12 @@ DEFAULT_REWARD_PROMPT = "{input} <rm_score>: {reward} "
 
 
 def decesion_transformer_processor(args, objs):
-    reward_prompt = args.get("reward_template", DEFAULT_REWARD_PROMPT)
-    assert "{input}" in reward_prompt
-    assert "{reward}" in reward_prompt
+    if "reward_template" not in args or args.reward_template is None:
+        reward_template = DEFAULT_REWARD_PROMPT
+    else:
+        reward_template = args.reward_template
+    assert "{input}" in reward_template
+    assert "{reward}" in reward_template
 
     if args.normalize_reward:
         reward_normalization(objs)
@@ -198,7 +201,7 @@ def decesion_transformer_processor(args, objs):
     for obj in tqdm(objs, desc="Decision Transformer process..."):
         input = obj["input"]
         reward = "{:.2f}".format(float(obj["reward"]))
-        input = reward_prompt.replace("{reward}", reward).replace("{input}", input)
+        input = reward_template.replace("{reward}", reward).replace("{input}", input)
         obj["input"] = input
 
     return objs
