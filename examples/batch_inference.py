@@ -94,7 +94,7 @@ def batch_generate(args):
         world_size = dist.get_world_size()
         files = [args.output_path + str(rank) for rank in range(world_size)]
         for file in files:
-            with jsonlines.open(filename, mode="r") as reader:
+            with jsonlines.open(file, mode="r") as reader:
                 for obj in reader:
                     output_dataset.append(obj)
             os.remove(file)
@@ -160,7 +160,7 @@ def batch_rm_inference(args):
         world_size = dist.get_world_size()
         files = [args.output_path + str(rank) for rank in range(world_size)]
         for file in files:
-            with jsonlines.open(filename, mode="r") as reader:
+            with jsonlines.open(file, mode="r") as reader:
                 for obj in reader:
                     output_dataset.append(obj)
             os.remove(file)

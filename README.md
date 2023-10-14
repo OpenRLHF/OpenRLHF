@@ -43,7 +43,7 @@
 
 ## Latest News
 
-- 2023/10/12: Support [Decision Transformer Alignment](./examples/scripts/train_decision_transformer_llama.sh).
+- 2023/10/14: Support [Decision Transformer Alignment](./examples/scripts/train_decision_transformer_llama.sh).
 - 2023/10/2: 34B codellama model with Ray-based RLHF + 1 DGX A100 test passed! Configs:
   - Adam Offload = True
   - micro_batch_size = 1
