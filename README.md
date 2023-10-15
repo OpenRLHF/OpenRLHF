@@ -99,20 +99,20 @@ Support Matrix
 | OpenRLHF  | - | 22 hours with 8 A100  | 
 | DeepSpeedChat  | - | 48 hours with 16 A100  |
 
-Ray/DeepSpeed Config: 
+**Ray/DeepSpeed Config:** 
 
 - 4 A100 80G for Actor, 2 A100 80G for Critic, 1 A100 80G for RM, and 1 A100 80G for InitPolicy
 - ZeRO2 with Adam Offload
 - Max Sequence Length: 2048 
 
-Throughput:
+**Throughput:**
 
 - 7B llama2: 0.105 samples/gpu/secs
-  - micro_batch_size = 16/8 [rollout/train], generation_length = 100~300
+  - micro_batch_size = 16/8 (rollout/train), generation_length = 100~300
 - 13B llama2: 0.04 samples/gpu/secs
-  - micro_batch_size = 8/4 [rollout/train], generation_length = 200~400
+  - micro_batch_size = 8/4 (rollout/train), generation_length = 200~400
 - 34B codellama: 0.007 samples/gpu/secs
-  - micro_batch_size = 2/1 [rollout/train], generation_length = 300~800
+  - micro_batch_size = 2/1 (rollout/train), generation_length = 300~800
 
 samples/gpu/secs = Number of PPO Samples / Number of A100 GPUS / Seconds
 
@@ -184,10 +184,10 @@ export PATH=$HOME/.local/bin/:$PATH
 ~/.local/bin/huggingface-cli login
 
 # launch ray in container
-nohup ray start --head --node-ip-address 0.0.0.0 --num-cpus 128 --num-gpus 8 --block &> ray.log &
+nohup ray start --head --node-ip-address 0.0.0.0 --num-gpus 8 --block &> ray.log &
 
 # if you want to launch ray on more nodes, use
-# ray start --address {MASTER-NODE-ADDRESS}:6379 --num-cpus 128 --num-gpus 8 --block
+# ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8 --block
 
 # train ray PPO model, requires 8 gpus in default config
 ./train_ppo_llama_ray.sh
