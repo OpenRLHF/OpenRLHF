@@ -54,7 +54,7 @@
 - 2023/9/6: Support FlashAttention2 (--flash_attn)
 - 2023/8/26: Support wandb logs (--wandb)
 - 2023/8/20: Upload PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
-- 2023/8/18: Support **LLaMA2 7B PPO fintune on Single A100**
+- 2023/8/18: Support LLaMA2 7B PPO fintune on Single A100
 - 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed test passed
 - 2023/07/30: OpenRLHF project officially launched
 
@@ -62,7 +62,7 @@
 
 OpenRLHF aims to develop a **High-performance RLHF training framework** based on Ray and DeepSpeed/HuggingFace.
 
-OpenLlaMA2 is the **Simplest** high-performance RLHF library that supports 34B models RLHF training with Single DGXA100.OpenRLHF
+OpenRLHF is the **Simplest** high-performance RLHF library that supports 34B models RLHF training with Single DGXA100.
 
 
 ### Features
