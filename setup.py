@@ -4,7 +4,7 @@ from setuptools import find_packages, setup
 import os
 
 
-_build_mode = os.getenv("OPENLLAMA2_BUILD_MODE", "")
+_build_mode = os.getenv("OPENRLHF_BUILD_MODE", "")
 
 
 def _is_nightly():
@@ -43,7 +43,7 @@ setup(
             "examples",
         )
     ),
-    description="A Ray-based High-performance LLaMA2 RLHF framework.",
+    description="A Ray-based High-performance RLHF framework.",
     long_description=_fetch_readme(),
     long_description_content_type="text/markdown",
     install_requires=_fetch_requirements("requirements.txt"),

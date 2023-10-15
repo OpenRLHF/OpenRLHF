@@ -62,7 +62,7 @@
 
 OpenRLHF aims to develop a **High-performance RLHF training framework** based on Ray and DeepSpeed/HuggingFace.
 
-OpenLlaMA2 is the **Simplest** high-performance RLHF library that supports 34B models RLHF training with Single DGXA100.
+OpenLlaMA2 is the **Simplest** high-performance RLHF library that supports 34B models RLHF training with Single DGXA100.OpenRLHF
 
 
 ### Features
