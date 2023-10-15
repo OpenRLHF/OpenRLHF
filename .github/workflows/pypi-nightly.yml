@@ -1,4 +1,4 @@
-name: OPENLLAMA2 PyPi Nightly
+name: OPENRLHF PyPi Nightly
 
 on:
   schedule:
@@ -31,7 +31,7 @@ jobs:
     - name: Build wheel
       if: env.COMMIT_TODAY == 'true'
       env:
-        OPENLLAMA2_BUILD_MODE: nightly
+        OPENRLHF_BUILD_MODE: nightly
       run: |
           pip install pytest torch cloudpickle cryptography deepspeed # TODO(qwang): installing dev requirements.
           pip install ray[default]==2.7.0
