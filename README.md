@@ -44,7 +44,7 @@
 ## Latest News
 - 2023/10/15: Rename to OpenRLHF 
 - 2023/10/14: Support [Decision Transformer Alignment](./examples/scripts/train_decision_transformer_llama.sh) (https://arxiv.org/abs/2308.12050).
-- 2023/10/2: 34B codellama model with Ray-based RLHF + 1 DGX A100 test passed! Configs:
+- 2023/10/2: 34B codellama model with Ray-based RLHF + 1 DGX A100 test passed! configs:
   - Adam Offload = True
   - micro_batch_size = 2/1 (rollout/train)
   - Enable FlashAttention2 to support 4096 seq length
@@ -75,8 +75,9 @@ OpenRLHF is the **Simplest** high-performance RLHF library that supports 34B mod
 - [✔️] Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh).
 - [✔️] Distributed RLHF based on Ray (for 34B models).
 - [✔️] [Decision Transformer Alignment](./examples/scripts/train_decision_transformer_llama.sh) (https://arxiv.org/abs/2308.12050).
-- [WIP] Multiple Reward models.
+- [WIP] Hot Chinese Base Models.
 - [WIP] Rejection Sampling.
+- [WIP] Multiple Reward models.
 - [WIP] Support QLora.
 - [WIP] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
 
@@ -100,11 +101,18 @@ Support Matrix
 
 Ray/DeepSpeed Config: 
 
-4 A100 80G for Actor / 2 for Critic / 1 for Reward / 1 for InitPolicy + ZeRO2 + Adam Offload + Seq length: 2048 
+- 4 A100 80G for Actor, 2 A100 80G for Critic, 1 A100 80G for RM, and 1 A100 80G for InitPolicy
+- ZeRO2 with Adam Offload
+- Max Sequence Length: 2048 
 
-- 7B llama2: 0.105 samples/gpu/secs (micro_batch_size = 16/8 [rollout/train]; generation_length = 100~300)
-- 13B llama2: 0.04 samples/gpu/secs (micro_batch_size = 8/4 [rollout/train]; generation_length = 200~400)
-- 34B codellama: 0.007 samples/gpu/secs (micro_batch_size = 2/1 [rollout/train]; generation_length = 300~800)
+Throughput:
+
+- 7B llama2: 0.105 samples/gpu/secs
+  - micro_batch_size = 16/8 [rollout/train], generation_length = 100~300
+- 13B llama2: 0.04 samples/gpu/secs
+  - micro_batch_size = 8/4 [rollout/train], generation_length = 200~400
+- 34B codellama: 0.007 samples/gpu/secs
+  - micro_batch_size = 2/1 [rollout/train], generation_length = 300~800
 
 samples/gpu/secs = Number of PPO Samples / Number of A100 GPUS / Seconds
 
@@ -215,7 +223,7 @@ sbatch ./train_llama_slurm.sh
 If you really don't want to use nvidia-docker, we also provide tutorials for building openrlhf from a conda environment. (We prefer nvidia-docker to avoid errors caused by the environment.)
 ```shell
 # we need conda
-conda create -n llama2 python=3.10
+conda create -n openrlhf python=3.10
 # so, we need install some package manualy: when installing torch, you may need to match the corresponding cuda version.
 pip install packaging ninja
 pip install torch --index-url https://download.pytorch.org/whl/cu118

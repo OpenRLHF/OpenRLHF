@@ -64,7 +64,7 @@ sbatch ./train_llama_slurm.sh
 If you really don't want to use nvidia docker, we also provide tutorials for building openrlhf from a conda environment.  
 ```
 # we need conda
-conda create -n llama2 python=3.8
+conda create -n openrlhf python=3.10
 # now requirements.txt seems incomplete for a conda env
 pip install -r requirements.txt
 # so, we need install some package manualy: when installing torch, you may need to match the corresponding cuda version.
