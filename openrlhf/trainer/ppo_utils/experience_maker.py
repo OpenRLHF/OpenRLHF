@@ -9,8 +9,8 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 
-from openllama2.models.actor import Actor
-from openllama2.models.utils import compute_reward, masked_mean
+from openrlhf.models.actor import Actor
+from openrlhf.models.utils import compute_reward, masked_mean
 
 
 @dataclass

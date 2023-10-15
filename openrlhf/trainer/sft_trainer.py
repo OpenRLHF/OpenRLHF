@@ -8,8 +8,8 @@ from torch.utils.data import DistributedSampler
 from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
-from openllama2.datasets import SFTDataset
-from openllama2.models import GPTLMLoss
+from openrlhf.datasets import SFTDataset
+from openrlhf.models import GPTLMLoss
 
 
 class SFTTrainer(ABC):

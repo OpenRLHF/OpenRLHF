@@ -9,7 +9,7 @@ from torch.optim import Optimizer
 from torch.utils.data import DistributedSampler
 from tqdm import tqdm
 
-from openllama2.models import DPOLoss
+from openrlhf.models import DPOLoss
 
 
 class DPOTrainer(ABC):

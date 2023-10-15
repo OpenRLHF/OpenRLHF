@@ -1,24 +1,24 @@
-# OpenLLaMA2
+# OpenRLHF
 
 </br>
 
-<h1 align="center">OpenLLaMA2</h1>
+<h1 align="center">OpenRLHF</h1>
 <div align="center">
 <p align="center">
     <h3>A Ray-based High-performance RLHF framework!</h3>
-      <a href="https://github.com/openllmai/OpenLLaMA2/graphs/contributors">
-        <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/openllmai/OpenLLaMA2" />
+      <a href="https://github.com/openllmai/OpenRLHF/graphs/contributors">
+        <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/openllmai/OpenRLHF" />
       </a>
-      <a href="https://github.com/openllmai/OpenLLaMA2/issues">
-        <img alt="Issues" src="https://img.shields.io/github/issues/openllmai/OpenLLaMA2?color=0088ff" />
+      <a href="https://github.com/openllmai/OpenRLHF/issues">
+        <img alt="Issues" src="https://img.shields.io/github/issues/openllmai/OpenRLHF?color=0088ff" />
       </a>
-      <a href="https://github.com/openllmai/OpenLLaMA2/discussions">
-        <img alt="Issues" src="https://img.shields.io/github/discussions/openllmai/OpenLLaMA2?color=0088ff" />
+      <a href="https://github.com/openllmai/OpenRLHF/discussions">
+        <img alt="Issues" src="https://img.shields.io/github/discussions/openllmai/OpenRLHF?color=0088ff" />
       </a>
-      <a href="https://github.com/openllmai/OpenLLaMA2/pulls">
-        <img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/openllmai/OpenLLaMA2?color=0088ff" />
-      <a href="https://github.com/openllmai/OpenLLaMA2/stargazers">
-        <img alt="GitHub stars" src="https://img.shields.io/github/stars/openllmai/OpenLLaMA2?color=ccf" />
+      <a href="https://github.com/openllmai/OpenRLHF/pulls">
+        <img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/openllmai/OpenRLHF?color=0088ff" />
+      <a href="https://github.com/openllmai/OpenRLHF/stargazers">
+        <img alt="GitHub stars" src="https://img.shields.io/github/stars/openllmai/OpenRLHF?color=ccf" />
       </a>
       <br/>
       <em>Open-source ChatGPT / Comprehensive / Lightweight / Easy-to-use</em>
@@ -31,7 +31,7 @@
 > **The code is open-source, feel free to use it, contributions are welcome! Note: The license of the model depends on the provider of the model.**
 
 - [💥Latest News](#latest-news)
-- [💫OpenLLaMA2](#openllama2-project)
+- [💫OpenRLHF](#openrlhf-project)
 - [💫Features](#features)
 - [💫Performance](#performance)
 - [📄Running Example](#running-example)
@@ -42,25 +42,25 @@
 - [🏆Contributors](#contributors)
 
 ## Latest News
-
+- 2023/10/15: Rename to OpenRLHF 
 - 2023/10/14: Support [Decision Transformer Alignment](./examples/scripts/train_decision_transformer_llama.sh) (https://arxiv.org/abs/2308.12050).
 - 2023/10/2: 34B codellama model with Ray-based RLHF + 1 DGX A100 test passed! Configs:
   - Adam Offload = True
   - micro_batch_size = 2/1 (rollout/train)
   - Enable FlashAttention2 to support 4096 seq length
 - 2023/9/20: Support [Ray-based RLHF](./examples/scripts/train_ppo_llama_ray.sh)
-- 2023/9/13: Upload [7B/13B SFT/RM/DPO/PPO checkpoint](https://huggingface.co/chuyi777/openllama2_checkpoint)
+- 2023/9/13: Upload [7B/13B SFT/RM/DPO/PPO checkpoint](https://huggingface.co/chuyi777/openrlhf_checkpoint)
 - 2023/9/9: Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh)
 - 2023/9/6: Support FlashAttention2 (--flash_attn)
 - 2023/8/26: Support wandb logs (--wandb)
 - 2023/8/20: Upload PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
 - 2023/8/18: Support **LLaMA2 7B PPO fintune on Single A100**
 - 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed test passed
-- 2023/07/30: OpenLLaMA2 project officially launched
+- 2023/07/30: OpenRLHF project officially launched
 
-## OpenLLaMA2 Project
+## OpenRLHF Project
 
-OpenLLaMA2 aims to develop a **High-performance RLHF training framework** based on Ray and DeepSpeed/HuggingFace.
+OpenRLHF aims to develop a **High-performance RLHF training framework** based on Ray and DeepSpeed/HuggingFace.
 
 OpenLlaMA2 is the **Simplest** high-performance RLHF library that supports 34B models RLHF training with Single DGXA100.
 
@@ -86,7 +86,7 @@ Support Matrix
 
 |        | PPO-max & Best Hyperparameters  | Ray (Distributed RL) | 34B Full Tuning with 1 DGXA100   | 7B Full Tuning with 1 A100  | Decision Transformer Alignment|
 |  ----  | ----  |  ----  | ----  | ----  | ----  |  
-| OpenLLaMA2  | ✔ | ✔  | ✔ | ✔ | ✔ |
+| OpenRLHF  | ✔ | ✔  | ✔ | ✔ | ✔ |
 | DeepSpeedChat  | ✖️ | ✖️  | ✖️ | ✖️ | ✖️ |
 | ColossalAIChat  | ✖️ | ✖️  | ✖️ |✖️ | ✖️ |
 | TRL  | ✖️ | ✖️  | ✖️ | ✖️ | ✖️ |
@@ -95,7 +95,7 @@ Support Matrix
 
 |        | 7B llama2 RLHF | 13B llama2 RLHF (50k samples) | 
 |  ----  | ----  |  ----  |
-| OpenLLaMA2  | - | 22 hours with 8 A100  | 
+| OpenRLHF  | - | 22 hours with 8 A100  | 
 | DeepSpeedChat  | - | 48 hours with 16 A100  |
 
 Ray/DeepSpeed Config: 
@@ -110,15 +110,15 @@ samples/gpu/secs = Number of PPO Samples / Number of A100 GPUS / Seconds
 
 ## Running Example
 
-You can build openllama2 from **nvidia-docker(recomended)** or from conda envs.
+You can build openrlhf from **nvidia-docker(recomended)** or from conda envs.
 
 ```shell
 Clone the repository: 
-git clone https://github.com/openllmai/OpenLLaMA2.git
+git clone https://github.com/openllmai/OpenRLHF.git
 
 # Download the pre-trained SFT/RM checkpoints (Optional)
 git lfs install
-git clone https://huggingface.co/chuyi777/openllama2_checkpoint
+git clone https://huggingface.co/chuyi777/openrlhf_checkpoint
 ```
 
 * Single-node training with nvidia-docker
@@ -133,10 +133,10 @@ cd examples/scripts
 ./docker_run.sh
 
 # cd in container
-cd /openllama2/examples/scripts
+cd /openrlhf/examples/scripts
 
-# build OpenLLaMA2 (i.e, pip install)
-./build_openllama2.sh
+# build OpenRLHF (i.e, pip install)
+./build_openrlhf.sh
 
 # huggingface login 
 ~/.local/bin/huggingface-cli login
@@ -166,10 +166,10 @@ cd examples/scripts
 ./docker_run.sh
 
 # cd in container
-cd /openllama2/examples/scripts
+cd /openrlhf/examples/scripts
 
-# build OpenLLaMA2 (i.e, pip install)
-./build_openllama2.sh
+# build OpenRLHF (i.e, pip install)
+./build_openrlhf.sh
 
 # huggingface login 
 export PATH=$HOME/.local/bin/:$PATH
@@ -210,9 +210,9 @@ readonly GPUS_PER_NODE=8
 sbatch ./train_llama_slurm.sh
 ```
 
-* build openllama2 from conda envs 
+* build openrlhf from conda envs 
 
-If you really don't want to use nvidia-docker, we also provide tutorials for building openllama2 from a conda environment. (We prefer nvidia-docker to avoid errors caused by the environment.)
+If you really don't want to use nvidia-docker, we also provide tutorials for building openrlhf from a conda environment. (We prefer nvidia-docker to avoid errors caused by the environment.)
 ```shell
 # we need conda
 conda create -n llama2 python=3.10
@@ -225,7 +225,7 @@ echo $? # output: 0
 # install flash-attn: may take some time.
 # For network error: you can download sepecified version from https://github.com/Dao-AILab/flash-attention/releases.
 pip install flash-attn==2.1.1 --no-build-isolation
-./build_openllama2.sh
+./build_openrlhf.sh
 # enjoy it!
 ```
 
@@ -267,42 +267,42 @@ We would like to express our gratitude to the following projects and organizatio
    - Your GitHub username
    - Your areas of interest
    - Your skills and experience related to NLP and/or AI
-1. You can also join us through the official GitHub [OpenLLaMA2 ↗](https://github.com/openllmai/OpenLLaMA2) project page. Just create an issue about your interest to contribute and we will get back to you.
+1. You can also join us through the official GitHub [OpenRLHF ↗](https://github.com/openllmai/OpenRLHF) project page. Just create an issue about your interest to contribute and we will get back to you.
 
 **What can you do?**
 
-1. Join the team and participate in the development of the OpenLLaMA2 project.
+1. Join the team and participate in the development of the OpenRLHF project.
 1. Contribute to the project by submitting pull requests.
 1. Help improve documentation, fix bugs, or create new features.
 1. Share the project and help us grow the community.
 
 ## Sponsor Us
 
-Your sponsorship can help us maintain and improve OpenLLaMA2. If you find this project useful, please consider sponsoring us. You can sponsor us on [Open Collective ↗](https://opencollective.com/openllmai).
+Your sponsorship can help us maintain and improve OpenRLHF. If you find this project useful, please consider sponsoring us. You can sponsor us on [Open Collective ↗](https://opencollective.com/openllmai).
 
 ## Starchart
 
 
-[![Star History Chart](https://api.star-history.com/svg?repos=openllmai/OpenLLaMA2&type=Date)](https://star-history.com/#openllmai/OpenLLaMA2&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=openllmai/OpenRLHF&type=Date)](https://star-history.com/#openllmai/OpenRLHF&Date)
 
 ## Contributors
 
 A big thank you to all our contributors! If you want to contribute, feel free to make a pull request or create an issue.
 
-<a href="https://github.com/openllmai/OpenLLaMA2/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=openllmai/OpenLLaMA2" />
+<a href="https://github.com/openllmai/OpenRLHF/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=openllmai/OpenRLHF" />
 </a>
 
 ## Citation
 ```
 @misc{openllmai23,
    author = {OpenLLMAI},
-   title = {OpenLLaMA2},
+   title = {OpenRLHF},
    year={2023},
-   howpublished = {\url{https://github.com/OpenLLMAI/OpenLLaMA2}}
+   howpublished = {\url{https://github.com/OpenLLMAI/OpenRLHF}}
 }
 ```
 
 ______________________________________________________________________
 
-*OpenLLaMA2 © 2023 OpenLLMAI. All Rights Reserved.*
+*OpenRLHF © 2023 OpenLLMAI. All Rights Reserved.*

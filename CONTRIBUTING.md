@@ -1,4 +1,4 @@
-# Contributing to OpenLLaMA2
+# Contributing to OpenRLHF
 
 After cloning the repository, please install pre-commit hooks with:
 ```

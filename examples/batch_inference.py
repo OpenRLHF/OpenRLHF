@@ -7,9 +7,9 @@ import torch
 from torch import distributed as dist
 from tqdm import tqdm
 
-from openllama2.datasets import PromptDataset, SFTDataset
-from openllama2.models import Actor, RewardModel
-from openllama2.utils import blending_datasets, get_strategy, get_tokenizer
+from openrlhf.datasets import PromptDataset, SFTDataset
+from openrlhf.models import Actor, RewardModel
+from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
 
 def batch_generate(args):

@@ -16,7 +16,7 @@ from torch import distributed as dist
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader, DistributedSampler
 
-from openllama2.models import Actor
+from openrlhf.models import Actor
 
 from .deepspeed_utils import (
     _z3_params_to_fetch,

@@ -1,7 +1,7 @@
-# OpenLLaMA2 Tutorial
+# OpenRLHF Tutorial
 ## Prepare envs and training
 ### Verified envs 
-You can build openllama2 from nvidia docker(recomended) or from conda envs. 
+You can build openrlhf from nvidia docker(recomended) or from conda envs. 
 
 * Python: 3.8/3.9/3.10/3.11
 * Torch: 2.0.0/2.0.1
@@ -18,10 +18,10 @@ cd examples/scripts
 ./docker_run.sh
 
 # cd in container
-cd /openllama2/examples/scripts
+cd /openrlhf/examples/scripts
 
-# build OpenLLaMA2 (i.e, pip install)
-./build_openllama2.sh
+# build OpenRLHF (i.e, pip install)
+./build_openrlhf.sh
 
 # huggingface login 
 ~/.local/bin/huggingface-cli login
@@ -60,8 +60,8 @@ readonly GPUS_PER_NODE=8
 sbatch ./train_llama_slurm.sh
 ```
 
-### build openllama2 from conda envs 
-If you really don't want to use nvidia docker, we also provide tutorials for building openllama2 from a conda environment.  
+### build openrlhf from conda envs 
+If you really don't want to use nvidia docker, we also provide tutorials for building openrlhf from a conda environment.  
 ```
 # we need conda
 conda create -n llama2 python=3.8
@@ -76,7 +76,7 @@ echo $?
 # install flash-attn: may take some time
 pip install flash-attn --no-build-isolation
 # build: may need to remove --use-feature=in-tree-build
-./build_openllama2.sh
+./build_openrlhf.sh
 # enjoy it!
 ```
 

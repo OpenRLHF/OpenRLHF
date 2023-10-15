@@ -3,8 +3,8 @@ import torch
 from torch import distributed as dist
 from tqdm import tqdm
 
-from openllama2.models import Actor
-from openllama2.utils import get_strategy, get_tokenizer
+from openrlhf.models import Actor
+from openrlhf.utils import get_strategy, get_tokenizer
 
 
 def generate(args):

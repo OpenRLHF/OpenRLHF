@@ -2,7 +2,7 @@
 
 #SBATCH -p {PARTITION}
 #SBATCH -A {ACCOUNT}
-#SBATCH -J {ACCOUNT}-openllama2
+#SBATCH -J {ACCOUNT}-openrlhf
 #SBATCH -N 2                       # 64x8x4
 #SBATCH -t {LIMIT_TIME}            # wall time
 #SBATCH --ntasks-per-node=1        # tasks per node
@@ -16,7 +16,7 @@
 # project settings
 PROJECT_PATH=$(cd ../../; realpath .)
 IMAGE_NAME="nvcr.io/nvidia/pytorch:23.08-py3"
-MOUNT="$PROJECT_PATH:/openllama2,$HOME/.cache:/root/.cache,/dev/null:/root/.bashrc"
+MOUNT="$PROJECT_PATH:/openrlhf,$HOME/.cache:/root/.cache,/dev/null:/root/.bashrc"
 
 JOBLOG="$(realpath .)/logs/train_ppo_llama_ray-$SLURM_JOB_ID.log"
 mkdir logs
@@ -58,7 +58,7 @@ sleep 30s
 srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" bash -c \
   "pip install ray[default] \
   && /root/.local/bin/ray job submit --address=http://localhost:8265 \
-    --runtime-env-json='{\"working_dir\": \"/openllama2\", \"pip\": \"/openllama2/requirements.txt\"}' \
+    --runtime-env-json='{\"working_dir\": \"/openrlhf\", \"pip\": \"/openrlhf/requirements.txt\"}' \
     -- python3 examples/train_ppo_ray.py \
     --ref_num_nodes 1 \
     --ref_num_gpus_per_node 2 \
@@ -70,9 +70,9 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --actor_num_gpus_per_node 8 \
     --pretrain meta-llama/Llama-2-13b-hf \
     --critic_pretrain meta-llama/Llama-2-13b-hf \
-    --reward_model_path /openllama2/examples/test_scripts/ckpt/13b_llama/rm_model.pt \
-    --sft_model_path /openllama2/examples/test_scripts/ckpt/13b_llama/sft_model.pt \
-    --save_path /openllama2/examples/test_scripts/ckpt/13b_llama \
+    --reward_model_path /openrlhf/examples/test_scripts/ckpt/13b_llama/rm_model.pt \
+    --sft_model_path /openrlhf/examples/test_scripts/ckpt/13b_llama/sft_model.pt \
+    --save_path /openrlhf/examples/test_scripts/ckpt/13b_llama \
     --micro_train_batch_size 4 \
     --train_batch_size 128 \
     --micro_rollout_batch_size 8 \

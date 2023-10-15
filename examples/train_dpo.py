@@ -7,10 +7,10 @@ from datetime import datetime
 
 from transformers.trainer import get_scheduler
 
-from openllama2.datasets import RewardDataset
-from openllama2.models import Actor
-from openllama2.trainer import DPOTrainer
-from openllama2.utils import blending_datasets, get_strategy, get_tokenizer
+from openrlhf.datasets import RewardDataset
+from openrlhf.models import Actor
+from openrlhf.trainer import DPOTrainer
+from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
 
 def train(args):
@@ -147,7 +147,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_wandb", type=str, default=None)
     parser.add_argument("--wandb_org", type=str, default=None)
     parser.add_argument("--wandb_group", type=str, default=None)
-    parser.add_argument("--wandb_project", type=str, default="openllama2_train_dpo")
+    parser.add_argument("--wandb_project", type=str, default="openrlhf_train_dpo")
     parser.add_argument(
         "--wandb_run_name",
         type=str,

@@ -8,8 +8,8 @@ import torch
 from ray.util.placement_group import PlacementGroup, placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from openllama2.models import Actor, Critic, RewardModel
-from openllama2.utils import DeepspeedStrategy, get_tokenizer
+from openrlhf.models import Actor, Critic, RewardModel
+from openrlhf.utils import DeepspeedStrategy, get_tokenizer
 
 
 class DistributedTorchRayActor:

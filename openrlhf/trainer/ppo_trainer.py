@@ -10,8 +10,8 @@ from torch.optim import Optimizer
 from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 
-from openllama2.models import Actor, Critic, GPTLMLoss, PolicyLoss, ValueLoss
-from openllama2.models.utils import masked_mean
+from openrlhf.models import Actor, Critic, GPTLMLoss, PolicyLoss, ValueLoss
+from openrlhf.models.utils import masked_mean
 
 from .ppo_utils import (
     AdaptiveKLController,

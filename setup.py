@@ -30,7 +30,7 @@ def _fetch_version():
 
 
 def _fetch_package_name():
-    return "openllama2-nightly" if _is_nightly() else "openllama2"
+    return "openrlhf-nightly" if _is_nightly() else "openrlhf"
 
 
 setup(

@@ -7,11 +7,11 @@ from typing import Dict
 import ray
 from transformers.trainer import get_scheduler
 
-from openllama2.datasets import PromptDataset, SFTDataset
-from openllama2.models import Actor, Critic, RewardModel
-from openllama2.trainer import PPOTrainer
-from openllama2.trainer.ppo_utils import Experience
-from openllama2.utils import DeepspeedStrategy, blending_datasets, get_tokenizer
+from openrlhf.datasets import PromptDataset, SFTDataset
+from openrlhf.models import Actor, Critic, RewardModel
+from openrlhf.trainer import PPOTrainer
+from openrlhf.trainer.ppo_utils import Experience
+from openrlhf.utils import DeepspeedStrategy, blending_datasets, get_tokenizer
 
 from .launcher import BasePPORole
 

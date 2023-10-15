@@ -8,7 +8,7 @@ from torch.optim import Optimizer
 from torch.utils.data import DistributedSampler
 from tqdm import tqdm
 
-from openllama2.models import LogExpLoss, PairWiseLoss
+from openrlhf.models import LogExpLoss, PairWiseLoss
 
 
 class RewardModelTrainer(ABC):

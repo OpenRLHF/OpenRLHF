@@ -4,14 +4,14 @@ from datetime import datetime
 import ray
 from ray.util.placement_group import placement_group
 
-from openllama2.trainer.ray import (
+from openrlhf.trainer.ray import (
     ActorModelRayActor,
     CriticModelRayActor,
     PPORayActorGroup,
     ReferenceModelRayActor,
     RewardModelRayActor,
 )
-from openllama2.utils import blending_datasets, get_strategy, get_tokenizer
+from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
 
 def train(args):
@@ -210,7 +210,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_wandb", type=str, default=None)
     parser.add_argument("--wandb_org", type=str, default=None)
     parser.add_argument("--wandb_group", type=str, default=None)
-    parser.add_argument("--wandb_project", type=str, default="openllama2_train_ppo")
+    parser.add_argument("--wandb_project", type=str, default="openrlhf_train_ppo")
     parser.add_argument(
         "--wandb_run_name",
         type=str,

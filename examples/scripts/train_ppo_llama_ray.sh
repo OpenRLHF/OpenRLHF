@@ -2,7 +2,7 @@ set -x
 export PATH=$HOME/.local/bin/:$PATH
 
 ray job submit --address="http://127.0.0.1:8265" \
-    --runtime-env-json='{"working_dir": "/openllama2", "pip": "/openllama2/requirements.txt"}' \
+    --runtime-env-json='{"working_dir": "/openrlhf", "pip": "/openrlhf/requirements.txt"}' \
     -- python3 examples/train_ppo_ray.py \
     --ref_num_nodes 1 \
     --ref_num_gpus_per_node 1 \
@@ -14,9 +14,9 @@ ray job submit --address="http://127.0.0.1:8265" \
     --actor_num_gpus_per_node 4 \
     --pretrain meta-llama/Llama-2-7b-hf \
     --critic_pretrain meta-llama/Llama-2-7b-hf \
-    --reward_model_path /openllama2/examples/test_scripts/ckpt/7b_llama/rm_model_anthropic_oasst_lmsys_webgpt.pt \
-    --sft_model_path /openllama2/examples/test_scripts/ckpt/7b_llama/sft_model_ocra.pt \
-    --save_path /openllama2/examples/test_scripts/ckpt/7b_llama \
+    --reward_model_path /openrlhf/examples/test_scripts/ckpt/7b_llama/rm_model_anthropic_oasst_lmsys_webgpt.pt \
+    --sft_model_path /openrlhf/examples/test_scripts/ckpt/7b_llama/sft_model_ocra.pt \
+    --save_path /openrlhf/examples/test_scripts/ckpt/7b_llama \
     --micro_train_batch_size 8 \
     --train_batch_size 128 \
     --micro_rollout_batch_size 16 \
