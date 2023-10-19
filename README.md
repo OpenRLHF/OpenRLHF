@@ -60,7 +60,7 @@
 
 OpenRLHF aims to develop a **High-performance RLHF training framework** based on Ray and DeepSpeed. OpenRLHF is the **Simplest** high-performance RLHF library that supports 34B models RLHF training with Single DGXA100.
 
-The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Reference Model, and the Critic Model onto separate GPUs using Ray, while placing the Adam Optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G), with high training efficiency thanks to the ability to use a large generate batch size with Adam Offload.
+The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Reference Model, and the Critic Model onto separate GPUs using Ray, while placing the Adam Optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G), with high training efficiency thanks to the ability to use a large generate batch size with Adam Offload and Ray. Our performance with the 13B models is 4 times that of DeepSpeedChat.
 
 
 ### Features
@@ -162,7 +162,7 @@ cd /openrlhf/examples/scripts
 ./train_decision_transformer_llama.sh
 ```
 
-* PPO training with Ray (for 13B/34B models)
+* PPO training with Ray (for 13B+ models, such as codellama 34B)
 
 ```shell
 cd examples/scripts
