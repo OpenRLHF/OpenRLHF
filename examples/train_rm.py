@@ -19,8 +19,8 @@ def train(args):
 
     # configure model
     # load huggingface model/config
-    from_config = bool(args.load_model or args.load_checkpoint, use_flash_attention_2=args.flash_attn)
-    model = RewardModel(args.pretrain, from_config)
+    from_config = bool(args.load_model or args.load_checkpoint)
+    model = RewardModel(args.pretrain, from_config, use_flash_attention_2=args.flash_attn)
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy)

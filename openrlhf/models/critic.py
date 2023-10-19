@@ -3,7 +3,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
-from transformers import AutoConfig, AutoModel
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM
 
 
 class Critic(nn.Module):
@@ -24,16 +24,19 @@ class Critic(nn.Module):
         if isinstance(pretrain_or_model, str):
             if from_config:
                 config = AutoConfig.from_pretrained(
-                    pretrain_or_model, torch_dtype="auto", use_flash_attention_2=use_flash_attention_2
-                )
-                self.model = AutoModel.from_config(config)
-            else:
-                self.model = AutoModel.from_pretrained(
                     pretrain_or_model,
                     torch_dtype="auto",
                     trust_remote_code=True,
                     use_flash_attention_2=use_flash_attention_2,
                 )
+                self.model = AutoModelForCausalLM.from_config(config, trust_remote_code=True).model
+            else:
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    pretrain_or_model,
+                    torch_dtype="auto",
+                    trust_remote_code=True,
+                    use_flash_attention_2=use_flash_attention_2,
+                ).model
         else:
             self.model = pretrain_or_model
 

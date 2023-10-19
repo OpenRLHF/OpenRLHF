@@ -94,18 +94,20 @@ def blending_datasets(
             or dataset.endswith(".json")
             or dataset.endswith(".jsonl")
         ):
-            strategy.print(f"load local data(json/jsonl/csv/parquet/txt): ")
+            strategy.print(f"load local data file: {dataset}")
             if dataset.endswith((".json", ".jsonl", ".csv", ".parquet", ".txt")):
                 files = dataset
                 data_type = os.path.splitext(files)[1][1:]
             else:
                 path = Path(dataset)
-                script = [str(file) for file in Path(path).rglob("*.py")]
+                script = [str(file.resolve()) for file in Path(path).rglob("*.py")]
                 extensions = ("*.json", "*.jsonl", "*.csv", "*.parquet", "*.txt")
                 files = [str(file) for ext in extensions for file in Path(path).rglob(ext)]
                 strategy.print(f"script: {script}")
                 strategy.print(f"files: {files}")
-                data_type = os.path.splitext(files[0])[1][1:]
+                data_type = os.path.splitext(files[0])[1][1:] if len(script) != 1 else script[0]
+                if data_type.endswith(".py"):
+                    files = None
 
             if data_type == "json" or data_type == "jsonl":
                 data_type = "json"
