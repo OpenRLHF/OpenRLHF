@@ -162,7 +162,8 @@ cd /openrlhf/examples/scripts
 ./train_decision_transformer_llama.sh
 ```
 
-* PPO training with Ray (for 13B+ models, such as codellama 34B)
+* PPO training with Ray
+> for 13B/34B models on A100/H100.. or 7B models on RTX4090
 
 ```shell
 cd examples/scripts
