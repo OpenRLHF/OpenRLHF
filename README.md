@@ -74,7 +74,7 @@ The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Referen
 - [✔️] Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh).
 - [✔️] Distributed RLHF based on Ray (for 34B models and 7B models on RTX4090).
 - [✔️] [Decision Transformer Alignment](./examples/scripts/train_decision_transformer_llama.sh) (https://arxiv.org/abs/2308.12050).
-- [WIP] Support Hot Chinese Base Models.
+- [✔️] Support Top Chinese Base Models.
 - [WIP] Support Rejection Sampling.
 - [WIP] Support Multiple Reward models.
 - [WIP] Support QLora.
