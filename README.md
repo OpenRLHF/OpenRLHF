@@ -43,6 +43,7 @@
 
 ## Latest News
 - 2023/10/20: Support [top chinese models](https://github.com/OpenLLMAI/OpenRLHF/issues/116)
+- 2023/10/15: Rename to OpenRLHF
 - 2023/10/14: Support [Decision Transformer Alignment](./examples/scripts/train_decision_transformer_llama.sh) (https://arxiv.org/abs/2308.12050).
 - 2023/10/2: 34B codellama model with Ray-based RLHF + 1 DGX A100 test passed! configs:
   - Adam Offload = True
@@ -75,7 +76,6 @@ The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Referen
 - [✔️] Distributed [RLHF based on Ray]((./examples/scripts/train_ppo_llama_ray.sh)) for 34B+ models and 7B models on RTX4090.
 - [✔️] [Decision Transformer Alignment](./examples/scripts/train_decision_transformer_llama.sh) (https://arxiv.org/abs/2308.12050).
 - [✔️] Support Top Chinese Base Models.
-- [✔️] Pre-trained [7B/13B SFT/RM/PPO/DPO/DT checkpoint]((https://huggingface.co/chuyi777/openrlhf_checkpoint)).
 - [WIP] Support Rejection Sampling.
 - [WIP] Support Multiple Reward models.
 - [WIP] Support QLora.
