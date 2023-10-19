@@ -64,7 +64,7 @@ OpenRLHF aims to develop a **High-performance RLHF training framework** based on
 
 OpenRLHF is the **Simplest** high-performance RLHF library that supports 34B models RLHF training with Single DGXA100.
 
-The core idea of OpenRLHF is to distribute the Actor Model, Reward Model, Reference Model, and Critic Model onto separate GPUs using Ray, while placing the optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G), with high training efficiency thanks to the ability to use very large batch sizes with Ray.
+The core idea of OpenRLHF is to distribute the Actor Model, Reward Model, Reference Model, and Critic Model onto separate GPUs using Ray, while placing the optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G), with high training efficiency thanks to the ability to use a large generate batch size with Ray.
 
 
 ### Features
