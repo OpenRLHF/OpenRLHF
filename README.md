@@ -61,20 +61,21 @@
 
 OpenRLHF aims to develop a **High-performance RLHF training framework** based on Ray and DeepSpeed. OpenRLHF is the **Simplest** high-performance RLHF library that supports 34B models RLHF training with Single DGXA100.
 
-The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Reference Model, and the Critic Model onto separate GPUs using Ray, while placing the Adam Optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G), with high training efficiency thanks to the ability to use a large generate batch size with Adam Offload and Ray. Our performance with the 13B models is 4 times that of DeepSpeedChat.
+The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Reference Model, and the Critic Model onto separate GPUs using Ray, while placing the Adam Optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G), with high training efficiency thanks to the ability to use a large generate batch size with Adam Offload and Ray. Our PPO performance with the 13B llama2 models is 4 times that of DeepSpeedChat.
 
 
 ### Features
 
 - [✔️] A fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
 - [✔️] Multi-nodes training scripts for Slurm.
-- [✔️] Wandb log.
+- [✔️] Wandb log (--wandb).
 - [✔️] Support conda env.
-- [✔️] FlashAttention2.
+- [✔️] FlashAttention2 (--flash_attn).
 - [✔️] Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh).
-- [✔️] Distributed RLHF based on Ray (for 34B models and 7B models on RTX4090).
+- [✔️] Distributed [RLHF based on Ray]((./examples/scripts/train_ppo_llama_ray.sh)) for 34B+ models and 7B models on RTX4090.
 - [✔️] [Decision Transformer Alignment](./examples/scripts/train_decision_transformer_llama.sh) (https://arxiv.org/abs/2308.12050).
 - [✔️] Support Top Chinese Base Models.
+- [✔️] Pre-trained [7B/13B SFT/RM/PPO/DPO/DT checkpoint]((https://huggingface.co/chuyi777/openrlhf_checkpoint)).
 - [WIP] Support Rejection Sampling.
 - [WIP] Support Multiple Reward models.
 - [WIP] Support QLora.
