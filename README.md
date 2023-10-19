@@ -58,11 +58,9 @@
 
 ## OpenRLHF Project
 
-OpenRLHF aims to develop a **High-performance RLHF training framework** based on Ray and DeepSpeed/HuggingFace.
+OpenRLHF aims to develop a **High-performance RLHF training framework** based on Ray and DeepSpeed/HuggingFace. OpenRLHF is the **Simplest** high-performance RLHF library that supports 34B models RLHF training with Single DGXA100.
 
-OpenRLHF is the **Simplest** high-performance RLHF library that supports 34B models RLHF training with Single DGXA100.
-
-The core idea of OpenRLHF is to distribute the Actor Model, Reward Model, Reference Model, and Critic Model onto separate GPUs using Ray, while placing the optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G), with high training efficiency thanks to the ability to use a large generate batch size with Ray.
+The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Reference Model, and the Critic Model onto separate GPUs using Ray, while placing the Adam Optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G), with high training efficiency thanks to the ability to use a large generate batch size with Adam Offload.
 
 
 ### Features
@@ -179,7 +177,6 @@ cd /openrlhf/examples/scripts
 ./build_openrlhf.sh
 
 # huggingface login 
-export PATH=$HOME/.local/bin/:$PATH
 ~/.local/bin/huggingface-cli login
 
 # launch ray in container
@@ -241,6 +238,7 @@ pip install flash-attn==2.1.1 --no-build-isolation
 After completing the training, you can evaluate your model by using the `inference` script:
 
 ```shell
+# interactive_chat
 ./interactive_chat_llama.sh { model_path }
 ```
 
