@@ -42,6 +42,7 @@
 - [🏆Contributors](#contributors)
 
 ## Latest News
+- 2023/10/20: Support [top chinese models](https://github.com/OpenLLMAI/OpenRLHF/issues/116)
 - 2023/10/14: Support [Decision Transformer Alignment](./examples/scripts/train_decision_transformer_llama.sh) (https://arxiv.org/abs/2308.12050).
 - 2023/10/2: 34B codellama model with Ray-based RLHF + 1 DGX A100 test passed! configs:
   - Adam Offload = True
