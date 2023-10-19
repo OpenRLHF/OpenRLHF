@@ -34,8 +34,12 @@ def train(args):
             new_state_dict = OrderedDict()
             for k, v in states_dict.items():
                 new_state_dict[k.replace("transformer.", "model.")] = v
+            strategy.print("Load state dict keys")
+            strategy.print(new_state_dict.keys())
             return new_state_dict
 
+        strategy.print("Model state dict keys")
+        strategy.print(model.state_dict().keys())
         strategy.load_model(model, args.load_model, strict=False, key_replace_fn=key_replace_fn)
         strategy.print("Load model: ", args.load_model)
 
