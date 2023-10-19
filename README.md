@@ -85,7 +85,7 @@ OpenRLHF is the **Simplest** high-performance RLHF library that supports 34B mod
 Support Matrix
 
 
-|        | PPO-max & Best Hyperparameters  | Ray (Distributed RL) | 34B Full Tuning with 1 DGXA100   | 7B Full Tuning with 1 A100  | Decision Transformer Alignment|
+|        | PPO-max & Best Hyperparameters  | Ray  | 34B Full Tuning with 4 A100   | 7B Full Tuning with 1 A100 (80G)  | 7B Full Tuning with 4 RTX4090 |
 |  ----  | ----  |  ----  | ----  | ----  | ----  |  
 | OpenRLHF  | ✔ | ✔  | ✔ | ✔ | ✔ |
 | DeepSpeedChat  | ✖️ | ✖️  | ✖️ | ✖️ | ✖️ |
