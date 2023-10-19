@@ -42,12 +42,11 @@
 - [🏆Contributors](#contributors)
 
 ## Latest News
-- 2023/10/15: Rename to OpenRLHF 
 - 2023/10/14: Support [Decision Transformer Alignment](./examples/scripts/train_decision_transformer_llama.sh) (https://arxiv.org/abs/2308.12050).
 - 2023/10/2: 34B codellama model with Ray-based RLHF + 1 DGX A100 test passed! configs:
   - Adam Offload = True
   - micro_batch_size = 2/1 (rollout/train)
-  - Enable FlashAttention2 to support 4096 seq length
+  - Enable FlashAttention2 to support 4096 sequence length
 - 2023/9/20: Support [Ray-based RLHF](./examples/scripts/train_ppo_llama_ray.sh)
 - 2023/9/13: Upload [7B/13B SFT/RM/DPO/PPO checkpoint](https://huggingface.co/chuyi777/openrlhf_checkpoint)
 - 2023/9/9: Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh)
@@ -55,8 +54,7 @@
 - 2023/8/26: Support wandb logs (--wandb)
 - 2023/8/20: Upload PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
 - 2023/8/18: Support LLaMA2 7B PPO fintune on Single A100
-- 2023/8/13: LLaMA2 7B + SFT+ RM + PPO + DeepSpeed test passed
-- 2023/07/30: OpenRLHF project officially launched
+- 2023/8/13: LLaMA2 7B + SFT+ RM + PPO training test passed
 
 ## OpenRLHF Project
 
@@ -75,13 +73,12 @@ The core idea of OpenRLHF is to distribute the Actor Model, Reward Model, Refere
 - [✔️] Support conda env.
 - [✔️] FlashAttention2.
 - [✔️] Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh).
-- [✔️] Distributed RLHF based on Ray (for 34B models).
+- [✔️] Distributed RLHF based on Ray (for 34B models and 7B models on RTX4090).
 - [✔️] [Decision Transformer Alignment](./examples/scripts/train_decision_transformer_llama.sh) (https://arxiv.org/abs/2308.12050).
-- [WIP] Hot Chinese Base Models.
-- [WIP] Rejection Sampling.
-- [WIP] Multiple Reward models.
+- [WIP] Support Hot Chinese Base Models.
+- [WIP] Support Rejection Sampling.
+- [WIP] Support Multiple Reward models.
 - [WIP] Support QLora.
-- [WIP] Develop the [RLHF datasets ↗](https://github.com/OpenLLMAI/OpenLLMData) for Multiple reward models.
 
 
 Support Matrix
