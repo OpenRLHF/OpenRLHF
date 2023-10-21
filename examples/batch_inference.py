@@ -15,7 +15,7 @@ from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 def batch_generate(args):
     # configure strategy
     strategy = get_strategy(args)
-    strategy.setup_distributed(timeout=timedelta(minutes=99999))
+    strategy.setup_distributed(timeout=timedelta(seconds=9999999))
 
     # configure model
     from_config = bool(args.load_model)
@@ -63,6 +63,11 @@ def batch_generate(args):
 
     output_dataset = []
     for prompts in pbar:
+        # Decision Transformer inference
+        if args.enable_dt:
+            for i in range(len(prompts)):
+                prompts[i] += args.dt_prompt.strip() + " "
+
         inputs = tokenize_fn(prompts)
         outputs = model.model.generate(
             **inputs,
@@ -81,6 +86,8 @@ def batch_generate(args):
         for prompt, output in zip(prompts, outputs):
             output = output[len(prompt) :]
             output_dataset.append({"input": prompt, "output": output})
+
+        dist.barrier()
 
     with jsonlines.open(args.output_path + str(strategy.get_rank()), mode="w") as writer:
         writer.write_all(output_dataset)
@@ -106,7 +113,7 @@ def batch_generate(args):
 def batch_rm_inference(args):
     # configure strategy
     strategy = get_strategy(args)
-    strategy.setup_distributed(timeout=timedelta(minutes=99999))
+    strategy.setup_distributed(timeout=timedelta(seconds=9999999))
 
     # configure model
     # load huggingface model/config
@@ -150,6 +157,8 @@ def batch_rm_inference(args):
             rewards = model(input_ids, attention_masks)
             for prompt, output, reward in zip(info["input"], info["output"], rewards):
                 output_dataset.append({"input": prompt, "output": output, "reward": reward.item()})
+
+            dist.barrier()
 
     with jsonlines.open(args.output_path + str(strategy.get_rank()), mode="w") as writer:
         writer.write_all(output_dataset)
@@ -232,10 +241,14 @@ if __name__ == "__main__":
     parser.add_argument("--output_path", type=str, default=None)
     parser.add_argument("--max_samples", type=int, default=500000)
 
-    # decision transformer
+    # Decision Transformer training
     parser.add_argument("--post_processor", type=str, default=None)
     parser.add_argument("--normalize_reward", action="store_true", default=False)
     parser.add_argument("--reward_template", type=str, default=None)
+
+    # Decision Transformer inference
+    parser.add_argument("--enable_dt", action="store_true", default=False)
+    parser.add_argument("--dt_prompt", type=str, default="<rm_score>: 5.00", help="decision transformer prompt")
 
     args = parser.parse_args()
     if args.eval_task and args.eval_task == "generate":

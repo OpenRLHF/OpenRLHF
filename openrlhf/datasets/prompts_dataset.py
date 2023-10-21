@@ -45,6 +45,9 @@ def preprocess_data(data):
         # tasksource/oasst1_pairwise_rlhf_reward
         if prompt.startswith("prompter:"):
             prompt = prompt.replace("prompter:", "\nHuman: ").replace("assistant:", "\nAssistant: ") + "\nAssistant: "
+    # JSON files for batch inference
+    elif exist_and_not_none(data, "input"):
+        prompt = "Human: " + data["input"] + "\nAssistant: "
     else:
         raise ValueError("prompt dataset key error")
     return prompt
