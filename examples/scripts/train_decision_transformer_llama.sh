@@ -14,7 +14,7 @@ read -r -d '' generate_commands <<EOF
     --dataset Open-Orca/OpenOrca,Dahoas/full-hh-rlhf \
     --dataset_probs 0.5,0.5 \
     --max_samples 38400 \
-    --temperature 0.5 \
+    --greedy_sampling \
     --zero_stage 0 \
     --micro_batch_size 16 \
     --output_path $GENERATE_OUTPUT
