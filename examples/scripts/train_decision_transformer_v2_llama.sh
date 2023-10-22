@@ -4,7 +4,17 @@ mkdir -p ./ckpt/7b_llama_dt
 RM_OUTPUT=./ckpt/7b_llama_dt/rm.jsonl
 
 # We found that the DT without generation achieved similar performance to the DT with generation version
-# And DT without generation is faster than DT with generation 
+# And DT without generation is significantly faster than DT with generation.
+#
+# Alpaca_eval results
+#
+# DT (8 hours with 4 A100) vs OCRA SFT
+#                win_rate  standard_error  n_total  avg_length
+# Current model     61.64            3.87      159        1956
+#
+# DT - non generation (4 hours with 4 A100) vs OCRA SFT
+#                win_rate  standard_error  n_total  avg_length
+# Current model     61.95            3.85      159        1568
 
 read -r -d '' get_rewards_commands <<EOF
 ../batch_inference.py
