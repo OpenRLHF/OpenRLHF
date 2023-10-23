@@ -30,7 +30,6 @@
 
 > **The code is open-source, feel free to use it, contributions are welcome! Note: The license of the model depends on the provider of the model.**
 
-- [💥Latest News](#latest-news)
 - [💫OpenRLHF](#openrlhf-project)
 - [💫Features](#features)
 - [💫Performance](#performance)
@@ -41,44 +40,32 @@
 - [🌈Starchart](#starchart)
 - [🏆Contributors](#contributors)
 
-## Latest News
-- 2023/10/20: Support [top chinese models](https://github.com/OpenLLMAI/OpenRLHF/issues/116)
-- 2023/10/15: Rename to OpenRLHF
-- 2023/10/14: Support [Decision Transformer Alignment](./examples/scripts/train_decision_transformer_v2_llama.sh) (https://arxiv.org/abs/2308.12050).
-- 2023/10/2: 34B codellama model with Ray-based RLHF + 1 DGX A100 test passed! configs:
-  - Adam Offload = True
-  - micro_batch_size = 2/1 (rollout/train)
-  - Enable FlashAttention2 to support 4096 sequence length
-- 2023/9/20: Support [Ray-based RLHF](./examples/scripts/train_ppo_llama_ray.sh)
-- 2023/9/13: Upload [7B/13B SFT/RM/DPO/PPO checkpoint](https://huggingface.co/chuyi777/openrlhf_checkpoint)
-- 2023/9/9: Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh)
-- 2023/9/6: Support FlashAttention2 (--flash_attn)
-- 2023/8/26: Support wandb logs (--wandb)
-- 2023/8/20: Upload PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
-- 2023/8/18: Support LLaMA2 7B PPO fintune on Single A100
-- 2023/8/13: LLaMA2 7B + SFT+ RM + PPO training test passed
-
 ## OpenRLHF Project
 
-OpenRLHF aims to develop a **High-performance RLHF training framework** based on Ray and DeepSpeed. OpenRLHF is the **Simplest** high-performance RLHF library that supports 34B models RLHF training with Single DGXA100.
+OpenRLHF aims to develop a **High-performance RLHF training framework** based on Ray and DeepSpeed. OpenRLHF is the **Simplest** high-performance RLHF library that supports 34B models RLHF training with Single DGXA100 ([script](./examples/scripts/train_ppo_llama_ray_34b.sh))).
 
-The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Reference Model, and the Critic Model onto separate GPUs using Ray, while placing the Adam Optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G), with high training efficiency thanks to the ability to use a large generate batch size with Adam Offload and Ray. Our PPO performance with the 13B llama2 models is 4 times that of DeepSpeedChat.
+The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Reference Model, and the Critic Model onto separate GPUs using Ray, while placing the Adam Optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G), with high training efficiency thanks to the ability to use a large generate batch size with Adam Offload and Ray. **Our PPO performance with the 13B llama2 models is 4 times that of DeepSpeedChat.**
 
 
 ### Features
 
-- [✔️] A fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
-- [✔️] Multi-nodes training scripts for Slurm.
-- [✔️] Wandb log (--wandb).
-- [✔️] Support conda env.
-- [✔️] FlashAttention2 (--flash_attn).
-- [✔️] Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh).
-- [✔️] Distributed [RLHF based on Ray]((./examples/scripts/train_ppo_llama_ray.sh)) for 34B+ models and 7B models on RTX4090.
-- [✔️] [Decision Transformer Alignment](./examples/scripts/train_decision_transformer_v2_llama.sh) (https://arxiv.org/abs/2308.12050).
-- [✔️] Support Top Chinese Base Models.
-- [WIP] Support Rejection Sampling.
-- [WIP] Support Multiple Reward models.
-- [WIP] Support QLora.
+- A fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
+- Multi-nodes [training scripts](./examples/scripts/train_llama_slurm.sh) for Slurm.
+- Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh).
+- Distributed [PPO based on Ray]((./examples/scripts/train_ppo_llama_ray.sh)) for 34B+ models and 7B models on RTX4090. 
+- Support [Decision Transformer (DT) Alignment](./examples/scripts/train_decision_transformer_v2_llama.sh) (https://arxiv.org/abs/2308.12050).
+- Support [top chinese models](https://github.com/OpenLLMAI/OpenRLHF/issues/116).
+- Support Wandb log (--wandb).
+- Support conda env.
+- Support FlashAttention2 (--flash_attn).
+- Pre-trained 7B/13B SFT/RM/DPO/PPO/DT [checkpoint](https://huggingface.co/chuyi777/openrlhf_checkpoint)
+- PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
+
+**TODO**
+
+- Support Rejection Sampling.
+- Support Multiple Reward models.
+- Support QLora.
 
 
 Support Matrix
