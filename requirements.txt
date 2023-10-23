@@ -11,3 +11,4 @@ torchmetrics
 tqdm
 transformers==4.34
 wandb
+transformers_stream_generator
