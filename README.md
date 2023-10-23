@@ -56,13 +56,13 @@ The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Referen
 - Support [Decision Transformer (DT) Alignment](./examples/scripts/train_decision_transformer_v2_llama.sh) (https://arxiv.org/abs/2308.12050).
 - Support [top chinese models](https://github.com/OpenLLMAI/OpenRLHF/issues/116).
 - Support Wandb log (--wandb).
-- Support conda env.
+- Support conda env/nvidia docker.
 - Support FlashAttention2 (--flash_attn).
 - Pre-trained 7B/13B SFT/RM/DPO/PPO/DT [checkpoint](https://huggingface.co/chuyi777/openrlhf_checkpoint)
 - PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
 
-**TODO**
-
+**TODO** 
+- Support checkpoint.
 - Support Rejection Sampling.
 - Support Multiple Reward models.
 - Support QLora.
