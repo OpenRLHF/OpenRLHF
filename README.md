@@ -58,9 +58,8 @@ The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Referen
 - Support Wandb log (--wandb).
 - Support conda env/nvidia docker.
 - Support FlashAttention2 (--flash_attn).
-- Pre-trained 7B/13B [checkpoints]( https://huggingface.co/OpenLLMAI/openrlhf_checkpoint)
-- Support [GPT4 evaluation](./evaluation/gpt4/README.md)
-- PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
+- Pre-trained 7B/13B llama2 [checkpoints]( https://huggingface.co/OpenLLMAI/openrlhf_checkpoint)
+- Support [GPT4 evaluation](./evaluation/gpt4/README.md) \& PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
 
 **TODO** 
 - Support checkpoint.
