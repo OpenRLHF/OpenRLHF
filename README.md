@@ -58,7 +58,7 @@ The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Referen
 - Support Wandb log (--wandb).
 - Support conda env/nvidia docker.
 - Support FlashAttention2 (--flash_attn).
-- Pre-trained 7B/13B SFT/RM/DPO/PPO/DT [checkpoint](https://huggingface.co/chuyi777/openrlhf_checkpoint)
+- Pre-trained 7B/13B SFT/RM/DPO/PPO/DT [checkpoint]( https://huggingface.co/OpenLLMAI/openrlhf_checkpoint)
 - PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
 
 **TODO** 
@@ -112,7 +112,7 @@ git clone https://github.com/openllmai/OpenRLHF.git
 
 # Download the pre-trained SFT/RM checkpoints (Optional)
 git lfs install
-git clone https://huggingface.co/chuyi777/openrlhf_checkpoint
+git clone  https://huggingface.co/OpenLLMAI/openrlhf_checkpoint
 ```
 
 * Single-node training with nvidia-docker
