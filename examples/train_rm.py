@@ -97,8 +97,6 @@ def train(args):
 
     os.makedirs(args.save_path, exist_ok=True)
 
-    # batch_size here is expected to be C(k,2), k means # response of each prompt
-    # be limited with the format of dataset 'Dahoas/rm-static', we'd better use batch_size as 1
     trainer = RewardModelTrainer(
         model=model,
         strategy=strategy,
