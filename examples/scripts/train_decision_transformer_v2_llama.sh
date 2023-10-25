@@ -30,7 +30,6 @@ read -r -d '' get_rewards_commands <<EOF
     --post_processor dt \
     --micro_batch_size 4 \
     --output_path $RM_OUTPUT
-    --normalize_reward
 EOF
 
 read -r -d '' sft_commands <<EOF
