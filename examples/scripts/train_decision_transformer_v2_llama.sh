@@ -23,7 +23,7 @@ read -r -d '' get_rewards_commands <<EOF
     --bf16 \
     --load_model ./ckpt/7b_llama/rm_model_anthropic_oasst_lmsys_webgpt.pt
     --max_len 2048 \
-    --dataset Open-Orca/OpenOrca,OpenLLMAI/anthropic_hh_oasst1_split \
+    --dataset Open-Orca/OpenOrca,Dahoas/full-hh-rlhf \
     --dataset_probs 0.5,0.5 \
     --max_samples 128000 \
     --zero_stage 0 \
