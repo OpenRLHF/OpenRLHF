@@ -193,7 +193,7 @@ def reward_normalization(objs):
         obj["reward"] = rewards[i].item()
 
 
-DEFAULT_REWARD_PROMPT = "{input} <rm_score>: {reward} "
+DEFAULT_REWARD_PROMPT = "{input} <reward>: {reward} "
 
 
 def decesion_transformer_processor(args, objs):
@@ -248,7 +248,7 @@ if __name__ == "__main__":
 
     # Decision Transformer inference
     parser.add_argument("--enable_dt", action="store_true", default=False)
-    parser.add_argument("--dt_prompt", type=str, default="<rm_score>: 5.00", help="decision transformer prompt")
+    parser.add_argument("--dt_prompt", type=str, default="<reward>: 5.00", help="decision transformer prompt")
 
     args = parser.parse_args()
     if args.eval_task and args.eval_task == "generate":

@@ -87,7 +87,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--ta_prompt", type=str, default=None)
     parser.add_argument("--enable_dt", action="store_true", default=False)
-    parser.add_argument("--dt_prompt", type=str, default="<rm_score>: 5.00", help="decision transformer prompt")
+    parser.add_argument("--dt_prompt", type=str, default="<reward>: 5.00", help="decision transformer prompt")
     args = parser.parse_args()
 
     print(args)
