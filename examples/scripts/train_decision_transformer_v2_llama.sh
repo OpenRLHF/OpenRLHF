@@ -42,6 +42,7 @@ read -r -d '' sft_commands <<EOF
     --micro_train_batch_size 2 \
     --pretrain meta-llama/Llama-2-7b-hf \
     --save_path ./ckpt/7b_llama_dt \
+    --load_model ./ckpt/7b_llama/sft_model_ocra.pt
     --zero_stage 2 \
     --max_epochs 1 \
     --bf16 \
