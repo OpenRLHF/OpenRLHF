@@ -178,7 +178,7 @@ def batch_rm_inference(args):
             os.remove(file)
 
         if args.post_processor == "dt":
-            strategy.print("Use Decision Transformer")
+            strategy.print(f"Use Decision Transformer, Reward Norm {args.normalize_reward}")
             decesion_transformer_processor(args, output_dataset)
 
         with jsonlines.open(args.output_path, mode="w") as writer:

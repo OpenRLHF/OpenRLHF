@@ -10,7 +10,6 @@ def preprocess_data(data):
     # Open-Orca/OpenOrca
     if exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
         prompt = "Human: " + data["system_prompt"] + "\n" + data["question"] + "\nAssistant: "
-        target = data["response"]
     # BelleGroup/train_0.5M_CN
     # LLMs/Alpaca-ShareGPT
     # yahma/alpaca-cleaned
