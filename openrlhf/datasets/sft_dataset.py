@@ -102,8 +102,8 @@ class SFTDataset(Dataset):
                 prompt_ids_len = 0
 
             if not self.pretrain_mode:
-                # filter the sample whose length is greater than max_length
-                if prompt_ids_len >= self.max_length:
+                # filter the sample whose length is greater than max_length (16 for answer length)
+                if prompt_ids_len >= self.max_length - 16:
                     continue
                 if not prompt or not target:
                     continue
@@ -130,7 +130,8 @@ class SFTDataset(Dataset):
         )
         info = {"input": prompt, "output": target}
         # to avoid EOS_token truncation
-        input_token["input_ids"][-1] = self.tokenizer.eos_token_id
+        input_token["input_ids"][0][-1] = self.tokenizer.eos_token_id
+        input_token["attention_mask"][0][-1] = True
         return prompt_ids_len, input_token["input_ids"], input_token["attention_mask"], info
 
     def collate_fn(self, item_list):

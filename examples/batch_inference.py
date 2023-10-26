@@ -175,7 +175,7 @@ def batch_rm_inference(args):
             with jsonlines.open(file, mode="r") as reader:
                 for obj in reader:
                     output_dataset.append(obj)
-            os.remove(file)
+            # os.remove(file)
 
         if args.post_processor == "dt":
             strategy.print(f"Use Decision Transformer, Reward Norm {args.normalize_reward}")

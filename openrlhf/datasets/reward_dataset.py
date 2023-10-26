@@ -103,8 +103,10 @@ class RewardDataset(Dataset):
         )
 
         # to avoid EOS_token truncation
-        chosen_token["input_ids"][-1] = self.tokenizer.eos_token_id
-        reject_token["input_ids"][-1] = self.tokenizer.eos_token_id
+        chosen_token["input_ids"][0][-1] = self.tokenizer.eos_token_id
+        reject_token["input_ids"][0][-1] = self.tokenizer.eos_token_id
+        chosen_token["attention_mask"][0][-1] = True
+        reject_token["attention_mask"][0][-1] = True
         return (
             chosen_token["input_ids"],
             chosen_token["attention_mask"],
