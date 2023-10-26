@@ -102,6 +102,9 @@ class RewardDataset(Dataset):
             return_tensors="pt",
         )
 
+        # to avoid EOS_token truncation
+        chosen_token["input_ids"][-1] = self.tokenizer.eos_token_id
+        reject_token["input_ids"][-1] = self.tokenizer.eos_token_id
         return (
             chosen_token["input_ids"],
             chosen_token["attention_mask"],

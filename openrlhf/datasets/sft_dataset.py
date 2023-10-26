@@ -129,7 +129,8 @@ class SFTDataset(Dataset):
             return_tensors="pt",
         )
         info = {"input": prompt, "output": target}
-
+        # to avoid EOS_token truncation
+        input_token["input_ids"][-1] = self.tokenizer.eos_token_id
         return prompt_ids_len, input_token["input_ids"], input_token["attention_mask"], info
 
     def collate_fn(self, item_list):
