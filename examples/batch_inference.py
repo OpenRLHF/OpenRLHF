@@ -209,7 +209,7 @@ def decesion_transformer_processor(args, objs):
 
     for obj in tqdm(objs, desc="Decision Transformer process..."):
         input = obj["input"]
-        reward = "{:.1f}".format(float(obj["reward"]))
+        reward = "{:.2f}".format(float(obj["reward"]))
         input = reward_template.replace("{reward}", reward).replace("{input}", input)
         obj["input"] = input
 
@@ -248,7 +248,7 @@ if __name__ == "__main__":
 
     # Decision Transformer inference
     parser.add_argument("--enable_dt", action="store_true", default=False)
-    parser.add_argument("--dt_prompt", type=str, default="<rm_score>: 5.0", help="decision transformer prompt")
+    parser.add_argument("--dt_prompt", type=str, default="<rm_score>: 5.00", help="decision transformer prompt")
 
     args = parser.parse_args()
     if args.eval_task and args.eval_task == "generate":

@@ -53,12 +53,12 @@ The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Referen
 - Multi-nodes [training scripts](./examples/scripts/train_llama_slurm.sh) for Slurm.
 - Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh).
 - Distributed [PPO based on Ray]((./examples/scripts/train_ppo_llama_ray.sh)) for 34B+ models and 7B models on RTX4090. 
-- Support [Decision Transformer (DT) Alignment](./examples/scripts/train_decision_transformer_v2_llama.sh) (https://arxiv.org/abs/2308.12050).
+- Support [Decision Transformer (DT) Alignment](./examples/scripts/train_decision_transformer_llama.sh) (https://arxiv.org/abs/2308.12050).
 - Support [top chinese models](https://github.com/OpenLLMAI/OpenRLHF/issues/116).
 - Support Wandb log (--wandb).
 - Support conda env/nvidia docker.
 - Support FlashAttention2 (--flash_attn).
-- Pre-trained 7B/13B llama2 [checkpoints]( https://huggingface.co/OpenLLMAI/openrlhf_checkpoint)
+- Pre-trained 7B/13B llama2 [checkpoints](https://huggingface.co/OpenLLMAI/openrlhf_checkpoint)
 - Support [GPT4 evaluation](./evaluation/gpt4/README.md) \& PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
 
 **TODO** 

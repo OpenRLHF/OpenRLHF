@@ -33,6 +33,7 @@ read -r -d '' get_rewards_commands <<EOF
     --zero_stage 0 \
     --post_processor dt \
     --micro_batch_size 4 \
+    --normalize_reward
     --output_path $RM_OUTPUT
 EOF
 
