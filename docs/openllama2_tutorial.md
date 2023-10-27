@@ -1,7 +1,7 @@
 # OpenRLHF Tutorial
 ## Prepare envs and training
 ### Verified envs 
-You can build openrlhf from nvidia docker(recomended) or from conda envs. 
+You can build openrlhf from nvidia docker(recommended) or from conda envs. 
 
 * Python: 3.8/3.9/3.10/3.11
 * Torch: 2.0.0/2.0.1
