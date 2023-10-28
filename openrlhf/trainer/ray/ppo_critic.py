@@ -137,7 +137,6 @@ class CriticModelRayActor(BasePPORole):
         self.critic.eval()
         with torch.no_grad():
             value = self.critic(sequences.to(device), action_mask.to(device), attention_mask.to(device))
-        self.critic.train()  # reset model state
         return value.to("cpu")
 
     def append(self, experience):

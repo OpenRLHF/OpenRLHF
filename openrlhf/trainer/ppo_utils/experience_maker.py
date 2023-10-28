@@ -132,11 +132,6 @@ class NaiveExperienceMaker(ABC):
             "response_length": action_mask.float().sum(dim=-1),
             "total_length": attention_mask.float().sum(dim=-1),
         }
-        # reset model state
-        self.actor.train()
-        self.critic.train()
-        self.initial_model.train()
-        self.reward_model.train()
 
         return Experience(
             sequences,
