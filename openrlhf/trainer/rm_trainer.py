@@ -37,14 +37,12 @@ class RewardModelTrainer(ABC):
         tokenizer,
         max_norm=0.5,
         max_epochs: int = 2,
-        only_evaluate=False,
         loss="sigmoid",
         gradient_checkpointing: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
         self.epochs = max_epochs if not only_evaluate else 1
-        self.only_evaluate = only_evaluate
         self.max_norm = max_norm
         self.model = model
         self.train_dataloader = train_dataloader

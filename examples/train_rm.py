@@ -105,7 +105,6 @@ def train(args):
         max_norm=args.max_norm,
         max_epochs=args.max_epochs,
         gradient_checkpointing=args.gradient_checkpointing,
-        only_evaluate=args.only_evaluate,
         loss=args.loss,
     )
 
@@ -137,7 +136,6 @@ if __name__ == "__main__":
     parser.add_argument("--max_epochs", type=int, default=1)
     parser.add_argument("--micro_train_batch_size", type=int, default=8)
     parser.add_argument("--train_batch_size", type=int, default=128)
-    parser.add_argument("--only_evaluate", action="store_true", default=False)
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
     parser.add_argument("--load_model", type=str, default=None)
     parser.add_argument("--max_norm", type=float, default=1.0)
