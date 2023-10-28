@@ -170,6 +170,12 @@ class PPOTrainer(ABC):
         update_timesteps = args.rollout_batch_size // (self.strategy.world_size * self.micro_rollout_batch_size)
         global_step = 1
 
+        # get eval and save steps
+        if args.eval_steps == -1:
+            args.eval_steps = prompts_dataloader.__len__() // update_timesteps  # Evaluate once per epoch
+        if args.save_steps == -1:
+            args.save_steps = float("inf")  # do not save ckpt
+
         for episode in range(args.num_episodes):
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
                 self.prompts_dataloader.sampler.set_epoch(episode)

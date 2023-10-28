@@ -202,11 +202,7 @@ def train(args):
         pad_token_id=tokenizer.pad_token_id,
         eos_token_id=tokenizer.eos_token_id,
     )
-    # reset some args
-    if args.eval_steps == -1:
-        args.eval_steps = prompts_dataloader.__len__()  # Evaluate once per epoch
-    if args.save_steps == -1:
-        args.save_steps = float("inf")  # do not save ckpt
+
     trainer.fit(
         prompts_dataloader,
         pretrain_dataloader,

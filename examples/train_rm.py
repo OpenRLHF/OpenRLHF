@@ -108,11 +108,6 @@ def train(args):
         loss=args.loss,
     )
 
-    # reset some args
-    if args.eval_steps == -1:
-        args.eval_steps = train_dataloader.__len__()  # Evaluate once per epoch
-    if args.save_steps == -1:
-        args.save_steps = float("inf")  # do not save ckpt
     trainer.fit(args)
 
     if not args.only_evaluate:

@@ -84,6 +84,12 @@ class SFTTrainer(ABC):
             wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
 
     def fit(self, args):
+        # get eval and save steps
+        if args.eval_steps == -1:
+            args.eval_steps = self.train_dataloader.__len__()  # Evaluate once per epoch
+        if args.save_steps == -1:
+            args.save_steps = float("inf")  # do not save ckpt
+
         global_step = 1
         epoch_bar = tqdm(
             range(self.epochs),
