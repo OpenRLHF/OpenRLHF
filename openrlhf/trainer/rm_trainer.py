@@ -124,15 +124,18 @@ class RewardModelTrainer(ABC):
                     "acc_mean": acc_mean,
                     "loss_mean": loss_mean,
                 }
-                self.manage_running_steps(args, global_step, step_bar, logs_dict)
+                # logs/checkpoints/evaluate
+                self.logs_and_checkpoints(args, global_step, step_bar, logs_dict)
 
+                step_bar.update()
                 global_step += 1
             epoch_bar.update()
 
         if self._wandb is not None and self.strategy.is_rank_0():
             self._wandb.finish()
 
-    def manage_running_steps(self, args, global_step, step_bar, logs_dict={}):
+    # logs/checkpoints/evaluate
+    def logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}):
         if global_step % args.logging_steps == 0:
             # step bar
             logs_dict = self.strategy.all_reduce(logs_dict)
@@ -146,8 +149,6 @@ class RewardModelTrainer(ABC):
             ):
                 logs = {"train/%s" % k: v for k, v in {**logs_dict, "global_step": global_step}.items()}
                 self._wandb.log(logs)
-
-        step_bar.update()
 
         # eval
         if global_step % args.eval_steps == 0:

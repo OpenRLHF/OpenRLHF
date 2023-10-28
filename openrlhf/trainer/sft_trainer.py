@@ -123,14 +123,15 @@ class SFTTrainer(ABC):
                     "train_loss": loss.item(),
                 }
                 # logs/checkpoints/evaluation
-                self.manage_running_steps(args, global_step, step_bar, logs_dict)
+                self.logs_and_checkpoints(args, global_step, step_bar, logs_dict)
 
+                step_bar.update()
                 global_step += 1
 
             epoch_bar.update()
 
     # logs/checkpoints/evaluation
-    def manage_running_steps(self, args, global_step, step_bar, logs_dict={}):
+    def logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}):
         if global_step % args.logging_steps == 0:
             # step bar
             logs_dict = self.strategy.all_reduce(logs_dict)
@@ -144,8 +145,6 @@ class SFTTrainer(ABC):
             ):
                 logs = {"train/%s" % k: v for k, v in {**logs_dict, "global_step": global_step}.items()}
                 self._wandb.log(logs)
-
-        step_bar.update()
 
         # eval
         if global_step % args.eval_steps == 0:

@@ -195,8 +195,10 @@ class PPOTrainer(ABC):
                     self.replay_buffer.clear()
                     torch.cuda.empty_cache()
                     self.kl_ctl.update(status["kl"], args.rollout_batch_size)
-                    self.manage_running_steps(args, global_step // update_timesteps, pbar, status)
+                    # logs/checkpoints
+                    self.logs_and_checkpoints(args, global_step // update_timesteps, pbar, status)
 
+                pbar.update()
                 global_step = global_step + 1
 
     def ppo_train(self):
@@ -334,7 +336,7 @@ class PPOTrainer(ABC):
         }
         return status
 
-    def manage_running_steps(self, args, global_step, step_bar, logs_dict={}):
+    def logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}):
         if global_step % args.logging_steps == 0:
             # step bar
             logs_dict = self.strategy.all_reduce(logs_dict)
@@ -349,8 +351,6 @@ class PPOTrainer(ABC):
                     }.items()
                 }
                 self._wandb.log(logs)
-
-        step_bar.update()
 
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity/others on whole dev dataset as metric
