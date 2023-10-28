@@ -34,12 +34,8 @@ def train(args):
             new_state_dict = OrderedDict()
             for k, v in states_dict.items():
                 new_state_dict[k.replace("transformer.", "model.")] = v
-            strategy.print("Load state dict keys")
-            strategy.print(new_state_dict.keys())
             return new_state_dict
 
-        strategy.print("Model state dict keys")
-        strategy.print(model.state_dict().keys())
         strategy.load_model(model, args.load_model, strict=False, key_replace_fn=key_replace_fn)
         strategy.print("Load model: ", args.load_model)
 
@@ -93,10 +89,11 @@ def train(args):
 
     if args.load_checkpoint:
         strategy.print("Load checkpoint: ", args.save_path)
-        # strategy.load_checkpoint(args.save_path + '/rm_model.pt')
 
     os.makedirs(args.save_path, exist_ok=True)
 
+    # batch_size here is expected to be C(k,2), k means # response of each prompt
+    # be limited with the format of dataset 'Dahoas/rm-static', we'd better use batch_size as 1
     trainer = RewardModelTrainer(
         model=model,
         strategy=strategy,
@@ -112,7 +109,12 @@ def train(args):
         loss=args.loss,
     )
 
-    trainer.fit(use_lora=args.lora_rank)
+    # reset some args
+    if args.eval_steps == -1:
+        args.eval_steps = train_dataloader.__len__()  # Evaluate once per epoch
+    if args.save_steps == -1:
+        args.save_steps = float("inf")  # do not save ckpt
+    trainer.fit(args)
 
     if not args.only_evaluate:
         # save model checkpoint after fitting on only rank0
@@ -126,6 +128,12 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default="Dahoas/full-hh-rlhf")
     parser.add_argument("--dataset_probs", type=str, default="1.0", help="sampling probs for datasets")
     parser.add_argument("--save_path", type=str, default="./ckpt")
+    parser.add_argument("--save_steps", type=int, default=-1)
+    parser.add_argument("--logging_steps", type=int, default=1)
+    parser.add_argument("--eval_steps", type=int, default=-1)
+    parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_rm")
+    parser.add_argument("--max_ckpt_num", type=int, default=3)
+    parser.add_argument("--max_ckpt_mem", type=int, default=100)  # 100GB
     parser.add_argument("--max_epochs", type=int, default=1)
     parser.add_argument("--micro_train_batch_size", type=int, default=8)
     parser.add_argument("--train_batch_size", type=int, default=128)

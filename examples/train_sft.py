@@ -68,7 +68,6 @@ def train(args):
     # load checkpoint
     if args.load_checkpoint:
         strategy.print("Load checkpoint: ", args.save_path)
-        # strategy.load_checkpoint(args.save_path + '/sft_model.pt')
 
     os.makedirs(args.save_path, exist_ok=True)
 
@@ -88,7 +87,12 @@ def train(args):
         gradient_checkpointing=args.gradient_checkpointing,
     )
 
-    trainer.fit(use_lora=args.lora_rank)
+    # reset some args
+    if args.eval_steps == -1:
+        args.eval_steps = train_dataloader.__len__()  # Evaluate once per epoch
+    if args.save_steps == -1:
+        args.save_steps = float("inf")  # do not save ckpt
+    trainer.fit(args)
 
     # save model checkpoint after fitting on only rank0
     strategy.save_model(model, args.save_path + "/sft_model.pt", only_rank0=True)
@@ -104,6 +108,12 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default="Dahoas/full-hh-rlhf")
     parser.add_argument("--dataset_probs", type=str, default="1.0", help="sampling probs for datasets")
     parser.add_argument("--save_path", type=str, default="./ckpt")
+    parser.add_argument("--save_steps", type=int, default=-1)
+    parser.add_argument("--logging_steps", type=int, default=1)
+    parser.add_argument("--eval_steps", type=int, default=-1)
+    parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_sft")
+    parser.add_argument("--max_ckpt_num", type=int, default=3)
+    parser.add_argument("--max_ckpt_mem", type=int, default=100)  # 100GB
     parser.add_argument("--max_epochs", type=int, default=2)
     parser.add_argument("--micro_train_batch_size", type=int, default=8)
     parser.add_argument("--train_batch_size", type=int, default=128)

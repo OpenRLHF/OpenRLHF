@@ -1,5 +1,6 @@
 import os
 import random
+import shutil
 from abc import ABC
 from collections import defaultdict
 from datetime import timedelta
@@ -198,6 +199,7 @@ class DeepspeedStrategy(ABC):
             model.model = engine
         else:
             model = engine
+
         return model, optim, scheduler
 
     def ds_init_eval_model(self, model):
@@ -352,3 +354,73 @@ class DeepspeedStrategy(ABC):
 
     def get_rank(self) -> int:
         return dist.get_rank()
+
+    def save_ckpt(self, model, save_dir, tag=None, max_num=3, max_mem=100, client_state={}, save_latest=True):
+        if self.is_rank_0():
+            # 检查并创建目录
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir, exist_ok=True)
+
+            # max hard drive space limit
+            MAX_SIZE = max_mem * 1024 * 1024 * 1024
+
+            while True:
+                # 获取所有子目录及其修改时间
+                subdirs = [
+                    (os.path.join(save_dir, d), os.path.getmtime(os.path.join(save_dir, d)))
+                    for d in os.listdir(save_dir)
+                    if os.path.isdir(os.path.join(save_dir, d))
+                ]
+
+                # 按修改时间排序，最旧的在前
+                subdirs.sort(key=lambda x: x[1])
+
+                # 计算当前所有子目录的总大小
+                total_size = 0
+                for subdir, _ in subdirs:
+                    for dirpath, dirnames, filenames in os.walk(subdir):
+                        for f in filenames:
+                            fp = os.path.join(dirpath, f)
+                            total_size += os.path.getsize(fp)
+
+                # 如果子目录数大于等于max_num或总大小大于max_mem，则删除最旧的checkpoint
+                if len(subdirs) >= max_num or total_size > MAX_SIZE:
+                    oldest_dir, _ = subdirs[0]  # 最旧的目录
+                    if os.path.exists(oldest_dir):  # 确保目录存在
+                        shutil.rmtree(oldest_dir)  # 删除目录及其内容
+                        self.print(f"Deleted oldest ckpt {oldest_dir}")  # 这里使用了标准的print函数
+                else:
+                    break
+        # TODO: full ckpt, save all infos for full recovery from checkpoint
+        # basic ckpt: reuse deepspeed.DeepSpeedEngine.save_checkpoint
+        if isinstance(model, deepspeed.DeepSpeedEngine):
+            model.save_checkpoint(save_dir, tag=tag, client_state=client_state, save_latest=save_latest)
+        else:
+            # It’s basically not used, so you can pass it.
+            torch.save(model.state_dict(), os.path.join(save_dir, f"{tag}.pt"))
+
+    def load_ckpt(
+        self,
+        model,
+        load_dir,
+        tag=None,
+        load_module_strict=True,
+        load_optimizer_states=True,
+        load_lr_scheduler_states=True,
+        load_module_only=False,
+    ):
+        if isinstance(model, deepspeed.DeepSpeedEngine):
+            # TODO: full ckpt, load all infos from full checkpoint
+            # basic ckpt: reuse deepspeed.DeepSpeedEngine.load_checkpoint
+            return model.load_checkpoint(
+                load_dir,
+                tag,
+                load_module_strict=True,
+                load_optimizer_states=True,
+                load_lr_scheduler_states=True,
+                load_module_only=False,
+            )
+        else:
+            # It’s basically not used, so you can pass it.
+            model.load_state_dict(torch.load(load_dir, map_location=self.device), strict=False)
+            return model

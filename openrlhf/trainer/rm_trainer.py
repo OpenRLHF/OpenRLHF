@@ -27,19 +27,19 @@ class RewardModelTrainer(ABC):
     """
 
     def __init__(
-        self,
-        model,
-        strategy,
-        optim: Optimizer,
-        train_dataloader,
-        eval_dataloader,
-        scheduler,
-        tokenizer,
-        max_norm=0.5,
-        max_epochs: int = 2,
-        only_evaluate=False,
-        loss="sigmoid",
-        gradient_checkpointing: bool = False,
+            self,
+            model,
+            strategy,
+            optim: Optimizer,
+            train_dataloader,
+            eval_dataloader,
+            scheduler,
+            tokenizer,
+            max_norm=0.5,
+            max_epochs: int = 2,
+            only_evaluate=False,
+            loss="sigmoid",
+            gradient_checkpointing: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -84,8 +84,8 @@ class RewardModelTrainer(ABC):
             wandb.define_metric("eval/epoch")
             wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
 
-    def fit(self, use_lora):
-        global_step = 0
+    def fit(self, args):
+        global_step = 1
         epoch_bar = tqdm(range(self.epochs), desc="Train epoch", disable=not self.strategy.is_rank_0())
         for epoch in range(self.epochs):
             #  train
@@ -117,37 +117,27 @@ class RewardModelTrainer(ABC):
                     self.strategy.backward(loss, self.model, self.optimizer)
                     self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-                    global_step += 1
                     acc_mean = acc_mean * 0.9 + 0.1 * (chosen_reward > reject_reward).float().mean().item()
                     loss_mean = loss_mean * 0.9 + 0.1 * loss.item()
-                    logs = {"train_loss": loss.item()}
-                    logs["chosen_reward"] = chosen_reward.mean().item()
-                    logs["reject_reward"] = reject_reward.mean().item()
-                    logs["acc_mean"] = acc_mean
-                    logs["loss_mean"] = loss_mean
-                    logs = self.strategy.all_reduce(logs)
-                    step_bar.set_postfix(logs)
-                    step_bar.update()
+                    # optional rm info
+                    logs_dict = {
+                        "train_loss": loss.item(),
+                        "chosen_reward": chosen_reward.mean().item(),
+                        "reject_reward": reject_reward.mean().item(),
+                        "acc_mean": acc_mean,
+                        "loss_mean": loss_mean,
+                    }
+                    self.manage_running_steps(args, global_step, step_bar, logs_dict)
 
-                    if (
-                        self._wandb is not None
-                        and self.strategy.is_rank_0()
-                        and global_step % self.strategy.accumulated_gradient == 0
-                    ):
-                        logs = {"train/%s" % k: v for k, v in {**logs, "global_step": global_step}.items()}
-                        self._wandb.log(logs)
-
-            # eval
-            self.evaluate(self.eval_dataloader, epoch)
-
+                    global_step += 1
             epoch_bar.update()
         if self._wandb is not None and self.strategy.is_rank_0():
             self._wandb.finish()
 
-    def evaluate(self, eval_dataloader, epoch_in_training):
+    def evaluate(self, eval_dataloader, steps=0):
         step_bar = tqdm(
-            range(self.eval_dataloader.__len__()),
-            desc="Eval stage of epoch %d" % epoch_in_training,
+            range(eval_dataloader.__len__()),
+            desc="Eval stage of steps %d" % steps,
             disable=not self.strategy.is_rank_0(),
         )
         self.model.eval()
@@ -198,8 +188,34 @@ class RewardModelTrainer(ABC):
             self.strategy.print(histgram)
 
             if self._wandb is not None and self.strategy.is_rank_0():
-                logs = {"eval/%s" % k: v for k, v in {**logs, "epoch": epoch_in_training}.items()}
+                logs = {"eval/%s" % k: v for k, v in {**logs, "steps": steps}.items()}
                 self._wandb.log(logs)
+        self.model.train()  # reset model state
+
+    def manage_running_steps(self, args, global_step, step_bar, logs_dict={}):
+        if global_step % args.logging_steps == 0:
+            # step bar
+            logs_dict = self.strategy.all_reduce(logs_dict)
+            step_bar.set_postfix(logs_dict)
+            step_bar.update(args.logging_steps)
+
+            # wandb
+            if (
+                    self._wandb is not None
+                    and self.strategy.is_rank_0()
+                    and global_step % self.strategy.accumulated_gradient == 0
+            ):
+                logs = {"train/%s" % k: v for k, v in {**logs_dict, "global_step": global_step}.items()}
+                self._wandb.log(logs)
+
+        # eval
+        if global_step % args.eval_steps == 0:
+            self.evaluate(self.eval_dataloader, global_step)
+        # save ckpt
+        # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
+        if global_step % args.save_steps == 0:
+            tag = f"global_step{global_step}"
+            self.strategy.save_ckpt(self.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem)
 
     def concatenated_forward(self, model, chosen_ids, c_mask, reject_ids, r_mask):
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
@@ -209,7 +225,7 @@ class RewardModelTrainer(ABC):
         input_ids, att_masks = self.concatenated_inputs(chosen_ids, c_mask, reject_ids, r_mask)
         all_values = model(input_ids, attention_mask=att_masks)
         chosen_rewards = all_values[: chosen_ids.shape[0]]
-        rejected_rewards = all_values[chosen_ids.shape[0] :]
+        rejected_rewards = all_values[chosen_ids.shape[0]:]
         return chosen_rewards, rejected_rewards
 
     def concatenated_inputs(self, chosen_ids, c_mask, reject_ids, r_mask):

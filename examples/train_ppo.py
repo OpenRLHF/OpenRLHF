@@ -163,7 +163,6 @@ def train(args):
     # load checkpoint
     if args.load_checkpoint:
         strategy.print("Load checkpoint: ", args.save_path)
-        # strategy.load_checkpoint(args.save_path + '/ppo_model.pt')
 
     os.makedirs(args.save_path, exist_ok=True)
 
@@ -203,12 +202,15 @@ def train(args):
         pad_token_id=tokenizer.pad_token_id,
         eos_token_id=tokenizer.eos_token_id,
     )
-
+    # reset some args
+    if args.eval_steps == -1:
+        args.eval_steps = prompts_dataloader.__len__()  # Evaluate once per epoch
+    if args.save_steps == -1:
+        args.save_steps = float("inf")  # do not save ckpt
     trainer.fit(
         prompts_dataloader,
         pretrain_dataloader,
-        num_episodes=args.num_episodes,
-        rollout_batch_size=args.rollout_batch_size,
+        args,
     )
 
     # save model checkpoint after fitting on only rank0
@@ -248,6 +250,12 @@ if __name__ == "__main__":
     parser.add_argument("--reward_model_path", type=str, default=None)
     parser.add_argument("--sft_model_path", type=str, default=None)
     parser.add_argument("--save_path", type=str, default="./ckpt")
+    parser.add_argument("--save_steps", type=int, default=-1)
+    parser.add_argument("--logging_steps", type=int, default=1)
+    parser.add_argument("--eval_steps", type=int, default=-1)
+    parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_ppo")
+    parser.add_argument("--max_ckpt_num", type=int, default=3)
+    parser.add_argument("--max_ckpt_mem", type=int, default=100)  # 100GB
     parser.add_argument("--num_episodes", type=int, default=1)
     parser.add_argument("--rollout_batch_size", type=int, default=512)
     parser.add_argument("--micro_rollout_batch_size", type=int, default=8)

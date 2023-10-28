@@ -10,6 +10,10 @@ read -r -d '' training_commands <<EOF
     --max_samples 500000 \
     --pretrain meta-llama/Llama-2-7b-hf \
     --save_path ./ckpt/7b_llama \
+    --save_steps -1 \
+    --logging_steps 1 \
+    --eval_steps -1 \
+    --ckpt_path ./ckpt/7b_llama/checkpoints_sft \
     --zero_stage 2 \
     --max_epochs 1 \
     --bf16 \

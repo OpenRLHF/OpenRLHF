@@ -33,7 +33,7 @@ class CriticPPOTrainer(PPOTrainer):
         for epoch in range(self.max_epochs):
             pbar = tqdm(
                 dataloader,
-                desc=f"Train epoch [{epoch+1}/{self.max_epochs}]",
+                desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
             for experience in pbar:
@@ -137,6 +137,7 @@ class CriticModelRayActor(BasePPORole):
         self.critic.eval()
         with torch.no_grad():
             value = self.critic(sequences.to(device), action_mask.to(device), attention_mask.to(device))
+        self.critic.train()  # reset model state
         return value.to("cpu")
 
     def append(self, experience):

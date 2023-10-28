@@ -7,6 +7,10 @@ read -r -d '' training_commands <<EOF
     --reward_model_path ./ckpt/7b_llama/rm_model_anthropic_oasst_lmsys_webgpt.pt \
     --sft_model_path ./ckpt/7b_llama/sft_model_ocra.pt \
     --save_path ./ckpt/7b_llama \
+    --save_steps -1 \
+    --logging_steps 1 \
+    --eval_steps -1 \
+    --ckpt_path ./ckpt/7b_llama/checkpoints_ppo \
     --micro_train_batch_size 1 \
     --train_batch_size 128 \
     --micro_rollout_batch_size 1 \
@@ -36,5 +40,3 @@ if [[ ${1} != "slurm" ]]; then
     export PATH=$HOME/.local/bin/:$PATH
     deepspeed $training_commands
 fi
-
-

@@ -1,4 +1,5 @@
 import math
+import os.path
 from abc import ABC
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -150,8 +151,7 @@ class PPOTrainer(ABC):
         self,
         prompts_dataloader,
         pretrain_dataloader,
-        num_episodes: 1,
-        rollout_batch_size: 1024,
+        args,
     ) -> None:
         self.prompts_dataloader = prompts_dataloader
         self.pretrain_dataloader = pretrain_dataloader
@@ -167,19 +167,19 @@ class PPOTrainer(ABC):
             )
             return {k: v.to(torch.cuda.current_device()) for k, v in batch.items()}
 
-        update_timesteps = rollout_batch_size // (self.strategy.world_size * self.micro_rollout_batch_size)
-        global_step = 0
+        update_timesteps = args.rollout_batch_size // (self.strategy.world_size * self.micro_rollout_batch_size)
+        global_step = 1
 
-        for episode in range(num_episodes):
+        for episode in range(args.num_episodes):
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
                 self.prompts_dataloader.sampler.set_epoch(episode)
             pbar = tqdm(
-                self.prompts_dataloader,
-                desc=f"Episode [{episode+1}/{num_episodes}]",
+                range(self.prompts_dataloader.__len__()),
+                desc=f"Episode [{episode + 1}/{args.num_episodes}]",
                 disable=not self.strategy.is_rank_0(),
             )
 
-            for rand_prompts in pbar:
+            for rand_prompts in self.prompts_dataloader:
                 inputs = tokenize_fn(rand_prompts)
                 experience = self.experience_maker.make_experience(**inputs, **self.generate_kwargs)
                 # print prompt/answer in each update step
@@ -188,25 +188,16 @@ class PPOTrainer(ABC):
                     self.strategy.print(output[0])
                 self.replay_buffer.append(experience)
 
-                global_step = global_step + 1
                 if global_step % update_timesteps == 0:
                     torch.cuda.empty_cache()
                     self.replay_buffer.normalize("advantages", self.strategy)
                     status = self.ppo_train()
                     self.replay_buffer.clear()
                     torch.cuda.empty_cache()
-                    self.kl_ctl.update(status["kl"], rollout_batch_size)
+                    self.kl_ctl.update(status["kl"], args.rollout_batch_size)
+                    self.manage_running_steps(args, global_step // update_timesteps, pbar, status)
 
-                    self.strategy.print(status)
-                    if self._wandb is not None and self.strategy.is_rank_0():
-                        logs = {
-                            "train/%s" % k: v
-                            for k, v in {
-                                **status,
-                                "global_step": global_step // update_timesteps,
-                            }.items()
-                        }
-                        self._wandb.log(logs)
+                global_step = global_step + 1
 
     def ppo_train(self):
         # replay buffer may be empty at first, we should rebuild at each training
@@ -225,7 +216,7 @@ class PPOTrainer(ABC):
         for epoch in range(self.max_epochs):
             pbar = tqdm(
                 dataloader,
-                desc=f"Train epoch [{epoch+1}/{self.max_epochs}]",
+                desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
             for experience in pbar:
@@ -342,3 +333,36 @@ class PPOTrainer(ABC):
             "values": masked_mean(values, experience.action_mask, dim=(0, 1)).item(),
         }
         return status
+
+    def manage_running_steps(self, args, global_step, step_bar, logs_dict={}):
+        if global_step % args.logging_steps == 0:
+            # step bar
+            logs_dict = self.strategy.all_reduce(logs_dict)
+            step_bar.set_postfix(logs_dict)
+            step_bar.update(args.logging_steps)
+            # wandb
+            if self._wandb is not None and self.strategy.is_rank_0():
+                logs = {
+                    "train/%s" % k: v
+                    for k, v in {
+                        **logs_dict,
+                        "global_step": global_step,
+                    }.items()
+                }
+                self._wandb.log(logs)
+
+        # eval
+        if global_step % args.eval_steps == 0:
+            # TODO: Add evaluation mechanism for PPO
+            # self.evaluate(self.eval_dataloader, global_step)
+            pass
+        # save ckpt
+        # TODO: save best model on dev, use loss/perplexity/others on whole dev dataset as metric
+        if global_step % args.save_steps == 0:
+            tag = f"global_step{global_step}"
+            self.strategy.save_ckpt(
+                self.actor.model, os.path.join(args.ckpt_path, "_actor"), tag, args.max_ckpt_num, args.max_ckpt_mem
+            )
+            self.strategy.save_ckpt(
+                self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
+            )
