@@ -139,7 +139,6 @@ class RewardModelTrainer(ABC):
             # step bar
             logs_dict = self.strategy.all_reduce(logs_dict)
             step_bar.set_postfix(logs_dict)
-            step_bar.update(args.logging_steps)
 
             # wandb
             if (
@@ -149,6 +148,8 @@ class RewardModelTrainer(ABC):
             ):
                 logs = {"train/%s" % k: v for k, v in {**logs_dict, "global_step": global_step}.items()}
                 self._wandb.log(logs)
+
+        step_bar.update()
 
         # eval
         if global_step % args.eval_steps == 0:
@@ -215,7 +216,6 @@ class RewardModelTrainer(ABC):
             if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": steps}.items()}
                 self._wandb.log(logs)
-        self.model.train()  # reset model state
 
     def concatenated_forward(self, model, chosen_ids, c_mask, reject_ids, r_mask):
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.

@@ -339,7 +339,6 @@ class PPOTrainer(ABC):
             # step bar
             logs_dict = self.strategy.all_reduce(logs_dict)
             step_bar.set_postfix(logs_dict)
-            step_bar.update(args.logging_steps)
             # wandb
             if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {
@@ -351,11 +350,8 @@ class PPOTrainer(ABC):
                 }
                 self._wandb.log(logs)
 
-        # eval
-        if global_step % args.eval_steps == 0:
-            # TODO: Add evaluation mechanism for PPO
-            # self.evaluate(self.eval_dataloader, global_step)
-            pass
+        step_bar.update()
+
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity/others on whole dev dataset as metric
         if global_step % args.save_steps == 0:
