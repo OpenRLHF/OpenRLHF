@@ -29,8 +29,6 @@ pip install alpaca_eval
 # convert .jsonl to .json
 sed -i '1s/^/[/; $!s/$/,/; $s/$/]/' {output_json_path}
 sed -i 's/"input"/"instruction"/g' {output_json_path}
-sed -i 's/Human: //g' {output_json_path}
-sed -i 's/\\nAssistant: //g' {output_json_path}
 
 alpaca_eval --model_outputs {output_json_path} --annotators_config alpaca_eval_gpt4 --reference_outputs sft.json
 ```
