@@ -197,3 +197,4 @@ class SFTTrainer(ABC):
             if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": steps}.items()}
                 self._wandb.log(logs)
+        self.model.train()  # reset model state
