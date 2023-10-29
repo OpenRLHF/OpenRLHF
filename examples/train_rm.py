@@ -55,19 +55,15 @@ def train(args):
         max_count=2000000,
         stopping_strategy="all_exhausted",
     )
-    train_dataset = RewardDataset(train_data, tokenizer, args.max_len, strategy) if not args.only_evaluate else None
+    train_dataset = RewardDataset(train_data, tokenizer, args.max_len, strategy)
     eval_dataset = RewardDataset(eval_data, tokenizer, args.max_len, strategy)
 
-    train_dataloader = (
-        strategy.setup_dataloader(
-            train_dataset,
-            args.micro_train_batch_size,
-            True,
-            True,
-            train_dataset.collate_fn,
-        )
-        if not args.only_evaluate
-        else None
+    train_dataloader = strategy.setup_dataloader(
+        train_dataset,
+        args.micro_train_batch_size,
+        True,
+        True,
+        train_dataset.collate_fn,
     )
     eval_dataloader = strategy.setup_dataloader(
         eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn
@@ -92,8 +88,8 @@ def train(args):
 
     os.makedirs(args.save_path, exist_ok=True)
 
-    # batch_size here is expected to be C(k,2), k means # response of each prompt
-    # be limited with the format of dataset 'Dahoas/rm-static', we'd better use batch_size as 1
+    # batch_size here is micro_batch_size * 2
+    # we use merged chosen + rejected response forward
     trainer = RewardModelTrainer(
         model=model,
         strategy=strategy,
@@ -110,9 +106,8 @@ def train(args):
 
     trainer.fit(args)
 
-    if not args.only_evaluate:
-        # save model checkpoint after fitting on only rank0
-        strategy.save_model(model, args.save_path + "/rm_model.pt", only_rank0=True)
+    # save model checkpoint after fitting on only rank0
+    strategy.save_model(model, args.save_path + "/rm_model.pt", only_rank0=True)
 
 
 if __name__ == "__main__":

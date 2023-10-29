@@ -42,7 +42,7 @@ class RewardModelTrainer(ABC):
     ) -> None:
         super().__init__()
         self.strategy = strategy
-        self.epochs = max_epochs if not only_evaluate else 1
+        self.epochs = max_epochs
         self.max_norm = max_norm
         self.model = model
         self.train_dataloader = train_dataloader
