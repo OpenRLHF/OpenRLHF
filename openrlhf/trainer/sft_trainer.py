@@ -129,7 +129,7 @@ class SFTTrainer(ABC):
                     "train_loss": loss.item(),
                 }
                 # logs/checkpoints/evaluation
-                self.logs_and_checkpoints(args, global_step, step_bar, logs_dict)
+                self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict)
 
                 step_bar.update()
                 global_step += 1
@@ -137,7 +137,7 @@ class SFTTrainer(ABC):
             epoch_bar.update()
 
     # logs/checkpoints/evaluation
-    def logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}):
+    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}):
         if global_step % args.logging_steps == 0:
             # step bar
             logs_dict = self.strategy.all_reduce(logs_dict)
