@@ -78,8 +78,8 @@ class DPOTrainer(ABC):
 
             wandb.define_metric("train/global_step")
             wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
-            wandb.define_metric("eval/epoch")
-            wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
+            wandb.define_metric("eval/global_step")
+            wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
 
     def fit(self, args):
         # get eval and save steps
