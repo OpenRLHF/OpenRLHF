@@ -81,8 +81,14 @@ class DPOTrainer(ABC):
             wandb.define_metric("eval/epoch")
             wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
 
-    def fit(self, use_lora):
-        global_step = 0
+    def fit(self, args):
+        # get eval and save steps
+        if args.eval_steps == -1:
+            args.eval_steps = self.train_dataloader.__len__()  # Evaluate once per epoch
+        if args.save_steps == -1:
+            args.save_steps = float("inf")  # do not save ckpt
+
+        global_step = 1
         epoch_bar = tqdm(
             range(self.epochs),
             desc="Train epoch",
@@ -123,39 +129,58 @@ class DPOTrainer(ABC):
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-                global_step += 1
                 acc_mean = acc_mean * 0.9 + 0.1 * (chosen_reward > reject_reward).float().mean().item()
                 loss_mean = loss_mean * 0.9 + 0.1 * loss.item()
-                logs = {"train_loss": loss.item()}
-                logs["chosen_reward"] = chosen_reward.mean().item()
-                logs["reject_reward"] = reject_reward.mean().item()
-                logs["acc_mean"] = acc_mean
-                logs["loss_mean"] = loss_mean
-                logs = self.strategy.all_reduce(logs)
-                step_bar.set_postfix(logs)
+                # dpo logs
+                logs_dict = {
+                    "train_loss": loss.item(),
+                    "chosen_reward": chosen_reward.mean().item(),
+                    "reject_reward": reject_reward.mean().item(),
+                    "acc_mean": acc_mean,
+                    "loss_mean": loss_mean,
+                }
+                # logs/checkpoints/evaluate
+                self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict)
+
                 step_bar.update()
-
-                if (
-                    self._wandb is not None
-                    and self.strategy.is_rank_0()
-                    and global_step % self.strategy.accumulated_gradient == 0
-                ):
-                    logs = {"train/%s" % k: v for k, v in {**logs, "global_step": global_step}.items()}
-                    self._wandb.log(logs)
-
-            # eval
-            self.evaluate(self.eval_dataloader, epoch)
+                global_step += 1
             epoch_bar.update()
 
         if self._wandb is not None and self.strategy.is_rank_0():
             self._wandb.finish()
 
-    def evaluate(self, eval_dataloader, epoch_in_training):
+    # logs/checkpoints/evaluate
+    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}):
+        # logs
+        if global_step % args.logging_steps == 0:
+            # step bar
+            logs_dict = self.strategy.all_reduce(logs_dict)
+            step_bar.set_postfix(logs_dict)
+
+            # wandb
+            if (
+                self._wandb is not None
+                and self.strategy.is_rank_0()
+                and global_step % self.strategy.accumulated_gradient == 0
+            ):
+                logs = {"train/%s" % k: v for k, v in {**logs_dict, "global_step": global_step}.items()}
+                self._wandb.log(logs)
+
+        # eval
+        if global_step % args.eval_steps == 0:
+            self.evaluate(self.eval_dataloader, global_step)
+        # save ckpt
+        # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
+        if global_step % args.save_steps == 0:
+            tag = f"global_step{global_step}"
+            self.strategy.save_ckpt(self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem)
+
+    def evaluate(self, eval_dataloader, steps=0):
         self.model.eval()
         with torch.no_grad():
             step_bar = tqdm(
                 range(eval_dataloader.__len__()),
-                desc="Eval stage of epoch %d" % epoch_in_training,
+                desc="Eval stage of global_step %d" % steps,
                 disable=not self.strategy.is_rank_0(),
             )
             acc = 0
@@ -189,8 +214,9 @@ class DPOTrainer(ABC):
             logs = self.strategy.all_reduce(logs)
             step_bar.set_postfix(logs)
             if self._wandb is not None and self.strategy.is_rank_0():
-                logs = {"eval/%s" % k: v for k, v in {**logs, "epoch": epoch_in_training}.items()}
+                logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": steps}.items()}
                 self._wandb.log(logs)
+        self.model.train() # reset model state
 
     def concatenated_forward(self, model, chosen_ids, c_mask, reject_ids, r_mask):
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
