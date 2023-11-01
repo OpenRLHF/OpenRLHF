@@ -355,7 +355,7 @@ class DeepspeedStrategy(ABC):
     def get_rank(self) -> int:
         return dist.get_rank()
 
-    def save_ckpt(self, model, save_dir, tag=None, max_num=3, max_mem=100, client_state={}, save_latest=True):
+    def save_ckpt(self, model, save_dir, tag=None, max_num=3, max_mem=1000, client_state={}, save_latest=True):
         if self.is_rank_0():
             # Check and create the directory
             if not os.path.exists(save_dir):
