@@ -110,6 +110,7 @@ class RewardModelTrainer(ABC):
                 c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
                 reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
                 r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
+                margin = margin.to(torch.cuda.current_device())
 
                 chosen_reward, reject_reward = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask
@@ -181,6 +182,7 @@ class RewardModelTrainer(ABC):
                 c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
                 reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
                 r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
+                margin = margin.to(torch.cuda.current_device())
 
                 chosen_reward, reject_reward = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask
