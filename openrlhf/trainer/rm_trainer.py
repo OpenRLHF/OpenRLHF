@@ -108,11 +108,12 @@ class RewardModelTrainer(ABC):
             self.model.train()
             acc_mean = 0
             loss_mean = 0
-            for chosen_ids, c_mask, reject_ids, r_mask in self.train_dataloader:
+            for chosen_ids, c_mask, reject_ids, r_mask, margin in self.train_dataloader:
                 chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
                 c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
                 reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
                 r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
+                margin = margin.to(torch.cuda.current_device())
 
                 chosen_reward, reject_reward = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask
@@ -121,7 +122,7 @@ class RewardModelTrainer(ABC):
                 if self.compute_fp32_loss:
                     chosen_reward = chosen_reward.float()
                     reject_reward = reject_reward.float()
-                loss = self.loss_fn(chosen_reward, reject_reward)
+                loss = self.loss_fn(chosen_reward, reject_reward, margin)
 
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
@@ -182,16 +183,17 @@ class RewardModelTrainer(ABC):
             acc = 0
             rewards = []
             loss_sum = 0
-            for chosen_ids, c_mask, reject_ids, r_mask in eval_dataloader:
+            for chosen_ids, c_mask, reject_ids, r_mask, margin in eval_dataloader:
                 chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
                 c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
                 reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
                 r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
+                margin = margin.to(torch.cuda.current_device())
 
                 chosen_reward, reject_reward = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask
                 )
-                loss = self.loss_fn(chosen_reward, reject_reward)
+                loss = self.loss_fn(chosen_reward, reject_reward, margin)
 
                 rewards += [chosen_reward.flatten(), reject_reward.flatten()]
                 acc += (chosen_reward > reject_reward).float().mean().item()
