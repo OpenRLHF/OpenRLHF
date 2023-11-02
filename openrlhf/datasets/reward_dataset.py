@@ -1,5 +1,6 @@
 from typing import Callable
 
+import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
@@ -49,7 +50,11 @@ def preprocess_data(data):
         reject = data["answer_1"] if data["score_0"] > data["score_1"] else data["answer_0"]
     else:
         raise ValueError("reward_dataset key error")
-    return prompt, chosen, reject
+
+    # margin loss
+    margin = data["margin"] if exist_and_not_none(data, "margin") else 0
+
+    return prompt, chosen, reject, margin
 
 
 class RewardDataset(Dataset):
@@ -67,22 +72,24 @@ class RewardDataset(Dataset):
         self.prompts = []
         self.chosens = []
         self.rejects = []
+        self.margins = []
         self.tokenizer = tokenizer
         self.strategy = strategy
         self.max_length = max_length
 
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
-            prompt, chosen, reject = preprocess_data(data)
+            prompt, chosen, reject, margin = preprocess_data(data)
             self.prompts.append(prompt)
             self.chosens.append(chosen)
             self.rejects.append(reject)
+            self.margins.append(margin)
 
     def __len__(self):
         length = len(self.chosens)
         return length
 
     def __getitem__(self, idx):
-        prompt, chosen, reject = self.prompts[idx], self.chosens[idx], self.rejects[idx]
+        prompt, chosen, reject, margin = self.prompts[idx], self.chosens[idx], self.rejects[idx], self.margins[idx]
 
         chosen = prompt + chosen + " " + self.tokenizer.eos_token
         chosen_token = self.tokenizer(
@@ -112,6 +119,7 @@ class RewardDataset(Dataset):
             chosen_token["attention_mask"],
             reject_token["input_ids"],
             reject_token["attention_mask"],
+            margin,
         )
 
     def collate_fn(self, item_list):
@@ -119,14 +127,16 @@ class RewardDataset(Dataset):
         chosen_masks = []
         reject_ids = []
         rejects_masks = []
-        for chosen_id, chosen_mask, reject_id, rejects_mask in item_list:
+        margins = []
+        for chosen_id, chosen_mask, reject_id, rejects_mask, margin in item_list:
             chosen_ids.append(chosen_id)
             chosen_masks.append(chosen_mask)
             reject_ids.append(reject_id)
             rejects_masks.append(rejects_mask)
+            margins.append(margin)
 
         chosen_ids = zero_pad_sequences(chosen_ids, value=self.tokenizer.pad_token_id)
         chosen_masks = zero_pad_sequences(chosen_masks)
         reject_ids = zero_pad_sequences(reject_ids, value=self.tokenizer.pad_token_id)
         rejects_masks = zero_pad_sequences(rejects_masks)
-        return chosen_ids, chosen_masks, reject_ids, rejects_masks
+        return chosen_ids, chosen_masks, reject_ids, rejects_masks, torch.tensor(margins, dtype=torch.float32)
