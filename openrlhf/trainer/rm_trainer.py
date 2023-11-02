@@ -59,8 +59,8 @@ class RewardModelTrainer(ABC):
             self.loss_fn = LogExpLoss()
             self.strategy.print("LogExp Loss")
 
+        self.margin_loss = self.strategy.args.margin_loss
         self.compute_fp32_loss = self.strategy.args.compute_fp32_loss
-        self.strategy.print(f"compute_fp32_loss: {self.compute_fp32_loss}")
 
         if self.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
@@ -113,7 +113,11 @@ class RewardModelTrainer(ABC):
                 c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
                 reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
                 r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
-                margin = margin.to(torch.cuda.current_device())
+
+                if self.margin_loss:
+                    margin = margin.to(torch.cuda.current_device())
+                else:
+                    margin = 0
 
                 chosen_reward, reject_reward = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask

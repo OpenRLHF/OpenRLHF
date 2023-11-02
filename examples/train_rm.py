@@ -143,6 +143,7 @@ if __name__ == "__main__":
     parser.add_argument("--adam_offload", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False)
     parser.add_argument("--compute_fp32_loss", action="store_true", default=False)
+    parser.add_argument("--margin_loss", action="store_true", default=False)
 
     # wandb pamameters
     parser.add_argument("--use_wandb", type=str, default=None)
