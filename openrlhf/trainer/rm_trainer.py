@@ -59,6 +59,9 @@ class RewardModelTrainer(ABC):
             self.loss_fn = LogExpLoss()
             self.strategy.print("LogExp Loss")
 
+        self.compute_fp32_loss = self.strategy.args.get("compute_fp32_loss", False)
+        self.strategy.print(f"compute_fp32_loss: {self.compute_fp32_loss}")
+
         if self.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
@@ -116,6 +119,9 @@ class RewardModelTrainer(ABC):
                     self.model, chosen_ids, c_mask, reject_ids, r_mask
                 )
 
+                if self.compute_fp32_loss:
+                    chosen_reward = chosen_reward.float()
+                    reject_reward = reject_reward.float()
                 loss = self.loss_fn(chosen_reward, reject_reward, margin)
 
                 self.strategy.backward(loss, self.model, self.optimizer)
