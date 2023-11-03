@@ -117,7 +117,7 @@ class RewardModelTrainer(ABC):
                 if self.margin_loss:
                     margin = margin.to(torch.cuda.current_device())
                 else:
-                    margin = 0
+                    margin = None
 
                 chosen_reward, reject_reward = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask

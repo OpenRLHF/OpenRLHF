@@ -81,8 +81,13 @@ class PairWiseLoss(nn.Module):
     Pairwise Loss for Reward Model
     """
 
-    def forward(self, chosen_reward: torch.Tensor, reject_reward: torch.Tensor, margin: torch.Tensor) -> torch.Tensor:
-        loss = -F.logsigmoid(chosen_reward - reject_reward - margin).mean()
+    def forward(
+        self, chosen_reward: torch.Tensor, reject_reward: torch.Tensor, margin: torch.Tensor = None
+    ) -> torch.Tensor:
+        if margin is not None:
+            loss = -F.logsigmoid(chosen_reward - reject_reward - margin).mean()
+        else:
+            loss = -F.logsigmoid(chosen_reward - reject_reward).mean()
         return loss
 
 
@@ -92,8 +97,13 @@ class LogExpLoss(nn.Module):
     Details: https://arxiv.org/abs/2204.05862
     """
 
-    def forward(self, chosen_reward: torch.Tensor, reject_reward: torch.Tensor, margin: torch.Tensor) -> torch.Tensor:
-        loss = torch.log(1 + torch.exp(reject_reward - chosen_reward - margin)).mean()
+    def forward(
+        self, chosen_reward: torch.Tensor, reject_reward: torch.Tensor, margin: torch.Tensor = None
+    ) -> torch.Tensor:
+        if margin is not None:
+            loss = torch.log(1 + torch.exp(reject_reward - chosen_reward - margin)).mean()
+        else:
+            loss = torch.log(1 + torch.exp(reject_reward - chosen_reward)).mean()
         return loss
 
 
