@@ -151,6 +151,10 @@ class DPOTrainer(ABC):
 
     # logs/checkpoints/evaluate
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}):
+        args.logging_steps *= self.strategy.accumulated_gradient
+        args.eval_steps *= self.strategy.accumulated_gradient
+        args.save_steps *= self.strategy.accumulated_gradient
+
         # logs
         if global_step % args.logging_steps == 0:
             # step bar
