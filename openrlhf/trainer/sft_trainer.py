@@ -84,9 +84,7 @@ class SFTTrainer(ABC):
             wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
 
     def fit(self, args):
-        # get eval and save steps
-        if args.eval_steps == -1:
-            args.eval_steps = self.train_dataloader.__len__()  # Evaluate once per epoch
+        # get save steps
         if args.save_steps == -1:
             args.save_steps = float("inf")  # do not save ckpt
 
@@ -138,7 +136,10 @@ class SFTTrainer(ABC):
 
     # logs/checkpoints/evaluation
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}):
-        if global_step % args.logging_steps == 0:
+        logging_steps = args.logging_steps * self.strategy.accumulated_gradient
+        eval_steps = args.eval_steps * self.strategy.accumulated_gradient
+        save_steps = args.save_steps * self.strategy.accumulated_gradient
+        if global_step % logging_steps == 0:
             # step bar
             logs_dict = self.strategy.all_reduce(logs_dict)
             step_bar.set_postfix(logs_dict)
@@ -153,11 +154,13 @@ class SFTTrainer(ABC):
                 self._wandb.log(logs)
 
         # eval
-        if global_step % args.eval_steps == 0:
-            self.evaluate(self.eval_dataloader, global_step)
+        if global_step % self.train_dataloader.__len__ == 0:
+            self.evaluate(self.eval_dataloader, global_step)  # eval/epoch
+        elif global_step % eval_steps == 0:
+            self.evaluate(self.eval_dataloader, global_step)  # eval/eval_steps
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
-        if global_step % args.save_steps == 0:
+        if global_step % save_steps == 0:
             tag = f"global_step{global_step}"
             self.strategy.save_ckpt(self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem)
 
