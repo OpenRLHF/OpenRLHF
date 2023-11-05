@@ -343,7 +343,10 @@ class PPOTrainer(ABC):
         return status
 
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}):
-        if global_step % args.logging_steps == 0:
+        logging_steps = args.logging_steps * self.strategy.accumulated_gradient
+        eval_steps = args.eval_steps * self.strategy.accumulated_gradient
+        save_steps = args.save_steps * self.strategy.accumulated_gradient
+        if global_step % logging_steps == 0:
             # step bar
             logs_dict = self.strategy.all_reduce(logs_dict)
             step_bar.set_postfix(logs_dict)
@@ -359,12 +362,12 @@ class PPOTrainer(ABC):
                 self._wandb.log(logs)
 
         # TODO: Add evaluation mechanism for PPO
-        if global_step % args.eval_steps == 0:
+        if global_step % eval_steps == 0:
             # self.evaluate(self.eval_dataloader, global_step)
             pass
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity/others on whole dev dataset as metric
-        if global_step % args.save_steps == 0:
+        if global_step % save_steps == 0:
             tag = f"global_step{global_step}"
             self.strategy.save_ckpt(
                 self.actor.model, os.path.join(args.ckpt_path, "_actor"), tag, args.max_ckpt_num, args.max_ckpt_mem
