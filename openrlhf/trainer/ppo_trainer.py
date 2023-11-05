@@ -346,7 +346,7 @@ class PPOTrainer(ABC):
         args.logging_steps *= self.strategy.accumulated_gradient
         args.eval_steps *= self.strategy.accumulated_gradient
         args.save_steps *= self.strategy.accumulated_gradient
-        
+
         if global_step % args.logging_steps == 0:
             # step bar
             logs_dict = self.strategy.all_reduce(logs_dict)
