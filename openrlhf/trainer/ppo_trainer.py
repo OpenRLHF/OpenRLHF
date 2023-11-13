@@ -351,7 +351,6 @@ class PPOTrainer(ABC):
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}):
         if global_step % args.logging_steps == 0:
             # step bar
-            logs_dict = self.strategy.all_reduce(logs_dict)
             step_bar.set_postfix(logs_dict)
             # wandb
             if self._wandb is not None and self.strategy.is_rank_0():
