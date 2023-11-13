@@ -1,7 +1,7 @@
 import logging
 import os
 import socket
-from typing import Optional, Type
+from typing import Callable, List, Optional, Type
 
 import ray
 import torch
@@ -210,30 +210,51 @@ class PPORayActorGroup:
         self,
         critic_model_group: "PPORayActorGroup",
         initial_model_group: "PPORayActorGroup",
-        reward_model_group: "PPORayActorGroup",
+        reward_model_groups: List["PPORayActorGroup"],
+        reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
     ):
         """Train actor model.
 
         Args:
             critic_model_group (PPORayActorGroup): critic model group.
-            initial_model (PPORayActorGroup): reference model group.
-            reward_model (PPORayActorGroup): reward model group.
+            initial_model_group (PPORayActorGroup): reference model group.
+            reward_model_groups (PPORayActorGroup): reward model groups.
+            reward_fn: reward calculate function, must be specified if using multiple reward models.
 
         Returns:
             List: list of remote object refs.
         """
+        assert (
+            len(reward_model_groups) == 1 or reward_fn is not None
+        ), "reward_fn must be specified if using multiple reward models"
+
         critic_actors = critic_model_group._actor_handlers
-        reward_actors = reward_model_group._actor_handlers
         initial_actors = initial_model_group._actor_handlers
-        return [
-            actor.fit.remote(
-                critic_actors[i % len(critic_actors)],
-                reward_actors[i % len(reward_actors)],
-                initial_actors[i % len(initial_actors)],
-                critic_train_remote=(i < len(critic_actors)),
+
+        refs = []
+        # TODO(wuxibin): actor model choose critic/reward/initial model in a
+        # round robin fashion, implement more efficient dispatching strategy.
+        for i, actor in enumerate(self._actor_handlers):
+            critic_actor = critic_actors[i % len(critic_actors)]
+            initial_actor = initial_actors[i % len(initial_actors)]
+
+            reward_actors = []
+            for reward_model_group in reward_model_groups:
+                actors = reward_model_group._actor_handlers
+                reward_actors.append(actors[i % len(actors)])
+
+            refs.append(
+                actor.fit.remote(
+                    critic_model=critic_actor,
+                    initial_model=initial_actor,
+                    reward_model=reward_actors,
+                    reward_fn=reward_fn,
+                    # whether this actor should triger corresponding critic model training
+                    critic_train_remote=(i < len(critic_actors)),
+                )
             )
-            for i, actor in enumerate(self._actor_handlers)
-        ]
+
+        return refs
 
     def async_save_actor_model(self):
         """Save actor model on rank 0.

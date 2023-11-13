@@ -80,9 +80,14 @@ class PPOTrainer(ABC):
         tokenizer: Optional[Callable[[Any], dict]] = None,
         prompt_max_len: int = 128,
         dataloader_pin_memory: bool = True,
+        reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
         critic_train_remote: bool = False,
         **generate_kwargs,
     ) -> None:
+        assert (
+            not isinstance(reward_model, List) or len(reward_model) == 1 or reward_fn is not None
+        ), "reward_fn must be specified if using multiple reward models"
+
         super().__init__()
         self.strategy = strategy
         self.micro_rollout_batch_size = micro_rollout_batch_size
@@ -98,6 +103,7 @@ class PPOTrainer(ABC):
         self.ema_beta = ema_beta
         self.gradient_checkpointing = gradient_checkpointing
         self.critic_train_remote = critic_train_remote
+        self.reward_fn = reward_fn
 
         self.actor = actor
         self.critic = critic
@@ -119,11 +125,11 @@ class PPOTrainer(ABC):
         # if reference/reward/critic models are ray actor handle, we should use RemoteExperienceMaker.
         if not isinstance(critic, ray.actor.ActorHandle):
             self.experience_maker = NaiveExperienceMaker(
-                actor, critic, reward_model, initial_model, self.kl_ctl, strategy
+                actor, critic, reward_model, initial_model, self.kl_ctl, strategy, reward_fn
             )
         else:
             self.experience_maker = RemoteExperienceMaker(
-                actor, critic, reward_model, initial_model, self.kl_ctl, strategy
+                actor, critic, reward_model, initial_model, self.kl_ctl, strategy, reward_fn
             )
         self.replay_buffer = NaiveReplayBuffer(micro_train_batch_size, buffer_limit, buffer_cpu_offload)
 
