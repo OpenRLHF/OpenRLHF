@@ -78,6 +78,7 @@ class NaiveExperienceMaker(ABC):
         initial_model: Actor,
         kl_controller,
         strategy=None,
+        reward_fn=None,
     ) -> None:
         super().__init__()
         self.actor = actor
@@ -86,6 +87,7 @@ class NaiveExperienceMaker(ABC):
         self.initial_model = initial_model
         self.kl_ctl = kl_controller
         self.strategy = strategy
+        self.reward_fn = reward_fn
 
     @torch.no_grad()
     def make_experience(self, input_ids: torch.Tensor, **generate_kwargs) -> Experience:
@@ -218,7 +220,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         value_ref = self.critic.forward.remote(sequences_cpu, action_mask_cpu, attention_mask_cpu)
 
         # rewards
-        r_ref = self.reward_model.forward.remote(sequences_cpu, attention_mask_cpu)
+        r_refs = []
+        for rm in self.reward_model:
+            r_refs.append(rm.forward.remote(sequences_cpu, attention_mask_cpu))
 
         # log probs
         start = time.time()
@@ -227,9 +231,13 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         # wait initial/critic/reward model done
         start = time.time()
-        base_action_log_probs, value, r = ray.get([base_action_log_probs_ref, value_ref, r_ref])
+        ref_values = ray.get([base_action_log_probs_ref, value_ref] + r_refs)
         wait_time = time.time() - start
-        base_action_log_probs, value, r = base_action_log_probs.to(device), value.to(device), r.to(device)
+
+        base_action_log_probs, value, rewards = ref_values[0], ref_values[1], ref_values[2:]
+        base_action_log_probs, value = base_action_log_probs.to(device), value.to(device)
+        rewards = [r.to(device) for r in rewards]
+        r = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
 
         reward, kl = compute_reward(
             r,

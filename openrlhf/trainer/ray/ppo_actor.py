@@ -2,9 +2,10 @@ import itertools
 import math
 import os
 from copy import deepcopy
-from typing import Dict
+from typing import Callable, Dict, List
 
 import ray
+import torch
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import PromptDataset, SFTDataset
@@ -140,10 +141,11 @@ class ActorModelRayActor(BasePPORole):
 
     def fit(
         self,
-        critic: ray.actor.ActorHandle,
-        reward_model: ray.actor.ActorHandle,
+        critic_model: ray.actor.ActorHandle,
         initial_model: ray.actor.ActorHandle,
-        critic_train_remote: bool,
+        reward_model: List[ray.actor.ActorHandle],
+        reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
+        critic_train_remote: bool = False,
     ):
         """Train actor model with prompt datasets."""
         strategy = self.strategy
@@ -153,7 +155,7 @@ class ActorModelRayActor(BasePPORole):
         trainer = ActorPPOTrainer(
             strategy,
             self.actor,
-            critic,
+            critic_model,
             reward_model,
             initial_model,
             ema_model=self.ema_model,
@@ -161,6 +163,7 @@ class ActorModelRayActor(BasePPORole):
             critic_optim=None,
             actor_scheduler=self.actor_scheduler,
             critic_scheduler=None,
+            reward_fn=reward_fn,
             max_epochs=args.max_epochs,
             micro_train_batch_size=args.micro_train_batch_size,
             micro_rollout_batch_size=args.micro_rollout_batch_size,
@@ -187,12 +190,7 @@ class ActorModelRayActor(BasePPORole):
             eos_token_id=self.tokenizer.eos_token_id,
         )
 
-        trainer.fit(
-            self.prompts_dataloader,
-            self.pretrain_dataloader,
-            num_episodes=args.num_episodes,
-            rollout_batch_size=args.rollout_batch_size,
-        )
+        trainer.fit(self.prompts_dataloader, self.pretrain_dataloader, args)
 
     def save_model(self):
         args = self.strategy.args

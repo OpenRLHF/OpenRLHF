@@ -1,7 +1,9 @@
 import argparse
 from datetime import datetime
+from typing import List
 
 import ray
+import torch
 from ray.util.placement_group import placement_group
 
 from openrlhf.trainer.ray import (
@@ -91,31 +93,49 @@ def train(args):
         pg=pg,
         num_gpus_per_actor=0.75 if pg else 1,
     )
-    reward_model = PPORayActorGroup(
-        args.reward_num_nodes,
-        args.reward_num_gpus_per_node,
-        RewardModelRayActor,
-        pg=pg,
-        num_gpus_per_actor=0.25 if pg else 1,
+
+    # multiple reward models
+    critic_pretrains = args.critic_pretrain.split(",")
+    reward_model_paths = (
+        args.reward_model_path.split(",") if args.reward_model_path else [None] * len(critic_pretrains)
     )
+    assert len(reward_model_paths) == len(
+        critic_pretrains
+    ), f"mismatch critic_pretrain and reward_model_path, must be same size"
+
+    reward_models = []
+    for _ in reward_model_paths:
+        reward_models.append(
+            PPORayActorGroup(
+                args.reward_num_nodes,
+                args.reward_num_gpus_per_node,
+                RewardModelRayActor,
+                pg=pg,
+                num_gpus_per_actor=0.25 if pg else 1,
+            )
+        )
 
     # init reference/reward/actor mdoel
     refs = []
     refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.pretrain, args.sft_model_path))
     refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.pretrain, args.sft_model_path))
-    refs.extend(reward_model.async_init_model_from_pretrained(strategy, args.critic_pretrain, args.reward_model_path))
+    for reward_model, critic_pretrain, reward_model_path in zip(reward_models, critic_pretrains, reward_model_paths):
+        refs.extend(reward_model.async_init_model_from_pretrained(strategy, critic_pretrain, reward_model_path))
     ray.get(refs)
 
     # critic scheduler initialization depends on max_step, so we have to init critic after actor
+    # TODO: use first reward model as critic model
     max_steps = ray.get(actor_model._actor_handlers[0].max_steps.remote())
     ray.get(
-        critic_model.async_init_model_from_pretrained(
-            strategy, args.critic_pretrain, args.reward_model_path, max_steps
-        )
+        critic_model.async_init_model_from_pretrained(strategy, critic_pretrains[0], reward_model_paths[0], max_steps)
     )
 
+    # NOTE: replace this with your own reward function!
+    def reward_fn(rewards: List[torch.Tensor]):
+        return torch.stack(rewards).sum(dim=0)
+
     # train actor and critic mdoel
-    refs = actor_model.async_fit_actor_model(critic_model, ref_model, reward_model)
+    refs = actor_model.async_fit_actor_model(critic_model, ref_model, reward_models, reward_fn=reward_fn)
     ray.get(refs)
 
     # save model
@@ -205,6 +225,11 @@ if __name__ == "__main__":
     parser.add_argument("--actor_init_on_gpu", action="store_true", default=False)
     parser.add_argument("--save_hf_model", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False)
+
+    # evaluation
+    parser.add_argument("--eval_steps", type=int, default=-1)
+    parser.add_argument("--save_steps", type=int, default=-1)
+    parser.add_argument("--logging_steps", type=int, default=1)
 
     # wandb pamameters
     parser.add_argument("--use_wandb", type=str, default=None)
