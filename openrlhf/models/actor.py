@@ -56,7 +56,7 @@ class Actor(nn.Module):
             "input_ids": input_ids,
             "top_k": kwargs.get("top_k", None),
             "top_p": kwargs.get("top_p", None),
-            "do_sample": kwargs.get("do_sample", False),
+            "do_sample": kwargs.get("do_sample", True),
             "early_stopping": True,
             "temperature": kwargs.get("temperature", 1),
             "use_cache": True,
