@@ -15,7 +15,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --actor_num_nodes 1 \
     --actor_num_gpus_per_node 4 \
     --pretrain codellama/CodeLlama-34b-Instruct-hf \
-    --critic_pretrain codellama/CodeLlama-34b-Instruct-hf \
+    --reward_pretrain codellama/CodeLlama-34b-Instruct-hf \
     --reward_model_path {reward_model_path} \
     --sft_model_path {sft_model_path} \
     --save_path /openrlhf/examples/test_scripts/ckpt/34b_codellama \

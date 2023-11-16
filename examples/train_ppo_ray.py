@@ -95,13 +95,13 @@ def train(args):
     )
 
     # multiple reward models
-    critic_pretrains = args.critic_pretrain.split(",")
+    reward_pretrains = args.reward_pretrain.split(",")
     reward_model_paths = (
-        args.reward_model_path.split(",") if args.reward_model_path else [None] * len(critic_pretrains)
+        args.reward_model_path.split(",") if args.reward_model_path else [None] * len(reward_pretrains)
     )
     assert len(reward_model_paths) == len(
-        critic_pretrains
-    ), f"mismatch critic_pretrain and reward_model_path, must be same size"
+        reward_pretrains
+    ), f"mismatch reward_pretrain and reward_model_path, must be same size"
 
     reward_models = []
     for _ in reward_model_paths:
@@ -119,15 +119,15 @@ def train(args):
     refs = []
     refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.pretrain, args.sft_model_path))
     refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.pretrain, args.sft_model_path))
-    for reward_model, critic_pretrain, reward_model_path in zip(reward_models, critic_pretrains, reward_model_paths):
-        refs.extend(reward_model.async_init_model_from_pretrained(strategy, critic_pretrain, reward_model_path))
+    for reward_model, reward_pretrain, reward_model_path in zip(reward_models, reward_pretrains, reward_model_paths):
+        refs.extend(reward_model.async_init_model_from_pretrained(strategy, reward_pretrain, reward_model_path))
     ray.get(refs)
 
     # critic scheduler initialization depends on max_step, so we have to init critic after actor
     # TODO: use first reward model as critic model
     max_steps = ray.get(actor_model._actor_handlers[0].max_steps.remote())
     ray.get(
-        critic_model.async_init_model_from_pretrained(strategy, critic_pretrains[0], reward_model_paths[0], max_steps)
+        critic_model.async_init_model_from_pretrained(strategy, reward_pretrains[0], reward_model_paths[0], max_steps)
     )
 
     # NOTE: replace this with your own reward function!
@@ -183,7 +183,7 @@ if __name__ == "__main__":
         help="sampling probs for datasets",
     )
     parser.add_argument("--pretrain", type=str, default=None)
-    parser.add_argument("--critic_pretrain", type=str, default=None)
+    parser.add_argument("--reward_pretrain", type=str, default=None)
     parser.add_argument("--reward_model_path", type=str, default=None)
     parser.add_argument("--sft_model_path", type=str, default=None)
     parser.add_argument("--save_path", type=str, default="./ckpt")

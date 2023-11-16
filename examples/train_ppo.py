@@ -28,15 +28,15 @@ def train(args):
     if args.actor_init_on_gpu:
         actor = actor.to(torch.cuda.current_device())
 
-    critic = Critic(args.critic_pretrain, True, args.normalize_reward, use_flash_attention_2=args.flash_attn)
+    critic = Critic(args.reward_pretrain, True, args.normalize_reward, use_flash_attention_2=args.flash_attn)
     reward_model = RewardModel(
-        args.critic_pretrain, reward_from_config, args.normalize_reward, use_flash_attention_2=args.flash_attn
+        args.reward_pretrain, reward_from_config, args.normalize_reward, use_flash_attention_2=args.flash_attn
     )
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, actor.model, "left", strategy)
-    get_tokenizer(args.critic_pretrain, critic.model, "left", strategy)
-    get_tokenizer(args.critic_pretrain, reward_model.model, "left", strategy)
+    get_tokenizer(args.reward_pretrain, critic.model, "left", strategy)
+    get_tokenizer(args.reward_pretrain, reward_model.model, "left", strategy)
 
     strategy.print(actor)
     strategy.print(critic)
@@ -242,7 +242,7 @@ if __name__ == "__main__":
         help="sampling probs for datasets",
     )
     parser.add_argument("--pretrain", type=str, default=None)
-    parser.add_argument("--critic_pretrain", type=str, default=None)
+    parser.add_argument("--reward_pretrain", type=str, default=None)
     parser.add_argument("--reward_model_path", type=str, default=None)
     parser.add_argument("--sft_model_path", type=str, default=None)
     parser.add_argument("--save_path", type=str, default="./ckpt")

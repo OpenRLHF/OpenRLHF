@@ -3,7 +3,7 @@ set -x
 read -r -d '' training_commands <<EOF
 ../train_ppo.py \
     --pretrain meta-llama/Llama-2-7b-hf \
-    --critic_pretrain meta-llama/Llama-2-7b-hf \
+    --reward_pretrain meta-llama/Llama-2-7b-hf \
     --reward_model_path ./ckpt/7b_llama/rm_model_anthropic_oasst_lmsys_webgpt.pt \
     --sft_model_path ./ckpt/7b_llama/sft_model_ocra.pt \
     --save_path ./ckpt/7b_llama \
