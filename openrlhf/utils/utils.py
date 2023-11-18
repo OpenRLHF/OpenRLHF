@@ -125,7 +125,7 @@ def blending_datasets(
             dataset = dataset_subfold_list[0]
             data = load_dataset(dataset)
         else:
-            Exception("Dataset Name: Format error")
+            raise Exception(f"Dataset Name {dataset}: Format error")
 
         if "train" in data:
             train_data_list.append(data["train"].select(range(min(max_count, len(data["train"])))))
