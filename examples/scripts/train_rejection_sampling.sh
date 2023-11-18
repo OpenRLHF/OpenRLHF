@@ -33,7 +33,7 @@ while (($iter < $TRAINING_ITERS)); do
     --eval_task generate \
     --pretrain meta-llama/Llama-2-7b-hf \
     --bf16 \
-    --load_model $POLICY_MODEL_PATH
+    --load_model $POLICY_MODEL_PATH \
     --max_len 2048 \
     --dataset Open-Orca/OpenOrca,Dahoas/full-hh-rlhf  \
     --dataset_probs 0.5,0.5 \
@@ -53,7 +53,7 @@ EOF
     --eval_task rm \
     --pretrain meta-llama/Llama-2-7b-hf \
     --bf16 \
-    --load_model $REWARD_MODEL_PATH
+    --load_model $REWARD_MODEL_PATH \
     --max_len 2048 \
     --dataset $GENERATE_OUTPUT  \
     --dataset_probs 1.0 \
@@ -75,7 +75,8 @@ EOF
     --micro_train_batch_size 2 \
     --pretrain meta-llama/Llama-2-7b-hf \
     --save_path ./ckpt/7b_llama_rs \
-    --load_model $POLICY_MODEL_PATH
+    --load_model $POLICY_MODEL_PATH \
+    --lr_scheduler constant \
     --zero_stage 2 \
     --max_epochs 1 \
     --bf16 \

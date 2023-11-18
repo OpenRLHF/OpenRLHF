@@ -56,7 +56,7 @@ def train(args):
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
 
     scheduler = get_scheduler(
-        "cosine",
+        args.lr_scheduler,
         optim,
         num_warmup_steps=math.ceil(max_steps * 0.03),
         num_training_steps=max_steps,
@@ -117,6 +117,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_norm", type=float, default=1.0)
     parser.add_argument("--l2", type=float, default=0)
     parser.add_argument("--load_model", type=str, default=None)
+    parser.add_argument("--lr_scheduler", type=str, default="cosine")
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
     parser.add_argument("--pretrain_mode", action="store_true", default=False)
     parser.add_argument("--lora_rank", type=int, default=0, help="low-rank adaptation matrices rank")

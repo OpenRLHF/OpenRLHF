@@ -57,7 +57,7 @@ def batch_generate(args):
         # for iterative generation
         start_idx = args.iter * args.rollout_batch_size
         end_idx = start_idx + args.rollout_batch_size
-        prompts_data = prompts_data.select(range(start_idx, min(end_idx, prompts_data)))
+        prompts_data = prompts_data.select(range(start_idx, min(end_idx, len(prompts_data))))
 
     prompts_dataset = PromptDataset(prompts_data, strategy)
     prompts_dataloader = strategy.setup_dataloader(
