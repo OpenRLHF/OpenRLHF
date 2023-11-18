@@ -213,6 +213,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_probs", type=str, default="1.0")
     parser.add_argument("--output_path", type=str, default=None)
     parser.add_argument("--max_samples", type=int, default=500000)
+    parser.add_argument("--seed", type=int, default=1234)
 
     # for generation
     parser.add_argument("--inference_tp_size", type=int, default=1)
