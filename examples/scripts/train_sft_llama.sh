@@ -19,7 +19,7 @@ read -r -d '' training_commands <<EOF
     --bf16 \
     --flash_attn \
     --learning_rate 5e-6 \
-    --gradient_checkpointing \
+    --gradient_checkpointing
 EOF
     # --wandb [WANDB_TOKENS]
 
