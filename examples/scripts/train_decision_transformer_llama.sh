@@ -63,16 +63,14 @@ checkSuccess() {
     fi
 }
 
-if [[ ${1} != "slurm" ]]; then
-    export PATH=$HOME/.local/bin/:$PATH
+export PATH=$HOME/.local/bin/:$PATH
 
-    if [ ! -e $GENERATE_OUTPUT ]; then
-        deepspeed $generate_commands
-        checkSuccess "GENERATE"
-    fi
-    if [ ! -e $RM_OUTPUT ]; then
-        deepspeed $get_rewards_commands
-        checkSuccess "RM"
-    fi
-    deepspeed $sft_commands
+if [ ! -e $GENERATE_OUTPUT ]; then
+    deepspeed $generate_commands
+    checkSuccess "GENERATE"
 fi
+if [ ! -e $RM_OUTPUT ]; then
+    deepspeed $get_rewards_commands
+    checkSuccess "RM"
+fi
+deepspeed $sft_commands

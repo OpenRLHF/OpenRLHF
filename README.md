@@ -61,10 +61,10 @@ The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Referen
 - Pre-trained 7B/13B llama2 [checkpoints](https://huggingface.co/OpenLLMAI/openrlhf_checkpoint)
 - Support [GPT4 evaluation](./evaluation/gpt4/README.md) \& PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
 - Support Multiple Reward models.
+- Support [Rejection Sampling](./examples/scripts/train_rejection_sampling.sh).
 
 **TODO** 
-- Support checkpoint.
-- Support Rejection Sampling.
+- Support samples checkpoint.
 - Support QLora.
 
 
@@ -147,6 +147,9 @@ cd /openrlhf/examples/scripts
 # train DPO model
 ./train_dpo_llama.sh
 
+# train Rejection Sampling model
+./train_rejection_sampling_llama.sh
+
 # train Decision Transformer model
 ./train_decision_transformer_llama.sh
 ```
@@ -190,11 +193,12 @@ huggingface-cli login
 
 # Moidfy the Slurm Account/Nodes ... in `train_llama_slurm.sh`
 
-# For SFT, RM, and PPO training stage:
+# For SFT, RM, and PPO and DPO training:
 # Modify the variable `training_script` in `train_llama_slurm.sh` to
 readonly training_script="train_sft_llama.sh"
 readonly training_script="train_rm_llama.sh"
 readonly training_script="train_ppo_llama.sh"
+readonly training_script="train_dpo_llama.sh"
 
 # set `GPUS_PER_NODE` in `train_llama_slurm.sh`
 readonly GPUS_PER_NODE=8

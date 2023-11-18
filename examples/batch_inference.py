@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.models import Actor, RewardModel
-from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
+from openrlhf.utils import blending_datasets, get_processor, get_strategy, get_tokenizer
 
 
 def batch_generate(args):
@@ -51,7 +51,14 @@ def batch_generate(args):
         args.seed,
         return_eval=False,
     )
-    prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
+    if args.iter is None:
+        prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
+    else:
+        # for iterative generation
+        start_idx = args.iter * args.rollout_batch_size
+        end_idx = start_idx + args.rollout_batch_size
+        prompts_data = prompts_data.select(range(start_idx, min(end_idx, prompts_data)))
+
     prompts_dataset = PromptDataset(prompts_data, strategy)
     prompts_dataloader = strategy.setup_dataloader(
         prompts_dataset, args.micro_batch_size, True, False, drop_last=False
@@ -61,6 +68,7 @@ def batch_generate(args):
         disable=not strategy.is_rank_0(),
     )
 
+    N = args.n
     output_dataset = []
     for prompts in pbar:
         # Decision Transformer inference
@@ -69,23 +77,24 @@ def batch_generate(args):
                 prompts[i] += args.dt_prompt.strip() + " "
 
         inputs = tokenize_fn(prompts)
-        outputs = model.model.generate(
-            **inputs,
-            use_cache=True,
-            max_length=args.max_len,
-            do_sample=not args.greedy_sampling,
-            top_p=args.top_p,
-            early_stopping=True,
-            num_beams=1,
-            temperature=args.temperature,
-            repetition_penalty=args.repetition_penalty,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-        )
-        outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        for prompt, output in zip(prompts, outputs):
-            output = output[len(prompt) :]
-            output_dataset.append({"input": prompt, "output": output})
+        for _ in range(N):
+            outputs = model.model.generate(
+                **inputs,
+                use_cache=True,
+                max_length=args.max_len,
+                do_sample=not args.greedy_sampling,
+                top_p=args.top_p,
+                early_stopping=True,
+                num_beams=1,
+                temperature=args.temperature,
+                repetition_penalty=args.repetition_penalty,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+            )
+            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            for prompt, output in zip(prompts, outputs):
+                output = output[len(prompt) :]
+                output_dataset.append({"input": prompt, "output": output})
 
         dist.barrier()
 
@@ -177,76 +186,58 @@ def batch_rm_inference(args):
                     output_dataset.append(obj)
             # os.remove(file)
 
-        if args.post_processor == "dt":
-            strategy.print(f"Use Decision Transformer, Reward Norm {args.normalize_reward}")
-            decesion_transformer_processor(args, output_dataset)
+        rewards = torch.tensor([obj["reward"] for obj in output_dataset])
+        print(f"Reward mean: {rewards.mean().item()}, std: {rewards.std().item()}")
+
+        if args.post_processor and args.post_processor != "null":
+            strategy.print(f"Use Processor {args.post_processor}, Reward Norm {args.normalize_reward}")
+            processor = get_processor(args.post_processor)
+            output_dataset = processor(output_dataset)
 
         with jsonlines.open(args.output_path, mode="w") as writer:
             writer.write_all(output_dataset)
 
 
-def reward_normalization(objs):
-    rewards = [float(obj["reward"]) for obj in objs]
-    rewards = torch.tensor(rewards, dtype=torch.float64)
-    rewards = (rewards - rewards.mean()) / rewards.std()
-    for i, obj in enumerate(objs):
-        obj["reward"] = rewards[i].item()
-
-
-DEFAULT_REWARD_PROMPT = "{input} <rm_score>: {reward} "
-
-
-def decesion_transformer_processor(args, objs):
-    if "reward_template" not in args or args.reward_template is None:
-        reward_template = DEFAULT_REWARD_PROMPT
-    else:
-        reward_template = args.reward_template
-    assert "{input}" in reward_template
-    assert "{reward}" in reward_template
-
-    if args.normalize_reward:
-        reward_normalization(objs)
-
-    for obj in tqdm(objs, desc="Decision Transformer process..."):
-        input = obj["input"]
-        reward = "{:.2f}".format(float(obj["reward"]))
-        input = reward_template.replace("{reward}", reward).replace("{input}", input)
-        obj["input"] = input
-
-    return objs
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--eval_task", type=str, default=None)
+    parser.add_argument("--eval_task", type=str, default=None, help="set to generate or rm")
     parser.add_argument("--pretrain", type=str, default=None)
     parser.add_argument("--load_model", type=str, default=None)
-    parser.add_argument("--prompt_max_len", type=int, default=1024)
     parser.add_argument("--max_len", type=int, default=2048)
     parser.add_argument("--zero_stage", type=int, default=0)
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--bf16", action="store_true", default=False)
-    parser.add_argument("--inference_tp_size", type=int, default=1)
-    parser.add_argument("--ta_prompt", type=str, default=None)
-    parser.add_argument("--greedy_sampling", action="store_true", default=False)
-    parser.add_argument("--top_p", type=float, default=0.9)
-    parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--repetition_penalty", type=float, default=1.2)
     parser.add_argument("--flash_attn", action="store_true", default=False)
-
-    # batch inference
     parser.add_argument("--micro_batch_size", type=int, default=16)
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--dataset_probs", type=str, default="1.0")
     parser.add_argument("--output_path", type=str, default=None)
     parser.add_argument("--max_samples", type=int, default=500000)
 
-    # Decision Transformer training
-    parser.add_argument("--post_processor", type=str, default=None)
+    # for generation
+    parser.add_argument("--inference_tp_size", type=int, default=1)
+    parser.add_argument("--ta_prompt", type=str, default=None)
+    parser.add_argument("--prompt_max_len", type=int, default=1024)
+    parser.add_argument("--greedy_sampling", action="store_true", default=False)
+    parser.add_argument("--top_p", type=float, default=0.9)
+    parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--repetition_penalty", type=float, default=1.2)
+    parser.add_argument("--n", type=int, default=1)
+    parser.add_argument(
+        "--post_processor",
+        type=str,
+        default=None,
+        help="set to rs (Rejection Sampling), dt (Decision Transformer) or None",
+    )
+
+    # for Iterative generation and Rejection Sampling
+    parser.add_argument("--iter", type=int, default=None)
+    parser.add_argument("--rollout_batch_size", type=int, default=2048)
+
+    # for Decision Transformer (DT) generation
     parser.add_argument("--normalize_reward", action="store_true", default=False)
     parser.add_argument("--reward_template", type=str, default=None)
-
-    # Decision Transformer inference
+    # for DT evaluation
     parser.add_argument("--enable_dt", action="store_true", default=False)
     parser.add_argument("--dt_prompt", type=str, default="<rm_score>: 5.00", help="decision transformer prompt")
 

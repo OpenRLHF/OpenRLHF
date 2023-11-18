@@ -3,7 +3,7 @@ set -x
 mkdir -p ./ckpt/7b_llama_dt
 RM_OUTPUT=./ckpt/7b_llama_dt/rm.jsonl
 
-# We found that the DT without generation achieved similar performance to the DT with generation version
+# We found that the DT without generation achieved similar performance to the DT with generation version.
 # And DT without generation is significantly faster than DT with generation.
 
 read -r -d '' get_rewards_commands <<EOF
@@ -49,12 +49,10 @@ checkSuccess() {
     fi
 }
 
-if [[ ${1} != "slurm" ]]; then
-    export PATH=$HOME/.local/bin/:$PATH
+export PATH=$HOME/.local/bin/:$PATH
 
-    if [ ! -e $RM_OUTPUT ]; then
-        deepspeed $get_rewards_commands
-        checkSuccess "RM"
-    fi
-    deepspeed $sft_commands
+if [ ! -e $RM_OUTPUT ]; then
+    deepspeed $get_rewards_commands
+    checkSuccess "RM"
 fi
+deepspeed $sft_commands
