@@ -24,7 +24,6 @@ export PATH=$HOME/.local/bin/:$PATH
 iter=0
 if [ -f $ITER_LOG_PATH ]; then
     iter=$(cat $ITER_LOG_PATH)
-    echo "Read iters: $iter" &>>$LOGS_PATH
 fi
 
 while (($iter < $TRAINING_ITERS)); do
