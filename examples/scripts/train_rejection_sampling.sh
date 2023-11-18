@@ -39,6 +39,7 @@ while (($iter < $TRAINING_ITERS)); do
     --dataset_probs 0.5,0.5 \
     --temperature 0.9
     --zero_stage 0 \
+    --best_of_n 16 \
     --micro_batch_size 16 \
     --iter $iter \
     --rollout_batch_size $ROLLOUT_BATCH_SIZE \

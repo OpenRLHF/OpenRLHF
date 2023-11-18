@@ -68,7 +68,7 @@ def batch_generate(args):
         disable=not strategy.is_rank_0(),
     )
 
-    N = args.n
+    N = args.best_of_n
     output_dataset = []
     for prompts in pbar:
         # Decision Transformer inference
@@ -223,7 +223,7 @@ if __name__ == "__main__":
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--repetition_penalty", type=float, default=1.2)
-    parser.add_argument("--n", type=int, default=1)
+    parser.add_argument("--best_of_n", type=int, default=1)
     parser.add_argument(
         "--post_processor",
         type=str,
