@@ -52,7 +52,7 @@ The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Referen
 - A fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
 - Multi-nodes [training scripts](./examples/scripts/train_llama_slurm.sh) for Slurm.
 - Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh).
-- Distributed [PPO based on Ray]((./examples/scripts/train_ppo_llama_ray.sh)) for 34B+ models and 7B models on RTX4090. 
+- Distributed [PPO based on Ray](./examples/scripts/train_ppo_llama_ray.sh) for 34B+ models and 7B models on RTX4090. 
 - Support [Decision Transformer (DT) Alignment](./examples/scripts/train_decision_transformer_llama.sh) (https://arxiv.org/abs/2308.12050).
 - Support [top chinese models](https://github.com/OpenLLMAI/OpenRLHF/issues/116).
 - Support Wandb log (--wandb).
