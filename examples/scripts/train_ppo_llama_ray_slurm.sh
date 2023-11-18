@@ -93,7 +93,7 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --actor_init_on_gpu \
     --adam_offload \
     --gradient_checkpointing \
-    --use_wandb add91d3d4ff79fc8b80686bba5c1e8192a199586" &>> ${JOBLOG}
+    --use_wandb {wandb_token} &>> ${JOBLOG}
 
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') Job ${SLURM_JOB_ID} stopped ..." &>> ${JOBLOG}
