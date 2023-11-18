@@ -3,7 +3,8 @@ set -x
 mkdir -p ./ckpt/7b_llama_rs
 GENERATE_OUTPUT=./ckpt/7b_llama_rs/generate.jsonl
 RM_OUTPUT=./ckpt/7b_llama_rs/rm.jsonl
-MODEL_OUTPUT_PATH=./ckpt/7b_llama_rs/sft_model.nemo
+MODEL_OUTPUT_PATH=./ckpt/7b_llama_rs/sft_model.pt
+ITER_LOG_PATH=null
 
 TRAINING_ITERS=20
 ROLLOUT_BATCH_SIZE=2048
@@ -21,6 +22,11 @@ checkSuccess() {
 export PATH=$HOME/.local/bin/:$PATH
 
 iter=0
+if [ -f $ITER_LOG_PATH ]; then
+    iter=$(cat $ITER_LOG_PATH)
+    echo "Read iters: $iter" &>>$LOGS_PATH
+fi
+
 while (($iter < $TRAINING_ITERS)); do
     echo "Iter: $iter"
     # Use latest model if past first iteration
@@ -89,4 +95,7 @@ EOF
     checkSuccess "SFT"
 
     iter=$((iter + 1))
+    if [[ "$ITER_LOG_PATH" != "null" ]]; then
+        echo $iter >$ITER_LOG_PATH
+    fi
 done
