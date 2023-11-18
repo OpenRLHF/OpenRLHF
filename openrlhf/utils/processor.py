@@ -37,7 +37,7 @@ def decesion_transformer_processor(args, objs):
 
 # Rejection Sampling
 # See https://arxiv.org/abs/2307.09288
-def rejection_sampling_processor(cfg, objs):
+def rejection_sampling_processor(args, objs):
     out = {}
     for obj in tqdm(objs, desc=f"Rejection Sampling process...."):
         input = obj["input"]

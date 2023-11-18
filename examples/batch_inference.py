@@ -192,7 +192,7 @@ def batch_rm_inference(args):
         if args.post_processor and args.post_processor != "null":
             strategy.print(f"Use Processor {args.post_processor}, Reward Norm {args.normalize_reward}")
             processor = get_processor(args.post_processor)
-            output_dataset = processor(output_dataset)
+            output_dataset = processor(args, output_dataset)
 
         with jsonlines.open(args.output_path, mode="w") as writer:
             writer.write_all(output_dataset)
