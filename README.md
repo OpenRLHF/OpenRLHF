@@ -104,7 +104,7 @@ samples/gpu/secs = Number of PPO Samples / Number of A100 GPUS / Seconds
 
 ## Running Example
 
-You can build openrlhf from **nvidia-docker(recomended)** or from conda envs.
+You can build openrlhf from **nvidia-docker(recommended)** or from conda envs.
 
 ```shell
 Clone the repository: 
