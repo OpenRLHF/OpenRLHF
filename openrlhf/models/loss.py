@@ -125,7 +125,8 @@ class DPOLoss(nn.Module):
 
         logits = pi_logratios - ref_logratios
         losses = -F.logsigmoid(self.beta * logits)
+        loss = losses.mean()
         chosen_rewards = self.beta * (policy_chosen_logps - reference_chosen_logps).detach()
         rejected_rewards = self.beta * (policy_rejected_logps - reference_rejected_logps).detach()
 
-        return losses, chosen_rewards, rejected_rewards
+        return loss, chosen_rewards, rejected_rewards
