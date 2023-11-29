@@ -48,6 +48,11 @@ def preprocess_data(data):
         prompt = "Human: " + data["question"]["full_text"] + "\nAssistant: "
         chosen = data["answer_0"] if data["score_0"] > data["score_1"] else data["answer_1"]
         reject = data["answer_1"] if data["score_0"] > data["score_1"] else data["answer_0"]
+    # damo/CValues-Comparison https://www.modelscope.cn/datasets/damo/CValues-Comparison/quickstart
+    elif exist_and_not_none(data, "pos_resp") and exist_and_not_none(data, "neg_resp"):
+        prompt = "Human: " + data["prompt"] + "\nAssistant: "
+        chosen = data["pos_resp"]
+        reject = data["neg_resp"]
     else:
         raise ValueError("reward_dataset key error")
 
