@@ -290,6 +290,10 @@ if __name__ == "__main__":
     parser.add_argument("--actor_init_on_gpu", action="store_true", default=False)
     parser.add_argument("--save_hf_model", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False)
+    parser.add_argument("--bos_token", type=str, default=None)
+    parser.add_argument("--eos_token", type=str, default=None)
+    parser.add_argument("--pad_token", type=str, default=None)
+    parser.add_argument("--unk_token", type=str, default=None)
 
     # wandb pamameters
     parser.add_argument("--use_wandb", type=str, default=None)

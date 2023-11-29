@@ -12,13 +12,27 @@ DEFAULT_BOS_TOKEN = "<s>"
 DEFAULT_UNK_TOKEN = "<unk>"
 
 
+def get_sp_tokens(args):
+    sp_tokens = {}
+    if hasattr(args, 'bos_token') and args.bos_token is not None:
+        sp_tokens["bos_token"] = args.bos_token
+    if hasattr(args, 'eos_token') and args.eos_token is not None:
+        sp_tokens["eos_token"] = args.eos_token
+    if hasattr(args, 'pad_token') and args.pad_token is not None:
+        sp_tokens["pad_token"] = args.pad_token
+    if hasattr(args, 'unk_token') and args.unk_token is not None:
+        sp_tokens["unk_token"] = args.unk_token
+    return sp_tokens
+
 def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=True):
-    tokenizer = AutoTokenizer.from_pretrained(pretrain, trust_remote_code=True)
+    sp_tokens = get_sp_tokens(strategy.args)
+
+    tokenizer = AutoTokenizer.from_pretrained(pretrain, trust_remote_code=True, **sp_tokens)
     tokenizer.padding_side = padding_side
 
     special_tokens_dict = dict()
     if tokenizer.pad_token is None or tokenizer.pad_token_id == tokenizer.eos_token_id:
-        special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
+        special_tokens_dict["pad_token"] = sp_tokens.get("pad_token", DEFAULT_PAD_TOKEN)
         if strategy is not None:
             strategy.print("add pad_token")
         tokenizer.add_special_tokens(special_tokens_dict)
