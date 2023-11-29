@@ -37,9 +37,9 @@ class RewardModel(nn.Module):
                     trust_remote_code=True,
                     use_flash_attention_2=use_flash_attention_2,
                 )
-                if hasattr(self.model, 'transformer'):
+                if hasattr(self.model, "transformer"):
                     self.model = self.model.transformer
-                elif hasattr(self.model, 'model'):
+                elif hasattr(self.model, "model"):
                     self.model = self.model.model
         else:
             self.model = pretrain_or_model
