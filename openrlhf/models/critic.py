@@ -29,7 +29,7 @@ class Critic(nn.Module):
                     trust_remote_code=True,
                     use_flash_attention_2=use_flash_attention_2,
                 )
-                self.model = AutoModelForCausalLM.from_config(config, trust_remote_code=True).model
+                self.model = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
             else:
                 self.model = AutoModelForCausalLM.from_pretrained(
                     pretrain_or_model,
@@ -37,10 +37,11 @@ class Critic(nn.Module):
                     trust_remote_code=True,
                     use_flash_attention_2=use_flash_attention_2,
                 )
-                if hasattr(self.model, "transformer"):
-                    self.model = self.model.transformer
-                elif hasattr(self.model, "model"):
-                    self.model = self.model.model
+
+            if hasattr(self.model, "transformer"):
+                self.model = self.model.transformer
+            elif hasattr(self.model, "model"):
+                self.model = self.model.model
         else:
             self.model = pretrain_or_model
 
