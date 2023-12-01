@@ -19,6 +19,10 @@ from .launcher import BasePPORole
 
 class ActorPPOTrainer(PPOTrainer):
     def ppo_train(self):
+        # ensure all experience makers done
+        self.experience_maker.flush()
+        torch.distributed.barrier()
+
         # triger remote critic model training
         if self.critic_train_remote:
             critic_status_ref = self.critic.fit.remote()
@@ -28,6 +32,9 @@ class ActorPPOTrainer(PPOTrainer):
         # wait remote critic model training done
         if self.critic_train_remote:
             status.update(ray.get(critic_status_ref))
+
+        torch.distributed.barrier()
+
         return status
 
     def training_step(self, experience: Experience) -> Dict[str, float]:

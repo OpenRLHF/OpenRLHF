@@ -282,6 +282,12 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # send experience to critic
         experience_cpu = deepcopy(experience)
         experience_cpu.to_device("cpu")
-        self.critic.append.remote(experience_cpu)
+        self._ref = self.critic.append.remote(experience_cpu)
+
         self.actor.train()  # reset model state
         return experience
+
+    def flush(self):
+        "Ensure all experience has been send to critic"
+        ray.get(self._ref)
+        self._ref = None
