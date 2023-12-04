@@ -371,10 +371,8 @@ class DeepspeedStrategy(ABC):
                     for d in os.listdir(save_dir)
                     if os.path.isdir(os.path.join(save_dir, d))
                 ]
-
                 # Sort by modification time, oldest first
                 subdirs.sort(key=lambda x: x[1])
-
                 # Calculate the total size of all sub -directory
                 total_size = 0
                 for subdir, _ in subdirs:
@@ -391,13 +389,9 @@ class DeepspeedStrategy(ABC):
                         self.print(f"Deleted oldest ckpt {oldest_dir}")  # The standard print function is used here
                 else:
                     break
-        # TODO: full ckpt, save all infos for full recovery from checkpoint
-        # basic ckpt: reuse deepspeed.DeepSpeedEngine.save_checkpoint
-        if isinstance(model, deepspeed.DeepSpeedEngine):
-            model.save_checkpoint(save_dir, tag=tag, client_state=client_state, save_latest=save_latest)
-        else:
-            # It’s basically not used, so you can ignore it.
-            torch.save(model.state_dict(), os.path.join(save_dir, f"{tag}.pt"))
+
+        assert isinstance(model, deepspeed.DeepSpeedEngine)
+        model.save_checkpoint(save_dir, tag=tag, client_state=client_state, save_latest=save_latest)
 
     def load_ckpt(
         self,
@@ -409,18 +403,13 @@ class DeepspeedStrategy(ABC):
         load_lr_scheduler_states=True,
         load_module_only=False,
     ):
-        if isinstance(model, deepspeed.DeepSpeedEngine):
-            # TODO: full ckpt, load all infos from full checkpoint
-            # basic ckpt: reuse deepspeed.DeepSpeedEngine.load_checkpoint
-            return model.load_checkpoint(
-                load_dir,
-                tag,
-                load_module_strict=load_module_strict,
-                load_optimizer_states=load_optimizer_states,
-                load_lr_scheduler_states=load_lr_scheduler_states,
-                load_module_only=load_module_only,
-            )
-        else:
-            # It’s basically not used, so you can ignore it.
-            model.load_state_dict(torch.load(load_dir, map_location="cpu"), strict=False)
-            return model
+        assert isinstance(model, deepspeed.DeepSpeedEngine)
+        # basic ckpt: reuse deepspeed.DeepSpeedEngine.load_checkpoint
+        return model.load_checkpoint(
+            load_dir,
+            tag,
+            load_module_strict=load_module_strict,
+            load_optimizer_states=load_optimizer_states,
+            load_lr_scheduler_states=load_lr_scheduler_states,
+            load_module_only=load_module_only,
+        )
