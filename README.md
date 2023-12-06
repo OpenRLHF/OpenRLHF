@@ -30,17 +30,7 @@
 
 > **The code is open-source, feel free to use it, contributions are welcome! Note: The license of the model depends on the provider of the model.**
 
-OpenRLHF aims to develop a **High-performance RLHF training framework** based on Ray and DeepSpeed. OpenRLHF is the **Simplest** high-performance RLHF library that supports 34B models RLHF training with Single DGXA100 ([script](./examples/scripts/train_ppo_llama_ray_34b.sh)).
-
-The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Reference Model, and the Critic Model onto separate GPUs using Ray, while placing the Adam Optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G), with high training efficiency. **The performance of OpenRLHF with the 13B LLaMA2 is 4x that of DeepSpeedChat** thanks to the ability to use a large inference batch size with Ray and DeepSpeed CPUAdam.
-
-- [💫Features](#features)
-- [💫Performance](#performance)
-- [📄Running Example](#running-example)
-- [💐References & Acknowledgements](#references-&-acknowledgements)
-- [🌟Sponsor Us](#sponsor-us)
-- [🌈Starchart](#starchart)
-- [🏆Contributors](#contributors)
+OpenRLHF is a **High-performance RLHF framework** based on Ray and DeepSpeed. OpenRLHF is the simplest high-performance RLHF library that supports 34B model RLHF training with a single DGXA100 (see training [script](./examples/scripts/train_ppo_llama_ray_34b.sh)). The key idea behind OpenRLHF is to distribute the Actor, Reward, Reference, and Critic models onto separate GPUs using Ray, while placing the Adam optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G GPUs), with high training efficiency. Thanks to the ability to use a large inference batch size with Ray and DeepSpeed's CPUAdam, **the performance of OpenRLHF with the 13B LLaMA2 model is 4x that of DeepSpeedChat**.
 
 ### Features
 
@@ -59,7 +49,7 @@ The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Referen
 
 
 **TODO** 
-- RLHF compatible with models larger than 100B using vLLM
+- **RLHF compatible with models larger than 100B using vLLM**
 - Allows saving and loading training checkpoints.
 - Integrates with the QLora.
 
@@ -284,10 +274,12 @@ A big thank you to all our contributors! If you want to contribute, feel free to
 
 ## Citation
 ```
-@misc{openllmai23,
-   author = {OpenLLMAI},
-   title = {OpenRLHF},
+@misc{hu23openrlhf,
+   author = {Jian Hu and Xibin Wu and Xianyu and Chen Su and Leon Qiu and Daoning Jiang and Qing Wang and Weixun Wang},
+   title = {OpenRLHF: A Ray-based High-performance RLHF framework},
    year={2023},
+   publisher = {GitHub},
+   journal = {GitHub repository},
    howpublished = {\url{https://github.com/OpenLLMAI/OpenRLHF}}
 }
 ```
