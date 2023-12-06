@@ -30,42 +30,38 @@
 
 > **The code is open-source, feel free to use it, contributions are welcome! Note: The license of the model depends on the provider of the model.**
 
-- [💫OpenRLHF](#openrlhf-project)
+OpenRLHF aims to develop a **High-performance RLHF training framework** based on Ray and DeepSpeed. OpenRLHF is the **Simplest** high-performance RLHF library that supports 34B models RLHF training with Single DGXA100 ([script](./examples/scripts/train_ppo_llama_ray_34b.sh)).
+
+The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Reference Model, and the Critic Model onto separate GPUs using Ray, while placing the Adam Optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G), with high training efficiency. **The performance of OpenRLHF with the 13B LLaMA2 is 4x that of DeepSpeedChat** thanks to the ability to use a large inference batch size with Ray and DeepSpeed CPUAdam.
+
 - [💫Features](#features)
 - [💫Performance](#performance)
 - [📄Running Example](#running-example)
-- [⛏️Pull Request](#pull-request)
 - [💐References & Acknowledgements](#references-&-acknowledgements)
 - [🌟Sponsor Us](#sponsor-us)
 - [🌈Starchart](#starchart)
 - [🏆Contributors](#contributors)
 
-## OpenRLHF Project
-
-OpenRLHF aims to develop a **High-performance RLHF training framework** based on Ray and DeepSpeed. OpenRLHF is the **Simplest** high-performance RLHF library that supports 34B models RLHF training with Single DGXA100 ([script](./examples/scripts/train_ppo_llama_ray_34b.sh)).
-
-The key idea of OpenRLHF is to distribute the Actor Model, Reward Model, Reference Model, and the Critic Model onto separate GPUs using Ray, while placing the Adam Optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G), with high training efficiency thanks to the ability to use a large generate batch size with Adam Offload and Ray. **Our PPO performance with the 13B llama2 models is 4 times that of DeepSpeedChat.**
-
-
 ### Features
 
 - A fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
-- Multi-nodes [training scripts](./examples/scripts/train_llama_slurm.sh) for Slurm.
-- Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh).
 - Distributed [PPO based on Ray](./examples/scripts/train_ppo_llama_ray.sh) for 34B+ models and 7B models on RTX4090. 
+- Support Multiple Reward models.
+- Support [Rejection Sampling](./examples/scripts/train_rejection_sampling_llama.sh).
+- Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh).
 - Support [Decision Transformer (DT) Alignment](./examples/scripts/train_decision_transformer_llama.sh) (https://arxiv.org/abs/2308.12050).
 - Support [top chinese models](https://github.com/OpenLLMAI/OpenRLHF/issues/116).
+- Multi-nodes [training scripts](./examples/scripts/train_llama_slurm.sh) for Slurm.
 - Support Wandb log (--wandb).
-- Support conda env/nvidia docker.
 - Support FlashAttention2 (--flash_attn).
-- Pre-trained 7B/13B llama2 [checkpoints](https://huggingface.co/OpenLLMAI/openrlhf_checkpoint)
 - Support [GPT4 evaluation](./evaluation/gpt4/README.md) \& PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
-- Support Multiple Reward models.
-- Support [Rejection Sampling](./examples/scripts/train_rejection_sampling.sh).
+- Pre-trained 7B/13B llama2 [checkpoints](https://huggingface.co/OpenLLMAI/openrlhf_checkpoint)
+
 
 **TODO** 
-- Support samples checkpoint.
-- Support QLora.
+- RLHF compatible with models larger than 100B using vLLM
+- Allows saving and loading training checkpoints.
+- Integrates with the QLora.
 
 
 Support Matrix
@@ -85,7 +81,7 @@ Support Matrix
 | OpenRLHF  | - | 22 hours with 8 A100  | 
 | DeepSpeedChat  | - | 48 hours with 16 A100  |
 
-**Ray/DeepSpeed Config:** 
+**Configs for Ray and DeepSpeed:** 
 
 - 4 A100 80G for Actor, 2 A100 80G for Critic, 1 A100 80G for RM, and 1 A100 80G for InitPolicy
 - ZeRO2 with Adam Offload
@@ -112,7 +108,7 @@ git clone https://github.com/openllmai/OpenRLHF.git
 
 # Download the pre-trained SFT/RM checkpoints (Optional)
 git lfs install
-git clone  https://huggingface.co/OpenLLMAI/openrlhf_checkpoint
+git clone --depth=1 https://huggingface.co/OpenLLMAI/openrlhf_checkpoint
 ```
 
 * Single-node training with nvidia-docker
@@ -208,6 +204,18 @@ readonly GPUS_PER_NODE=8
 sbatch ./train_llama_slurm.sh
 ```
 
+* Inference and Evaluation
+
+After completing the training, you can evaluate your model by using the `inference` script:
+
+```shell
+# interactive_chat
+./interactive_chat_llama.sh { model_path }
+
+# batch generate
+python examples/batch_inference.py {args}
+```
+
 * build openrlhf from conda envs 
 
 If you really don't want to use nvidia-docker, we also provide tutorials for building openrlhf from a conda environment. (We prefer nvidia-docker to avoid errors caused by the environment.)
@@ -227,27 +235,6 @@ pip install flash-attn==2.1.1 --no-build-isolation
 # enjoy it!
 ```
 
-* Inference and Evaluation
-
-After completing the training, you can evaluate your model by using the `inference` script:
-
-```shell
-# interactive_chat
-./interactive_chat_llama.sh { model_path }
-
-# batch generate
-python examples/batch_inference.py {args}
-```
-
-## Pull Request
-If you want to contribute code please format the code using the following command,
-
-```
-pip install pre-commit
-pre-commit install
-git add .
-git commit -m "xxx"
-```
 
 ## References & Acknowledgements
 
