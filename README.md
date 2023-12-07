@@ -30,12 +30,16 @@
 
 > **The code is open-source, feel free to use it, contributions are welcome! Note: The license of the model depends on the provider of the model.**
 
-OpenRLHF is a **High-performance RLHF framework** based on Ray and DeepSpeed. OpenRLHF is the simplest high-performance RLHF library that supports 34B model RLHF training with a single DGXA100 (see training [script](./examples/scripts/train_ppo_llama_ray_34b.sh)). The key idea behind OpenRLHF is to distribute the Actor, Reward, Reference, and Critic models onto separate GPUs using Ray, while placing the Adam optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G GPUs), with high training efficiency. Thanks to the ability to use a large inference batch size with Ray and DeepSpeed's CPUAdam, **the performance of OpenRLHF with the 13B LLaMA2 model is 4x that of DeepSpeedChat**.
+OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HuggingFace Transformers:
+
+- **Simple and easy to use**: OpenRLHF is one of the simplest high-performance RLHF libraries currently available, enabling 34B model RLHF training with just a single DGXA100 node (see the training [script](./examples/scripts/train_ppo_llama_ray_34b.sh)).
+- **Distributed RLHF**: The key idea behind OpenRLHF is to distribute the Actor, Reward, Reference, and Critic models onto separate GPUs using Ray, while placing the Adam optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G GPUs).
+- **High performance**: Thanks to the ability to use a large inference batch size with Ray and DeepSpeed's CPUAdam, the performance of OpenRLHF with the 13B LLaMA2 model is 4x that of DeepSpeedChat.
 
 ### Features
 
-- A fast LLaMA2 SFT/PPO Training Framework based on DeepSpeed.
-- Distributed [PPO based on Ray](./examples/scripts/train_ppo_llama_ray.sh) for 34B+ models and 7B models on RTX4090. 
+- Compatible with HuggingFace Transformers model.
+- Distributed [PPO based on Ray](./examples/scripts/train_ppo_llama_ray.sh). 
 - Support Multiple Reward models.
 - Support [Rejection Sampling](./examples/scripts/train_rejection_sampling_llama.sh).
 - Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh).
