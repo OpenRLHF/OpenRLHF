@@ -43,7 +43,7 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and Huggin
 - Support Multiple Reward models.
 - Support [Rejection Sampling](./examples/scripts/train_rejection_sampling_llama.sh).
 - Support [DPO (direct-preference-optimization)](./examples/scripts/train_dpo_llama.sh).
-- Support [Decision Transformer (DT) Alignment](./examples/scripts/train_decision_transformer_llama.sh) (https://arxiv.org/abs/2308.12050).
+- Support [Conditional Alignment](./examples/scripts/train_conditional_llama.sh) (https://arxiv.org/abs/2308.12050).
 - Support [top chinese models](https://github.com/OpenLLMAI/OpenRLHF/issues/116).
 - Multi-nodes [training scripts](./examples/scripts/train_llama_slurm.sh) for Slurm.
 - Support Wandb log (--wandb).

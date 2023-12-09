@@ -3,9 +3,6 @@ set -x
 mkdir -p ./ckpt/7b_llama_dt
 RM_OUTPUT=./ckpt/7b_llama_dt/rm.jsonl
 
-# We found that the DT without generation achieved similar performance to the DT with generation version.
-# And DT without generation is significantly faster than DT with generation.
-
 read -r -d '' get_rewards_commands <<EOF
 ../batch_inference.py
     --eval_task rm \
