@@ -140,8 +140,8 @@ cd /openrlhf/examples/scripts
 # train Rejection Sampling model
 ./train_rejection_sampling_llama.sh
 
-# train Decision Transformer model
-./train_decision_transformer_llama.sh
+# train Conditional Alignment model
+./train_conditional_llama.sh
 ```
 
 * PPO training with Ray
