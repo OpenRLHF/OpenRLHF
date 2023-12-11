@@ -119,7 +119,7 @@ def blending_datasets(
                 data_type = os.path.splitext(files[0])[1][1:] if len(script) != 1 else script[0]
                 if data_type.endswith(".py"):
                     files = None
-                    
+
             if data_type == "json" or data_type == "jsonl":
                 data_type = "json"
             elif data_type == "txt":
