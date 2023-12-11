@@ -100,12 +100,11 @@ def blending_datasets(
         dataset = dataset.strip()
         dataset_subfold_list = dataset.split("@")
         strategy.print(f"dataset: {dataset}")
+        # local dir with python script or common local file
         if (
             os.path.isdir(os.path.join(os.getcwd(), dataset))
-            or dataset.endswith(".json")
-            or dataset.endswith(".jsonl")
+            or dataset.endswith((".json", ".jsonl", ".csv", ".parquet", ".txt"))
         ):
-            strategy.print(f"load local data file: {dataset}")
             if dataset.endswith((".json", ".jsonl", ".csv", ".parquet", ".txt")):
                 files = dataset
                 data_type = os.path.splitext(files)[1][1:]
@@ -116,19 +115,20 @@ def blending_datasets(
                 files = [str(file) for ext in extensions for file in Path(path).rglob(ext)]
                 strategy.print(f"script: {script}")
                 strategy.print(f"files: {files}")
-                data_type = os.path.splitext(files[0])[1][1:] if len(script) != 1 else script[0]
-                if data_type.endswith(".py"):
-                    files = None
-
-            if data_type == "json" or data_type == "jsonl":
+                # For dir, follow python script or first file type
+                data_type = script[0] if len(script) == 1 else os.path.splitext(files[0])[1][1:]
+            # reformat data type
+            if data_type in ["json", "jsonl"]:
                 data_type = "json"
             elif data_type == "txt":
                 data_type = "text"
-            elif data_type in ["parquet", "csv"]:
-                data_type = data_type
+            elif data_type.endswith(".py"):
+                # load local dir with python script
+                files = None
+            if data_type.endswith(".py"):
+                strategy.print(f"load {dataset} with script {data_type}")
             else:
-                strategy.print(f"Unsupported file types: {data_type}")
-
+                strategy.print(f"load {files} from {dataset}")
             data = load_dataset(data_type, data_files=files)
         elif len(dataset_subfold_list) == 2:
             dataset = dataset_subfold_list[0]
