@@ -101,9 +101,8 @@ def blending_datasets(
         dataset_subfold_list = dataset.split("@")
         strategy.print(f"dataset: {dataset}")
         # local dir with python script or common local file
-        if (
-            os.path.isdir(os.path.join(os.getcwd(), dataset))
-            or dataset.endswith((".json", ".jsonl", ".csv", ".parquet", ".txt"))
+        if os.path.isdir(os.path.join(os.getcwd(), dataset)) or dataset.endswith(
+            (".json", ".jsonl", ".csv", ".parquet", ".txt")
         ):
             if dataset.endswith((".json", ".jsonl", ".csv", ".parquet", ".txt")):
                 files = dataset
