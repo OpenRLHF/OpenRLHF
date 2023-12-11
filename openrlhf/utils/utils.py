@@ -124,6 +124,8 @@ def blending_datasets(
                 data_type = "json"
             elif data_type == "txt":
                 data_type = "text"
+            elif data_type in ["parquet", "csv"]:
+                data_type = data_type
             else:
                 strategy.print(f"Unsupported file types: {data_type}")
 
