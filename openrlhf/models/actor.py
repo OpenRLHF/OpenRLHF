@@ -82,6 +82,15 @@ class Actor(nn.Module):
         attention_mask = (sequences.ne(eos_token_id) & sequences.ne(pad_token_id)).to(dtype=torch.long)
         seq_length = attention_mask.size(1)
 
+        # The following code is equivalent to:
+        #
+        # for i in range(attention_mask.size(0)):
+        #     for t in reversed(range(seq_length)):
+        #         if attention_mask[i][t] > 0.5:
+        #             attention_mask[i][min(t + 1, seq_length - 1)] = True
+        #             sequences[i][min(t + 1, seq_length - 1)] = eos_token_id
+        #             break
+        #
         eos_indices = seq_length - attention_mask.fliplr().argmax(dim=1, keepdim=True).clamp(min=1)
         attention_mask.scatter_(dim=1, index=eos_indices, value=1)
         sequences.scatter_(dim=1, index=eos_indices, value=eos_token_id)
