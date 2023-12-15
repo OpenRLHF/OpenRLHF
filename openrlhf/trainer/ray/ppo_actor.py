@@ -1,9 +1,11 @@
 import itertools
 import math
 import os
+import socket
 from copy import deepcopy
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Tuple
 
+import deepspeed
 import ray
 import torch
 from transformers.trainer import get_scheduler
@@ -11,28 +13,133 @@ from transformers.trainer import get_scheduler
 from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.models import Actor, Critic, RewardModel
 from openrlhf.trainer import PPOTrainer
-from openrlhf.trainer.ppo_utils import Experience
+from openrlhf.trainer.ppo_utils import Experience, RemoteExperienceMaker
 from openrlhf.utils import DeepspeedStrategy, blending_datasets, get_tokenizer
+from openrlhf.utils.distributed_util import init_process_group
+from openrlhf.utils.deepspeed_utils import _z3_params_to_fetch
 
 from .launcher import BasePPORole
 
 
 class ActorPPOTrainer(PPOTrainer):
+    def __init__(
+        self,
+        *args,
+        vllm_engines: List = None,
+        param_metadata: Dict[str, Tuple] = None,
+        critic_train_remote: bool = False,
+        **kwargs,
+    ):
+        """PPOTrainer for ray.
+
+        Args:
+            vllm_engines (List, optional): vllm engines for text generation, if not specified, generate text by actor model directly. Defaults to None.
+            param_metadata (Dict, optional): parameters' metadata for broadcasting parameters to vllm engines. Defaults to None.
+            critic_train_remote (bool, optional): whether this actor should triger corresponding critic model training. Defaults to False.
+        """
+        super().__init__(*args, **kwargs)
+        self.vllm_engines = vllm_engines
+        self.param_metada = param_metadata
+        self.critic_train_remote = critic_train_remote
+
+        self.experience_maker = RemoteExperienceMaker(
+            self.actor,
+            self.critic,
+            self.reward_model,
+            self.initial_model,
+            self.tokenizer,
+            self.prompt_max_len,
+            self.kl_ctl,
+            self.strategy,
+            self.reward_fn,
+            vllm_engines=self.vllm_engines,
+        )
+
+        # Create torch group with deepspeed rank 0 and all vllm ranks
+        # to update vllm engine's weights after each training stage.
+        #
+        # Say we have 3 vllm engines and eache of them has 4 GPUs,
+        # then the torch group is:
+        # [    0,      1, 2, 3, 4,  5, 6, 7, 8,  9, 10, 11, 12]
+        # |ds rank 0 |  engine-0  |  engine-1  |   engine-2   |
+        #
+        # For ZeRO-1/2:
+        #   1. Broadcast parameters from rank 0 to all vllm engines
+        # For ZeRO-3:
+        #   1. AllGather paramters to rank 0
+        #   2. Broadcast parameters from rank 0 to all vllm engines
+        if self.vllm_engines is not None and torch.distributed.get_rank() == 0:
+            master_address = ray._private.services.get_node_ip_address()
+            with socket.socket() as sock:
+                sock.bind(("", 0))
+                master_port = sock.getsockname()[1]
+
+            vllm_num_engines, vllm_tensor_parallel_size = (
+                self.strategy.args.vllm_num_engines,
+                self.strategy.args.vllm_tensor_parallel_size,
+            )
+            world_size = vllm_num_engines * vllm_tensor_parallel_size + 1
+            refs = [
+                engine.init_process_group.remote(
+                    master_address, master_port, i * vllm_tensor_parallel_size + 1, world_size, "vllm"
+                )
+                for i, engine in enumerate(self.vllm_engines)
+            ]
+            self._model_update_group = init_process_group(
+                backend="nccl",
+                init_method=f"tcp://{master_address}:{master_port}",
+                world_size=world_size,
+                rank=0,
+                group_name="vllm",
+            )
+
+            ray.get(refs)
+
+        torch.distributed.barrier()
+
     def ppo_train(self):
-        # ensure all experience makers done
+        # 1. ensure all experience makers done
         self.experience_maker.flush()
         torch.distributed.barrier()
 
-        # triger remote critic model training
+        # 2. triger remote critic model training
         if self.critic_train_remote:
             critic_status_ref = self.critic.fit.remote()
 
+        # 3. actor model training
         status = super().ppo_train()
 
-        # wait remote critic model training done
+        # 4. broadcast weights to vllm engines
+        if self.vllm_engines is not None:
+            model = self.actor.model.module
+            count, num_params = 0, len(list(model.named_parameters()))
+            for name, param in model.named_parameters():
+                count += 1  # empty_cache at last param
+
+                # Fire all vllm engines for broadcast
+                if torch.distributed.get_rank() == 0:
+                    [
+                        engine.update_weight.remote(
+                            name, dtype=param.dtype, shape=self.param_metada[name], empty_cache=count == num_params
+                        )
+                        for engine in self.vllm_engines
+                    ]
+
+                if self.strategy.args.zero_stage != 3:
+                    # For ZeRO-1/2, broadcast parameter to all vllm engines by rank 0
+                    if torch.distributed.get_rank() == 0:
+                        torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
+                else:
+                    # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
+                    params_to_fetch = _z3_params_to_fetch([param])
+                    assert len(params_to_fetch) > 0, f"parameter {name} should be zero-3 sharded"
+                    with deepspeed.zero.GatheredParameters(params_to_fetch, enabled=len(params_to_fetch) > 0):
+                        if torch.distributed.get_rank() == 0:
+                            torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
+
+        # 5. wait remote critic model training done
         if self.critic_train_remote:
             status.update(ray.get(critic_status_ref))
-
         torch.distributed.barrier()
 
         return status
@@ -50,6 +157,12 @@ class ActorModelRayActor(BasePPORole):
         )
         strategy.print(actor)
         self.prepare_datasets()
+
+        # NOTE: For ZeRO-3, parameters are sharded and shapes will be torch.Size([]),
+        # so we keep a copy of metadata for broadcasting parameters to vllm engines.
+        self.param_metada = {}
+        for name, param in actor.model.named_parameters():
+            self.param_metada[name] = param.shape
 
         args = strategy.args
         # lora
@@ -152,6 +265,7 @@ class ActorModelRayActor(BasePPORole):
         initial_model: ray.actor.ActorHandle,
         reward_model: List[ray.actor.ActorHandle],
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
+        vllm_engines: List[ray.actor.ActorHandle] = None,
         critic_train_remote: bool = False,
     ):
         """Train actor model with prompt datasets."""
@@ -171,6 +285,8 @@ class ActorModelRayActor(BasePPORole):
             actor_scheduler=self.actor_scheduler,
             critic_scheduler=None,
             reward_fn=reward_fn,
+            vllm_engines=vllm_engines,
+            param_metadata=self.param_metada,
             max_epochs=args.max_epochs,
             micro_train_batch_size=args.micro_train_batch_size,
             micro_rollout_batch_size=args.micro_rollout_batch_size,

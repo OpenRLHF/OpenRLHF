@@ -16,8 +16,12 @@ from openrlhf.trainer.ray import (
 from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
 
-def train(args):
-    # sanity check
+# NOTE: reward function for multiple reward models, replace this with your own function!
+def reward_fn(rewards: List[torch.Tensor]):
+    return torch.stack(rewards).sum(dim=0)
+
+
+def validate_args(args):
     actor_world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
     critic_world_size = args.critic_num_nodes * args.critic_num_gpus_per_node
 
@@ -30,6 +34,12 @@ def train(args):
     assert (
         actor_world_size % critic_world_size == 0
     ), f"actor_world_size must be divisible by critic_world_size, got {actor_world_size} and {critic_world_size}"
+
+    assert args.zero_stage != 3 or args.vllm_num_engines > 0, f"ZeRO-3 is only supported when vLLM enabled"
+
+
+def train(args):
+    validate_args(args)
 
     # configure strategy
     strategy = get_strategy(args)
@@ -115,27 +125,40 @@ def train(args):
             )
         )
 
-    # init reference/reward/actor mdoel
+    # init reference/reward/actor model
     refs = []
     refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.pretrain, args.sft_model_path))
     refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.pretrain, args.sft_model_path))
     for reward_model, reward_pretrain, reward_model_path in zip(reward_models, reward_pretrains, reward_model_paths):
         refs.extend(reward_model.async_init_model_from_pretrained(strategy, reward_pretrain, reward_model_path))
-    ray.get(refs)
+
+    # init vLLM engine for text generation
+    vllm_engines = None
+    if args.vllm_num_engines is not None:
+        from openrlhf.trainer.ray.vllm_engine import LLMRayActor
+
+        vllm_engines = [
+            LLMRayActor.remote(
+                args.pretrain,
+                trust_remote_code=True,
+                tensor_parallel_size=args.vllm_tensor_parallel_size,
+                dtype="bfloat16" if args.bf16 else "auto",
+            )
+            for _ in range(args.vllm_num_engines)
+        ]
 
     # critic scheduler initialization depends on max_step, so we have to init critic after actor
     # TODO: use first reward model as critic model
     max_steps = ray.get(actor_model._actor_handlers[0].max_steps.remote())
-    ray.get(
+    refs.extend(
         critic_model.async_init_model_from_pretrained(strategy, reward_pretrains[0], reward_model_paths[0], max_steps)
     )
-
-    # NOTE: replace this with your own reward function!
-    def reward_fn(rewards: List[torch.Tensor]):
-        return torch.stack(rewards).sum(dim=0)
+    ray.get(refs)
 
     # train actor and critic mdoel
-    refs = actor_model.async_fit_actor_model(critic_model, ref_model, reward_models, reward_fn=reward_fn)
+    refs = actor_model.async_fit_actor_model(
+        critic_model, ref_model, reward_models, reward_fn=reward_fn, vllm_engines=vllm_engines
+    )
     ray.get(refs)
 
     # save model
@@ -166,6 +189,15 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="whether to colocate actor and critic model, if true, they will share same gpus.",
+    )
+
+    # optional vLLM for text generation
+    parser.add_argument("--vllm_num_engines", type=int, default=None, help="number of vLLM Engines")
+    parser.add_argument(
+        "--vllm_tensor_parallel_size",
+        type=int,
+        default=1,
+        help="tensor parallel size of vLLM Engine for multi-GPU inference",
     )
 
     parser.add_argument("--prompt_data", type=str, default=None)

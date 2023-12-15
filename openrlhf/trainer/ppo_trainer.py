@@ -20,7 +20,6 @@ from .ppo_utils import (
     FixedKLController,
     NaiveExperienceMaker,
     NaiveReplayBuffer,
-    RemoteExperienceMaker,
 )
 
 
@@ -81,7 +80,6 @@ class PPOTrainer(ABC):
         prompt_max_len: int = 128,
         dataloader_pin_memory: bool = True,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
-        critic_train_remote: bool = False,
         **generate_kwargs,
     ) -> None:
         assert (
@@ -102,11 +100,12 @@ class PPOTrainer(ABC):
         self.prompt_max_len = prompt_max_len
         self.ema_beta = ema_beta
         self.gradient_checkpointing = gradient_checkpointing
-        self.critic_train_remote = critic_train_remote
         self.reward_fn = reward_fn
 
         self.actor = actor
         self.critic = critic
+        self.reward_model = reward_model
+        self.initial_model = initial_model
         self.ema_model = ema_model
         self.actor_optim = actor_optim
         self.critic_optim = critic_optim
@@ -122,15 +121,9 @@ class PPOTrainer(ABC):
         else:
             self.kl_ctl = FixedKLController(init_kl_coef)
 
-        # if reference/reward/critic models are ray actor handle, we should use RemoteExperienceMaker.
-        if not isinstance(critic, ray.actor.ActorHandle):
-            self.experience_maker = NaiveExperienceMaker(
-                actor, critic, reward_model, initial_model, self.kl_ctl, strategy, reward_fn
-            )
-        else:
-            self.experience_maker = RemoteExperienceMaker(
-                actor, critic, reward_model, initial_model, self.kl_ctl, strategy, reward_fn
-            )
+        self.experience_maker = NaiveExperienceMaker(
+            actor, critic, reward_model, initial_model, tokenizer, prompt_max_len, self.kl_ctl, strategy, reward_fn
+        )
         self.replay_buffer = NaiveReplayBuffer(micro_train_batch_size, buffer_limit, buffer_cpu_offload)
 
         self._wandb = None
@@ -162,17 +155,6 @@ class PPOTrainer(ABC):
         self.prompts_dataloader = prompts_dataloader
         self.pretrain_dataloader = pretrain_dataloader
 
-        # tokenizer
-        def tokenize_fn(texts):
-            batch = self.tokenizer(
-                texts,
-                return_tensors="pt",
-                max_length=self.prompt_max_len,
-                padding=True,
-                truncation=True,
-            )
-            return {k: v.to(torch.cuda.current_device()) for k, v in batch.items()}
-
         update_timesteps = args.rollout_batch_size // (self.strategy.world_size * self.micro_rollout_batch_size)
         global_step = 1
 
@@ -192,8 +174,7 @@ class PPOTrainer(ABC):
             )
 
             for rand_prompts in self.prompts_dataloader:
-                inputs = tokenize_fn(rand_prompts)
-                experience = self.experience_maker.make_experience(**inputs, **self.generate_kwargs)
+                experience = self.experience_maker.make_experience(rand_prompts, **self.generate_kwargs)
                 # print prompt/answer in each update step
                 if global_step % update_timesteps == 0:
                     output = self.tokenizer.batch_decode(experience.sequences, skip_special_tokens=True)
