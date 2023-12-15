@@ -132,7 +132,6 @@ class ActorPPOTrainer(PPOTrainer):
                 else:
                     # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
                     params_to_fetch = _z3_params_to_fetch([param])
-                    assert len(params_to_fetch) > 0, f"parameter {name} should be zero-3 sharded"
                     with deepspeed.zero.GatheredParameters(params_to_fetch, enabled=len(params_to_fetch) > 0):
                         if torch.distributed.get_rank() == 0:
                             torch.distributed.broadcast(param.data, 0, group=self._model_update_group)

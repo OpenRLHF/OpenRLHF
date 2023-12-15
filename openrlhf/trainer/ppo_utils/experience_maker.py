@@ -321,8 +321,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         sampling_params = SamplingParams(
             temperature=kwargs.get("temperature", 1.0),
-            top_p=kwargs.get("top_p", None),
-            top_k=kwargs.get("top_k", None),
+            top_p=kwargs.get("top_p", 1.0),
+            top_k=kwargs.get("top_k", -1),
             max_tokens=kwargs.get("max_new_tokens", 16),
         )
 
@@ -361,7 +361,14 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             sequences.append(input_ids + output_ids)
 
         sequences = torch.tensor(sequences)
-        attention_mask = sequences.ne(pad_token_id).to(dtype=torch.long)
+        attention_mask = (sequences.ne(eos_token_id) & sequences.ne(pad_token_id)).to(dtype=torch.long)
+        seq_length = attention_mask.size(1)
+        for i in range(attention_mask.size(0)):
+            for t in reversed(range(seq_length)):
+                if attention_mask[i][t] > 0.5:
+                    attention_mask[i][min(t + 1, seq_length - 1)] = True
+                    sequences[i][min(t + 1, seq_length - 1)] = eos_token_id
+                    break
 
         action_seq = sequences[:, max_input_len:-1]
         action_mask = action_seq.ne(eos_token_id) & action_seq.ne(pad_token_id)

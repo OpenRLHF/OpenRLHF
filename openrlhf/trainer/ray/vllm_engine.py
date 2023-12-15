@@ -46,7 +46,7 @@ class _WorkerWrap(Worker):
         assert dtype == self.model_config.dtype, f"mismatch dtype: src {dtype}, dst {self.model_config.dtype}"
         weight = torch.empty(shape, dtype=dtype, device="cuda")
         torch.distributed.broadcast(weight, 0, group=self._model_update_group)
-        self.model.load_weights(model_name_or_path={name: weight})
+        self.model_runner.model.load_weights(model_name_or_path={name: weight})
 
         del weight
         # TODO: should we empty cache if all weights have updated?
