@@ -39,12 +39,8 @@ def compute_reward(
     kl_reward = -kl_coef * kl
 
     r = r.clamp(min=-10, max=10)
-    last_reward = torch.zeros_like(kl)
-    for i in range(last_reward.size(0)):
-        for t in reversed(range(last_reward.size(1))):
-            if action_mask[i][t] > 0.5:
-                last_reward[i][t] = r[i]
-                break
+    eos_indices = action_mask.size(1) - 1 - action_mask.long().fliplr().argmax(dim=1, keepdim=True)
+    last_reward = torch.zeros_like(kl).scatter_(dim=1, index=eos_indices, src=r.unsqueeze(1).to(kl.dtype))
 
     reward = last_reward + kl_reward
     return reward, kl

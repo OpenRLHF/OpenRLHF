@@ -63,13 +63,8 @@ class RewardModel(nn.Module):
             reward = values[:, -1]
         else:
             # assume that there is some padding on both sides
-            last_value = []
-            for i in range(sequences.size(0)):
-                for t in reversed(range(sequences.size(1))):
-                    if attention_mask[i][t] > 0.5:
-                        last_value.append(values[i][t])
-                        break
-            reward = torch.stack(last_value)
+            eos_indices = attention_mask.size(1) - 1 - attention_mask.fliplr().argmax(dim=1, keepdim=True)
+            reward = values.gather(dim=1, index=eos_indices).squeeze(1)
 
             # normalize reward in eval mode
             if self.normalize_reward:
