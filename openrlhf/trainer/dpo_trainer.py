@@ -226,7 +226,7 @@ class DPOTrainer(ABC):
         """
         input_ids, att_masks = self.concatenated_inputs(chosen_ids, c_mask, reject_ids, r_mask)
         all_logits = model(input_ids, attention_mask=att_masks, return_output=True)["logits"]
-        all_logps = self._get_batch_logps(all_logits, input_ids, average_log_prob=False)
+        all_logps = self._get_batch_logps(all_logits, input_ids, attention_mask=att_masks, average_log_prob=False)
         chosen_logps = all_logps[: chosen_ids.shape[0]]
         rejected_logps = all_logps[chosen_ids.shape[0] :]
         return chosen_logps, rejected_logps
@@ -264,7 +264,7 @@ class DPOTrainer(ABC):
         return inputs_ids, att_masks
 
     def _get_batch_logps(
-        self, logits: torch.FloatTensor, labels: torch.LongTensor, average_log_prob: bool = False
+        self, logits: torch.FloatTensor, labels: torch.LongTensor, attention_mask, average_log_prob: bool = False
     ) -> torch.FloatTensor:
         """Compute the log probabilities of the given labels under the given logits.
 
@@ -280,10 +280,9 @@ class DPOTrainer(ABC):
 
         labels = labels[:, 1:].clone()
         logits = logits[:, :-1, :]
-        loss_mask = labels != self.tokenizer.pad_token_id
-
+        loss_mask = attention_mask[:, 1:].bool()
         # dummy token; we'll ignore the losses on these tokens later
-        labels[labels == self.tokenizer.pad_token_id] = 0
+        labels[loss_mask == False] = 0
         per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
 
         if average_log_prob:

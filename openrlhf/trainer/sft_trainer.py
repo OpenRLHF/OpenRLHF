@@ -114,9 +114,9 @@ class SFTTrainer(ABC):
                 logits = self.model(inputs, attention_mask=attention_mask, return_output=True)["logits"]
 
                 labels = torch.where(
-                    inputs.eq(self.tokenizer.pad_token_id),
-                    self.loss_fn.IGNORE_INDEX,
+                    attention_mask.bool(),
                     inputs,
+                    self.loss_fn.IGNORE_INDEX,
                 )
                 if not self.pretrain_mode:
                     for label, source_len in zip(labels, prompts_id_len):
@@ -178,9 +178,9 @@ class SFTTrainer(ABC):
                 logits = self.model(inputs, attention_mask=attention_mask, return_output=True)["logits"]
 
                 labels = torch.where(
-                    inputs.eq(self.tokenizer.pad_token_id),
-                    self.loss_fn.IGNORE_INDEX,
+                    attention_mask.bool(),
                     inputs,
+                    self.loss_fn.IGNORE_INDEX,
                 )
                 if not self.pretrain_mode:
                     for label, source_len in zip(labels, prompts_id_len):

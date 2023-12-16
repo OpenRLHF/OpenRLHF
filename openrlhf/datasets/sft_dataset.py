@@ -97,13 +97,13 @@ class SFTDataset(Dataset):
                     truncation=True,
                     return_tensors="pt",
                 )
-                prompt_ids_len = prompt_token["input_ids"].ne(self.tokenizer.pad_token_id).sum().item()
+                prompt_ids_len = prompt_token["attention_mask"].sum().item()
             else:
                 prompt_ids_len = 0
 
             if not self.pretrain_mode:
-                # filter the sample whose length is greater than max_length (16 for answer length)
-                if prompt_ids_len >= self.max_length - 16:
+                # filter the sample whose length is greater than max_length (2 for answer length)
+                if prompt_ids_len >= self.max_length - 2:
                     continue
                 if not prompt or not target:
                     continue
