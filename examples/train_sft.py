@@ -108,7 +108,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_steps", type=int, default=-1)
     parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_sft")
     parser.add_argument("--max_ckpt_num", type=int, default=3)
-    parser.add_argument("--max_ckpt_mem", type=int, default=100)  # 100GB
+    parser.add_argument("--max_ckpt_mem", type=int, default=1000)  # 1000GB
     parser.add_argument("--max_epochs", type=int, default=2)
     parser.add_argument("--micro_train_batch_size", type=int, default=8)
     parser.add_argument("--train_batch_size", type=int, default=128)

@@ -251,7 +251,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_steps", type=int, default=-1)
     parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_ppo")
     parser.add_argument("--max_ckpt_num", type=int, default=3)
-    parser.add_argument("--max_ckpt_mem", type=int, default=100)  # 100GB
+    parser.add_argument("--max_ckpt_mem", type=int, default=1000)  # 1000GB
     parser.add_argument("--num_episodes", type=int, default=1)
     parser.add_argument("--rollout_batch_size", type=int, default=512)
     parser.add_argument("--micro_rollout_batch_size", type=int, default=8)

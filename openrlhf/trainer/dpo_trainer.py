@@ -44,6 +44,7 @@ class DPOTrainer(ABC):
     ) -> None:
         super().__init__()
         self.strategy = strategy
+        self.args = strategy.args
         self.epochs = max_epochs
         self.max_norm = max_norm
         self.model = model
@@ -56,7 +57,7 @@ class DPOTrainer(ABC):
         self.tokenizer = tokenizer
 
         self.beta = beta
-        self.loss_fn = DPOLoss(self.beta)
+        self.loss_fn = DPOLoss(self.beta, self.args.label_smoothing, self.args.ipo)
 
         if self.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
