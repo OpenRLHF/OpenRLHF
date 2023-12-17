@@ -58,7 +58,7 @@ def get_strategy(args):
     if "adam_offload" not in args:
         args.adam_offload = False
     if "zpg" not in args:
-        args.zpg = 8
+        args.zpg = 1
     # max_out_tokens for DS inference
     if "max_len" in args and args.max_len is not None:
         args.max_out_tokens = args.max_len

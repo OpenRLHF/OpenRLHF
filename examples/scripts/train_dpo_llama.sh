@@ -22,6 +22,8 @@ read -r -d '' training_commands <<EOF
      --load_model ./ckpt/7b_llama/sft_model_ocra.pt
 EOF
      # --wandb [WANDB_TOKENS]
+     # --ipo [for IPO]
+     # --label_smoothing 0.1 [for cDPO]
 
 
 if [[ ${1} != "slurm" ]]; then
