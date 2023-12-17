@@ -13,7 +13,6 @@ read -r -d '' training_commands <<EOF
     --save_steps -1 \
     --logging_steps 1 \
     --eval_steps -1 \
-    --ckpt_path ./ckpt/7b_llama/checkpoints_sft \
     --zero_stage 2 \
     --max_epochs 1 \
     --bf16 \

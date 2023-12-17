@@ -10,7 +10,6 @@ read -r -d '' training_commands <<EOF
     --save_steps -1 \
     --logging_steps 1 \
     --eval_steps -1 \
-    --ckpt_path ./ckpt/7b_llama/checkpoints_ppo \
     --micro_train_batch_size 1 \
     --train_batch_size 128 \
     --micro_rollout_batch_size 1 \

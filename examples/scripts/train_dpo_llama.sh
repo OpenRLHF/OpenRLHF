@@ -6,7 +6,6 @@ read -r -d '' training_commands <<EOF
      --save_steps -1 \
      --logging_steps 1 \
      --eval_steps -1 \
-     --ckpt_path ./ckpt/7b_llama/checkpoints_dpo \
      --train_batch_size 128 \
      --micro_train_batch_size 1 \
      --pretrain meta-llama/Llama-2-7b-hf \
