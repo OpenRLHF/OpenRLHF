@@ -27,15 +27,10 @@ def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=
     tokenizer = AutoTokenizer.from_pretrained(pretrain, trust_remote_code=True, **sp_tokens)
     tokenizer.padding_side = padding_side
 
-    special_tokens_dict = dict()
-    if tokenizer.pad_token is None or tokenizer.pad_token_id == tokenizer.eos_token_id:
-        special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
-        if strategy is not None:
-            strategy.print("add pad_token")
-        tokenizer.add_special_tokens(special_tokens_dict)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     model.resize_token_embeddings(len(tokenizer))
 
-    assert tokenizer.pad_token_id != tokenizer.eos_token_id
     return tokenizer
 
 

@@ -294,9 +294,9 @@ class PPOTrainer(ABC):
             inputs = data[1].squeeze(1).to(torch.cuda.current_device())
             attention_mask = data[2].squeeze(1).to(torch.cuda.current_device())
             label = torch.where(
-                inputs.eq(self.tokenizer.pad_token_id),
-                self.ptx_loss_fn.IGNORE_INDEX,
+                attention_mask.bool(),
                 inputs,
+                self.ptx_loss_fn.IGNORE_INDEX,
             )
 
             ptx_log_probs = self.actor(inputs, attention_mask=attention_mask, return_output=True)["logits"]
