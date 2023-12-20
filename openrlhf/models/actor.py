@@ -32,9 +32,12 @@ class Actor(nn.Module):
                     pretrain_or_model,
                     torch_dtype="auto",
                     trust_remote_code=True,
+                )
+                self.model = AutoModelForCausalLM.from_config(
+                    config,
+                    trust_remote_code=True,
                     use_flash_attention_2=use_flash_attention_2,
                 )
-                self.model = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
             else:
                 self.model = AutoModelForCausalLM.from_pretrained(
                     pretrain_or_model,
