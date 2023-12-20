@@ -276,6 +276,8 @@ A big thank you to all our contributors! If you want to contribute, feel free to
   <img src="https://contrib.rocks/image?repo=openllmai/OpenRLHF" />
 </a>
 
+Our project would also like to thank [ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/Chat) and [DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat). In the early stages of the project, we referred to their code design.
+
 ## Citation
 ```
 @misc{hu23openrlhf,
