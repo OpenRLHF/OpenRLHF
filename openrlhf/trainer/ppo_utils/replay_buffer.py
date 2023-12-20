@@ -117,11 +117,7 @@ def remove_padding_in_sequences(items):
         right_pad = None if right_pad == 0 else -right_pad
 
         # left_pad for seq and att_mask
-        left_pad = 0
-        for i in range(len(att_mask)):
-            if att_mask[i] > 0.5:
-                left_pad = i
-                break
+        left_pad = att_mask.argmax()
         (
             item.sequences,
             item.action_log_probs,
