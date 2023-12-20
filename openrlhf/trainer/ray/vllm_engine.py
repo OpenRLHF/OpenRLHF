@@ -1,11 +1,11 @@
 import inspect
 from functools import partial
 
-import torch
 import ray
+import torch
 from vllm import LLM
-from vllm.worker.worker import Worker
 from vllm.model_executor.weight_utils import hf_model_weights_iterator
+from vllm.worker.worker import Worker
 
 from openrlhf.utils.distributed_util import init_process_group
 

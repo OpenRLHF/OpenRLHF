@@ -2,7 +2,7 @@ import time
 from abc import ABC
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Optional, Tuple, List, Union
+from typing import List, Optional, Tuple, Union
 
 import ray
 import torch

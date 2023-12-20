@@ -15,8 +15,8 @@ from openrlhf.models import Actor, Critic, RewardModel
 from openrlhf.trainer import PPOTrainer
 from openrlhf.trainer.ppo_utils import Experience, RemoteExperienceMaker
 from openrlhf.utils import DeepspeedStrategy, blending_datasets, get_tokenizer
-from openrlhf.utils.distributed_util import init_process_group
 from openrlhf.utils.deepspeed_utils import _z3_params_to_fetch
+from openrlhf.utils.distributed_util import init_process_group
 
 from .launcher import BasePPORole
 

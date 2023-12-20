@@ -14,13 +14,7 @@ from tqdm import tqdm
 from openrlhf.models import Actor, Critic, GPTLMLoss, PolicyLoss, ValueLoss
 from openrlhf.models.utils import masked_mean
 
-from .ppo_utils import (
-    AdaptiveKLController,
-    Experience,
-    FixedKLController,
-    NaiveExperienceMaker,
-    NaiveReplayBuffer,
-)
+from .ppo_utils import AdaptiveKLController, Experience, FixedKLController, NaiveExperienceMaker, NaiveReplayBuffer
 
 
 class PPOTrainer(ABC):
