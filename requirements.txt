@@ -1,5 +1,5 @@
 datasets
-deepspeed==0.12.5
+deepspeed==0.12.6
 einops
 isort
 jsonlines
