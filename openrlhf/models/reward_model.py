@@ -22,6 +22,7 @@ class RewardModel(nn.Module):
     ) -> None:
         super().__init__()
         if isinstance(pretrain_or_model, str):
+            attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
             if from_config:
                 config = AutoConfig.from_pretrained(
                     pretrain_or_model,
@@ -31,14 +32,14 @@ class RewardModel(nn.Module):
                 self.model = AutoModelForCausalLM.from_config(
                     config,
                     trust_remote_code=True,
-                    use_flash_attention_2=use_flash_attention_2,
+                    attn_implementation=attn_implementation,
                 )
             else:
                 self.model = AutoModelForCausalLM.from_pretrained(
                     pretrain_or_model,
                     torch_dtype="auto",
                     trust_remote_code=True,
-                    use_flash_attention_2=use_flash_attention_2,
+                    attn_implementation=attn_implementation,
                 )
             if hasattr(self.model, "transformer"):
                 self.model = self.model.transformer

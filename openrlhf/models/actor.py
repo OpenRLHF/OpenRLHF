@@ -26,6 +26,7 @@ class Actor(nn.Module):
         use_flash_attention_2=False,
     ) -> None:
         super().__init__()
+        attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
         if isinstance(pretrain_or_model, str):
             if from_config:
                 config = AutoConfig.from_pretrained(
@@ -36,14 +37,14 @@ class Actor(nn.Module):
                 self.model = AutoModelForCausalLM.from_config(
                     config,
                     trust_remote_code=True,
-                    use_flash_attention_2=use_flash_attention_2,
+                    attn_implementation=attn_implementation,
                 )
             else:
                 self.model = AutoModelForCausalLM.from_pretrained(
                     pretrain_or_model,
                     torch_dtype="auto",
                     trust_remote_code=True,
-                    use_flash_attention_2=use_flash_attention_2,
+                    attn_implementation=attn_implementation,
                 )
         else:
             self.model = pretrain_or_model

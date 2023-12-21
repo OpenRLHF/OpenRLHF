@@ -1,5 +1,5 @@
 datasets
-deepspeed==0.11.1
+deepspeed==0.12.5
 einops
 isort
 jsonlines
@@ -9,6 +9,6 @@ ray[default]
 torch
 torchmetrics
 tqdm
-transformers==4.34
+transformers==4.36.2
 transformers_stream_generator
 wandb
