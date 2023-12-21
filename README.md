@@ -218,13 +218,13 @@ If you really don't want to use nvidia-docker, we also provide tutorials for bui
 conda create -n openrlhf python=3.10
 # so, we need install some package manually: when installing torch, you may need to match the corresponding cuda version.
 pip install packaging ninja
-pip install torch --index-url https://download.pytorch.org/whl/cu118
+pip3 install torch
 # check ninjia
 ninja --version
 echo $? # output: 0
 # install flash-attn: may take some time.
 # For network error: you can download specified version from https://github.com/Dao-AILab/flash-attention/releases.
-pip install flash-attn==2.1.1 --no-build-isolation
+pip install flash-attn==2.3.6 --no-build-isolation
 ./build_openrlhf.sh
 # enjoy it!
 ```

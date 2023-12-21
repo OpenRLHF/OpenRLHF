@@ -15,7 +15,7 @@
 
 # project settings
 PROJECT_PATH=$(cd ../../; realpath .)
-IMAGE_NAME="nvcr.io/nvidia/pytorch:23.12-py3"
+IMAGE_NAME="nvcr.io/nvidia/pytorch:23.10-py3"
 MOUNT="$PROJECT_PATH:/openrlhf,$HOME/.cache:/root/.cache,/dev/null:/root/.bashrc"
 
 JOBLOG="$(realpath .)/logs/train_ppo_llama_ray-$SLURM_JOB_ID.log"
