@@ -1,3 +1,4 @@
+import logging
 import time
 from abc import ABC
 from copy import deepcopy
@@ -339,6 +340,11 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # |<---------- prompt ----------->|<-------- answer ------->|
         max_input_len, max_output_len = 0, 0
         for output in outputs:
+            # TODO: how to force vLLM generate at least one token?
+            if len(output.outputs[0].token_ids) == 0:
+                logging.warning(f"no output for prompt: {output.prompt}")
+                output.outputs[0].token_ids = [self.tokenizer.eos_token_id]
+
             max_input_len = max(max_input_len, len(output.prompt_token_ids))
             max_output_len = max(max_output_len, len(output.outputs[0].token_ids))
 
@@ -351,7 +357,6 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
             # right padding output
             output_len = len(output.outputs[0].token_ids)
-            assert output_len > 0, f"no output for prompt: {output.prompt}"
             output_ids = output.outputs[0].token_ids + [pad_token_id] * (max_output_len - output_len)
             if output_ids[output_len - 1] != eos_token_id:
                 assert output_len == max_output_len
@@ -362,13 +367,12 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         sequences = torch.tensor(sequences)
         attention_mask = (sequences.ne(eos_token_id) & sequences.ne(pad_token_id)).to(dtype=torch.long)
+
+        # enforce last token before PAD token is EOS token.
         seq_length = attention_mask.size(1)
-        for i in range(attention_mask.size(0)):
-            for t in reversed(range(seq_length)):
-                if attention_mask[i][t] > 0.5:
-                    attention_mask[i][min(t + 1, seq_length - 1)] = True
-                    sequences[i][min(t + 1, seq_length - 1)] = eos_token_id
-                    break
+        eos_indices = seq_length - attention_mask.long().fliplr().argmax(dim=1, keepdim=True).clamp(min=1)
+        attention_mask.scatter_(dim=1, index=eos_indices, value=1)
+        sequences.scatter_(dim=1, index=eos_indices, value=eos_token_id)
 
         action_seq = sequences[:, max_input_len:-1]
         action_mask = action_seq.ne(eos_token_id) & action_seq.ne(pad_token_id)
