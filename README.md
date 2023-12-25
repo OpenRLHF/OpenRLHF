@@ -23,8 +23,6 @@
 
 <hr>
 
-> **The code is open-source, feel free to use it, contributions are welcome! Note: The license of the model depends on the provider of the model.**
-
 OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HuggingFace Transformers:
 
 - **Simple and easy to use**: OpenRLHF is one of the simplest high-performance RLHF libraries currently available, enabling 34B model RLHF training with just a single DGXA100 node (see the training [script](./examples/scripts/train_ppo_llama_ray_34b.sh)).
