@@ -1,11 +1,6 @@
-# OpenRLHF
-
-</br>
-
-<h1 align="center">OpenRLHF</h1>
+![](./docs/logo.png)
 <div align="center">
 <p align="center">
-    <h3>A Ray-based High-performance RLHF framework!</h3>
       <a href="https://github.com/openllmai/OpenRLHF/graphs/contributors">
         <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/openllmai/OpenRLHF" />
       </a>
@@ -20,15 +15,13 @@
       <a href="https://github.com/openllmai/OpenRLHF/stargazers">
         <img alt="GitHub stars" src="https://img.shields.io/github/stars/openllmai/OpenRLHF?color=ccf" />
       </a>
-      <br/>
-      <em>Open-source ChatGPT / Comprehensive / Lightweight / Easy-to-use</em>
-      <br/>
+      <br>
+      <em>Open-source / Comprehensive / Lightweight / Easy-to-use</em>
     </p>
-
 </p>
 </div>
 
-> **The code is open-source, feel free to use it, contributions are welcome! Note: The license of the model depends on the provider of the model.**
+<hr>
 
 OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HuggingFace Transformers:
 
@@ -36,9 +29,8 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and Huggin
 - **Distributed RLHF**: The key idea behind OpenRLHF is to distribute the Actor, Reward, Reference, and Critic models onto separate GPUs using Ray, while placing the Adam optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G GPUs).
 - **High performance**: Thanks to the ability to use a large inference batch size with Ray and DeepSpeed's CPUAdam, the performance of OpenRLHF with the 13B LLaMA2 model is 4x that of DeepSpeedChat.
 
-### Features
+## Features
 
-- Compatible with HuggingFace Transformers model.
 - Distributed [PPO based on Ray](./examples/scripts/train_ppo_llama_ray.sh). 
 - Support Multiple Reward models.
 - Support [Rejection Sampling](./examples/scripts/train_rejection_sampling_llama.sh).
@@ -61,14 +53,14 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and Huggin
 Support Matrix
 
 
-|        | PPO-max & Best Hyperparameters  | Ray  | 34B Full Tuning with 4 A100   | 7B Full Tuning with 1 A100 (80G)  | 7B Full Tuning with 4 RTX4090 |
+|        | Best Hyperparameters  | Ray  | 34B Full Tuning with 4 A100   | 7B Full Tuning with 1 A100  | 7B Full Tuning with 4 RTX4090 |
 |  ----  | ----  |  ----  | ----  | ----  | ----  |  
 | OpenRLHF  | ✔ | ✔  | ✔ | ✔ | ✔ |
 | DeepSpeedChat  | ✖️ | ✖️  | ✖️ | ✖️ | ✖️ |
 | ColossalAIChat  | ✖️ | ✖️  | ✖️ |✖️ | ✖️ |
 | TRL  | ✖️ | ✖️  | ✖️ | ✖️ | ✖️ |
 
-### Performance
+## Performance
 
 |        | 7B llama2 RLHF | 13B llama2 RLHF (50k samples) | 
 |  ----  | ----  |  ----  |
@@ -224,7 +216,7 @@ ninja --version
 echo $? # output: 0
 # install flash-attn: may take some time.
 # For network error: you can download specified version from https://github.com/Dao-AILab/flash-attention/releases.
-pip install flash-attn==2.3.6 --no-build-isolation
+pip install flash-attn==2.3.6
 ./build_openrlhf.sh
 # enjoy it!
 ```
@@ -241,7 +233,7 @@ We would like to express our gratitude to the following projects and organizatio
 - [Ray ↗](https://github.com/ray-project/ray)
 
 
-### Join Us
+## Join Us
 
 **How to Join?**
 
@@ -264,7 +256,6 @@ We would like to express our gratitude to the following projects and organizatio
 Your sponsorship can help us maintain and improve OpenRLHF. If you find this project useful, please consider sponsoring us. You can sponsor us on [Open Collective ↗](https://opencollective.com/openllmai).
 
 ## Starchart
-
 
 [![Star History Chart](https://api.star-history.com/svg?repos=openllmai/OpenRLHF&type=Date)](https://star-history.com/#openllmai/OpenRLHF&Date)
 
