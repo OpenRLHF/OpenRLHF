@@ -1,7 +1,8 @@
 <div align="center">
 <p align="center">
-<img alt="" src="./docs/logo.png" style="display: inline-block; height: 200px" />
+<img alt="" src="./docs/logo.png" style="display: inline-block; height: 190px" />
 </p>
+<br>
 </div>
 
 <div align="center">
