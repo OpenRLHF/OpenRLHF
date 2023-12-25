@@ -1,5 +1,7 @@
-<div style="text-align: center; width: 500px;">
+<div align="center">
+<p align="center">
 <img alt="" src="./docs/logo.png" style="display: inline-block; height: 250px" />
+</p>
 </div>
 
 <div align="center">
