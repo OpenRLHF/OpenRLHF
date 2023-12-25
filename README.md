@@ -1,6 +1,6 @@
 <div align="center">
 <p align="center">
-<img alt="" src="./docs/logo.png" style="display: inline-block; height: 230px" />
+<img alt="" src="./docs/logo.png" style="display: inline-block; height: 200px" />
 </p>
 </div>
 
