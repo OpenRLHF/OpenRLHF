@@ -1,4 +1,7 @@
-![](./docs/logo.png)
+<div style="text-align: center; width: 250px; border: green solid 1px;">
+<img alt="" src="./docs/logo.png" style="margin: 0 auto;" />
+</div>
+
 <div align="center">
 <p align="center">
       <a href="https://github.com/openllmai/OpenRLHF/graphs/contributors">
