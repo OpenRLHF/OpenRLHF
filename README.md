@@ -17,7 +17,7 @@
         <img alt="GitHub stars" src="https://img.shields.io/github/stars/openllmai/OpenRLHF?color=ccf" />
       </a>
       <br/>
-      <em>Open-source / Comprehensive / Lightweight / Easy-to-use</em>
+      <!-- <em>Open-source / Comprehensive / Lightweight / Easy-to-use</em> -->
       <br/>
     </p>
 </p>
@@ -31,7 +31,7 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and Huggin
 - **Distributed RLHF**: The key idea behind OpenRLHF is to distribute the Actor, Reward, Reference, and Critic models onto separate GPUs using Ray, while placing the Adam optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 34B models with multiple A100 80G GPUs).
 - **High performance**: Thanks to the ability to use a large inference batch size with Ray and DeepSpeed's CPUAdam, the performance of OpenRLHF with the 13B LLaMA2 model is 4x that of DeepSpeedChat.
 
-### Features
+## Features
 
 - Compatible with HuggingFace Transformers model.
 - Distributed [PPO based on Ray](./examples/scripts/train_ppo_llama_ray.sh). 
@@ -63,7 +63,7 @@ Support Matrix
 | ColossalAIChat  | ✖️ | ✖️  | ✖️ |✖️ | ✖️ |
 | TRL  | ✖️ | ✖️  | ✖️ | ✖️ | ✖️ |
 
-### Performance
+## Performance
 
 |        | 7B llama2 RLHF | 13B llama2 RLHF (50k samples) | 
 |  ----  | ----  |  ----  |
@@ -236,7 +236,7 @@ We would like to express our gratitude to the following projects and organizatio
 - [Ray ↗](https://github.com/ray-project/ray)
 
 
-### Join Us
+## Join Us
 
 **How to Join?**
 
