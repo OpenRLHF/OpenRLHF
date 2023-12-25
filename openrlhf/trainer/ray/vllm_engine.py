@@ -1,5 +1,5 @@
-import logging
 import inspect
+import logging
 from functools import partial
 
 import ray
