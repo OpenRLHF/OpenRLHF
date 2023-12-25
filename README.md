@@ -31,7 +31,6 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and Huggin
 
 ## Features
 
-- Compatible with HuggingFace Transformers model.
 - Distributed [PPO based on Ray](./examples/scripts/train_ppo_llama_ray.sh). 
 - Support Multiple Reward models.
 - Support [Rejection Sampling](./examples/scripts/train_rejection_sampling_llama.sh).
@@ -54,7 +53,7 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and Huggin
 Support Matrix
 
 
-|        | PPO-max & Best Hyperparameters  | Ray  | 34B Full Tuning with 4 A100   | 7B Full Tuning with 1 A100 (80G)  | 7B Full Tuning with 4 RTX4090 |
+|        | Best Hyperparameters  | Ray  | 34B Full Tuning with 4 A100   | 7B Full Tuning with 1 A100  | 7B Full Tuning with 4 RTX4090 |
 |  ----  | ----  |  ----  | ----  | ----  | ----  |  
 | OpenRLHF  | ✔ | ✔  | ✔ | ✔ | ✔ |
 | DeepSpeedChat  | ✖️ | ✖️  | ✖️ | ✖️ | ✖️ |
@@ -217,7 +216,7 @@ ninja --version
 echo $? # output: 0
 # install flash-attn: may take some time.
 # For network error: you can download specified version from https://github.com/Dao-AILab/flash-attention/releases.
-pip install flash-attn==2.3.6 --no-build-isolation
+pip install flash-attn==2.3.6
 ./build_openrlhf.sh
 # enjoy it!
 ```
@@ -257,7 +256,6 @@ We would like to express our gratitude to the following projects and organizatio
 Your sponsorship can help us maintain and improve OpenRLHF. If you find this project useful, please consider sponsoring us. You can sponsor us on [Open Collective ↗](https://opencollective.com/openllmai).
 
 ## Starchart
-
 
 [![Star History Chart](https://api.star-history.com/svg?repos=openllmai/OpenRLHF&type=Date)](https://star-history.com/#openllmai/OpenRLHF&Date)
 
