@@ -1,3 +1,4 @@
+![](./docs/logo.png)
 <div align="center">
 <p align="center">
       <a href="https://github.com/openllmai/OpenRLHF/graphs/contributors">
@@ -14,12 +15,11 @@
       <a href="https://github.com/openllmai/OpenRLHF/stargazers">
         <img alt="GitHub stars" src="https://img.shields.io/github/stars/openllmai/OpenRLHF?color=ccf" />
       </a>
-      <!-- <em>Open-source / Comprehensive / Lightweight / Easy-to-use</em> -->
+      <em>Open-source / Comprehensive / Lightweight / Easy-to-use</em>
+      <br>
     </p>
 </p>
 </div>
-
-![](./docs/logo.png)
 
 <hr>
 
