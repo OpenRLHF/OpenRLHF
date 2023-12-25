@@ -1,8 +1,5 @@
-# OpenRLHF
+![](./docs/logo.png)
 
-</br>
-
-<h1 align="center">OpenRLHF</h1>
 <div align="center">
 <p align="center">
     <h3>A Ray-based High-performance RLHF framework!</h3>
