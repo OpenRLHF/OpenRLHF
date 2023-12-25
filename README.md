@@ -15,8 +15,8 @@
       <a href="https://github.com/openllmai/OpenRLHF/stargazers">
         <img alt="GitHub stars" src="https://img.shields.io/github/stars/openllmai/OpenRLHF?color=ccf" />
       </a>
-      <em>Open-source / Comprehensive / Lightweight / Easy-to-use</em>
       <br>
+      <em>Open-source / Comprehensive / Lightweight / Easy-to-use</em>
     </p>
 </p>
 </div>
