@@ -1,3 +1,4 @@
+import logging
 import inspect
 from functools import partial
 
@@ -43,6 +44,9 @@ class _WorkerWrap(Worker):
         )
 
     def update_weight(self, name, dtype, shape, empty_cache=False):
+        if torch.distributed.get_rank() == 0:
+            logging.info(f"update weight: {name}, dtype: {dtype}, shape: {shape}")
+
         assert dtype == self.model_config.dtype, f"mismatch dtype: src {dtype}, dst {self.model_config.dtype}"
         weight = torch.empty(shape, dtype=dtype, device="cuda")
         torch.distributed.broadcast(weight, 0, group=self._model_update_group)

@@ -95,7 +95,7 @@ class NaiveExperienceMaker(ABC):
         self.reward_fn = reward_fn
 
     # tokenizer
-    def tokenize_fn(self, texts, max_length):
+    def tokenize_fn(self, texts, max_length, device):
         batch = self.tokenizer(
             texts,
             return_tensors="pt",
@@ -103,7 +103,7 @@ class NaiveExperienceMaker(ABC):
             padding=True,
             truncation=True,
         )
-        return {k: v.to(torch.cuda.current_device()) for k, v in batch.items()}
+        return {k: v.to(device) for k, v in batch.items()}
 
     @torch.no_grad()
     def make_experience(self, prompts: Union[str, List[str]], **generate_kwargs) -> Experience:
@@ -113,7 +113,7 @@ class NaiveExperienceMaker(ABC):
         self.reward_model.eval()
 
         # generate seq
-        inputs = self.tokenize_fn(prompts, self.prompt_max_len)
+        inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
         sequences, attention_mask, action_mask = self.actor.generate(**inputs, **generate_kwargs)
         num_actions = action_mask.size(1)
 
@@ -314,11 +314,15 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         return experience
 
     def generate_local(self, prompts: List[str], **kwargs) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        inputs = self.tokenize_fn(prompts, self.prompt_max_len)
+        inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
         return self.actor.generate(**inputs, **kwargs)
 
     def generate_vllm(self, prompts: List[str], **kwargs) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         from vllm import SamplingParams
+
+        # round-robin load balance
+        rank = torch.distributed.get_rank()
+        llm = self.vllm_engines[rank % len(self.vllm_engines)]
 
         sampling_params = SamplingParams(
             temperature=kwargs.get("temperature", 1.0),
@@ -327,10 +331,13 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             max_tokens=kwargs.get("max_new_tokens", 16),
         )
 
-        # round-robin load balance
-        rank = torch.distributed.get_rank()
-        llm = self.vllm_engines[rank % len(self.vllm_engines)]
-        outputs = ray.get(llm.generate.remote(prompts, sampling_params))
+        # TODO: can't pass `max_length` to vLLM's tokenizer for input truncation, remove this once it is supported.
+        input_ids = self.tokenize_fn(prompts, self.prompt_max_len, device="cpu")["input_ids"]
+        pad_indices = (input_ids == self.tokenizer.pad_token_id).to(dtype=torch.int).argmax(dim=-1)
+        prompt_token_ids = []
+        for i, pad_index in enumerate(pad_indices.numpy()):
+            prompt_token_ids.append(input_ids[i][:pad_index] if pad_index != 0 else input_ids[i])
+        outputs = ray.get(llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
 
         # NOTE: concat all outputs to following format:
         #
@@ -343,7 +350,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             # TODO: how to force vLLM generate at least one token?
             if len(output.outputs[0].token_ids) == 0:
                 logging.warning(f"no output for prompt: {output.prompt}")
-                output.outputs[0].token_ids = [self.tokenizer.eos_token_id]
+                output.outputs[0].token_ids = [self.tokenizer.unk_token_id, self.tokenizer.eos_token_id]
 
             max_input_len = max(max_input_len, len(output.prompt_token_ids))
             max_output_len = max(max_output_len, len(output.outputs[0].token_ids))
