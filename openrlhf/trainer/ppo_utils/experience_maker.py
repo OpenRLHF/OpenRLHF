@@ -333,10 +333,11 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         # TODO: can't pass `max_length` to vLLM's tokenizer for input truncation, remove this once it is supported.
         input_ids = self.tokenize_fn(prompts, self.prompt_max_len, device="cpu")["input_ids"]
-        pad_indices = (input_ids == self.tokenizer.pad_token_id).to(dtype=torch.int).argmax(dim=-1)
+        assert self.tokenizer.padding_side == "left", f"tokenizer padding_size should be left"
+        pad_indices = (input_ids != self.tokenizer.pad_token_id).to(dtype=torch.int).argmax(dim=-1)
         prompt_token_ids = []
         for i, pad_index in enumerate(pad_indices.numpy()):
-            prompt_token_ids.append(input_ids[i][:pad_index] if pad_index != 0 else input_ids[i])
+            prompt_token_ids.append(input_ids[i][pad_index:].tolist())
         outputs = ray.get(llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
 
         # NOTE: concat all outputs to following format:
