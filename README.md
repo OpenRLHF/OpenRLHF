@@ -2,7 +2,6 @@
 
 <div align="center">
 <p align="center">
-    <h3>A Ray-based High-performance RLHF framework!</h3>
       <a href="https://github.com/openllmai/OpenRLHF/graphs/contributors">
         <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/openllmai/OpenRLHF" />
       </a>
@@ -18,10 +17,9 @@
         <img alt="GitHub stars" src="https://img.shields.io/github/stars/openllmai/OpenRLHF?color=ccf" />
       </a>
       <br/>
-      <em>Open-source ChatGPT / Comprehensive / Lightweight / Easy-to-use</em>
+      <em>Open-source / Comprehensive / Lightweight / Easy-to-use</em>
       <br/>
     </p>
-
 </p>
 </div>
 
