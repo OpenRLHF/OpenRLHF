@@ -2,7 +2,6 @@
 <p align="center">
 <img alt="" src="./docs/logo.png" style="display: inline-block; height: 160px" />
 </p>
-<br>
 </div>
 
 <div align="center">
