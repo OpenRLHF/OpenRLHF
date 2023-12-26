@@ -95,6 +95,11 @@ class ActorPPOTrainer(PPOTrainer):
 
             ray.get(refs)
 
+            # TODO: remove this once we refactor actor/critic/reward
+            # class to load model from hugging face format directly.
+            if self.strategy.args.sft_model_path:
+                self._broadcast_to_vllm()
+
         torch.distributed.barrier()
 
     def ppo_train(self):
@@ -111,30 +116,7 @@ class ActorPPOTrainer(PPOTrainer):
 
         # 4. broadcast weights to vllm engines
         if self.vllm_engines is not None:
-            model = self.actor.model.module
-            count, num_params = 0, len(list(model.named_parameters()))
-            for name, param in model.named_parameters():
-                count += 1  # empty_cache at last param
-
-                # Fire all vllm engines for broadcast
-                if torch.distributed.get_rank() == 0:
-                    [
-                        engine.update_weight.remote(
-                            name, dtype=param.dtype, shape=self.param_metada[name], empty_cache=count == num_params
-                        )
-                        for engine in self.vllm_engines
-                    ]
-
-                if self.strategy.args.zero_stage != 3:
-                    # For ZeRO-1/2, broadcast parameter to all vllm engines by rank 0
-                    if torch.distributed.get_rank() == 0:
-                        torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
-                else:
-                    # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
-                    params_to_fetch = _z3_params_to_fetch([param])
-                    with deepspeed.zero.GatheredParameters(params_to_fetch, enabled=len(params_to_fetch) > 0):
-                        if torch.distributed.get_rank() == 0:
-                            torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
+            self._broadcast_to_vllm()
 
         # 5. wait remote critic model training done
         if self.critic_train_remote:
@@ -145,6 +127,32 @@ class ActorPPOTrainer(PPOTrainer):
 
     def training_step(self, experience: Experience) -> Dict[str, float]:
         return self.training_step_actor(experience)
+
+    def _broadcast_to_vllm(self):
+        model = self.actor.model.module
+        count, num_params = 0, len(list(model.named_parameters()))
+        for name, param in model.named_parameters():
+            count += 1  # empty_cache at last param
+
+            # Fire all vllm engines for broadcast
+            if torch.distributed.get_rank() == 0:
+                [
+                    engine.update_weight.remote(
+                        name, dtype=param.dtype, shape=self.param_metada[name], empty_cache=count == num_params
+                    )
+                    for engine in self.vllm_engines
+                ]
+
+            if self.strategy.args.zero_stage != 3:
+                # For ZeRO-1/2, broadcast parameter to all vllm engines by rank 0
+                if torch.distributed.get_rank() == 0:
+                    torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
+            else:
+                # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
+                params_to_fetch = _z3_params_to_fetch([param])
+                with deepspeed.zero.GatheredParameters(params_to_fetch, enabled=len(params_to_fetch) > 0):
+                    if torch.distributed.get_rank() == 0:
+                        torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
 
 
 @ray.remote(num_gpus=1)
