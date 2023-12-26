@@ -21,7 +21,7 @@ def reward_fn(rewards: List[torch.Tensor]):
     return torch.stack(rewards).sum(dim=0)
 
 
-def validate_args(args):
+def _validate_args(args):
     actor_world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
     critic_world_size = args.critic_num_nodes * args.critic_num_gpus_per_node
 
@@ -39,7 +39,7 @@ def validate_args(args):
 
 
 def train(args):
-    validate_args(args)
+    _validate_args(args)
 
     # configure strategy
     strategy = get_strategy(args)
