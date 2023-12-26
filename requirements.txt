@@ -5,6 +5,7 @@ flash-attn==2.3.6
 isort
 jsonlines
 loralib
+optimum
 peft
 ray[default]
 torch

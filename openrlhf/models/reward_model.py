@@ -18,7 +18,12 @@ class RewardModel(nn.Module):
     """
 
     def __init__(
-        self, pretrain_or_model: str, from_config=False, normalize_reward=True, use_flash_attention_2=False
+        self,
+        pretrain_or_model: str,
+        from_config=False,
+        normalize_reward=True,
+        use_flash_attention_2=False,
+        to_bettertransformer=False,
     ) -> None:
         super().__init__()
         if isinstance(pretrain_or_model, str):
@@ -41,6 +46,10 @@ class RewardModel(nn.Module):
                     trust_remote_code=True,
                     attn_implementation=attn_implementation,
                 )
+
+            if to_bettertransformer:
+                self.model.to_bettertransformer()
+
             if hasattr(self.model, "transformer"):
                 self.model = self.model.transformer
             elif hasattr(self.model, "model"):

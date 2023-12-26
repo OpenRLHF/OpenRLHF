@@ -24,6 +24,7 @@ class Actor(nn.Module):
         pretrain_or_model,
         from_config=False,
         use_flash_attention_2=False,
+        to_bettertransformer=False,
     ) -> None:
         super().__init__()
         attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
@@ -46,6 +47,9 @@ class Actor(nn.Module):
                     trust_remote_code=True,
                     attn_implementation=attn_implementation,
                 )
+
+            if to_bettertransformer:
+                self.model.to_bettertransformer()
         else:
             self.model = pretrain_or_model
 
