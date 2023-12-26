@@ -48,7 +48,7 @@ class RewardModel(nn.Module):
                 )
 
             if to_bettertransformer:
-                self.model.to_bettertransformer()
+                self.model = self.model.to_bettertransformer()
 
             if hasattr(self.model, "transformer"):
                 self.model = self.model.transformer

@@ -49,7 +49,7 @@ class Actor(nn.Module):
                 )
 
             if to_bettertransformer:
-                self.model.to_bettertransformer()
+                self.model = self.model.to_bettertransformer()
         else:
             self.model = pretrain_or_model
 
