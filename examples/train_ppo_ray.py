@@ -143,6 +143,7 @@ def train(args):
                 trust_remote_code=True,
                 tensor_parallel_size=args.vllm_tensor_parallel_size,
                 dtype="bfloat16" if args.bf16 else "auto",
+                seed=args.seed,
             )
             for _ in range(args.vllm_num_engines)
         ]
