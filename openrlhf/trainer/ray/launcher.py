@@ -78,7 +78,12 @@ class ReferenceModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, model_path):
         self._setup_distributed(strategy)
         model, _ = self._from_pretrained(
-            Actor, pretrain, model_path, use_flash_attention_2=strategy.args.flash_attn, bf16=strategy.args.bf16
+            Actor,
+            pretrain,
+            model_path,
+            use_flash_attention_2=strategy.args.flash_attn,
+            bf16=strategy.args.bf16,
+            ds_config=strategy.get_ds_eval_config(),
         )
         strategy.print(model)
 
@@ -109,6 +114,7 @@ class RewardModelRayActor(BasePPORole):
             normalize_reward=strategy.args.normalize_reward,
             use_flash_attention_2=strategy.args.flash_attn,
             bf16=strategy.args.bf16,
+            ds_config=strategy.get_ds_eval_config(),
         )
         strategy.print(model)
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
