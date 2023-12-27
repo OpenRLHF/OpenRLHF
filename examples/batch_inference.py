@@ -24,6 +24,7 @@ def batch_generate(args):
         from_config,
         use_flash_attention_2=args.flash_attn,
         to_bettertransformer=args.to_bettertransformer,
+        bf16=args.bf16,
     )
 
     # configure tokenizer
@@ -137,6 +138,7 @@ def batch_rm_inference(args):
         from_config,
         use_flash_attention_2=args.flash_attn,
         to_bettertransformer=args.to_bettertransformer,
+        bf16=args.bf16,
     )
 
     # configure tokenizer

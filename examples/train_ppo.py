@@ -24,13 +24,19 @@ def train(args):
     actor_from_config = bool(args.sft_model_path or args.load_checkpoint)
     reward_from_config = bool(args.reward_model_path)
 
-    actor = Actor(args.pretrain, actor_from_config, use_flash_attention_2=args.flash_attn)
+    actor = Actor(args.pretrain, actor_from_config, use_flash_attention_2=args.flash_attn, bf16=args.bf16)
     if args.actor_init_on_gpu:
         actor = actor.to(torch.cuda.current_device())
 
-    critic = Critic(args.reward_pretrain, True, args.normalize_reward, use_flash_attention_2=args.flash_attn)
+    critic = Critic(
+        args.reward_pretrain, True, args.normalize_reward, use_flash_attention_2=args.flash_attn, bf16=args.bf16
+    )
     reward_model = RewardModel(
-        args.reward_pretrain, reward_from_config, args.normalize_reward, use_flash_attention_2=args.flash_attn
+        args.reward_pretrain,
+        reward_from_config,
+        args.normalize_reward,
+        use_flash_attention_2=args.flash_attn,
+        bf16=args.bf16,
     )
 
     # configure tokenizer

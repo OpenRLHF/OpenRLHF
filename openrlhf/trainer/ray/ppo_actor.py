@@ -46,7 +46,7 @@ class ActorModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, model_path):
         self._setup_distributed(strategy)
         actor, self.tokenizer = self._from_pretrained(
-            Actor, pretrain, model_path, use_flash_attention_2=strategy.args.flash_attn
+            Actor, pretrain, model_path, use_flash_attention_2=strategy.args.flash_attn, bf16=strategy.args.bf16
         )
         strategy.print(actor)
         self.prepare_datasets()
