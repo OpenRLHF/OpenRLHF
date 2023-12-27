@@ -37,9 +37,7 @@ class DistributedTorchRayActor:
     def _get_current_node_ip():
         address = ray._private.services.get_node_ip_address()
         # strip ipv6 address
-        address = address.lstrip("[")
-        address = address.rstrip("]")
-        return address
+        return address.strip("[]")
 
     @staticmethod
     def _get_free_port():
@@ -215,6 +213,7 @@ class PPORayActorGroup:
         initial_model_group: "PPORayActorGroup",
         reward_model_groups: List["PPORayActorGroup"],
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
+        vllm_engines: List = None,
     ):
         """Train actor model.
 
@@ -223,6 +222,7 @@ class PPORayActorGroup:
             initial_model_group (PPORayActorGroup): reference model group.
             reward_model_groups (PPORayActorGroup): reward model groups.
             reward_fn: reward calculate function, must be specified if using multiple reward models.
+            vllm_engines: vllm engines for text generation, if not specified, generate text by actor model directly.
 
         Returns:
             List: list of remote object refs.
@@ -252,6 +252,7 @@ class PPORayActorGroup:
                     initial_model=initial_actor,
                     reward_model=reward_actors,
                     reward_fn=reward_fn,
+                    vllm_engines=vllm_engines,
                     # whether this actor should triger corresponding critic model training
                     critic_train_remote=(i < len(critic_actors)),
                 )
@@ -266,3 +267,10 @@ class PPORayActorGroup:
             List: list of remote object refs.
         """
         return [actor.save_model.remote() for actor in self._actor_handlers]
+
+    def async_run_method(self, method_name, *args, **kwargs):
+        refs = []
+        for actor in self._actor_handlers:
+            method = getattr(actor, method_name)
+            refs.append(method.remote(*args, **kwargs))
+        return refs

@@ -26,7 +26,8 @@ def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=
 
     tokenizer = AutoTokenizer.from_pretrained(pretrain, trust_remote_code=True, **sp_tokens)
     tokenizer.padding_side = padding_side
-
+    # NOTE: When enable vLLM, do not resize_token_embeddings, or the vocab size will mismatch with vLLM.
+    # https://github.com/facebookresearch/llama-recipes/pull/196
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id

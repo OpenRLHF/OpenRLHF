@@ -1,8 +1,9 @@
+import logging
 import time
 from abc import ABC
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import ray
 import torch
@@ -76,6 +77,8 @@ class NaiveExperienceMaker(ABC):
         critic: nn.Module,
         reward_model: nn.Module,
         initial_model: Actor,
+        tokenizer,
+        prompt_max_len: int,
         kl_controller,
         strategy=None,
         reward_fn=None,
@@ -85,19 +88,33 @@ class NaiveExperienceMaker(ABC):
         self.critic = critic
         self.reward_model = reward_model
         self.initial_model = initial_model
+        self.tokenizer = tokenizer
+        self.prompt_max_len = prompt_max_len
         self.kl_ctl = kl_controller
         self.strategy = strategy
         self.reward_fn = reward_fn
 
+    # tokenizer
+    def tokenize_fn(self, texts, max_length, device):
+        batch = self.tokenizer(
+            texts,
+            return_tensors="pt",
+            max_length=max_length,
+            padding=True,
+            truncation=True,
+        )
+        return {k: v.to(device) for k, v in batch.items()}
+
     @torch.no_grad()
-    def make_experience(self, input_ids: torch.Tensor, **generate_kwargs) -> Experience:
+    def make_experience(self, prompts: Union[str, List[str]], **generate_kwargs) -> Experience:
         self.actor.eval()
         self.critic.eval()
         self.initial_model.eval()
         self.reward_model.eval()
 
         # generate seq
-        sequences, attention_mask, action_mask = self.actor.generate(input_ids, **generate_kwargs)
+        inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
+        sequences, attention_mask, action_mask = self.actor.generate(**inputs, **generate_kwargs)
         num_actions = action_mask.size(1)
 
         # log probs
@@ -197,15 +214,24 @@ class NaiveExperienceMaker(ABC):
 
 
 class RemoteExperienceMaker(NaiveExperienceMaker):
+    def __init__(self, *args, vllm_engines: List = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.vllm_engines = vllm_engines
+
     @torch.no_grad()
-    def make_experience(self, input_ids: torch.Tensor, **generate_kwargs) -> Experience:
+    def make_experience(self, prompts: Union[str, List[str]], **generate_kwargs) -> Experience:
         self.actor.eval()
         device = torch.cuda.current_device()
 
+        # generate sequence
         start = time.time()
-        # generate seq
-        sequences, attention_mask, action_mask = self.actor.generate(input_ids, **generate_kwargs)
+        sequences, attention_mask, action_mask = (
+            self.generate_local(prompts, **generate_kwargs)
+            if self.vllm_engines is None
+            else self.generate_vllm(prompts, **generate_kwargs)
+        )
         generate_time = time.time() - start
+
         num_actions = action_mask.size(1)
         sequences_cpu, attention_mask_cpu, action_mask_cpu = (
             sequences.to("cpu"),
@@ -263,7 +289,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         }
 
         if self.strategy.args.perf:
-            batch_size = input_ids.size(0)
+            batch_size = 1 if isinstance(prompts, str) else len(prompts)
             info["generate_time"] = torch.full((batch_size,), generate_time, device=device)
             info["actor_time"] = torch.full((batch_size,), actor_time, device=device)
             info["wait_time"] = torch.full((batch_size,), wait_time, device=device)
@@ -286,6 +312,79 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         self.actor.train()  # reset model state
         return experience
+
+    def generate_local(self, prompts: List[str], **kwargs) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
+        return self.actor.generate(**inputs, **kwargs)
+
+    def generate_vllm(self, prompts: List[str], **kwargs) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        from vllm import SamplingParams
+
+        # round-robin load balance
+        rank = torch.distributed.get_rank()
+        llm = self.vllm_engines[rank % len(self.vllm_engines)]
+
+        sampling_params = SamplingParams(
+            temperature=kwargs.get("temperature", 1.0),
+            top_p=kwargs.get("top_p", 1.0),
+            top_k=kwargs.get("top_k", -1),
+            max_tokens=kwargs.get("max_new_tokens", 16),
+        )
+
+        # TODO: can't pass `max_length` to vLLM's tokenizer for input truncation, remove this once it is supported.
+        input_ids = self.tokenize_fn(prompts, self.prompt_max_len, device="cpu")["input_ids"]
+        assert self.tokenizer.padding_side == "left", f"tokenizer padding_size should be left"
+        pad_indices = (input_ids != self.tokenizer.pad_token_id).to(dtype=torch.int).argmax(dim=-1)
+        prompt_token_ids = []
+        for i, pad_index in enumerate(pad_indices.numpy()):
+            prompt_token_ids.append(input_ids[i][pad_index:].tolist())
+        outputs = ray.get(llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
+
+        # NOTE: concat all outputs to following format:
+        #
+        # | [PAD] [PAD] token token token | token token [EOS] [PAD] |
+        # | token token token token token | token token [EOS] [PAD] |
+        # | [PAD] [PAD] [PAD] token token | token token token [EOS] |
+        # |<---------- prompt ----------->|<-------- answer ------->|
+        max_input_len, max_output_len = 0, 0
+        for output in outputs:
+            # TODO: how to force vLLM generate at least one token?
+            if len(output.outputs[0].token_ids) == 0:
+                logging.warning(f"no output for prompt: {output.prompt}")
+                output.outputs[0].token_ids = [self.tokenizer.unk_token_id, self.tokenizer.eos_token_id]
+
+            max_input_len = max(max_input_len, len(output.prompt_token_ids))
+            max_output_len = max(max_output_len, len(output.outputs[0].token_ids))
+
+        pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
+        sequences = []
+        for output in outputs:
+            # left padding input
+            input_len = len(output.prompt_token_ids)
+            input_ids = [pad_token_id] * (max_input_len - input_len) + output.prompt_token_ids
+
+            # right padding output
+            output_len = len(output.outputs[0].token_ids)
+            output_ids = output.outputs[0].token_ids + [pad_token_id] * (max_output_len - output_len)
+            if output_ids[output_len - 1] != eos_token_id:
+                assert output_len == max_output_len
+                output_ids[-1] = eos_token_id
+
+            # concat input and output
+            sequences.append(input_ids + output_ids)
+
+        sequences = torch.tensor(sequences)
+        attention_mask = (sequences.ne(eos_token_id) & sequences.ne(pad_token_id)).to(dtype=torch.long)
+
+        # enforce last token before PAD token is EOS token.
+        seq_length = attention_mask.size(1)
+        eos_indices = seq_length - attention_mask.long().fliplr().argmax(dim=1, keepdim=True).clamp(min=1)
+        attention_mask.scatter_(dim=1, index=eos_indices, value=1)
+        sequences.scatter_(dim=1, index=eos_indices, value=eos_token_id)
+
+        action_seq = sequences[:, max_input_len:-1]
+        action_mask = action_seq.ne(eos_token_id) & action_seq.ne(pad_token_id)
+        return sequences.to("cuda"), attention_mask.to("cuda"), action_mask.to("cuda")
 
     def flush(self):
         "Ensure all experience has been send to critic"
