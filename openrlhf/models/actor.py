@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM, PreTrainedModel
 
 from .utils import log_probs_from_logits
 
@@ -25,14 +25,23 @@ class Actor(nn.Module):
         from_config=False,
         use_flash_attention_2=False,
         to_bettertransformer=False,
+        bf16=True,
     ) -> None:
         super().__init__()
-        attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
         if isinstance(pretrain_or_model, str):
+            attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
+
+            # Patch for https://github.com/huggingface/transformers/issues/28052
+            def _autoset_attn_implementation_monkeypatch(cls, config, *args, **kwargs):  # type: ignore
+                config._attn_implementation = attn_implementation
+                return config
+
+            PreTrainedModel._autoset_attn_implementation = classmethod(_autoset_attn_implementation_monkeypatch)
+
             if from_config:
                 config = AutoConfig.from_pretrained(
                     pretrain_or_model,
-                    torch_dtype="auto",
+                    torch_dtype=torch.bfloat16 if bf16 else "auto",
                     trust_remote_code=True,
                 )
                 self.model = AutoModelForCausalLM.from_config(
@@ -43,7 +52,7 @@ class Actor(nn.Module):
             else:
                 self.model = AutoModelForCausalLM.from_pretrained(
                     pretrain_or_model,
-                    torch_dtype="auto",
+                    torch_dtype=torch.bfloat16 if bf16 else "auto",
                     trust_remote_code=True,
                     attn_implementation=attn_implementation,
                 )

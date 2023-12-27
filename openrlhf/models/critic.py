@@ -3,7 +3,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
-from transformers import AutoConfig, AutoModel, AutoModelForCausalLM
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, PreTrainedModel
 
 
 class Critic(nn.Module):
@@ -18,15 +18,29 @@ class Critic(nn.Module):
     """
 
     def __init__(
-        self, pretrain_or_model, from_config=False, normalize_reward=True, use_flash_attention_2=False
+        self,
+        pretrain_or_model,
+        from_config=False,
+        normalize_reward=True,
+        use_flash_attention_2=False,
+        bf16=True,
     ) -> None:
         super().__init__()
+
         if isinstance(pretrain_or_model, str):
             attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
+
+            # Patch for https://github.com/huggingface/transformers/issues/28052
+            def _autoset_attn_implementation_monkeypatch(cls, config, *args, **kwargs):  # type: ignore
+                config._attn_implementation = attn_implementation
+                return config
+
+            PreTrainedModel._autoset_attn_implementation = classmethod(_autoset_attn_implementation_monkeypatch)
+
             if from_config:
                 config = AutoConfig.from_pretrained(
                     pretrain_or_model,
-                    torch_dtype="auto",
+                    torch_dtype=torch.bfloat16 if bf16 else "auto",
                     trust_remote_code=True,
                 )
                 self.model = AutoModelForCausalLM.from_config(
@@ -37,7 +51,7 @@ class Critic(nn.Module):
             else:
                 self.model = AutoModelForCausalLM.from_pretrained(
                     pretrain_or_model,
-                    torch_dtype="auto",
+                    torch_dtype=torch.bfloat16 if bf16 else "auto",
                     trust_remote_code=True,
                     attn_implementation=attn_implementation,
                 )

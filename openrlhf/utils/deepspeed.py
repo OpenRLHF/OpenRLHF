@@ -151,41 +151,15 @@ class DeepspeedStrategy(ABC):
         for arg in models_or_model_optim_pairs:
             if isinstance(arg, tuple):
                 assert len(arg) == 3, f'Expect (model, optimizer, scheduler) pair, got a tuple with size "{len(arg)}"'
-                ret.append(self.ds_init_train_model(*arg))
+                ret.append(self._ds_init_train_model(*arg))
             else:
-                ret.append(self.ds_init_eval_model(arg))
+                ret.append(self._ds_init_eval_model(arg))
 
         return ret[0] if len(ret) == 1 else ret
 
-    def ds_init_train_model(self, model, optim, scheduler):
+    def _ds_init_train_model(self, model, optim, scheduler):
         is_actor = isinstance(model, Actor)
-        stage = self.stage
-        # ZeRO3-based GPT generation is very slow in RLHF
-        # if self.is_rlhf and is_actor and stage == 3 and self.inference_tp_size <= 1:
-        #     stage = 2
-
-        # DS Config
-        ds_config = get_train_ds_config(
-            offload=False,
-            adam_offload=self.adam_offload,
-            stage=stage,
-            bf16=self.bf16,
-            max_norm=self.max_norm,
-            # hybrid_engine does not support a lot of models
-            enable_hybrid_engine=is_actor and self.inference_tp_size > 1 and stage == 3,
-            pin_parameters=True,
-            inference_tp_size=self.inference_tp_size,
-            tp_gather_partition_size=4,
-            max_out_tokens=self.max_out_tokens,
-            zpg=self.zpg,
-        )
-
-        ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
-        train_batch_size = self.train_batch_size
-        # corner case for ptx loss (backward twice)
-        if self.is_rlhf and is_actor and self.args.pretrain_data is not None:
-            train_batch_size *= 2
-        ds_config["train_batch_size"] = train_batch_size
+        ds_config = self.get_ds_train_config(is_actor)
 
         engine, optim, _, scheduler = deepspeed.initialize(
             model=model.model if is_actor else model,
@@ -202,30 +176,35 @@ class DeepspeedStrategy(ABC):
 
         return model, optim, scheduler
 
-    def ds_init_eval_model(self, model):
-        is_actor = isinstance(model, Actor)
-        stage = self.stage
-        offload = False
-        # No gradients
-        if stage != 3:
-            stage = 0
-        # Offload ema model
-        if getattr(model, "is_ema", None):
-            offload = True
-            stage = 0
-
+    def get_ds_train_config(self, is_actor):
         # DS Config
-        ds_config = get_eval_ds_config(
-            offload=offload,
-            stage=stage,
+        ds_config = get_train_ds_config(
+            offload=False,
+            adam_offload=self.adam_offload,
+            stage=self.stage,
             bf16=self.bf16,
-            enable_hybrid_engine=is_actor and self.inference_tp_size > 1 and stage == 3,
+            max_norm=self.max_norm,
+            # hybrid_engine does not support a lot of models
+            enable_hybrid_engine=False,
+            pin_parameters=True,
             inference_tp_size=self.inference_tp_size,
-            tp_gather_partition_size=self.inference_tp_size,
+            tp_gather_partition_size=4,
             max_out_tokens=self.max_out_tokens,
+            zpg=self.zpg,
         )
+
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
-        ds_config["train_batch_size"] = self.train_batch_size
+        train_batch_size = self.train_batch_size
+        # corner case for ptx loss (backward twice)
+        if self.is_rlhf and is_actor and self.args.pretrain_data is not None:
+            train_batch_size *= 2
+        ds_config["train_batch_size"] = train_batch_size
+
+        return ds_config
+
+    def _ds_init_eval_model(self, model):
+        is_actor = isinstance(model, Actor)
+        ds_config = self.get_ds_eval_config(is_ema=getattr(model, "is_ema", False))
 
         engine, *_ = deepspeed.initialize(
             model=model.model if is_actor else model,
@@ -238,6 +217,26 @@ class DeepspeedStrategy(ABC):
         else:
             model = engine
         return model
+
+    def get_ds_eval_config(self, is_ema=False):
+        if is_ema:
+            offload = True
+        else:
+            offload = False
+        # DS Config
+        ds_config = get_eval_ds_config(
+            offload=offload,
+            stage=self.stage if self.stage == 3 else 0,
+            bf16=self.bf16,
+            enable_hybrid_engine=False,
+            inference_tp_size=self.inference_tp_size,
+            tp_gather_partition_size=self.inference_tp_size,
+            max_out_tokens=self.max_out_tokens,
+        )
+        ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
+        ds_config["train_batch_size"] = self.train_batch_size
+
+        return ds_config
 
     def moving_average(self, model, model_ema, beta=0.992, device="cpu"):
         self.time_steps["ema"] += 1
