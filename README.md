@@ -37,6 +37,7 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and Huggin
 ## Features
 
 - Distributed [PPO based on Ray](./examples/scripts/train_ppo_llama_ray.sh). 
+- Support full RLHF fine-tuning of models with **over 70 billion parameters** using vLLM.
 - Support Multiple Reward models.
 - Support [Rejection Sampling](./examples/scripts/train_rejection_sampling_llama.sh).
 - Support [DPO (direct-preference-optimization)/IPO/cDPO](./examples/scripts/train_dpo_llama.sh).
@@ -50,10 +51,8 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and Huggin
 
 
 **TODO** 
-- **RLHF compatible with models larger than 100B using vLLM**
 - Allows saving and loading training checkpoints.
-- Integrates with the QLora.
-
+- Support Hybrid vLLM inference engine.
 
 Support Matrix
 
