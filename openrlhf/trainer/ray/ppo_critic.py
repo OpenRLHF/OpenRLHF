@@ -69,6 +69,7 @@ class CriticModelRayActor(BasePPORole):
             model_path,
             normalize_reward=strategy.args.normalize_reward,
             use_flash_attention_2=strategy.args.flash_attn,
+            bf16=strategy.args.bf16,
         )
         strategy.print(critic)
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
