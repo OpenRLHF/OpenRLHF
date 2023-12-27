@@ -226,18 +226,6 @@ pip install flash-attn==2.3.6
 # enjoy it!
 ```
 
-
-## References & Acknowledgements
-
-We would like to express our gratitude to the following projects and organizations for their contributions to the field of AI and NLP:
-
-- [Hugging Face Transformers ↗](https://github.com/huggingface/transformers)
-- [OpenAI GPT ↗](https://github.com/openai/gpt-3)
-- [LLaMA2 ↗](https://ai.meta.com/llama/)
-- [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
-- [Ray ↗](https://github.com/ray-project/ray)
-
-
 ## Join Us
 
 **How to Join?**
@@ -272,7 +260,18 @@ A big thank you to all our contributors! If you want to contribute, feel free to
   <img src="https://contrib.rocks/image?repo=openllmai/OpenRLHF" />
 </a>
 
+## References & Acknowledgements
+
+We would like to express our gratitude to the following projects and organizations for their contributions to the field of AI and NLP:
+
+- [Hugging Face Transformers ↗](https://github.com/huggingface/transformers)
+- [OpenAI GPT ↗](https://github.com/openai/gpt-3)
+- [LLaMA2 ↗](https://ai.meta.com/llama/)
+- [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
+- [Ray ↗](https://github.com/ray-project/ray)
+
 Our project would also like to thank [ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/Chat) and [DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat). In the early stages of the project, we referred to their code design.
+
 
 ## Citation
 ```
