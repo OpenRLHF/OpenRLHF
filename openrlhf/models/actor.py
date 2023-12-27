@@ -25,7 +25,7 @@ class Actor(nn.Module):
         from_config=False,
         use_flash_attention_2=False,
         to_bettertransformer=False,
-        bf16=True,
+        bf16=False,
     ) -> None:
         super().__init__()
         if isinstance(pretrain_or_model, str):
