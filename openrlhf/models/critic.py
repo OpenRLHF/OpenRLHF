@@ -24,7 +24,7 @@ class Critic(nn.Module):
         from_config=False,
         normalize_reward=True,
         use_flash_attention_2=False,
-        bf16=True,
+        bf16=False,
         ds_config=None,
     ) -> None:
         super().__init__()
