@@ -77,13 +77,13 @@ class RewardModel(nn.Module):
             self.model = pretrain_or_model
 
         # value head
-        self.value_head = nn.Linear(self.model.config.hidden_size, 1)
+        self.value_head = nn.Linear(self.model.config.hidden_size, 1, device="cuda")
         self.value_head.weight.data.normal_(mean=0.0, std=1 / (self.model.config.hidden_size + 1))
 
         # mean std
         self.normalize_reward = normalize_reward
-        self.register_buffer("mean", torch.zeros(1))
-        self.register_buffer("std", torch.ones(1))
+        self.register_buffer("mean", torch.zeros(1, device="cuda"))
+        self.register_buffer("std", torch.ones(1, device="cuda"))
 
     def forward(self, sequences: torch.LongTensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         outputs = self.model(sequences, attention_mask=attention_mask)

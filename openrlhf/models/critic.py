@@ -72,12 +72,12 @@ class Critic(nn.Module):
         else:
             self.model = pretrain_or_model
 
-        self.value_head = nn.Linear(self.model.config.hidden_size, 1)
+        self.value_head = nn.Linear(self.model.config.hidden_size, 1, device="cuda")
 
         # mean std
         self.normalize_reward = normalize_reward
-        self.register_buffer("mean", torch.zeros(1))
-        self.register_buffer("std", torch.ones(1))
+        self.register_buffer("mean", torch.zeros(1, device="cuda"))
+        self.register_buffer("std", torch.ones(1, device="cuda"))
 
     def forward(
         self,
