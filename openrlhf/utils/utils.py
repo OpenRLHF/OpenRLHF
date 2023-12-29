@@ -33,8 +33,6 @@ def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=
         tokenizer.pad_token_id = tokenizer.eos_token_id
         model.config.pad_token_id = tokenizer.pad_token_id
 
-    model.resize_token_embeddings(len(tokenizer))
-
     return tokenizer
 
 

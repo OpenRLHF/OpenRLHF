@@ -1,25 +1,23 @@
 set -x 
 export PATH=$HOME/.local/bin/:$PATH
 
-# use --flash_attn to support 4096 context length (2048 for prompts and 2048 for answers)
-
 ray job submit --address="http://127.0.0.1:8265" \
     --runtime-env-json='{"working_dir": "/openrlhf", "pip": "/openrlhf/requirements.txt"}' \
     --no-wait \
     -- python3 examples/train_ppo_ray.py \
     --ref_num_nodes 1 \
-    --ref_num_gpus_per_node 1 \
+    --ref_num_gpus_per_node 2 \
     --reward_num_nodes 1 \
-    --reward_num_gpus_per_node 1 \
+    --reward_num_gpus_per_node 2 \
     --critic_num_nodes 1 \
-    --critic_num_gpus_per_node 2 \
+    --critic_num_gpus_per_node 4 \
     --actor_num_nodes 1 \
     --actor_num_gpus_per_node 4 \
-    --pretrain codellama/CodeLlama-34b-Instruct-hf \
-    --reward_pretrain codellama/CodeLlama-34b-Instruct-hf \
-    --reward_model_path {reward_model_path} \
-    --sft_model_path {sft_model_path} \
-    --save_path /openrlhf/examples/test_scripts/ckpt/34b_codellama \
+    --vllm_num_engines 2 \
+    --vllm_tensor_parallel_size 2 \
+    --pretrain meta-llama/Llama-2-70b-chat-hf \
+    --reward_pretrain meta-llama/Llama-2-70b-chat-hf \
+    --save_path /mnt/bn/wuxibin/cache/ckpt/llama_70b \
     --micro_train_batch_size 1 \
     --train_batch_size 128 \
     --micro_rollout_batch_size 2 \
@@ -27,7 +25,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --max_epochs 1 \
     --prompt_max_len 1024 \
     --generate_max_len 1024 \
-    --zero_stage 2 \
+    --zero_stage 3 \
     --bf16 \
     --actor_learning_rate 5e-7 \
     --critic_learning_rate 9e-6 \

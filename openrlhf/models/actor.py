@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
 from transformers import AutoConfig, AutoModelForCausalLM, PreTrainedModel
+from transformers.deepspeed import HfDeepSpeedConfig
 
 from .utils import log_probs_from_logits
 
@@ -26,8 +27,10 @@ class Actor(nn.Module):
         use_flash_attention_2=False,
         to_bettertransformer=False,
         bf16=False,
+        ds_config=None,
     ) -> None:
         super().__init__()
+
         if isinstance(pretrain_or_model, str):
             attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
 
@@ -37,6 +40,13 @@ class Actor(nn.Module):
                 return config
 
             PreTrainedModel._autoset_attn_implementation = classmethod(_autoset_attn_implementation_monkeypatch)
+
+            # Note: dschf is defined in function scope to avoid global effects
+            # https://huggingface.co/docs/transformers/main_classes/deepspeed#nontrainer-deepspeed-integration
+            if ds_config is not None and ds_config["zero_optimization"]["stage"] == 3:
+                dschf = HfDeepSpeedConfig(ds_config)
+            else:
+                dschf = None
 
             if from_config:
                 config = AutoConfig.from_pretrained(

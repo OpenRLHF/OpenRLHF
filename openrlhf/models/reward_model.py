@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, PreTrainedModel
+from transformers.deepspeed import HfDeepSpeedConfig
 
 
 class RewardModel(nn.Module):
@@ -25,8 +26,10 @@ class RewardModel(nn.Module):
         use_flash_attention_2=False,
         to_bettertransformer=False,
         bf16=False,
+        ds_config=None,
     ) -> None:
         super().__init__()
+
         if isinstance(pretrain_or_model, str):
             attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
 
@@ -36,6 +39,13 @@ class RewardModel(nn.Module):
                 return config
 
             PreTrainedModel._autoset_attn_implementation = classmethod(_autoset_attn_implementation_monkeypatch)
+
+            # Note: dschf is defined in function scope to avoid global effects
+            # https://huggingface.co/docs/transformers/main_classes/deepspeed#nontrainer-deepspeed-integration
+            if ds_config is not None and ds_config["zero_optimization"]["stage"] == 3:
+                dschf = HfDeepSpeedConfig(ds_config)
+            else:
+                dschf = None
 
             if from_config:
                 config = AutoConfig.from_pretrained(
@@ -67,13 +77,13 @@ class RewardModel(nn.Module):
             self.model = pretrain_or_model
 
         # value head
-        self.value_head = nn.Linear(self.model.config.hidden_size, 1)
+        self.value_head = nn.Linear(self.model.config.hidden_size, 1, device="cuda")
         self.value_head.weight.data.normal_(mean=0.0, std=1 / (self.model.config.hidden_size + 1))
 
         # mean std
         self.normalize_reward = normalize_reward
-        self.register_buffer("mean", torch.zeros(1))
-        self.register_buffer("std", torch.ones(1))
+        self.register_buffer("mean", torch.zeros(1, device="cuda"))
+        self.register_buffer("std", torch.ones(1, device="cuda"))
 
     def forward(self, sequences: torch.LongTensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         outputs = self.model(sequences, attention_mask=attention_mask)

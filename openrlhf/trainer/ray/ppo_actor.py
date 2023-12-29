@@ -26,7 +26,6 @@ class ActorPPOTrainer(PPOTrainer):
         self,
         *args,
         vllm_engines: List = None,
-        param_metadata: Dict[str, Tuple] = None,
         critic_train_remote: bool = False,
         **kwargs,
     ):
@@ -34,12 +33,10 @@ class ActorPPOTrainer(PPOTrainer):
 
         Args:
             vllm_engines (List, optional): vllm engines for text generation, if not specified, generate text by actor model directly. Defaults to None.
-            param_metadata (Dict, optional): parameters' metadata for broadcasting parameters to vllm engines. Defaults to None.
             critic_train_remote (bool, optional): whether this actor should triger corresponding critic model training. Defaults to False.
         """
         super().__init__(*args, **kwargs)
         self.vllm_engines = vllm_engines
-        self.param_metada = param_metadata
         self.critic_train_remote = critic_train_remote
 
         self.experience_maker = RemoteExperienceMaker(
@@ -136,10 +133,9 @@ class ActorPPOTrainer(PPOTrainer):
 
             # Fire all vllm engines for broadcast
             if torch.distributed.get_rank() == 0:
+                shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
                 [
-                    engine.update_weight.remote(
-                        name, dtype=param.dtype, shape=self.param_metada[name], empty_cache=count == num_params
-                    )
+                    engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
                     for engine in self.vllm_engines
                 ]
 
@@ -159,16 +155,15 @@ class ActorModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, model_path):
         self._setup_distributed(strategy)
         actor, self.tokenizer = self._from_pretrained(
-            Actor, pretrain, model_path, use_flash_attention_2=strategy.args.flash_attn, bf16=strategy.args.bf16
+            Actor,
+            pretrain,
+            model_path,
+            use_flash_attention_2=strategy.args.flash_attn,
+            bf16=strategy.args.bf16,
+            ds_config=strategy.get_ds_train_config(is_actor=True),
         )
         strategy.print(actor)
         self.prepare_datasets()
-
-        # NOTE: For ZeRO-3, parameters are sharded and shapes will be torch.Size([]),
-        # so we keep a copy of metadata for broadcasting parameters to vllm engines.
-        self.param_metada = {}
-        for name, param in actor.model.named_parameters():
-            self.param_metada[name] = param.shape
 
         args = strategy.args
         # lora
@@ -292,7 +287,6 @@ class ActorModelRayActor(BasePPORole):
             critic_scheduler=None,
             reward_fn=reward_fn,
             vllm_engines=vllm_engines,
-            param_metadata=self.param_metada,
             max_epochs=args.max_epochs,
             micro_train_batch_size=args.micro_train_batch_size,
             micro_rollout_batch_size=args.micro_rollout_batch_size,
