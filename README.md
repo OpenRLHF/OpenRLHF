@@ -57,7 +57,7 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and Huggin
 Support Matrix
 
 
-|        | Best Hyperparameters  | Ray  | 34B Full Tuning with 4 A100   | 7B Full Tuning with 1 A100  | 7B Full Tuning with 4 RTX4090 |
+|        | Best Hyperparameters  | Ray  | 34B Full Tuning with 4 A100   | 70B+ Full Tuning with 16 A100  | 7B Full Tuning with 4 RTX4090 |
 |  ----  | ----  |  ----  | ----  | ----  | ----  |  
 | OpenRLHF  | ✔ | ✔  | ✔ | ✔ | ✔ |
 | DeepSpeedChat  | ✖️ | ✖️  | ✖️ | ✖️ | ✖️ |
