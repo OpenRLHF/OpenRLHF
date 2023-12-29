@@ -30,7 +30,8 @@ read -r -d '' training_commands <<EOF
     --actor_init_on_gpu \
     --adam_offload \
     --flash_attn \
-    --gradient_checkpointing
+    --gradient_checkpointing \
+    --save_hf_model
 EOF
     # --wandb [WANDB_TOKENS]
     # --flash_attn, there is a bug for micro_rollout_batch_size >= 2
