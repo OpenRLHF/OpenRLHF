@@ -37,16 +37,16 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 ## Features
 
 - Distributed [PPO based on Ray](./examples/scripts/train_ppo_llama_ray.sh). 
-- Support full RLHF fine-tuning of models with [over 70 billion parameters using vLLM](./examples/scripts/train_ppo_llama_ray_70b.sh).
-- Support Multiple Reward models.
+- Support full RLHF fine-tuning of models with [over 70 billion parameters](./examples/scripts/train_ppo_llama_ray_70b.sh).
+- Support vLLM generation acceleration in RLHF (--vllm_num_engines).
+- Support multiple reward models.
 - Support [DPO (direct-preference-optimization)/IPO/cDPO](./examples/scripts/train_dpo_llama.sh).
 - Support [Rejection Sampling](./examples/scripts/train_rejection_sampling_llama.sh).
 - Support [Conditional Alignment](./examples/scripts/train_conditional_llama.sh) (https://arxiv.org/abs/2308.12050).
 - Support [top chinese models](https://github.com/OpenLLMAI/OpenRLHF/issues/116).
-- Multi-nodes [training scripts](./examples/scripts/train_llama_slurm.sh) for Slurm.
 - Support Wandb log (--wandb).
 - Support FlashAttention2 (--flash_attn).
-- Support [GPT4 evaluation](./evaluation/gpt4/README.md) \& PPO vs SFT <a href="./docs/ppo_examples.md">examples</a>
+- Multi-nodes [training scripts](./examples/scripts/train_llama_slurm.sh) for Slurm.
 - Pre-trained 7B/13B llama2 [checkpoints](https://huggingface.co/OpenLLMAI/openrlhf_checkpoint)
 
 
