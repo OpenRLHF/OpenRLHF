@@ -1,8 +1,6 @@
 set -x 
 export PATH=$HOME/.local/bin/:$PATH
 
-# use --flash_attn to support 4096 context length (2048 for prompts and 2048 for answers)
-
 ray job submit --address="http://127.0.0.1:8265" \
     --runtime-env-json='{"working_dir": "/openrlhf", "pip": "/openrlhf/requirements.txt"}' \
     --no-wait \
@@ -39,4 +37,5 @@ ray job submit --address="http://127.0.0.1:8265" \
     --normalize_reward \
     --actor_init_on_gpu \
     --adam_offload \
+    --flash_attn \
     --gradient_checkpointing

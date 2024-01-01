@@ -92,6 +92,7 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --normalize_reward \
     --actor_init_on_gpu \
     --adam_offload \
+    --flash_attn \
     --gradient_checkpointing \
     --use_wandb {wandb_token} &>> ${JOBLOG}
 
