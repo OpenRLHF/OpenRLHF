@@ -93,11 +93,6 @@ class ActorPPOTrainer(PPOTrainer):
 
             ray.get(refs)
 
-        # TODO: remove this once we refactor actor/critic/reward
-        # class to load model from hugging face format directly.
-        if self.vllm_engines is not None and self.strategy.args.sft_model_path:
-            self._broadcast_to_vllm()
-
         torch.distributed.barrier()
 
     def ppo_train(self):

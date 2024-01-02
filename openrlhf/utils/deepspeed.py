@@ -279,7 +279,7 @@ class DeepspeedStrategy(ABC):
 
         if self.stage != 3:
             if self.is_rank_0():
-                model.save_pretrained(output_dir, **kwargs)
+                model_to_save.save_pretrained(output_dir, **kwargs)
         else:
             output_state_dict = {}
             # gather parameters
@@ -293,11 +293,10 @@ class DeepspeedStrategy(ABC):
                 for k, v in model_to_save.named_buffers():
                     vv = v.data.cpu()
                     output_state_dict[k] = vv
-                model.save_pretrained(output_dir, state_dict=output_state_dict, **kwargs)
+                model_to_save.save_pretrained(output_dir, state_dict=output_state_dict, **kwargs)
 
         if self.is_rank_0():
             # save config
-            model_to_save = self._unwrap_model(model)
             output_config_file = os.path.join(output_dir, "config.json")
             model_to_save.config.to_json_file(output_config_file)
             # save tokenizer
