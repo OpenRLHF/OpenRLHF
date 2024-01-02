@@ -1,11 +1,14 @@
-import logging
 from typing import Optional
 
 import torch
 import torch.nn as nn
-from peft import LoraConfig, get_peft_model
 from transformers import AutoConfig, AutoModel
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
+from transformers.deepspeed import HfDeepSpeedConfig
+
+from openrlhf.utils.logging import init_logger
+
+logger = init_logger(__name__)
 
 
 # Construct transformer with a value head for sequence classification.
@@ -13,31 +16,35 @@ from transformers.dynamic_module_utils import get_class_from_dynamic_module
 def get_llm_for_sequence_classification(
     model_name_or_path: str,
     model_type: str,
-    num_labels=1,
+    bf16=True,
     normalize_reward=False,
     use_flash_attention_2=False,
+    ds_config: dict = None,
     **kwargs,
-):
+) -> nn.Module:
     """Get transformer with a sequence classification head on top (linear layer).
 
     Args:
-        model_name_or_path (str): _description_
-        model_type (str): 'critic' or 'reward'.
-        config (_type_, optional): _description_. Defaults to None.
-        num_labels (int, optional): _description_. Defaults to 1.
-        use_flash_attention_2 (bool, optional): _description_. Defaults to False.
+        model_name_or_path (str): Path to pretrained model.
+        model_type (str): Either "reward" or "critic.
+        bf16 (bool, optional): Whether enable bfloat16. Defaults to True.
+        normalize_reward (bool, optional): Whether normalize reward. Defaults to False.
+        use_flash_attention_2 (bool, optional): Whether use Flash Attention 2.0. Defaults to False.
+        ds_config (dict, optional): Deepspeed config, used to automatically splitting the model onto
+            multiple gpus during from_pretrained when ZeRO-3 enabled. Defaults to None.
 
     Returns:
-        _type_: _description_
+        nn.Module: pretrained transformer model.
     """
     assert (
         model_type == "critic" or model_type == "reward"
     ), f"invalid model_type: {model_type}, should be critic or reward."
 
-    if config is None:
-        config, kwargs = AutoConfig.from_pretrained(
-            model_name_or_path, num_labels=num_labels, return_unused_kwargs=True, trust_remote_code=True
-        )
+    config = AutoConfig.from_pretrained(
+        model_name_or_path, trust_remote_code=True, torch_dtype=torch.bfloat16 if bf16 else "auto"
+    )
+    config.normalize_reward = normalize_reward
+    config._attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
 
     try:
         base_class = AutoModel._model_mapping[type(config)]
@@ -64,7 +71,7 @@ def get_llm_for_sequence_classification(
                 auto_model_name = config.auto_map["AutoModel"].split(".")[1]
             pretrained_model_name = causal_model_name.split("For")[0] + "PreTrainedModel"
 
-        print(f"BASE_MODEL_CLASS: {auto_model_name}, PRETRAINED_MODEL_CLASS: {pretrained_model_name}")
+        logger.info(f"BASE_MODEL_CLASS: {auto_model_name}, PRETRAINED_MODEL_CLASS: {pretrained_model_name}")
 
         base_pretrained_class = get_class_from_dynamic_module(
             f"{module_file}.{pretrained_model_name}", model_name_or_path, **kwargs
@@ -75,14 +82,18 @@ def get_llm_for_sequence_classification(
         else:
             cls_class = _get_critic_model(base_pretrained_class, base_class)
 
-    config.normalize_reward = normalize_reward
+    # Note: dschf is defined in function scope to avoid global effects
+    # https://huggingface.co/docs/transformers/main_classes/deepspeed#nontrainer-deepspeed-integration
+    if ds_config is not None and ds_config["zero_optimization"]["stage"] == 3:
+        dschf = HfDeepSpeedConfig(ds_config)
+    else:
+        dschf = None
 
     model = cls_class.from_pretrained(
         model_name_or_path,
         config=config,
         trust_remote_code=True,
-        torch_dtype=torch.bfloat16,
-        use_flash_attention_2=use_flash_attention_2,
+        torch_dtype=torch.bfloat16 if bf16 else "auto",
     )
 
     return model
@@ -94,7 +105,6 @@ def _get_reward_model(base_pretrained_model, base_llm_model):
 
         def __init__(self, config: AutoConfig):
             super().__init__(config)
-            self.num_labels = config.num_labels
             setattr(self, self.base_model_prefix, base_llm_model(config))
 
             self.value_head = nn.Linear(self.model.config.hidden_size, 1)
@@ -104,9 +114,17 @@ def _get_reward_model(base_pretrained_model, base_llm_model):
             self.normalize_reward = config.normalize_reward
             self.register_buffer("mean", torch.zeros(1))
             self.register_buffer("std", torch.ones(1))
+            logger.info(f"normalize_reward: {self.normalize_reward}, mean: {self.mean}, std: {self.std}")
 
             # Initialize weights and apply final processing
             self.post_init()
+
+        @classmethod
+        def _autoset_attn_implementation(cls, config, *args, **kwargs):
+            logger.info(
+                "Monkey patch for Flash Attention, see https://github.com/huggingface/transformers/issues/28052"
+            )
+            return config
 
         def forward(
             self,
@@ -132,17 +150,6 @@ def _get_reward_model(base_pretrained_model, base_llm_model):
                     reward = (reward - self.mean) / self.std
             return reward
 
-        def lora_enable(self, lora_rank=0, lora_train_bias="none"):
-            if lora_rank > 0:
-                lora_config = LoraConfig(
-                    inference_mode=False,
-                    r=lora_rank,
-                    lora_alpha=16,
-                    lora_dropout=0.05,
-                    bias=lora_train_bias,
-                )
-                self.model = get_peft_model(self.model, lora_config)
-
     return LLMForSequenceClassification
 
 
@@ -152,7 +159,6 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
 
         def __init__(self, config: AutoConfig):
             super().__init__(config)
-            self.num_labels = config.num_labels
             setattr(self, self.base_model_prefix, base_llm_model(config))
 
             self.value_head = nn.Linear(self.model.config.hidden_size, 1)
@@ -162,9 +168,17 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
             self.normalize_reward = config.normalize_reward
             self.register_buffer("mean", torch.zeros(1))
             self.register_buffer("std", torch.ones(1))
+            logger.info(f"normalize_reward: {self.normalize_reward}, mean: {self.mean}, std: {self.std}")
 
             # Initialize weights and apply final processing
             self.post_init()
+
+        @classmethod
+        def _autoset_attn_implementation(cls, config, *args, **kwargs):
+            logger.info(
+                "Monkey patch for Flash Attention, see https://github.com/huggingface/transformers/issues/28052"
+            )
+            return config
 
         def forward(
             self,
@@ -184,16 +198,5 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
             if self.normalize_reward:
                 values = (values - self.mean) / self.std
             return values[:, -num_actions:]
-
-        def lora_enable(self, lora_rank=0, lora_train_bias="none"):
-            if lora_rank > 0:
-                lora_config = LoraConfig(
-                    inference_mode=False,
-                    r=lora_rank,
-                    lora_alpha=16,
-                    lora_dropout=0.05,
-                    bias=lora_train_bias,
-                )
-                self.model = get_peft_model(self.model, lora_config)
 
     return LLMForSequenceClassification
