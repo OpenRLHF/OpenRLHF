@@ -324,14 +324,6 @@ class ActorModelRayActor(BasePPORole):
         # save model checkpoint after fitting on only rank0
         self.strategy.save_model(
             self.ema_model if args.enable_ema else self.actor,
-            args.save_path + "/ppo_model.pt",
-            only_rank0=True,
+            self.tokenizer,
+            args.save_path,
         )
-
-        if args.save_hf_model:
-            os.makedirs(args.save_path + "/ppo_hf", exist_ok=True)
-            self.strategy.save_hf_format(
-                self.ema_model if args.enable_ema else self.actor,
-                self.tokenizer,
-                args.save_path + "/ppo_hf",
-            )

@@ -7,7 +7,7 @@ from datetime import datetime
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import RewardDataset
-from openrlhf.models import get_llm_for_sequence_classification
+from openrlhf.models import get_llm_for_sequence_regression
 from openrlhf.models.utils import lora_enable
 from openrlhf.trainer import RewardModelTrainer
 from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
@@ -21,8 +21,12 @@ def train(args):
     # configure model
     # load huggingface model/config
     from_config = bool(args.load_model or args.load_checkpoint)
-    model = get_llm_for_sequence_classification(
-        args.pretrain, "reward", use_flash_attention_2=args.flash_attn, bf16=args.bf16
+    model = get_llm_for_sequence_regression(
+        args.pretrain,
+        "reward",
+        use_flash_attention_2=args.flash_attn,
+        bf16=args.bf16,
+        ds_config=strategy.get_ds_train_config(is_actor=False),
     )
 
     # configure tokenizer
@@ -110,7 +114,7 @@ def train(args):
     trainer.fit(args)
 
     # save model checkpoint after fitting on only rank0
-    strategy.save_model(model, args.save_path + "/rm_model.pt", only_rank0=True)
+    strategy.save_model(model, tokenizer, args.save_path)
 
 
 if __name__ == "__main__":

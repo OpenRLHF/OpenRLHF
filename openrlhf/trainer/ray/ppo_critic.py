@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
-from openrlhf.models import Actor, get_llm_for_sequence_classification
+from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.models.utils import lora_enable
 from openrlhf.trainer import PPOTrainer
 from openrlhf.trainer.ppo_utils import Experience
@@ -64,7 +64,7 @@ class CriticPPOTrainer(PPOTrainer):
 class CriticModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps):
         self._setup_distributed(strategy)
-        critic = get_llm_for_sequence_classification(
+        critic = get_llm_for_sequence_regression(
             pretrain,
             "critic",
             normalize_reward=strategy.args.normalize_reward,

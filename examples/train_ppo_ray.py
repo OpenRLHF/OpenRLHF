@@ -245,7 +245,6 @@ if __name__ == "__main__":
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False)
     parser.add_argument("--actor_init_on_gpu", action="store_true", default=False)
-    parser.add_argument("--save_hf_model", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False)
     parser.add_argument("--bos_token", type=str, default=None)
     parser.add_argument("--eos_token", type=str, default=None)

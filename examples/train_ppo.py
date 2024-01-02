@@ -9,7 +9,7 @@ import torch
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import PromptDataset, SFTDataset
-from openrlhf.models import Actor, get_llm_for_sequence_classification
+from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.models.utils import lora_enable
 from openrlhf.trainer import PPOTrainer
 from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
@@ -29,14 +29,14 @@ def train(args):
     if args.actor_init_on_gpu:
         actor = actor.to(torch.cuda.current_device())
 
-    critic = get_llm_for_sequence_classification(
+    critic = get_llm_for_sequence_regression(
         args.reward_pretrain,
         "critic",
         normalize_reward=args.normalize_reward,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
     )
-    reward_model = get_llm_for_sequence_classification(
+    reward_model = get_llm_for_sequence_regression(
         args.reward_pretrain,
         "reward",
         reward_from_config,
@@ -224,17 +224,9 @@ def train(args):
     # save model checkpoint after fitting on only rank0
     strategy.save_model(
         ema_model if args.enable_ema else actor,
-        args.save_path + "/ppo_model.pt",
-        only_rank0=True,
+        tokenizer,
+        args.save_path,
     )
-
-    if args.save_hf_model:
-        os.makedirs(args.save_path + "/ppo_hf", exist_ok=True)
-        strategy.save_hf_format(
-            ema_model if args.enable_ema else actor,
-            tokenizer,
-            args.save_path + "/ppo_hf",
-        )
 
 
 if __name__ == "__main__":
@@ -300,7 +292,6 @@ if __name__ == "__main__":
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False)
     parser.add_argument("--actor_init_on_gpu", action="store_true", default=False)
-    parser.add_argument("--save_hf_model", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False)
 
     parser.add_argument("--bos_token", type=str, default=None)

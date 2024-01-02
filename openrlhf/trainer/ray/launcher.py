@@ -8,7 +8,7 @@ import torch
 from ray.util.placement_group import PlacementGroup, placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from openrlhf.models import Actor, get_llm_for_sequence_classification
+from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.utils import DeepspeedStrategy, get_tokenizer
 
 
@@ -91,7 +91,7 @@ class ReferenceModelRayActor(BasePPORole):
 class RewardModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
         self._setup_distributed(strategy)
-        model = get_llm_for_sequence_classification(
+        model = get_llm_for_sequence_regression(
             pretrain,
             "reward",
             normalize_reward=strategy.args.normalize_reward,

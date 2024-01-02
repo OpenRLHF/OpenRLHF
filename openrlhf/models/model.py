@@ -13,7 +13,7 @@ logger = init_logger(__name__)
 
 # Construct transformer with a value head for sequence classification.
 # https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L1310
-def get_llm_for_sequence_classification(
+def get_llm_for_sequence_regression(
     model_name_or_path: str,
     model_type: str,
     *,
@@ -116,7 +116,6 @@ def _get_reward_model(base_pretrained_model, base_llm_model):
             self.normalize_reward = config.normalize_reward
             self.register_buffer("mean", torch.zeros(1))
             self.register_buffer("std", torch.ones(1))
-            logger.info(f"normalize_reward: {self.normalize_reward}, mean: {self.mean}, std: {self.std}")
 
         @classmethod
         def _autoset_attn_implementation(cls, config, *args, **kwargs):
@@ -167,7 +166,6 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
             self.normalize_reward = config.normalize_reward
             self.register_buffer("mean", torch.zeros(1))
             self.register_buffer("std", torch.ones(1))
-            logger.info(f"normalize_reward: {self.normalize_reward}, mean: {self.mean}, std: {self.std}")
 
         @classmethod
         def _autoset_attn_implementation(cls, config, *args, **kwargs):
@@ -179,8 +177,8 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
         def forward(
             self,
             input_ids: torch.LongTensor = None,
-            attention_mask: Optional[torch.Tensor] = None,
             action_mask: Optional[torch.Tensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
         ) -> torch.Tensor:
             outputs = getattr(self, self.base_model_prefix)(
                 input_ids,
