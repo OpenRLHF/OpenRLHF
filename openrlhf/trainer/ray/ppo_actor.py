@@ -11,7 +11,8 @@ import torch
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import PromptDataset, SFTDataset
-from openrlhf.models import Actor, Critic, RewardModel
+from openrlhf.models import Actor
+from openrlhf.models.utils import lora_enable
 from openrlhf.trainer import PPOTrainer
 from openrlhf.trainer.ppo_utils import Experience, RemoteExperienceMaker
 from openrlhf.utils import DeepspeedStrategy, blending_datasets, get_tokenizer
@@ -152,16 +153,18 @@ class ActorPPOTrainer(PPOTrainer):
 
 @ray.remote(num_gpus=1)
 class ActorModelRayActor(BasePPORole):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, model_path):
+    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
         self._setup_distributed(strategy)
-        actor, self.tokenizer = self._from_pretrained(
-            Actor,
+        actor = Actor(
             pretrain,
-            model_path,
             use_flash_attention_2=strategy.args.flash_attn,
             bf16=strategy.args.bf16,
             ds_config=strategy.get_ds_train_config(is_actor=True),
         )
+
+        # configure tokenizer
+        self.tokenizer = get_tokenizer(pretrain, actor.model, "left", strategy)
+
         strategy.print(actor)
         self.prepare_datasets()
 
@@ -169,7 +172,7 @@ class ActorModelRayActor(BasePPORole):
         # lora
         if args.lora_rank > 0:
             strategy.print("lora_enable")
-            actor.lora_enable(args.lora_rank)
+            actor.model = lora_enable(actor.model, args.lora_rank)
 
         if args.enable_ema:
             ema_model = deepcopy(actor)

@@ -7,7 +7,8 @@ from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
-from openrlhf.models import Actor, Critic, RewardModel
+from openrlhf.models import Actor, get_llm_for_sequence_classification
+from openrlhf.models.utils import lora_enable
 from openrlhf.trainer import PPOTrainer
 from openrlhf.trainer.ppo_utils import Experience
 from openrlhf.utils import DeepspeedStrategy, blending_datasets, get_tokenizer
@@ -61,12 +62,11 @@ class CriticPPOTrainer(PPOTrainer):
 
 @ray.remote(num_gpus=1)
 class CriticModelRayActor(BasePPORole):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, model_path, max_steps):
+    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps):
         self._setup_distributed(strategy)
-        critic, tokenizer = self._from_pretrained(
-            Critic,
+        critic = get_llm_for_sequence_classification(
             pretrain,
-            model_path,
+            "critic",
             normalize_reward=strategy.args.normalize_reward,
             use_flash_attention_2=strategy.args.flash_attn,
             bf16=strategy.args.bf16,
@@ -80,7 +80,7 @@ class CriticModelRayActor(BasePPORole):
         # lora
         if args.lora_rank > 0:
             strategy.print("lora_enable")
-            critic.lora_enable(args.lora_rank)
+            critic = lora_enable(critic, args.lora_rank)
 
         # configure optimizer
         critic_optim = strategy.create_optimizer(
@@ -122,7 +122,6 @@ class CriticModelRayActor(BasePPORole):
             micro_train_batch_size=args.micro_train_batch_size,
             micro_rollout_batch_size=args.micro_rollout_batch_size,
             gradient_checkpointing=args.gradient_checkpointing,
-            tokenizer=tokenizer,
             prompt_max_len=args.prompt_max_len,
             value_clip=args.value_clip,
             eps_clip=args.eps_clip,

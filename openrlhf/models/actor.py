@@ -4,7 +4,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from optimum.bettertransformer import BetterTransformer
-from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
 from transformers import AutoConfig, AutoModelForCausalLM, PreTrainedModel
 from transformers.deepspeed import HfDeepSpeedConfig
 
@@ -155,15 +154,3 @@ class Actor(nn.Module):
 
     def print_trainable_parameters(self):
         self.model.print_trainable_parameters()
-
-    def lora_enable(self, lora_rank=0, lora_train_bias="none"):
-        if lora_rank > 0:
-            lora_config = LoraConfig(
-                task_type=TaskType.CAUSAL_LM,
-                inference_mode=False,
-                r=lora_rank,
-                lora_alpha=16,
-                lora_dropout=0.05,
-                bias=lora_train_bias,
-            )
-            self.model = get_peft_model(self.model, lora_config)

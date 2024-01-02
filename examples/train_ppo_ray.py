@@ -106,15 +106,8 @@ def train(args):
 
     # multiple reward models
     reward_pretrains = args.reward_pretrain.split(",")
-    reward_model_paths = (
-        args.reward_model_path.split(",") if args.reward_model_path else [None] * len(reward_pretrains)
-    )
-    assert len(reward_model_paths) == len(
-        reward_pretrains
-    ), f"mismatch reward_pretrain and reward_model_path, must be same size"
-
     reward_models = []
-    for _ in reward_model_paths:
+    for _ in reward_pretrains:
         reward_models.append(
             PPORayActorGroup(
                 args.reward_num_nodes,
@@ -127,10 +120,10 @@ def train(args):
 
     # init reference/reward/actor model
     refs = []
-    refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.pretrain, args.sft_model_path))
-    refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.pretrain, args.sft_model_path))
-    for reward_model, reward_pretrain, reward_model_path in zip(reward_models, reward_pretrains, reward_model_paths):
-        refs.extend(reward_model.async_init_model_from_pretrained(strategy, reward_pretrain, reward_model_path))
+    refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.pretrain))
+    refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.pretrain))
+    for reward_model, reward_pretrain in zip(reward_models, reward_pretrains):
+        refs.extend(reward_model.async_init_model_from_pretrained(strategy, reward_pretrain))
 
     # init vLLM engine for text generation
     vllm_engines = None
@@ -151,9 +144,7 @@ def train(args):
     # critic scheduler initialization depends on max_step, so we have to init critic after actor
     # TODO: use first reward model as critic model
     max_steps = ray.get(actor_model._actor_handlers[0].max_steps.remote())
-    refs.extend(
-        critic_model.async_init_model_from_pretrained(strategy, reward_pretrains[0], reward_model_paths[0], max_steps)
-    )
+    refs.extend(critic_model.async_init_model_from_pretrained(strategy, reward_pretrains[0], max_steps))
     ray.get(refs)
 
     # train actor and critic mdoel
@@ -217,8 +208,6 @@ if __name__ == "__main__":
     )
     parser.add_argument("--pretrain", type=str, default=None)
     parser.add_argument("--reward_pretrain", type=str, default=None)
-    parser.add_argument("--reward_model_path", type=str, default=None)
-    parser.add_argument("--sft_model_path", type=str, default=None)
     parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--num_episodes", type=int, default=1)
     parser.add_argument("--rollout_batch_size", type=int, default=512)

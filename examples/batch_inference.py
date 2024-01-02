@@ -8,7 +8,7 @@ from torch import distributed as dist
 from tqdm import tqdm
 
 from openrlhf.datasets import PromptDataset, SFTDataset
-from openrlhf.models import Actor, RewardModel
+from openrlhf.models import Actor, get_llm_for_sequence_classification
 from openrlhf.utils import blending_datasets, get_processor, get_strategy, get_tokenizer
 
 
@@ -134,9 +134,9 @@ def batch_rm_inference(args):
     # configure model
     # load huggingface model/config
     from_config = bool(args.load_model)
-    model = RewardModel(
+    model = get_llm_for_sequence_classification(
         args.pretrain,
-        from_config,
+        "reward",
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
     )

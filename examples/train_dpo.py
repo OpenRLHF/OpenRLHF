@@ -9,6 +9,7 @@ from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import RewardDataset
 from openrlhf.models import Actor
+from openrlhf.models.utils import lora_enable
 from openrlhf.trainer import DPOTrainer
 from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
@@ -35,7 +36,7 @@ def train(args):
 
     # lora
     if args.lora_rank > 0:
-        model.lora_enable(args.lora_rank)
+        model = lora_enable(model, args.lora_rank)
 
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)

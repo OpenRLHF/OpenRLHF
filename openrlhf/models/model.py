@@ -16,6 +16,7 @@ logger = init_logger(__name__)
 def get_llm_for_sequence_classification(
     model_name_or_path: str,
     model_type: str,
+    *,
     bf16=True,
     normalize_reward=False,
     use_flash_attention_2=False,
@@ -74,9 +75,9 @@ def get_llm_for_sequence_classification(
         logger.info(f"BASE_MODEL_CLASS: {auto_model_name}, PRETRAINED_MODEL_CLASS: {pretrained_model_name}")
 
         base_pretrained_class = get_class_from_dynamic_module(
-            f"{module_file}.{pretrained_model_name}", model_name_or_path, **kwargs
+            f"{module_file}.{pretrained_model_name}", model_name_or_path
         )
-        base_class = get_class_from_dynamic_module(f"{module_file}.{auto_model_name}", model_name_or_path, **kwargs)
+        base_class = get_class_from_dynamic_module(f"{module_file}.{auto_model_name}", model_name_or_path)
         if model_type == "reward":
             cls_class = _get_reward_model(base_pretrained_class, base_class)
         else:
@@ -94,6 +95,7 @@ def get_llm_for_sequence_classification(
         config=config,
         trust_remote_code=True,
         torch_dtype=torch.bfloat16 if bf16 else "auto",
+        **kwargs,
     )
 
     return model
@@ -115,9 +117,6 @@ def _get_reward_model(base_pretrained_model, base_llm_model):
             self.register_buffer("mean", torch.zeros(1))
             self.register_buffer("std", torch.ones(1))
             logger.info(f"normalize_reward: {self.normalize_reward}, mean: {self.mean}, std: {self.std}")
-
-            # Initialize weights and apply final processing
-            self.post_init()
 
         @classmethod
         def _autoset_attn_implementation(cls, config, *args, **kwargs):
@@ -169,9 +168,6 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
             self.register_buffer("mean", torch.zeros(1))
             self.register_buffer("std", torch.ones(1))
             logger.info(f"normalize_reward: {self.normalize_reward}, mean: {self.mean}, std: {self.std}")
-
-            # Initialize weights and apply final processing
-            self.post_init()
 
         @classmethod
         def _autoset_attn_implementation(cls, config, *args, **kwargs):

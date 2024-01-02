@@ -4,6 +4,7 @@ import loralib as lora
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
 
 
 def compute_approx_kl(
@@ -102,3 +103,18 @@ def convert_to_lora(
                 fan_in_fan_out=fan_in_fan_out,
                 merge_weights=merge_weights,
             )
+
+
+def lora_enable(model: nn.Module, lora_rank=0, lora_train_bias="none"):
+    if lora_rank > 0:
+        lora_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            inference_mode=False,
+            r=lora_rank,
+            lora_alpha=16,
+            lora_dropout=0.05,
+            bias=lora_train_bias,
+        )
+        model = get_peft_model(model, lora_config)
+
+    return model

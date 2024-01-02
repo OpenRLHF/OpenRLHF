@@ -9,7 +9,8 @@ import torch
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import PromptDataset, SFTDataset
-from openrlhf.models import Actor, Critic, RewardModel
+from openrlhf.models import Actor, get_llm_for_sequence_classification
+from openrlhf.models.utils import lora_enable
 from openrlhf.trainer import PPOTrainer
 from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
@@ -28,11 +29,16 @@ def train(args):
     if args.actor_init_on_gpu:
         actor = actor.to(torch.cuda.current_device())
 
-    critic = Critic(
-        args.reward_pretrain, True, args.normalize_reward, use_flash_attention_2=args.flash_attn, bf16=args.bf16
-    )
-    reward_model = RewardModel(
+    critic = get_llm_for_sequence_classification(
         args.reward_pretrain,
+        "critic",
+        normalize_reward=args.normalize_reward,
+        use_flash_attention_2=args.flash_attn,
+        bf16=args.bf16,
+    )
+    reward_model = get_llm_for_sequence_classification(
+        args.reward_pretrain,
+        "reward",
         reward_from_config,
         args.normalize_reward,
         use_flash_attention_2=args.flash_attn,
@@ -66,8 +72,8 @@ def train(args):
     # lora
     if args.lora_rank > 0:
         strategy.print("lora_enable")
-        actor.lora_enable(args.lora_rank)
-        critic.lora_enable(args.lora_rank)
+        actor.model = lora_enable(actor.model, args.lora_rank)
+        critic = lora_enable(critic, args.lora_rank)
 
     if args.enable_ema:
         ema_model = deepcopy(actor)

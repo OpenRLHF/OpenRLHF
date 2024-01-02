@@ -8,7 +8,7 @@ import torch
 from ray.util.placement_group import PlacementGroup, placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from openrlhf.models import Actor, Critic, RewardModel
+from openrlhf.models import Actor, get_llm_for_sequence_classification
 from openrlhf.utils import DeepspeedStrategy, get_tokenizer
 
 
@@ -55,32 +55,16 @@ class BasePPORole(DistributedTorchRayActor):
         self.strategy = strategy
         strategy.setup_distributed()
 
-    def _from_pretrained(self, model_type, pretrain, model_path, **kwargs):
-        # load huggingface model/config
-        from_config = bool(model_path)
-        model = model_type(pretrain, from_config, **kwargs)
-
-        # configure tokenizer
-        tokenizer = get_tokenizer(pretrain, model.model, "left", self.strategy)
-
-        # load PyTorch model
-        if model_path:
-            self.strategy.load_model(model, model_path)
-
-        return model, tokenizer
-
     def init_model_from_pretrained(self, *args, **kwargs):
         raise NotImplementedError()
 
 
 @ray.remote(num_gpus=1)
 class ReferenceModelRayActor(BasePPORole):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, model_path):
+    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
         self._setup_distributed(strategy)
-        model, _ = self._from_pretrained(
-            Actor,
+        model = Actor(
             pretrain,
-            model_path,
             use_flash_attention_2=strategy.args.flash_attn,
             bf16=strategy.args.bf16,
             ds_config=strategy.get_ds_eval_config(),
@@ -105,12 +89,11 @@ class ReferenceModelRayActor(BasePPORole):
 
 @ray.remote(num_gpus=1)
 class RewardModelRayActor(BasePPORole):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, model_path):
+    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
         self._setup_distributed(strategy)
-        model, _ = self._from_pretrained(
-            RewardModel,
+        model = get_llm_for_sequence_classification(
             pretrain,
-            model_path,
+            "reward",
             normalize_reward=strategy.args.normalize_reward,
             use_flash_attention_2=strategy.args.flash_attn,
             bf16=strategy.args.bf16,
