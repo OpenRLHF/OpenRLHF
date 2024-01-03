@@ -3,6 +3,7 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from optimum.bettertransformer import BetterTransformer
 from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
 from transformers import AutoConfig, AutoModelForCausalLM, PreTrainedModel
 from transformers.deepspeed import HfDeepSpeedConfig
@@ -25,7 +26,6 @@ class Actor(nn.Module):
         pretrain_or_model,
         from_config=False,
         use_flash_attention_2=False,
-        to_bettertransformer=False,
         bf16=False,
         ds_config=None,
     ) -> None:
@@ -67,8 +67,6 @@ class Actor(nn.Module):
                     attn_implementation=attn_implementation,
                 )
 
-            if to_bettertransformer:
-                self.model = self.model.to_bettertransformer()
         else:
             self.model = pretrain_or_model
 
@@ -148,6 +146,12 @@ class Actor(nn.Module):
 
     def gradient_checkpointing_disable(self):
         self.model.gradient_checkpointing_disable()
+
+    def to_bettertransformer(self):
+        self.model = BetterTransformer.transform(self.model)
+
+    def reverse_bettertransformer(self):
+        self.model = BetterTransformer.reverse(self.model)
 
     def print_trainable_parameters(self):
         self.model.print_trainable_parameters()
