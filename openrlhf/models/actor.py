@@ -62,6 +62,7 @@ class Actor(nn.Module):
                 self.model = AutoModelForCausalLM.from_pretrained(
                     pretrain_or_model,
                     torch_dtype=torch.bfloat16 if bf16 else "auto",
+                    device_map="cuda",
                     trust_remote_code=True,
                     attn_implementation=attn_implementation,
                 )

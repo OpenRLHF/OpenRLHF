@@ -95,6 +95,7 @@ def get_llm_for_sequence_regression(
         config=config,
         trust_remote_code=True,
         torch_dtype=torch.bfloat16 if bf16 else "auto",
+        device_map="cuda",
         **kwargs,
     )
 
