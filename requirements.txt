@@ -1,7 +1,7 @@
 datasets
 deepspeed==0.12.6
 einops
-flash-attn==2.3.6
+flash-attn==2.4.2
 isort
 jsonlines
 loralib

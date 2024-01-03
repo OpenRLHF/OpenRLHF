@@ -220,7 +220,7 @@ ninja --version
 echo $? # output: 0
 # install flash-attn: may take some time.
 # For network error: you can download specified version from https://github.com/Dao-AILab/flash-attention/releases.
-pip install flash-attn==2.3.6
+pip install flash-attn==2.4.2
 ./build_openrlhf.sh
 # enjoy it!
 ```
