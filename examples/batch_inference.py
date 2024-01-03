@@ -23,9 +23,10 @@ def batch_generate(args):
         args.pretrain,
         from_config,
         use_flash_attention_2=args.flash_attn,
-        to_bettertransformer=args.to_bettertransformer,
         bf16=args.bf16,
     )
+    if args.to_bettertransformer:
+        model.to_bettertransformer()
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy)
@@ -137,9 +138,11 @@ def batch_rm_inference(args):
         args.pretrain,
         from_config,
         use_flash_attention_2=args.flash_attn,
-        to_bettertransformer=args.to_bettertransformer,
         bf16=args.bf16,
     )
+
+    if args.to_bettertransformer:
+        model.to_bettertransformer()
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy)

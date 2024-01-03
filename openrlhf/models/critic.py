@@ -2,6 +2,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+from optimum.bettertransformer import BetterTransformer
 from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, PreTrainedModel
 from transformers.deepspeed import HfDeepSpeedConfig
@@ -104,6 +105,12 @@ class Critic(nn.Module):
 
     def print_trainable_parameters(self):
         self.model.print_trainable_parameters()
+
+    def to_bettertransformer(self):
+        self.model = BetterTransformer.transform(self.model)
+
+    def reverse_bettertransformer(self):
+        self.model = BetterTransformer.reverse(self.model)
 
     def lora_enable(self, lora_rank=0, lora_train_bias="none"):
         if lora_rank > 0:

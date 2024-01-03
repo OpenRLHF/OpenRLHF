@@ -2,6 +2,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+from optimum.bettertransformer import BetterTransformer
 from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, PreTrainedModel
 from transformers.deepspeed import HfDeepSpeedConfig
@@ -24,7 +25,6 @@ class RewardModel(nn.Module):
         from_config=False,
         normalize_reward=True,
         use_flash_attention_2=False,
-        to_bettertransformer=False,
         bf16=False,
         ds_config=None,
     ) -> None:
@@ -65,9 +65,6 @@ class RewardModel(nn.Module):
                     trust_remote_code=True,
                     attn_implementation=attn_implementation,
                 )
-
-            if to_bettertransformer:
-                self.model = self.model.to_bettertransformer()
 
             if hasattr(self.model, "transformer"):
                 self.model = self.model.transformer
@@ -117,6 +114,12 @@ class RewardModel(nn.Module):
 
     def gradient_checkpointing_disable(self):
         self.model.gradient_checkpointing_disable()
+
+    def to_bettertransformer(self):
+        self.model = BetterTransformer.transform(self.model)
+
+    def reverse_bettertransformer(self):
+        self.model = BetterTransformer.reverse(self.model)
 
     def print_trainable_parameters(self):
         self.model.print_trainable_parameters()

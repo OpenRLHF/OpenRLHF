@@ -167,7 +167,23 @@ class PPOTrainer(ABC):
                 disable=not self.strategy.is_rank_0(),
             )
 
+            is_better_transformer = False
+
+            def switch_bettertransformer(to_better):
+                is_better_transformer = to_better
+                if to_better:
+                    self.actor.to_bettertransformer()
+                    self.critic.to_bettertransformer()
+                    self.reward_model.to_bettertransformer()
+                else:
+                    self.actor.reverse_bettertransformer()
+                    self.critic.reverse_bettertransformer()
+                    self.reward_model.reverse_bettertransformer()
+
             for rand_prompts in self.prompts_dataloader:
+                if args.to_bettertransformer:
+                    switch_bettertransformer(True)
+
                 experience = self.experience_maker.make_experience(rand_prompts, **self.generate_kwargs)
                 # print prompt/answer in each update step
                 if global_step % update_timesteps == 0:
@@ -176,6 +192,9 @@ class PPOTrainer(ABC):
                 self.replay_buffer.append(experience)
 
                 if global_step % update_timesteps == 0:
+                    if args.to_bettertransformer:
+                        switch_bettertransformer(False)
+
                     torch.cuda.empty_cache()
                     self.replay_buffer.normalize("advantages", self.strategy)
                     status = self.ppo_train()
@@ -187,6 +206,9 @@ class PPOTrainer(ABC):
 
                 pbar.update()
                 global_step = global_step + 1
+
+            if is_better_transformer:
+                switch_bettertransformer(False)
 
     def ppo_train(self):
         # replay buffer may be empty at first, we should rebuild at each training
