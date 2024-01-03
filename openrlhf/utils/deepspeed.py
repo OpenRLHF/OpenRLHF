@@ -290,6 +290,9 @@ class DeepspeedStrategy(ABC):
                     if self.is_rank_0():
                         output_state_dict[k] = vv
             if self.is_rank_0():
+                for k, v in model_to_save.named_buffers():
+                    vv = v.data.cpu()
+                    output_state_dict[k] = vv
                 model_to_save.save_pretrained(output_dir, state_dict=output_state_dict, **kwargs)
 
         if self.is_rank_0():
