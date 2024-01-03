@@ -113,6 +113,10 @@ def train(args):
 
     trainer.fit(args)
 
+    # save mean/std to config.json
+    model.config.mean = model.mean.item()
+    model.config.std = model.std.item()
+
     # save model checkpoint after fitting on only rank0
     strategy.save_model(model, tokenizer, args.save_path)
 

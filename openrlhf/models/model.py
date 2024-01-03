@@ -114,8 +114,13 @@ def _get_reward_model(base_pretrained_model, base_llm_model):
 
             # mean std
             self.normalize_reward = config.normalize_reward
-            self.register_buffer("mean", torch.zeros(1))
-            self.register_buffer("std", torch.ones(1))
+            self.register_buffer("mean", torch.zeros(1), persistent=False)
+            self.register_buffer("std", torch.ones(1), persistent=False)
+
+            # load mean/std from config.json
+            if hasattr(config, "mean"):
+                self.mean[0] = config.mean
+                self.std[0] = config.std
 
         @classmethod
         def _autoset_attn_implementation(cls, config, *args, **kwargs):
@@ -164,8 +169,13 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
 
             # mean std
             self.normalize_reward = config.normalize_reward
-            self.register_buffer("mean", torch.zeros(1))
-            self.register_buffer("std", torch.ones(1))
+            self.register_buffer("mean", torch.zeros(1), persistent=False)
+            self.register_buffer("std", torch.ones(1), persistent=False)
+
+            # load mean/std from config.json
+            if hasattr(config, "mean"):
+                self.mean[0] = config.mean
+                self.std[0] = config.std
 
         @classmethod
         def _autoset_attn_implementation(cls, config, *args, **kwargs):
