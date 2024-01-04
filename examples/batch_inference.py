@@ -30,11 +30,6 @@ def batch_generate(args):
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy)
 
-    # load Pytorch model
-    if args.load_model:
-        strategy.print("Load model: ", args.load_model)
-        strategy.load_model(model, args.load_model)
-
     # prepare models
     model = strategy.prepare(model)
     model.eval()
@@ -141,11 +136,6 @@ def batch_rm_inference(args):
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model, "left", strategy)
-
-    # load RM
-    if args.load_model:
-        strategy.load_model(model, args.load_model)
-        strategy.print("Load model: ", args.load_model)
 
     # prepare models
     model = strategy.prepare(model)
