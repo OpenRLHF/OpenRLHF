@@ -28,7 +28,7 @@ def train(args):
     )
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy)
+    tokenizer = get_tokenizer(args.pretrain, model, "left", strategy)
 
     strategy.print(model)
 

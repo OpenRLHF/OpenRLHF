@@ -140,7 +140,7 @@ def batch_rm_inference(args):
     )
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy)
+    tokenizer = get_tokenizer(args.pretrain, model, "left", strategy)
 
     # load RM
     if args.load_model:

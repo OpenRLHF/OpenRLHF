@@ -45,8 +45,8 @@ def train(args):
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, actor.model, "left", strategy)
-    get_tokenizer(args.reward_pretrain, critic.model, "left", strategy)
-    get_tokenizer(args.reward_pretrain, reward_model.model, "left", strategy)
+    get_tokenizer(args.reward_pretrain, critic, "left", strategy)
+    get_tokenizer(args.reward_pretrain, reward_model, "left", strategy)
 
     strategy.print(actor)
     strategy.print(critic)
