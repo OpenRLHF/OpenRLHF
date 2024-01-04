@@ -117,6 +117,9 @@ cd /openrlhf/examples/scripts
 # huggingface login 
 ~/.local/bin/huggingface-cli login
 
+# continue pretrain
+./train_continue_pretrain_llama.sh
+
 # train SFT model
 ./train_sft_llama.sh
 
