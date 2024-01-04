@@ -154,8 +154,7 @@ class ActorModelRayActor(BasePPORole):
             pretrain,
             use_flash_attention_2=strategy.args.flash_attn,
             bf16=strategy.args.bf16,
-            # TODO(@wuxibin): it's very weird that HfDeepSpeedConfig will cause vLLM not stable.
-            # ds_config=strategy.get_ds_train_config(is_actor=True),
+            ds_config=strategy.get_ds_train_config(is_actor=True),
         )
 
         # configure tokenizer
