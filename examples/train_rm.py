@@ -20,31 +20,17 @@ def train(args):
 
     # configure model
     # load huggingface model/config
-    from_config = bool(args.load_model or args.load_checkpoint)
     model = get_llm_for_sequence_regression(
         args.pretrain,
         "reward",
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
-        ds_config=strategy.get_ds_train_config(is_actor=False),
     )
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy)
 
     strategy.print(model)
-
-    # load SFT model
-    if args.load_model and not args.load_checkpoint:
-
-        def key_replace_fn(states_dict):
-            new_state_dict = OrderedDict()
-            for k, v in states_dict.items():
-                new_state_dict[k.replace("transformer.", "model.")] = v
-            return new_state_dict
-
-        strategy.load_model(model, args.load_model, strict=False, key_replace_fn=key_replace_fn)
-        strategy.print("Load model: ", args.load_model)
 
     # lora
     if args.lora_rank > 0:
@@ -138,7 +124,6 @@ if __name__ == "__main__":
     parser.add_argument("--micro_train_batch_size", type=int, default=8)
     parser.add_argument("--train_batch_size", type=int, default=128)
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
-    parser.add_argument("--load_model", type=str, default=None)
     parser.add_argument("--max_norm", type=float, default=1.0)
     parser.add_argument("--max_len", type=int, default=512)
     parser.add_argument("--l2", type=float, default=0.0)

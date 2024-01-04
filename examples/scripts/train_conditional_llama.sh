@@ -6,9 +6,8 @@ RM_OUTPUT=./ckpt/7b_llama_dt/rm.jsonl
 read -r -d '' get_rewards_commands <<EOF
 ../batch_inference.py
     --eval_task rm \
-    --pretrain meta-llama/Llama-2-7b-hf \
+    --pretrain OpenLLMAI/Llama-2-7b-rm-anthropic_hh-lmsys-oasst-webgpt \
     --bf16 \
-    --load_model ./ckpt/7b_llama/rm_model_anthropic_oasst_lmsys_webgpt.pt
     --max_len 2048 \
     --dataset Open-Orca/OpenOrca,Dahoas/full-hh-rlhf \
     --dataset_probs 0.5,0.5 \
@@ -27,9 +26,8 @@ read -r -d '' sft_commands <<EOF
     --dataset_probs 1.0 \
     --train_batch_size 128 \
     --micro_train_batch_size 2 \
-    --pretrain meta-llama/Llama-2-7b-hf \
+    --pretrain OpenLLMAI/Llama-2-7b-sft-model-ocra-500k \
     --save_path ./ckpt/7b_llama_dt \
-    --load_model ./ckpt/7b_llama/sft_model_ocra.pt
     --zero_stage 2 \
     --max_epochs 1 \
     --bf16 \

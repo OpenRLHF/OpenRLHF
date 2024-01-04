@@ -7,7 +7,7 @@ We evaluated the models (see [checkpoints]( https://huggingface.co/OpenLLMAI/o
 ```shell
 deepspeed batch_inference.py
     --eval_task generate \
-    --pretrain meta-llama/Llama-2-7b-hf \
+    --pretrain OpenLLMAI/Llama-2-7b-sft-model-ocra-500k \
     --bf16 \
     --max_len 2048 \
     --dataset ./data/benchmark.jsonl \
@@ -16,7 +16,6 @@ deepspeed batch_inference.py
     --zero_stage 0 \
     --micro_batch_size 16 \
     --greedy_sampling \
-    --load_model {model_path} \
     --output_path {output_json_path}
     # --enable_dt (for Decision Transformer models)
 ```

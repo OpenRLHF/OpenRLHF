@@ -18,10 +18,9 @@ def batch_generate(args):
     strategy.setup_distributed(timeout=timedelta(seconds=9999999))
 
     # configure model
-    from_config = bool(args.load_model)
     model = Actor(
         args.pretrain,
-        from_config,
+        False,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
     )
@@ -133,16 +132,12 @@ def batch_rm_inference(args):
 
     # configure model
     # load huggingface model/config
-    from_config = bool(args.load_model)
     model = get_llm_for_sequence_regression(
         args.pretrain,
         "reward",
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
     )
-
-    if args.to_bettertransformer:
-        model.to_bettertransformer()
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy)
@@ -217,7 +212,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--eval_task", type=str, default=None, help="set to generate or rm")
     parser.add_argument("--pretrain", type=str, default=None)
-    parser.add_argument("--load_model", type=str, default=None)
     parser.add_argument("--max_len", type=int, default=2048)
     parser.add_argument("--zero_stage", type=int, default=0)
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")

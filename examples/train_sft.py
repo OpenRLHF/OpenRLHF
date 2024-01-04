@@ -19,18 +19,13 @@ def train(args):
 
     # configure model
     # load huggingface model/config
-    from_config = bool(args.load_model or args.load_checkpoint)
+    from_config = bool(args.load_checkpoint)
     model = Actor(args.pretrain, from_config, use_flash_attention_2=args.flash_attn, bf16=args.bf16)
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy)
 
     strategy.print(model)
-
-    # load Pytorch model
-    if args.load_model and not args.load_checkpoint:
-        strategy.print("Load model: ", args.load_model)
-        strategy.load_model(model, args.load_model)
 
     # lora
     if args.lora_rank > 0:
@@ -113,7 +108,6 @@ if __name__ == "__main__":
     parser.add_argument("--max_len", type=int, default=512)
     parser.add_argument("--max_norm", type=float, default=1.0)
     parser.add_argument("--l2", type=float, default=0)
-    parser.add_argument("--load_model", type=str, default=None)
     parser.add_argument("--lr_scheduler", type=str, default="cosine")
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
     parser.add_argument("--pretrain_mode", action="store_true", default=False)

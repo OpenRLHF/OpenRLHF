@@ -12,10 +12,8 @@ ray job submit --address="http://127.0.0.1:8265" \
     --critic_num_gpus_per_node 2 \
     --actor_num_nodes 1 \
     --actor_num_gpus_per_node 4 \
-    --pretrain meta-llama/Llama-2-7b-hf \
-    --reward_pretrain meta-llama/Llama-2-7b-hf \
-    --reward_model_path /openrlhf/examples/test_scripts/ckpt/7b_llama/rm_model_anthropic_oasst_lmsys_webgpt.pt \
-    --sft_model_path /openrlhf/examples/test_scripts/ckpt/7b_llama/sft_model_ocra.pt \
+    --pretrain OpenLLMAI/Llama-2-7b-sft-model-ocra-500k \
+    --reward_pretrain OpenLLMAI/Llama-2-7b-rm-anthropic_hh-lmsys-oasst-webgpt \
     --save_path /openrlhf/examples/test_scripts/ckpt/7b_llama \
     --micro_train_batch_size 8 \
     --train_batch_size 128 \

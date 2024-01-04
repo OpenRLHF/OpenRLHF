@@ -36,7 +36,7 @@ while (($iter < $TRAINING_ITERS)); do
     read -r -d '' generate_commands <<EOF
 ../batch_inference.py
     --eval_task generate \
-    --pretrain meta-llama/Llama-2-7b-hf \
+    --pretrain OpenLLMAI/Llama-2-7b-sft-model-ocra-500k \
     --bf16 \
     --load_model $POLICY_MODEL_PATH \
     --max_len 2048 \
@@ -57,7 +57,7 @@ EOF
     read -r -d '' get_rewards_commands <<EOF
 ../batch_inference.py
     --eval_task rm \
-    --pretrain meta-llama/Llama-2-7b-hf \
+    --pretrain OpenLLMAI/Llama-2-7b-sft-model-ocra-500k \
     --bf16 \
     --load_model $REWARD_MODEL_PATH \
     --max_len 2048 \
@@ -79,7 +79,7 @@ EOF
     --dataset_probs 1.0 \
     --train_batch_size 128 \
     --micro_train_batch_size 2 \
-    --pretrain meta-llama/Llama-2-7b-hf \
+    --pretrain OpenLLMAI/Llama-2-7b-sft-model-ocra-500k \
     --save_path ./ckpt/7b_llama_rs \
     --load_model $POLICY_MODEL_PATH \
     --lr_scheduler constant \

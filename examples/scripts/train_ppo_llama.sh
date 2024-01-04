@@ -2,10 +2,8 @@ set -x
 
 read -r -d '' training_commands <<EOF
 ../train_ppo.py \
-    --pretrain meta-llama/Llama-2-7b-hf \
-    --reward_pretrain meta-llama/Llama-2-7b-hf \
-    --reward_model_path ./ckpt/7b_llama/rm_model_anthropic_oasst_lmsys_webgpt.pt \
-    --sft_model_path ./ckpt/7b_llama/sft_model_ocra.pt \
+    --pretrain OpenLLMAI/Llama-2-7b-sft-model-ocra-500k \
+    --reward_pretrain OpenLLMAI/Llama-2-7b-rm-anthropic_hh-lmsys-oasst-webgpt \
     --save_path ./ckpt/7b_llama \
     --save_steps -1 \
     --logging_steps 1 \
@@ -30,8 +28,7 @@ read -r -d '' training_commands <<EOF
     --actor_init_on_gpu \
     --adam_offload \
     --flash_attn \
-    --gradient_checkpointing \
-    --save_hf_model
+    --gradient_checkpointing
 EOF
     # --wandb [WANDB_TOKENS]
     # --flash_attn, there is a bug for micro_rollout_batch_size >= 2

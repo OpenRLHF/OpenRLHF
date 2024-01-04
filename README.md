@@ -47,7 +47,7 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 - Support Wandb log (--wandb).
 - Support FlashAttention2 (--flash_attn).
 - Multi-nodes [training scripts](./examples/scripts/train_llama_slurm.sh) for Slurm.
-- Pre-trained 7B/13B llama2 [checkpoints](https://huggingface.co/OpenLLMAI/openrlhf_checkpoint)
+- Pre-trained 7B/13B llama2 [checkpoints](https://huggingface.co/OpenLLMAI)
 
 
 **TODO** 
@@ -95,10 +95,6 @@ You can build openrlhf from **nvidia-docker(recommended)** or from conda envs.
 ```shell
 Clone the repository: 
 git clone https://github.com/openllmai/OpenRLHF.git
-
-# Download the pre-trained SFT/RM checkpoints (Optional)
-git lfs install
-git clone --depth=1 https://huggingface.co/OpenLLMAI/openrlhf_checkpoint
 ```
 
 * Single-node training with nvidia-docker
@@ -200,7 +196,7 @@ After completing the training, you can evaluate your model by using the `inferen
 
 ```shell
 # interactive_chat
-./interactive_chat_llama.sh { model_path }
+./interactive_chat_llama.sh { pretrain_model_path }
 
 # batch generate
 python examples/batch_inference.py {args}

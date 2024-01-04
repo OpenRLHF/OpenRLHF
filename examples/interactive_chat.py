@@ -13,16 +13,10 @@ def generate(args):
     strategy.setup_distributed()
 
     # configure model
-    from_config = bool(args.load_model)
-    model = Actor(args.pretrain, from_config, use_flash_attention_2=args.flash_attn)
+    model = Actor(args.pretrain, False, use_flash_attention_2=args.flash_attn)
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy)
-
-    # load Pytorch model
-    if args.load_model:
-        strategy.print("Load model: ", args.load_model)
-        strategy.load_model(model, args.load_model)
 
     # prepare models
     model = strategy.prepare(model)
@@ -72,7 +66,6 @@ def generate(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--pretrain", type=str, default=None)
-    parser.add_argument("--load_model", type=str, default=None)
     parser.add_argument("--max_len", type=int, default=2048)
     parser.add_argument("--zero_stage", type=int, default=0)
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
