@@ -3,14 +3,13 @@ set -x
 mkdir -p ./ckpt/7b_llama_rs
 GENERATE_OUTPUT=./ckpt/7b_llama_rs/generate.jsonl
 RM_OUTPUT=./ckpt/7b_llama_rs/rm.jsonl
-MODEL_OUTPUT_PATH=./ckpt/7b_llama_rs/sft_model.pt
+MODEL_OUTPUT_PATH=./ckpt/7b_llama_rs/
 ITER_LOG_PATH=null
 
 TRAINING_ITERS=20
 ROLLOUT_BATCH_SIZE=2048
 
-POLICY_MODEL_PATH=./ckpt/7b_llama/sft_model_ocra.pt
-REWARD_MODEL_PATH=./ckpt/7b_llama/rm_model_anthropic_oasst_lmsys_webgpt.pt
+POLICY_MODEL_PATH=OpenLLMAI/Llama-2-7b-sft-model-ocra-500k
 
 checkSuccess() {
     if [[ $? != 0 ]]; then
@@ -36,9 +35,8 @@ while (($iter < $TRAINING_ITERS)); do
     read -r -d '' generate_commands <<EOF
 ../batch_inference.py
     --eval_task generate \
-    --pretrain OpenLLMAI/Llama-2-7b-sft-model-ocra-500k \
+    --pretrain $POLICY_MODEL_PATH \
     --bf16 \
-    --load_model $POLICY_MODEL_PATH \
     --max_len 2048 \
     --dataset Open-Orca/OpenOrca,Dahoas/full-hh-rlhf  \
     --dataset_probs 0.5,0.5 \
@@ -57,9 +55,8 @@ EOF
     read -r -d '' get_rewards_commands <<EOF
 ../batch_inference.py
     --eval_task rm \
-    --pretrain OpenLLMAI/Llama-2-7b-sft-model-ocra-500k \
+    --pretrain OpenLLMAI/Llama-2-7b-rm-anthropic_hh-lmsys-oasst-webgpt\
     --bf16 \
-    --load_model $REWARD_MODEL_PATH \
     --max_len 2048 \
     --dataset $GENERATE_OUTPUT  \
     --dataset_probs 1.0 \

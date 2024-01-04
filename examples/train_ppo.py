@@ -22,8 +22,7 @@ def train(args):
 
     # configure model
     # load huggingface model/config
-    actor_from_config = bool(args.sft_model_path or args.load_checkpoint)
-    reward_from_config = bool(args.reward_model_path)
+    actor_from_config = bool(args.load_checkpoint)
 
     actor = Actor(args.pretrain, actor_from_config, use_flash_attention_2=args.flash_attn, bf16=args.bf16)
     if args.actor_init_on_gpu:
@@ -39,8 +38,7 @@ def train(args):
     reward_model = get_llm_for_sequence_regression(
         args.reward_pretrain,
         "reward",
-        reward_from_config,
-        args.normalize_reward,
+        normalize_reward=args.normalize_reward,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
     )
@@ -53,21 +51,11 @@ def train(args):
     strategy.print(actor)
     strategy.print(critic)
 
-    # load PyTorch model
-    if args.sft_model_path:
-        strategy.load_model(actor, args.sft_model_path)
-    if args.reward_model_path:
-        strategy.load_model(reward_model, args.reward_model_path)
-
     # copy weights for reference actor/ema actor/critic
     initial_model = deepcopy(actor)
-    critic.model = deepcopy(reward_model.model)
-    critic.value_head = deepcopy(reward_model.value_head)
 
     strategy.print("reward normalization status: {}".format(args.normalize_reward))
     strategy.print("mean: {}, std {}".format(reward_model.mean, reward_model.std))
-    critic.mean = deepcopy(reward_model.mean)
-    critic.std = deepcopy(reward_model.std)
 
     # lora
     if args.lora_rank > 0:
@@ -209,7 +197,7 @@ def train(args):
         do_sample=True,
         max_new_tokens=args.generate_max_len,
         max_length=args.max_len,
-        temperature=1,
+        temperature=args.temperature,
         top_p=args.top_p,
         pad_token_id=tokenizer.pad_token_id,
         eos_token_id=tokenizer.eos_token_id,
@@ -247,8 +235,6 @@ if __name__ == "__main__":
     )
     parser.add_argument("--pretrain", type=str, default=None)
     parser.add_argument("--reward_pretrain", type=str, default=None)
-    parser.add_argument("--reward_model_path", type=str, default=None)
-    parser.add_argument("--sft_model_path", type=str, default=None)
     parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--save_steps", type=int, default=-1)
     parser.add_argument("--logging_steps", type=int, default=1)
@@ -276,6 +262,7 @@ if __name__ == "__main__":
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
     parser.add_argument("--normalize_reward", action="store_true", default=False)
     parser.add_argument("--top_p", type=float, default=1.0)
+    parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--lora_rank", type=int, default=0, help="low-rank adaptation matrices rank")
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
