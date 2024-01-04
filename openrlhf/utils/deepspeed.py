@@ -268,15 +268,18 @@ class DeepspeedStrategy(ABC):
             state_dict = key_replace_fn(state_dict)
         unwrapped_model.load_state_dict(state_dict, strict=strict)
 
-    def save_model(self, model: nn.Module, path: str, only_rank0: bool = True) -> None:
+    def save_model(self, model: nn.Module, tokenizer, output_dir, **kwargs) -> None:
+        if self.is_rank_0():
+            os.makedirs(output_dir, exist_ok=False)
+
+        # save model weights for ZeRO2/3
         model_to_save = self._unwrap_model(model)
         if isinstance(model_to_save, PeftModel):
             model_to_save = model_to_save.merge_and_unload()
 
         if self.stage != 3:
             if self.is_rank_0():
-                save_dict = model_to_save.state_dict()
-                torch.save(save_dict, path)
+                model_to_save.save_pretrained(output_dir, **kwargs)
         else:
             output_state_dict = {}
             # gather parameters
@@ -290,21 +293,21 @@ class DeepspeedStrategy(ABC):
                 for k, v in model_to_save.named_buffers():
                     vv = v.data.cpu()
                     output_state_dict[k] = vv
-                torch.save(output_state_dict, path)
+                model_to_save.save_pretrained(output_dir, state_dict=output_state_dict, **kwargs)
 
-    def save_hf_format(self, model, tokenizer, output_dir):
-        # used to save huggingface format, so we can use it for hf.from_pretrained
-        CONFIG_NAME = "config.json"
-        WEIGHTS_NAME = "pytorch_model.bin"
-        # save model weights for ZeRO2/3
-        self.save_model(model, os.path.join(output_dir, WEIGHTS_NAME))
         if self.is_rank_0():
             # save config
-            model_to_save = self._unwrap_model(model)
-            output_config_file = os.path.join(output_dir, CONFIG_NAME)
+            output_config_file = os.path.join(output_dir, "config.json")
             model_to_save.config.to_json_file(output_config_file)
             # save tokenizer
-            tokenizer.save_vocabulary(output_dir)
+            tokenizer.save_pretrained(output_dir)
+
+            # for models not in AutoModel, copy python module files
+            train_from_model_path = model_to_save.config._name_or_path
+            if os.path.exists(train_from_model_path):
+                for filename in os.listdir(train_from_model_path):
+                    if filename.endswith(".py"):
+                        shutil.copy(os.path.join(train_from_model_path, filename), os.path.join(output_dir, filename))
 
     def all_reduce(self, data, op="mean"):
         assert op in ("mean", "max", "sum")

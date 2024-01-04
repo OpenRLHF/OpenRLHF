@@ -7,6 +7,7 @@ from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import SFTDataset
 from openrlhf.models import Actor
+from openrlhf.models.utils import lora_enable
 from openrlhf.trainer import SFTTrainer
 from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
@@ -33,7 +34,7 @@ def train(args):
 
     # lora
     if args.lora_rank > 0:
-        model.lora_enable(args.lora_rank)
+        model = lora_enable(model, args.lora_rank)
 
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)
@@ -90,11 +91,7 @@ def train(args):
     trainer.fit(args)
 
     # save model checkpoint after fitting on only rank0
-    strategy.save_model(model, args.save_path + "/sft_model.pt", only_rank0=True)
-
-    if args.save_hf_model:
-        os.makedirs(args.save_path + "/sft_hf", exist_ok=True)
-        strategy.save_hf_format(model, tokenizer, args.save_path + "/sft_hf")
+    strategy.save_model(model, tokenizer, args.save_path)
 
 
 if __name__ == "__main__":
@@ -129,7 +126,6 @@ if __name__ == "__main__":
     parser.add_argument("--learning_rate", type=float, default=2e-6)
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False)
-    parser.add_argument("--save_hf_model", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False)
 
     # wandb pamameters

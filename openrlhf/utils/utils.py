@@ -129,10 +129,10 @@ def blending_datasets(
         elif len(dataset_subfold_list) == 2:
             dataset = dataset_subfold_list[0]
             subfold = dataset_subfold_list[1]
-            data = load_dataset(dataset, data_dir=subfold.strip(), token=True)
+            data = load_dataset(dataset, data_dir=subfold.strip())
         elif len(dataset_subfold_list) == 1:
             dataset = dataset_subfold_list[0]
-            data = load_dataset(dataset, token=True)
+            data = load_dataset(dataset)
         else:
             raise Exception(f"Dataset Name {dataset}: Format error")
 

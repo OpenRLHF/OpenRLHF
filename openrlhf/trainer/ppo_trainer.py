@@ -11,7 +11,7 @@ from torch.optim import Optimizer
 from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 
-from openrlhf.models import Actor, Critic, GPTLMLoss, PolicyLoss, ValueLoss
+from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
 from openrlhf.models.utils import masked_mean
 
 from .ppo_utils import AdaptiveKLController, Experience, FixedKLController, NaiveExperienceMaker, NaiveReplayBuffer
@@ -24,7 +24,7 @@ class PPOTrainer(ABC):
     Args:
         strategy (Strategy): the strategy to use for training
         actor (Actor): the actor model in ppo algorithm
-        critic (Critic): the critic model in ppo algorithm
+        critic (nn.Module): the critic model in ppo algorithm
         reward_model (nn.Module): the reward model in rlhf algorithm to make reward of sentences
         initial_model (Actor): the initial model in rlhf algorithm to generate reference logits to limit the update of actor
         actor_optim (Optimizer): the optimizer to use for actor model
@@ -48,7 +48,7 @@ class PPOTrainer(ABC):
         self,
         strategy,
         actor: Actor,
-        critic: Critic,
+        critic: nn.Module,
         reward_model: nn.Module,
         initial_model: Actor,
         ema_model: Actor,
