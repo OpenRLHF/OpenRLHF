@@ -53,6 +53,7 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 **TODO** 
 - Allows saving and loading training checkpoints.
 - Support Hybrid vLLM inference engine.
+- Support LoRA/QLoRA using `peft`.
 
 Support Matrix
 
