@@ -105,15 +105,15 @@ def get_llm_for_sequence_regression(
 
 
 def _get_reward_model(base_pretrained_model, base_llm_model):
-    class LLMForSequenceClassification(base_pretrained_model):
+    class LLMForSequenceRegression(base_pretrained_model):
         supports_gradient_checkpointing = True
 
         def __init__(self, config: AutoConfig):
             super().__init__(config)
             setattr(self, self.base_model_prefix, base_llm_model(config))
 
-            self.value_head = nn.Linear(self.model.config.hidden_size, 1)
-            self.value_head.weight.data.normal_(mean=0.0, std=1 / (self.model.config.hidden_size + 1))
+            self.value_head = nn.Linear(config.hidden_size, 1)
+            self.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
 
             # mean std
             self.normalize_reward = config.normalize_reward
@@ -156,19 +156,19 @@ def _get_reward_model(base_pretrained_model, base_llm_model):
                     reward = (reward - self.mean) / self.std
             return reward
 
-    return LLMForSequenceClassification
+    return LLMForSequenceRegression
 
 
 def _get_critic_model(base_pretrained_model, base_llm_model):
-    class LLMForSequenceClassification(base_pretrained_model):
+    class LLMForSequenceRegression(base_pretrained_model):
         supports_gradient_checkpointing = True
 
         def __init__(self, config: AutoConfig):
             super().__init__(config)
             setattr(self, self.base_model_prefix, base_llm_model(config))
 
-            self.value_head = nn.Linear(self.model.config.hidden_size, 1)
-            self.value_head.weight.data.normal_(mean=0.0, std=1 / (self.model.config.hidden_size + 1))
+            self.value_head = nn.Linear(config.hidden_size, 1)
+            self.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
 
             # mean std
             self.normalize_reward = config.normalize_reward
@@ -206,4 +206,4 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
                 values = (values - self.mean) / self.std
             return values[:, -num_actions:]
 
-    return LLMForSequenceClassification
+    return LLMForSequenceRegression
