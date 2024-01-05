@@ -270,7 +270,7 @@ class DeepspeedStrategy(ABC):
 
     def save_model(self, model: nn.Module, tokenizer, output_dir, **kwargs) -> None:
         if self.is_rank_0():
-            os.makedirs(output_dir, exist_ok=False)
+            os.makedirs(output_dir, exist_ok=True)
 
         # save model weights for ZeRO2/3
         model_to_save = self._unwrap_model(model)
