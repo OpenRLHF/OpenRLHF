@@ -214,8 +214,9 @@ class RewardModelTrainer(ABC):
 
             # save mean std
             self.strategy.print("Set reward mean std")
-            self.model.mean[0] = reward_mean
-            self.model.std[0] = reward_std
+            unwrap_model = self.strategy._unwrap_model(self.model)
+            unwrap_model.config.mean = reward_mean.item()
+            unwrap_model.config.std = reward_std.item()
 
             bar_dict = {
                 "eval_loss": loss_mean,
