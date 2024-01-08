@@ -45,7 +45,7 @@ class PolicyLoss(nn.Module):
         surr2 = ratio.clamp(1 - self.clip_eps, 1 + self.clip_eps) * advantages
         loss = -torch.min(surr1, surr2)
         loss = masked_mean(loss, action_mask)
-        return loss.mean()
+        return loss
 
 
 class ValueLoss(nn.Module):
@@ -73,7 +73,7 @@ class ValueLoss(nn.Module):
             loss = (values - returns) ** 2
 
         loss = masked_mean(loss, action_mask)
-        return 0.5 * loss.mean()
+        return 0.5 * loss
 
 
 class PairWiseLoss(nn.Module):
@@ -85,10 +85,10 @@ class PairWiseLoss(nn.Module):
         self, chosen_reward: torch.Tensor, reject_reward: torch.Tensor, margin: torch.Tensor = None
     ) -> torch.Tensor:
         if margin is not None:
-            loss = -F.logsigmoid(chosen_reward - reject_reward - margin).mean()
+            loss = -F.logsigmoid(chosen_reward - reject_reward - margin)
         else:
-            loss = -F.logsigmoid(chosen_reward - reject_reward).mean()
-        return loss
+            loss = -F.logsigmoid(chosen_reward - reject_reward)
+        return loss.mean()
 
 
 class LogExpLoss(nn.Module):

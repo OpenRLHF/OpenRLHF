@@ -319,7 +319,7 @@ class PPOTrainer(ABC):
         # status
         status = {
             "critic_loss": critic_loss.item(),
-            "values": masked_mean(values, experience.action_mask, dim=(0, 1)).item(),
+            "values": masked_mean(values, experience.action_mask).item(),
         }
         return status
 
