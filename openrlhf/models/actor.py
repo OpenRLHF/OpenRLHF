@@ -43,9 +43,7 @@ class Actor(nn.Module):
             # Note: dschf is defined in function scope to avoid global effects
             # https://huggingface.co/docs/transformers/main_classes/deepspeed#nontrainer-deepspeed-integration
             if ds_config is not None and ds_config["zero_optimization"]["stage"] == 3:
-                # TODO(@wuxibin): it's very weird that HfDeepSpeedConfig will cause vLLM not stable.
-                # dschf = HfDeepSpeedConfig(ds_config)
-                dschf = None
+                dschf = HfDeepSpeedConfig(ds_config)
             else:
                 dschf = None
 
@@ -64,7 +62,6 @@ class Actor(nn.Module):
                 self.model = AutoModelForCausalLM.from_pretrained(
                     pretrain_or_model,
                     torch_dtype=torch.bfloat16 if bf16 else "auto",
-                    # device_map="cuda",
                     trust_remote_code=True,
                     attn_implementation=attn_implementation,
                 )
@@ -106,6 +103,9 @@ class Actor(nn.Module):
         eos_token_id = generate_args["eos_token_id"]
         pad_token_id = generate_args["pad_token_id"]
 
+        return self.process_sequences(sequences, input_ids.size(1), eos_token_id, pad_token_id)
+
+    def process_sequences(self, sequences: torch.Tensor, input_len, eos_token_id, pad_token_id):
         attention_mask = (sequences.ne(eos_token_id) & sequences.ne(pad_token_id)).to(dtype=torch.long)
         seq_length = attention_mask.size(1)
 
@@ -122,7 +122,6 @@ class Actor(nn.Module):
         attention_mask.scatter_(dim=1, index=eos_indices, value=1)
         sequences.scatter_(dim=1, index=eos_indices, value=eos_token_id)
 
-        input_len = input_ids.size(1)
         # in RL, state_i (current token) + action_i (next token) -> state_i+1 (next token)
         state_seq = sequences[:, input_len - 1 : -1]
         # we only calculate the loss of state_i != eos | pad

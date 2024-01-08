@@ -12,6 +12,9 @@ from tqdm import tqdm
 
 from openrlhf.models.actor import Actor
 from openrlhf.models.utils import compute_reward, masked_mean
+from openrlhf.utils.logging import init_logger
+
+logger = init_logger(__name__)
 
 
 @dataclass
@@ -226,9 +229,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # generate sequence
         start = time.time()
         sequences, attention_mask, action_mask = (
-            self.generate_local(prompts, **generate_kwargs)
+            self._generate_local(prompts, **generate_kwargs)
             if self.vllm_engines is None
-            else self.generate_vllm(prompts, **generate_kwargs)
+            else self._generate_vllm(prompts, **generate_kwargs)
         )
         generate_time = time.time() - start
 
@@ -313,11 +316,11 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         self.actor.train()  # reset model state
         return experience
 
-    def generate_local(self, prompts: List[str], **kwargs) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _generate_local(self, prompts: List[str], **kwargs) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
         return self.actor.generate(**inputs, **kwargs)
 
-    def generate_vllm(self, prompts: List[str], **kwargs) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _generate_vllm(self, prompts: List[str], **kwargs) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         from vllm import SamplingParams
 
         # round-robin load balance
@@ -349,12 +352,13 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         max_input_len, max_output_len = 0, 0
         for output in outputs:
             # TODO: how to force vLLM generate at least one token?
-            if len(output.outputs[0].token_ids) == 0:
-                logging.warning(f"no output for prompt: {output.prompt}")
+            output_token_ids = output.outputs[0].token_ids
+            if output_token_ids[0] == self.tokenizer.eos_token_id:
+                logger.warning(f"Only EOS output for prompt: {output.prompt}")
                 output.outputs[0].token_ids = [self.tokenizer.unk_token_id, self.tokenizer.eos_token_id]
 
             max_input_len = max(max_input_len, len(output.prompt_token_ids))
-            max_output_len = max(max_output_len, len(output.outputs[0].token_ids))
+            max_output_len = max(max_output_len, len(output_token_ids))
 
         pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
         sequences = []
@@ -374,16 +378,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             sequences.append(input_ids + output_ids)
 
         sequences = torch.tensor(sequences)
-        attention_mask = (sequences.ne(eos_token_id) & sequences.ne(pad_token_id)).to(dtype=torch.long)
-
-        # enforce last token before PAD token is EOS token.
-        seq_length = attention_mask.size(1)
-        eos_indices = seq_length - attention_mask.long().fliplr().argmax(dim=1, keepdim=True).clamp(min=1)
-        attention_mask.scatter_(dim=1, index=eos_indices, value=1)
-        sequences.scatter_(dim=1, index=eos_indices, value=eos_token_id)
-
-        action_seq = sequences[:, max_input_len:-1]
-        action_mask = action_seq.ne(eos_token_id) & action_seq.ne(pad_token_id)
+        sequences, attention_mask, action_mask = self.actor.process_sequences(
+            sequences, max_input_len, eos_token_id, pad_token_id
+        )
         return sequences.to("cuda"), attention_mask.to("cuda"), action_mask.to("cuda")
 
     def flush(self):
