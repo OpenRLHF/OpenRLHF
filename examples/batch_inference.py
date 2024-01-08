@@ -130,6 +130,7 @@ def batch_rm_inference(args):
     model = get_llm_for_sequence_regression(
         args.pretrain,
         "reward",
+        normalize_reward=True,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
     )
