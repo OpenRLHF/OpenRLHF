@@ -123,8 +123,10 @@ class Actor(nn.Module):
         sequences.scatter_(dim=1, index=eos_indices, value=eos_token_id)
 
         input_len = input_ids.size(1)
-        action_seq = sequences[:, input_len:-1]
-        action_mask = action_seq.ne(eos_token_id) & action_seq.ne(pad_token_id)
+        # in RL, state_i (current token) + action_i (next token) -> state_i+1 (next token)
+        state_seq = sequences[:, input_len - 1 : -1]
+        # we only calculate the loss of state_i != eos | pad
+        action_mask = state_seq.ne(eos_token_id) & state_seq.ne(pad_token_id)
         return sequences, attention_mask, action_mask
 
     def forward(
