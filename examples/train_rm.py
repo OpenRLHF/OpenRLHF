@@ -51,6 +51,7 @@ def train(args):
         max_count=2000000,
         stopping_strategy="all_exhausted",
     )
+    train_data = train_data.select(range(min(args.max_samples, len(train_data))))
     train_dataset = RewardDataset(train_data, tokenizer, args.max_len, strategy)
     eval_dataset = RewardDataset(eval_data, tokenizer, args.max_len, strategy)
 
@@ -122,6 +123,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_epochs", type=int, default=1)
     parser.add_argument("--micro_train_batch_size", type=int, default=8)
     parser.add_argument("--train_batch_size", type=int, default=128)
+    parser.add_argument("--max_samples", type=int, default=1000000)
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
     parser.add_argument("--max_norm", type=float, default=1.0)
     parser.add_argument("--max_len", type=int, default=512)
