@@ -8,9 +8,9 @@ read -r -d '' training_commands <<EOF
     --save_steps -1 \
     --logging_steps 1 \
     --eval_steps -1 \
-    --micro_train_batch_size 1 \
+    --micro_train_batch_size 2 \
     --train_batch_size 128 \
-    --micro_rollout_batch_size 1 \
+    --micro_rollout_batch_size 4 \
     --rollout_batch_size 1024 \
     --max_epochs 1 \
     --prompt_max_len 1024 \
@@ -31,7 +31,6 @@ read -r -d '' training_commands <<EOF
     --gradient_checkpointing
 EOF
     # --wandb [WANDB_TOKENS]
-    # --flash_attn, there is a bug for micro_rollout_batch_size >= 2
 
 if [[ ${1} != "slurm" ]]; then
     export PATH=$HOME/.local/bin/:$PATH

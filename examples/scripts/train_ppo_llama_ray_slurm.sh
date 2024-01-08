@@ -68,10 +68,8 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --critic_num_gpus_per_node 4 \
     --actor_num_nodes 1 \
     --actor_num_gpus_per_node 8 \
-    --pretrain meta-llama/Llama-2-13b-hf \
-    --reward_pretrain meta-llama/Llama-2-13b-hf \
-    --reward_model_path /openrlhf/examples/test_scripts/ckpt/13b_llama/rm_model.pt \
-    --sft_model_path /openrlhf/examples/test_scripts/ckpt/13b_llama/sft_model.pt \
+    --pretrain OpenLLMAI/Llama-2-13b-sft-model-ocra-500k \
+    --reward_pretrain OpenLLMAI/Llama-2-13b-rm-anthropic_hh-lmsys-oasst-webgpt \
     --save_path /openrlhf/examples/test_scripts/ckpt/13b_llama \
     --micro_train_batch_size 4 \
     --train_batch_size 128 \

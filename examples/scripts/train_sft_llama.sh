@@ -6,7 +6,7 @@ read -r -d '' training_commands <<EOF
     --dataset Open-Orca/OpenOrca \
     --dataset_probs 1.0 \
     --train_batch_size 128 \
-    --micro_train_batch_size 1 \
+    --micro_train_batch_size 2 \
     --max_samples 500000 \
     --pretrain meta-llama/Llama-2-7b-hf \
     --save_path ./ckpt/7b_llama \
