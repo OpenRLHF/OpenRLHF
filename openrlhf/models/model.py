@@ -86,9 +86,7 @@ def get_llm_for_sequence_regression(
     # Note: dschf is defined in function scope to avoid global effects
     # https://huggingface.co/docs/transformers/main_classes/deepspeed#nontrainer-deepspeed-integration
     if ds_config is not None and ds_config["zero_optimization"]["stage"] == 3:
-        # TODO(@wuxibin): it's very weird that HfDeepSpeedConfig will cause vLLM not stable.
-        # dschf = HfDeepSpeedConfig(ds_config)
-        dschf = None
+        dschf = HfDeepSpeedConfig(ds_config)
     else:
         dschf = None
 
@@ -97,7 +95,6 @@ def get_llm_for_sequence_regression(
         config=config,
         trust_remote_code=True,
         torch_dtype=torch.bfloat16 if bf16 else "auto",
-        # device_map="cuda",
         **kwargs,
     )
 
