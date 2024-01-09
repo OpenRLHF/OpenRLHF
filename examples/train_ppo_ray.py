@@ -130,8 +130,10 @@ def train(args):
     if args.vllm_num_engines is not None:
         from openrlhf.trainer.ray.vllm_engine import LLMRayActor
 
+        # When tensor_parallel_size=1, vLLM init model in LLMEngine directly, assign 1 GPU for it.
+        num_gpus = int(args.vllm_tensor_parallel_size == 1)
         vllm_engines = [
-            LLMRayActor.remote(
+            LLMRayActor.options(num_gpus=num_gpus).remote(
                 args.pretrain,
                 trust_remote_code=True,
                 tensor_parallel_size=args.vllm_tensor_parallel_size,
