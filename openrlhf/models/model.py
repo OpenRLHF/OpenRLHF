@@ -213,7 +213,7 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
                 values = (values - self.mean) / self.std
 
             if return_output:
-                return values[:, -num_actions:], outputs if num_actions else outputs
+                return outputs if num_actions is None else (values[:, -num_actions:], outputs)
             else:
                 return values[:, -num_actions:]
 

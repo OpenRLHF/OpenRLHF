@@ -145,7 +145,7 @@ class Actor(nn.Module):
         log_probs = log_probs_from_logits(output["logits"][:, :-1, :], sequences[:, 1:])
 
         if return_output:
-            return log_probs[:, -num_actions:], output if num_actions else output
+            return output if num_actions is None else (log_probs[:, -num_actions:], output)
         else:
             return log_probs[:, -num_actions:]
 
