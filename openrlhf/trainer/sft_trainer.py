@@ -9,7 +9,7 @@ from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import SFTDataset
-from openrlhf.models import GPTLMLoss
+from openrlhf.models import GPTLMLoss, SwitchBalancingLoss
 
 
 class SFTTrainer(ABC):
@@ -58,6 +58,9 @@ class SFTTrainer(ABC):
 
         # misc
         self.loss_fn = GPTLMLoss()
+        self.balancing_loss = self.args.balancing_loss_coef > 1e-5
+        if self.balancing_loss:
+            self.balancing_loss_fn = SwitchBalancingLoss(model.config.num_experts, model.config.top_k)
 
         if self.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
@@ -111,7 +114,13 @@ class SFTTrainer(ABC):
             for prompts_id_len, inputs, attention_masks, _ in self.train_dataloader:
                 inputs = inputs.squeeze(1).to(torch.cuda.current_device())
                 attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
-                logits = self.model(inputs, attention_mask=attention_mask, return_output=True)["logits"]
+                output = self.model(inputs, attention_mask=attention_mask, return_output=True)
+
+                # loss function
+                if self.balancing_loss:
+                    balancing_loss = self.balancing_loss_fn(output.router_logits)
+                else:
+                    balancing_loss = 0
 
                 labels = torch.where(
                     attention_mask.bool(),
@@ -122,12 +131,17 @@ class SFTTrainer(ABC):
                     for label, source_len in zip(labels, prompts_id_len):
                         label[:source_len] = self.loss_fn.IGNORE_INDEX
 
-                loss = self.loss_fn(logits, labels)
+                gpt_loss = self.loss_fn(output.logits, labels)
+                loss = gpt_loss + balancing_loss * self.args.balancing_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
+
                 logs_dict = {
-                    "train_loss": loss.item(),
+                    "gpt_loss": gpt_loss.item(),
                 }
+                if self.balancing_loss:
+                    logs_dict["balancing_loss"] = balancing_loss.item()
+
                 # logs/checkpoints/evaluation
                 self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict)
 
@@ -189,7 +203,7 @@ class SFTTrainer(ABC):
 
                 times += 1
                 loss_sum += loss.item()
-                bar_dict = {"eval loss": loss_sum / times}
+                bar_dict = {"eval gpt_loss": loss_sum / times}
                 step_bar.update()
                 logs = self.strategy.all_reduce(bar_dict)
                 step_bar.set_postfix(logs)

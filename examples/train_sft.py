@@ -121,6 +121,7 @@ if __name__ == "__main__":
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False)
+    parser.add_argument("--balancing_loss_coef", type=float, default=0)
 
     # wandb pamameters
     parser.add_argument("--use_wandb", type=str, default=None)

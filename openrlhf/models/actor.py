@@ -65,7 +65,12 @@ class Actor(nn.Module):
                     trust_remote_code=True,
                     attn_implementation=attn_implementation,
                 )
+            self.config = self.model.config
 
+            # Mixtral 8x7b - balancing loss
+            if "output_router_logits" in self.model.config.to_dict():
+                self.strategy.print("[Mixtral 8x7b] set output_router_logits as True")
+                self.model.config.output_router_logits = True
         else:
             self.model = pretrain_or_model
 
