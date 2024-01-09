@@ -69,7 +69,7 @@ class Actor(nn.Module):
 
             # Mixtral 8x7b - balancing loss
             if "output_router_logits" in self.model.config.to_dict():
-                self.strategy.print("[Mixtral 8x7b] set output_router_logits as True")
+                print("[Mixtral 8x7b] set output_router_logits as True")
                 self.model.config.output_router_logits = True
         else:
             self.model = pretrain_or_model
