@@ -66,7 +66,7 @@ def train(args):
         False,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
-        ds_config=strategy.get_ds_eval_config(offload=False),
+        # ds_config=strategy.get_ds_eval_config(offload=False),
     )
     get_tokenizer(args.pretrain, initial_model.model, "left", strategy)
 
