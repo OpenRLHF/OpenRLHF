@@ -97,7 +97,7 @@ class RewardModelRayActor(BasePPORole):
             normalize_reward=strategy.args.normalize_reward,
             use_flash_attention_2=strategy.args.flash_attn,
             bf16=strategy.args.bf16,
-            ds_config=strategy.get_ds_eval_config(),
+            # ds_config=strategy.get_ds_eval_config(),
         )
         strategy.print(model)
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
