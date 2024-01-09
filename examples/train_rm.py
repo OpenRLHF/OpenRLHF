@@ -26,6 +26,7 @@ def train(args):
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
         ds_config=strategy.get_ds_train_config(is_actor=False),
+        init_value_head=True,
     )
 
     # configure tokenizer

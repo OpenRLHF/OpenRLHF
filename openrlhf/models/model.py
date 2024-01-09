@@ -22,6 +22,7 @@ def get_llm_for_sequence_regression(
     normalize_reward=False,
     use_flash_attention_2=False,
     ds_config: dict = None,
+    init_value_head: bool = False,
     **kwargs,
 ) -> nn.Module:
     """Get transformer with a sequence classification head on top (linear layer).
@@ -99,16 +100,17 @@ def get_llm_for_sequence_regression(
         **kwargs,
     )
 
-    # NOTE: For ZeRO-3 reward model training only, intialize value_head manually
+    # NOTE: For reward model training only, intialize value_head manually
     # because deepspeed.zero.Init() will not intialize them.
     # TODO: Find a better way to clarify reward model training.
-    if dschf is not None:
-        logger.info("initialize value_head for ZeRO-3 reward model training.")
-        with deepspeed.zero.GatheredParameters([model.value_head.weight], modifier_rank=0):
-            if torch.distributed.get_rank() == 0:
-                model.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
-    else:
-        model.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
+    if init_value_head:
+        if dschf is not None:
+            logger.info("initialize value_head for ZeRO-3 reward model training.")
+            with deepspeed.zero.GatheredParameters([model.value_head.weight], modifier_rank=0):
+                if torch.distributed.get_rank() == 0:
+                    model.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
+        else:
+            model.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
 
     # Mixtral 8x7b - balancing loss
     if "output_router_logits" in model.config.to_dict():
