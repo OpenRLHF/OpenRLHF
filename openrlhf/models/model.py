@@ -1,8 +1,8 @@
 from typing import Optional
 
+import deepspeed
 import torch
 import torch.nn as nn
-import deepspeed
 from transformers import AutoConfig, AutoModel
 from transformers.deepspeed import HfDeepSpeedConfig
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
