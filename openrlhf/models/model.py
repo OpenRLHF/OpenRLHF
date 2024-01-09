@@ -1,5 +1,6 @@
 from typing import Optional
 
+import deepspeed
 import torch
 import torch.nn as nn
 from transformers import AutoConfig, AutoModel
@@ -98,6 +99,16 @@ def get_llm_for_sequence_regression(
         **kwargs,
     )
 
+    # NOTE: For ZeRO-3 reward model training only, intialize value_head manually
+    # because deepspeed.zero.Init() will not intialize them.
+    # TODO: Find a better way to clarify reward model training.
+    if dschf is not None and model_type == "reward" and "offload_optimizer" in ds_config["zero_optimization"]:
+        logger.info("initialize value_head for ZeRO-3 reward model training.")
+        with deepspeed.zero.GatheredParameters([model.value_head.weight, model.value_head.bias], modifier_rank=0):
+            if torch.distributed.get_rank() == 0:
+                model.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
+                model.value_head.bias.data[0] = 0
+
     # Mixtral 8x7b - balancing loss
     if "output_router_logits" in model.config.to_dict():
         print("[Mixtral 8x7b] set output_router_logits as True")
@@ -114,7 +125,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model):
             super().__init__(config)
             setattr(self, self.base_model_prefix, base_llm_model(config))
 
-            self.value_head = nn.Linear(config.hidden_size, 1, bias=False)
+            self.value_head = nn.Linear(config.hidden_size, 1, bias=True)
             self.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
 
             # mean std
@@ -173,7 +184,7 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
             super().__init__(config)
             setattr(self, self.base_model_prefix, base_llm_model(config))
 
-            self.value_head = nn.Linear(config.hidden_size, 1, bias=False)
+            self.value_head = nn.Linear(config.hidden_size, 1, bias=True)
             self.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
 
             # mean std
