@@ -43,7 +43,7 @@ def train(args):
         ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
     )
     if args.ref_offload:
-        ref_model.offload = True
+        ref_model._offload = True
     get_tokenizer(args.pretrain, ref_model.model, "right", strategy)
 
     # lora

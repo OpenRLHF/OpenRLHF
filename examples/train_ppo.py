@@ -172,9 +172,9 @@ def train(args):
         critic.gradient_checkpointing_enable()
 
     if ema_model:
-        ema_model.offload = True
+        ema_model._offload = True
         ema_model = strategy.prepare(ema_model, is_rlhf=True)
-        del ema_model.offload
+        del ema_model._offload
 
     # load checkpoint
     if args.load_checkpoint:

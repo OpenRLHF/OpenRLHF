@@ -201,9 +201,9 @@ class ActorModelRayActor(BasePPORole):
             self.actor.gradient_checkpointing_enable()
 
         if ema_model:
-            ema_model.offload = True
+            ema_model._offload = True
             self.ema_model = strategy.prepare(ema_model, is_rlhf=True)
-            del ema_model.offload
+            del ema_model._offload
         else:
             self.ema_model = None
 
