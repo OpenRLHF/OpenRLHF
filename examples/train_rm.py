@@ -25,7 +25,7 @@ def train(args):
         "reward",
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
-        ds_config=strategy.get_ds_train_config(is_actor=False),
+        # ds_config=strategy.get_ds_train_config(is_actor=False),
     )
 
     # init value head
