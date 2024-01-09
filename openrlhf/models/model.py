@@ -107,8 +107,8 @@ def get_llm_for_sequence_regression(
         with deepspeed.zero.GatheredParameters([model.value_head.weight], modifier_rank=0):
             if torch.distributed.get_rank() == 0:
                 model.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
-                if "bias" in model.value_head:
-                    model.value_head.bias.data[0] = 0
+    else:
+        model.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
 
     # Mixtral 8x7b - balancing loss
     if "output_router_logits" in model.config.to_dict():
@@ -127,7 +127,6 @@ def _get_reward_model(base_pretrained_model, base_llm_model):
             setattr(self, self.base_model_prefix, base_llm_model(config))
 
             self.value_head = nn.Linear(config.hidden_size, 1, bias=False)
-            self.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
 
             # mean std
             self.normalize_reward = config.normalize_reward
@@ -186,7 +185,6 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
             setattr(self, self.base_model_prefix, base_llm_model(config))
 
             self.value_head = nn.Linear(config.hidden_size, 1, bias=False)
-            self.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
 
             # mean std
             self.normalize_reward = config.normalize_reward
