@@ -94,7 +94,7 @@ def get_llm_for_sequence_regression(
         model_name_or_path,
         config=config,
         trust_remote_code=True,
-        torch_dtype=torch.bfloat16 if bf16 else "auto",
+        torch_dtype="auto",
         **kwargs,
     )
 
@@ -116,7 +116,6 @@ def _get_reward_model(base_pretrained_model, base_llm_model):
 
             self.value_head = nn.Linear(config.hidden_size, 1)
             self.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
-            setattr(self.value_head, "_is_hf_initialized", True)
 
             # mean std
             self.normalize_reward = config.normalize_reward

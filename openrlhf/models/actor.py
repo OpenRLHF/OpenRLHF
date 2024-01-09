@@ -50,7 +50,7 @@ class Actor(nn.Module):
             if from_config:
                 config = AutoConfig.from_pretrained(
                     pretrain_or_model,
-                    torch_dtype=torch.bfloat16 if bf16 else "auto",
+                    torch_dtype="auto",
                     trust_remote_code=True,
                 )
                 self.model = AutoModelForCausalLM.from_config(
@@ -61,7 +61,7 @@ class Actor(nn.Module):
             else:
                 self.model = AutoModelForCausalLM.from_pretrained(
                     pretrain_or_model,
-                    torch_dtype=torch.bfloat16 if bf16 else "auto",
+                    torch_dtype="auto",
                     trust_remote_code=True,
                     attn_implementation=attn_implementation,
                 )
