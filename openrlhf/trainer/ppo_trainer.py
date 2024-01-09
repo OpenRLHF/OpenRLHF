@@ -276,7 +276,7 @@ class PPOTrainer(ABC):
             experience.advantages,
             action_mask=experience.action_mask,
         )
-        loss = ptx_loss + balancing_loss * self.args.balancing_loss_coef
+        loss = actor_loss + balancing_loss * self.args.balancing_loss_coef
         self.strategy.backward(loss, self.actor, self.actor_optim)
 
         # ptx loss
