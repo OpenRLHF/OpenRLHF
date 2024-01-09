@@ -204,7 +204,7 @@ class DeepspeedStrategy(ABC):
 
     def _ds_init_eval_model(self, model):
         is_actor = isinstance(model, Actor)
-        ds_config = self.get_ds_eval_config(is_ema=getattr(model, "is_ema", False))
+        ds_config = self.get_ds_eval_config(offload=getattr(model, "is_ema", False))
 
         engine, *_ = deepspeed.initialize(
             model=model.model if is_actor else model,
@@ -218,11 +218,7 @@ class DeepspeedStrategy(ABC):
             model = engine
         return model
 
-    def get_ds_eval_config(self, is_ema=False):
-        if is_ema:
-            offload = True
-        else:
-            offload = False
+    def get_ds_eval_config(self, offload=False):
         # DS Config
         ds_config = get_eval_ds_config(
             offload=offload,
