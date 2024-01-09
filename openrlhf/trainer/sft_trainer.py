@@ -55,6 +55,7 @@ class SFTTrainer(ABC):
         self.tokenizer = tokenizer
         self.optimizer = optim
         self.gradient_checkpointing = gradient_checkpointing
+        self.args = strategy.args
 
         # misc
         self.loss_fn = GPTLMLoss()
