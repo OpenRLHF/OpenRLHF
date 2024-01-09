@@ -50,7 +50,7 @@ class Actor(nn.Module):
             if from_config:
                 config = AutoConfig.from_pretrained(
                     pretrain_or_model,
-                    torch_dtype=torch.bfloat16 if bf16 else "auto",
+                    torch_dtype="auto",
                     trust_remote_code=True,
                 )
                 self.model = AutoModelForCausalLM.from_config(
@@ -61,11 +61,16 @@ class Actor(nn.Module):
             else:
                 self.model = AutoModelForCausalLM.from_pretrained(
                     pretrain_or_model,
-                    torch_dtype=torch.bfloat16 if bf16 else "auto",
+                    torch_dtype="auto",
                     trust_remote_code=True,
                     attn_implementation=attn_implementation,
                 )
+            self.config = self.model.config
 
+            # Mixtral 8x7b - balancing loss
+            if "output_router_logits" in self.model.config.to_dict():
+                print("[Mixtral 8x7b] set output_router_logits as True")
+                self.model.config.output_router_logits = True
         else:
             self.model = pretrain_or_model
 
@@ -137,11 +142,11 @@ class Actor(nn.Module):
     ) -> torch.Tensor:
         """Returns action log probs"""
         output = self.model(sequences, attention_mask=attention_mask)
+        log_probs = log_probs_from_logits(output["logits"][:, :-1, :], sequences[:, 1:])
 
         if return_output:
-            return output
+            return output if num_actions is None else (log_probs[:, -num_actions:], output)
         else:
-            log_probs = log_probs_from_logits(output["logits"][:, :-1, :], sequences[:, 1:])
             return log_probs[:, -num_actions:]
 
     def gradient_checkpointing_enable(self):

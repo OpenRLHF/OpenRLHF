@@ -20,7 +20,13 @@ def train(args):
     # configure model
     # load huggingface model/config
     from_config = bool(args.load_checkpoint)
-    model = Actor(args.pretrain, from_config, use_flash_attention_2=args.flash_attn, bf16=args.bf16)
+    model = Actor(
+        args.pretrain,
+        from_config,
+        use_flash_attention_2=args.flash_attn,
+        bf16=args.bf16,
+        ds_config=strategy.get_ds_train_config(is_actor=True),
+    )
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy)
@@ -121,6 +127,7 @@ if __name__ == "__main__":
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False)
+    parser.add_argument("--balancing_loss_coef", type=float, default=0)
 
     # wandb pamameters
     parser.add_argument("--use_wandb", type=str, default=None)

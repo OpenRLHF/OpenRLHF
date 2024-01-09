@@ -25,9 +25,10 @@ def train(args):
         "reward",
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
+        # ds_config=strategy.get_ds_train_config(is_actor=False),
     )
 
-    # Patch for from_pretrained
+    # init value head
     model.value_head.weight.data.normal_(mean=0.0, std=1 / (model.config.hidden_size + 1))
 
     # configure tokenizer
@@ -141,6 +142,7 @@ if __name__ == "__main__":
     parser.add_argument("--flash_attn", action="store_true", default=False)
     parser.add_argument("--compute_fp32_loss", action="store_true", default=False)
     parser.add_argument("--margin_loss", action="store_true", default=False)
+    parser.add_argument("--balancing_loss_coef", type=float, default=0)
     parser.add_argument("--bos_token", type=str, default=None)
     parser.add_argument("--eos_token", type=str, default=None)
     parser.add_argument("--pad_token", type=str, default=None)

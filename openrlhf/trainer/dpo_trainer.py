@@ -9,7 +9,7 @@ from torch.optim import Optimizer
 from torch.utils.data import DistributedSampler
 from tqdm import tqdm
 
-from openrlhf.models import DPOLoss
+from openrlhf.models import DPOLoss, SwitchBalancingLoss
 
 
 class DPOTrainer(ABC):
@@ -44,7 +44,6 @@ class DPOTrainer(ABC):
     ) -> None:
         super().__init__()
         self.strategy = strategy
-        self.args = strategy.args
         self.epochs = max_epochs
         self.max_norm = max_norm
         self.model = model
@@ -55,9 +54,14 @@ class DPOTrainer(ABC):
         self.optimizer = optim
         self.gradient_checkpointing = gradient_checkpointing
         self.tokenizer = tokenizer
+        self.args = strategy.args
 
         self.beta = beta
         self.loss_fn = DPOLoss(self.beta, self.args.label_smoothing, self.args.ipo)
+
+        self.balancing_loss = self.args.balancing_loss_coef > 1e-8
+        if self.balancing_loss:
+            self.balancing_loss_fn = SwitchBalancingLoss(model.config.num_experts, model.config.top_k)
 
         if self.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
@@ -116,17 +120,24 @@ class DPOTrainer(ABC):
                 reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
                 r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
 
-                chosen_logps, rejected_logps = self.concatenated_forward(
+                chosen_logps, rejected_logps, router_logits = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask
                 )
                 with torch.no_grad():
-                    reference_chosen_logps, reference_rejected_logps = self.concatenated_forward(
+                    reference_chosen_logps, reference_rejected_logps, _ = self.concatenated_forward(
                         self.ref_model, chosen_ids, c_mask, reject_ids, r_mask
                     )
-                loss, chosen_reward, reject_reward = self.loss_fn(
+
+                # loss function
+                if self.balancing_loss:
+                    balancing_loss = self.balancing_loss_fn(router_logits)
+                else:
+                    balancing_loss = 0
+
+                preference_loss, chosen_reward, reject_reward = self.loss_fn(
                     chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
                 )
-
+                loss = preference_loss + balancing_loss * self.args.balancing_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
@@ -134,7 +145,7 @@ class DPOTrainer(ABC):
                 loss_mean = loss_mean * 0.9 + 0.1 * loss.item()
                 # dpo logs
                 logs_dict = {
-                    "train_loss": loss.item(),
+                    "preference_loss": preference_loss.item(),
                     "chosen_reward": chosen_reward.mean().item(),
                     "reject_reward": reject_reward.mean().item(),
                     "acc_mean": acc_mean,
@@ -192,10 +203,10 @@ class DPOTrainer(ABC):
                 reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
                 r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
 
-                chosen_logps, rejected_logps = self.concatenated_forward(
+                chosen_logps, rejected_logps, _ = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask
                 )
-                reference_chosen_logps, reference_rejected_logps = self.concatenated_forward(
+                reference_chosen_logps, reference_rejected_logps, _ = self.concatenated_forward(
                     self.ref_model, chosen_ids, c_mask, reject_ids, r_mask
                 )
                 loss, chosen_reward, reject_reward = self.loss_fn(
@@ -225,11 +236,13 @@ class DPOTrainer(ABC):
         We do this to avoid doing two forward passes, because it's faster for FSDP.
         """
         input_ids, att_masks = self.concatenated_inputs(chosen_ids, c_mask, reject_ids, r_mask)
-        all_logits = model(input_ids, attention_mask=att_masks, return_output=True)["logits"]
+        output = model(input_ids, attention_mask=att_masks, return_output=True)
+        all_logits = output["logits"]
         all_logps = self._get_batch_logps(all_logits, input_ids, attention_mask=att_masks, average_log_prob=False)
         chosen_logps = all_logps[: chosen_ids.shape[0]]
         rejected_logps = all_logps[chosen_ids.shape[0] :]
-        return chosen_logps, rejected_logps
+        router_logits = output.router_logits if "router_logits" in output else []
+        return chosen_logps, rejected_logps, router_logits
 
     def concatenated_inputs(self, chosen_ids, c_mask, reject_ids, r_mask):
         """Concatenate the chosen and rejected inputs into a single tensor.

@@ -8,7 +8,7 @@ from torch.optim import Optimizer
 from torch.utils.data import DistributedSampler
 from tqdm import tqdm
 
-from openrlhf.models import LogExpLoss, PairWiseLoss
+from openrlhf.models import LogExpLoss, PairWiseLoss, SwitchBalancingLoss
 
 
 class RewardModelTrainer(ABC):
@@ -51,6 +51,7 @@ class RewardModelTrainer(ABC):
         self.optimizer = optim
         self.gradient_checkpointing = gradient_checkpointing
         self.tokenizer = tokenizer
+        self.args = strategy.args
 
         if loss == "sigmoid":
             self.loss_fn = PairWiseLoss()
@@ -58,6 +59,10 @@ class RewardModelTrainer(ABC):
         else:
             self.loss_fn = LogExpLoss()
             self.strategy.print("LogExp Loss")
+
+        self.balancing_loss = self.args.balancing_loss_coef > 1e-8
+        if self.balancing_loss:
+            self.balancing_loss_fn = SwitchBalancingLoss(model.config.num_experts, model.config.top_k)
 
         self.margin_loss = self.strategy.args.margin_loss
         self.compute_fp32_loss = self.strategy.args.compute_fp32_loss
@@ -119,28 +124,37 @@ class RewardModelTrainer(ABC):
                 else:
                     margin = None
 
-                chosen_reward, reject_reward = self.concatenated_forward(
+                chosen_reward, reject_reward, router_logits = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask
                 )
+
+                # loss function
+                if self.balancing_loss:
+                    balancing_loss = self.balancing_loss_fn(router_logits)
+                else:
+                    balancing_loss = 0
 
                 if self.compute_fp32_loss:
                     chosen_reward = chosen_reward.float()
                     reject_reward = reject_reward.float()
-                loss = self.loss_fn(chosen_reward, reject_reward, margin)
 
+                preference_loss = self.loss_fn(chosen_reward, reject_reward, margin)
+                loss = preference_loss + balancing_loss * self.args.balancing_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 acc_mean = acc_mean * 0.9 + 0.1 * (chosen_reward > reject_reward).float().mean().item()
-                loss_mean = loss_mean * 0.9 + 0.1 * loss.item()
+                loss_mean = loss_mean * 0.9 + 0.1 * preference_loss.item()
                 # optional rm info
                 logs_dict = {
-                    "train_loss": loss.item(),
+                    "preference_loss": preference_loss.item(),
                     "chosen_reward": chosen_reward.mean().item(),
                     "reject_reward": reject_reward.mean().item(),
                     "acc_mean": acc_mean,
                     "loss_mean": loss_mean,
                 }
+                if self.balancing_loss:
+                    logs_dict["balancing_loss"] = balancing_loss.item()
                 # logs/checkpoints/evaluate
                 self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict)
 
@@ -194,7 +208,7 @@ class RewardModelTrainer(ABC):
                 r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
                 margin = margin.to(torch.cuda.current_device())
 
-                chosen_reward, reject_reward = self.concatenated_forward(
+                chosen_reward, reject_reward, _ = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask
                 )
                 loss = self.loss_fn(chosen_reward, reject_reward, margin)
@@ -242,10 +256,11 @@ class RewardModelTrainer(ABC):
         We do this to avoid doing two forward passes, because it's faster for FSDP.
         """
         input_ids, att_masks = self.concatenated_inputs(chosen_ids, c_mask, reject_ids, r_mask)
-        all_values = model(input_ids, attention_mask=att_masks)
+        all_values, output = model(input_ids, attention_mask=att_masks, return_output=True)
         chosen_rewards = all_values[: chosen_ids.shape[0]]
         rejected_rewards = all_values[chosen_ids.shape[0] :]
-        return chosen_rewards, rejected_rewards
+        router_logits = output.router_logits if "router_logits" in output else []
+        return chosen_rewards, rejected_rewards, router_logits
 
     def concatenated_inputs(self, chosen_ids, c_mask, reject_ids, r_mask):
         """Concatenate the chosen and rejected inputs into a single tensor.

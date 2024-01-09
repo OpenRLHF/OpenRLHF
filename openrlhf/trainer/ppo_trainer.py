@@ -11,7 +11,7 @@ from torch.optim import Optimizer
 from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 
-from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
+from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, SwitchBalancingLoss, ValueLoss
 from openrlhf.models.utils import masked_mean
 
 from .ppo_utils import AdaptiveKLController, Experience, FixedKLController, NaiveExperienceMaker, NaiveReplayBuffer
@@ -82,6 +82,7 @@ class PPOTrainer(ABC):
 
         super().__init__()
         self.strategy = strategy
+        self.args = strategy.args
         self.micro_rollout_batch_size = micro_rollout_batch_size
         self.max_epochs = max_epochs
         self.tokenizer = tokenizer
@@ -109,6 +110,12 @@ class PPOTrainer(ABC):
         self.actor_loss_fn = PolicyLoss(eps_clip)
         self.critic_loss_fn = ValueLoss(value_clip)
         self.ptx_loss_fn = GPTLMLoss()
+
+        # Mixtral 8x7b
+        self.balancing_loss = self.args.balancing_loss_coef > 1e-8
+        if self.balancing_loss:
+            self.actor_balancing_loss_fn = SwitchBalancingLoss(actor.config.num_experts, actor.config.top_k)
+            self.critic_balancing_loss_fn = SwitchBalancingLoss(critic.config.num_experts, critic.config.top_k)
 
         if self.kl_target:
             self.kl_ctl = AdaptiveKLController(init_kl_coef, kl_target, kl_horizon)
@@ -254,14 +261,23 @@ class PPOTrainer(ABC):
 
         num_actions = experience.action_mask.size(1)
         # actor loss
-        action_log_probs = self.actor(experience.sequences, num_actions, attention_mask=experience.attention_mask)
+        action_log_probs, output = self.actor(
+            experience.sequences, num_actions, attention_mask=experience.attention_mask, return_output=True
+        )
+
+        # loss function
+        if self.balancing_loss:
+            balancing_loss = self.actor_balancing_loss_fn(output.router_logits)
+        else:
+            balancing_loss = 0
         actor_loss = self.actor_loss_fn(
             action_log_probs,
             experience.action_log_probs,
             experience.advantages,
             action_mask=experience.action_mask,
         )
-        self.strategy.backward(actor_loss, self.actor, self.actor_optim)
+        loss = actor_loss + balancing_loss * self.args.balancing_loss_coef
+        self.strategy.backward(loss, self.actor, self.actor_optim)
 
         # ptx loss
         if self.pretrain_dataloader is not None:
@@ -274,9 +290,17 @@ class PPOTrainer(ABC):
                 self.ptx_loss_fn.IGNORE_INDEX,
             )
 
-            ptx_log_probs = self.actor(inputs, attention_mask=attention_mask, return_output=True)["logits"]
+            output = self.actor(inputs, attention_mask=attention_mask, return_output=True)
+            ptx_log_probs = output["logits"]
+
+            # loss function
+            if self.balancing_loss:
+                balancing_loss = self.actor_balancing_loss_fn(output.router_logits)
+            else:
+                balancing_loss = 0
             ptx_loss = self.ptx_loss_fn(ptx_log_probs, label)
-            self.strategy.backward(ptx_loss, self.actor, self.actor_optim)
+            loss = ptx_loss + balancing_loss * self.args.balancing_loss_coef
+            self.strategy.backward(loss, self.actor, self.actor_optim)
 
         self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
         if self.ema_model:
@@ -301,19 +325,25 @@ class PPOTrainer(ABC):
         self.critic.train()
 
         # critic loss
-        values = self.critic(
+        values, output = self.critic(
             experience.sequences,
             action_mask=experience.action_mask,
             attention_mask=experience.attention_mask,
+            return_output=True,
         )
+        # loss function
+        if self.balancing_loss:
+            balancing_loss = self.critic_balancing_loss_fn(output.router_logits)
+        else:
+            balancing_loss = 0
         critic_loss = self.critic_loss_fn(
             values,
             experience.values,
             experience.returns,
             action_mask=experience.action_mask,
         )
-
-        self.strategy.backward(critic_loss, self.critic, self.critic_optim)
+        loss = critic_loss + balancing_loss * self.args.balancing_loss_coef
+        self.strategy.backward(loss, self.critic, self.critic_optim)
         self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
 
         # status

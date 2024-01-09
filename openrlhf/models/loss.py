@@ -140,3 +140,57 @@ class DPOLoss(nn.Module):
         rejected_rewards = self.beta * (policy_rejected_logps - reference_rejected_logps).detach()
 
         return loss, chosen_rewards, rejected_rewards
+
+
+# Adapted from https://github.com/huggingface/transformers/blob/3b742ea84cfc32432d60c0b65c886576ef736833/src/transformers/models/mixtral/modeling_mixtral.py#L77
+class SwitchBalancingLoss(nn.Module):
+    def __init__(self, num_experts: torch.Tensor = None, top_k=2):
+        super().__init__()
+        self.num_experts = num_experts
+        self.top_k = top_k
+
+    def forward(gate_logits: torch.Tensor) -> float:
+        r"""
+        Computes auxiliary load balancing loss as in Switch Transformer - implemented in Pytorch.
+
+        See Switch Transformer (https://arxiv.org/abs/2101.03961) for more details. This function implements the loss
+        function presented in equations (4) - (6) of the paper. It aims at penalizing cases where the routing between
+        experts is too unbalanced.
+
+        Args:
+            gate_logits (Union[`torch.Tensor`, Tuple[torch.Tensor]):
+                Logits from the `gate`, should be a tuple of model.config.num_hidden_layers tensors of
+                shape [batch_size X sequence_length, num_experts].
+            num_experts (`int`, *optional*):
+                Number of experts
+
+        Returns:
+            The auxiliary loss.
+        """
+        if gate_logits is None or not isinstance(gate_logits, tuple):
+            return 0
+
+        if isinstance(gate_logits, tuple):
+            compute_device = gate_logits[0].device
+            concatenated_gate_logits = torch.cat([layer_gate.to(compute_device) for layer_gate in gate_logits], dim=0)
+
+        # `[batch_size X sequence_length, num_experts]`
+        routing_weights = torch.nn.functional.softmax(concatenated_gate_logits, dim=-1)
+
+        _, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
+
+        # treat `top_k` as tokens (shape is `top_k X [batch_size X sequence_length]`)
+        selected_experts = selected_experts.reshape(-1)
+
+        # `top_k X [batch_size X sequence_length] X num_experts
+        expert_mask = torch.nn.functional.one_hot(selected_experts, self.num_experts)
+        expert_mask = torch.max(expert_mask, dim=-2).values
+
+        # Compute the percentage of tokens routed to each experts
+        tokens_per_expert = torch.mean(expert_mask.float(), dim=0)
+
+        # Compute the average probability of routing to these experts
+        router_prob_per_expert = torch.mean(routing_weights, dim=0)
+
+        overall_loss = torch.sum(tokens_per_expert * router_prob_per_expert.unsqueeze(-1))
+        return overall_loss * self.num_experts

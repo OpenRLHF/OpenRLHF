@@ -24,7 +24,14 @@ def train(args):
     # load huggingface model/config
     actor_from_config = bool(args.load_checkpoint)
 
-    actor = Actor(args.pretrain, actor_from_config, use_flash_attention_2=args.flash_attn, bf16=args.bf16)
+    actor = Actor(
+        args.pretrain,
+        actor_from_config,
+        use_flash_attention_2=args.flash_attn,
+        bf16=args.bf16,
+        # ds_config=strategy.get_ds_train_config(is_actor=True),
+    )
+
     if args.actor_init_on_gpu:
         actor = actor.to(torch.cuda.current_device())
 
@@ -34,6 +41,7 @@ def train(args):
         normalize_reward=args.normalize_reward,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
+        # ds_config=strategy.get_ds_train_config(is_actor=False),
     )
     reward_model = get_llm_for_sequence_regression(
         args.reward_pretrain,
@@ -41,6 +49,7 @@ def train(args):
         normalize_reward=args.normalize_reward,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
+        # ds_config=strategy.get_ds_train_config(is_actor=False),
     )
 
     # configure tokenizer
@@ -51,8 +60,15 @@ def train(args):
     strategy.print(actor)
     strategy.print(critic)
 
-    # copy weights for reference actor/ema actor/critic
-    initial_model = deepcopy(actor)
+    # load weights for reference actor
+    initial_model = Actor(
+        args.pretrain,
+        False,
+        use_flash_attention_2=args.flash_attn,
+        bf16=args.bf16,
+        # ds_config=strategy.get_ds_eval_config(offload=False),
+    )
+    get_tokenizer(args.pretrain, initial_model.model, "left", strategy)
 
     strategy.print("reward normalization status: {}".format(args.normalize_reward))
     strategy.print("mean: {}, std {}".format(reward_model.mean, reward_model.std))
@@ -156,9 +172,9 @@ def train(args):
         critic.gradient_checkpointing_enable()
 
     if ema_model:
-        ema_model.is_ema = True
+        ema_model._offload = True
         ema_model = strategy.prepare(ema_model, is_rlhf=True)
-        del ema_model.is_ema
+        del ema_model._offload
 
     # load checkpoint
     if args.load_checkpoint:
@@ -280,6 +296,7 @@ if __name__ == "__main__":
     parser.add_argument("--adam_offload", action="store_true", default=False)
     parser.add_argument("--actor_init_on_gpu", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False)
+    parser.add_argument("--balancing_loss_coef", type=float, default=0)
 
     parser.add_argument("--bos_token", type=str, default=None)
     parser.add_argument("--eos_token", type=str, default=None)

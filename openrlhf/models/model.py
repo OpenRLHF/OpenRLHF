@@ -94,9 +94,14 @@ def get_llm_for_sequence_regression(
         model_name_or_path,
         config=config,
         trust_remote_code=True,
-        torch_dtype=torch.bfloat16 if bf16 else "auto",
+        torch_dtype="auto",
         **kwargs,
     )
+
+    # Mixtral 8x7b - balancing loss
+    if "output_router_logits" in model.config.to_dict():
+        print("[Mixtral 8x7b] set output_router_logits as True")
+        model.config.output_router_logits = True
 
     return model
 
@@ -133,6 +138,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model):
             self,
             input_ids: torch.LongTensor = None,
             attention_mask: Optional[torch.Tensor] = None,
+            return_output=False,
         ) -> torch.Tensor:
             outputs = getattr(self, self.base_model_prefix)(
                 input_ids,
@@ -151,7 +157,10 @@ def _get_reward_model(base_pretrained_model, base_llm_model):
                 # normalize reward in eval mode
                 if self.normalize_reward:
                     reward = (reward - self.mean) / self.std
-            return reward
+            if return_output:
+                return reward, outputs
+            else:
+                return reward
 
     return LLMForSequenceRegression
 
@@ -189,6 +198,7 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
             input_ids: torch.LongTensor = None,
             action_mask: Optional[torch.Tensor] = None,
             attention_mask: Optional[torch.Tensor] = None,
+            return_output=False,
         ) -> torch.Tensor:
             outputs = getattr(self, self.base_model_prefix)(
                 input_ids,
@@ -201,6 +211,10 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
             # normalize reward
             if self.normalize_reward:
                 values = (values - self.mean) / self.std
-            return values[:, -num_actions:]
+
+            if return_output:
+                return outputs if num_actions is None else (values[:, -num_actions:], outputs)
+            else:
+                return values[:, -num_actions:]
 
     return LLMForSequenceRegression
