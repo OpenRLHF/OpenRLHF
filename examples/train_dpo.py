@@ -34,7 +34,17 @@ def train(args):
     tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy)
     strategy.print(model)
 
-    ref_model = deepcopy(model)
+    # load weights for ref model
+    ref_model = Actor(
+        args.pretrain,
+        False,
+        use_flash_attention_2=args.flash_attn,
+        bf16=args.bf16,
+        ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
+    )
+    if args.ref_offload:
+        ref_model.offload = True
+    get_tokenizer(args.pretrain, ref_model.model, "right", strategy)
 
     # lora
     if args.lora_rank > 0:
@@ -140,6 +150,7 @@ if __name__ == "__main__":
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2)
     parser.add_argument("--bf16", action="store_true", default=False)
+    parser.add_argument("--ref_offload", action="store_true", default=False)
     parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False)
