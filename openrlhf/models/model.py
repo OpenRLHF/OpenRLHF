@@ -211,11 +211,10 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
             # normalize reward
             if self.normalize_reward:
                 values = (values - self.mean) / self.std
-            values = values[:, -num_actions:]
 
             if return_output:
-                return values, outputs
+                return values[:, -num_actions:], outputs if num_actions else outputs
             else:
-                return values
+                return values[:, -num_actions:]
 
     return LLMForSequenceRegression

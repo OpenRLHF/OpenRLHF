@@ -142,11 +142,11 @@ class Actor(nn.Module):
     ) -> torch.Tensor:
         """Returns action log probs"""
         output = self.model(sequences, attention_mask=attention_mask)
+        log_probs = log_probs_from_logits(output["logits"][:, :-1, :], sequences[:, 1:])
 
         if return_output:
-            return output
+            return log_probs[:, -num_actions:], output if num_actions else output
         else:
-            log_probs = log_probs_from_logits(output["logits"][:, :-1, :], sequences[:, 1:])
             return log_probs[:, -num_actions:]
 
     def gradient_checkpointing_enable(self):
