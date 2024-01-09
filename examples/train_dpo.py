@@ -40,7 +40,7 @@ def train(args):
         False,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
-        # ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
+        ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
     )
     if args.ref_offload:
         ref_model._offload = True
