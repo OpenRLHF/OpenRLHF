@@ -29,7 +29,7 @@ def train(args):
         actor_from_config,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
-        # ds_config=strategy.get_ds_train_config(is_actor=True),
+        ds_config=strategy.get_ds_train_config(is_actor=True),
     )
 
     if args.actor_init_on_gpu:
@@ -41,7 +41,7 @@ def train(args):
         normalize_reward=args.normalize_reward,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
-        # ds_config=strategy.get_ds_train_config(is_actor=False),
+        ds_config=strategy.get_ds_train_config(is_actor=False),
     )
     reward_model = get_llm_for_sequence_regression(
         args.reward_pretrain,
@@ -49,7 +49,7 @@ def train(args):
         normalize_reward=args.normalize_reward,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
-        # ds_config=strategy.get_ds_train_config(is_actor=False),
+        ds_config=strategy.get_ds_train_config(is_actor=False),
     )
 
     # configure tokenizer

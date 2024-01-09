@@ -114,7 +114,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model):
             super().__init__(config)
             setattr(self, self.base_model_prefix, base_llm_model(config))
 
-            self.value_head = nn.Linear(config.hidden_size, 1)
+            self.value_head = nn.Linear(config.hidden_size, 1, bias=False)
             self.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
 
             # mean std
@@ -173,7 +173,7 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
             super().__init__(config)
             setattr(self, self.base_model_prefix, base_llm_model(config))
 
-            self.value_head = nn.Linear(config.hidden_size, 1)
+            self.value_head = nn.Linear(config.hidden_size, 1, bias=False)
             self.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
 
             # mean std
