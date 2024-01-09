@@ -112,7 +112,7 @@ class PPOTrainer(ABC):
         self.ptx_loss_fn = GPTLMLoss()
 
         # Mixtral 8x7b
-        self.balancing_loss = self.args.balancing_loss_coef > 1e-5
+        self.balancing_loss = self.args.balancing_loss_coef > 1e-8
         if self.balancing_loss:
             self.actor_balancing_loss_fn = SwitchBalancingLoss(actor.config.num_experts, actor.config.top_k)
             self.critic_balancing_loss_fn = SwitchBalancingLoss(critic.config.num_experts, critic.config.top_k)

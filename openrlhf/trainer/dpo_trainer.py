@@ -59,7 +59,7 @@ class DPOTrainer(ABC):
         self.beta = beta
         self.loss_fn = DPOLoss(self.beta, self.args.label_smoothing, self.args.ipo)
 
-        self.balancing_loss = self.args.balancing_loss_coef > 1e-5
+        self.balancing_loss = self.args.balancing_loss_coef > 1e-8
         if self.balancing_loss:
             self.balancing_loss_fn = SwitchBalancingLoss(model.config.num_experts, model.config.top_k)
 
