@@ -10,23 +10,7 @@ import torch
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
 
 
-def get_train_ds_config(
-    offload,
-    adam_offload=True,
-    stage=2,
-    bf16=True,
-    max_norm=1.0,
-    enable_hybrid_engine=False,
-    inference_tp_size=1,
-    release_inference_cache=True,
-    pin_parameters=True,
-    tp_gather_partition_size=4,
-    max_out_tokens=512,
-    zpg=8,
-):
-    if enable_hybrid_engine and inference_tp_size > 1:
-        assert stage == 3, "Zero stage 3 must be used to do Tensor sharding in the hybrid engine"
-
+def get_train_ds_config(offload, adam_offload=True, stage=2, bf16=True, max_norm=1.0, zpg=8, grad_accum_dtype="fp32"):
     device = "cpu" if offload else "none"
     zero_opt_dict = {
         "stage": stage,
@@ -51,14 +35,7 @@ def get_train_ds_config(
         "gradient_clipping": max_norm,
         "prescale_gradients": False,
         "wall_clock_breakdown": False,
-        "hybrid_engine": {
-            "enabled": enable_hybrid_engine,
-            "max_out_tokens": max_out_tokens,
-            "inference_tp_size": inference_tp_size,
-            "release_inference_cache": release_inference_cache,
-            "pin_parameters": pin_parameters,
-            "tp_gather_partition_size": tp_gather_partition_size,
-        },
+        "data_types": {"grad_accum_dtype": grad_accum_dtype},
     }
 
 
@@ -66,16 +43,7 @@ def get_eval_ds_config(
     offload,
     stage=0,
     bf16=True,
-    enable_hybrid_engine=False,
-    inference_tp_size=1,
-    release_inference_cache=True,
-    pin_parameters=True,
-    tp_gather_partition_size=1,
-    max_out_tokens=512,
 ):
-    if enable_hybrid_engine and inference_tp_size > 1:
-        assert stage == 3, "Zero stage 3 must be used to do Tensor sharding in the hybrid engine"
-
     zero_opt_dict = {
         "stage": stage,
         "stage3_param_persistence_threshold": 1e4,
@@ -92,14 +60,6 @@ def get_eval_ds_config(
         "gradient_clipping": 1.0,
         "prescale_gradients": False,
         "wall_clock_breakdown": False,
-        "hybrid_engine": {
-            "enabled": enable_hybrid_engine,
-            "max_out_tokens": max_out_tokens,
-            "inference_tp_size": inference_tp_size,
-            "release_inference_cache": release_inference_cache,
-            "pin_parameters": pin_parameters,
-            "tp_gather_partition_size": tp_gather_partition_size,
-        },
     }
 
 

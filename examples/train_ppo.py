@@ -283,7 +283,6 @@ if __name__ == "__main__":
     parser.add_argument("--lora_rank", type=int, default=0, help="low-rank adaptation matrices rank")
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2)
-    parser.add_argument("--inference_tp_size", type=int, default=1)
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--bf16", action="store_true", default=False)
     parser.add_argument("--actor_learning_rate", type=float, default=1e-6)
@@ -297,6 +296,7 @@ if __name__ == "__main__":
     parser.add_argument("--actor_init_on_gpu", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False)
     parser.add_argument("--balancing_loss_coef", type=float, default=0)
+    parser.add_argument("--grad_accum_dtype", type=str, default=None)
 
     parser.add_argument("--bos_token", type=str, default=None)
     parser.add_argument("--eos_token", type=str, default=None)

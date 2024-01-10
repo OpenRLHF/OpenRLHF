@@ -42,8 +42,6 @@ class DeepspeedStrategy(ABC):
         micro_train_batch_size=1,
         train_batch_size=1,
         zero_stage=2,
-        max_out_tokens=512,
-        inference_tp_size=1,
         bf16=True,
         args=None,
     ) -> None:
@@ -52,15 +50,15 @@ class DeepspeedStrategy(ABC):
         self.args = args
         self.stage = zero_stage
         self.train_batch_size = train_batch_size
-        self.max_out_tokens = max_out_tokens
         self.micro_train_batch_size = micro_train_batch_size
-        self.inference_tp_size = inference_tp_size
         self.bf16 = bf16
         self.adam_offload = args.adam_offload
-        self.is_rlhf = False
         self.zpg = args.zpg
         self.seed = seed
         self.max_norm = max_norm
+        self.grad_accum_dtype = args.grad_accum_dtype
+
+        self.is_rlhf = False
         self.time_steps = defaultdict(int)
 
     def set_seed(self, seed: int) -> None:
@@ -184,13 +182,8 @@ class DeepspeedStrategy(ABC):
             stage=self.stage,
             bf16=self.bf16,
             max_norm=self.max_norm,
-            # hybrid_engine does not support a lot of models
-            enable_hybrid_engine=False,
-            pin_parameters=True,
-            inference_tp_size=self.inference_tp_size,
-            tp_gather_partition_size=4,
-            max_out_tokens=self.max_out_tokens,
             zpg=self.zpg,
+            grad_accum_dtype=self.grad_accum_dtype,
         )
 
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
@@ -220,15 +213,7 @@ class DeepspeedStrategy(ABC):
 
     def get_ds_eval_config(self, offload=False):
         # DS Config
-        ds_config = get_eval_ds_config(
-            offload=offload,
-            stage=self.stage if self.stage == 3 else 0,
-            bf16=self.bf16,
-            enable_hybrid_engine=False,
-            inference_tp_size=self.inference_tp_size,
-            tp_gather_partition_size=self.inference_tp_size,
-            max_out_tokens=self.max_out_tokens,
-        )
+        ds_config = get_eval_ds_config(offload=offload, stage=self.stage if self.stage == 3 else 0, bf16=self.bf16)
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
         ds_config["train_batch_size"] = self.train_batch_size
 

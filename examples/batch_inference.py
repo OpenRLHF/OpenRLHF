@@ -216,7 +216,6 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=1234)
 
     # for generation
-    parser.add_argument("--inference_tp_size", type=int, default=1)
     parser.add_argument("--ta_prompt", type=str, default=None)
     parser.add_argument("--prompt_max_len", type=int, default=1024)
     parser.add_argument("--greedy_sampling", action="store_true", default=False)
