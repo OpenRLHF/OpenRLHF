@@ -258,23 +258,19 @@ class DeepspeedStrategy(ABC):
         if isinstance(model_to_save, PeftModel):
             model_to_save = model_to_save.merge_and_unload()
 
-        if self.stage != 3:
-            if self.is_rank_0():
-                model_to_save.save_pretrained(output_dir, **kwargs)
-        else:
-            output_state_dict = {}
-            # gather parameters
-            for k, v in model_to_save.named_parameters():
-                params_to_fetch = _z3_params_to_fetch([v])
-                with deepspeed.zero.GatheredParameters(params_to_fetch, enabled=len(params_to_fetch) > 0):
-                    vv = v.data.cpu()
-                    if self.is_rank_0():
-                        output_state_dict[k] = vv
-            if self.is_rank_0():
-                for k, v in model_to_save.named_buffers():
-                    vv = v.data.cpu()
+        output_state_dict = {}
+        # gather parameters
+        for k, v in model_to_save.named_parameters():
+            params_to_fetch = _z3_params_to_fetch([v])
+            with deepspeed.zero.GatheredParameters(params_to_fetch, enabled=len(params_to_fetch) > 0):
+                vv = v.data.cpu()
+                if self.is_rank_0():
                     output_state_dict[k] = vv
-                model_to_save.save_pretrained(output_dir, state_dict=output_state_dict, **kwargs)
+        if self.is_rank_0():
+            for k, v in model_to_save.named_buffers():
+                vv = v.data.cpu()
+                output_state_dict[k] = vv
+            model_to_save.save_pretrained(output_dir, state_dict=output_state_dict, **kwargs)
 
         if self.is_rank_0():
             # save config

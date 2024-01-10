@@ -10,7 +10,7 @@ import torch
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
 
 
-def get_train_ds_config(offload, adam_offload=True, stage=2, bf16=True, max_norm=1.0, zpg=8, grad_accum_dtype="fp32"):
+def get_train_ds_config(offload, adam_offload=True, stage=2, bf16=True, max_norm=1.0, zpg=8, grad_accum_dtype=None):
     device = "cpu" if offload else "none"
     zero_opt_dict = {
         "stage": stage,
@@ -35,7 +35,7 @@ def get_train_ds_config(offload, adam_offload=True, stage=2, bf16=True, max_norm
         "gradient_clipping": max_norm,
         "prescale_gradients": False,
         "wall_clock_breakdown": False,
-        "data_types": {"grad_accum_dtype": grad_accum_dtype},
+        "data_types": {"grad_accum_dtype": grad_accum_dtype if grad_accum_dtype else "fp32"},
     }
 
 
