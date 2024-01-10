@@ -13,7 +13,14 @@ def generate(args):
     strategy.setup_distributed()
 
     # configure model
-    model = Actor(args.pretrain, False, use_flash_attention_2=args.flash_attn)
+    model = Actor(
+        args.pretrain,
+        use_flash_attention_2=args.flash_attn,
+        bf16=args.bf16,
+        load_in_4bit=args.load_in_4bit,
+        lora_rank=args.lora_rank,
+        lora_alpha=args.lora_alpha,
+    )
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy)
@@ -40,7 +47,7 @@ def generate(args):
         # get input prompt
         user_prompt = user_prompt + "\nHuman: " + inputs + "\nAssistant: "
         if args.enable_dt:
-            user_prompt += args.dt_prompt.strip() + " "
+            user_prompt += args.ca_prompt.strip() + " "
         user_prompt_len = len(user_prompt)
 
         input_ids = tokenizer.encode(user_prompt, return_tensors="pt").to(torch.cuda.current_device())
@@ -77,9 +84,14 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=0.5)
     parser.add_argument("--repetition_penalty", type=float, default=1.2)
 
+    # QLora
+    parser.add_argument("--load_in_4bit", action="store_true", default=False)
+    parser.add_argument("--lora_rank", type=int, default=0)
+    parser.add_argument("--lora_alpha", type=int, default=16)
+
     parser.add_argument("--ta_prompt", type=str, default=None)
     parser.add_argument("--enable_dt", action="store_true", default=False)
-    parser.add_argument("--dt_prompt", type=str, default="<rm_score>: 5.00", help="decision transformer prompt")
+    parser.add_argument("--ca_prompt", type=str, default="<rm_score>: 5.00", help="conditional alignment prompt")
     args = parser.parse_args()
 
     print(args)

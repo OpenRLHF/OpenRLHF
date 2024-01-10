@@ -17,11 +17,9 @@ def train(args):
     strategy.setup_distributed()
 
     # configure model
-    # load huggingface model/config
-    from_config = bool(args.load_checkpoint)
+    # load huggingface model
     model = Actor(
         args.pretrain,
-        from_config,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
         load_in_4bit=args.load_in_4bit,

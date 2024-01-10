@@ -20,12 +20,9 @@ def train(args):
     strategy.setup_distributed()
 
     # configure model
-    # load huggingface model/config
-    actor_from_config = bool(args.load_checkpoint)
-
+    # load huggingface model
     actor = Actor(
         args.pretrain,
-        actor_from_config,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
         ds_config=strategy.get_ds_train_config(is_actor=True),
@@ -62,7 +59,6 @@ def train(args):
     # load weights for reference actor
     initial_model = Actor(
         args.pretrain,
-        False,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
         ds_config=strategy.get_ds_eval_config(offload=False),
