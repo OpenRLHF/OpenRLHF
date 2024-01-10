@@ -112,6 +112,7 @@ class SFTTrainer(ABC):
 
             # train
             self.model.train()
+            loss_mean = 0
             for prompts_id_len, inputs, attention_masks, _ in self.train_dataloader:
                 inputs = inputs.squeeze(1).to(torch.cuda.current_device())
                 attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
@@ -137,9 +138,8 @@ class SFTTrainer(ABC):
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-                logs_dict = {
-                    "gpt_loss": gpt_loss.item(),
-                }
+                loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item()
+                logs_dict = {"gpt_loss": gpt_loss.item(), "loss_mean": loss_mean}
                 if self.balancing_loss:
                     logs_dict["balancing_loss"] = balancing_loss.item()
 
