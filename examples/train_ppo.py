@@ -10,7 +10,6 @@ from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.models import Actor, get_llm_for_sequence_regression
-from openrlhf.models.utils import lora_enable
 from openrlhf.trainer import PPOTrainer
 from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
@@ -72,12 +71,6 @@ def train(args):
 
     strategy.print("reward normalization status: {}".format(args.normalize_reward))
     strategy.print("mean: {}, std {}".format(reward_model.mean, reward_model.std))
-
-    # lora
-    if args.lora_rank > 0:
-        strategy.print("lora_enable")
-        actor.model = lora_enable(actor.model, args.lora_rank)
-        critic = lora_enable(critic, args.lora_rank)
 
     if args.enable_ema:
         ema_model = deepcopy(actor)

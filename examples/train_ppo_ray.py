@@ -249,6 +249,7 @@ if __name__ == "__main__":
     parser.add_argument("--flash_attn", action="store_true", default=False)
     parser.add_argument("--balancing_loss_coef", type=float, default=0)
     parser.add_argument("--grad_accum_dtype", type=str, default=None)
+
     parser.add_argument("--bos_token", type=str, default=None)
     parser.add_argument("--eos_token", type=str, default=None)
     parser.add_argument("--pad_token", type=str, default=None)

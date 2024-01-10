@@ -60,9 +60,10 @@ class RewardModelTrainer(ABC):
             self.loss_fn = LogExpLoss()
             self.strategy.print("LogExp Loss")
 
+        # Mixtral 8*7b
         self.balancing_loss = self.args.balancing_loss_coef > 1e-8
         if self.balancing_loss:
-            self.balancing_loss_fn = SwitchBalancingLoss(model.config.num_experts, model.config.top_k)
+            self.balancing_loss_fn = SwitchBalancingLoss(model._config.num_experts, model._config.top_k)
 
         self.margin_loss = self.strategy.args.margin_loss
         self.compute_fp32_loss = self.strategy.args.compute_fp32_loss
@@ -129,16 +130,17 @@ class RewardModelTrainer(ABC):
                 )
 
                 # loss function
-                if self.balancing_loss:
-                    balancing_loss = self.balancing_loss_fn(router_logits)
-                else:
-                    balancing_loss = 0
-
                 if self.compute_fp32_loss:
                     chosen_reward = chosen_reward.float()
                     reject_reward = reject_reward.float()
 
                 preference_loss = self.loss_fn(chosen_reward, reject_reward, margin)
+                # mixtral
+                if self.balancing_loss:
+                    balancing_loss = self.balancing_loss_fn(router_logits)
+                else:
+                    balancing_loss = 0
+
                 loss = preference_loss + balancing_loss * self.args.balancing_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)

@@ -4,7 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from optimum.bettertransformer import BetterTransformer
-from transformers import AutoConfig, AutoModelForCausalLM, PreTrainedModel
+from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedModel
 from transformers.deepspeed import HfDeepSpeedConfig
 
 from .utils import log_probs_from_logits
@@ -23,9 +24,11 @@ class Actor(nn.Module):
     def __init__(
         self,
         pretrain_or_model,
-        from_config=False,
         use_flash_attention_2=False,
-        bf16=False,
+        bf16=True,
+        load_in_4bit=False,
+        lora_rank=0,
+        lora_alpha=16,
         ds_config=None,
     ) -> None:
         super().__init__()
@@ -47,30 +50,42 @@ class Actor(nn.Module):
             else:
                 dschf = None
 
-            if from_config:
-                config = AutoConfig.from_pretrained(
-                    pretrain_or_model,
-                    torch_dtype="auto",
-                    trust_remote_code=True,
-                )
-                self.model = AutoModelForCausalLM.from_config(
-                    config,
-                    trust_remote_code=True,
-                    attn_implementation=attn_implementation,
+            if load_in_4bit:
+                assert bf16, "we only support bnb_4bit_compute_dtype = bf16"
+                nf4_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_compute_dtype=torch.bfloat16,
                 )
             else:
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    pretrain_or_model,
-                    torch_dtype="auto",
-                    trust_remote_code=True,
-                    attn_implementation=attn_implementation,
-                )
-            self.config = self.model.config
+                nf4_config = None
+
+            self.model = AutoModelForCausalLM.from_pretrained(
+                pretrain_or_model,
+                torch_dtype="auto",
+                trust_remote_code=True,
+                attn_implementation=attn_implementation,
+                quantization_config=nf4_config,
+            )
 
             # Mixtral 8x7b - balancing loss
             if "output_router_logits" in self.model.config.to_dict():
                 print("[Mixtral 8x7b] set output_router_logits as True")
                 self.model.config.output_router_logits = True
+
+            # LoRA
+            if lora_rank > 0:
+                lora_config = LoraConfig(
+                    task_type=TaskType.CAUSAL_LM,
+                    r=lora_rank,
+                    lora_alpha=lora_alpha,
+                    lora_dropout=0,
+                    bias="none",
+                )
+                self.model = get_peft_model(self.model, lora_config)
+
+            self._config = self.model.config
         else:
             self.model = pretrain_or_model
 

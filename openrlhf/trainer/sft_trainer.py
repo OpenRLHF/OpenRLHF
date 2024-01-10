@@ -57,11 +57,12 @@ class SFTTrainer(ABC):
         self.gradient_checkpointing = gradient_checkpointing
         self.args = strategy.args
 
-        # misc
         self.loss_fn = GPTLMLoss()
+
+        # Mixtral 8*7b
         self.balancing_loss = self.args.balancing_loss_coef > 1e-8
         if self.balancing_loss:
-            self.balancing_loss_fn = SwitchBalancingLoss(model.config.num_experts, model.config.top_k)
+            self.balancing_loss_fn = SwitchBalancingLoss(model._config.num_experts, model._config.top_k)
 
         if self.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
@@ -119,16 +120,17 @@ class SFTTrainer(ABC):
                 output = self.model(inputs, attention_mask=attention_mask, return_output=True)
 
                 # loss function
-                if self.balancing_loss:
-                    balancing_loss = self.balancing_loss_fn(output.router_logits)
-                else:
-                    balancing_loss = 0
-
                 labels = torch.where(
                     attention_mask.bool(),
                     inputs,
                     self.loss_fn.IGNORE_INDEX,
                 )
+                # mixtral
+                if self.balancing_loss:
+                    balancing_loss = self.balancing_loss_fn(output.router_logits)
+                else:
+                    balancing_loss = 0
+
                 if not self.pretrain_mode:
                     for label, source_len in zip(labels, prompts_id_len):
                         label[:source_len] = self.loss_fn.IGNORE_INDEX

@@ -12,7 +12,6 @@ from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.models import Actor
-from openrlhf.models.utils import lora_enable
 from openrlhf.trainer import PPOTrainer
 from openrlhf.trainer.ppo_utils import Experience, RemoteExperienceMaker
 from openrlhf.utils import DeepspeedStrategy, blending_datasets, get_tokenizer
@@ -164,10 +163,6 @@ class ActorModelRayActor(BasePPORole):
         self.prepare_datasets()
 
         args = strategy.args
-        # lora
-        if args.lora_rank > 0:
-            strategy.print("lora_enable")
-            actor.model = lora_enable(actor.model, args.lora_rank)
 
         if args.enable_ema:
             ema_model = deepcopy(actor)

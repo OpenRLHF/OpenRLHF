@@ -8,7 +8,6 @@ from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
-from openrlhf.models.utils import lora_enable
 from openrlhf.trainer import PPOTrainer
 from openrlhf.trainer.ppo_utils import Experience
 from openrlhf.utils import DeepspeedStrategy, blending_datasets, get_tokenizer
@@ -77,10 +76,6 @@ class CriticModelRayActor(BasePPORole):
         strategy.print("mean: {}, std {}".format(critic.mean, critic.std))
 
         args = strategy.args
-        # lora
-        if args.lora_rank > 0:
-            strategy.print("lora_enable")
-            critic = lora_enable(critic, args.lora_rank)
 
         # configure optimizer
         critic_optim = strategy.create_optimizer(

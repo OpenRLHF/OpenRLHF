@@ -9,7 +9,6 @@ from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import RewardDataset
 from openrlhf.models import Actor
-from openrlhf.models.utils import lora_enable
 from openrlhf.trainer import DPOTrainer
 from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
@@ -27,6 +26,9 @@ def train(args):
         from_config,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
+        load_in_4bit=args.load_in_4bit,
+        lora_rank=args.lora_rank,
+        lora_alpha=args.lora_alpha,
         ds_config=strategy.get_ds_train_config(is_actor=True),
     )
 
@@ -45,10 +47,6 @@ def train(args):
     if args.ref_offload:
         ref_model._offload = True
     get_tokenizer(args.pretrain, ref_model.model, "right", strategy)
-
-    # lora
-    if args.lora_rank > 0:
-        model = lora_enable(model, args.lora_rank)
 
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)
@@ -158,6 +156,9 @@ if __name__ == "__main__":
     parser.add_argument("--max_samples", type=int, default=1000000)
     parser.add_argument("--balancing_loss_coef", type=float, default=0)
     parser.add_argument("--grad_accum_dtype", type=str, default=None)
+    parser.add_argument("--load_in_4bit", action="store_true", default=False)
+    parser.add_argument("--lora_rank", type=int, default=0)
+    parser.add_argument("--lora_alpha", type=int, default=16)
 
     # wandb pamameters
     parser.add_argument("--use_wandb", type=str, default=None)
