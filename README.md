@@ -46,14 +46,15 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 - Support [top chinese models](https://github.com/OpenLLMAI/OpenRLHF/issues/116).
 - Support Wandb log (--wandb).
 - Support FlashAttention2 (--flash_attn).
+- Support QLoRA (--load_in_4bit), LoRA (--lora_rank).
 - Multi-nodes [training scripts](./examples/scripts/train_llama_slurm.sh) for Slurm.
-- Pre-trained 7B/13B llama2 [checkpoints](https://huggingface.co/OpenLLMAI)
+- Pre-trained LLaMA2 [checkpoints](https://huggingface.co/OpenLLMAI)
 
 
 **TODO** 
 - Allows saving and loading training checkpoints.
 - Support Hybrid vLLM inference engine.
-- Support LoRA/QLoRA using `peft`.
+- Support Multi-adapters RLHF (LoRA)
 
 Support Matrix
 

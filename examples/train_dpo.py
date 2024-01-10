@@ -144,7 +144,7 @@ if __name__ == "__main__":
     parser.add_argument("--label_smoothing", type=float, default=0.0)  # cDPO https://arxiv.org/pdf/2305.18290.pdf
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--lora_rank", type=int, default=0, help="low-rank adaptation matrices rank")
+
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2)
     parser.add_argument("--bf16", action="store_true", default=False)

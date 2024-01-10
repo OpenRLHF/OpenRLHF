@@ -115,7 +115,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr_scheduler", type=str, default="cosine")
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
     parser.add_argument("--pretrain_mode", action="store_true", default=False)
-    parser.add_argument("--lora_rank", type=int, default=0, help="low-rank adaptation matrices rank")
+
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
