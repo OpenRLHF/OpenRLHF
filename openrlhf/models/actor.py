@@ -70,12 +70,6 @@ class Actor(nn.Module):
                 quantization_config=nf4_config,
             )
 
-            # Mixtral 8x7b - balancing loss
-            if "output_router_logits" in self.model.config.to_dict():
-                print("[Mixtral 8x7b] set output_router_logits as True")
-                self.model.config.output_router_logits = True
-            self._config = self.model.config
-
             # LoRA
             if lora_rank > 0:
                 # https://github.com/huggingface/peft/issues/137
@@ -99,7 +93,13 @@ class Actor(nn.Module):
                         if "lm_head" in name or "embed_tokens" in name:
                             if hasattr(module, "weight"):
                                 module = module.to(torch.bfloat16)
-                self._is_peft_model = True
+
+            # Mixtral 8x7b - balancing loss
+            if "output_router_logits" in self.model.config.to_dict():
+                print("[Mixtral 8x7b] set output_router_logits as True")
+                self.model.config.output_router_logits = True
+                self._num_experts = self.model.config.num_local_experts
+                self._topk = self.model.config.num_experts_per_tok
         else:
             self.model = pretrain_or_model
 

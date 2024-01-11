@@ -117,12 +117,6 @@ def get_llm_for_sequence_regression(
         **kwargs,
     )
 
-    # Mixtral 8x7b - balancing loss
-    if "output_router_logits" in model.config.to_dict():
-        print("[Mixtral 8x7b] set output_router_logits as True")
-        model.config.output_router_logits = True
-    model._config = config
-
     # LoRA
     if lora_rank > 0:
         # https://github.com/huggingface/peft/issues/137
@@ -146,7 +140,13 @@ def get_llm_for_sequence_regression(
                 if "value_head" in name or "embed_tokens" in name:
                     if hasattr(module, "weight"):
                         module = module.to(torch.bfloat16)
-        model._is_peft_model = True
+
+    # Mixtral 8x7b - balancing loss
+    if "output_router_logits" in model.config.to_dict():
+        print("[Mixtral 8x7b] set output_router_logits as True")
+        model.config.output_router_logits = True
+        model._num_experts = model.config.num_local_experts
+        model._topk = model.config.num_experts_per_tok
 
     # NOTE: For reward model training only, intialize value_head manually
     # because deepspeed.zero.Init() will not intialize them.

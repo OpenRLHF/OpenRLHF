@@ -60,7 +60,7 @@ class SFTTrainer(ABC):
         # Mixtral 8*7b
         self.balancing_loss = self.args.balancing_loss_coef > 1e-8
         if self.balancing_loss:
-            self.balancing_loss_fn = SwitchBalancingLoss(model._config.num_experts, model._config.top_k)
+            self.balancing_loss_fn = SwitchBalancingLoss(model._num_experts, model._top_k)
 
         # wandb setting
         self._wandb = None
