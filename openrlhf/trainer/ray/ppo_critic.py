@@ -94,14 +94,14 @@ class CriticModelRayActor(BasePPORole):
             num_training_steps=max_steps,
         )
 
+        if args.gradient_checkpointing:
+            self.critic.gradient_checkpointing_enable()
+
         # prepare models/optimizers...
         self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare(
             (critic, critic_optim, critic_scheduler),
             is_rlhf=True,
         )
-
-        if args.gradient_checkpointing:
-            self.critic.gradient_checkpointing_enable()
 
         # configure Trainer
         # only use wandb at actor model

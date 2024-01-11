@@ -62,9 +62,6 @@ class DPOTrainer(ABC):
         if self.balancing_loss:
             self.balancing_loss_fn = SwitchBalancingLoss(model._config.num_experts, model._config.top_k)
 
-        if self.gradient_checkpointing:
-            self.model.gradient_checkpointing_enable()
-
         self._wandb = None
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():
             import wandb

@@ -190,14 +190,14 @@ class ActorModelRayActor(BasePPORole):
             num_training_steps=max_steps,
         )
 
+        if args.gradient_checkpointing:
+            self.actor.gradient_checkpointing_enable()
+
         # prepare models/optimizers...
         self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare(
             (actor, actor_optim, actor_scheduler),
             is_rlhf=True,
         )
-
-        if args.gradient_checkpointing:
-            self.actor.gradient_checkpointing_enable()
 
         if ema_model:
             ema_model._offload = True
