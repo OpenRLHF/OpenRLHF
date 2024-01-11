@@ -144,7 +144,7 @@ def get_llm_for_sequence_regression(
                 if "value_head" in name or "embed_tokens" in name:
                     if hasattr(module, "weight"):
                         module = module.to(torch.bfloat16)
-        self._is_peft_model = True
+        model._is_peft_model = True
 
     # NOTE: For reward model training only, intialize value_head manually
     # because deepspeed.zero.Init() will not intialize them.
