@@ -77,7 +77,7 @@ def masked_normalize(tensor: torch.Tensor, mask: torch.Tensor, dim: int = 1, eps
     return mean_centered * var.clamp(min=eps).rsqrt()
 
 
-def find_all_linear_names(model, load_in_4bit):
+def find_all_linear_names(model, load_in_4bit=False):
     cls = bnb.nn.Linear4bit if load_in_4bit else nn.Linear
     lora_module_names = set()
     for name, module in model.named_modules():
