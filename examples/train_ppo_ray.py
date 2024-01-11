@@ -232,7 +232,7 @@ if __name__ == "__main__":
     parser.add_argument("--normalize_reward", action="store_true", default=False)
     parser.add_argument("--top_p", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--lora_rank", type=int, default=0, help="low-rank adaptation matrices rank")
+
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2)
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
@@ -249,6 +249,12 @@ if __name__ == "__main__":
     parser.add_argument("--flash_attn", action="store_true", default=False)
     parser.add_argument("--balancing_loss_coef", type=float, default=0)
     parser.add_argument("--grad_accum_dtype", type=str, default=None)
+    parser.add_argument("--disable_trace_cache", action="store_true", default=False)
+    parser.add_argument("--load_in_4bit", action="store_true", default=False)
+    parser.add_argument("--lora_rank", type=int, default=0)
+    parser.add_argument("--lora_alpha", type=int, default=16)
+    parser.add_argument("--target_modules", type=list, default=None)
+
     parser.add_argument("--bos_token", type=str, default=None)
     parser.add_argument("--eos_token", type=str, default=None)
     parser.add_argument("--pad_token", type=str, default=None)

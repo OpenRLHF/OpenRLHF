@@ -1,10 +1,9 @@
 from typing import Optional, Tuple, Union
 
-import loralib as lora
+import bitsandbytes as bnb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
 
 
 def compute_approx_kl(
@@ -78,42 +77,16 @@ def masked_normalize(tensor: torch.Tensor, mask: torch.Tensor, dim: int = 1, eps
     return mean_centered * var.clamp(min=eps).rsqrt()
 
 
-def convert_to_lora(
-    model: nn.Module,
-    input_size: int,
-    output_size: int,
-    lora_rank: int = 16,
-    lora_alpha: int = 1,
-    lora_dropout: float = 0.0,
-    fan_in_fan_out: bool = False,
-    merge_weights: bool = True,
-):
-    if lora_rank > min(input_size, output_size):
-        raise ValueError(f"LoRA rank {lora_rank} must be less or equal than {min(input_size, output_size)}")
-
+def find_all_linear_names(model, load_in_4bit=False):
+    cls = bnb.nn.Linear4bit if load_in_4bit else nn.Linear
+    lora_module_names = set()
     for name, module in model.named_modules():
-        if isinstance(module, nn.Linear):
-            module._modules[name] = lora.Linear(
-                input_size,
-                output_size,
-                r=lora_rank,
-                lora_alpha=lora_alpha,
-                lora_dropout=lora_dropout,
-                fan_in_fan_out=fan_in_fan_out,
-                merge_weights=merge_weights,
-            )
+        if isinstance(module, cls):
+            names = name.split(".")
+            lora_module_names.add(names[0] if len(names) == 1 else names[-1])
 
-
-def lora_enable(model: nn.Module, lora_rank=0, lora_train_bias="none"):
-    if lora_rank > 0:
-        lora_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM,
-            inference_mode=False,
-            r=lora_rank,
-            lora_alpha=16,
-            lora_dropout=0.05,
-            bias=lora_train_bias,
-        )
-        model = get_peft_model(model, lora_config)
-
-    return model
+    if "lm_head" in lora_module_names:  # needed for 16-bit
+        lora_module_names.remove("lm_head")
+    if "value_head" in lora_module_names:  # needed for 16-bit
+        lora_module_names.remove("lm_head")
+    return list(lora_module_names)

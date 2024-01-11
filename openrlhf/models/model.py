@@ -3,11 +3,14 @@ from typing import Optional
 import deepspeed
 import torch
 import torch.nn as nn
-from transformers import AutoConfig, AutoModel
+from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
+from peft.tuners.lora import LoraLayer
+from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
 from transformers.deepspeed import HfDeepSpeedConfig
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
 from openrlhf.utils.logging import init_logger
+from .utils import find_all_linear_names, log_probs_from_logits
 
 logger = init_logger(__name__)
 
@@ -19,6 +22,10 @@ def get_llm_for_sequence_regression(
     model_type: str,
     *,
     bf16=True,
+    load_in_4bit=False,
+    lora_rank=0,
+    lora_alpha=16,
+    target_modules=None,
     normalize_reward=False,
     use_flash_attention_2=False,
     ds_config: dict = None,
@@ -43,9 +50,7 @@ def get_llm_for_sequence_regression(
         model_type == "critic" or model_type == "reward"
     ), f"invalid model_type: {model_type}, should be critic or reward."
 
-    config = AutoConfig.from_pretrained(
-        model_name_or_path, trust_remote_code=True, torch_dtype=torch.bfloat16 if bf16 else "auto"
-    )
+    config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
     config.normalize_reward = normalize_reward
     config._attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
 
@@ -92,13 +97,54 @@ def get_llm_for_sequence_regression(
     else:
         dschf = None
 
+    if load_in_4bit:
+        assert bf16, "we only support bnb_4bit_compute_dtype = bf16"
+        nf4_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+    else:
+        nf4_config = None
+
     model = cls_class.from_pretrained(
         model_name_or_path,
         config=config,
         trust_remote_code=True,
         torch_dtype="auto",
+        quantization_config=nf4_config,
         **kwargs,
     )
+
+    # LoRA
+    if lora_rank > 0:
+        model.enable_input_require_grads()
+        lora_config = LoraConfig(
+            r=lora_rank,
+            lora_alpha=lora_alpha,
+            target_modules=target_modules or find_all_linear_names(model, load_in_4bit),
+            lora_dropout=0,
+            bias="none",
+        )
+        model = get_peft_model(model, lora_config)
+
+        if load_in_4bit:
+            for name, module in model.named_modules():
+                if isinstance(module, LoraLayer):
+                    module = module.to(torch.bfloat16)
+                if "norm" in name:
+                    module = module.to(torch.float32)
+                if "value_head" in name or "embed_tokens" in name:
+                    if hasattr(module, "weight"):
+                        module = module.to(torch.bfloat16)
+
+    # Mixtral 8x7b - balancing loss
+    if "output_router_logits" in model.config.to_dict():
+        print("[Mixtral 8x7b] set output_router_logits as True")
+        model.config.output_router_logits = True
+        model._num_experts = model.config.num_local_experts
+        model._topk = model.config.num_experts_per_tok
 
     # NOTE: For reward model training only, intialize value_head manually
     # because deepspeed.zero.Init() will not intialize them.
@@ -111,11 +157,6 @@ def get_llm_for_sequence_regression(
                     model.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
         else:
             model.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
-
-    # Mixtral 8x7b - balancing loss
-    if "output_router_logits" in model.config.to_dict():
-        print("[Mixtral 8x7b] set output_router_logits as True")
-        model.config.output_router_logits = True
 
     return model
 

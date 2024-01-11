@@ -4,10 +4,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from optimum.bettertransformer import BetterTransformer
-from transformers import AutoConfig, AutoModelForCausalLM, PreTrainedModel
+from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
+from peft.tuners.lora import LoraLayer
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedModel
 from transformers.deepspeed import HfDeepSpeedConfig
 
-from .utils import log_probs_from_logits
+from .utils import find_all_linear_names, log_probs_from_logits
 
 
 class Actor(nn.Module):
@@ -23,9 +25,12 @@ class Actor(nn.Module):
     def __init__(
         self,
         pretrain_or_model,
-        from_config=False,
         use_flash_attention_2=False,
-        bf16=False,
+        bf16=True,
+        load_in_4bit=False,
+        lora_rank=0,
+        lora_alpha=16,
+        target_modules=None,
         ds_config=None,
     ) -> None:
         super().__init__()
@@ -47,30 +52,54 @@ class Actor(nn.Module):
             else:
                 dschf = None
 
-            if from_config:
-                config = AutoConfig.from_pretrained(
-                    pretrain_or_model,
-                    torch_dtype="auto",
-                    trust_remote_code=True,
-                )
-                self.model = AutoModelForCausalLM.from_config(
-                    config,
-                    trust_remote_code=True,
-                    attn_implementation=attn_implementation,
+            if load_in_4bit:
+                assert bf16, "we only support bnb_4bit_compute_dtype = bf16"
+                nf4_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_compute_dtype=torch.bfloat16,
                 )
             else:
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    pretrain_or_model,
-                    torch_dtype="auto",
-                    trust_remote_code=True,
-                    attn_implementation=attn_implementation,
+                nf4_config = None
+
+            self.model = AutoModelForCausalLM.from_pretrained(
+                pretrain_or_model,
+                trust_remote_code=True,
+                attn_implementation=attn_implementation,
+                quantization_config=nf4_config,
+            )
+
+            # LoRA
+            if lora_rank > 0:
+                # https://github.com/huggingface/peft/issues/137
+                self.model.enable_input_require_grads()
+                lora_config = LoraConfig(
+                    task_type=TaskType.CAUSAL_LM,
+                    r=lora_rank,
+                    lora_alpha=lora_alpha,
+                    target_modules=target_modules or find_all_linear_names(self.model, load_in_4bit),
+                    lora_dropout=0,
+                    bias="none",
                 )
-            self.config = self.model.config
+                self.model = get_peft_model(self.model, lora_config)
+
+                if load_in_4bit:
+                    for name, module in self.model.named_modules():
+                        if isinstance(module, LoraLayer):
+                            module = module.to(torch.bfloat16)
+                        if "norm" in name:
+                            module = module.to(torch.float32)
+                        if "lm_head" in name or "embed_tokens" in name:
+                            if hasattr(module, "weight"):
+                                module = module.to(torch.bfloat16)
 
             # Mixtral 8x7b - balancing loss
             if "output_router_logits" in self.model.config.to_dict():
                 print("[Mixtral 8x7b] set output_router_logits as True")
                 self.model.config.output_router_logits = True
+                self._num_experts = self.model.config.num_local_experts
+                self._topk = self.model.config.num_experts_per_tok
         else:
             self.model = pretrain_or_model
 

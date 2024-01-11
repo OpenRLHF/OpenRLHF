@@ -10,7 +10,6 @@ from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.models import Actor, get_llm_for_sequence_regression
-from openrlhf.models.utils import lora_enable
 from openrlhf.trainer import PPOTrainer
 from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
@@ -21,14 +20,15 @@ def train(args):
     strategy.setup_distributed()
 
     # configure model
-    # load huggingface model/config
-    actor_from_config = bool(args.load_checkpoint)
-
+    # load huggingface model
     actor = Actor(
         args.pretrain,
-        actor_from_config,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
+        load_in_4bit=args.load_in_4bit,
+        lora_rank=args.lora_rank,
+        lora_alpha=args.lora_alpha,
+        target_modules=args.target_modules,
         ds_config=strategy.get_ds_train_config(is_actor=True),
     )
 
@@ -41,6 +41,10 @@ def train(args):
         normalize_reward=args.normalize_reward,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
+        load_in_4bit=args.load_in_4bit,
+        lora_rank=args.lora_rank,
+        lora_alpha=args.lora_alpha,
+        target_modules=args.target_modules,
         ds_config=strategy.get_ds_train_config(is_actor=False),
     )
     reward_model = get_llm_for_sequence_regression(
@@ -49,6 +53,7 @@ def train(args):
         normalize_reward=args.normalize_reward,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
+        load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_train_config(is_actor=False),
     )
 
@@ -63,21 +68,15 @@ def train(args):
     # load weights for reference actor
     initial_model = Actor(
         args.pretrain,
-        False,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
+        load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=False),
     )
     get_tokenizer(args.pretrain, initial_model.model, "left", strategy)
 
     strategy.print("reward normalization status: {}".format(args.normalize_reward))
     strategy.print("mean: {}, std {}".format(reward_model.mean, reward_model.std))
-
-    # lora
-    if args.lora_rank > 0:
-        strategy.print("lora_enable")
-        actor.model = lora_enable(actor.model, args.lora_rank)
-        critic = lora_enable(critic, args.lora_rank)
 
     if args.enable_ema:
         ema_model = deepcopy(actor)
@@ -153,6 +152,11 @@ def train(args):
         num_training_steps=max_steps,
     )
 
+    # gradient_checkpointing
+    if args.gradient_checkpointing:
+        actor.gradient_checkpointing_enable()
+        critic.gradient_checkpointing_enable()
+
     # prepare models/optimizers...
     (
         (actor, actor_optim, actor_scheduler),
@@ -166,10 +170,6 @@ def train(args):
         initial_model,
         is_rlhf=True,
     )
-
-    if args.gradient_checkpointing:
-        actor.gradient_checkpointing_enable()
-        critic.gradient_checkpointing_enable()
 
     if ema_model:
         ema_model._offload = True
@@ -280,7 +280,7 @@ if __name__ == "__main__":
     parser.add_argument("--top_p", type=float, default=1.0)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--lora_rank", type=int, default=0, help="low-rank adaptation matrices rank")
+
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2)
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
@@ -297,6 +297,11 @@ if __name__ == "__main__":
     parser.add_argument("--flash_attn", action="store_true", default=False)
     parser.add_argument("--balancing_loss_coef", type=float, default=0)
     parser.add_argument("--grad_accum_dtype", type=str, default=None)
+    parser.add_argument("--disable_trace_cache", action="store_true", default=False)
+    parser.add_argument("--load_in_4bit", action="store_true", default=False)
+    parser.add_argument("--lora_rank", type=int, default=0)
+    parser.add_argument("--lora_alpha", type=int, default=16)
+    parser.add_argument("--target_modules", type=list, default=None)
 
     parser.add_argument("--bos_token", type=str, default=None)
     parser.add_argument("--eos_token", type=str, default=None)

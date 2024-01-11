@@ -67,6 +67,7 @@ class ReferenceModelRayActor(BasePPORole):
             pretrain,
             use_flash_attention_2=strategy.args.flash_attn,
             bf16=strategy.args.bf16,
+            load_in_4bit=strategy.args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(),
         )
         strategy.print(model)
@@ -97,6 +98,7 @@ class RewardModelRayActor(BasePPORole):
             normalize_reward=strategy.args.normalize_reward,
             use_flash_attention_2=strategy.args.flash_attn,
             bf16=strategy.args.bf16,
+            load_in_4bit=strategy.args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(),
         )
         strategy.print(model)

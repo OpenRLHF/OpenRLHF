@@ -8,7 +8,6 @@ from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import RewardDataset
 from openrlhf.models import get_llm_for_sequence_regression
-from openrlhf.models.utils import lora_enable
 from openrlhf.trainer import RewardModelTrainer
 from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
@@ -25,6 +24,10 @@ def train(args):
         "reward",
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
+        load_in_4bit=args.load_in_4bit,
+        lora_rank=args.lora_rank,
+        lora_alpha=args.lora_alpha,
+        target_modules=args.target_modules,
         ds_config=strategy.get_ds_train_config(is_actor=False),
         init_value_head=True,
     )
@@ -33,10 +36,6 @@ def train(args):
     tokenizer = get_tokenizer(args.pretrain, model, "left", strategy)
 
     strategy.print(model)
-
-    # lora
-    if args.lora_rank > 0:
-        model = lora_enable(model, args.lora_rank)
 
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)
@@ -76,6 +75,10 @@ def train(args):
         num_training_steps=max_steps,
     )
 
+    # gradient_checkpointing
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+
     # strategy prepare
     (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
 
@@ -96,7 +99,6 @@ def train(args):
         scheduler=scheduler,
         max_norm=args.max_norm,
         max_epochs=args.max_epochs,
-        gradient_checkpointing=args.gradient_checkpointing,
         loss=args.loss,
     )
 
@@ -130,7 +132,7 @@ if __name__ == "__main__":
     parser.add_argument("--loss", type=str, default="sigmoid")
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--lora_rank", type=int, default=0, help="low-rank adaptation matrices rank")
+
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2)
     parser.add_argument("--bf16", action="store_true", default=False)
@@ -142,6 +144,12 @@ if __name__ == "__main__":
     parser.add_argument("--margin_loss", action="store_true", default=False)
     parser.add_argument("--balancing_loss_coef", type=float, default=0)
     parser.add_argument("--grad_accum_dtype", type=str, default=None)
+    parser.add_argument("--disable_trace_cache", action="store_true", default=False)
+    parser.add_argument("--load_in_4bit", action="store_true", default=False)
+    parser.add_argument("--lora_rank", type=int, default=0)
+    parser.add_argument("--lora_alpha", type=int, default=16)
+    parser.add_argument("--target_modules", type=list, default=None)
+
     parser.add_argument("--bos_token", type=str, default=None)
     parser.add_argument("--eos_token", type=str, default=None)
     parser.add_argument("--pad_token", type=str, default=None)

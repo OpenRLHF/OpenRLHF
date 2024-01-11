@@ -114,8 +114,8 @@ class PPOTrainer(ABC):
         # Mixtral 8x7b
         self.balancing_loss = self.args.balancing_loss_coef > 1e-8
         if self.balancing_loss:
-            self.actor_balancing_loss_fn = SwitchBalancingLoss(actor.config.num_experts, actor.config.top_k)
-            self.critic_balancing_loss_fn = SwitchBalancingLoss(critic.config.num_experts, critic.config.top_k)
+            self.actor_balancing_loss_fn = SwitchBalancingLoss(actor._config.num_experts, actor._config.top_k)
+            self.critic_balancing_loss_fn = SwitchBalancingLoss(critic._config.num_experts, critic._config.top_k)
 
         if self.kl_target:
             self.kl_ctl = AdaptiveKLController(init_kl_coef, kl_target, kl_horizon)
@@ -266,16 +266,17 @@ class PPOTrainer(ABC):
         )
 
         # loss function
-        if self.balancing_loss:
-            balancing_loss = self.actor_balancing_loss_fn(output.router_logits)
-        else:
-            balancing_loss = 0
         actor_loss = self.actor_loss_fn(
             action_log_probs,
             experience.action_log_probs,
             experience.advantages,
             action_mask=experience.action_mask,
         )
+        # mixtral
+        if self.balancing_loss:
+            balancing_loss = self.actor_balancing_loss_fn(output.router_logits)
+        else:
+            balancing_loss = 0
         loss = actor_loss + balancing_loss * self.args.balancing_loss_coef
         self.strategy.backward(loss, self.actor, self.actor_optim)
 
@@ -294,11 +295,12 @@ class PPOTrainer(ABC):
             ptx_log_probs = output["logits"]
 
             # loss function
+            ptx_loss = self.ptx_loss_fn(ptx_log_probs, label)
+            # mixtral
             if self.balancing_loss:
                 balancing_loss = self.actor_balancing_loss_fn(output.router_logits)
             else:
                 balancing_loss = 0
-            ptx_loss = self.ptx_loss_fn(ptx_log_probs, label)
             loss = ptx_loss + balancing_loss * self.args.balancing_loss_coef
             self.strategy.backward(loss, self.actor, self.actor_optim)
 
@@ -332,16 +334,17 @@ class PPOTrainer(ABC):
             return_output=True,
         )
         # loss function
-        if self.balancing_loss:
-            balancing_loss = self.critic_balancing_loss_fn(output.router_logits)
-        else:
-            balancing_loss = 0
         critic_loss = self.critic_loss_fn(
             values,
             experience.values,
             experience.returns,
             action_mask=experience.action_mask,
         )
+        # mixtral
+        if self.balancing_loss:
+            balancing_loss = self.critic_balancing_loss_fn(output.router_logits)
+        else:
+            balancing_loss = 0
         loss = critic_loss + balancing_loss * self.args.balancing_loss_coef
         self.strategy.backward(loss, self.critic, self.critic_optim)
         self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")

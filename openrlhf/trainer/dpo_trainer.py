@@ -40,7 +40,6 @@ class DPOTrainer(ABC):
         max_norm=0.5,
         beta=0.01,
         max_epochs: int = 2,
-        gradient_checkpointing: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -52,19 +51,16 @@ class DPOTrainer(ABC):
         self.ref_model = ref_model
         self.scheduler = scheduler
         self.optimizer = optim
-        self.gradient_checkpointing = gradient_checkpointing
         self.tokenizer = tokenizer
         self.args = strategy.args
 
         self.beta = beta
         self.loss_fn = DPOLoss(self.beta, self.args.label_smoothing, self.args.ipo)
 
+        # Mixtral 8*7b
         self.balancing_loss = self.args.balancing_loss_coef > 1e-8
         if self.balancing_loss:
-            self.balancing_loss_fn = SwitchBalancingLoss(model.config.num_experts, model.config.top_k)
-
-        if self.gradient_checkpointing:
-            self.model.gradient_checkpointing_enable()
+            self.balancing_loss_fn = SwitchBalancingLoss(model._num_experts, model._topk)
 
         self._wandb = None
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():
@@ -129,14 +125,15 @@ class DPOTrainer(ABC):
                     )
 
                 # loss function
+                preference_loss, chosen_reward, reject_reward = self.loss_fn(
+                    chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
+                )
+                # mixtral
                 if self.balancing_loss:
                     balancing_loss = self.balancing_loss_fn(router_logits)
                 else:
                     balancing_loss = 0
 
-                preference_loss, chosen_reward, reject_reward = self.loss_fn(
-                    chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
-                )
                 loss = preference_loss + balancing_loss * self.args.balancing_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)

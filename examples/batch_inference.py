@@ -20,9 +20,9 @@ def batch_generate(args):
     # configure model
     model = Actor(
         args.pretrain,
-        False,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
+        load_in_4bit=args.load_in_4bit,
     )
     if args.to_bettertransformer:
         model.to_bettertransformer()
@@ -75,7 +75,7 @@ def batch_generate(args):
         # Decision Transformer inference
         if args.enable_dt:
             for i in range(len(prompts)):
-                prompts[i] += args.dt_prompt.strip() + " "
+                prompts[i] += args.ca_prompt.strip() + " "
 
         inputs = tokenize_fn(prompts)
         for _ in range(N):
@@ -133,6 +133,7 @@ def batch_rm_inference(args):
         normalize_reward=True,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
+        load_in_4bit=args.load_in_4bit,
     )
 
     # configure tokenizer
@@ -231,16 +232,18 @@ if __name__ == "__main__":
         help="set to rs (Rejection Sampling), dt (Decision Transformer) or None",
     )
 
+    # QLora
+    parser.add_argument("--load_in_4bit", action="store_true", default=False)
+
     # for Iterative generation and Rejection Sampling
     parser.add_argument("--iter", type=int, default=None)
     parser.add_argument("--rollout_batch_size", type=int, default=2048)
 
-    # for Decision Transformer (DT) generation
+    # for Conditional Alignment
     parser.add_argument("--normalize_reward", action="store_true", default=False)
     parser.add_argument("--reward_template", type=str, default=None)
-    # for DT evaluation
     parser.add_argument("--enable_dt", action="store_true", default=False)
-    parser.add_argument("--dt_prompt", type=str, default="<rm_score>: 5.00", help="decision transformer prompt")
+    parser.add_argument("--ca_prompt", type=str, default="<rm_score>: 5.00", help="decision transformer prompt")
 
     args = parser.parse_args()
     if args.eval_task and args.eval_task == "generate":

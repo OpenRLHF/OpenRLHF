@@ -12,7 +12,6 @@ from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.models import Actor
-from openrlhf.models.utils import lora_enable
 from openrlhf.trainer import PPOTrainer
 from openrlhf.trainer.ppo_utils import Experience, RemoteExperienceMaker
 from openrlhf.utils import DeepspeedStrategy, blending_datasets, get_tokenizer
@@ -154,6 +153,10 @@ class ActorModelRayActor(BasePPORole):
             pretrain,
             use_flash_attention_2=strategy.args.flash_attn,
             bf16=strategy.args.bf16,
+            load_in_4bit=strategy.args.load_in_4bit,
+            lora_rank=strategy.args.lora_rank,
+            lora_alpha=strategy.args.lora_alpha,
+            target_modules=strategy.args.target_modules,
             ds_config=strategy.get_ds_train_config(is_actor=True),
         )
 
@@ -164,10 +167,6 @@ class ActorModelRayActor(BasePPORole):
         self.prepare_datasets()
 
         args = strategy.args
-        # lora
-        if args.lora_rank > 0:
-            strategy.print("lora_enable")
-            actor.model = lora_enable(actor.model, args.lora_rank)
 
         if args.enable_ema:
             ema_model = deepcopy(actor)
@@ -191,14 +190,14 @@ class ActorModelRayActor(BasePPORole):
             num_training_steps=max_steps,
         )
 
+        if args.gradient_checkpointing:
+            self.actor.gradient_checkpointing_enable()
+
         # prepare models/optimizers...
         self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare(
             (actor, actor_optim, actor_scheduler),
             is_rlhf=True,
         )
-
-        if args.gradient_checkpointing:
-            self.actor.gradient_checkpointing_enable()
 
         if ema_model:
             ema_model._offload = True

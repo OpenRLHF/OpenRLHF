@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
-from peft import PeftModel
+from peft import PeftModel, get_peft_model_state_dict
 from torch import distributed as dist
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader, DistributedSampler
@@ -57,6 +57,8 @@ class DeepspeedStrategy(ABC):
         self.seed = seed
         self.max_norm = max_norm
         self.grad_accum_dtype = args.grad_accum_dtype
+        # disable_trace_cache for MoE
+        self.disable_trace_cache = args.disable_trace_cache or args.balancing_loss_coef > 1e-8
 
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
@@ -184,6 +186,7 @@ class DeepspeedStrategy(ABC):
             max_norm=self.max_norm,
             zpg=self.zpg,
             grad_accum_dtype=self.grad_accum_dtype,
+            disable_trace_cache=self.disable_trace_cache,
         )
 
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
@@ -255,24 +258,29 @@ class DeepspeedStrategy(ABC):
 
         # save model weights for ZeRO2/3
         model_to_save = self._unwrap_model(model)
-        if isinstance(model_to_save, PeftModel):
-            model_to_save = model_to_save.merge_and_unload()
 
-        output_state_dict = {}
         # gather parameters
+        output_state_dict = {}
         for k, v in model_to_save.named_parameters():
+            # only gather z3 params
             params_to_fetch = _z3_params_to_fetch([v])
             with deepspeed.zero.GatheredParameters(params_to_fetch, enabled=len(params_to_fetch) > 0):
                 vv = v.data.cpu()
                 if self.is_rank_0():
                     output_state_dict[k] = vv
+
         if self.is_rank_0():
+            # copy named_buffers
             for k, v in model_to_save.named_buffers():
                 vv = v.data.cpu()
                 output_state_dict[k] = vv
+
+            # only save peft weights https://github.com/microsoft/DeepSpeed/issues/4295
+            if isinstance(model_to_save, PeftModel):
+                output_state_dict = get_peft_model_state_dict(model_to_save, output_state_dict)
+            # save model
             model_to_save.save_pretrained(output_dir, state_dict=output_state_dict, **kwargs)
 
-        if self.is_rank_0():
             # save config
             output_config_file = os.path.join(output_dir, "config.json")
             model_to_save.config.to_json_file(output_config_file)

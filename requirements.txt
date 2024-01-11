@@ -1,3 +1,4 @@
+bitsandbytes
 datasets
 deepspeed==0.12.6
 einops
