@@ -50,6 +50,7 @@ def train(args):
         stopping_strategy="all_exhausted",
     )
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
+    eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
     train_dataset = RewardDataset(train_data, tokenizer, args.max_len, strategy)
     eval_dataset = RewardDataset(eval_data, tokenizer, args.max_len, strategy)
 
