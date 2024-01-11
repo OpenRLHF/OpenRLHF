@@ -98,6 +98,7 @@ class Actor(nn.Module):
                         if "lm_head" in name or "embed_tokens" in name:
                             if hasattr(module, "weight"):
                                 module = module.to(torch.bfloat16)
+                self._is_peft_model = True
         else:
             self.model = pretrain_or_model
 

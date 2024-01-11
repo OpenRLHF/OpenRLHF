@@ -117,22 +117,11 @@ def get_llm_for_sequence_regression(
         **kwargs,
     )
 
-    # NOTE: For reward model training only, intialize value_head manually
-    # because deepspeed.zero.Init() will not intialize them.
-    # TODO: Find a better way to clarify reward model training.
-    if init_value_head:
-        if dschf is not None:
-            logger.info("initialize value_head for ZeRO-3 reward model training.")
-            with deepspeed.zero.GatheredParameters([model.value_head.weight], modifier_rank=0):
-                if torch.distributed.get_rank() == 0:
-                    model.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
-        else:
-            model.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
-
     # Mixtral 8x7b - balancing loss
     if "output_router_logits" in model.config.to_dict():
         print("[Mixtral 8x7b] set output_router_logits as True")
         model.config.output_router_logits = True
+    model._config = config
 
     # LoRA
     if lora_rank > 0:
@@ -155,8 +144,20 @@ def get_llm_for_sequence_regression(
                 if "value_head" in name or "embed_tokens" in name:
                     if hasattr(module, "weight"):
                         module = module.to(torch.bfloat16)
+        self._is_peft_model = True
 
-    model._config = config
+    # NOTE: For reward model training only, intialize value_head manually
+    # because deepspeed.zero.Init() will not intialize them.
+    # TODO: Find a better way to clarify reward model training.
+    if init_value_head:
+        if dschf is not None:
+            logger.info("initialize value_head for ZeRO-3 reward model training.")
+            with deepspeed.zero.GatheredParameters([model.value_head.weight], modifier_rank=0):
+                if torch.distributed.get_rank() == 0:
+                    model.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
+        else:
+            model.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
+
     return model
 
 
