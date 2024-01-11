@@ -69,6 +69,10 @@ class CriticModelRayActor(BasePPORole):
             normalize_reward=strategy.args.normalize_reward,
             use_flash_attention_2=strategy.args.flash_attn,
             bf16=strategy.args.bf16,
+            load_in_4bit=strategy.args.load_in_4bit,
+            lora_rank=strategy.args.lora_rank,
+            lora_alpha=strategy.args.lora_alpha,
+            target_modules=strategy.args.target_modules,
             ds_config=strategy.get_ds_train_config(is_actor=False),
         )
         strategy.print(critic)
