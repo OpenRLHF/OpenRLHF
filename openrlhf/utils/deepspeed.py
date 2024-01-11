@@ -277,10 +277,12 @@ class DeepspeedStrategy(ABC):
 
             # only save peft weights https://github.com/microsoft/DeepSpeed/issues/4295
             if isinstance(model_to_save, PeftModel):
-                output_state_dict = get_peft_model_state_dict(model_to_save, output_state_dict)
                 model_to_save.save_pretrained(output_dir, **kwargs)
                 if self.stage == 3:
-                    torch.save(output_state_dict, os.path.join(output_dir, "adapter_model.bin"))
+                    torch.save(
+                        get_peft_model_state_dict(model_to_save, output_state_dict),
+                        os.path.join(output_dir, "adapter_model.bin"),
+                    )
             else:
                 # save model
                 model_to_save.save_pretrained(output_dir, state_dict=output_state_dict, **kwargs)
