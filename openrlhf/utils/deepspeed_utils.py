@@ -26,10 +26,16 @@ def get_train_ds_config(
         "offload_param": {"device": device},
         "offload_optimizer": {
             "device": "cpu" if adam_offload else "none",
+            "pin_memory": True,
         },
-        "stage3_param_persistence_threshold": 1e4,
-        "stage3_max_live_parameters": 3e7,
-        "stage3_prefetch_bucket_size": 3e7,
+        "overlap_comm": True,
+        "contiguous_gradients": True,
+        "sub_group_size": "auto",
+        "stage3_max_live_parameters": "auto",
+        "stage3_max_reuse_distance": "auto",
+        "stage3_param_persistence_threshold": "auto",
+        "stage3_prefetch_bucket_size": "auto",
+        "reduce_bucket_size": "auto",
         # ZeRO++
         "zero_hpz_partition_size": zpg,
         "zero_quantized_weights": False,
@@ -38,8 +44,6 @@ def get_train_ds_config(
     # we should disable trace cache for MoE: https://github.com/microsoft/DeepSpeed/discussions/4081
     if disable_trace_cache:
         zero_opt_dict["stage3_prefetch_bucket_size"] = 0
-        zero_opt_dict["stage3_max_live_parameters"] = 0
-        zero_opt_dict["stage3_max_reuse_distance"] = 0
 
     return {
         "steps_per_print": 100,
@@ -61,9 +65,10 @@ def get_eval_ds_config(
 ):
     zero_opt_dict = {
         "stage": stage,
-        "stage3_param_persistence_threshold": 1e4,
+        "stage3_param_persistence_threshold": "auto",
         "offload_param": {
             "device": "cpu" if offload else "none",
+            "pin_memory": True,
         },
     }
     return {
