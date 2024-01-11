@@ -149,7 +149,7 @@ class SwitchBalancingLoss(nn.Module):
         self.num_experts = num_experts
         self.top_k = top_k
 
-    def forward(gate_logits: torch.Tensor) -> float:
+    def forward(self, gate_logits: torch.Tensor) -> float:
         r"""
         Computes auxiliary load balancing loss as in Switch Transformer - implemented in Pytorch.
 
