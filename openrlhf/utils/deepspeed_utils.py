@@ -10,7 +10,16 @@ import torch
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
 
 
-def get_train_ds_config(offload, adam_offload=True, stage=2, bf16=True, max_norm=1.0, zpg=8, grad_accum_dtype=None):
+def get_train_ds_config(
+    offload,
+    adam_offload=True,
+    stage=2,
+    bf16=True,
+    max_norm=1.0,
+    zpg=8,
+    grad_accum_dtype=None,
+    disable_trace_cache=False,
+):
     device = "cpu" if offload else "none"
     zero_opt_dict = {
         "stage": stage,
@@ -26,6 +35,12 @@ def get_train_ds_config(offload, adam_offload=True, stage=2, bf16=True, max_norm
         "zero_quantized_weights": False,
         "zero_quantized_gradients": False,
     }
+    # we should disable trace cache for MoE: https://github.com/microsoft/DeepSpeed/discussions/4081
+    if disable_trace_cache:
+        zero_opt_dict["stage3_prefetch_bucket_size"] = 0
+        zero_opt_dict["stage3_max_live_parameters"] = 0
+        zero_opt_dict["stage3_max_reuse_distance"] = 0
+
     return {
         "steps_per_print": 100,
         "zero_optimization": zero_opt_dict,

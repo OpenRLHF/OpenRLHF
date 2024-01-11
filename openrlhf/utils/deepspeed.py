@@ -57,6 +57,7 @@ class DeepspeedStrategy(ABC):
         self.seed = seed
         self.max_norm = max_norm
         self.grad_accum_dtype = args.grad_accum_dtype
+        self.disable_trace_cache = args.disable_trace_cache
 
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
@@ -184,6 +185,7 @@ class DeepspeedStrategy(ABC):
             max_norm=self.max_norm,
             zpg=self.zpg,
             grad_accum_dtype=self.grad_accum_dtype,
+            disable_trace_cache=self.disable_trace_cache,
         )
 
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size

@@ -159,6 +159,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_samples", type=int, default=1000000)
     parser.add_argument("--balancing_loss_coef", type=float, default=0)
     parser.add_argument("--grad_accum_dtype", type=str, default=None)
+    parser.add_argument("--disable_trace_cache", action="store_true", default=False)
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
     parser.add_argument("--lora_rank", type=int, default=0)
     parser.add_argument("--lora_alpha", type=int, default=16)
