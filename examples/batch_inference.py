@@ -22,6 +22,7 @@ def batch_generate(args):
         args.pretrain,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
+        load_in_4bit=args.load_in_4bit,
     )
     if args.to_bettertransformer:
         model.to_bettertransformer()
@@ -132,6 +133,7 @@ def batch_rm_inference(args):
         normalize_reward=True,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
+        load_in_4bit=args.load_in_4bit,
     )
 
     # configure tokenizer
@@ -229,6 +231,9 @@ if __name__ == "__main__":
         default=None,
         help="set to rs (Rejection Sampling), dt (Decision Transformer) or None",
     )
+
+    # QLora
+    parser.add_argument("--load_in_4bit", action="store_true", default=False)
 
     # for Iterative generation and Rejection Sampling
     parser.add_argument("--iter", type=int, default=None)

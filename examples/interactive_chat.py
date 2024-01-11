@@ -17,6 +17,7 @@ def generate(args):
         args.pretrain,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
+        load_in_4bit=args.load_in_4bit,
     )
 
     # configure tokenizer
@@ -80,6 +81,9 @@ if __name__ == "__main__":
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--temperature", type=float, default=0.5)
     parser.add_argument("--repetition_penalty", type=float, default=1.2)
+
+    # QLora
+    parser.add_argument("--load_in_4bit", action="store_true", default=False)
 
     parser.add_argument("--ta_prompt", type=str, default=None)
     parser.add_argument("--enable_dt", action="store_true", default=False)
