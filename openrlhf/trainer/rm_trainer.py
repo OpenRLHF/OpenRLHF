@@ -129,9 +129,7 @@ class RewardModelTrainer(ABC):
 
                 preference_loss = self.loss_fn(chosen_reward, reject_reward, margin)
                 # mixtral
-                if self.aux_loss:
-                    aux_loss = aux_loss
-                else:
+                if not self.aux_loss:
                     aux_loss = 0
 
                 loss = preference_loss + aux_loss * self.args.aux_loss_coef

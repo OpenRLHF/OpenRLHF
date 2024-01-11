@@ -127,9 +127,7 @@ class DPOTrainer(ABC):
                     chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
                 )
                 # mixtral
-                if self.aux_loss:
-                    aux_loss = aux_loss
-                else:
+                if not self.aux_loss:
                     aux_loss = 0
 
                 loss = preference_loss + aux_loss * self.args.aux_loss_coef
