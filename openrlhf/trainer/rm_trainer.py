@@ -61,7 +61,7 @@ class RewardModelTrainer(ABC):
         # Mixtral 8*7b
         self.balancing_loss = self.args.balancing_loss_coef > 1e-8
         if self.balancing_loss:
-            self.balancing_loss_fn = SwitchBalancingLoss(model._num_experts, model._top_k)
+            self.balancing_loss_fn = SwitchBalancingLoss(model._num_experts, model._topk)
 
         self.margin_loss = self.strategy.args.margin_loss
         self.compute_fp32_loss = self.strategy.args.compute_fp32_loss

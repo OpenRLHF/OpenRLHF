@@ -60,7 +60,7 @@ class DPOTrainer(ABC):
         # Mixtral 8*7b
         self.balancing_loss = self.args.balancing_loss_coef > 1e-8
         if self.balancing_loss:
-            self.balancing_loss_fn = SwitchBalancingLoss(model._num_experts, model._top_k)
+            self.balancing_loss_fn = SwitchBalancingLoss(model._num_experts, model._topk)
 
         self._wandb = None
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():
