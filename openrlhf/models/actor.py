@@ -83,7 +83,7 @@ class Actor(nn.Module):
                     task_type=TaskType.CAUSAL_LM,
                     r=lora_rank,
                     lora_alpha=lora_alpha,
-                    target_modules=find_all_linear_names(self.model) if load_in_4bit else target_modules,
+                    target_modules=target_modules or find_all_linear_names(self.model, load_in_4bit),
                     lora_dropout=0,
                     bias="none",
                 )

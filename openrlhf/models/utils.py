@@ -77,8 +77,8 @@ def masked_normalize(tensor: torch.Tensor, mask: torch.Tensor, dim: int = 1, eps
     return mean_centered * var.clamp(min=eps).rsqrt()
 
 
-def find_all_linear_names(model):
-    cls = bnb.nn.Linear4bit
+def find_all_linear_names(model, load_in_4bit):
+    cls = bnb.nn.Linear4bit if load_in_4bit else nn.Linear
     lora_module_names = set()
     for name, module in model.named_modules():
         if isinstance(module, cls):
@@ -87,5 +87,7 @@ def find_all_linear_names(model):
             break
 
     if "lm_head" in lora_module_names:  # needed for 16-bit
+        lora_module_names.remove("lm_head")
+    if "value_head" in lora_module_names:  # needed for 16-bit
         lora_module_names.remove("lm_head")
     return list(lora_module_names)

@@ -9,7 +9,8 @@ from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
 from transformers.deepspeed import HfDeepSpeedConfig
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
-from openrlhf.utils.logging import find_all_linear_names, init_logger
+from openrlhf.utils.logging import init_logger
+from .utils import find_all_linear_names, log_probs_from_logits
 
 logger = init_logger(__name__)
 
@@ -139,7 +140,7 @@ def get_llm_for_sequence_regression(
             task_type=TaskType.SEQ_CLS,
             r=lora_rank,
             lora_alpha=lora_alpha,
-            target_modules=find_all_linear_names(model) if load_in_4bit else target_modules,
+            target_modules=target_modules or find_all_linear_names(model, load_in_4bit),
             lora_dropout=0,
             bias="none",
         )
@@ -151,7 +152,7 @@ def get_llm_for_sequence_regression(
                     module = module.to(torch.bfloat16)
                 if "norm" in name:
                     module = module.to(torch.float32)
-                if "lm_head" in name or "embed_tokens" in name:
+                if "value_head" in name or "embed_tokens" in name:
                     if hasattr(module, "weight"):
                         module = module.to(torch.bfloat16)
 
