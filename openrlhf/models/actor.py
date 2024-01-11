@@ -75,6 +75,7 @@ class Actor(nn.Module):
             if "output_router_logits" in self.model.config.to_dict():
                 print("[Mixtral 8x7b] set output_router_logits as True")
                 self.model.config.output_router_logits = True
+            self._config = self.model.config
 
             # LoRA
             if lora_rank > 0:
@@ -97,8 +98,6 @@ class Actor(nn.Module):
                         if "lm_head" in name or "embed_tokens" in name:
                             if hasattr(module, "weight"):
                                 module = module.to(torch.bfloat16)
-
-            self._config = self.model.config
         else:
             self.model = pretrain_or_model
 
