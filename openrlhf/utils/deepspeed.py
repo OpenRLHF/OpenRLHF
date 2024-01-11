@@ -255,6 +255,7 @@ class DeepspeedStrategy(ABC):
 
         # save model weights for ZeRO2/3
         model_to_save = self._unwrap_model(model)
+        is_peft_model = isinstance(model_to_save, PeftModel)
 
         # gather parameters
         output_state_dict = {}
