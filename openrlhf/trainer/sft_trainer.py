@@ -40,7 +40,6 @@ class SFTTrainer(ABC):
         batch_size: int = 1,
         max_epochs: int = 2,
         tokenizer=None,
-        gradient_checkpointing: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -54,7 +53,6 @@ class SFTTrainer(ABC):
         self.model = model
         self.tokenizer = tokenizer
         self.optimizer = optim
-        self.gradient_checkpointing = gradient_checkpointing
         self.args = strategy.args
 
         self.loss_fn = GPTLMLoss()
@@ -63,9 +61,6 @@ class SFTTrainer(ABC):
         self.balancing_loss = self.args.balancing_loss_coef > 1e-8
         if self.balancing_loss:
             self.balancing_loss_fn = SwitchBalancingLoss(model._config.num_experts, model._config.top_k)
-
-        if self.gradient_checkpointing:
-            self.model.gradient_checkpointing_enable()
 
         # wandb setting
         self._wandb = None

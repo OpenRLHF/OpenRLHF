@@ -40,7 +40,6 @@ class DPOTrainer(ABC):
         max_norm=0.5,
         beta=0.01,
         max_epochs: int = 2,
-        gradient_checkpointing: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -52,7 +51,6 @@ class DPOTrainer(ABC):
         self.ref_model = ref_model
         self.scheduler = scheduler
         self.optimizer = optim
-        self.gradient_checkpointing = gradient_checkpointing
         self.tokenizer = tokenizer
         self.args = strategy.args
 

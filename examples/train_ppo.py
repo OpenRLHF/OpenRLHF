@@ -142,6 +142,11 @@ def train(args):
         num_training_steps=max_steps,
     )
 
+    # gradient_checkpointing
+    if args.gradient_checkpointing:
+        actor.gradient_checkpointing_enable()
+        critic.gradient_checkpointing_enable()
+
     # prepare models/optimizers...
     (
         (actor, actor_optim, actor_scheduler),
@@ -155,10 +160,6 @@ def train(args):
         initial_model,
         is_rlhf=True,
     )
-
-    if args.gradient_checkpointing:
-        actor.gradient_checkpointing_enable()
-        critic.gradient_checkpointing_enable()
 
     if ema_model:
         ema_model._offload = True

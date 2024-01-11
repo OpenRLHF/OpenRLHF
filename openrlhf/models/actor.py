@@ -65,7 +65,6 @@ class Actor(nn.Module):
 
             self.model = AutoModelForCausalLM.from_pretrained(
                 pretrain_or_model,
-                torch_dtype="auto",
                 trust_remote_code=True,
                 attn_implementation=attn_implementation,
                 quantization_config=nf4_config,

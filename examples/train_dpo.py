@@ -46,6 +46,10 @@ def train(args):
         ref_model._offload = True
     get_tokenizer(args.pretrain, ref_model.model, "right", strategy)
 
+    # gradient_checkpointing
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)
 

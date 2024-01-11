@@ -38,7 +38,6 @@ class RewardModelTrainer(ABC):
         max_norm=0.5,
         max_epochs: int = 2,
         loss="sigmoid",
-        gradient_checkpointing: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -67,9 +66,6 @@ class RewardModelTrainer(ABC):
 
         self.margin_loss = self.strategy.args.margin_loss
         self.compute_fp32_loss = self.strategy.args.compute_fp32_loss
-
-        if self.gradient_checkpointing:
-            self.model.gradient_checkpointing_enable()
 
         self._wandb = None
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():

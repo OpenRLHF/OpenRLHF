@@ -74,6 +74,10 @@ def train(args):
         num_training_steps=max_steps,
     )
 
+    # gradient_checkpointing
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+
     # strategy prepare
     (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
 
@@ -94,7 +98,6 @@ def train(args):
         scheduler=scheduler,
         max_norm=args.max_norm,
         max_epochs=args.max_epochs,
-        gradient_checkpointing=args.gradient_checkpointing,
         loss=args.loss,
     )
 
