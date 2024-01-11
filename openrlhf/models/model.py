@@ -143,8 +143,6 @@ def get_llm_for_sequence_regression(
     if "output_router_logits" in model.config.to_dict():
         print("[Mixtral 8x7b] set output_router_logits as True")
         model.config.output_router_logits = True
-        model._num_experts = model.config.num_local_experts
-        model._topk = model.config.num_experts_per_tok
 
     # NOTE: For reward model training only, intialize value_head manually
     # because deepspeed.zero.Init() will not intialize them.

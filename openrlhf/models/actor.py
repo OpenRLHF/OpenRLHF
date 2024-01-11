@@ -98,8 +98,6 @@ class Actor(nn.Module):
             if "output_router_logits" in self.model.config.to_dict():
                 print("[Mixtral 8x7b] set output_router_logits as True")
                 self.model.config.output_router_logits = True
-                self._num_experts = self.model.config.num_local_experts
-                self._topk = self.model.config.num_experts_per_tok
         else:
             self.model = pretrain_or_model
 

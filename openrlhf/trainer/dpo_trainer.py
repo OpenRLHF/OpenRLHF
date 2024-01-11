@@ -58,9 +58,7 @@ class DPOTrainer(ABC):
         self.loss_fn = DPOLoss(self.beta, self.args.label_smoothing, self.args.ipo)
 
         # Mixtral 8*7b
-        self.balancing_loss = self.args.balancing_loss_coef > 1e-8
-        if self.balancing_loss:
-            self.balancing_loss_fn = SwitchBalancingLoss(model._num_experts, model._topk)
+        self.aux_loss = self.args.aux_loss_coef > 1e-8
 
         self._wandb = None
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():
@@ -116,7 +114,7 @@ class DPOTrainer(ABC):
                 reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
                 r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
 
-                chosen_logps, rejected_logps, router_logits = self.concatenated_forward(
+                chosen_logps, rejected_logps, aux_loss = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask
                 )
                 with torch.no_grad():
@@ -129,12 +127,12 @@ class DPOTrainer(ABC):
                     chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
                 )
                 # mixtral
-                if self.balancing_loss:
-                    balancing_loss = self.balancing_loss_fn(router_logits)
+                if self.aux_loss:
+                    aux_loss = aux_loss
                 else:
-                    balancing_loss = 0
+                    aux_loss = 0
 
-                loss = preference_loss + balancing_loss * self.args.balancing_loss_coef
+                loss = preference_loss + aux_loss * self.args.aux_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
@@ -238,8 +236,8 @@ class DPOTrainer(ABC):
         all_logps = self._get_batch_logps(all_logits, input_ids, attention_mask=att_masks, average_log_prob=False)
         chosen_logps = all_logps[: chosen_ids.shape[0]]
         rejected_logps = all_logps[chosen_ids.shape[0] :]
-        router_logits = output.router_logits if "router_logits" in output else []
-        return chosen_logps, rejected_logps, router_logits
+        aux_loss = output.aux_loss if "aux_loss" in output else []
+        return chosen_logps, rejected_logps, aux_loss
 
     def concatenated_inputs(self, chosen_ids, c_mask, reject_ids, r_mask):
         """Concatenate the chosen and rejected inputs into a single tensor.

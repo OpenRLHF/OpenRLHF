@@ -112,10 +112,7 @@ class PPOTrainer(ABC):
         self.ptx_loss_fn = GPTLMLoss()
 
         # Mixtral 8x7b
-        self.balancing_loss = self.args.balancing_loss_coef > 1e-8
-        if self.balancing_loss:
-            self.actor_balancing_loss_fn = SwitchBalancingLoss(actor._config.num_experts, actor._config.top_k)
-            self.critic_balancing_loss_fn = SwitchBalancingLoss(critic._config.num_experts, critic._config.top_k)
+        self.aux_loss = self.args.aux_loss_coef > 1e-8
 
         if self.kl_target:
             self.kl_ctl = AdaptiveKLController(init_kl_coef, kl_target, kl_horizon)
@@ -273,11 +270,11 @@ class PPOTrainer(ABC):
             action_mask=experience.action_mask,
         )
         # mixtral
-        if self.balancing_loss:
-            balancing_loss = self.actor_balancing_loss_fn(output.router_logits)
+        if self.aux_loss:
+            aux_loss = output.aux_loss
         else:
-            balancing_loss = 0
-        loss = actor_loss + balancing_loss * self.args.balancing_loss_coef
+            aux_loss = 0
+        loss = actor_loss + aux_loss * self.args.aux_loss_coef
         self.strategy.backward(loss, self.actor, self.actor_optim)
 
         # ptx loss
@@ -297,11 +294,11 @@ class PPOTrainer(ABC):
             # loss function
             ptx_loss = self.ptx_loss_fn(ptx_log_probs, label)
             # mixtral
-            if self.balancing_loss:
-                balancing_loss = self.actor_balancing_loss_fn(output.router_logits)
+            if self.aux_loss:
+                aux_loss = output.aux_loss
             else:
-                balancing_loss = 0
-            loss = ptx_loss + balancing_loss * self.args.balancing_loss_coef
+                aux_loss = 0
+            loss = ptx_loss + aux_loss * self.args.aux_loss_coef
             self.strategy.backward(loss, self.actor, self.actor_optim)
 
         self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
@@ -341,11 +338,11 @@ class PPOTrainer(ABC):
             action_mask=experience.action_mask,
         )
         # mixtral
-        if self.balancing_loss:
-            balancing_loss = self.critic_balancing_loss_fn(output.router_logits)
+        if self.aux_loss:
+            aux_loss = output.aux_loss
         else:
-            balancing_loss = 0
-        loss = critic_loss + balancing_loss * self.args.balancing_loss_coef
+            aux_loss = 0
+        loss = critic_loss + aux_loss * self.args.aux_loss_coef
         self.strategy.backward(loss, self.critic, self.critic_optim)
         self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
 

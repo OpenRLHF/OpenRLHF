@@ -58,9 +58,7 @@ class SFTTrainer(ABC):
         self.loss_fn = GPTLMLoss()
 
         # Mixtral 8*7b
-        self.balancing_loss = self.args.balancing_loss_coef > 1e-8
-        if self.balancing_loss:
-            self.balancing_loss_fn = SwitchBalancingLoss(model._num_experts, model._topk)
+        self.aux_loss = self.args.aux_loss_coef > 1e-8
 
         # wandb setting
         self._wandb = None
@@ -121,24 +119,24 @@ class SFTTrainer(ABC):
                     self.loss_fn.IGNORE_INDEX,
                 )
                 # mixtral
-                if self.balancing_loss:
-                    balancing_loss = self.balancing_loss_fn(output.router_logits)
+                if self.aux_loss:
+                    aux_loss = output.aux_loss
                 else:
-                    balancing_loss = 0
+                    aux_loss = 0
 
                 if not self.pretrain_mode:
                     for label, source_len in zip(labels, prompts_id_len):
                         label[:source_len] = self.loss_fn.IGNORE_INDEX
 
                 gpt_loss = self.loss_fn(output.logits, labels)
-                loss = gpt_loss + balancing_loss * self.args.balancing_loss_coef
+                loss = gpt_loss + aux_loss * self.args.aux_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item()
                 logs_dict = {"gpt_loss": gpt_loss.item(), "loss_mean": loss_mean}
-                if self.balancing_loss:
-                    logs_dict["balancing_loss"] = balancing_loss.item()
+                if self.aux_loss:
+                    logs_dict["aux_loss"] = aux_loss.item()
 
                 # logs/checkpoints/evaluation
                 self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict)

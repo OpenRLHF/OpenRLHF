@@ -58,7 +58,7 @@ class DeepspeedStrategy(ABC):
         self.max_norm = max_norm
         self.grad_accum_dtype = args.grad_accum_dtype
         # disable_trace_cache for MoE
-        self.disable_trace_cache = args.disable_trace_cache or args.balancing_loss_coef > 1e-8
+        self.disable_trace_cache = args.disable_trace_cache or args.aux_loss_coef > 1e-8
 
         self.is_rlhf = False
         self.time_steps = defaultdict(int)

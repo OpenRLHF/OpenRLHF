@@ -59,9 +59,7 @@ class RewardModelTrainer(ABC):
             self.strategy.print("LogExp Loss")
 
         # Mixtral 8*7b
-        self.balancing_loss = self.args.balancing_loss_coef > 1e-8
-        if self.balancing_loss:
-            self.balancing_loss_fn = SwitchBalancingLoss(model._num_experts, model._topk)
+        self.aux_loss = self.args.aux_loss_coef > 1e-8
 
         self.margin_loss = self.strategy.args.margin_loss
         self.compute_fp32_loss = self.strategy.args.compute_fp32_loss
@@ -120,7 +118,7 @@ class RewardModelTrainer(ABC):
                 else:
                     margin = None
 
-                chosen_reward, reject_reward, router_logits = self.concatenated_forward(
+                chosen_reward, reject_reward, aux_loss = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask
                 )
 
@@ -131,12 +129,12 @@ class RewardModelTrainer(ABC):
 
                 preference_loss = self.loss_fn(chosen_reward, reject_reward, margin)
                 # mixtral
-                if self.balancing_loss:
-                    balancing_loss = self.balancing_loss_fn(router_logits)
+                if self.aux_loss:
+                    aux_loss = aux_loss
                 else:
-                    balancing_loss = 0
+                    aux_loss = 0
 
-                loss = preference_loss + balancing_loss * self.args.balancing_loss_coef
+                loss = preference_loss + aux_loss * self.args.aux_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
@@ -150,8 +148,8 @@ class RewardModelTrainer(ABC):
                     "acc_mean": acc_mean,
                     "loss_mean": loss_mean,
                 }
-                if self.balancing_loss:
-                    logs_dict["balancing_loss"] = balancing_loss.item()
+                if self.aux_loss:
+                    logs_dict["aux_loss"] = aux_loss.item()
                 # logs/checkpoints/evaluate
                 self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict)
 
@@ -256,8 +254,8 @@ class RewardModelTrainer(ABC):
         all_values, output = model(input_ids, attention_mask=att_masks, return_output=True)
         chosen_rewards = all_values[: chosen_ids.shape[0]]
         rejected_rewards = all_values[chosen_ids.shape[0] :]
-        router_logits = output.router_logits if "router_logits" in output else []
-        return chosen_rewards, rejected_rewards, router_logits
+        aux_loss = output.aux_loss if "aux_loss" in output else []
+        return chosen_rewards, rejected_rewards, aux_loss
 
     def concatenated_inputs(self, chosen_ids, c_mask, reject_ids, r_mask):
         """Concatenate the chosen and rejected inputs into a single tensor.
