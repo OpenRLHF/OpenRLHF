@@ -27,7 +27,6 @@ class Actor(nn.Module):
         pretrain_or_model,
         use_flash_attention_2=False,
         bf16=True,
-        load_in_4bit=False,
         lora_rank=0,
         lora_alpha=16,
         target_modules=None,
@@ -52,22 +51,10 @@ class Actor(nn.Module):
             else:
                 dschf = None
 
-            if load_in_4bit:
-                assert bf16, "we only support bnb_4bit_compute_dtype = bf16"
-                nf4_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_quant_type="nf4",
-                    bnb_4bit_use_double_quant=True,
-                    bnb_4bit_compute_dtype=torch.bfloat16,
-                )
-            else:
-                nf4_config = None
-
             self.model = AutoModelForCausalLM.from_pretrained(
                 pretrain_or_model,
                 trust_remote_code=True,
                 attn_implementation=attn_implementation,
-                quantization_config=nf4_config,
             )
 
             # Mixtral 8x7b - balancing loss
@@ -82,22 +69,11 @@ class Actor(nn.Module):
                     task_type=TaskType.CAUSAL_LM,
                     r=lora_rank,
                     lora_alpha=lora_alpha,
-                    target_modules=target_modules or find_all_linear_names(self.model, load_in_4bit),
+                    target_modules=target_modules or find_all_linear_names(self.model),
                     lora_dropout=0,
                     bias="none",
                 )
                 self.model = get_peft_model(self.model, lora_config)
-
-                if load_in_4bit:
-                    for name, module in self.model.named_modules():
-                        if isinstance(module, LoraLayer):
-                            module = module.to(torch.bfloat16)
-                        if "norm" in name:
-                            module = module.to(torch.float32)
-                        if "lm_head" in name or "embed_tokens" in name:
-                            if hasattr(module, "weight"):
-                                module = module.to(torch.bfloat16)
-                self._is_peft_model = True
         else:
             self.model = pretrain_or_model
 

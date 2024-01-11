@@ -22,7 +22,6 @@ def get_llm_for_sequence_regression(
     model_type: str,
     *,
     bf16=True,
-    load_in_4bit=False,
     lora_rank=0,
     lora_alpha=16,
     target_modules=None,
@@ -97,23 +96,11 @@ def get_llm_for_sequence_regression(
     else:
         dschf = None
 
-    if load_in_4bit:
-        assert bf16, "we only support bnb_4bit_compute_dtype = bf16"
-        nf4_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-        )
-    else:
-        nf4_config = None
-
     model = cls_class.from_pretrained(
         model_name_or_path,
         config=config,
         trust_remote_code=True,
         torch_dtype="auto",
-        quantization_config=nf4_config,
         **kwargs,
     )
 
@@ -129,22 +116,11 @@ def get_llm_for_sequence_regression(
             task_type=TaskType.SEQ_CLS,
             r=lora_rank,
             lora_alpha=lora_alpha,
-            target_modules=target_modules or find_all_linear_names(model, load_in_4bit),
+            target_modules=target_modules or find_all_linear_names(model),
             lora_dropout=0,
             bias="none",
         )
         model = get_peft_model(model, lora_config)
-
-        if load_in_4bit:
-            for name, module in model.named_modules():
-                if isinstance(module, LoraLayer):
-                    module = module.to(torch.bfloat16)
-                if "norm" in name:
-                    module = module.to(torch.float32)
-                if "value_head" in name or "embed_tokens" in name:
-                    if hasattr(module, "weight"):
-                        module = module.to(torch.bfloat16)
-        model._is_peft_model = True
 
     # NOTE: For reward model training only, intialize value_head manually
     # because deepspeed.zero.Init() will not intialize them.
