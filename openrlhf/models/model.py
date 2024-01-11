@@ -112,6 +112,8 @@ def get_llm_for_sequence_regression(
 
     # LoRA
     if lora_rank > 0:
+        # https://github.com/huggingface/peft/issues/137
+        model.enable_input_require_grads()
         lora_config = LoraConfig(
             task_type=TaskType.SEQ_CLS,
             r=lora_rank,

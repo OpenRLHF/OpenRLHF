@@ -65,6 +65,8 @@ class Actor(nn.Module):
 
             # LoRA
             if lora_rank > 0:
+                # https://github.com/huggingface/peft/issues/137
+                self.model.enable_input_require_grads()
                 lora_config = LoraConfig(
                     task_type=TaskType.CAUSAL_LM,
                     r=lora_rank,
