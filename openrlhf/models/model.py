@@ -4,11 +4,12 @@ import deepspeed
 import torch
 import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
+from peft.tuners.lora import LoraLayer
 from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
 from transformers.deepspeed import HfDeepSpeedConfig
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
-from openrlhf.utils.logging import init_logger
+from openrlhf.utils.logging import find_all_linear_names, init_logger
 
 logger = init_logger(__name__)
 
@@ -23,6 +24,7 @@ def get_llm_for_sequence_regression(
     load_in_4bit=False,
     lora_rank=0,
     lora_alpha=16,
+    target_modules=None,
     normalize_reward=False,
     use_flash_attention_2=False,
     ds_config: dict = None,
@@ -137,10 +139,21 @@ def get_llm_for_sequence_regression(
             task_type=TaskType.SEQ_CLS,
             r=lora_rank,
             lora_alpha=lora_alpha,
+            target_modules=find_all_linear_names(model) if load_in_4bit else target_modules,
             lora_dropout=0,
             bias="none",
         )
         model = get_peft_model(model, lora_config)
+
+        if load_in_4bit:
+            for name, module in model.named_modules():
+                if isinstance(module, LoraLayer):
+                    module = module.to(torch.bfloat16)
+                if "norm" in name:
+                    module = module.to(torch.float32)
+                if "lm_head" in name or "embed_tokens" in name:
+                    if hasattr(module, "weight"):
+                        module = module.to(torch.bfloat16)
 
     model._config = config
     return model

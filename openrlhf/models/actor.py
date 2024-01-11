@@ -5,10 +5,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from optimum.bettertransformer import BetterTransformer
 from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
+from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedModel
 from transformers.deepspeed import HfDeepSpeedConfig
 
-from .utils import log_probs_from_logits
+from .utils import find_all_linear_names, log_probs_from_logits
 
 
 class Actor(nn.Module):
@@ -29,6 +30,7 @@ class Actor(nn.Module):
         load_in_4bit=False,
         lora_rank=0,
         lora_alpha=16,
+        target_modules=None,
         ds_config=None,
     ) -> None:
         super().__init__()
@@ -80,10 +82,21 @@ class Actor(nn.Module):
                     task_type=TaskType.CAUSAL_LM,
                     r=lora_rank,
                     lora_alpha=lora_alpha,
+                    target_modules=find_all_linear_names(self.model) if load_in_4bit else target_modules,
                     lora_dropout=0,
                     bias="none",
                 )
                 self.model = get_peft_model(self.model, lora_config)
+
+                if load_in_4bit:
+                    for name, module in self.model.named_modules():
+                        if isinstance(module, LoraLayer):
+                            module = module.to(torch.bfloat16)
+                        if "norm" in name:
+                            module = module.to(torch.float32)
+                        if "lm_head" in name or "embed_tokens" in name:
+                            if hasattr(module, "weight"):
+                                module = module.to(torch.bfloat16)
 
             self._config = self.model.config
         else:
