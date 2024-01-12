@@ -60,12 +60,12 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 Support Matrix
 
 
-|        | PPO Implementation Tricks  | Ray  | 34B Full Tuning with 4 A100   | 70B+ Full Tuning with 16 A100  | 7B Full Tuning with 4 RTX4090 |
-|  ----  | ----  |  ----  | ----  | ----  | ----  |  
-| OpenRLHF  | ✔ | ✔  | ✔ | ✔ | ✔ |
-| DeepSpeedChat  | ✖️ | ✖️  | ✖️ | ✖️ | ✖️ |
-| ColossalAIChat  | ✖️ | ✖️  | ✖️ |✖️ | ✖️ |
-| TRL  | ✖️ | ✖️  | ✖️ | ✖️ | ✖️ |
+|        | PPO Implementation Tricks  | 34B Full Tuning with 4 A100   | 70B+ Full Tuning with 16 A100  | 7B Full Tuning with 4 RTX4090 | QLoRA | Mixtral 8*7b |
+|  ----  | ----  |  ----  | ----  | ----  | ----  |  ----  | 
+| OpenRLHF  | ✔ | ✔  | ✔ | ✔ | ✔ | ✔ |
+| DeepSpeedChat  | ✖️ | ✖️  | ✖️ | ✖️ | ✖️ | ✖️ |
+| ColossalAIChat  | ✖️ | ✖️  | ✖️ |✖️ | ✖️ | ✖️ |
+| TRL  | ✖️ | ✖️  | ✖️ | ✖️ | ✔ | ✔ |
 
 ## Performance
 
