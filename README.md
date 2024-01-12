@@ -65,7 +65,7 @@ Support Matrix
 | OpenRLHF  | ✔ | ✔  | ✔ | ✔ | ✔ | ✔ |
 | DeepSpeedChat  | ✖️ | ✖️  | ✖️ | ✖️ | ✖️ | ✖️ |
 | ColossalAIChat  | ✖️ | ✖️  | ✖️ |✖️ | ✖️ | ✖️ |
-| TRL  | ✖️ | ✖️  | ✖️ | ✖️ | ✔ | ✔ |
+| TRL  | ✖️ | ✖️  | ✖️ | ✖️ | ✔ | ✔ (SFT) |
 
 ## Performance
 
