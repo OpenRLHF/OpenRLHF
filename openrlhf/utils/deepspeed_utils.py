@@ -30,9 +30,9 @@ def get_train_ds_config(
         },
         "overlap_comm": True,
         "contiguous_gradients": True,
-        "sub_group_size": "auto",
-        "stage3_max_live_parameters": "auto",
-        "stage3_max_reuse_distance": "auto",
+        "sub_group_size": 1e9,
+        "stage3_max_live_parameters": 1e9,
+        "stage3_max_reuse_distance": 1e9,
         "stage3_param_persistence_threshold": "auto",
         "stage3_prefetch_bucket_size": "auto",
         "reduce_bucket_size": "auto",
@@ -44,6 +44,8 @@ def get_train_ds_config(
     # we should disable trace cache for MoE: https://github.com/microsoft/DeepSpeed/discussions/4081
     if disable_trace_cache:
         zero_opt_dict["stage3_prefetch_bucket_size"] = 0
+        zero_opt_dict["stage3_max_live_parameters"] = 0
+        zero_opt_dict["stage3_max_reuse_distance"] = 0
 
     return {
         "steps_per_print": 100,
