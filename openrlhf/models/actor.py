@@ -68,6 +68,7 @@ class Actor(nn.Module):
                 trust_remote_code=True,
                 attn_implementation=attn_implementation,
                 quantization_config=nf4_config,
+                torch_dtype="auto",
             )
 
             # LoRA
