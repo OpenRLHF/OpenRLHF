@@ -28,8 +28,6 @@ def get_train_ds_config(
             "device": "cpu" if adam_offload else "none",
             "pin_memory": True,
         },
-        "overlap_comm": True,
-        "contiguous_gradients": True,
         "sub_group_size": "auto",
         "stage3_max_live_parameters": "auto",
         "stage3_max_reuse_distance": "auto",
