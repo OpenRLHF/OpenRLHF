@@ -40,7 +40,7 @@ def train(args):
     # prepare for data and dataset
     train_data, eval_data = blending_datasets(args.dataset, args.dataset_probs, strategy, args.seed)
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
-    eval_data = eval_data.select(range(min(args.max_samples, len(train_data))))
+    eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
     train_dataset = SFTDataset(train_data, tokenizer, args.max_len, strategy, pretrain_mode=args.pretrain_mode)
     eval_dataset = SFTDataset(eval_data, tokenizer, args.max_len, strategy, pretrain_mode=args.pretrain_mode)
 
