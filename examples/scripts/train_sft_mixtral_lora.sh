@@ -18,9 +18,8 @@ read -r -d '' training_commands <<EOF
     --bf16 \
     --flash_attn \
     --learning_rate 5e-6 \
-    --gradient_checkpointing \
     --lora_rank 64 \
-    --lora_alpha 16 \
+    --lora_alpha 32 \
     --disable_trace_cache \
     --aux_loss_coef 0.001
 EOF
