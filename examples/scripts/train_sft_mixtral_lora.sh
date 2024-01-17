@@ -13,11 +13,12 @@ read -r -d '' training_commands <<EOF
     --save_steps -1 \
     --logging_steps 1 \
     --eval_steps -1 \
-    --zero_stage 3 \
+    --zero_stage 2 \
     --max_epochs 1 \
     --bf16 \
     --flash_attn \
     --learning_rate 5e-6 \
+    --load_in_4bit \
     --lora_rank 64 \
     --lora_alpha 32 \
     --disable_trace_cache \
