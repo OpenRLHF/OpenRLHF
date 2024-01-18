@@ -1,5 +1,6 @@
 import random
 import argparse
+import urllib.request
 
 import numpy as np
 import torch
@@ -8,6 +9,14 @@ import deepspeed
 
 from transformers import AutoModelForCausalLM
 from transformers.deepspeed import HfDeepSpeedConfig
+
+
+def download():
+    resp = urllib.request.urlopen(
+        "https://raw.githubusercontent.com/OpenLLMAI/OpenRLHF/wuxibin/zero_init_debug/data/experience.pt"
+    )
+    with open("experience.pt", "wb") as f:
+        f.write(resp.read())
 
 
 def set_seed(seed):
@@ -71,6 +80,7 @@ def main(args):
     )
     engine.eval()
 
+    download()
     state_dict = torch.load(f"experience.pt", map_location="cpu")
     input_ids, attention_mask = state_dict["sequences"].to("cuda"), state_dict["attention_mask"].to("cuda")
     with torch.no_grad():
