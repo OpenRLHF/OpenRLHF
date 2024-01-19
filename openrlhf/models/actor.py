@@ -1,5 +1,6 @@
 from typing import Optional, Tuple, Union
 
+import deepspeed
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,6 +9,7 @@ from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedModel
 from transformers.deepspeed import HfDeepSpeedConfig
+from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
 
 from .utils import find_all_linear_names, log_probs_from_logits
 
@@ -99,6 +101,7 @@ class Actor(nn.Module):
             if "output_router_logits" in self.model.config.to_dict():
                 print("[Mixtral 8x7b] set output_router_logits as True")
                 self.model.config.output_router_logits = True
+                deepspeed.utils.set_z3_leaf_modules(self.model, [MixtralSparseMoeBlock])
         else:
             self.model = pretrain_or_model
 

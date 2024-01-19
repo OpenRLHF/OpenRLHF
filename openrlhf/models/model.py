@@ -8,8 +8,10 @@ from peft.tuners.lora import LoraLayer
 from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
 from transformers.deepspeed import HfDeepSpeedConfig
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
+from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
 
 from openrlhf.utils.logging import init_logger
+
 from .utils import find_all_linear_names, log_probs_from_logits
 
 logger = init_logger(__name__)
@@ -143,6 +145,7 @@ def get_llm_for_sequence_regression(
     if "output_router_logits" in model.config.to_dict():
         print("[Mixtral 8x7b] set output_router_logits as True")
         model.config.output_router_logits = True
+        deepspeed.utils.set_z3_leaf_modules(model, [MixtralSparseMoeBlock])
 
     # NOTE: For reward model training only, intialize value_head manually
     # because deepspeed.zero.Init() will not intialize them.

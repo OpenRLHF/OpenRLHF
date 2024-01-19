@@ -39,7 +39,6 @@ def get_train_ds_config(
         "zero_quantized_weights": False,
         "zero_quantized_gradients": False,
     }
-    # we should disable trace cache for MoE: https://github.com/microsoft/DeepSpeed/discussions/4081
     if disable_trace_cache:
         zero_opt_dict["stage3_prefetch_bucket_size"] = 0
         zero_opt_dict["stage3_max_live_parameters"] = 0
