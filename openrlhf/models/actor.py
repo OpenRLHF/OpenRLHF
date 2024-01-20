@@ -71,6 +71,7 @@ class Actor(nn.Module):
                 attn_implementation=attn_implementation,
                 quantization_config=nf4_config,
                 torch_dtype="auto",
+                device_map="cuda",
             )
 
             # LoRA
