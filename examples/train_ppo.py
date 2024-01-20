@@ -32,6 +32,9 @@ def train(args):
         ds_config=strategy.get_ds_train_config(is_actor=True),
     )
 
+    if args.actor_init_on_gpu:
+        actor = actor.to(torch.cuda.current_device())
+
     critic = get_llm_for_sequence_regression(
         args.reward_pretrain,
         "critic",

@@ -115,7 +115,6 @@ def get_llm_for_sequence_regression(
         config=config,
         trust_remote_code=True,
         torch_dtype="auto",
-        device_map="cuda",
         quantization_config=nf4_config,
         **kwargs,
     )
