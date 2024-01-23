@@ -23,6 +23,7 @@ EOF
      # --wandb [WANDB_TOKENS]
      # --ipo [for IPO]
      # --label_smoothing 0.1 [for cDPO]
+     # --ref_offload [to save GPU memory]
 
 
 if [[ ${1} != "slurm" ]]; then
