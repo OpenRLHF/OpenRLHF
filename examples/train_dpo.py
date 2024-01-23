@@ -114,7 +114,6 @@ def train(args):
         max_norm=args.max_norm,
         beta=args.beta,
         max_epochs=args.max_epochs,
-        gradient_checkpointing=args.gradient_checkpointing,
     )
 
     trainer.fit(args)
