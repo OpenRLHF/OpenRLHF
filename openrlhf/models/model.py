@@ -12,7 +12,10 @@ from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
 
 from openrlhf.utils.logging import init_logger
 
-from .utils import find_all_linear_names, log_probs_from_logits
+from .utils import find_all_linear_names, log_probs_from_logits, replace_rope_embedding
+
+# https://github.com/microsoft/DeepSpeed/issues/4932
+replace_rope_embedding()
 
 logger = init_logger(__name__)
 
@@ -117,6 +120,7 @@ def get_llm_for_sequence_regression(
         torch_dtype="auto",
         quantization_config=nf4_config,
         **kwargs,
+        low_cpu_mem_usage=True,
     )
 
     # LoRA
