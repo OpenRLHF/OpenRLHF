@@ -120,7 +120,6 @@ def get_llm_for_sequence_regression(
         torch_dtype="auto",
         quantization_config=nf4_config,
         **kwargs,
-        low_cpu_mem_usage=True,
     )
 
     # LoRA
