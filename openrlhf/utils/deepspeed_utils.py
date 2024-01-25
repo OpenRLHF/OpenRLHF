@@ -23,7 +23,6 @@ def get_train_ds_config(
     device = "cpu" if offload else "none"
     zero_opt_dict = {
         "stage": stage,
-        "overlap_comm": True,
         "offload_param": {"device": device},
         "offload_optimizer": {
             "device": "cpu" if adam_offload else "none",
