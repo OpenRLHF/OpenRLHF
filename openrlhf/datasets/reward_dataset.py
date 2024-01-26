@@ -1,10 +1,10 @@
 from typing import Callable, Iterable, Iterator, List, Sized
 
-import torch
 import numpy as np
-
-from tqdm import tqdm
+import torch
 from torch.utils.data import Dataset
+from tqdm import tqdm
+
 from .utils import exist_and_not_none, zero_pad_sequences
 
 

@@ -1,28 +1,31 @@
-import os
-import math
 import argparse
-
-import torch.distributed as dist
+import math
+import os
+from collections import OrderedDict
 from datetime import datetime
 
-from collections import OrderedDict
+import torch.distributed as dist
 from transformers.trainer import get_scheduler
 
+from openrlhf.datasets import (
+    DistributedVanillaKTOSampler,
+    RewardDataset,
+    UnpairedPreferenceDataset,
+    UnpairedRewardDataset,
+)
 from openrlhf.models import Actor
-from openrlhf.datasets import RewardDataset, UnpairedPreferenceDataset
 from openrlhf.trainer import KTOTrainer
-from openrlhf.datasets import UnpairedRewardDataset, DistributedVanillaKTOSampler
 from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
 
 def train(args):
     if args.unpaired_preference:
         assert args.vanilla_loss is False, "vanilla_loss is not supported for unpaired_preference"
-    
+
     # configure strategy
     strategy = get_strategy(args)
     strategy.setup_distributed()
-    
+
     # configure model
     # load huggingface model
     model = Actor(
@@ -35,7 +38,7 @@ def train(args):
         target_modules=args.target_modules,
         ds_config=strategy.get_ds_train_config(is_actor=True),
     )
-    
+
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy)
     strategy.print(model)
@@ -55,10 +58,10 @@ def train(args):
     # gradient_checkpointing
     if args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
-    
+
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)
-    
+
     # prepare for data and dataset
     train_data, eval_data = blending_datasets(
         args.dataset,
@@ -76,7 +79,7 @@ def train(args):
         eval_dataset = RewardDataset(eval_data, tokenizer, args.max_len, strategy)
         train_dataset = UnpairedRewardDataset(train_dataset, vanilla_loss=args.vanilla_loss)
         eval_dataset = UnpairedRewardDataset(eval_dataset, vanilla_loss=args.vanilla_loss)
-        
+
         train_sampler = DistributedVanillaKTOSampler(
             train_dataset,
             num_replicas=dist.get_world_size(),
@@ -93,7 +96,7 @@ def train(args):
             train_dataset.collate_fn,
             sampler=train_sampler,
         )
-        
+
         eval_sampler = DistributedVanillaKTOSampler(
             eval_dataset,
             num_replicas=dist.get_world_size(),
@@ -121,13 +124,9 @@ def train(args):
             train_dataset.collate_fn,
         )
         eval_dataloader = strategy.setup_dataloader(
-            eval_dataset,
-            args.micro_train_batch_size,
-            True,
-            False,
-            eval_dataset.collate_fn
+            eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn
         )
-    
+
     # scheduler
     num_update_steps_per_epoch = len(train_dataloader) * args.max_epochs // strategy.accumulated_gradient
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
@@ -159,7 +158,7 @@ def train(args):
         vanilla_loss=args.vanilla_loss,
     )
     trainer.fit(args)
-    
+
     # save model checkpoint after fitting on only rank0
     strategy.save_model(model, tokenizer, args.save_path)
 
@@ -186,8 +185,18 @@ if __name__ == "__main__":
     parser.add_argument("--beta", type=float, default=0.01)
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--vanilla_loss", action="store_true", default=False, help="make sure there are as many positive and negative samples in the batch")
-    parser.add_argument("--unpaired_preference", action="store_true", default=False, help="dataset is the format of unpaired preference")
+    parser.add_argument(
+        "--vanilla_loss",
+        action="store_true",
+        default=False,
+        help="make sure there are as many positive and negative samples in the batch",
+    )
+    parser.add_argument(
+        "--unpaired_preference",
+        action="store_true",
+        default=False,
+        help="dataset is the format of unpaired preference",
+    )
 
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2)
