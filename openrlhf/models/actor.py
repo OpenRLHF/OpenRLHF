@@ -11,7 +11,10 @@ from transformers import AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedMod
 from transformers.deepspeed import HfDeepSpeedConfig
 from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
 
-from .utils import find_all_linear_names, log_probs_from_logits
+from .utils import find_all_linear_names, log_probs_from_logits, replace_rope_embedding
+
+# https://github.com/microsoft/DeepSpeed/issues/4932
+replace_rope_embedding()
 
 
 class Actor(nn.Module):

@@ -299,7 +299,7 @@ class PPOTrainer(ABC):
             else:
                 aux_loss = 0
             loss = ptx_loss + aux_loss * self.args.aux_loss_coef
-            self.strategy.backward(loss, self.actor, self.actor_optim)
+            self.strategy.backward(self.ptx_coef * loss, self.actor, self.actor_optim)
 
         self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
         if self.ema_model:

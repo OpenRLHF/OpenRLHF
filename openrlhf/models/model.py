@@ -12,7 +12,10 @@ from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
 
 from openrlhf.utils.logging import init_logger
 
-from .utils import find_all_linear_names, log_probs_from_logits
+from .utils import find_all_linear_names, log_probs_from_logits, replace_rope_embedding
+
+# https://github.com/microsoft/DeepSpeed/issues/4932
+replace_rope_embedding()
 
 logger = init_logger(__name__)
 
