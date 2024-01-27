@@ -2,13 +2,13 @@ set -x
 
 read -r -d '' training_commands <<EOF
 ../train_dpo.py \
-     --save_path ./ckpt/7b_llama \
+     --save_path ./ckpt/13b_llama \
      --save_steps -1 \
      --logging_steps 1 \
      --eval_steps -1 \
      --train_batch_size 128 \
      --micro_train_batch_size 1 \
-     --pretrain OpenLLMAI/Llama-2-13b-sft-model-ocra-500k \
+     --pretrain codellama/CodeLlama-34b-Instruct-hf \
      --bf16 \
      --max_epochs 1 \
      --max_len 2048 \
