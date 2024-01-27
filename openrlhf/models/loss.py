@@ -177,7 +177,7 @@ class SwitchBalancingLoss(nn.Module):
 
         routing_weights = torch.nn.functional.softmax(concatenated_gate_logits, dim=-1)
 
-        _, selected_experts = torch.topk(routing_weights, top_k, dim=-1)
+        _, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
 
         # treat `top_k` as tokens (shape is `top_k X [batch_size X sequence_length]`)
         selected_experts = selected_experts.reshape(-1)
