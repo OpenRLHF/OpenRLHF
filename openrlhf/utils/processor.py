@@ -10,12 +10,12 @@ def reward_normalization(objs):
         obj["reward"] = rewards[i].item()
 
 
-# Decision Transformer Alignment
+# Conditional SFT
 # See https://arxiv.org/abs/2308.12050
 DEFAULT_REWARD_PROMPT = "{input} <rm_score>: {reward} "
 
 
-def decesion_transformer_processor(args, objs):
+def conditional_sft_processor(args, objs):
     if "reward_template" not in args or args.reward_template is None:
         reward_template = DEFAULT_REWARD_PROMPT
     else:
@@ -26,7 +26,7 @@ def decesion_transformer_processor(args, objs):
     if args.normalize_reward:
         reward_normalization(objs)
 
-    for obj in tqdm(objs, desc="Decision Transformer process..."):
+    for obj in tqdm(objs, desc="Conditional SFT process..."):
         input = obj["input"]
         reward = "{:.2f}".format(float(obj["reward"]))
         input = reward_template.replace("{reward}", reward).replace("{input}", input)
@@ -55,7 +55,7 @@ def rejection_sampling_processor(args, objs):
 
 PROCESSORS = {
     "rs": rejection_sampling_processor,
-    "dt": decesion_transformer_processor,
+    "ca": conditional_sft_processor,
 }
 
 

@@ -42,8 +42,9 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 - Support vLLM generation acceleration in RLHF (--vllm_num_engines).
 - Support multiple reward models.
 - Support [DPO (direct-preference-optimization)/IPO/cDPO](./examples/scripts/train_dpo_llama.sh).
+- Support [KTO](./examples/scripts/train_kto_llama.sh).
 - Support [Rejection Sampling](./examples/scripts/train_rejection_sampling_llama.sh).
-- Support [Conditional Alignment](./examples/scripts/train_conditional_llama.sh) (https://arxiv.org/abs/2308.12050).
+- Support [Conditional SFT](./examples/scripts/train_conditional_llama.sh) (https://arxiv.org/abs/2308.12050).
 - Support [Mixtral 8*7b](./examples/test_scripts/train_sft_mixtral_lora.sh) (--aux_loss_coef)
 - Support Wandb log (--wandb).
 - Support FlashAttention2 (--flash_attn).
@@ -141,7 +142,7 @@ cd /openrlhf/examples/scripts
 # train Rejection Sampling model
 ./train_rejection_sampling_llama.sh
 
-# train Conditional Alignment model
+# train Conditional SFT model
 ./train_conditional_llama.sh
 ```
 

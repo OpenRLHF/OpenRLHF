@@ -229,7 +229,7 @@ if __name__ == "__main__":
         "--post_processor",
         type=str,
         default=None,
-        help="set to rs (Rejection Sampling), dt (Decision Transformer) or None",
+        help="set to rs (Rejection Sampling), ca (Conditional SFT) or None",
     )
 
     # QLora
@@ -239,11 +239,11 @@ if __name__ == "__main__":
     parser.add_argument("--iter", type=int, default=None)
     parser.add_argument("--rollout_batch_size", type=int, default=2048)
 
-    # for Conditional Alignment
+    # for Conditional SFT
     parser.add_argument("--normalize_reward", action="store_true", default=False)
     parser.add_argument("--reward_template", type=str, default=None)
-    parser.add_argument("--enable_dt", action="store_true", default=False)
-    parser.add_argument("--ca_prompt", type=str, default="<rm_score>: 5.00", help="decision transformer prompt")
+    parser.add_argument("--enable_ca", action="store_true", default=False)
+    parser.add_argument("--ca_prompt", type=str, default="<rm_score>: 5.00", help="Conditional SFT prompt")
 
     args = parser.parse_args()
     if args.eval_task and args.eval_task == "generate":

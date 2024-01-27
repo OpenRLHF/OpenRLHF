@@ -1,7 +1,7 @@
 set -x
 
-mkdir -p ./ckpt/7b_llama_dt
-RM_OUTPUT=./ckpt/7b_llama_dt/rm.jsonl
+mkdir -p ./ckpt/7b_llama_ca
+RM_OUTPUT=./ckpt/7b_llama_ca/rm.jsonl
 
 read -r -d '' get_rewards_commands <<EOF
 ../batch_inference.py
@@ -13,7 +13,7 @@ read -r -d '' get_rewards_commands <<EOF
     --dataset_probs 0.5,0.5 \
     --max_samples 128000 \
     --zero_stage 0 \
-    --post_processor dt \
+    --post_processor ca \
     --normalize_reward
     --micro_batch_size 4 \
     --output_path $RM_OUTPUT
@@ -27,7 +27,7 @@ read -r -d '' sft_commands <<EOF
     --train_batch_size 128 \
     --micro_train_batch_size 2 \
     --pretrain OpenLLMAI/Llama-2-7b-sft-model-ocra-500k \
-    --save_path ./ckpt/7b_llama_dt \
+    --save_path ./ckpt/7b_llama_ca \
     --zero_stage 2 \
     --max_epochs 1 \
     --bf16 \
