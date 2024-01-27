@@ -1,6 +1,7 @@
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -121,7 +122,7 @@ class DPOLoss(nn.Module):
         policy_rejected_logps: torch.Tensor,
         reference_chosen_logps: torch.Tensor,
         reference_rejected_logps: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         pi_logratios = policy_chosen_logps - policy_rejected_logps
         ref_logratios = reference_chosen_logps - reference_rejected_logps
         logits = pi_logratios - ref_logratios
@@ -192,3 +193,94 @@ class SwitchBalancingLoss(nn.Module):
 
         overall_loss = torch.sum(tokens_per_expert * router_prob_per_expert.unsqueeze(-1))
         return overall_loss * self.num_experts
+
+
+# Adapted from https://github.com/ContextualAI/HALOs/blob/ca9b7e3eeea220c0944ad8095d641da33f907a7e/trainers.py#L742
+class VanillaKTOLoss(nn.Module):
+    """
+    KTO loss for even sampling
+    """
+
+    def __init__(self, beta: float) -> None:
+        super().__init__()
+        self.beta = beta
+
+    def forward(
+        self,
+        policy_chosen_logps: torch.FloatTensor,
+        policy_rejected_logps: torch.FloatTensor,
+        reference_chosen_logps: torch.FloatTensor,
+        reference_rejected_logps: torch.FloatTensor,
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        chosen_KL = (policy_chosen_logps - reference_chosen_logps).mean().clamp(min=0)
+        rejected_KL = (policy_rejected_logps - reference_rejected_logps).mean().clamp(min=0)
+
+        chosen_logratios = policy_chosen_logps - reference_chosen_logps
+        rejected_logratios = policy_rejected_logps - reference_rejected_logps
+
+        losses = torch.cat(
+            (
+                1 - F.sigmoid(self.beta * (chosen_logratios - rejected_KL)),
+                1 - F.sigmoid(self.beta * (chosen_KL - rejected_logratios)),
+            ),
+            0,
+        ).mean()
+
+        chosen_rewards = self.beta * (policy_chosen_logps - reference_chosen_logps).detach()
+        rejected_rewards = self.beta * (policy_rejected_logps - reference_rejected_logps).detach()
+        return losses, chosen_rewards, rejected_rewards
+
+
+# Adapted from https://github.com/ContextualAI/HALOs/blob/ca9b7e3eeea220c0944ad8095d641da33f907a7e/trainers.py#L770
+class KTOLoss(nn.Module):
+    """
+    KTO loss for uneven sampling
+    """
+
+    def __init__(
+        self, beta: float, desirable_weight: float, undesirable_weight: float, world_size: int, device: torch.device
+    ) -> None:
+        super().__init__()
+        self.beta = beta
+        self.world_size = world_size
+        self.device = device
+        self.desirable_weight = desirable_weight
+        self.undesirable_weight = undesirable_weight
+
+    def forward(
+        self,
+        policy_chosen_logps: torch.FloatTensor,
+        policy_rejected_logps: torch.FloatTensor,
+        policy_KL_logps: torch.FloatTensor,
+        reference_chosen_logps: torch.FloatTensor,
+        reference_rejected_logps: torch.FloatTensor,
+        reference_KL_logps: torch.FloatTensor,
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        KL = (policy_KL_logps - reference_KL_logps).mean().detach()
+        # nn.all_reduce sums up the KL estimates across all devices (gradient will also be scaled by world size)
+        dist.nn.all_reduce(KL, op=dist.ReduceOp.SUM)
+        # take average (will also scale gradients appropriately)
+        KL = (KL / self.world_size).clamp(min=0)
+
+        if policy_chosen_logps.shape[0] != 0:
+            chosen_logratios = policy_chosen_logps - reference_chosen_logps
+            chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - KL))
+            chosen_rewards = self.beta * chosen_logratios.detach()
+        else:
+            # important to cast to policy_dtype; otherwise error will occur during all_gather
+            chosen_losses = torch.Tensor([]).to(policy_rejected_logps.dtype).to(self.device)
+            chosen_rewards = torch.Tensor([]).to(policy_rejected_logps.dtype).to(self.device)
+
+        if policy_rejected_logps.shape[0] != 0:
+            rejected_logratios = policy_rejected_logps - reference_rejected_logps
+            rejected_losses = 1 - F.sigmoid(self.beta * (KL - rejected_logratios))
+            rejected_rewards = self.beta * rejected_logratios.detach()
+        else:
+            # important to cast to policy_dtype; otherwise error will occur during all_gather
+            rejected_losses = torch.Tensor([]).to(policy_chosen_logps.dtype).to(self.device)
+            rejected_rewards = torch.Tensor([]).to(policy_chosen_logps.dtype).to(self.device)
+
+        losses = torch.cat(
+            (self.desirable_weight * chosen_losses, self.undesirable_weight * rejected_losses), 0
+        ).mean()
+        return losses, chosen_rewards, rejected_rewards, KL

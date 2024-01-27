@@ -2,18 +2,26 @@ import argparse
 import math
 import os
 from collections import OrderedDict
-from copy import deepcopy
 from datetime import datetime
 
+import torch.distributed as dist
 from transformers.trainer import get_scheduler
 
-from openrlhf.datasets import RewardDataset
+from openrlhf.datasets import (
+    DistributedVanillaKTOSampler,
+    RewardDataset,
+    UnpairedPreferenceDataset,
+    UnpairedRewardDataset,
+)
 from openrlhf.models import Actor
-from openrlhf.trainer import DPOTrainer
+from openrlhf.trainer import KTOTrainer
 from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
 
 def train(args):
+    if args.unpaired_preference:
+        assert args.vanilla_loss is False, "vanilla_loss is not supported for unpaired_preference"
+
     # configure strategy
     strategy = get_strategy(args)
     strategy.setup_distributed()
@@ -65,20 +73,59 @@ def train(args):
     )
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
     eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
-    train_dataset = RewardDataset(train_data, tokenizer, args.max_len, strategy)
-    eval_dataset = RewardDataset(eval_data, tokenizer, args.max_len, strategy)
 
-    train_dataloader = strategy.setup_dataloader(
-        train_dataset,
-        args.micro_train_batch_size,
-        True,
-        True,
-        train_dataset.collate_fn,
-    )
+    if not args.unpaired_preference:
+        train_dataset = RewardDataset(train_data, tokenizer, args.max_len, strategy)
+        eval_dataset = RewardDataset(eval_data, tokenizer, args.max_len, strategy)
+        train_dataset = UnpairedRewardDataset(train_dataset, vanilla_loss=args.vanilla_loss)
+        eval_dataset = UnpairedRewardDataset(eval_dataset, vanilla_loss=args.vanilla_loss)
 
-    eval_dataloader = strategy.setup_dataloader(
-        eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn
-    )
+        train_sampler = DistributedVanillaKTOSampler(
+            train_dataset,
+            num_replicas=dist.get_world_size(),
+            rank=dist.get_rank(),
+            shuffle=False,
+            seed=args.seed,
+            drop_last=False,
+        )
+        train_dataloader = strategy.setup_dataloader(
+            train_dataset,
+            args.micro_train_batch_size,
+            True,
+            True,
+            train_dataset.collate_fn,
+            sampler=train_sampler,
+        )
+
+        eval_sampler = DistributedVanillaKTOSampler(
+            eval_dataset,
+            num_replicas=dist.get_world_size(),
+            rank=dist.get_rank(),
+            shuffle=False,
+            seed=args.seed,
+            drop_last=False,
+        )
+        eval_dataloader = strategy.setup_dataloader(
+            eval_dataset,
+            args.micro_train_batch_size,
+            True,
+            False,
+            eval_dataset.collate_fn,
+            sampler=eval_sampler,
+        )
+    else:
+        train_dataset = UnpairedPreferenceDataset(train_data, tokenizer, args.max_len, strategy)
+        eval_dataset = UnpairedPreferenceDataset(eval_data, tokenizer, args.max_len, strategy)
+        train_dataloader = strategy.setup_dataloader(
+            train_dataset,
+            args.micro_train_batch_size,
+            True,
+            True,
+            train_dataset.collate_fn,
+        )
+        eval_dataloader = strategy.setup_dataloader(
+            eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn
+        )
 
     # scheduler
     num_update_steps_per_epoch = len(train_dataloader) * args.max_epochs // strategy.accumulated_gradient
@@ -94,15 +141,9 @@ def train(args):
     # strategy prepare
     ((model, optim, scheduler), ref_model) = strategy.prepare((model, optim, scheduler), ref_model)
 
-    if args.load_checkpoint:
-        strategy.print("Load checkpoint: ", args.save_path)
-        # strategy.load_checkpoint(args.save_path + '/rm_model.pt')
-
     os.makedirs(args.save_path, exist_ok=True)
 
-    # batch_size here is expected to be C(k,2), k means # response of each prompt
-    # be limited with the format of dataset 'Dahoas/rm-static', we'd better use batch_size as 1
-    trainer = DPOTrainer(
+    trainer = KTOTrainer(
         model=model,
         ref_model=ref_model,
         tokenizer=tokenizer,
@@ -114,8 +155,8 @@ def train(args):
         max_norm=args.max_norm,
         beta=args.beta,
         max_epochs=args.max_epochs,
+        vanilla_loss=args.vanilla_loss,
     )
-
     trainer.fit(args)
 
     # save model checkpoint after fitting on only rank0
@@ -131,7 +172,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_steps", type=int, default=-1)
     parser.add_argument("--logging_steps", type=int, default=1)
     parser.add_argument("--eval_steps", type=int, default=-1)
-    parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_dpo")
+    parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_kto")
     parser.add_argument("--max_ckpt_num", type=int, default=3)
     parser.add_argument("--max_ckpt_mem", type=int, default=1000)  # 1000GB
     parser.add_argument("--max_epochs", type=int, default=1)
@@ -142,10 +183,20 @@ if __name__ == "__main__":
     parser.add_argument("--max_len", type=int, default=512)
     parser.add_argument("--l2", type=float, default=0.0)
     parser.add_argument("--beta", type=float, default=0.01)
-    parser.add_argument("--ipo", action="store_true", default=False)  # IPO https://arxiv.org/pdf/2310.12036v2.pdf
-    parser.add_argument("--label_smoothing", type=float, default=0.0)  # cDPO https://arxiv.org/pdf/2305.18290.pdf
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--vanilla_loss",
+        action="store_true",
+        default=False,
+        help="make sure there are as many positive and negative samples in the batch",
+    )
+    parser.add_argument(
+        "--unpaired_preference",
+        action="store_true",
+        default=False,
+        help="dataset is the format of unpaired preference",
+    )
 
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2)
@@ -172,7 +223,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--wandb_run_name",
         type=str,
-        default="exp_%s" % datetime.now().strftime("%m%dT%H:%M"),
+        default="rm_%s" % datetime.now().strftime("%m%dT%H:%M"),
     )
 
     args = parser.parse_args()

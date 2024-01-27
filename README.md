@@ -135,6 +135,9 @@ cd /openrlhf/examples/scripts
 # train DPO model
 ./train_dpo_llama.sh
 
+# train KTO model
+./train_kto_llama.sh
+
 # train Rejection Sampling model
 ./train_rejection_sampling_llama.sh
 
