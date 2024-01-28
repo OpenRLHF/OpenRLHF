@@ -9,13 +9,15 @@ from .reward_dataset import RewardDataset
 from .utils import exist_and_not_none, zero_pad_sequences
 
 
-def preprocess_data(data):
+def preprocess_data(data, input_template, eos_token="</s>"):
     """
     Preprocess data from raw dataset to prompt, response, label
 
     Args:
         data: raw data from dataset
     """
+    no_template = False
+
     # Dylan2048/ultrafeedback-unpaired-preferences
     if exist_and_not_none(data, "score"):
         prompt = data["instruction"]
@@ -24,6 +26,9 @@ def preprocess_data(data):
     else:
         raise ValueError("Unknown dataset")
 
+    # input template
+    if not no_template:
+        prompt = input_template.format(prompt)
     return prompt, response, label
 
 
@@ -37,7 +42,9 @@ class UnpairedPreferenceDataset(Dataset):
         self.max_length: max length of input
     """
 
-    def __init__(self, dataset, tokenizer: Callable, max_length: int, strategy) -> None:
+    def __init__(
+        self, dataset, tokenizer: Callable, max_length: int, strategy, input_template="Human: {} \nAssistant: "
+    ) -> None:
         super().__init__()
         self.prompts = []
         self.responses = []
@@ -47,7 +54,7 @@ class UnpairedPreferenceDataset(Dataset):
         self.max_length = max_length
 
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
-            prompt, response, label = preprocess_data(data)
+            prompt, response, label = preprocess_data(data, input_template, self.tokenizer.eos_token)
             self.prompts.append(prompt)
             self.responses.append(response)
             self.labels.append(label)

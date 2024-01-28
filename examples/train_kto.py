@@ -116,8 +116,12 @@ def train(args):
             sampler=eval_sampler,
         )
     else:
-        train_dataset = UnpairedPreferenceDataset(train_data, tokenizer, args.max_len, strategy)
-        eval_dataset = UnpairedPreferenceDataset(eval_data, tokenizer, args.max_len, strategy)
+        train_dataset = UnpairedPreferenceDataset(
+            train_data, tokenizer, args.max_len, strategy, input_template=args.input_template
+        )
+        eval_dataset = UnpairedPreferenceDataset(
+            eval_data, tokenizer, args.max_len, strategy, input_template=args.input_template
+        )
         train_dataloader = strategy.setup_dataloader(
             train_dataset,
             args.micro_train_batch_size,

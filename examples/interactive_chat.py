@@ -43,8 +43,8 @@ def generate(args):
             continue
 
         # get input prompt
-        user_prompt = user_prompt + "\nHuman: " + inputs + "\nAssistant: "
-        if args.enable_dt:
+        user_prompt = user_prompt + "\n" + args.input_template.format(inputs)
+        if args.enable_ca:
             user_prompt += args.ca_prompt.strip() + " "
         user_prompt_len = len(user_prompt)
 
@@ -81,13 +81,14 @@ if __name__ == "__main__":
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--temperature", type=float, default=0.5)
     parser.add_argument("--repetition_penalty", type=float, default=1.2)
+    parser.add_argument("--input_template", type=str, default="Human: {} \nAssistant: ")
 
     # QLora
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
 
     parser.add_argument("--ta_prompt", type=str, default=None)
-    parser.add_argument("--enable_dt", action="store_true", default=False)
-    parser.add_argument("--ca_prompt", type=str, default="<rm_score>: 5.00", help="conditional alignment prompt")
+    parser.add_argument("--enable_ca", action="store_true", default=False)
+    parser.add_argument("--ca_prompt", type=str, default="<rm_score>: 5.00", help="conditional SFT prompt")
     args = parser.parse_args()
 
     print(args)
