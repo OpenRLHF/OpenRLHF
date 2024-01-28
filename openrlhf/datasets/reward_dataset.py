@@ -19,9 +19,10 @@ def preprocess_data(data, input_template, eos_token="</s>") -> str:
     elif exist_and_not_none(data, "chosen") and exist_and_not_none(data, "rejected"):
         prompt = data["prompt"] if exist_and_not_none(data, "prompt") else ""
         if prompt.startswith("prompter:"):
-            prompt = prompt.replace("prompter:", "").replace("assistant:", "\nAssistant: ")
+            prompt = prompt.replace("prompter:", "\nHuman: ").replace("assistant:", "\nAssistant: ") + "\nAssistant: "
         chosen = data["chosen"]
         reject = data["rejected"]
+        no_template = True  # do not modified with input template again
     # lvwerra/stack-exchange-paired
     elif exist_and_not_none(data, "response_j"):
         prompt = data["question"]

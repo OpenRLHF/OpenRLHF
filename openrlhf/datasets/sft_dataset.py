@@ -10,6 +10,7 @@ def preprocess_data(data, input_template, no_template=False, eos_token="</s>"):
     if exist_and_not_none(data, "prompt") and exist_and_not_none(data, "chosen"):
         prompt = data["prompt"]
         target = data["chosen"]
+        no_template = True  # do not modified with input template again
     # pvduy/sharegpt_alpaca_oa_vicuna_format
     elif exist_and_not_none(data, "prompt") and exist_and_not_none(data, "label"):
         prompt = data["prompt"].replace("USER:", "").replace("ASSISTANT:", "")

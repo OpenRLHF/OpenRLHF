@@ -5,6 +5,7 @@ from .utils import exist_and_not_none
 
 def preprocess_data(data, input_template, eos_token="</s>") -> str:
     no_template = False
+
     # Open-Orca/OpenOrca
     if exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
         prompt = data["system_prompt"] + "\n" + data["question"]
@@ -44,7 +45,8 @@ def preprocess_data(data, input_template, eos_token="</s>") -> str:
         prompt = data["prompt"]
         # tasksource/oasst1_pairwise_rlhf_reward
         if prompt.startswith("prompter:"):
-            prompt = prompt.replace("prompter:", "").replace("assistant:", "\nAssistant: ")
+            prompt = prompt.replace("prompter:", "\nHuman: ").replace("assistant:", "\nAssistant: ") + "\nAssistant: "
+        no_template = True  # do not modified with input template again
     # local JSON files
     elif exist_and_not_none(data, "input"):
         prompt = data["input"]
