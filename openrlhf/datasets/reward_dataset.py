@@ -62,7 +62,7 @@ def preprocess_data(data, input_template, eos_token="</s>") -> str:
     # margin loss
     margin = data["margin"] if exist_and_not_none(data, "margin") else 0
 
-    # template
+    # input template
     if not no_template:
         prompt = input_template.format(prompt)
     return prompt, chosen, reject, margin

@@ -45,9 +45,9 @@ def preprocess_data(data, input_template, no_template=False, eos_token="</s>"):
         no_template = True  # do not modified with input template again
     # EleutherAI/pile
     elif exist_and_not_none(data, "text") and exist_and_not_none(data, "meta"):
+        assert no_template  # pretrain_mode
         prompt = ""
         target = data["text"]
-        assert no_template
     # local JSON files
     elif exist_and_not_none(data, "input") and exist_and_not_none(data, "output"):
         prompt = data["input"]
@@ -55,7 +55,7 @@ def preprocess_data(data, input_template, no_template=False, eos_token="</s>"):
     else:
         raise ValueError("Unknown SFT dataset")
 
-    # template
+    # input template
     if not no_template:
         prompt = input_template.format(prompt)
     return prompt, target
