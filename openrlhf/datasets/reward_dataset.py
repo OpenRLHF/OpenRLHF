@@ -6,6 +6,7 @@ from .utils import exist_and_not_none, zero_pad_sequences
 
 
 def preprocess_data(data, input_template, eos_token="</s>") -> str:
+    # a flag
     no_template = False
 
     # stanfordnlp/SHP
@@ -44,7 +45,7 @@ def preprocess_data(data, input_template, eos_token="</s>") -> str:
         reject = data["conversation_b"] if data["winner"] == "model_a" else data["conversation_a"]
         chosen = process_chatbot_arena_conversations(chosen)
         reject = process_chatbot_arena_conversations(reject)
-        no_template = True
+        no_template = True  # do not modified with input template again
     # openai/webgpt_comparisons
     elif exist_and_not_none(data, "answer_0") and exist_and_not_none(data, "answer_1"):
         prompt = data["question"]["full_text"]
@@ -56,10 +57,12 @@ def preprocess_data(data, input_template, eos_token="</s>") -> str:
         chosen = data["pos_resp"]
         reject = data["neg_resp"]
     else:
-        raise ValueError("reward_dataset key error")
+        raise ValueError("Unknown reward dataset")
 
     # margin loss
     margin = data["margin"] if exist_and_not_none(data, "margin") else 0
+
+    # template
     if not no_template:
         prompt = input_template.format(prompt)
     return prompt, chosen, reject, margin

@@ -4,7 +4,7 @@ from tqdm import tqdm
 from .utils import exist_and_not_none, zero_pad_sequences
 
 
-def preprocess_data(data, input_template, pretrain_mode=False, eos_token="</s>"):
+def preprocess_data(data, input_template, no_template=False, eos_token="</s>"):
     # Dahoas/full-hh-rlhf
     # iamketan25/open-assistant-instructions
     if exist_and_not_none(data, "prompt") and exist_and_not_none(data, "chosen"):
@@ -42,20 +42,21 @@ def preprocess_data(data, input_template, pretrain_mode=False, eos_token="</s>")
                 if item is not data["conversations"][-1]:
                     prompt += item["value"]
                 target = item["value"]
-        pretrain_mode = True  # do not modified with input template again
+        no_template = True  # do not modified with input template again
     # EleutherAI/pile
     elif exist_and_not_none(data, "text") and exist_and_not_none(data, "meta"):
         prompt = ""
         target = data["text"]
-        pretrain_mode = True  # ignore prompt.replace(xxx)
+        assert no_template
     # local JSON files
     elif exist_and_not_none(data, "input") and exist_and_not_none(data, "output"):
         prompt = data["input"]
         target = data["output"]
     else:
-        raise ValueError("sft_dataset key error")
+        raise ValueError("Unknown SFT dataset")
 
-    if not pretrain_mode:
+    # template
+    if not no_template:
         prompt = input_template.format(prompt)
     return prompt, target
 
