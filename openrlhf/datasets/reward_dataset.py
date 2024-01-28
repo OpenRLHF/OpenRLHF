@@ -27,6 +27,7 @@ def preprocess_data(data, input_template, no_template=False, eos_token="</s>") -
         reject = data["response_k"]
     # lmsys/chatbot_arena_conversations
     elif exist_and_not_none(data, "winner") and exist_and_not_none(data, "conversation_a"):
+
         def process_chatbot_arena_conversations(lll):
             result = []
             for l in lll:
@@ -35,6 +36,7 @@ def preprocess_data(data, input_template, no_template=False, eos_token="</s>") -
                 else:
                     result.append(l["content"] + eos_token)
             return "\n".join(result)
+
         prompt = ""
         chosen = data["conversation_a"] if data["winner"] == "model_a" else data["conversation_b"]
         reject = data["conversation_b"] if data["winner"] == "model_a" else data["conversation_a"]
@@ -71,13 +73,14 @@ class RewardDataset(Dataset):
         self.max_length: max length of input
     """
 
-    def __init__(self, 
-        dataset, 
-        tokenizer: Callable, 
-        max_length: int, 
+    def __init__(
+        self,
+        dataset,
+        tokenizer: Callable,
+        max_length: int,
         strategy,
         input_template="Human: {} \nAssistant: ",
-        no_template = False
+        no_template=False,
     ) -> None:
         super().__init__()
         self.prompts = []

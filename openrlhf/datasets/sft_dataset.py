@@ -3,6 +3,7 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 from .utils import exist_and_not_none, zero_pad_sequences
 
+
 def preprocess_data(data, input_template, pretrain_mode=False, eos_token="</s>"):
     # Dahoas/full-hh-rlhf
     # iamketan25/open-assistant-instructions
@@ -13,7 +14,7 @@ def preprocess_data(data, input_template, pretrain_mode=False, eos_token="</s>")
     elif exist_and_not_none(data, "prompt") and exist_and_not_none(data, "label"):
         prompt = data["prompt"].replace("USER:", "").replace("ASSISTANT:", "")
         target = data["label"].replace("</s>", "")
-    # BelleGroup/train_0.5M_CN 
+    # BelleGroup/train_0.5M_CN
     # LLMs/Alpaca-ShareGPT
     # yahma/alpaca-cleaned
     # QingyiSi/Alpaca-CoT
@@ -38,10 +39,10 @@ def preprocess_data(data, input_template, pretrain_mode=False, eos_token="</s>")
             if item["from"] == "human":
                 prompt += input_template.format(item["value"])
             elif item["from"] == "gpt":
-                if item is not data['conversations'][-1]:
+                if item is not data["conversations"][-1]:
                     prompt += item["value"] + eos_token
                 target = item["value"]
-        pretrain_mode = True # do not modified with input template again
+        pretrain_mode = True  # do not modified with input template again
     # EleutherAI/pile
     elif exist_and_not_none(data, "text") and exist_and_not_none(data, "meta"):
         prompt = ""
@@ -54,7 +55,7 @@ def preprocess_data(data, input_template, pretrain_mode=False, eos_token="</s>")
     else:
         raise ValueError("sft_dataset key error")
 
-    #if pretrain_mode:
+    # if pretrain_mode:
     #    prompt.replace("Human:", " ").replace("\nAssistant:", " ")
 
     if not pretrain_mode:

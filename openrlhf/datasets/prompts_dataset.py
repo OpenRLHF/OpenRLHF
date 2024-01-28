@@ -22,6 +22,7 @@ def preprocess_data(data, input_template, no_template=False, eos_token="</s>") -
         prompt = data["question"]
     # lmsys/chatbot_arena_conversations
     elif exist_and_not_none(data, "winner") and exist_and_not_none(data, "conversation_a"):
+
         def process_chatbot_arena_conversations(lll):
             result = []
             for l in lll:
@@ -30,6 +31,7 @@ def preprocess_data(data, input_template, no_template=False, eos_token="</s>") -
                 else:
                     result.append(l["content"] + eos_token)
             return "\n".join(result)
+
         prompt = data["conversation_a"][:-1]
         prompt = process_chatbot_arena_conversations(prompt)
         no_template = True
@@ -63,12 +65,7 @@ class PromptDataset(Dataset):
     """
 
     def __init__(
-        self, 
-        dataset, 
-        strategy,
-        input_template="Human: {} \nAssistant: ",
-        no_template = False,
-        eos_token="</s>"
+        self, dataset, strategy, input_template="Human: {} \nAssistant: ", no_template=False, eos_token="</s>"
     ) -> None:
         super().__init__()
         self.strategy = strategy
