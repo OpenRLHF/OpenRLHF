@@ -6,7 +6,6 @@ from .utils import exist_and_not_none, zero_pad_sequences
 
 
 def preprocess_data(data, input_template, eos_token="</s>") -> str:
-    # a flag
     no_template = False
 
     # stanfordnlp/SHP
