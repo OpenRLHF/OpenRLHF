@@ -101,7 +101,7 @@ def train(args):
         return_eval=False,
     )
     prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
-    prompts_dataset = PromptDataset(prompts_data, tokenizer, strategy)
+    prompts_dataset = PromptDataset(prompts_data, tokenizer, strategy, input_template=args.input_template)
     prompts_dataloader = strategy.setup_dataloader(prompts_dataset, args.micro_rollout_batch_size, True, True)
 
     if args.pretrain_data:
@@ -302,6 +302,7 @@ if __name__ == "__main__":
     parser.add_argument("--lora_rank", type=int, default=0)
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--target_modules", type=list, default=None)
+    parser.add_argument("--input_template", type=str, default="Human: {} \nAssistant: ")
 
     parser.add_argument("--bos_token", type=str, default=None)
     parser.add_argument("--eos_token", type=str, default=None)

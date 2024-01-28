@@ -51,8 +51,8 @@ def train(args):
     )
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
     eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
-    train_dataset = RewardDataset(train_data, tokenizer, args.max_len, strategy)
-    eval_dataset = RewardDataset(eval_data, tokenizer, args.max_len, strategy)
+    train_dataset = RewardDataset(train_data, tokenizer, args.max_len, strategy, input_template=args.input_template)
+    eval_dataset = RewardDataset(eval_data, tokenizer, args.max_len, strategy, input_template=args.input_template)
 
     train_dataloader = strategy.setup_dataloader(
         train_dataset,
@@ -150,6 +150,7 @@ if __name__ == "__main__":
     parser.add_argument("--lora_rank", type=int, default=0)
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--target_modules", type=list, default=None)
+    parser.add_argument("--input_template", type=str, default="Human: {} \nAssistant: ")
 
     parser.add_argument("--bos_token", type=str, default=None)
     parser.add_argument("--eos_token", type=str, default=None)
