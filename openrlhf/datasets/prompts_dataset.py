@@ -6,8 +6,15 @@ from .utils import exist_and_not_none
 def preprocess_data(data, input_template, eos_token="</s>") -> str:
     no_template = False
 
+    # Dahoas/full-hh-rlhf
+    if exist_and_not_none(data, "prompt"):
+        prompt = data["prompt"]
+        # tasksource/oasst1_pairwise_rlhf_reward
+        if prompt.startswith("prompter:"):
+            prompt = prompt.replace("prompter:", "\nHuman: ").replace("assistant:", "\nAssistant: ") + "\nAssistant: "
+        no_template = True  # do not modified with input template again
     # Open-Orca/OpenOrca
-    if exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
+    elif exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
         prompt = data["system_prompt"] + "\n" + data["question"]
     # BelleGroup/train_0.5M_CN
     # LLMs/Alpaca-ShareGPT
@@ -40,13 +47,6 @@ def preprocess_data(data, input_template, eos_token="</s>") -> str:
     # openai/webgpt_comparisons
     elif exist_and_not_none(data, "question") and exist_and_not_none(data, "answer_1"):
         prompt = data["question"]["full_text"]
-    # Dahoas/full-hh-rlhf
-    elif exist_and_not_none(data, "prompt"):
-        prompt = data["prompt"]
-        # tasksource/oasst1_pairwise_rlhf_reward
-        if prompt.startswith("prompter:"):
-            prompt = prompt.replace("prompter:", "\nHuman: ").replace("assistant:", "\nAssistant: ") + "\nAssistant: "
-        no_template = True  # do not modified with input template again
     # local JSON files
     elif exist_and_not_none(data, "input"):
         prompt = data["input"]
