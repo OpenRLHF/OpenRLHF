@@ -75,8 +75,10 @@ def train(args):
     eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
 
     if not args.unpaired_preference:
-        train_dataset = RewardDataset(train_data, tokenizer, args.max_len, strategy)
-        eval_dataset = RewardDataset(eval_data, tokenizer, args.max_len, strategy)
+        train_dataset = RewardDataset(
+            train_data, tokenizer, args.max_len, strategy, input_template=args.input_template
+        )
+        eval_dataset = RewardDataset(eval_data, tokenizer, args.max_len, strategy, input_template=args.input_template)
         train_dataset = UnpairedRewardDataset(train_dataset, vanilla_loss=args.vanilla_loss)
         eval_dataset = UnpairedRewardDataset(eval_dataset, vanilla_loss=args.vanilla_loss)
 
