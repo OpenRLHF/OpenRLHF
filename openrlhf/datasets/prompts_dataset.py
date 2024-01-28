@@ -3,7 +3,7 @@ from tqdm import tqdm
 from .utils import exist_and_not_none
 
 
-def preprocess_data(data, input_template, no_template=False) -> str:
+def preprocess_data(data, input_template, no_template=False, eos_token="</s>") -> str:
     # Open-Orca/OpenOrca
     if exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
         prompt = data["system_prompt"] + "\n" + data["question"]
@@ -28,7 +28,7 @@ def preprocess_data(data, input_template, no_template=False) -> str:
                 if "user" in l["role"]:
                     result.append(input_template.format(l["content"]))
                 else:
-                    result.append(l["content"])
+                    result.append(l["content"] + eos_token)
             return "\n".join(result)
         prompt = data["conversation_a"][:-1]
         prompt = process_chatbot_arena_conversations(prompt)
@@ -67,7 +67,8 @@ class PromptDataset(Dataset):
         dataset, 
         strategy,
         input_template="Human: {} \nAssistant: ",
-        no_template = False
+        no_template = False,
+        eos_token="</s>"
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -75,7 +76,7 @@ class PromptDataset(Dataset):
         self.no_template = no_template
         self.prompts = []
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
-            prompt = preprocess_data(data, input_template, no_template)
+            prompt = preprocess_data(data, input_template, no_template, eos_token)
             self.prompts.append(prompt)
 
     def __len__(self):
