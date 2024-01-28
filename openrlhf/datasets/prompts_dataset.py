@@ -3,7 +3,8 @@ from tqdm import tqdm
 from .utils import exist_and_not_none
 
 
-def preprocess_data(data, input_template, no_template=False, eos_token="</s>") -> str:
+def preprocess_data(data, input_template, eos_token="</s>") -> str:
+    no_template = False
     # Open-Orca/OpenOrca
     if exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
         prompt = data["system_prompt"] + "\n" + data["question"]
@@ -29,7 +30,7 @@ def preprocess_data(data, input_template, no_template=False, eos_token="</s>") -
                 if "user" in l["role"]:
                     result.append(input_template.format(l["content"]))
                 else:
-                    result.append(l["content"] + eos_token)
+                    result.append(l["content"])
             return "\n".join(result)
 
         prompt = data["conversation_a"][:-1]
@@ -49,6 +50,7 @@ def preprocess_data(data, input_template, no_template=False, eos_token="</s>") -
         prompt = data["input"]
     else:
         raise ValueError("prompt dataset key error")
+
     if not no_template:
         prompt = input_template.format(prompt)
     return prompt
@@ -65,15 +67,19 @@ class PromptDataset(Dataset):
     """
 
     def __init__(
-        self, dataset, strategy, input_template="Human: {} \nAssistant: ", no_template=False, eos_token="</s>"
+        self,
+        dataset,
+        tokenizer,
+        strategy,
+        input_template="Human: {} \nAssistant: ",
     ) -> None:
         super().__init__()
         self.strategy = strategy
+        self.tokenizer = tokenizer
         self.input_template = input_template
-        self.no_template = no_template
         self.prompts = []
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
-            prompt = preprocess_data(data, input_template, no_template, eos_token)
+            prompt = preprocess_data(data, input_template, self.tokenizer.eos_token)
             self.prompts.append(prompt)
 
     def __len__(self):

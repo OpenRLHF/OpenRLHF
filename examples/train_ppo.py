@@ -101,7 +101,7 @@ def train(args):
         return_eval=False,
     )
     prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
-    prompts_dataset = PromptDataset(prompts_data, strategy)
+    prompts_dataset = PromptDataset(prompts_data, tokenizer, strategy)
     prompts_dataloader = strategy.setup_dataloader(prompts_dataset, args.micro_rollout_batch_size, True, True)
 
     if args.pretrain_data:

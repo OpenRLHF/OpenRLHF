@@ -5,7 +5,9 @@ from tqdm import tqdm
 from .utils import exist_and_not_none, zero_pad_sequences
 
 
-def preprocess_data(data, input_template, no_template=False, eos_token="</s>") -> str:
+def preprocess_data(data, input_template, eos_token="</s>") -> str:
+    no_template = False
+
     # stanfordnlp/SHP
     if exist_and_not_none(data, "human_ref_A"):
         prompt = data["history"]
@@ -80,7 +82,6 @@ class RewardDataset(Dataset):
         max_length: int,
         strategy,
         input_template="Human: {} \nAssistant: ",
-        no_template=False,
     ) -> None:
         super().__init__()
         self.prompts = []
@@ -92,7 +93,7 @@ class RewardDataset(Dataset):
         self.max_length = max_length
 
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
-            prompt, chosen, reject, margin = preprocess_data(data, input_template, no_template, tokenizer.eos_token)
+            prompt, chosen, reject, margin = preprocess_data(data, input_template, tokenizer.eos_token)
             self.prompts.append(prompt)
             self.chosens.append(chosen)
             self.rejects.append(reject)

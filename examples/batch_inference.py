@@ -60,7 +60,7 @@ def batch_generate(args):
         end_idx = start_idx + args.rollout_batch_size
         prompts_data = prompts_data.select(range(start_idx, min(end_idx, len(prompts_data))))
 
-    prompts_dataset = PromptDataset(prompts_data, strategy)
+    prompts_dataset = PromptDataset(prompts_data, tokenizer, strategy)
     prompts_dataloader = strategy.setup_dataloader(
         prompts_dataset, args.micro_batch_size, True, False, drop_last=False
     )

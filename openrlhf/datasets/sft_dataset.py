@@ -40,23 +40,20 @@ def preprocess_data(data, input_template, pretrain_mode=False, eos_token="</s>")
                 prompt += input_template.format(item["value"])
             elif item["from"] == "gpt":
                 if item is not data["conversations"][-1]:
-                    prompt += item["value"] + eos_token
+                    prompt += item["value"]
                 target = item["value"]
         pretrain_mode = True  # do not modified with input template again
     # EleutherAI/pile
     elif exist_and_not_none(data, "text") and exist_and_not_none(data, "meta"):
         prompt = ""
         target = data["text"]
-        pretrain_mode = False  # ignore prompt.replace(xxx)
-    # JSON files for decision transformer
+        pretrain_mode = True  # ignore prompt.replace(xxx)
+    # local JSON files
     elif exist_and_not_none(data, "input") and exist_and_not_none(data, "output"):
         prompt = data["input"]
         target = data["output"]
     else:
         raise ValueError("sft_dataset key error")
-
-    # if pretrain_mode:
-    #    prompt.replace("Human:", " ").replace("\nAssistant:", " ")
 
     if not pretrain_mode:
         prompt = input_template.format(prompt)
