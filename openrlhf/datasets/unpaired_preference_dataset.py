@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import Dataset, DistributedSampler
 from tqdm import tqdm
 
-from .preference_dataset import RewardDataset
+from .reward_dataset import RewardDataset
 from .utils import exist_and_not_none, zero_pad_sequences
 
 
