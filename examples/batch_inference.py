@@ -15,7 +15,7 @@ from openrlhf.utils import blending_datasets, get_processor, get_strategy, get_t
 def batch_generate(args):
     # configure strategy
     strategy = get_strategy(args)
-    strategy.setup_distributed(timeout=timedelta(seconds=9999999))
+    strategy.setup_distributed(timeout=timedelta(minutes=240))
 
     # configure model
     model = Actor(
@@ -51,6 +51,7 @@ def batch_generate(args):
         strategy,
         args.seed,
         return_eval=False,
+        max_count=args.max_samples,
     )
     if args.iter is None:
         prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
@@ -123,7 +124,7 @@ def batch_generate(args):
 def batch_rm_inference(args):
     # configure strategy
     strategy = get_strategy(args)
-    strategy.setup_distributed(timeout=timedelta(seconds=9999999))
+    strategy.setup_distributed(timeout=timedelta(minutes=30))
 
     # configure model
     # load huggingface model/config
@@ -149,6 +150,7 @@ def batch_rm_inference(args):
         strategy,
         args.seed,
         return_eval=False,
+        max_count=args.max_samples,
     )
     dataset = dataset.select(range(min(args.max_samples, len(dataset))))
     dataset = SFTDataset(
@@ -215,7 +217,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--dataset_probs", type=str, default="1.0")
     parser.add_argument("--output_path", type=str, default=None)
-    parser.add_argument("--max_samples", type=int, default=500000)
+    parser.add_argument("--max_samples", type=int, default=1000000)
     parser.add_argument("--seed", type=int, default=1234)
 
     # for generation

@@ -60,7 +60,7 @@ def train(args):
         args.dataset_probs,
         strategy,
         args.seed,
-        max_count=5000000,
+        max_count=args.max_samples,
         stopping_strategy="all_exhausted",
     )
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
