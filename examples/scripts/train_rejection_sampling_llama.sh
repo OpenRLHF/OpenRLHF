@@ -34,22 +34,20 @@ while (($iter < $TRAINING_ITERS)); do
 
     read -r -d '' generate_commands <<EOF
 ../batch_inference.py
-    --eval_task generate \
+    --eval_task generate_vllm \
     --pretrain $POLICY_MODEL_PATH \
-    --bf16 \
-    --max_len 2048 \
+    --max_new_tokens 1024 \
     --dataset Open-Orca/OpenOrca,Dahoas/full-hh-rlhf  \
     --dataset_probs 0.5,0.5 \
     --temperature 0.9
-    --zero_stage 0 \
+    --tp_size 8
     --best_of_n 16 \
-    --micro_batch_size 16 \
     --iter $iter \
     --rollout_batch_size $ROLLOUT_BATCH_SIZE \
     --output_path $GENERATE_OUTPUT
 EOF
     echo $generate_commands
-    deepspeed $generate_commands
+    python $generate_commands
     checkSuccess "GENERATE"
 
     read -r -d '' get_rewards_commands <<EOF

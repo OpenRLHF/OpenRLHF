@@ -300,7 +300,7 @@ if __name__ == "__main__":
     parser.add_argument("--best_of_n", type=int, default=1)
     parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
     parser.add_argument("--max_new_tokens", type=int, default=1024)
-    parser.add_argument("--tp_size", type=int, default=4)
+    parser.add_argument("--tp_size", type=int, default=8)
     parser.add_argument(
         "--post_processor",
         type=str,
