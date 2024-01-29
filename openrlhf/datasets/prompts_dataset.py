@@ -47,7 +47,7 @@ def preprocess_data(data, input_template, eos_token="</s>") -> str:
     # openai/webgpt_comparisons
     elif exist_and_not_none(data, "question") and exist_and_not_none(data, "answer_1"):
         prompt = data["question"]["full_text"]
-    # local JSON files
+    # custom datasets
     elif exist_and_not_none(data, "input"):
         prompt = data["input"]
     else:
