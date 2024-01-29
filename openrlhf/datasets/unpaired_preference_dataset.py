@@ -112,10 +112,6 @@ class UnpairedRewardDataset(Dataset):
     def __init__(
         self,
         dataset,
-        tokenizer: Callable = None,
-        max_length: int = None,
-        strategy=None,
-        input_template="Human: {}\nAssistant: ",
         vanilla_loss=False,
     ) -> None:
         super().__init__()
