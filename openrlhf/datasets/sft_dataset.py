@@ -32,17 +32,7 @@ def preprocess_data(data, input_template, no_template=False, eos_token="</s>"):
     elif exist_and_not_none(data, "prompt") and exist_and_not_none(data, "response"):
         prompt = data["prompt"]
         target = data["response"]
-    # FreedomIntelligence/phoenix-sft-data-v1
-    elif exist_and_not_none(data, "conversations"):
-        prompt = ""
-        target = ""
-        for item in data["conversations"]:
-            if item["from"] == "human":
-                prompt += input_template.format(item["value"])
-            elif item["from"] == "gpt":
-                target = item["value"]
-        no_template = True  # do not modified with input template again
-    # EleutherAI/pile
+    # EleutherAI/pile [pretrain datasets]
     elif exist_and_not_none(data, "text") and exist_and_not_none(data, "meta"):
         assert no_template  # pretrain_mode
         prompt = ""

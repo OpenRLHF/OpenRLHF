@@ -23,12 +23,6 @@ def preprocess_data(data, input_template, eos_token="</s>") -> str:
     elif exist_and_not_none(data, "instruction") and exist_and_not_none(data, "output"):
         input = " " + data["input"] if exist_and_not_none(data, "input") else ""
         prompt = data["instruction"] + input
-    # stanfordnlp/SHP
-    elif exist_and_not_none(data, "history"):
-        prompt = data["history"]
-    # lvwerra/stack-exchange-paired
-    elif exist_and_not_none(data, "question") and exist_and_not_none(data, "response_j"):
-        prompt = data["question"]
     # lmsys/chatbot_arena_conversations
     elif exist_and_not_none(data, "winner") and exist_and_not_none(data, "conversation_a"):
 

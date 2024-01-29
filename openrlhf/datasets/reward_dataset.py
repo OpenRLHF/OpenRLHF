@@ -17,12 +17,6 @@ def preprocess_data(data, input_template, eos_token="</s>") -> str:
         chosen = data["chosen"]
         reject = data["rejected"]
         no_template = True  # do not modified with input template again
-    # stanfordnlp/SHP
-    elif exist_and_not_none(data, "human_ref_A"):
-        prompt = data["history"]
-        preferA = bool(data["labels"])
-        chosen = data["human_ref_A"] if preferA else data["human_ref_B"]
-        reject = data["human_ref_B"] if preferA else data["human_ref_A"]
     # lvwerra/stack-exchange-paired
     elif exist_and_not_none(data, "response_j"):
         prompt = data["question"]
