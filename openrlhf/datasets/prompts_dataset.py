@@ -38,7 +38,7 @@ def preprocess_data(data, input_template, eos_token="</s>") -> str:
                 if "user" in l["role"]:
                     result.append(input_template.format(l["content"]))
                 else:
-                    result.append(l["content"])
+                    result.append(l["content"] + eos_token)
             return "\n".join(result)
 
         prompt = data["conversation_a"][:-1]
