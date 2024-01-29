@@ -15,7 +15,7 @@ from openrlhf.utils import blending_datasets, get_processor, get_strategy, get_t
 def batch_generate(args):
     # configure strategy
     strategy = get_strategy(args)
-    strategy.setup_distributed(timeout=timedelta(minutes=240))
+    strategy.setup_distributed(timeout=timedelta(minutes=720))
 
     # configure model
     model = Actor(
@@ -78,6 +78,8 @@ def batch_generate(args):
             for i in range(len(prompts)):
                 prompts[i] += args.ca_prompt.strip() + " "
 
+        dist.barrier()
+
         inputs = tokenize_fn(prompts)
         for _ in range(N):
             outputs = model.model.generate(
@@ -124,7 +126,7 @@ def batch_generate(args):
 def batch_rm_inference(args):
     # configure strategy
     strategy = get_strategy(args)
-    strategy.setup_distributed(timeout=timedelta(minutes=30))
+    strategy.setup_distributed(timeout=timedelta(minutes=180))
 
     # configure model
     # load huggingface model/config
@@ -163,6 +165,8 @@ def batch_rm_inference(args):
         dataloader,
         disable=not strategy.is_rank_0(),
     )
+
+    dist.barrier()
 
     output_dataset = []
     with torch.no_grad():
