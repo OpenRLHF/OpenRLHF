@@ -6,10 +6,75 @@ import jsonlines
 import torch
 from torch import distributed as dist
 from tqdm import tqdm
+from transformers import AutoTokenizer
+from vllm import LLM, SamplingParams
 
 from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.utils import blending_datasets, get_processor, get_strategy, get_tokenizer
+
+
+def batch_generate_vllm(args):
+    # configure strategy
+    class Empty:
+        pass
+
+    dummy_strategy = Empty()
+    dummy_strategy.print = print
+    dummy_strategy.is_rank_0 = lambda: True
+
+    # configure tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(args.pretrain, trust_remote_code=True)
+
+    # configure model
+    llm = LLM(model=args.pretrain, tensor_parallel_size=args.tp_size, trust_remote_code=True, seed=args.seed)
+
+    # Create a sampling params object.
+    sampling_params = SamplingParams(
+        max_tokens=args.max_new_tokens,
+        top_p=args.top_p,
+        use_beam_search=False,
+        temperature=args.temperature,
+        repetition_penalty=args.repetition_penalty,
+    )
+
+    prompts_data = blending_datasets(
+        args.dataset,
+        args.dataset_probs,
+        dummy_strategy,
+        args.seed,
+        return_eval=False,
+        max_count=args.max_samples,
+    )
+    if args.iter is None:
+        prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
+    else:
+        # for iterative generation
+        start_idx = args.iter * args.rollout_batch_size
+        end_idx = start_idx + args.rollout_batch_size
+        prompts_data = prompts_data.select(range(start_idx, min(end_idx, len(prompts_data))))
+
+    prompts_dataset = PromptDataset(prompts_data, tokenizer, dummy_strategy, input_template=args.input_template)
+    prompts = list(prompts_dataset)
+
+    # Conditional SFT inference
+    if args.enable_ca:
+        for i in range(len(prompts)):
+            prompts[i] += args.ca_prompt.strip() + " "
+
+    # best of n
+    N = args.best_of_n
+    output_dataset = []
+
+    for _ in range(N):
+        outputs = llm.generate(prompts, sampling_params)
+        for output in outputs:
+            prompt = output.prompt
+            output = output.outputs[0].text
+            output_dataset.append({"input": prompt, "output": output})
+
+    with jsonlines.open(args.output_path, mode="w") as writer:
+        writer.write_all(output_dataset)
 
 
 def batch_generate(args):
@@ -210,7 +275,7 @@ def batch_rm_inference(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--eval_task", type=str, default=None, help="set to generate or rm")
+    parser.add_argument("--eval_task", type=str, default=None, help="set to generate, generate_vllm or rm")
     parser.add_argument("--pretrain", type=str, default=None)
     parser.add_argument("--max_len", type=int, default=2048)
     parser.add_argument("--zero_stage", type=int, default=0)
@@ -234,6 +299,8 @@ if __name__ == "__main__":
     parser.add_argument("--repetition_penalty", type=float, default=1.2)
     parser.add_argument("--best_of_n", type=int, default=1)
     parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
+    parser.add_argument("--max_new_tokens", type=int, default=1024)
+    parser.add_argument("--tp_size", type=int, default=4)
     parser.add_argument(
         "--post_processor",
         type=str,
@@ -257,6 +324,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.eval_task and args.eval_task == "generate":
         batch_generate(args)
+    if args.eval_task and args.eval_task == "generate_vllm":
+        batch_generate_vllm(args)
     elif args.eval_task and args.eval_task == "rm":
         batch_rm_inference(args)
     else:

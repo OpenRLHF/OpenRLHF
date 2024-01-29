@@ -22,7 +22,7 @@ class NewLineFormatter(logging.Formatter):
         return msg
 
 
-_root_logger = logging.getLogger("vllm")
+_root_logger = logging.getLogger("openrlhf")
 _default_handler = None
 
 
