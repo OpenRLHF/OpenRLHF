@@ -32,7 +32,7 @@ def preprocess_data(data, input_template, no_template=False, eos_token="</s>"):
     elif exist_and_not_none(data, "prompt") and exist_and_not_none(data, "response"):
         prompt = data["prompt"]
         target = data["response"]
-    # EleutherAI/pile [pretrain datasets]
+    # EleutherAI/pile [pretrain !!!]
     elif exist_and_not_none(data, "text") and exist_and_not_none(data, "meta"):
         assert no_template  # pretrain_mode
         prompt = ""
