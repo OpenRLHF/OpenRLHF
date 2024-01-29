@@ -70,15 +70,15 @@ def batch_generate(args):
         disable=not strategy.is_rank_0(),
     )
 
+    dist.barrier()
     N = args.best_of_n
     output_dataset = []
+
     for prompts in pbar:
         # Conditional SFT inference
         if args.enable_ca:
             for i in range(len(prompts)):
                 prompts[i] += args.ca_prompt.strip() + " "
-
-        dist.barrier()
 
         inputs = tokenize_fn(prompts)
         for _ in range(N):
