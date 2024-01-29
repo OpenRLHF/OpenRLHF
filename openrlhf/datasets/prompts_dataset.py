@@ -41,7 +41,7 @@ def preprocess_data(data, input_template, eos_token="</s>") -> str:
     # openai/webgpt_comparisons
     elif exist_and_not_none(data, "question") and exist_and_not_none(data, "answer_1"):
         prompt = data["question"]["full_text"]
-    # custom datasets
+    # for batch_inference.py
     elif exist_and_not_none(data, "input"):
         prompt = data["input"]
     else:

@@ -37,7 +37,7 @@ def preprocess_data(data, input_template, no_template=False, eos_token="</s>"):
         assert no_template  # pretrain_mode
         prompt = ""
         target = data["text"]
-    # custom datasets
+    # for batch_inference.py
     elif exist_and_not_none(data, "input") and exist_and_not_none(data, "output"):
         prompt = data["input"]
         target = data["output"]
