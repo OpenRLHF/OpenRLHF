@@ -1,20 +1,19 @@
 from typing import Callable
-
 from torch.utils.data import Dataset
 from tqdm import tqdm
-
 from .utils import exist_and_not_none, zero_pad_sequences
 
 
-def preprocess_data(data, pretrain_mode=False):
+def preprocess_data(data, input_template, no_template=False, eos_token="</s>"):
     # Dahoas/full-hh-rlhf
     # iamketan25/open-assistant-instructions
     if exist_and_not_none(data, "prompt") and exist_and_not_none(data, "chosen"):
         prompt = data["prompt"]
         target = data["chosen"]
+        no_template = True  # do not modified with input template again
     # pvduy/sharegpt_alpaca_oa_vicuna_format
     elif exist_and_not_none(data, "prompt") and exist_and_not_none(data, "label"):
-        prompt = data["prompt"].replace("USER:", "\nHuman: ").replace("ASSISTANT:", "\nAssistant: ")
+        prompt = data["prompt"].replace("USER:", "").replace("ASSISTANT:", "")
         target = data["label"].replace("</s>", "")
     # BelleGroup/train_0.5M_CN
     # LLMs/Alpaca-ShareGPT
@@ -22,40 +21,33 @@ def preprocess_data(data, pretrain_mode=False):
     # QingyiSi/Alpaca-CoT
     elif exist_and_not_none(data, "instruction") and exist_and_not_none(data, "output"):
         input = " " + data["input"] if exist_and_not_none(data, "input") else ""
-        prompt = "Human: " + data["instruction"] + input + "\nAssistant: "
+        prompt = data["instruction"] + input
         target = data["output"]
     # Open-Orca/OpenOrca
     elif exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
-        prompt = "Human: " + data["system_prompt"] + "\n" + data["question"] + "\nAssistant: "
+        prompt = data["system_prompt"] + "\n" + data["question"]
         target = data["response"]
     # crumb/gpt4all-clean
     # nomic-ai/gpt4all-j-prompt-generations
     elif exist_and_not_none(data, "prompt") and exist_and_not_none(data, "response"):
-        prompt = "Human: " + data["prompt"] + "\nAssistant: "
+        prompt = data["prompt"]
         target = data["response"]
-    # FreedomIntelligence/phoenix-sft-data-v1
-    elif exist_and_not_none(data, "conversations"):
-        prompt = ""
-        target = ""
-        for item in data["conversations"]:
-            if item["from"] == "human":
-                prompt = "Human: " + item["value"] + "\nAssistant: "
-            elif item["from"] == "gpt":
-                target = item["value"]
-    # EleutherAI/pile
+    # EleutherAI/pile [pretrain !!!]
     elif exist_and_not_none(data, "text") and exist_and_not_none(data, "meta"):
+        assert no_template  # pretrain_mode
         prompt = ""
         target = data["text"]
-        pretrain_mode = False  # ignore prompt.replace(xxx)
-    # JSON files for decision transformer
+    # for batch_inference.py
     elif exist_and_not_none(data, "input") and exist_and_not_none(data, "output"):
         prompt = data["input"]
         target = data["output"]
+        no_template = True
     else:
-        raise ValueError("sft_dataset key error")
+        raise ValueError("Unknown SFT dataset")
 
-    if pretrain_mode:
-        prompt.replace("Human:", " ").replace("\nAssistant:", " ")
+    # input template
+    if not no_template:
+        prompt = input_template.format(prompt)
     return prompt, target
 
 
@@ -75,6 +67,7 @@ class SFTDataset(Dataset):
         tokenizer: Callable,
         max_length: int,
         strategy,
+        input_template="Human: {}\nAssistant: ",
         pretrain_mode=False,
     ) -> None:
         super().__init__()
@@ -87,7 +80,7 @@ class SFTDataset(Dataset):
         self.max_length = max_length
 
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
-            prompt, target = preprocess_data(data, pretrain_mode)
+            prompt, target = preprocess_data(data, input_template, pretrain_mode, eos_token=self.tokenizer.eos_token)
 
             if not self.pretrain_mode:
                 prompt_token = self.tokenizer(

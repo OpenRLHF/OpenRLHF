@@ -60,7 +60,7 @@ def batch_generate(args):
         end_idx = start_idx + args.rollout_batch_size
         prompts_data = prompts_data.select(range(start_idx, min(end_idx, len(prompts_data))))
 
-    prompts_dataset = PromptDataset(prompts_data, strategy)
+    prompts_dataset = PromptDataset(prompts_data, tokenizer, strategy, input_template=args.input_template)
     prompts_dataloader = strategy.setup_dataloader(
         prompts_dataset, args.micro_batch_size, True, False, drop_last=False
     )
@@ -72,8 +72,8 @@ def batch_generate(args):
     N = args.best_of_n
     output_dataset = []
     for prompts in pbar:
-        # Decision Transformer inference
-        if args.enable_dt:
+        # Conditional SFT inference
+        if args.enable_ca:
             for i in range(len(prompts)):
                 prompts[i] += args.ca_prompt.strip() + " "
 
@@ -151,7 +151,9 @@ def batch_rm_inference(args):
         return_eval=False,
     )
     dataset = dataset.select(range(min(args.max_samples, len(dataset))))
-    dataset = SFTDataset(dataset, tokenizer, args.max_len, strategy, pretrain_mode=False)
+    dataset = SFTDataset(
+        dataset, tokenizer, args.max_len, strategy, pretrain_mode=False, input_template=args.input_template
+    )
     dataloader = strategy.setup_dataloader(
         dataset, args.micro_batch_size, True, False, dataset.collate_fn, drop_last=False
     )
@@ -225,6 +227,7 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--repetition_penalty", type=float, default=1.2)
     parser.add_argument("--best_of_n", type=int, default=1)
+    parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
     parser.add_argument(
         "--post_processor",
         type=str,

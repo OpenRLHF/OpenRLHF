@@ -9,13 +9,15 @@ from .reward_dataset import RewardDataset
 from .utils import exist_and_not_none, zero_pad_sequences
 
 
-def preprocess_data(data):
+def preprocess_data(data, input_template, eos_token="</s>"):
     """
     Preprocess data from raw dataset to prompt, response, label
 
     Args:
         data: raw data from dataset
     """
+    no_template = False
+
     # Dylan2048/ultrafeedback-unpaired-preferences
     if exist_and_not_none(data, "score"):
         prompt = data["instruction"]
@@ -24,6 +26,9 @@ def preprocess_data(data):
     else:
         raise ValueError("Unknown dataset")
 
+    # input template
+    if not no_template:
+        prompt = input_template.format(prompt)
     return prompt, response, label
 
 
@@ -37,7 +42,9 @@ class UnpairedPreferenceDataset(Dataset):
         self.max_length: max length of input
     """
 
-    def __init__(self, dataset, tokenizer: Callable, max_length: int, strategy) -> None:
+    def __init__(
+        self, dataset, tokenizer: Callable, max_length: int, strategy, input_template="Human: {}\nAssistant: "
+    ) -> None:
         super().__init__()
         self.prompts = []
         self.responses = []
@@ -47,7 +54,7 @@ class UnpairedPreferenceDataset(Dataset):
         self.max_length = max_length
 
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
-            prompt, response, label = preprocess_data(data)
+            prompt, response, label = preprocess_data(data, input_template, self.tokenizer.eos_token)
             self.prompts.append(prompt)
             self.responses.append(response)
             self.labels.append(label)
@@ -103,32 +110,20 @@ class UnpairedRewardDataset(Dataset):
     """
 
     def __init__(
-        self, dataset, tokenizer: Callable = None, max_length: int = None, strategy=None, vanilla_loss=False
+        self,
+        dataset,
+        vanilla_loss=False,
     ) -> None:
         super().__init__()
         # directly init from reward dataset
-        if isinstance(dataset, RewardDataset):
-            self.prompts = dataset.prompts * 2
-            self.responses = dataset.chosens + dataset.rejects
-            self.labels = [1] * len(dataset.chosens) + [0] * len(dataset.rejects)
+        assert isinstance(dataset, RewardDataset)
+        self.prompts = dataset.prompts * 2
+        self.responses = dataset.chosens + dataset.rejects
+        self.labels = [1] * len(dataset.chosens) + [0] * len(dataset.rejects)
 
-            self.tokenizer = dataset.tokenizer
-            self.strategy = dataset.strategy
-            self.max_length = dataset.max_length
-        else:
-            self.prompts = []
-            self.responses = []
-            self.labels = []
-            for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
-                prompt, response, label = preprocess_data(data)
-                self.prompts.append(prompt)
-                self.responses.append(response)
-                self.labels.append(label)
-
-            self.tokenizer = tokenizer
-            self.strategy = strategy
-            self.max_length = max_length
-
+        self.tokenizer = dataset.tokenizer
+        self.strategy = dataset.strategy
+        self.max_length = dataset.max_length
         self.vanilla_loss = vanilla_loss
 
     def __getitem__(self, index):

@@ -41,8 +41,22 @@ def train(args):
     train_data, eval_data = blending_datasets(args.dataset, args.dataset_probs, strategy, args.seed)
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
     eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
-    train_dataset = SFTDataset(train_data, tokenizer, args.max_len, strategy, pretrain_mode=args.pretrain_mode)
-    eval_dataset = SFTDataset(eval_data, tokenizer, args.max_len, strategy, pretrain_mode=args.pretrain_mode)
+    train_dataset = SFTDataset(
+        train_data,
+        tokenizer,
+        args.max_len,
+        strategy,
+        pretrain_mode=args.pretrain_mode,
+        input_template=args.input_template,
+    )
+    eval_dataset = SFTDataset(
+        eval_data,
+        tokenizer,
+        args.max_len,
+        strategy,
+        pretrain_mode=args.pretrain_mode,
+        input_template=args.input_template,
+    )
 
     train_dataloader = strategy.setup_dataloader(
         train_dataset, args.micro_train_batch_size, True, True, train_dataset.collate_fn
@@ -135,6 +149,7 @@ if __name__ == "__main__":
     parser.add_argument("--lora_rank", type=int, default=0)
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--target_modules", type=list, default=None)
+    parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
 
     parser.add_argument("--bos_token", type=str, default=None)
     parser.add_argument("--eos_token", type=str, default=None)

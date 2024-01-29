@@ -37,35 +37,14 @@ def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=
 
 
 def get_strategy(args):
-    # default args for deepspeed
-    if "seed" not in args:
-        args.seed = 42
-    if "max_norm" not in args:
-        args.max_norm = 1.0
-    if "micro_train_batch_size" not in args:
-        args.micro_train_batch_size = 1
-    if "train_batch_size" not in args:
-        args.train_batch_size = 8
-    if "local_rank" not in args:
-        args.local_rank = -1
-    if "bf16" not in args:
-        args.bf16 = True
-    if "adam_offload" not in args:
-        args.adam_offload = False
-    if "zpg" not in args:
-        args.zpg = 1
-    if "grad_accum_dtype" not in args:
-        args.grad_accum_dtype = "fp32"
-
     strategy = DeepspeedStrategy(
-        seed=args.seed,
-        max_norm=args.max_norm,
-        micro_train_batch_size=args.micro_train_batch_size,
-        train_batch_size=args.train_batch_size,
+        seed=getattr(args, "seed", 42),
+        max_norm=getattr(args, "max_norm", 1.0),
+        micro_train_batch_size=getattr(args, "micro_train_batch_size", 1),
+        train_batch_size=getattr(args, "train_batch_size", 128),
         zero_stage=args.zero_stage,
         args=args,
     )
-
     return strategy
 
 
