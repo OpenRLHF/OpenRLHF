@@ -38,10 +38,10 @@ def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=
 
 def get_strategy(args):
     strategy = DeepspeedStrategy(
-        seed=args.get("seed", 42),
-        max_norm=args.get("max_norm", 1.0),
-        micro_train_batch_size=args.get("micro_train_batch_size", 1),
-        train_batch_size=args.get("train_batch_size", 128),
+        seed=getattr(args, "seed", 42),
+        max_norm=getattr(args, "max_norm", 1.0),
+        micro_train_batch_size=getattr(args, "micro_train_batch_size", 1),
+        train_batch_size=getattr(args, "train_batch_size", 128),
         zero_stage=args.zero_stage,
         args=args,
     )
