@@ -40,8 +40,6 @@ def preprocess_data(data, input_template, no_template=False, eos_token="</s>"):
             if item["from"] == "human":
                 prompt += input_template.format(item["value"])
             elif item["from"] == "gpt":
-                if item is not data["conversations"][-1]:
-                    prompt += item["value"] + eos_token
                 target = item["value"]
         no_template = True  # do not modified with input template again
     # EleutherAI/pile
