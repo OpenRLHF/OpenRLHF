@@ -41,6 +41,7 @@ def preprocess_data(data, input_template, no_template=False, eos_token="</s>"):
     elif exist_and_not_none(data, "input") and exist_and_not_none(data, "output"):
         prompt = data["input"]
         target = data["output"]
+        no_template = True
     else:
         raise ValueError("Unknown SFT dataset")
 
