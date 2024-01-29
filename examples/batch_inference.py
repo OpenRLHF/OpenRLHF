@@ -72,8 +72,8 @@ def batch_generate(args):
     N = args.best_of_n
     output_dataset = []
     for prompts in pbar:
-        # Decision Transformer inference
-        if args.enable_dt:
+        # Conditional SFT inference
+        if args.enable_ca:
             for i in range(len(prompts)):
                 prompts[i] += args.ca_prompt.strip() + " "
 
