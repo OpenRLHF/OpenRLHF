@@ -38,7 +38,7 @@ def train(args):
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)
 
     # prepare for data and dataset
-    train_data, eval_data = blending_datasets(args.dataset, args.dataset_probs, strategy, args.seed)
+    train_data, eval_data = blending_datasets(args.dataset, args.dataset_probs, strategy, args.seed, max_count=5000000)
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
     eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
     train_dataset = SFTDataset(

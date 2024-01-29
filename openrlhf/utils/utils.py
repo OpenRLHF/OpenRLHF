@@ -53,7 +53,7 @@ def blending_datasets(
     probabilities,
     strategy=None,
     seed=42,
-    max_count=2000000,
+    max_count=5000000,
     return_eval=True,
     stopping_strategy="first_exhausted",
 ):
