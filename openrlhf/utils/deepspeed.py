@@ -52,13 +52,13 @@ class DeepspeedStrategy(ABC):
         self.train_batch_size = train_batch_size
         self.micro_train_batch_size = micro_train_batch_size
         self.bf16 = bf16
-        self.adam_offload = args.adam_offload
-        self.zpg = args.zpg
         self.seed = seed
         self.max_norm = max_norm
-        self.grad_accum_dtype = args.grad_accum_dtype
+        self.adam_offload = args.get("adam_offload", False)
+        self.zpg = args.get("zpg", 1)
+        self.grad_accum_dtype = args.get("grad_accum_dtype", "fp32")
         # disable_trace_cache
-        self.disable_trace_cache = args.disable_trace_cache
+        self.disable_trace_cache = args.get("disable_trace_cache", False)
 
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
