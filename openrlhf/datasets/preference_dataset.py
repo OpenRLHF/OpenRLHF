@@ -43,7 +43,7 @@ class UnpairedPreferenceDataset(Dataset):
     """
 
     def __init__(
-        self, dataset, tokenizer: Callable, max_length: int, strategy, input_template="Human: {} \nAssistant: "
+        self, dataset, tokenizer: Callable, max_length: int, strategy, input_template="Human: {}\nAssistant: "
     ) -> None:
         super().__init__()
         self.prompts = []

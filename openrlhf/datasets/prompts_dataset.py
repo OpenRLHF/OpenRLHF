@@ -74,7 +74,7 @@ class PromptDataset(Dataset):
         dataset,
         tokenizer,
         strategy,
-        input_template="Human: {} \nAssistant: ",
+        input_template="Human: {}\nAssistant: ",
     ) -> None:
         super().__init__()
         self.strategy = strategy

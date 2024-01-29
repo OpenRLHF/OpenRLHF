@@ -78,7 +78,7 @@ class SFTDataset(Dataset):
         tokenizer: Callable,
         max_length: int,
         strategy,
-        input_template="Human: {} \nAssistant: ",
+        input_template="Human: {}\nAssistant: ",
         pretrain_mode=False,
     ) -> None:
         super().__init__()

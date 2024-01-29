@@ -84,7 +84,7 @@ class RewardDataset(Dataset):
         tokenizer: Callable,
         max_length: int,
         strategy,
-        input_template="Human: {} \nAssistant: ",
+        input_template="Human: {}\nAssistant: ",
     ) -> None:
         super().__init__()
         self.prompts = []
