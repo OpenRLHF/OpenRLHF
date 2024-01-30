@@ -31,18 +31,19 @@
 OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Transformers:
 
 - **Simple and easy to use**: OpenRLHF is one of the simplest high-performance RLHF libraries currently available, enabling 34B model RLHF training with just a single DGXA100 node (see the training [script](./examples/scripts/train_ppo_llama_ray_34b.sh)).
-- **Distributed RLHF**: The key idea behind OpenRLHF is to distribute the Actor, Reward, Reference, and Critic models onto separate GPUs using Ray, while placing the Adam optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 70B+ models with multiple A100 80G GPUs and vLLM).
-- **High performance**: Thanks to the ability to use a large inference batch size with Ray and DeepSpeed's CPUAdam (Pinned Memory), the performance of OpenRLHF with the 13B LLaMA2 model is 4x that of DeepSpeedChat. We also support vLLM generation acceleration to further improve the performance.
+- **Distributed RLHF**: The key idea behind OpenRLHF is to distribute the Actor, Reward, Reference, and Critic models onto separate GPUs using Ray, while placing the Adam optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 70B+ models with multiple A100 80G GPUs and vLLM, see [architecture](./docs/ray_architecture.png)).
+- **High performance**: RLHF training spends 80% of the time on the sample generation stage. Thanks to the ability to use a large inference batch size with Ray and Adam Offload (Pinned Memory), the performance of OpenRLHF with the 13B LLaMA2 model is 4x that of DeepSpeedChat. We also support vLLM generation acceleration to further improve the generation performance.
 - **PPO Implementation Tricks**: We integrated the implementation tricks for PPO to improve the training stability, referencing https://arxiv.org/abs/2005.12729 and https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/.
+
 
 ## Features
 
 - Distributed [PPO based on Ray](./examples/scripts/train_ppo_llama_ray.sh). 
 - Support full RLHF fine-tuning of models with [over 70 billion parameters](./examples/scripts/train_ppo_llama_ray_70b.sh).
 - Support vLLM generation acceleration in RLHF (--vllm_num_engines).
-- Support multiple reward models.
+- Support multiple reward models (--reward_pretrain model1,model2...).
 - Support [DPO (direct-preference-optimization)/IPO/cDPO](./examples/scripts/train_dpo_llama.sh).
-- Support [KTO](./examples/scripts/train_kto_llama.sh).
+- Support [Kahneman-Tversky optimization (KTO)](./examples/scripts/train_kto_llama.sh).
 - Support [Rejection Sampling](./examples/scripts/train_rejection_sampling_llama.sh).
 - Support [Conditional SFT](./examples/scripts/train_conditional_llama.sh) (https://arxiv.org/abs/2308.12050).
 - Support [Mixtral 8*7b](./examples/test_scripts/train_sft_mixtral_lora.sh) (--aux_loss_coef)
@@ -56,7 +57,6 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 **TODO** 
 - Allows saving and loading training checkpoints.
 - Support Hybrid vLLM inference engine.
-- Support Multi-adapters(i.e, shared base model) RLHF 
 
 RLHF Support Matrix
 
@@ -172,6 +172,9 @@ nohup ray start --head --node-ip-address 0.0.0.0 --num-gpus 8 --block &> ray.log
 
 # train ray PPO model, requires 8 gpus in default config
 ./train_ppo_llama_ray.sh
+
+# for 70B models
+# ./train_ppo_llama_ray_70b.sh
 ```
 
 * Multi-nodes training on Slurm
@@ -209,6 +212,7 @@ After completing the training, you can evaluate your model by using the `inferen
 ./interactive_chat_llama.sh { pretrain_model_path }
 
 # batch generate
+# support vLLM acceleration (--eval_task generate_vllm)
 python examples/batch_inference.py {args}
 ```
 
