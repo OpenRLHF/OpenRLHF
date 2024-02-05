@@ -78,7 +78,9 @@ def train(args):
 
     # gradient_checkpointing
     if args.gradient_checkpointing:
-        model.gradient_checkpointing_enable()
+        model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
+        )
 
     # strategy prepare
     (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
@@ -151,6 +153,7 @@ if __name__ == "__main__":
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--target_modules", type=list, default=None)
     parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
+    parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
 
     parser.add_argument("--bos_token", type=str, default=None)
     parser.add_argument("--eos_token", type=str, default=None)
