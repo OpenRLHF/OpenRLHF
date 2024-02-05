@@ -183,8 +183,8 @@ class Actor(nn.Module):
         else:
             return log_probs[:, -num_actions:]
 
-    def gradient_checkpointing_enable(self):
-        self.model.gradient_checkpointing_enable()
+    def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs={'use_reentrant':False}):
+        self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)
 
     def gradient_checkpointing_disable(self):
         self.model.gradient_checkpointing_disable()

@@ -95,7 +95,7 @@ class CriticModelRayActor(BasePPORole):
         )
 
         if args.gradient_checkpointing:
-            critic.gradient_checkpointing_enable()
+            critic.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant':args.gradient_checkpointing_use_reentrant})
 
         # prepare models/optimizers...
         self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare(
