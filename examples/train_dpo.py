@@ -49,7 +49,9 @@ def train(args):
 
     # gradient_checkpointing
     if args.gradient_checkpointing:
-        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant':args.gradient_checkpointing_use_reentrant})
+        model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
+        )
 
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)
@@ -164,7 +166,7 @@ if __name__ == "__main__":
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--target_modules", type=list, default=None)
     parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
-    parser.add_argument("--gradient_checkpointing_use_reentrant", action='store_true')
+    parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
 
     # wandb pamameters
     parser.add_argument("--use_wandb", type=str, default=None)

@@ -191,7 +191,9 @@ class ActorModelRayActor(BasePPORole):
         )
 
         if args.gradient_checkpointing:
-            actor.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant':args.gradient_checkpointing_use_reentrant})
+            actor.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
+            )
 
         # prepare models/optimizers...
         self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare(
