@@ -43,6 +43,7 @@ def get_strategy(args):
         micro_train_batch_size=getattr(args, "micro_train_batch_size", 1),
         train_batch_size=getattr(args, "train_batch_size", 128),
         zero_stage=args.zero_stage,
+        bf16=getattr(args, "bf16", True),
         args=args,
     )
     return strategy
