@@ -155,8 +155,12 @@ cd examples/scripts
 # launch nvidia container
 ./docker_run.sh
 
-# install Ray and huggingface-cli
-pip install ray[default] huggingface_hub
+# cd in container
+cd /openrlhf/examples/scripts
+
+# build OpenRLHF (i.e, pip install)
+./build_openrlhf.sh
+
 # due to the compatibility of nVIDIA PyTorch image
 pip uninstall xgboost transformer_engine -y
 
@@ -169,14 +173,13 @@ ray start --head --node-ip-address 0.0.0.0 --num-gpus 8
 # if you want to launch ray on more nodes, use
 ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 
-# cd in container
-cd /openrlhf/examples/scripts
 
 # train ray PPO model, requires 8 gpus in default config
 ./train_ppo_llama_ray.sh
 
 # for 70B models and vLLM-based RLHF
 pip install vllm
+pip uninstall flash_attn -y
 
 ./train_ppo_llama_ray_70b.sh
 ```
