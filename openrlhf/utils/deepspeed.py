@@ -273,10 +273,18 @@ class DeepspeedStrategy(ABC):
                     output_state_dict[k] = vv
 
         if self.is_rank_0():
-            # copy named_buffers
+            state_dict = model_to_save.state_dict()
+
+            # copy named_buffers with `persistent=True`
             for k, v in model_to_save.named_buffers():
+                if k not in state_dict:
+                    continue
                 vv = v.data.cpu()
                 output_state_dict[k] = vv
+
+            assert len(output_state_dict) == len(
+                state_dict
+            ), f"mismatch size output_state_dict({len(output_state_dict)}) and state_dict({len(state_dict)})"
 
             # only save peft weights https://github.com/microsoft/DeepSpeed/issues/4295
             if isinstance(model_to_save, PeftModel):
