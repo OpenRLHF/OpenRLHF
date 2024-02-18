@@ -205,6 +205,9 @@ readonly GPUS_PER_NODE=8
 # run multi-nodes training script
 # train_llama_slurm.sh will load the training args from `training_script`
 sbatch ./train_llama_slurm.sh
+
+# for Ray PPO training with Slurm
+sbatch ./train_ppo_llama_ray_slurm.sh
 ```
 
 * Inference and Evaluation
