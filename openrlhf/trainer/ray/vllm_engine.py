@@ -1,5 +1,5 @@
 import inspect
-import logging
+import importlib
 from functools import partial
 
 import ray
@@ -9,6 +9,9 @@ from vllm.model_executor.weight_utils import hf_model_weights_iterator
 from vllm.worker.worker import Worker
 
 from openrlhf.utils.distributed_util import init_process_group
+from openrlhf.utils.logging import init_logger
+
+logger = init_logger(__name__)
 
 
 def _hf_model_weights_iterator_wrap(model_name_or_path, *args, **kwargs):
@@ -21,12 +24,29 @@ def _hf_model_weights_iterator_wrap(model_name_or_path, *args, **kwargs):
 
 class _WorkerWrap(Worker):
     def __init__(self, *args, **kwargs):
-        import vllm.model_executor.models
-
         # Monkey patch hf_model_weights_iterator to allow update single weight
-        modules = inspect.getmembers(vllm.model_executor.models, inspect.ismodule)
-        for _, m in modules:
-            m.hf_model_weights_iterator = _hf_model_weights_iterator_wrap
+        import vllm
+
+        if vllm.__version__ < "0.2.5":
+            import vllm.model_executor.models
+
+            modules = inspect.getmembers(vllm.model_executor.models, inspect.ismodule)
+            for _, m in modules:
+                m.hf_model_weights_iterator = _hf_model_weights_iterator_wrap
+        else:
+            from vllm.model_executor.models import ModelRegistry, _MODELS
+
+            load_model_cls = ModelRegistry.load_model_cls
+
+            def patched_load_model_cls(model_arch: str):
+                module_name, _ = _MODELS[model_arch]
+                module = importlib.import_module(f"vllm.model_executor.models.{module_name}")
+                module.hf_model_weights_iterator = _hf_model_weights_iterator_wrap
+                logger.info(f"Monkey patch hf_model_weights_iterator for module {module_name}")
+
+                return load_model_cls(model_arch)
+
+            ModelRegistry.load_model_cls = patched_load_model_cls
 
         super().__init__(*args, **kwargs)
 
@@ -45,7 +65,7 @@ class _WorkerWrap(Worker):
 
     def update_weight(self, name, dtype, shape, empty_cache=False):
         if torch.distributed.get_rank() == 0:
-            logging.info(f"update weight: {name}, dtype: {dtype}, shape: {shape}")
+            logger.debug(f"update weight: {name}, dtype: {dtype}, shape: {shape}")
 
         assert dtype == self.model_config.dtype, f"mismatch dtype: src {dtype}, dst {self.model_config.dtype}"
         weight = torch.empty(shape, dtype=dtype, device="cuda")
