@@ -165,10 +165,10 @@ cd /openrlhf/examples/scripts
 ~/.local/bin/huggingface-cli login
 
 # launch ray in container
-nohup ray start --head --node-ip-address 0.0.0.0 --num-gpus 8 --block &> ray.log &
+ray start --head --node-ip-address 0.0.0.0 --num-gpus 8
 
 # if you want to launch ray on more nodes, use
-# ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8 --block
+# ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 
 # train ray PPO model, requires 8 gpus in default config
 ./train_ppo_llama_ray.sh
