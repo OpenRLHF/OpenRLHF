@@ -178,7 +178,9 @@ ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 ./train_ppo_llama_ray.sh
 
 # for 70B models and vLLM-based RLHF
-pip install vllm
+pip install vllm==0.2.4
+
+# due to the compatibility of vLLM
 pip uninstall flash_attn -y
 
 ./train_ppo_llama_ray_70b.sh
