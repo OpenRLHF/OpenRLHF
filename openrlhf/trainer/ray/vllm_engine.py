@@ -1,5 +1,5 @@
-import inspect
 import importlib
+import inspect
 from functools import partial
 
 import ray
@@ -34,7 +34,7 @@ class _WorkerWrap(Worker):
             for _, m in modules:
                 m.hf_model_weights_iterator = _hf_model_weights_iterator_wrap
         else:
-            from vllm.model_executor.models import ModelRegistry, _MODELS
+            from vllm.model_executor.models import _MODELS, ModelRegistry
 
             load_model_cls = ModelRegistry.load_model_cls
 
