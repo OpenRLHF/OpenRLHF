@@ -156,7 +156,7 @@ cd examples/scripts
 ./docker_run.sh
 
 # install Ray and huggingface-cli
-pip install ray[default] huggingface_hub -y
+pip install ray[default] huggingface_hub
 # due to the compatibility of nVIDIA PyTorch image
 pip uninstall xgboost transformer_engine -y
 
@@ -175,7 +175,7 @@ cd /openrlhf/examples/scripts
 # train ray PPO model, requires 8 gpus in default config
 ./train_ppo_llama_ray.sh
 
-# for 70B models
+# for 70B models and vLLM-based RLHF
 pip install vllm
 
 ./train_ppo_llama_ray_70b.sh
