@@ -156,7 +156,9 @@ cd examples/scripts
 ./docker_run.sh
 
 # install Ray and huggingface-cli
-pip install ray[default] huggingface_hub
+pip install ray[default] huggingface_hub -y
+# due to the compatibility of nVIDIA PyTorch image
+pip uninstall xgboost transformer_engine -y
 
 # huggingface login 
 ~/.local/bin/huggingface-cli login

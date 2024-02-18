@@ -1,6 +1,3 @@
-# Due to the compatibility of vLLM with nVIDIA PyTorch image, you may need
-# pip uninstall xgboost transformer_engine -y
-
 set -x 
 export PATH=$HOME/.local/bin/:$PATH
 
