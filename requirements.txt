@@ -1,6 +1,6 @@
 bitsandbytes
 datasets
-deepspeed==0.13.1
+deepspeed==0.13.2
 einops
 flash-attn==2.4.2
 isort
@@ -12,6 +12,6 @@ ray[default]
 torch
 torchmetrics
 tqdm
-transformers==4.37.1
+transformers==4.37.2
 transformers_stream_generator
 wandb
