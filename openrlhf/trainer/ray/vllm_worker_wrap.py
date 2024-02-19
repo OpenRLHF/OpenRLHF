@@ -2,8 +2,8 @@ import importlib
 import inspect
 
 import torch
-from vllm.worker.worker import Worker
 from vllm.model_executor.weight_utils import hf_model_weights_iterator
+from vllm.worker.worker import Worker
 
 from openrlhf.utils.distributed_util import init_process_group
 from openrlhf.utils.logging import init_logger
@@ -12,7 +12,6 @@ logger = init_logger(__name__)
 
 
 def _hf_model_weights_iterator_wrap(model_name_or_path, *args, **kwargs):
-
     if isinstance(model_name_or_path, dict):
         for name, param in model_name_or_path.items():
             yield name, param

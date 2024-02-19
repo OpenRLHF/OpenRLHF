@@ -18,7 +18,6 @@ class LLMRayActor:
 
             worker.Worker = WorkerWrap
         else:
-
             # NOTE: In 0.2.7, vLLM made a major change to its architecture which move one worker into the driver process.
             # Driver process will manually set CUDA_VISIBLE_DEVICES before worker init. To avoid importing torch before
             # set CUDA_VISIBLE_DEVICES, we must defer monkey patch.
