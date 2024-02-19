@@ -12,6 +12,7 @@ from openrlhf.trainer.ray import (
     PPORayActorGroup,
     ReferenceModelRayActor,
     RewardModelRayActor,
+    create_vllm_engines,
 )
 from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
@@ -128,20 +129,9 @@ def train(args):
     # init vLLM engine for text generation
     vllm_engines = None
     if args.vllm_num_engines is not None:
-        from openrlhf.trainer.ray.vllm_engine import LLMRayActor
-
-        # When tensor_parallel_size=1, vLLM init model in LLMEngine directly, assign 1 GPU for it.
-        num_gpus = int(args.vllm_tensor_parallel_size == 1)
-        vllm_engines = [
-            LLMRayActor.options(num_gpus=num_gpus).remote(
-                args.pretrain,
-                trust_remote_code=True,
-                tensor_parallel_size=args.vllm_tensor_parallel_size,
-                dtype="bfloat16" if args.bf16 else "auto",
-                seed=args.seed,
-            )
-            for _ in range(args.vllm_num_engines)
-        ]
+        vllm_engines = create_vllm_engines(
+            args.vllm_num_engines, args.vllm_tensor_parallel_size, args.pretrain, args.seed
+        )
 
     # critic scheduler initialization depends on max_step, so we have to init critic after actor
     # TODO: use first reward model as critic model

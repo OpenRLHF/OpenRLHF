@@ -1,113 +1,83 @@
-import importlib
-import inspect
-from functools import partial
+import os
+from typing import List
 
 import ray
-import torch
+from ray.util.placement_group import placement_group
+from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from vllm import LLM
-from vllm.model_executor.weight_utils import hf_model_weights_iterator
-from vllm.worker.worker import Worker
-
-from openrlhf.utils.distributed_util import init_process_group
-from openrlhf.utils.logging import init_logger
-
-logger = init_logger(__name__)
-
-
-def _hf_model_weights_iterator_wrap(model_name_or_path, *args, **kwargs):
-    if isinstance(model_name_or_path, dict):
-        for name, param in model_name_or_path.items():
-            yield name, param
-    else:
-        yield from hf_model_weights_iterator(model_name_or_path, *args, **kwargs)
-
-
-class _WorkerWrap(Worker):
-    def __init__(self, *args, **kwargs):
-        # Monkey patch hf_model_weights_iterator to allow update single weight
-        import vllm
-
-        if vllm.__version__ < "0.2.5":
-            import vllm.model_executor.models
-
-            modules = inspect.getmembers(vllm.model_executor.models, inspect.ismodule)
-            for _, m in modules:
-                m.hf_model_weights_iterator = _hf_model_weights_iterator_wrap
-        else:
-            from vllm.model_executor.models import _MODELS, ModelRegistry
-
-            load_model_cls = ModelRegistry.load_model_cls
-
-            def patched_load_model_cls(model_arch: str):
-                module_name, _ = _MODELS[model_arch]
-                module = importlib.import_module(f"vllm.model_executor.models.{module_name}")
-                module.hf_model_weights_iterator = _hf_model_weights_iterator_wrap
-                logger.info(f"Monkey patch hf_model_weights_iterator for module {module_name}")
-
-                return load_model_cls(model_arch)
-
-            ModelRegistry.load_model_cls = patched_load_model_cls
-
-        super().__init__(*args, **kwargs)
-
-    def init_process_group(self, master_address, master_port, rank, world_size, group_name):
-        """Init torch process group for model weights update"""
-        assert torch.distributed.is_initialized(), f"default torch process group must be initialized"
-        assert group_name != "", f"group name must not be empty"
-
-        self._model_update_group = init_process_group(
-            backend="nccl",
-            init_method=f"tcp://{master_address}:{master_port}",
-            world_size=world_size,
-            rank=rank,
-            group_name=group_name,
-        )
-
-    def update_weight(self, name, dtype, shape, empty_cache=False):
-        if torch.distributed.get_rank() == 0:
-            logger.debug(f"update weight: {name}, dtype: {dtype}, shape: {shape}")
-
-        assert dtype == self.model_config.dtype, f"mismatch dtype: src {dtype}, dst {self.model_config.dtype}"
-        weight = torch.empty(shape, dtype=dtype, device="cuda")
-        torch.distributed.broadcast(weight, 0, group=self._model_update_group)
-        self.model_runner.model.load_weights(model_name_or_path={name: weight})
-
-        del weight
-        # TODO: should we empty cache if all weights have updated?
-        # if empty_cache:
-        #     torch.cuda.empty_cache()
 
 
 @ray.remote
 class LLMRayActor:
     def __init__(self, *args, **kwargs):
-        from vllm.worker import worker
+        import vllm
 
-        worker.Worker = _WorkerWrap
+        if vllm.__version__ < "0.2.7" or kwargs["tensor_parallel_size"] == 1:
+            from vllm.worker import worker
+            from openrlhf.trainer.ray.vllm_worker_wrap import WorkerWrap
+
+            worker.Worker = WorkerWrap
+        else:
+
+            # NOTE: In 0.2.7, vLLM made a major change to its architecture which move one worker into the driver process.
+            # Driver process will manually set CUDA_VISIBLE_DEVICES before worker init. To avoid importing torch before
+            # set CUDA_VISIBLE_DEVICES, we must defer monkey patch.
+            # For more detail, see: https://github.com/vllm-project/vllm/pull/2221
+            def _set_cuda_visible_devices(device_ids: List[int]):
+                os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, device_ids))
+
+                from vllm.worker import worker
+                from openrlhf.trainer.ray.vllm_worker_wrap import WorkerWrap
+
+                worker.Worker = WorkerWrap
+
+            vllm.engine.llm_engine.set_cuda_visible_devices = _set_cuda_visible_devices
 
         self.llm = LLM(*args, **kwargs)
 
     def generate(self, *args, **kwargs):
         return self.llm.generate(*args, **kwargs)
 
-    def init_process_group(self, master_address, master_port, rank, world_size, group_name):
-        all_outputs = []
-        use_ray = len(self.llm.llm_engine.workers) > 1
-
-        for i, worker in enumerate(self.llm.llm_engine.workers):
-            if use_ray:
-                executor = partial(worker.execute_method.remote, "init_process_group")
-            else:
-                executor = getattr(worker, "init_process_group")
-
-            output = executor(master_address, master_port, rank + i, world_size, group_name)
-            all_outputs.append(output)
-
-        if use_ray:
-            ray.get(all_outputs)
+    def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name):
+        return self.llm.llm_engine._run_workers(
+            "init_process_group", master_address, master_port, rank_offset, world_size, group_name
+        )
 
     def update_weight(self, name, dtype, shape, empty_cache=False):
-        self.llm.llm_engine._run_workers("update_weight", name, dtype, shape, empty_cache)
+        return self.llm.llm_engine._run_workers("update_weight", name, dtype, shape, empty_cache)
+
+
+def create_vllm_engines(num_engines: int, tensor_parallel_size: int, pretrain: str, seed: int):
+    vllm_engines = []
+    for _ in range(num_engines):
+        # When tensor_parallel_size=1, vLLM init model in LLMEngine directly, assign 1 GPU for it.
+        num_gpus = int(tensor_parallel_size == 1)
+        scheduling_strategy = None
+
+        if tensor_parallel_size > 1:
+            bundles = [{"GPU": 1, "CPU": 1}] * tensor_parallel_size
+            pg = placement_group(bundles)
+            ray.get(pg.ready())
+
+            scheduling_strategy = PlacementGroupSchedulingStrategy(
+                placement_group=pg, placement_group_capture_child_tasks=True, placement_group_bundle_index=0
+            )
+
+        vllm_engines.append(
+            LLMRayActor.options(
+                num_cpus=1,
+                num_gpus=num_gpus,
+                scheduling_strategy=scheduling_strategy,
+            ).remote(
+                pretrain,
+                trust_remote_code=True,
+                tensor_parallel_size=tensor_parallel_size,
+                dtype="bfloat16",
+                seed=seed,
+            )
+        )
+
+    return vllm_engines
 
 
 if __name__ == "__main__":
