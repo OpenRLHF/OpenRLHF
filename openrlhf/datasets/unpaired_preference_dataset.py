@@ -9,25 +9,29 @@ from .reward_dataset import RewardDataset
 from .utils import exist_and_not_none, zero_pad_sequences
 
 
-def preprocess_data(data, input_template, eos_token="</s>"):
+def preprocess_data(data, input_template=None, input_key=None, label_key=None):
     """
     Preprocess data from raw dataset to prompt, response, label
 
     Args:
         data: raw data from dataset
     """
-    no_template = False
-
-    # Dylan2048/ultrafeedback-unpaired-preferences
-    if exist_and_not_none(data, "score"):
-        prompt = data["instruction"]
-        response = data["response"]
-        label = data["score"]
+    # custom dataset
+    if input_key and label_key:
+        prompt = data[input_key]
+        response = ""
+        label = data[label_key]
     else:
-        raise ValueError("Unknown dataset")
+        # Dylan2048/ultrafeedback-unpaired-preferences
+        if exist_and_not_none(data, "score"):
+            prompt = data["instruction"]
+            response = data["response"]
+            label = data["score"]
+        else:
+            raise ValueError("Unknown dataset")
 
     # input template
-    if not no_template:
+    if input_template:
         prompt = input_template.format(prompt)
     return prompt, response, label
 
@@ -52,9 +56,11 @@ class UnpairedPreferenceDataset(Dataset):
         self.tokenizer = tokenizer
         self.strategy = strategy
         self.max_length = max_length
+        input_key = getattr(self.strategy.args, "input_key", None)
+        output_key = getattr(self.strategy.args, "output_key", None)
 
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
-            prompt, response, label = preprocess_data(data, input_template, self.tokenizer.eos_token)
+            prompt, response, label = preprocess_data(data, input_template, input_key, output_key)
             self.prompts.append(prompt)
             self.responses.append(response)
             self.labels.append(label)

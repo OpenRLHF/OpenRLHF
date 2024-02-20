@@ -289,6 +289,10 @@ if __name__ == "__main__":
     parser.add_argument("--max_samples", type=int, default=1000000)
     parser.add_argument("--seed", type=int, default=1234)
 
+    # custom dataset key name
+    parser.add_argument("--input_key", type=str, default=None)
+    parser.add_argument("--output_key", type=str, default=None)
+
     # for generation
     parser.add_argument("--ta_prompt", type=str, default=None)
     parser.add_argument("--prompt_max_len", type=int, default=1024)
@@ -300,16 +304,14 @@ if __name__ == "__main__":
     parser.add_argument("--best_of_n", type=int, default=1)
     parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
     parser.add_argument("--max_new_tokens", type=int, default=1024)
-    parser.add_argument("--tp_size", type=int, default=8)
     parser.add_argument(
         "--post_processor",
         type=str,
         default=None,
         help="set to rs (Rejection Sampling), ca (Conditional SFT) or None",
     )
-
-    # QLora
-    parser.add_argument("--load_in_4bit", action="store_true", default=False)
+    # for vllm
+    parser.add_argument("--tp_size", type=int, default=8)
 
     # for Iterative generation and Rejection Sampling
     parser.add_argument("--iter", type=int, default=None)

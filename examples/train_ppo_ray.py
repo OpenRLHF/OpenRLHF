@@ -252,6 +252,9 @@ if __name__ == "__main__":
     parser.add_argument("--pad_token", type=str, default=None)
     parser.add_argument("--unk_token", type=str, default=None)
 
+    # custom dataset key name
+    parser.add_argument("--input_key", type=str, default=None)
+
     # evaluation
     parser.add_argument("--eval_steps", type=int, default=-1)
     parser.add_argument("--save_steps", type=int, default=-1)
