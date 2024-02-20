@@ -60,11 +60,12 @@ class UnpairedPreferenceDataset(Dataset):
         self.tokenizer = tokenizer
         self.strategy = strategy
         self.max_length = max_length
-        input_key = getattr(self.strategy.args, "input_key", None)
+        prompt_key = getattr(self.strategy.args, "prompt_key", None)
+        output_key = getattr(self.strategy.args, "output_key", None)
         label_key = getattr(self.strategy.args, "label_key", None)
 
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
-            prompt, response, label = preprocess_data(data, input_template, input_key, label_key)
+            prompt, response, label = preprocess_data(data, input_template, prompt_key, output_key, label_key)
             self.prompts.append(prompt)
             self.responses.append(response)
             self.labels.append(label)
