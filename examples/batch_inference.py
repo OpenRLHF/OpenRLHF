@@ -87,7 +87,6 @@ def batch_generate(args):
         args.pretrain,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
-        load_in_4bit=args.load_in_4bit,
     )
     if args.to_bettertransformer:
         model.to_bettertransformer()
@@ -201,7 +200,6 @@ def batch_rm_inference(args):
         normalize_reward=True,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
-        load_in_4bit=args.load_in_4bit,
     )
 
     # configure tokenizer
