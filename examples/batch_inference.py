@@ -22,6 +22,7 @@ def batch_generate_vllm(args):
     dummy_strategy = Empty()
     dummy_strategy.print = print
     dummy_strategy.is_rank_0 = lambda: True
+    dummy_strategy.args = args
 
     # configure tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.pretrain, trust_remote_code=True)
