@@ -5,10 +5,14 @@ from tqdm import tqdm
 from .utils import exist_and_not_none, zero_pad_sequences
 
 
-def preprocess_data(data, input_template=None, chosen_key=None, rejected_key=None) -> str:
+def preprocess_data(data, input_template=None, prompt_key=None, chosen_key=None, rejected_key=None) -> str:
     # custom dataset
     if chosen_key and rejected_key:
-        prompt = ""
+        if prompt_key:
+            prompt = data[prompt_key]
+        else:
+            prompt = ""
+            input_template = None  # do not modified with input template again
         chosen = data[chosen_key]
         reject = data[rejected_key]
     else:
@@ -95,11 +99,14 @@ class RewardDataset(Dataset):
         self.strategy = strategy
         self.max_length = max_length
 
+        prompt_key = getattr(self.strategy.args, "prompt_key", None)
         chosen_key = getattr(self.strategy.args, "chosen_key", None)
         rejected_key = getattr(self.strategy.args, "rejected_key", None)
 
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
-            prompt, chosen, reject, margin = preprocess_data(data, input_template, chosen_key, rejected_key)
+            prompt, chosen, reject, margin = preprocess_data(
+                data, input_template, prompt_key, chosen_key, rejected_key
+            )
             self.prompts.append(prompt)
             self.chosens.append(chosen)
             self.rejects.append(reject)

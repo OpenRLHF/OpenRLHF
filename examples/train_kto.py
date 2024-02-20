@@ -227,10 +227,11 @@ if __name__ == "__main__":
 
     # custom dataset key name
     # pair-wise
+    parser.add_argument("--prompt_key", type=str, default=None)
     parser.add_argument("--chosen_key", type=str, default=None)
     parser.add_argument("--rejected_key", type=str, default=None)
     # unpair
-    parser.add_argument("--input_key", type=str, default=None)
+    parser.add_argument("--output_key", type=str, default=None)
     parser.add_argument("--label_key", type=str, default=None)
 
     # wandb pamameters

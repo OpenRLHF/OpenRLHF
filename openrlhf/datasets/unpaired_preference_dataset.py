@@ -9,7 +9,7 @@ from .reward_dataset import RewardDataset
 from .utils import exist_and_not_none, zero_pad_sequences
 
 
-def preprocess_data(data, input_template=None, input_key=None, label_key=None):
+def preprocess_data(data, input_template=None, prompt_key=None, output_key=None, label_key=None):
     """
     Preprocess data from raw dataset to prompt, response, label
 
@@ -17,9 +17,13 @@ def preprocess_data(data, input_template=None, input_key=None, label_key=None):
         data: raw data from dataset
     """
     # custom dataset
-    if input_key and label_key:
-        prompt = data[input_key]
-        response = ""
+    if output_key and label_key:
+        if prompt_key:
+            prompt = data[prompt_key]
+        else:
+            prompt = ""
+            input_template = None  # do not modified with input template again
+        response = data[output_key]
         label = data[label_key]
     else:
         # Dylan2048/ultrafeedback-unpaired-preferences
