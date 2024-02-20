@@ -163,8 +163,8 @@ class RewardDataset(Dataset):
             rejects_masks.append(rejects_mask)
             margins.append(margin)
 
-        chosen_ids = zero_pad_sequences(chosen_ids, value=self.tokenizer.pad_token_id)
-        chosen_masks = zero_pad_sequences(chosen_masks)
-        reject_ids = zero_pad_sequences(reject_ids, value=self.tokenizer.pad_token_id)
-        rejects_masks = zero_pad_sequences(rejects_masks)
+        chosen_ids = zero_pad_sequences(chosen_ids, "left", value=self.tokenizer.pad_token_id)
+        chosen_masks = zero_pad_sequences(chosen_masks, "left")
+        reject_ids = zero_pad_sequences(reject_ids, "left", value=self.tokenizer.pad_token_id)
+        rejects_masks = zero_pad_sequences(rejects_masks, "left")
         return chosen_ids, chosen_masks, reject_ids, rejects_masks, torch.tensor(margins, dtype=torch.float32)

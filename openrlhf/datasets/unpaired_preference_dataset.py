@@ -105,8 +105,8 @@ class UnpairedPreferenceDataset(Dataset):
             tot_masks.append(attention_mask)
             tot_labels.append(-1)
 
-        input_ids = zero_pad_sequences(tot_ids, value=self.tokenizer.pad_token_id)
-        attention_mask = zero_pad_sequences(tot_masks)
+        input_ids = zero_pad_sequences(tot_ids, "left", value=self.tokenizer.pad_token_id)
+        attention_mask = zero_pad_sequences(tot_masks, "left")
         return input_ids, attention_mask, torch.LongTensor(tot_labels)
 
 
@@ -176,8 +176,8 @@ class UnpairedRewardDataset(Dataset):
                 response_masks.append(attention_mask)
                 labels.append(-1)
 
-        response_ids = zero_pad_sequences(response_ids, value=self.tokenizer.pad_token_id)
-        response_masks = zero_pad_sequences(response_masks)
+        response_ids = zero_pad_sequences(response_ids, "right", value=self.tokenizer.pad_token_id)
+        response_masks = zero_pad_sequences(response_masks, "right")
         return response_ids, response_masks, torch.LongTensor(labels)
 
 

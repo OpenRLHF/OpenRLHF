@@ -92,7 +92,7 @@ def make_experience_batch(items: List[BufferItem]) -> Experience:
     )
     for key in keys:
         vals = [getattr(item, key) for item in items]
-        batch_data = zero_pad_sequences(vals, "left")
+        batch_data = zero_pad_sequences(vals, "right")
         kwargs[key] = batch_data
 
     kwargs["info"] = {}
