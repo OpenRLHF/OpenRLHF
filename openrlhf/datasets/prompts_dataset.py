@@ -3,52 +3,53 @@ from tqdm import tqdm
 from .utils import exist_and_not_none
 
 
-def preprocess_data(data, input_template, eos_token="</s>") -> str:
-    no_template = False
-
-    # Dahoas/full-hh-rlhf
-    if exist_and_not_none(data, "prompt"):
-        prompt = data["prompt"]
-        # tasksource/oasst1_pairwise_rlhf_reward
-        if prompt.startswith("prompter:"):
-            prompt = prompt.replace("prompter:", "\nHuman: ").replace("assistant:", "\nAssistant: ") + "\nAssistant: "
-        no_template = True  # do not modified with input template again
-    # Open-Orca/OpenOrca
-    elif exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
-        prompt = data["system_prompt"] + "\n" + data["question"]
-    # BelleGroup/train_0.5M_CN
-    # LLMs/Alpaca-ShareGPT
-    # yahma/alpaca-cleaned
-    # QingyiSi/Alpaca-CoT
-    elif exist_and_not_none(data, "instruction") and exist_and_not_none(data, "output"):
-        input = " " + data["input"] if exist_and_not_none(data, "input") else ""
-        prompt = data["instruction"] + input
-    # lmsys/chatbot_arena_conversations
-    elif exist_and_not_none(data, "winner") and exist_and_not_none(data, "conversation_a"):
-
-        def process_chatbot_arena_conversations(lll):
-            result = []
-            for l in lll:
-                if "user" in l["role"]:
-                    result.append(input_template.format(l["content"]))
-                else:
-                    result.append(l["content"])
-            return "\n".join(result)
-
-        prompt = data["conversation_a"][:-1]
-        prompt = process_chatbot_arena_conversations(prompt)
-        no_template = True  # do not modified with input template again
-    # openai/webgpt_comparisons
-    elif exist_and_not_none(data, "question") and exist_and_not_none(data, "answer_1"):
-        prompt = data["question"]["full_text"]
-    # for batch_inference.py
-    elif exist_and_not_none(data, "input"):
-        prompt = data["input"]
+def preprocess_data(data, input_template=None, input_key=None) -> str:
+    # custom dataset
+    if input_key:
+        prompt = data[input_key]
     else:
-        raise ValueError("Unknown prompts dataset")
+        # Dahoas/full-hh-rlhf
+        if exist_and_not_none(data, "prompt"):
+            prompt = data["prompt"]
+            # tasksource/oasst1_pairwise_rlhf_reward
+            if prompt.startswith("prompter:"):
+                prompt = (
+                    prompt.replace("prompter:", "\nHuman: ").replace("assistant:", "\nAssistant: ") + "\nAssistant: "
+                )
+            input_template = None  # do not modified with input template again
+        # Open-Orca/OpenOrca
+        elif exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
+            prompt = data["system_prompt"] + "\n" + data["question"]
+        # BelleGroup/train_0.5M_CN
+        # LLMs/Alpaca-ShareGPT
+        # yahma/alpaca-cleaned
+        # QingyiSi/Alpaca-CoT
+        elif exist_and_not_none(data, "instruction") and exist_and_not_none(data, "output"):
+            input = " " + data["input"] if exist_and_not_none(data, "input") else ""
+            prompt = data["instruction"] + input
+        # lmsys/chatbot_arena_conversations
+        elif exist_and_not_none(data, "winner") and exist_and_not_none(data, "conversation_a"):
+
+            def process_chatbot_arena_conversations(lll):
+                result = []
+                for l in lll:
+                    if "user" in l["role"]:
+                        result.append(input_template.format(l["content"]))
+                    else:
+                        result.append(l["content"])
+                return "\n".join(result)
+
+            prompt = data["conversation_a"][:-1]
+            prompt = process_chatbot_arena_conversations(prompt)
+            input_template = None  # do not modified with input template again
+        # openai/webgpt_comparisons
+        elif exist_and_not_none(data, "question") and exist_and_not_none(data, "answer_1"):
+            prompt = data["question"]["full_text"]
+        else:
+            raise ValueError("Unknown prompts dataset")
 
     # input template
-    if not no_template:
+    if input_template:
         prompt = input_template.format(prompt)
     return prompt
 
@@ -74,9 +75,11 @@ class PromptDataset(Dataset):
         self.strategy = strategy
         self.tokenizer = tokenizer
         self.input_template = input_template
+        input_key = getattr(self.strategy.args, "input_key", None)
+
         self.prompts = []
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
-            prompt = preprocess_data(data, input_template, self.tokenizer.eos_token)
+            prompt = preprocess_data(data, input_template, input_key)
             self.prompts.append(prompt)
 
     def __len__(self):

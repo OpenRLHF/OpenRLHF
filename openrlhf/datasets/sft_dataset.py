@@ -4,49 +4,54 @@ from tqdm import tqdm
 from .utils import exist_and_not_none, zero_pad_sequences
 
 
-def preprocess_data(data, input_template, no_template=False, eos_token="</s>"):
-    # Dahoas/full-hh-rlhf
-    # iamketan25/open-assistant-instructions
-    if exist_and_not_none(data, "prompt") and exist_and_not_none(data, "chosen"):
-        prompt = data["prompt"]
-        target = data["chosen"]
-        no_template = True  # do not modified with input template again
-    # pvduy/sharegpt_alpaca_oa_vicuna_format
-    elif exist_and_not_none(data, "prompt") and exist_and_not_none(data, "label"):
-        prompt = data["prompt"].replace("USER:", "").replace("ASSISTANT:", "")
-        target = data["label"].replace("</s>", "")
-    # BelleGroup/train_0.5M_CN
-    # LLMs/Alpaca-ShareGPT
-    # yahma/alpaca-cleaned
-    # QingyiSi/Alpaca-CoT
-    elif exist_and_not_none(data, "instruction") and exist_and_not_none(data, "output"):
-        input = " " + data["input"] if exist_and_not_none(data, "input") else ""
-        prompt = data["instruction"] + input
-        target = data["output"]
-    # Open-Orca/OpenOrca
-    elif exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
-        prompt = data["system_prompt"] + "\n" + data["question"]
-        target = data["response"]
-    # crumb/gpt4all-clean
-    # nomic-ai/gpt4all-j-prompt-generations
-    elif exist_and_not_none(data, "prompt") and exist_and_not_none(data, "response"):
-        prompt = data["prompt"]
-        target = data["response"]
-    # EleutherAI/pile [pretrain !!!]
-    elif exist_and_not_none(data, "text") and exist_and_not_none(data, "meta"):
-        assert no_template  # pretrain_mode
-        prompt = ""
-        target = data["text"]
-    # for batch_inference.py
-    elif exist_and_not_none(data, "input") and exist_and_not_none(data, "output"):
-        prompt = data["input"]
-        target = data["output"]
-        no_template = True
+def preprocess_data(data, input_template=None, input_key=None, output_key=None):
+    # custom dataset
+    if input_key and output_key:
+        prompt = data[input_key]
+        target = data[output_key]
     else:
-        raise ValueError("Unknown SFT dataset")
+        # Dahoas/full-hh-rlhf
+        # iamketan25/open-assistant-instructions
+        if exist_and_not_none(data, "prompt") and exist_and_not_none(data, "chosen"):
+            prompt = data["prompt"]
+            target = data["chosen"]
+            input_template = None  # do not modified with input template again
+        # pvduy/sharegpt_alpaca_oa_vicuna_format
+        elif exist_and_not_none(data, "prompt") and exist_and_not_none(data, "label"):
+            prompt = data["prompt"].replace("USER:", "").replace("ASSISTANT:", "")
+            target = data["label"].replace("</s>", "")
+        # BelleGroup/train_0.5M_CN
+        # LLMs/Alpaca-ShareGPT
+        # yahma/alpaca-cleaned
+        # QingyiSi/Alpaca-CoT
+        elif exist_and_not_none(data, "instruction") and exist_and_not_none(data, "output"):
+            input = " " + data["input"] if exist_and_not_none(data, "input") else ""
+            prompt = data["instruction"] + input
+            target = data["output"]
+        # Open-Orca/OpenOrca
+        elif exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
+            prompt = data["system_prompt"] + "\n" + data["question"]
+            target = data["response"]
+        # crumb/gpt4all-clean
+        # nomic-ai/gpt4all-j-prompt-generations
+        elif exist_and_not_none(data, "prompt") and exist_and_not_none(data, "response"):
+            prompt = data["prompt"]
+            target = data["response"]
+        # EleutherAI/pile [pretrain !!!]
+        elif exist_and_not_none(data, "text") and exist_and_not_none(data, "meta"):
+            assert input_template is None  # pretrain_mode
+            prompt = ""
+            target = data["text"]
+        # for batch_inference.py
+        elif exist_and_not_none(data, "input") and exist_and_not_none(data, "output"):
+            prompt = data["input"]
+            target = data["output"]
+            input_template = None
+        else:
+            raise ValueError("Unknown SFT dataset")
 
     # input template
-    if not no_template:
+    if input_template:
         prompt = input_template.format(prompt)
     return prompt, target
 
@@ -78,9 +83,11 @@ class SFTDataset(Dataset):
         self.strategy = strategy
         self.pretrain_mode = pretrain_mode
         self.max_length = max_length
+        input_key = getattr(self.strategy.args, "input_key", None)
+        output_key = getattr(self.strategy.args, "output_key", None)
 
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
-            prompt, target = preprocess_data(data, input_template, pretrain_mode, eos_token=self.tokenizer.eos_token)
+            prompt, target = preprocess_data(data, None if pretrain_mode else input_template, input_key, output_key)
 
             if not self.pretrain_mode:
                 prompt_token = self.tokenizer(

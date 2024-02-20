@@ -22,6 +22,7 @@ def batch_generate_vllm(args):
     dummy_strategy = Empty()
     dummy_strategy.print = print
     dummy_strategy.is_rank_0 = lambda: True
+    dummy_strategy.args = args
 
     # configure tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.pretrain, trust_remote_code=True)
@@ -87,7 +88,6 @@ def batch_generate(args):
         args.pretrain,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
-        load_in_4bit=args.load_in_4bit,
     )
     if args.to_bettertransformer:
         model.to_bettertransformer()
@@ -201,7 +201,6 @@ def batch_rm_inference(args):
         normalize_reward=True,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
-        load_in_4bit=args.load_in_4bit,
     )
 
     # configure tokenizer
@@ -289,6 +288,10 @@ if __name__ == "__main__":
     parser.add_argument("--max_samples", type=int, default=1000000)
     parser.add_argument("--seed", type=int, default=1234)
 
+    # custom dataset key name
+    parser.add_argument("--input_key", type=str, default=None)
+    parser.add_argument("--output_key", type=str, default=None)
+
     # for generation
     parser.add_argument("--ta_prompt", type=str, default=None)
     parser.add_argument("--prompt_max_len", type=int, default=1024)
@@ -300,16 +303,14 @@ if __name__ == "__main__":
     parser.add_argument("--best_of_n", type=int, default=1)
     parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
     parser.add_argument("--max_new_tokens", type=int, default=1024)
-    parser.add_argument("--tp_size", type=int, default=8)
     parser.add_argument(
         "--post_processor",
         type=str,
         default=None,
         help="set to rs (Rejection Sampling), ca (Conditional SFT) or None",
     )
-
-    # QLora
-    parser.add_argument("--load_in_4bit", action="store_true", default=False)
+    # for vllm
+    parser.add_argument("--tp_size", type=int, default=8)
 
     # for Iterative generation and Rejection Sampling
     parser.add_argument("--iter", type=int, default=None)

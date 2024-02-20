@@ -168,6 +168,11 @@ if __name__ == "__main__":
     parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
 
+    # custom dataset key name
+    parser.add_argument("--prompt_key", type=str, default=None)
+    parser.add_argument("--chosen_key", type=str, default=None)
+    parser.add_argument("--rejected_key", type=str, default=None)
+
     # wandb pamameters
     parser.add_argument("--use_wandb", type=str, default=None)
     parser.add_argument("--wandb_org", type=str, default=None)

@@ -9,25 +9,33 @@ from .reward_dataset import RewardDataset
 from .utils import exist_and_not_none, zero_pad_sequences
 
 
-def preprocess_data(data, input_template, eos_token="</s>"):
+def preprocess_data(data, input_template=None, prompt_key=None, output_key=None, label_key=None):
     """
     Preprocess data from raw dataset to prompt, response, label
 
     Args:
         data: raw data from dataset
     """
-    no_template = False
-
-    # Dylan2048/ultrafeedback-unpaired-preferences
-    if exist_and_not_none(data, "score"):
-        prompt = data["instruction"]
-        response = data["response"]
-        label = data["score"]
+    # custom dataset
+    if output_key and label_key:
+        if prompt_key:
+            prompt = data[prompt_key]
+        else:
+            prompt = ""
+            input_template = None  # do not modified with input template again
+        response = data[output_key]
+        label = data[label_key]
     else:
-        raise ValueError("Unknown dataset")
+        # Dylan2048/ultrafeedback-unpaired-preferences
+        if exist_and_not_none(data, "score"):
+            prompt = data["instruction"]
+            response = data["response"]
+            label = data["score"]
+        else:
+            raise ValueError("Unknown dataset")
 
     # input template
-    if not no_template:
+    if input_template:
         prompt = input_template.format(prompt)
     return prompt, response, label
 
@@ -52,9 +60,12 @@ class UnpairedPreferenceDataset(Dataset):
         self.tokenizer = tokenizer
         self.strategy = strategy
         self.max_length = max_length
+        prompt_key = getattr(self.strategy.args, "prompt_key", None)
+        output_key = getattr(self.strategy.args, "output_key", None)
+        label_key = getattr(self.strategy.args, "label_key", None)
 
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
-            prompt, response, label = preprocess_data(data, input_template, self.tokenizer.eos_token)
+            prompt, response, label = preprocess_data(data, input_template, prompt_key, output_key, label_key)
             self.prompts.append(prompt)
             self.responses.append(response)
             self.labels.append(label)
