@@ -105,8 +105,8 @@ class UnpairedPreferenceDataset(Dataset):
             tot_masks.append(attention_mask)
             tot_labels.append(-1)
 
-        input_ids = zero_pad_sequences(tot_ids, "left", value=self.tokenizer.pad_token_id)
-        attention_mask = zero_pad_sequences(tot_masks, "left")
+        input_ids = zero_pad_sequences(tot_ids, "right", value=self.tokenizer.pad_token_id)
+        attention_mask = zero_pad_sequences(tot_masks, "right")
         return input_ids, attention_mask, torch.LongTensor(tot_labels)
 
 
