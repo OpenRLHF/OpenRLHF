@@ -58,16 +58,16 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 - Allows saving and loading training checkpoints.
 - Support Hybrid vLLM inference engine.
 
-RLHF Support Matrix
+RLHF (PPO) Support Matrix
 
 
-|                | PPO Implementation Tricks | 34B Full Tuning with 4 A100 | 70B+ Full Tuning with 16 A100 | 7B Full Tuning with 4 RTX4090 | QLoRA | Mixtral 8*7b |
+|                | Implementation Tricks | 34B Full Tuning with 4 A100 | 70B+ Full Tuning with 16 A100 | 7B Full Tuning with 4 RTX4090 | QLoRA | Mixtral 8*7b |
 | -------------- | ------------------------- | --------------------------- | ----------------------------- | ----------------------------- | ----- | ------------ |
 | OpenRLHF       | ✔                         | ✔                           | ✔                             | ✔                             | ✔     | ✔            |
 | DeepSpeedChat  | ✖️                         | ✖️                           | ✖️                             | ✖️                             | ✖️     | ✖️            |
 | ColossalAIChat | ✖️                         | ✖️                           | ✖️                             | ✖️                             | ✖️     | ✖️            |
-| TRL            | ✖️                         | ✖️                           | ✖️                             | ✖️                             | ✔     | ✖️            |
-| LLaMA-Factory  | ✖️                         | ✖️                           | ✖️                             | ✖️                             | ✔     | ✔            |
+| TRL            | ✔                         | ✖️                           | ✖️                             | ✖️                             | ✔     | ✖️            |
+| LLaMA-Factory  | ✖️                         | ✖️                           | ✖️                             | ✖️                             | ✔     | ✔ (QLoRA)         |
 
 ## Performance
 
