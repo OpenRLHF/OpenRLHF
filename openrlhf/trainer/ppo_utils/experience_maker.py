@@ -26,9 +26,9 @@ class Experience:
     Shapes of each tensor:
     sequences: (B, S)
     action_log_probs: (B, A)
-    values: (B)
-    returns: (B)
-    advatanges: (B)
+    values: (B, A)
+    returns: (B, A)
+    advatanges: (B, A)
     attention_mask: (B, S)
     action_mask: (B, A)
 
