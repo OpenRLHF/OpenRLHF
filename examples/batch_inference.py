@@ -7,7 +7,6 @@ import torch
 from torch import distributed as dist
 from tqdm import tqdm
 from transformers import AutoTokenizer
-from vllm import LLM, SamplingParams
 
 from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.models import Actor, get_llm_for_sequence_regression
@@ -15,6 +14,8 @@ from openrlhf.utils import blending_datasets, get_processor, get_strategy, get_t
 
 
 def batch_generate_vllm(args):
+    from vllm import LLM, SamplingParams
+
     # configure strategy
     class Empty:
         pass

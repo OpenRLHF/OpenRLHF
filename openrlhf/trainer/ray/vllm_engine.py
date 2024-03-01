@@ -4,7 +4,6 @@ from typing import List
 import ray
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-from vllm import LLM
 
 
 @ray.remote
@@ -32,7 +31,7 @@ class LLMRayActor:
 
             vllm.engine.llm_engine.set_cuda_visible_devices = _set_cuda_visible_devices
 
-        self.llm = LLM(*args, **kwargs)
+        self.llm = vllm.LLM(*args, **kwargs)
 
     def generate(self, *args, **kwargs):
         return self.llm.generate(*args, **kwargs)
