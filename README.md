@@ -110,7 +110,10 @@ cd examples/scripts
 # install nvidia-docker (Optional)
 ./nvidia_docker_install.sh
 
-# launch nvidia container
+# build nvidia container with vLLM (Recommended)
+./docker_run.sh build
+
+# run nvidia container
 ./docker_run.sh
 
 # cd in container
@@ -121,9 +124,6 @@ cd /openrlhf/examples/scripts
 
 # huggingface login 
 ~/.local/bin/huggingface-cli login
-
-# continue pretrain
-./train_continue_pretrain_llama.sh
 
 # train SFT model
 ./train_sft_llama.sh
@@ -153,7 +153,10 @@ cd /openrlhf/examples/scripts
 ```shell
 cd examples/scripts
 
-# launch nvidia container
+# build nvidia container with vLLM (Important!!)
+./docker_run.sh build
+
+# run nvidia container
 ./docker_run.sh
 
 # cd in container
@@ -161,8 +164,6 @@ cd /openrlhf/examples/scripts
 
 # build OpenRLHF (i.e, pip install)
 ./build_openrlhf.sh
-# due to the compatibility of nVIDIA PyTorch image
-pip uninstall xgboost transformer_engine -y
 
 # huggingface login 
 ~/.local/bin/huggingface-cli login
@@ -172,15 +173,11 @@ ray start --head --node-ip-address 0.0.0.0 --num-gpus 8
 # if you want to launch ray on more nodes, use
 ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 
-
 # train ray PPO model, requires 8 gpus in default config
 ./train_ppo_llama_ray.sh
 
-# for 70B models and vLLM-based RLHF (important!)
-pip install vllm==0.3.2
-# due to the compatibility of vLLM
-pip uninstall flash_attn -y
-
+# for 70B models
+# launch ray PPO with vLLM
 ./train_ppo_llama_ray_70b.sh
 ```
 
