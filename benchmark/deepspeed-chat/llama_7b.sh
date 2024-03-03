@@ -5,8 +5,8 @@
 # DeepSpeed Team
 ACTOR_MODEL_PATH=meta-llama/Llama-2-7b-hf
 CRITIC_MODEL_PATH=meta-llama/Llama-2-7b-hf
-ACTOR_ZERO_STAGE=
-CRITIC_ZERO_STAGE=
+ACTOR_ZERO_STAGE=2
+CRITIC_ZERO_STAGE=3
 OUTPUT=
 if [ "$OUTPUT" == "" ]; then
     OUTPUT=./output_step3_llama
@@ -47,6 +47,7 @@ deepspeed --master_port 12346 main.py \
    --gradient_accumulation_steps 1 \
    --actor_gradient_checkpointing \
    --critic_gradient_checkpointing \
+   --offload_reference_model \
    --offload \
    --actor_dropout 0.0 \
    --num_warmup_steps 100 \
