@@ -102,8 +102,8 @@ Clone the repository:
 git clone https://github.com/openllmai/OpenRLHF.git
 ```
 
-* Single-node training with nvidia-docker
-
+* install nvidia-docker
+  
 ```shell
 cd examples/scripts
 
@@ -115,8 +115,12 @@ cd examples/scripts
 
 # run nvidia container
 ./docker_run.sh
+```
 
-# cd in container
+* Single-node training with nvidia-docker
+
+```shell
+# cd in nvidia container
 cd /openrlhf/examples/scripts
 
 # build OpenRLHF (i.e, pip install)
@@ -151,15 +155,7 @@ cd /openrlhf/examples/scripts
 > for > 13B models on V100/A100/H100.. or 7B models on RTX4090
 
 ```shell
-cd examples/scripts
-
-# build nvidia container with vLLM (Important!!)
-./docker_run.sh build
-
-# run nvidia container
-./docker_run.sh
-
-# cd in container
+# cd in nvidia container
 cd /openrlhf/examples/scripts
 
 # build OpenRLHF (i.e, pip install)
