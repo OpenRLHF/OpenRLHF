@@ -1,7 +1,7 @@
 # OpenRLHF Benchmark
 
 ## Setting
-We basically follow [deepspeed-chat's benchmark settings](https://github.com/microsoft/DeepSpeedExamples/blob/master/applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/BenckmarkSetting.md) with some differents
+We basically follow [deepspeed-chat's benchmark settings](https://github.com/microsoft/DeepSpeedExamples/blob/master/applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/BenckmarkSetting.md) with some differences
 - max_prompt_seq_len=1024 and max_answer_seq_len=1024
 - init reward model from actor model with same model size
 
