@@ -1,5 +1,6 @@
 set -x
 
+build=${1-""}
 PROJECT_PATH=$(cd $(dirname $0)/../../; pwd)
 IMAGE_NAME="nvcr.io/nvidia/pytorch:23.12-py3"
 
