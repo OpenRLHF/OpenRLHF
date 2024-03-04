@@ -129,7 +129,8 @@ class PPOTrainer(ABC):
             import wandb
 
             self._wandb = wandb
-            wandb.login(key=strategy.args.use_wandb)
+            if not wandb.api.api_key:
+                wandb.login(key=strategy.args.use_wandb)
             wandb.init(
                 entity=strategy.args.wandb_org,
                 project=strategy.args.wandb_project,
