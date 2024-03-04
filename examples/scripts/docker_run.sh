@@ -10,6 +10,5 @@ if [[ "${build}" == *"b"* ]]; then
 else 
 	docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
 		-v $PROJECT_PATH:/openrlhf -v  $HOME/.cache:/root/.cache -v  $HOME/.bash_history2:/root/.bash_history \
-		-v $HOME/.local:/root/.local -v $HOME/.triton:/root/.triton \
 		$IMAGE_NAME bash
 fi
