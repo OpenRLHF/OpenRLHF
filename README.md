@@ -300,4 +300,4 @@ Our project would also like to thank [ColossalChat](https://github.com/hpcaitech
 
 ______________________________________________________________________
 
-*OpenRLHF © 2023 OpenLLMAI. All Rights Reserved.*
+*OpenRLHF © 2024 OpenLLMAI. All Rights Reserved.*
