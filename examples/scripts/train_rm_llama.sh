@@ -19,7 +19,7 @@ read -r -d '' training_commands <<EOF
      --flash_attn \
      --gradient_checkpointing
 EOF
-     # --wandb [WANDB_TOKENS]
+     # --wandb [WANDB_TOKENS] or True (use wandb login command)
 
 
 if [[ ${1} != "slurm" ]]; then

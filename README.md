@@ -104,7 +104,7 @@ git clone https://github.com/openllmai/OpenRLHF.git
 
 * install nvidia-docker
   
-```shell
+```bash
 cd examples/scripts
 
 # install nvidia-docker (Optional)
@@ -127,7 +127,10 @@ cd /openrlhf/examples/scripts
 ./build_openrlhf.sh
 
 # huggingface login 
-~/.local/bin/huggingface-cli login
+huggingface-cli login
+
+# wandb login (Optional, also set --wandb True in script)
+wandb.login()
 
 # train SFT model
 ./train_sft_llama.sh
@@ -154,7 +157,7 @@ cd /openrlhf/examples/scripts
 * PPO training with Ray
 > for > 13B models on V100/A100/H100.. or 7B models on RTX4090
 
-```shell
+```bash
 # cd in nvidia container
 cd /openrlhf/examples/scripts
 
@@ -162,7 +165,10 @@ cd /openrlhf/examples/scripts
 ./build_openrlhf.sh
 
 # huggingface login 
-~/.local/bin/huggingface-cli login
+huggingface-cli login
+
+# wandb login (Optional, also set --wandb True in script)
+wandb.login()
 
 # launch the master node of ray in container
 ray start --head --node-ip-address 0.0.0.0 --num-gpus 8
@@ -179,7 +185,7 @@ ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 
 * Multi-nodes training on Slurm
 
-```shell
+```bash
 cd examples/scripts
 
 # huggingface login on Slurm 
@@ -210,13 +216,13 @@ sbatch ./train_ppo_llama_ray_slurm.sh
 
 After completing the training, you can evaluate your model by using the `inference` script:
 
-```shell
-# interactive_chat
-./interactive_chat_llama.sh { pretrain_model_path }
-
+```bash
 # batch generate
 # support vLLM acceleration (--eval_task generate_vllm)
 python examples/batch_inference.py {args}
+
+# interactive_chat
+./interactive_chat_llama.sh { pretrain_model_path }
 ```
 
 * build openrlhf from conda envs 

@@ -21,7 +21,7 @@ read -r -d '' training_commands <<EOF
      --gradient_checkpointing \
      --vanilla_loss
 EOF
-     # --wandb [WANDB_TOKENS]
+     # --wandb [WANDB_TOKENS] or True (use wandb login command)
      # --vanilla_loss [for same num +/- samples in KTO batch]
 
 # support unpaired-preference dataset, like the following:

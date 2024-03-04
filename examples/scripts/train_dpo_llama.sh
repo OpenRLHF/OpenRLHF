@@ -21,7 +21,7 @@ read -r -d '' training_commands <<EOF
      --gradient_checkpointing \
      --ref_offload
 EOF
-     # --wandb [WANDB_TOKENS]
+     # --wandb [WANDB_TOKENS] or True (use wandb login command)
      # --ipo [for IPO]
      # --label_smoothing 0.1 [for cDPO]
 
