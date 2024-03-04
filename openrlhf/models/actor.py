@@ -5,16 +5,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from optimum.bettertransformer import BetterTransformer
-from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
+from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedModel
 from transformers.deepspeed import HfDeepSpeedConfig
 from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
 
-from .utils import find_all_linear_names, log_probs_from_logits, replace_rope_embedding
-
-# https://github.com/microsoft/DeepSpeed/issues/4932
-replace_rope_embedding()
+from .utils import find_all_linear_names, log_probs_from_logits
 
 
 class Actor(nn.Module):

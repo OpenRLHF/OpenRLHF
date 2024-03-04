@@ -3,7 +3,7 @@ from typing import Optional
 import deepspeed
 import torch
 import torch.nn as nn
-from peft import LoraConfig, TaskType, get_peft_config, get_peft_model
+from peft import LoraConfig, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
 from transformers.deepspeed import HfDeepSpeedConfig
@@ -12,10 +12,7 @@ from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
 
 from openrlhf.utils.logging import init_logger
 
-from .utils import find_all_linear_names, log_probs_from_logits, replace_rope_embedding
-
-# https://github.com/microsoft/DeepSpeed/issues/4932
-replace_rope_embedding()
+from .utils import find_all_linear_names
 
 logger = init_logger(__name__)
 
