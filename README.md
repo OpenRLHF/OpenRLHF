@@ -160,7 +160,7 @@ wandb.login()
 ./train_conditional_llama.sh
 
 # Continue Pre-training
-./train_continue_pretrain.sh
+./train_continue_pretrain_llama.sh
 ```
 
 * **PPO training with Ray**
