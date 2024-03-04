@@ -107,7 +107,7 @@ samples/gpu/secs = Number of PPO Samples / Number of A100 GPUs / Seconds
 git clone https://github.com/openllmai/OpenRLHF.git
 ```
 
-* **install nvidia-docker and OpenRLHF**
+**install nvidia-docker and OpenRLHF**
   
 ```bash
 cd examples/scripts
@@ -135,7 +135,7 @@ wandb.login()
 
 ```
 
-* **Single-node training**
+**Single-node training**
 
 ```shell
 # Supervised Finetuning
@@ -153,7 +153,7 @@ wandb.login()
 # KTO
 ./train_kto_llama.sh
 
-# Rejection Sampling
+# Rejection Sampling with vLLM
 ./train_rejection_sampling_llama.sh
 
 # Conditional SFT
@@ -163,7 +163,7 @@ wandb.login()
 ./train_continue_pretrain_llama.sh
 ```
 
-* **PPO training with Ray**
+**PPO training with Ray**
 > [!TIP]
 > for > 13B models on V100/A100/H100.. or 7B models on RTX4090
 
@@ -181,7 +181,7 @@ ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 ./train_ppo_llama_ray_70b.sh
 ```
 
-* **Multi-nodes training on Slurm**
+**Multi-nodes training on Slurm**
 
 ```bash
 cd examples/scripts
@@ -207,7 +207,7 @@ sbatch ./train_llama_slurm.sh
 sbatch ./train_ppo_llama_ray_slurm.sh
 ```
 
-* **Inference and Evaluation**
+**Inference and Evaluation**
 
 After completing the training, you can evaluate your model by using the `inference` script:
 
@@ -220,7 +220,7 @@ python examples/batch_inference.py {args}
 ./interactive_chat_llama.sh { pretrain_model_path }
 ```
 
-* **build openrlhf from conda envs**
+**build openrlhf from conda envs**
 
 If you really don't want to use nvidia-docker, we also provide tutorials for building openrlhf from a conda environment. (We prefer nvidia-docker to avoid errors caused by the environment.)
 ```shell
