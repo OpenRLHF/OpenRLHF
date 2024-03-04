@@ -21,6 +21,8 @@ read -r -d '' training_commands <<EOF
     --pretrain_mode
 EOF
 
+     # --wandb [WANDB_TOKENS] or True (use wandb login command)
+
 if [[ ${1} != "slurm" ]]; then
     deepspeed $training_commands
 fi

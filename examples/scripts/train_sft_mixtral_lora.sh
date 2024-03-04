@@ -1,8 +1,5 @@
 set -x
 
-# MoE requires deepspeed >= 0.12.7
-# pip install git+https://github.com/microsoft/DeepSpeed.git
-
 read -r -d '' training_commands <<EOF
 ../train_sft.py \
     --max_len 2048 \

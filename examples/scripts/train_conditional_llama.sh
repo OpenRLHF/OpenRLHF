@@ -32,8 +32,7 @@ read -r -d '' sft_commands <<EOF
     --max_epochs 1 \
     --bf16 \
     --learning_rate 5e-6 \
-    --gradient_checkpointing \
-    --save_hf_model
+    --gradient_checkpointing
 EOF
 
 
