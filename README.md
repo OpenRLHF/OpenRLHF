@@ -30,9 +30,9 @@
 
 OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Transformers:
 
-- **Simple and easy to use**: OpenRLHF is one of the simplest high-performance RLHF libraries currently available, compatibility with huggingface models and datasets.
+- **Simple and easy to use**: OpenRLHF is one of the simplest high-performance RLHF libraries currently available, and compatible with Huggingface models and datasets.
 - **High performance**: RLHF training spends 80% of the time on the sample generation stage. Thanks to the ability to use a large inference batch size with Ray and Adam Offload (Pinned Memory), the performance of OpenRLHF with the 13B LLaMA2 model is 4x that of DeepSpeedChat. We also support vLLM generation acceleration to further improve the generation performance.
-- **Distributed RLHF**: The key idea behind OpenRLHF is to distribute the Actor, Reward, Reference, and Critic models onto separate GPUs using Ray, while placing the Adam optimizer on the CPU. This enables full-scale fine-tuning of 70B+ models with multiple A100 80G GPUs and vLLM (see [architecture](./docs/ray_architecture.png)) and 7B models across multiple 24GB RTX 4090 GPUs.
+- **Distributed RLHF**:  OpenRLHF distribute the Actor, Reward, Reference, and Critic models onto separate GPUs using Ray, while placing the Adam optimizer on the CPU. This enables full-scale fine-tuning of 70B+ models with multiple A100 80G GPUs and vLLM (see [architecture](./docs/ray_architecture.png)) and 7B models across multiple 24GB RTX 4090 GPUs.
 - **PPO Implementation Tricks**: We integrated the implementation tricks for PPO to improve the training stability, referencing https://arxiv.org/abs/2005.12729 and https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/.
 
 
@@ -58,41 +58,41 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 
 **RLHF (PPO) Support Matrix**
 
+| Feature | OpenRLHF | DSChat | CAIChat | TRL | NeMo-Aligner |
+| ------------- |:-------------:| :-------------:| :-------------:| :-------------:| :-------------:|
+| 70B+ Full Tuning with 16 A100      | ✅ | ❌ | ❌ | ❌ | ✅ (32+ A100s) |
+| 7B Full Tuning with 4 RTX4090 | ✅      |    ❌ | ❌ | ❌ | ❌ |
+| 34B DPO Full Tuning with 8 A100 | ✅      |    ❌ | ❌ | ❌ | ❌ |  
+| PPO Implementation Tricks | ✅      |    ❌ | ❌ | ✅ | ✅ |
+| Support QLoRA | ✅      |    ❌ | ❌ | ✅ | ❌ |
+| Support Mixtral 8*7b | ✅      |    ❌ | ❌ | ❌ | ❌ |  
+| Support Unmerged Actor-Critic | ✅     |   ✅ | ✅ | ❌ | ✅ |
+| Support Multiple Reward Models | ✅      |    ❌ | ❌ | ❌ | ❌ |   
+| Support Huggingface Models | ✅      |    ✅ | ✅ | ✅ | ❌ (need to convert) |
+| Easy-to-use | ✅      |   ✅ | ✅ | ✅ | ❌ |
 
-|                | Implementation Tricks | 34B Full Tuning with 4 A100 | 70B+ Full Tuning with 16 A100 | 7B Full Tuning with 4 RTX4090 | QLoRA | Mixtral 8*7b |
-| -------------- | ------------------------- | --------------------------- | ----------------------------- | ----------------------------- | ----- | ------------ |
-| OpenRLHF       | ✔                         | ✔                           | ✔                             | ✔                             | ✔     | ✔            |
-| DeepSpeedChat  | ✖️                         | ✖️                           | ✖️                             | ✖️                             | ✖️     | ✖️            |
-| ColossalAIChat | ✖️                         | ✖️                           | ✖️                             | ✖️                             | ✖️     | ✖️            |
-| TRL            | ✔                         | ✖️                           | ✖️                             | ✖️                             | ✔     | ✖️            |
-| LLaMA-Factory  | ✖️                         | ✖️                           | ✖️                             | ✖️                             | ✔     | ✔ (QLoRA)         |
 
 ## Performance
 
-|        | 7B llama2 RLHF | 13B llama2 RLHF (50k samples) | 
+|        | 7B llama2 PPO | 13B llama2 PPO (50k samples) | 
 |  ----  | ----  |  ----  |
 | OpenRLHF  | - | 17 hours with 8 A100  | 
 | DeepSpeedChat  | - | 48 hours with 16 A100  |
 
-**Configuration** 
-
-Common
+**Common Configuration** 
 
 - Ray: 4 A100 80G for Actor, 2 A100 80G for Critic, 1 A100 80G for RM, and 1 A100 80G for InitPolicy
 - DeepSpeed: ZeRO2 with Adam Offload
 - Max Sequence Length: 2048 
 
-For 7B to 34B Models
-
-- 7B llama2: micro_batch_size = 16/8 (rollout/train)
-- 13B llama2: micro_batch_size = 8/4 (rollout/train)
-- 34B codellama: micro_batch_size = 2/1 (rollout/train)
 
 **Throughput**
 
-- 7B llama2: 0.136 samples/gpu/secs, generation_length = 100~300
-- 13B llama2: 0.05 samples/gpu/secs, generation_length = 200~400
-- 34B codellama: 0.009 samples/gpu/secs, generation_length = 300~800
+| Model | Micro Batch Size (rollout/train) | Throughput | Generation Length |
+|-|-|-|-|  
+| 7B llama2 | 16/8 | 0.136 samples/gpu/sec | 100-300 |
+| 13B llama2 | 8/4 | 0.05 samples/gpu/sec | 200-400 |
+| 34B codellama | 2/1 | 0.009 samples/gpu/sec | 300-800 |
 
 samples/gpu/secs = Number of PPO Samples / Number of A100 GPUs / Seconds
 
