@@ -56,7 +56,7 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 - Allows saving and loading training checkpoints.
 - Support Hybrid vLLM inference engine.
 
-RLHF (PPO) Support Matrix
+**RLHF (PPO) Support Matrix**
 
 
 |                | Implementation Tricks | 34B Full Tuning with 4 A100 | 70B+ Full Tuning with 16 A100 | 7B Full Tuning with 4 RTX4090 | QLoRA | Mixtral 8*7b |
@@ -88,7 +88,7 @@ For 7B to 34B Models
 - 13B llama2: micro_batch_size = 8/4 (rollout/train)
 - 34B codellama: micro_batch_size = 2/1 (rollout/train)
 
-**Throughput:**
+**Throughput**
 
 - 7B llama2: 0.136 samples/gpu/secs, generation_length = 100~300
 - 13B llama2: 0.05 samples/gpu/secs, generation_length = 200~400
