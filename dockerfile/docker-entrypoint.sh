@@ -14,6 +14,8 @@ if [[ "${USER}" != "root" ]]; then
 
     export HOME=/home/${USER}
     export PATH=/home/${USER}/.local/bin/:$PATH
+else
+    export PATH=/root/.local/bin/:$PATH
 fi
 
 cd $HOME
