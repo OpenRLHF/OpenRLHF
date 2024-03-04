@@ -56,7 +56,7 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 - Allows saving and loading training checkpoints.
 - Support Hybrid vLLM inference engine.
 
-**RLHF (PPO) Support Matrix**
+**PPO Support Matrix**
 
 | Feature | OpenRLHF | DSChat | CAIChat | TRL | NeMo-Aligner |
 | ------------- |:-------------:| :-------------:| :-------------:| :-------------:| :-------------:|
@@ -73,12 +73,6 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 
 
 ## Performance
-
-|        | 7B llama2 PPO | 13B llama2 PPO (50k samples) | 
-|  ----  | ----  |  ----  |
-| OpenRLHF  | - | 17 hours with 8 A100  | 
-| DeepSpeedChat  | - | 48 hours with 16 A100  |
-
 **Common Configuration** 
 
 - Ray: 4 A100 80G for Actor, 2 A100 80G for Critic, 1 A100 80G for RM, and 1 A100 80G for InitPolicy
@@ -96,16 +90,24 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 
 samples/gpu/secs = Number of PPO Samples / Number of A100 GPUs / Seconds
 
+**OpenRLHF vs DSChat**
+
+|        | 7B llama2 PPO | 13B llama2 PPO (50k samples) | 
+|  ----  | ----  |  ----  |
+| OpenRLHF  | - | 17 hours with 8 A100  | 
+| DeepSpeedChat  | - | 48 hours with 16 A100  |
+
+
 ## Running Example
 
 You can build openrlhf from **nvidia-docker(recommended)** or from conda envs.
 
 ```shell
-Clone the repository: 
+# Clone the repository: 
 git clone https://github.com/openllmai/OpenRLHF.git
 ```
 
-* install nvidia-docker and OpenRLHF
+* **install nvidia-docker and OpenRLHF**
   
 ```bash
 cd examples/scripts
@@ -161,7 +163,8 @@ wandb.login()
 ./train_continue_pretrain.sh
 ```
 
-* PPO training with Ray
+* **PPO training with Ray**
+> [!TIP]
 > for > 13B models on V100/A100/H100.. or 7B models on RTX4090
 
 ```bash
@@ -204,7 +207,7 @@ sbatch ./train_llama_slurm.sh
 sbatch ./train_ppo_llama_ray_slurm.sh
 ```
 
-* Inference and Evaluation
+* **Inference and Evaluation**
 
 After completing the training, you can evaluate your model by using the `inference` script:
 
@@ -217,7 +220,7 @@ python examples/batch_inference.py {args}
 ./interactive_chat_llama.sh { pretrain_model_path }
 ```
 
-* build openrlhf from conda envs 
+* **build openrlhf from conda envs**
 
 If you really don't want to use nvidia-docker, we also provide tutorials for building openrlhf from a conda environment. (We prefer nvidia-docker to avoid errors caused by the environment.)
 ```shell
