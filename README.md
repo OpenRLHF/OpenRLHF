@@ -99,8 +99,8 @@ samples/gpu/secs = Number of PPO Samples / Number of A100 GPUs / Seconds
 
 
 ## Running Example
-
-You can build openrlhf from **nvidia-docker(recommended)** or from conda envs.
+> [!IMPORTANT]
+> You can build openrlhf from **nvidia-docker(recommended)** or from conda envs.
 
 ```shell
 # Clone the repository: 
@@ -135,7 +135,7 @@ wandb.login()
 
 ```
 
-* Single-node training
+* **Single-node training**
 
 ```shell
 # Supervised Finetuning
@@ -181,7 +181,7 @@ ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 ./train_ppo_llama_ray_70b.sh
 ```
 
-* Multi-nodes training on Slurm
+* **Multi-nodes training on Slurm**
 
 ```bash
 cd examples/scripts
