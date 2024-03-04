@@ -27,6 +27,5 @@ read -r -d '' training_commands <<EOF
 EOF
 
 if [[ ${1} != "slurm" ]]; then
-    export PATH=$HOME/.local/bin/:$PATH
     deepspeed $training_commands
 fi
