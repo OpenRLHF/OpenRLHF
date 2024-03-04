@@ -30,9 +30,9 @@
 
 OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Transformers:
 
-- **Simple and easy to use**: OpenRLHF is one of the simplest high-performance RLHF libraries currently available, enabling 34B model RLHF training with just a single DGXA100 node (see the training [script](./examples/scripts/train_ppo_llama_ray_34b.sh)).
-- **Distributed RLHF**: The key idea behind OpenRLHF is to distribute the Actor, Reward, Reference, and Critic models onto separate GPUs using Ray, while placing the Adam optimizer on the CPU. This enables full-scale fine-tuning of 7B models across multiple 24GB RTX 4090 GPUs (or 70B+ models with multiple A100 80G GPUs and vLLM, see [architecture](./docs/ray_architecture.png)).
+- **Simple and easy to use**: OpenRLHF is one of the simplest high-performance RLHF libraries currently available, compatibility with huggingface models and datasets.
 - **High performance**: RLHF training spends 80% of the time on the sample generation stage. Thanks to the ability to use a large inference batch size with Ray and Adam Offload (Pinned Memory), the performance of OpenRLHF with the 13B LLaMA2 model is 4x that of DeepSpeedChat. We also support vLLM generation acceleration to further improve the generation performance.
+- **Distributed RLHF**: The key idea behind OpenRLHF is to distribute the Actor, Reward, Reference, and Critic models onto separate GPUs using Ray, while placing the Adam optimizer on the CPU. This enables full-scale fine-tuning of 70B+ models with multiple A100 80G GPUs and vLLM (see [architecture](./docs/ray_architecture.png)) and 7B models across multiple 24GB RTX 4090 GPUs.
 - **PPO Implementation Tricks**: We integrated the implementation tricks for PPO to improve the training stability, referencing https://arxiv.org/abs/2005.12729 and https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/.
 
 
@@ -51,8 +51,6 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 - Support FlashAttention2 (--flash_attn).
 - Support QLoRA (--load_in_4bit), LoRA (--lora_rank, --target_modules).
 - Multi-nodes [training scripts](./examples/scripts/train_llama_slurm.sh) for Slurm.
-- Pre-trained LLaMA2 [checkpoints](https://huggingface.co/OpenLLMAI)
-
 
 **TODO** 
 - Allows saving and loading training checkpoints.
@@ -76,22 +74,27 @@ RLHF (PPO) Support Matrix
 | OpenRLHF  | - | 17 hours with 8 A100  | 
 | DeepSpeedChat  | - | 48 hours with 16 A100  |
 
-**Configs for Ray and DeepSpeed:** 
+**Configuration** 
 
-- 4 A100 80G for Actor, 2 A100 80G for Critic, 1 A100 80G for RM, and 1 A100 80G for InitPolicy
-- ZeRO2 with Adam Offload
+Common
+
+- Ray: 4 A100 80G for Actor, 2 A100 80G for Critic, 1 A100 80G for RM, and 1 A100 80G for InitPolicy
+- DeepSpeed: ZeRO2 with Adam Offload
 - Max Sequence Length: 2048 
+
+For 7B to 34B Models
+
+- 7B llama2: micro_batch_size = 16/8 (rollout/train)
+- 13B llama2: micro_batch_size = 8/4 (rollout/train)
+- 34B codellama: micro_batch_size = 2/1 (rollout/train)
 
 **Throughput:**
 
-- 7B llama2: 0.136 samples/gpu/secs
-  - micro_batch_size = 16/8 (rollout/train), generation_length = 100~300
-- 13B llama2: 0.05 samples/gpu/secs
-  - micro_batch_size = 8/4 (rollout/train), generation_length = 200~400
-- 34B codellama: 0.009 samples/gpu/secs
-  - micro_batch_size = 2/1 (rollout/train), generation_length = 300~800
+- 7B llama2: 0.136 samples/gpu/secs, generation_length = 100~300
+- 13B llama2: 0.05 samples/gpu/secs, generation_length = 200~400
+- 34B codellama: 0.009 samples/gpu/secs, generation_length = 300~800
 
-samples/gpu/secs = Number of PPO Samples / Number of A100 GPUS / Seconds
+samples/gpu/secs = Number of PPO Samples / Number of A100 GPUs / Seconds
 
 ## Running Example
 
@@ -102,7 +105,7 @@ Clone the repository:
 git clone https://github.com/openllmai/OpenRLHF.git
 ```
 
-* install nvidia-docker
+* install nvidia-docker and OpenRLHF
   
 ```bash
 cd examples/scripts
@@ -115,11 +118,7 @@ cd examples/scripts
 
 # run nvidia container
 ./docker_run.sh
-```
 
-* Single-node training with nvidia-docker
-
-```shell
 # cd in nvidia container
 cd /openrlhf/examples/scripts
 
@@ -132,54 +131,50 @@ huggingface-cli login
 # wandb login (Optional, also set --wandb True in script)
 wandb.login()
 
-# train SFT model
+```
+
+* Single-node training
+
+```shell
+# Supervised Finetuning
 ./train_sft_llama.sh
 
-# train RM model
+# Reward Model Tuning
 ./train_rm_llama.sh
 
-# train PPO model
+# PPO Training
 ./train_ppo_llama.sh
 
-# train DPO model
+# DPO
 ./train_dpo_llama.sh
 
-# train KTO model
+# KTO
 ./train_kto_llama.sh
 
-# train Rejection Sampling model
+# Rejection Sampling
 ./train_rejection_sampling_llama.sh
 
-# train Conditional SFT model
+# Conditional SFT
 ./train_conditional_llama.sh
+
+# Continue Pre-training
+./train_continue_pretrain.sh
 ```
 
 * PPO training with Ray
 > for > 13B models on V100/A100/H100.. or 7B models on RTX4090
 
 ```bash
-# cd in nvidia container
-cd /openrlhf/examples/scripts
-
-# build OpenRLHF (i.e, pip install)
-./build_openrlhf.sh
-
-# huggingface login 
-huggingface-cli login
-
-# wandb login (Optional, also set --wandb True in script)
-wandb.login()
-
 # launch the master node of ray in container
 ray start --head --node-ip-address 0.0.0.0 --num-gpus 8
 # if you want to launch ray on more nodes, use
 ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 
-# train ray PPO model, requires 8 gpus in default config
+# Ray PPO training, requires 8 GPUs in default config
 ./train_ppo_llama_ray.sh
 
 # for 70B models
-# launch ray PPO with vLLM
+# Launch Ray PPO with vLLM, requires 16 A100s in default config
 ./train_ppo_llama_ray_70b.sh
 ```
 
@@ -188,18 +183,15 @@ ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 ```bash
 cd examples/scripts
 
-# huggingface login on Slurm 
-pip install transformers
-huggingface-cli login
-
 # Moidfy the Slurm Account/Nodes ... in `train_llama_slurm.sh`
 
-# For SFT, RM, and PPO and DPO training:
+# For SFT, RM, PPO, DPO, KTO training:
 # Modify the variable `training_script` in `train_llama_slurm.sh` to
 readonly training_script="train_sft_llama.sh"
 readonly training_script="train_rm_llama.sh"
 readonly training_script="train_ppo_llama.sh"
 readonly training_script="train_dpo_llama.sh"
+readonly training_script="train_kto_llama.sh"
 
 # set `GPUS_PER_NODE` in `train_llama_slurm.sh`
 readonly GPUS_PER_NODE=8
