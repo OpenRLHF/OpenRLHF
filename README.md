@@ -165,7 +165,7 @@ wandb.login()
 
 **PPO training with Ray**
 > [!TIP]
-> for > 13B models on V100/A100/H100.. or 7B models on RTX4090
+> for >= 13B models on V100/A100/H100.. or 7B models on RTX4090
 
 ```bash
 # launch the master node of ray in container
