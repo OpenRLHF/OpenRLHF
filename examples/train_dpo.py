@@ -67,8 +67,12 @@ def train(args):
     )
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
     eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
-    train_dataset = RewardDataset(train_data, tokenizer, args.max_len, strategy, input_template=args.input_template)
-    eval_dataset = RewardDataset(eval_data, tokenizer, args.max_len, strategy, input_template=args.input_template)
+    train_dataset = RewardDataset(
+        train_data, tokenizer, args.max_len, strategy, input_template=args.input_template, is_dpo=True
+    )
+    eval_dataset = RewardDataset(
+        eval_data, tokenizer, args.max_len, strategy, input_template=args.input_template, is_dpo=True
+    )
 
     train_dataloader = strategy.setup_dataloader(
         train_dataset,
