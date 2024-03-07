@@ -115,7 +115,7 @@ class RewardModelTrainer(ABC):
                 r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
 
                 if self.margin_loss:
-                    margin = margin.to(torch.cuda.current_device())
+                    margin = torch.tensor(margin).to(torch.cuda.current_device())
                 else:
                     margin = None
 
