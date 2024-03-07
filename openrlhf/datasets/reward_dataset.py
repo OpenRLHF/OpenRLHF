@@ -89,15 +89,23 @@ class RewardDataset(Dataset):
         max_length: int,
         strategy,
         input_template="Human: {}\nAssistant: ",
+        is_dpo=False,
     ) -> None:
         super().__init__()
+        self.is_dpo = is_dpo
+
         self.prompts = []
         self.chosens = []
         self.rejects = []
-        self.margins = []
+        if self.is_dpo:
+            self.prompt_ids_lens = []
+        else:
+            self.margins = []
+
         self.tokenizer = tokenizer
         self.strategy = strategy
         self.max_length = max_length
+        self.is_dpo = is_dpo
 
         prompt_key = getattr(self.strategy.args, "prompt_key", None)
         chosen_key = getattr(self.strategy.args, "chosen_key", None)
@@ -107,17 +115,39 @@ class RewardDataset(Dataset):
             prompt, chosen, reject, margin = preprocess_data(
                 data, input_template, prompt_key, chosen_key, rejected_key
             )
+
+            # prompt_ids_len for prompt mask
+            if self.is_dpo:
+                prompt_token = self.tokenizer(
+                    prompt,
+                    max_length=self.max_length,
+                    padding=False,
+                    truncation=True,
+                    return_tensors="pt",
+                )
+                prompt_ids_len = prompt_token["attention_mask"].sum().item()
+                # filter the sample whose length is greater than max_length (2 for answer length)
+                if prompt_ids_len >= self.max_length - 2:
+                    continue
+                else:
+                    self.prompt_ids_lens.append(prompt_ids_len)
+            else:
+                self.margins.append(margin)
+
             self.prompts.append(prompt)
             self.chosens.append(chosen)
             self.rejects.append(reject)
-            self.margins.append(margin)
 
     def __len__(self):
         length = len(self.chosens)
         return length
 
     def __getitem__(self, idx):
-        prompt, chosen, reject, margin = self.prompts[idx], self.chosens[idx], self.rejects[idx], self.margins[idx]
+        prompt, chosen, reject = self.prompts[idx], self.chosens[idx], self.rejects[idx]
+        if self.is_dpo:
+            extra = self.prompt_ids_lens[idx]
+        else:
+            extra = self.margins[idx]
 
         chosen = prompt + chosen + " " + self.tokenizer.eos_token
         chosen_token = self.tokenizer(
@@ -142,12 +172,13 @@ class RewardDataset(Dataset):
         reject_token["input_ids"][0][-1] = self.tokenizer.eos_token_id
         chosen_token["attention_mask"][0][-1] = True
         reject_token["attention_mask"][0][-1] = True
+
         return (
             chosen_token["input_ids"],
             chosen_token["attention_mask"],
             reject_token["input_ids"],
             reject_token["attention_mask"],
-            margin,
+            extra,
         )
 
     def collate_fn(self, item_list):
@@ -155,16 +186,16 @@ class RewardDataset(Dataset):
         chosen_masks = []
         reject_ids = []
         rejects_masks = []
-        margins = []
-        for chosen_id, chosen_mask, reject_id, rejects_mask, margin in item_list:
+        extras = []
+        for chosen_id, chosen_mask, reject_id, rejects_mask, extra in item_list:
             chosen_ids.append(chosen_id)
             chosen_masks.append(chosen_mask)
             reject_ids.append(reject_id)
             rejects_masks.append(rejects_mask)
-            margins.append(margin)
+            extras.append(extra)
 
         chosen_ids = zero_pad_sequences(chosen_ids, value=self.tokenizer.pad_token_id)
         chosen_masks = zero_pad_sequences(chosen_masks)
         reject_ids = zero_pad_sequences(reject_ids, value=self.tokenizer.pad_token_id)
         rejects_masks = zero_pad_sequences(rejects_masks)
-        return chosen_ids, chosen_masks, reject_ids, rejects_masks, torch.tensor(margins, dtype=torch.float32)
+        return chosen_ids, chosen_masks, reject_ids, rejects_masks, extras

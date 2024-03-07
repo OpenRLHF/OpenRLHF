@@ -109,18 +109,18 @@ class DPOTrainer(ABC):
             acc_mean = 0
             loss_mean = 0
             # train
-            for chosen_ids, c_mask, reject_ids, r_mask, _ in self.train_dataloader:
+            for chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens in self.train_dataloader:
                 chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
                 c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
                 reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
                 r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
 
                 chosen_logps, rejected_logps, aux_loss = self.concatenated_forward(
-                    self.model, chosen_ids, c_mask, reject_ids, r_mask
+                    self.model, chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens
                 )
                 with torch.no_grad():
                     reference_chosen_logps, reference_rejected_logps, _ = self.concatenated_forward(
-                        self.ref_model, chosen_ids, c_mask, reject_ids, r_mask
+                        self.ref_model, chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens
                     )
 
                 # loss function
@@ -191,17 +191,17 @@ class DPOTrainer(ABC):
             )
             acc = 0
             loss_sum = 0
-            for chosen_ids, c_mask, reject_ids, r_mask, _ in eval_dataloader:
+            for chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens in eval_dataloader:
                 chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
                 c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
                 reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
                 r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
 
                 chosen_logps, rejected_logps, _ = self.concatenated_forward(
-                    self.model, chosen_ids, c_mask, reject_ids, r_mask
+                    self.model, chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens
                 )
                 reference_chosen_logps, reference_rejected_logps, _ = self.concatenated_forward(
-                    self.ref_model, chosen_ids, c_mask, reject_ids, r_mask
+                    self.ref_model, chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens
                 )
                 loss, chosen_reward, reject_reward = self.loss_fn(
                     chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
@@ -224,7 +224,7 @@ class DPOTrainer(ABC):
                 self._wandb.log(logs)
         self.model.train()  # reset model state
 
-    def concatenated_forward(self, model, chosen_ids, c_mask, reject_ids, r_mask):
+    def concatenated_forward(self, model, chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens):
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
@@ -232,7 +232,7 @@ class DPOTrainer(ABC):
         input_ids, att_masks = self.concatenated_inputs(chosen_ids, c_mask, reject_ids, r_mask)
         output = model(input_ids, attention_mask=att_masks, return_output=True)
         all_logits = output["logits"]
-        all_logps = self._get_batch_logps(all_logits, input_ids, attention_mask=att_masks, average_log_prob=False)
+        all_logps = self._get_batch_logps(all_logits, input_ids, att_masks, prompt_id_lens, average_log_prob=False)
         chosen_logps = all_logps[: chosen_ids.shape[0]]
         rejected_logps = all_logps[chosen_ids.shape[0] :]
         aux_loss = output.aux_loss if "aux_loss" in output else []
@@ -271,7 +271,12 @@ class DPOTrainer(ABC):
         return inputs_ids, att_masks
 
     def _get_batch_logps(
-        self, logits: torch.FloatTensor, labels: torch.LongTensor, attention_mask, average_log_prob: bool = False
+        self,
+        logits: torch.FloatTensor,
+        labels: torch.LongTensor,
+        attention_mask,
+        prompt_id_lens,
+        average_log_prob: bool = False,
     ) -> torch.FloatTensor:
         """Compute the log probabilities of the given labels under the given logits.
 
@@ -287,12 +292,18 @@ class DPOTrainer(ABC):
 
         labels = labels[:, 1:].clone()
         logits = logits[:, :-1, :]
-        loss_mask = attention_mask[:, 1:].bool()
+
+        loss_masks = attention_mask.clone().bool()
+        # mask prompts
+        for mask, source_len in zip(loss_masks, prompt_id_lens):
+            mask[:source_len] = False
+        loss_masks = loss_masks[:, 1:]
+
         # dummy token; we'll ignore the losses on these tokens later
-        labels[loss_mask == False] = 0
+        labels[loss_masks == False] = 0
         per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
 
         if average_log_prob:
-            return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
+            return (per_token_logps * loss_masks).sum(-1) / loss_masks.sum(-1)
         else:
-            return (per_token_logps * loss_mask).sum(-1)
+            return (per_token_logps * loss_masks).sum(-1)
