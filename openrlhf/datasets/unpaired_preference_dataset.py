@@ -189,8 +189,8 @@ class DistributedVanillaKTOSampler(DistributedSampler):
     def __init__(
         self,
         dataset: Dataset,
-        num_replicas: int | None = None,
-        rank: int | None = None,
+        num_replicas: int = None,
+        rank: int = None,
         shuffle: bool = True,
         seed: int = 0,
         drop_last: bool = False,

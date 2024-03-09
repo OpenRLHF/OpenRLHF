@@ -33,8 +33,8 @@ deepspeed --master_port 12346 main.py \
    --num_padding_at_beginning 1 \
    --per_device_generation_batch_size 2 \
    --per_device_training_batch_size 2 \
-   --generation_batches 16 \
-   --gradient_accumulation_steps 16 \
+   --generation_batches 64 \
+   --gradient_accumulation_steps 8 \
    --ppo_epochs 1 \
    --max_answer_seq_len 1024 \
    --max_prompt_seq_len 1024 \
@@ -44,7 +44,6 @@ deepspeed --master_port 12346 main.py \
    --critic_weight_decay 0.1 \
    --num_train_epochs 1 \
    --lr_scheduler_type cosine \
-   --gradient_accumulation_steps 1 \
    --actor_gradient_checkpointing \
    --critic_gradient_checkpointing \
    --offload_reference_model \

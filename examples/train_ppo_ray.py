@@ -128,7 +128,7 @@ def train(args):
 
     # init vLLM engine for text generation
     vllm_engines = None
-    if args.vllm_num_engines is not None:
+    if args.vllm_num_engines > 0:
         vllm_engines = create_vllm_engines(
             args.vllm_num_engines, args.vllm_tensor_parallel_size, args.pretrain, args.seed
         )
@@ -176,7 +176,7 @@ if __name__ == "__main__":
     )
 
     # optional vLLM for text generation
-    parser.add_argument("--vllm_num_engines", type=int, default=None, help="number of vLLM Engines")
+    parser.add_argument("--vllm_num_engines", type=int, default=0, help="number of vLLM Engines")
     parser.add_argument(
         "--vllm_tensor_parallel_size",
         type=int,

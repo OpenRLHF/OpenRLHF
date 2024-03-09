@@ -1,3 +1,4 @@
+import time
 import math
 import os.path
 from abc import ABC
@@ -13,6 +14,7 @@ from tqdm import tqdm
 
 from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, SwitchBalancingLoss, ValueLoss
 from openrlhf.models.utils import masked_mean
+from openrlhf.utils.perf import print_throughput_step3
 
 from .ppo_utils import AdaptiveKLController, Experience, FixedKLController, NaiveExperienceMaker, NaiveReplayBuffer
 
@@ -171,6 +173,7 @@ class PPOTrainer(ABC):
                 disable=not self.strategy.is_rank_0(),
             )
 
+            generate_start_time = time.time()
             for rand_prompts in self.prompts_dataloader:
                 experience = self.experience_maker.make_experience(rand_prompts, **self.generate_kwargs)
                 # print prompt/answer in each update step
@@ -180,6 +183,7 @@ class PPOTrainer(ABC):
                 self.replay_buffer.append(experience)
 
                 if global_step % update_timesteps == 0:
+                    generate_end_time = time.time()
                     torch.cuda.empty_cache()
                     self.replay_buffer.normalize("advantages", self.strategy)
                     status = self.ppo_train()
@@ -188,6 +192,21 @@ class PPOTrainer(ABC):
                     self.kl_ctl.update(status["kl"], args.rollout_batch_size)
                     # logs/checkpoints
                     self.save_logs_and_checkpoints(args, global_step // update_timesteps, pbar, status)
+
+                    # print throughput performance
+                    training_end_time = time.time()
+                    e2e_time = training_end_time - generate_start_time
+                    gen_exp_time = generate_end_time - generate_start_time
+                    train_time = training_end_time - generate_end_time
+                    print_throughput_step3(
+                        self.actor.model.module,
+                        self.args,
+                        e2e_time,
+                        gen_exp_time,
+                        train_time,
+                        torch.distributed.get_rank(),
+                    )
+                    generate_start_time = training_end_time
 
                 pbar.update()
                 global_step = global_step + 1
