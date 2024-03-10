@@ -27,6 +27,7 @@ For all model sizes and comparisions, we use a fixed global train_batch_size=102
     <tr>
         <td rowspan="2">Size</td>
         <td rowspan="2">Method</td>
+        <td rowspan="2">GPU</td>
         <td colspan="3">Generation</td>
         <td colspan="3">Training</td>
         <td colspan="3">End-to-End</td>
@@ -46,6 +47,7 @@ For all model sizes and comparisions, we use a fixed global train_batch_size=102
         <td rowspan="4">LLama2-7B</td>
         <td>DeepspeedChat</td>
         <td>8</td>
+        <td>8</td>
         <td>697.12</td>
         <td>5.32</td>
         <td>8</td>
@@ -58,6 +60,7 @@ For all model sizes and comparisions, we use a fixed global train_batch_size=102
     <tr>
         <td>OpenRLHF</td>
         <td>8</td>
+        <td>8</td>
         <td>920.81</td>
         <td>4.03</td>
         <td>8</td>
@@ -68,7 +71,8 @@ For all model sizes and comparisions, we use a fixed global train_batch_size=102
         <td>0.87</td>
     </tr>
     <tr>
-        <td>OpenRLHF</td>
+        <td>OpenRLHF(ray)</td>
+        <td>1:1:4:2</td>
         <td>16</td>
         <td>1498.77</td>
         <td>2.48</td>
@@ -80,7 +84,8 @@ For all model sizes and comparisions, we use a fixed global train_batch_size=102
         <td>0.54</td>
     </tr>
     <tr>
-        <td>OpenRLHF</td>
+        <td>OpenRLHF(ray+vllm)</td>
+        <td>1:1:2:2:2</td>
         <td>16</td>
         <td>481.86</td>
         <td>7.70</td>
@@ -94,6 +99,7 @@ For all model sizes and comparisions, we use a fixed global train_batch_size=102
     <tr>
         <td rowspan="3">LLama2-13B</td>
         <td>DeepspeedChat</td>
+        <td>8</td>
         <td>2</td>
         <td>2590.72</td>
         <td>2.74</td>
@@ -105,7 +111,8 @@ For all model sizes and comparisions, we use a fixed global train_batch_size=102
         <td>0.27</td>
     </tr>
     <tr>
-        <td>OpenRLHF</td>
+        <td>OpenRLHF(ray)</td>
+        <td>1:1:4:2</td>
         <td>8</td>
         <td>2722.51</td>
         <td>2.61</td>
@@ -117,7 +124,8 @@ For all model sizes and comparisions, we use a fixed global train_batch_size=102
         <td>0.28</td>
     </tr>
     <tr>
-        <td>OpenRLHF</td>
+        <td>OpenRLHF(ray+vllm)</td>
+        <td>1:1:2:2:2</td>
         <td>8</td>
         <td>1425.75</td>
         <td>4.98</td>
@@ -134,7 +142,8 @@ For all model sizes and comparisions, we use a fixed global train_batch_size=102
         <td colspan="9">N/A</td>
     </tr>
     <tr>
-        <td>OpenRLHF</td>
+        <td>OpenRLHF(ray+vllm)</td>
+        <td>1:1:2:2:2</td>
     </tr>
     <tr>
         <td rowspan="3">LLama2-70B</td>
@@ -142,7 +151,8 @@ For all model sizes and comparisions, we use a fixed global train_batch_size=102
         <td colspan="9">N/A</td>
     </tr>
     <tr>
-        <td>OpenRLHF</td>
+        <td>OpenRLHF(ray+vllm)</td>
+        <td>2:2:4:4:4</td>
         <td>4</td>
         <td>7122.65</td>
         <td>2.48</td>
@@ -155,5 +165,6 @@ For all model sizes and comparisions, we use a fixed global train_batch_size=102
     </tr>
     <tr>
         <td>NeMo-Aligner</td>
+        <td colspan="10">TBD</td>
     </tr>
 </table>
