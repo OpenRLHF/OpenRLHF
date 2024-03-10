@@ -145,6 +145,15 @@ For all model sizes and comparisions, we use a fixed global train_batch_size=102
     <tr>
         <td>OpenRLHF(ray+vllm)</td>
         <td>1:1:2:2:2</td>
+        <td>4</td>
+        <td>5518.07</td>
+        <td>3.84</td>
+        <td>2</td>
+        <td>3296.18</td>
+        <td>51.49</td>
+        <td>8814.25</td>
+        <td>21.66</td>
+        <td>0.12</td>
     </tr>
     <tr>
         <td rowspan="3">LLama2-70B</td>
