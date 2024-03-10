@@ -139,6 +139,7 @@ For all model sizes and comparisions, we use a fixed global train_batch_size=102
     <tr>
         <td rowspan="2">LLama2-34B</td>
         <td>DeepspeedChat</td>
+        <td>8</td>
         <td colspan="9">N/A</td>
     </tr>
     <tr>
@@ -148,6 +149,7 @@ For all model sizes and comparisions, we use a fixed global train_batch_size=102
     <tr>
         <td rowspan="3">LLama2-70B</td>
         <td>DeepspeedChat</td>
+        <td>16</td>
         <td colspan="9">N/A</td>
     </tr>
     <tr>
