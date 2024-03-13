@@ -125,7 +125,7 @@ class RewardDataset(Dataset):
                     truncation=True,
                     return_tensors="pt",
                 )
-                prompt_ids_len = prompt_token["attention_mask"].sum().item()
+                prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
                 # filter the sample whose length is greater than max_length (2 for answer length)
                 if prompt_ids_len >= self.max_length - 2:
                     continue

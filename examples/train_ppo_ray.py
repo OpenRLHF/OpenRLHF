@@ -246,6 +246,7 @@ if __name__ == "__main__":
     parser.add_argument("--target_modules", type=list, default=None)
     parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
+    parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
 
     parser.add_argument("--bos_token", type=str, default=None)
     parser.add_argument("--eos_token", type=str, default=None)
