@@ -76,7 +76,7 @@ if __name__ == "__main__":
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--bf16", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False)
-    parser.add_argument("--disable_fast_tokenizer ", action="store_true", default=False)
+    parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
 
     parser.add_argument("--greedy_sampling", action="store_true", default=False)
     parser.add_argument("--top_p", type=float, default=0.9)

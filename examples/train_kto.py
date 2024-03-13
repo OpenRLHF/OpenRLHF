@@ -193,7 +193,7 @@ if __name__ == "__main__":
     parser.add_argument("--beta", type=float, default=0.01)
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--disable_fast_tokenizer ", action="store_true", default=False)
+    parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument(
         "--vanilla_loss",
         action="store_true",
