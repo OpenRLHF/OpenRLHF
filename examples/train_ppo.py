@@ -58,9 +58,9 @@ def train(args):
     )
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, actor.model, "left", strategy)
-    get_tokenizer(args.reward_pretrain, critic, "left", strategy)
-    get_tokenizer(args.reward_pretrain, reward_model, "left", strategy)
+    tokenizer = get_tokenizer(args.pretrain, actor.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
+    get_tokenizer(args.reward_pretrain, critic, "left", strategy, use_fast=not args.disable_fast_tokenizer)
+    get_tokenizer(args.reward_pretrain, reward_model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
 
     strategy.print(actor)
     strategy.print(critic)
@@ -308,6 +308,7 @@ if __name__ == "__main__":
     parser.add_argument("--target_modules", type=list, default=None)
     parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
+    parser.add_argument("--disable_fast_tokenizer ", action="store_true", default=False)
 
     parser.add_argument("--bos_token", type=str, default=None)
     parser.add_argument("--eos_token", type=str, default=None)

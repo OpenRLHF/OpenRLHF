@@ -40,7 +40,7 @@ def train(args):
     )
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy)
+    tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
     strategy.print(model)
 
     # load weights for ref model
@@ -53,7 +53,7 @@ def train(args):
     )
     if args.ref_offload:
         ref_model._offload = True
-    get_tokenizer(args.pretrain, ref_model.model, "right", strategy)
+    get_tokenizer(args.pretrain, ref_model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
 
     # gradient_checkpointing
     if args.gradient_checkpointing:
@@ -193,6 +193,7 @@ if __name__ == "__main__":
     parser.add_argument("--beta", type=float, default=0.01)
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--disable_fast_tokenizer ", action="store_true", default=False)
     parser.add_argument(
         "--vanilla_loss",
         action="store_true",

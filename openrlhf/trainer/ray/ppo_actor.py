@@ -161,7 +161,9 @@ class ActorModelRayActor(BasePPORole):
         )
 
         # configure tokenizer
-        self.tokenizer = get_tokenizer(pretrain, actor.model, "left", strategy)
+        self.tokenizer = get_tokenizer(
+            pretrain, actor.model, "left", strategy, use_fast=not args.disable_fast_tokenizer
+        )
 
         strategy.print(actor)
         self.prepare_datasets()

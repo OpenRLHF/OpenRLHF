@@ -94,7 +94,7 @@ def batch_generate(args):
         model.to_bettertransformer()
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy)
+    tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
 
     # prepare models
     model = strategy.prepare(model)
@@ -205,7 +205,7 @@ def batch_rm_inference(args):
     )
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model, "left", strategy)
+    tokenizer = get_tokenizer(args.pretrain, model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
 
     # prepare models
     model = strategy.prepare(model)
@@ -282,6 +282,7 @@ if __name__ == "__main__":
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--bf16", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False)
+    parser.add_argument("--disable_fast_tokenizer ", action="store_true", default=False)
     parser.add_argument("--micro_batch_size", type=int, default=16)
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--dataset_probs", type=str, default="1.0")
