@@ -97,7 +97,7 @@ class SFTDataset(Dataset):
                     truncation=True,
                     return_tensors="pt",
                 )
-                prompt_ids_len = prompt_token["attention_mask"].sum().item()
+                prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
             else:
                 prompt_ids_len = 0
 
