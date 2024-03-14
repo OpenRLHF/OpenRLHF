@@ -162,7 +162,7 @@ class ActorModelRayActor(BasePPORole):
 
         # configure tokenizer
         self.tokenizer = get_tokenizer(
-            pretrain, actor.model, "left", strategy, use_fast=not args.disable_fast_tokenizer
+            pretrain, actor.model, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer
         )
 
         strategy.print(actor)
@@ -171,7 +171,13 @@ class ActorModelRayActor(BasePPORole):
         args = strategy.args
 
         if args.enable_ema:
-            ema_model = deepcopy(actor)
+            ema_model = Actor(
+                pretrain,
+                use_flash_attention_2=strategy.args.flash_attn,
+                bf16=strategy.args.bf16,
+                load_in_4bit=strategy.args.load_in_4bit,
+                ds_config=strategy.get_ds_eval_config(offload=True),
+            )
         else:
             ema_model = None
 
@@ -206,7 +212,6 @@ class ActorModelRayActor(BasePPORole):
         if ema_model:
             ema_model._offload = True
             self.ema_model = strategy.prepare(ema_model, is_rlhf=True)
-            del ema_model._offload
         else:
             self.ema_model = None
 
