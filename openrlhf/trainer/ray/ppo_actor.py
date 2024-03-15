@@ -187,7 +187,12 @@ class ActorModelRayActor(BasePPORole):
         )
 
         # configure scheduler
-        num_update_steps_per_episodes = len(self.prompts_dataloader) * args.max_epochs // strategy.accumulated_gradient
+        num_update_steps_per_episodes = (
+            int(len(self.prompts_dataloader) * (args.micro_rollout_batch_size / args.micro_train_batch_size))
+            * args.max_epochs
+            // strategy.accumulated_gradient
+        )
+
         max_steps = math.ceil(args.num_episodes * num_update_steps_per_episodes)
         self.max_steps = max_steps
 
