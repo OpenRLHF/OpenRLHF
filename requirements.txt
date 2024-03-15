@@ -7,6 +7,7 @@ isort
 jsonlines
 loralib
 optimum
+packaging
 peft
 ray[default]
 torch
@@ -15,3 +16,4 @@ tqdm
 transformers==4.38.2
 transformers_stream_generator
 wandb
+wheel
