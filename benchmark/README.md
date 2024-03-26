@@ -44,8 +44,8 @@ For all model sizes and comparisions, we use a fixed global train_batch_size=102
         <td>Samples/sec</td>
     </tr>
     <tr>
-        <td rowspan="4">LLama2-7B</td>
-        <td>DeepspeedChat</td>
+        <td rowspan="5">LLama2-7B</td>
+        <td>DeepspeedChat(w/ offload)</td>
         <td>8</td>
         <td>8</td>
         <td>697.12</td>
@@ -55,6 +55,19 @@ For all model sizes and comparisions, we use a fixed global train_batch_size=102
         <td>60.34</td>
         <td>1189.13</td>
         <td>28.08</td>
+        <td>0.86</td>
+    </tr>
+    <tr>
+        <td>DeepspeedChat(w/o offload)</td>
+        <td>8</td>
+        <td>4</td>
+        <td>975.36</td>
+        <td>3.80</td>
+        <td>4</td>
+        <td>209.05</td>
+        <td>142.01</td>
+        <td>1184.31</td>
+        <td>28.20</td>
         <td>0.86</td>
     </tr>
     <tr>
