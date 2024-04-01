@@ -162,7 +162,9 @@ class Llama_Evaluator(Evaluator):
             example += f'\n{choice}. {line[f"{choice}"]}'
         if include_answer:
             if cot:
-                example += "\n答案：让我们一步一步思考，\n" + line["explanation"] + f"\n所以答案是{line['answer']}。\n\n"
+                example += (
+                    "\n答案：让我们一步一步思考，\n" + line["explanation"] + f"\n所以答案是{line['answer']}。\n\n"
+                )
             else:
                 example += "\n答案：" + line["answer"] + "\n\n"
         else:

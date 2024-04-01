@@ -151,7 +151,9 @@ class Llama_Evaluator(Evaluator):
             example += f'\n{choice}. {line[f"{choice}"]}'
         if include_answer:
             if cot:
-                example += "\n答案：让我们一步一步思考，\n" + line["explanation"] + f"\n所以答案是{line['Answer']}。\n\n"
+                example += (
+                    "\n答案：让我们一步一步思考，\n" + line["explanation"] + f"\n所以答案是{line['Answer']}。\n\n"
+                )
             else:
                 example += "\n答案：" + suffix + line["Answer"] + "\n\n"
         else:
@@ -180,7 +182,10 @@ class Llama_Evaluator(Evaluator):
         DEFAULT_SYSTEM_PROMPT = """你是一个乐于助人的助手。"""
         prompt = f"以下是中国关于{subject}考试的单项选择题，请选出其中的正确答案。\n\n"
         prompt_template = (
-            "[INST] <<SYS>>\n" "{system_prompt}\n" "<</SYS>>\n\n" "{instruction} [/INST]好的，我会结合{subject}相关知识回答"
+            "[INST] <<SYS>>\n"
+            "{system_prompt}\n"
+            "<</SYS>>\n\n"
+            "{instruction} [/INST]好的，我会结合{subject}相关知识回答"
         )
 
         prompt = prompt_template.format_map(

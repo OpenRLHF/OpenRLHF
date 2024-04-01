@@ -106,9 +106,7 @@ class Actor(nn.Module):
             self.model = pretrain_or_model
 
     @torch.no_grad()
-    def generate(
-        self, input_ids: torch.Tensor, **kwargs
-    ) -> Union[
+    def generate(self, input_ids: torch.Tensor, **kwargs) -> Union[
         Tuple[torch.LongTensor, torch.LongTensor],
         Tuple[torch.LongTensor, torch.LongTensor, torch.BoolTensor],
     ]:
