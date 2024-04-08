@@ -5,7 +5,7 @@ We evaluated the models (see [checkpoints]( https://huggingface.co/OpenLLMAI/o
 1. Generate responses
 
 ```shell
-deepspeed batch_inference.py
+deepspeed batch_inference.py \
     --eval_task generate \
     --pretrain OpenLLMAI/Llama-2-7b-sft-model-ocra-500k \
     --bf16 \
