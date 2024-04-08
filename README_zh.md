@@ -28,6 +28,8 @@
 
 <hr>
 
+<span>[ <a href="README.md">English</a> | 中文 ]</span>
+
 OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 RLHF 框架：
 
 - **简单易用**: OpenRLHF 是目前可用的最简单的高性能 RLHF 库之一，兼容 Huggingface 模型和数据集。

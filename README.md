@@ -1,7 +1,5 @@
 <div align="center">
     <img alt="OpenRLHF logo" src="./docs/logo.png" style="height: 160px;" />
-    <br>
-    <span>[ English | <a href="README_zh.md">中文</a> ]</span>
 </div>
 <div align="center">
 <p align="center">
@@ -26,6 +24,8 @@
 </div>
 
 <hr>
+
+<span>[ English | <a href="README_zh.md">中文</a> ]</span>
 
 OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Transformers:
 
