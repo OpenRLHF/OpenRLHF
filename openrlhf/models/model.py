@@ -3,9 +3,9 @@ from typing import Optional
 import deepspeed
 import torch
 import torch.nn as nn
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, get_peft_model, PeftModel
 from peft.tuners.lora import LoraLayer
-from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
+from transformers import AutoConfig, AutoModel, BitsAndBytesConfig, AutoModelForCausalLM
 from transformers.deepspeed import HfDeepSpeedConfig
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
@@ -278,3 +278,24 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
                 return values[:, -num_actions:]
 
     return LLMForSequenceRegression
+
+
+def get_teacher_model(teacher_model_path, teacher_peft_path=None, **kwargs):
+    config = AutoConfig.from_pretrained(teacher_model_path)
+
+    config.is_model_parallel = False
+    model = AutoModelForCausalLM.from_pretrained(
+        teacher_model_path, 
+        config=config, 
+        trust_remote_code=True,
+        torch_dtype="auto",
+        device_map="auto",
+        **kwargs,
+    )
+
+    if teacher_peft_path is not None:
+        model = PeftModel.from_pretrained(model, teacher_peft_path)
+
+    model.eval()
+    
+    return model

@@ -9,5 +9,6 @@ from .loss import (
     SwitchBalancingLoss,
     ValueLoss,
     VanillaKTOLoss,
+    KDLoss
 )
-from .model import get_llm_for_sequence_regression
+from .model import get_llm_for_sequence_regression, get_teacher_model

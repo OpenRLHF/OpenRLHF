@@ -1,11 +1,12 @@
-deepspeed ../train_sft.py \
+deepspeed ../train_kd.py \
     --max_len 512 \
     --dataset Open-Orca/OpenOrca \
     --dataset_probs 1.0 \
     --train_batch_size 128 \
     --micro_train_batch_size 2 \
     --max_samples 5000 \
-    --pretrain gpt2-xl \
+    --pretrain /home/octopus/data/zzd/infer/LMOps/minillm/checkpoints/gpt2-base \
+    --teacher_model /home/octopus/data/zzd/infer/LMOps/minillm/checkpoints/gpt2-large \
     --save_path ./ckpt/gpt2 \
     --save_steps -1 \
     --logging_steps 1 \
@@ -13,4 +14,5 @@ deepspeed ../train_sft.py \
     --zero_stage 2 \
     --max_epochs 1 \
     --learning_rate 5e-6 \
-    --gradient_checkpointing
+    --gradient_checkpointing \
+    --kd_coef 0.4
