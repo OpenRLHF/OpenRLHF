@@ -5,7 +5,7 @@ deepspeed ../train_sft.py \
     --train_batch_size 128 \
     --micro_train_batch_size 2 \
     --max_samples 5000 \
-    --pretrain gpt2 \
+    --pretrain gpt2-xl \
     --save_path ./ckpt/gpt2 \
     --save_steps -1 \
     --logging_steps 1 \
