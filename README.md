@@ -1,9 +1,8 @@
 <div align="center">
-<p align="center">
-<img alt="" src="./docs/logo.png" style="display: inline-block; height: 160px" />
-</p>
+    <img alt="OpenRLHF logo" src="./docs/logo.png" style="height: 160px;" />
+    <br>
+    <span>[ English | <a href="README_zh.md">中文</a> ]</span>
 </div>
-
 <div align="center">
 <p align="center">
       <a href="https://github.com/openllmai/OpenRLHF/graphs/contributors">
