@@ -1,0 +1,16 @@
+deepspeed ../train_sft.py \
+    --max_len 512 \
+    --dataset Open-Orca/OpenOrca \
+    --dataset_probs 1.0 \
+    --train_batch_size 128 \
+    --micro_train_batch_size 2 \
+    --max_samples 5000 \
+    --pretrain gpt2 \
+    --save_path ./ckpt/gpt2 \
+    --save_steps -1 \
+    --logging_steps 1 \
+    --eval_steps -1 \
+    --zero_stage 2 \
+    --max_epochs 1 \
+    --learning_rate 5e-6 \
+    --gradient_checkpointing
