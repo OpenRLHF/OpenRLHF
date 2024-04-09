@@ -6,7 +6,7 @@ from datetime import datetime
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import SFTDataset
-from openrlhf.models import Actor, get_teacher_model
+from openrlhf.models import Actor
 from openrlhf.trainer import KDTrainer
 from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
@@ -28,7 +28,17 @@ def train(args):
         target_modules=args.target_modules,
         ds_config=strategy.get_ds_train_config(is_actor=True),
     )
-    teacher_model = get_teacher_model(args.teacher_model, args.teacher_peft_model)
+
+    # load teacher model for inference
+    teacher_model = Actor(
+        args.teacher_model,
+        use_flash_attention_2=args.flash_attn,
+        bf16=args.bf16,
+        load_in_4bit=args.load_in_4bit,
+        ds_config=strategy.get_ds_eval_config(offload=args.teacher_offload),
+    )
+    if args.teacher_offload:
+        teacher_model._offload = True
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
@@ -86,7 +96,7 @@ def train(args):
         )
 
     # prepare models
-    (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
+    ((model, optim, scheduler), teacher_model) = strategy.prepare((model, optim, scheduler), teacher_model)
 
     # load checkpoint
     if args.load_checkpoint:
@@ -152,6 +162,7 @@ if __name__ == "__main__":
     parser.add_argument("--flash_attn", action="store_true", default=False)
     parser.add_argument("--aux_loss_coef", type=float, default=0)
     parser.add_argument("--kd_coef", type=float, default=0.4)
+    parser.add_argument("--teacher_offload", action="store_true", default=False)
     parser.add_argument("--grad_accum_dtype", type=str, default=None)
     parser.add_argument("--disable_trace_cache", action="store_true", default=False)
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
