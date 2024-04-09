@@ -304,5 +304,5 @@ class KDLoss(nn.Module):
         x = torch.sum(prod_probs, dim=-1).view(-1)
         mask = (label != self.IGNORE_INDEX).int()
         distil_loss = -torch.sum(x * mask.view(-1), dim=0) / torch.sum(mask.view(-1), dim=0)
-    
+
         return distil_loss
