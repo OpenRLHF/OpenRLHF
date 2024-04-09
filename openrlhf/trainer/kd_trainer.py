@@ -128,15 +128,9 @@ class KDTrainer(ABC):
                 gpt_loss = self.loss_fn(output.logits, labels)
 
                 with torch.no_grad():
-<<<<<<< HEAD
-                    teacher_logits = self.teacher_model(inputs, attention_mask=attention_mask, return_output=True)['logits']
+                    teacher_logits = self.teacher_model(inputs, attention_mask=attention_mask, return_output=True).["logits"]
                 distil_loss = self.kd_loss(output.logits, teacher_logits, labels)
-=======
-                    teacher_logits = self.teacher_model(inputs, attention_mask=attention_mask, return_output=True)[
-                        "logits"
-                    ]
-                    distil_loss = self.kd_loss(output.logits, teacher_logits, labels)
->>>>>>> 9c085c01483b4adc90097c86d7dde0089d760207
+
 
                 loss = gpt_loss * (1 - self.args.kd_coef) + distil_loss * self.args.kd_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
