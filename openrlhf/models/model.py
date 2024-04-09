@@ -3,9 +3,9 @@ from typing import Optional
 import deepspeed
 import torch
 import torch.nn as nn
-from peft import LoraConfig, get_peft_model, PeftModel
+from peft import LoraConfig, get_peft_model
 from peft.tuners.lora import LoraLayer
-from transformers import AutoConfig, AutoModel, BitsAndBytesConfig, AutoModelForCausalLM
+from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
 from transformers.deepspeed import HfDeepSpeedConfig
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
