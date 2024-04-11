@@ -284,3 +284,25 @@ class KTOLoss(nn.Module):
             (self.desirable_weight * chosen_losses, self.undesirable_weight * rejected_losses), 0
         ).mean()
         return losses, chosen_rewards, rejected_rewards, KL
+
+
+# Adapted from https://github.com/microsoft/LMOps/blob/main/minillm/finetune.py#L166
+class KDLoss(nn.Module):
+    """
+    Language Model Knowledge Distillation Loss
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.IGNORE_INDEX = -100
+
+    def forward(self, logits: torch.Tensor, teacher_logits: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
+        teacher_probs = F.softmax(teacher_logits, dim=-1, dtype=torch.float32)
+        inf_mask = torch.isinf(logits)
+        logprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
+        prod_probs = torch.masked_fill(teacher_probs * logprobs, inf_mask, 0)
+        x = torch.sum(prod_probs, dim=-1).view(-1)
+        mask = (label != self.IGNORE_INDEX).int()
+        distil_loss = -torch.sum(x * mask.view(-1), dim=0) / torch.sum(mask.view(-1), dim=0)
+
+        return distil_loss
