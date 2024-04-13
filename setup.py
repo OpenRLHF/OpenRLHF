@@ -47,7 +47,7 @@ setup(
     long_description=_fetch_readme(),
     long_description_content_type="text/markdown",
     install_requires=_fetch_requirements("requirements.txt"),
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     classifiers=[
         "Programming Language :: Python :: 3",
         "Environment :: GPU :: NVIDIA CUDA",
