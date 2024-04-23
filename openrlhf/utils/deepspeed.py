@@ -282,9 +282,11 @@ class DeepspeedStrategy(ABC):
                 vv = v.data.cpu()
                 output_state_dict[k] = vv
 
-            assert len(output_state_dict) == len(
-                state_dict
-            ), f"mismatch size output_state_dict({len(output_state_dict)}) and state_dict({len(state_dict)})"
+            state_dict_keys = set(state_dict.keys())
+            output_state_dict_keys = set(output_state_dict.keys())
+            assert state_dict_keys.issubset(
+                output_state_dict_keys
+            ), f"mismatch keys {output_state_dict_keys.symmetric_difference(state_dict_keys)}"
 
             # only save peft weights https://github.com/microsoft/DeepSpeed/issues/4295
             if isinstance(model_to_save, PeftModel):
