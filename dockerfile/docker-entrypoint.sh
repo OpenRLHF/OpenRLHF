@@ -12,6 +12,9 @@ if [[ "${USER}" != "root" ]]; then
     usermod -a -G root ${USER}
     adduser ${USER} sudo
 
+    # user:password
+    echo "${USER}:123" | chpasswd
+
     export HOME=/home/${USER}
     export PATH=/home/${USER}/.local/bin/:$PATH
 else

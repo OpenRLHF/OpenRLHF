@@ -248,6 +248,13 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # values
         value_ref = self.critic.forward.remote(sequences_cpu, action_mask_cpu, attention_mask_cpu)
 
+        # avoid CUDA OOM when colocate models
+        if self.strategy.args.colocate_critic_reward:
+            ray.get([value_ref])
+
+        if self.strategy.args.colocate_actor_ref:
+            ray.get([base_action_log_probs_ref])
+
         # rewards
         r_refs = []
         for rm in self.reward_model:
