@@ -40,13 +40,6 @@ class Actor(nn.Module):
         if isinstance(pretrain_or_model, str):
             attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
 
-            # Patch for https://github.com/huggingface/transformers/issues/28052
-            def _autoset_attn_implementation_monkeypatch(cls, config, *args, **kwargs):  # type: ignore
-                config._attn_implementation = attn_implementation
-                return config
-
-            PreTrainedModel._autoset_attn_implementation = classmethod(_autoset_attn_implementation_monkeypatch)
-
             # Note: dschf is defined in function scope to avoid global effects
             # https://huggingface.co/docs/transformers/main_classes/deepspeed#nontrainer-deepspeed-integration
             if ds_config is not None and ds_config["zero_optimization"]["stage"] == 3:

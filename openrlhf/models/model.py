@@ -182,13 +182,6 @@ def _get_reward_model(base_pretrained_model, base_llm_model):
                 self.mean[0] = config.mean
                 self.std[0] = config.std
 
-        @classmethod
-        def _autoset_attn_implementation(cls, config, *args, **kwargs):
-            logger.info(
-                "Monkey patch for Flash Attention, see https://github.com/huggingface/transformers/issues/28052"
-            )
-            return config
-
         def forward(
             self,
             input_ids: torch.LongTensor = None,
@@ -241,13 +234,6 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
             if hasattr(config, "mean"):
                 self.mean[0] = config.mean
                 self.std[0] = config.std
-
-        @classmethod
-        def _autoset_attn_implementation(cls, config, *args, **kwargs):
-            logger.info(
-                "Monkey patch for Flash Attention, see https://github.com/huggingface/transformers/issues/28052"
-            )
-            return config
 
         def forward(
             self,
