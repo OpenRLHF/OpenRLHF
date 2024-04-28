@@ -45,7 +45,7 @@ def train(args):
     # configure strategy
     strategy = get_strategy(args)
 
-    # if colocated, create placement group for actor and critic model explicitly.
+    # if colocated, create placement group for actor and ref model explicitly.
     pg = None
     if args.colocate_actor_ref:
         assert (
@@ -84,7 +84,7 @@ def train(args):
         num_gpus_per_actor=0.25 if pg else 1,
     )
 
-    # if colocated, create placement group for reference and reward model explicitly.
+    # if colocated, create placement group for critic and reward model explicitly.
     pg = None
     if args.colocate_critic_reward:
         assert (
