@@ -31,18 +31,12 @@ class LLMRayActor:
 
             vllm.engine.llm_engine.set_cuda_visible_devices = _set_cuda_visible_devices
 
-        if vllm.__version__ >= "0.4.1":
-            kwargs["worker_use_ray"] = True
         self.llm = vllm.LLM(*args, **kwargs)
 
     def generate(self, *args, **kwargs):
         return self.llm.generate(*args, **kwargs)
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name):
-        if vllm.__version__ >= "0.4.1":
-            return self.llm.llm_engine.model_executor._run_workers(
-                "init_process_group", master_address, master_port, rank_offset, world_size, group_name
-            )
         return self.llm.llm_engine._run_workers(
             "init_process_group", master_address, master_port, rank_offset, world_size, group_name
         )

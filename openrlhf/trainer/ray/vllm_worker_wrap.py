@@ -2,6 +2,7 @@ import importlib
 import inspect
 
 import torch
+from vllm.model_executor.weight_utils import hf_model_weights_iterator
 from vllm.worker.worker import Worker
 
 from openrlhf.utils.distributed_util import init_process_group
@@ -10,43 +11,41 @@ from openrlhf.utils.logging import init_logger
 logger = init_logger(__name__)
 
 
+def _hf_model_weights_iterator_wrap(model_name_or_path, *args, **kwargs):
+    if isinstance(model_name_or_path, dict):
+        for name, param in model_name_or_path.items():
+            yield name, param
+    else:
+        yield from hf_model_weights_iterator(model_name_or_path, *args, **kwargs)
+
+
 class WorkerWrap(Worker):
     def __init__(self, *args, **kwargs):
         # Monkey patch hf_model_weights_iterator to allow update single weight
         import vllm
 
-        if vllm.__version__ < "0.4.1":
-            from vllm.model_executor.weight_utils import hf_model_weights_iterator
+        if vllm.__version__ < "0.2.5":
+            import vllm.model_executor.models
 
-            def _hf_model_weights_iterator_wrap(model_name_or_path, *args, **kwargs):
-                if isinstance(model_name_or_path, dict):
-                    for name, param in model_name_or_path.items():
-                        yield name, param
-                else:
-                    yield from hf_model_weights_iterator(model_name_or_path, *args, **kwargs)
+            modules = inspect.getmembers(vllm.model_executor.models, inspect.ismodule)
+            for _, m in modules:
+                m.hf_model_weights_iterator = _hf_model_weights_iterator_wrap
+        else:
+            # NOTE: In 0.2.5, vLLM introduce lazy model loader
+            # https://github.com/vllm-project/vllm/pull/2044
+            from vllm.model_executor.models import _MODELS, ModelRegistry
 
-            if vllm.__version__ < "0.2.5":
-                import vllm.model_executor.models
+            load_model_cls = ModelRegistry.load_model_cls
 
-                modules = inspect.getmembers(vllm.model_executor.models, inspect.ismodule)
-                for _, m in modules:
-                    m.hf_model_weights_iterator = _hf_model_weights_iterator_wrap
-            else:
-                # NOTE: In 0.2.5, vLLM introduce lazy model loader
-                # https://github.com/vllm-project/vllm/pull/2044
-                from vllm.model_executor.models import _MODELS, ModelRegistry
+            def patched_load_model_cls(model_arch: str):
+                module_name, _ = _MODELS[model_arch]
+                module = importlib.import_module(f"vllm.model_executor.models.{module_name}")
+                module.hf_model_weights_iterator = _hf_model_weights_iterator_wrap
+                logger.info(f"Monkey patch hf_model_weights_iterator for module {module_name}")
 
-                load_model_cls = ModelRegistry.load_model_cls
+                return load_model_cls(model_arch)
 
-                def patched_load_model_cls(model_arch: str):
-                    module_name, _ = _MODELS[model_arch]
-                    module = importlib.import_module(f"vllm.model_executor.models.{module_name}")
-                    module.hf_model_weights_iterator = _hf_model_weights_iterator_wrap
-                    logger.info(f"Monkey patch hf_model_weights_iterator for module {module_name}")
-
-                    return load_model_cls(model_arch)
-
-                ModelRegistry.load_model_cls = patched_load_model_cls
+            ModelRegistry.load_model_cls = patched_load_model_cls
 
         super().__init__(*args, **kwargs)
 
