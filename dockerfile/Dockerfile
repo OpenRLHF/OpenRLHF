@@ -15,7 +15,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt install -y tzdata
 
 RUN apt-get -y install build-essential git python3-dev python3-pip libopenexr-dev libxi-dev libglfw3-dev libglew-dev libomp-dev libxinerama-dev libxcursor-dev gdb
 RUN pip uninstall xgboost transformer_engine flash_attn -y
-RUN pip install vllm==0.3.2
+RUN pip install vllm==0.4.1
 
 COPY docker-entrypoint.sh .
 RUN chmod a+x docker-entrypoint.sh

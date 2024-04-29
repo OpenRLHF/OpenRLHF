@@ -1,9 +1,13 @@
 import os
-from typing import List
+from typing import Dict, List
 
 import ray
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+
+from openrlhf.utils.logging import init_logger
+
+logger = init_logger(__name__)
 
 
 @ray.remote
@@ -11,40 +15,53 @@ class LLMRayActor:
     def __init__(self, *args, **kwargs):
         import vllm
 
-        if vllm.__version__ < "0.2.7" or kwargs["tensor_parallel_size"] == 1:
-            from vllm.worker import worker
+        assert vllm.__version__ >= "0.4.1", "OpenRLHF only supports vLLM >= 0.4.1"
+
+        self.use_gpu_executor = kwargs["tensor_parallel_size"] == 1
+
+        # See https://github.com/vllm-project/vllm/blob/main/vllm/executor/gpu_executor.py
+        if self.use_gpu_executor:
             from openrlhf.trainer.ray.vllm_worker_wrap import WorkerWrap
 
-            worker.Worker = WorkerWrap
+            vllm.worker.worker.Worker = WorkerWrap
         else:
-            # NOTE: In 0.2.7, vLLM made a major change to its architecture which move one worker into the driver process.
-            # Driver process will manually set CUDA_VISIBLE_DEVICES before worker init. To avoid importing torch before
-            # set CUDA_VISIBLE_DEVICES, we must defer monkey patch.
-            # For more detail, see: https://github.com/vllm-project/vllm/pull/2221
-            def _set_cuda_visible_devices(device_ids: List[int]):
-                os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, device_ids))
-
-                from vllm.worker import worker
-                from openrlhf.trainer.ray.vllm_worker_wrap import WorkerWrap
-
-                worker.Worker = WorkerWrap
-
-            vllm.engine.llm_engine.set_cuda_visible_devices = _set_cuda_visible_devices
-
-        if vllm.__version__ >= "0.4.1":
+            # RayGPUExecutor
+            # See the patch https://github.com/vllm-project/vllm/commit/479d69fad0538f04cb22bf13e76ff91cfeb8a4e5
             kwargs["worker_use_ray"] = True
+
+            if vllm.__version__ > "0.4.1":
+                RayWorkerWrapperPath = vllm.executor.ray_utils
+            else:
+                RayWorkerWrapperPath = vllm.engine.ray_utils
+
+            class RayWorkerWrapper(RayWorkerWrapperPath.RayWorkerWrapper):
+                def __init__(self, *args, **kwargs) -> None:
+                    kwargs["worker_module_name"] = "openrlhf.trainer.ray.vllm_worker_wrap"
+                    kwargs["worker_class_name"] = "WorkerWrap"
+                    super().__init__(*args, **kwargs)
+
+            RayWorkerWrapperPath.RayWorkerWrapper = RayWorkerWrapper
+
         self.llm = vllm.LLM(*args, **kwargs)
 
     def generate(self, *args, **kwargs):
         return self.llm.generate(*args, **kwargs)
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name):
-        return self.llm.llm_engine._run_workers(
-            "init_process_group", master_address, master_port, rank_offset, world_size, group_name
-        )
+        if self.use_gpu_executor:
+            return self.llm.llm_engine.model_executor.driver_worker.init_process_group(
+                master_address, master_port, rank_offset, world_size, group_name
+            )
+        else:
+            return self.llm.llm_engine.model_executor._run_workers(
+                "init_process_group", master_address, master_port, rank_offset, world_size, group_name
+            )
 
     def update_weight(self, name, dtype, shape, empty_cache=False):
-        return self.llm.llm_engine._run_workers("update_weight", name, dtype, shape, empty_cache)
+        if self.use_gpu_executor:
+            return self.llm.llm_engine.model_executor.driver_worker.update_weight(name, dtype, shape, empty_cache)
+        else:
+            return self.llm.llm_engine.model_executor._run_workers("update_weight", name, dtype, shape, empty_cache)
 
 
 def create_vllm_engines(num_engines: int, tensor_parallel_size: int, pretrain: str, seed: int):
