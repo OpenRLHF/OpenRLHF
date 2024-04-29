@@ -17,19 +17,28 @@ class LLMRayActor:
 
         assert vllm.__version__ >= "0.4.1", "OpenRLHF only supports vLLM >= 0.4.1"
 
-        # See the patch: https://github.com/vllm-project/vllm/commit/479d69fad0538f04cb22bf13e76ff91cfeb8a4e5
-        if vllm.__version__ > "0.4.1":
-            RayWorkerWrapperPath = vllm.executor.ray_utils
+        self.use_gpu_executor = kwargs["tensor_parallel_size"] == 1
+
+        # See https://github.com/vllm-project/vllm/blob/main/vllm/executor/gpu_executor.py
+        if self.use_gpu_executor:
+            from openrlhf.trainer.ray.vllm_worker_wrap import WorkerWrap
+
+            vllm.worker.worker.Worker = WorkerWrap
         else:
-            RayWorkerWrapperPath = vllm.engine.ray_utils
+            # RayGPUExecutor
+            # See the patch https://github.com/vllm-project/vllm/commit/479d69fad0538f04cb22bf13e76ff91cfeb8a4e5
+            if vllm.__version__ > "0.4.1":
+                RayWorkerWrapperPath = vllm.executor.ray_utils
+            else:
+                RayWorkerWrapperPath = vllm.engine.ray_utils
 
-        class RayWorkerWrapper(RayWorkerWrapperPath.RayWorkerWrapper):
-            def __init__(self, *args, **kwargs) -> None:
-                kwargs["worker_module_name"] = "openrlhf.trainer.ray.vllm_worker_wrap"
-                kwargs["worker_class_name"] = "WorkerWrap"
-                super().__init__(*args, **kwargs)
+            class RayWorkerWrapper(RayWorkerWrapperPath.RayWorkerWrapper):
+                def __init__(self, *args, **kwargs) -> None:
+                    kwargs["worker_module_name"] = "openrlhf.trainer.ray.vllm_worker_wrap"
+                    kwargs["worker_class_name"] = "WorkerWrap"
+                    super().__init__(*args, **kwargs)
 
-        RayWorkerWrapperPath.RayWorkerWrapper = RayWorkerWrapper
+            RayWorkerWrapperPath.RayWorkerWrapper = RayWorkerWrapper
 
         self.llm = vllm.LLM(*args, **kwargs)
 
@@ -37,12 +46,20 @@ class LLMRayActor:
         return self.llm.generate(*args, **kwargs)
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name):
-        return self.llm.llm_engine.model_executor._run_workers(
-            "init_process_group", master_address, master_port, rank_offset, world_size, group_name
-        )
+        if self.use_gpu_executor:
+            return self.llm.llm_engine.model_executor.driver_worker.init_process_group(
+                master_address, master_port, rank_offset, world_size, group_name
+            )
+        else:
+            return self.llm.llm_engine.model_executor._run_workers(
+                "init_process_group", master_address, master_port, rank_offset, world_size, group_name
+            )
 
     def update_weight(self, name, dtype, shape, empty_cache=False):
-        return self.llm.llm_engine.model_executor._run_workers("update_weight", name, dtype, shape, empty_cache)
+        if self.use_gpu_executor:
+            return self.llm.llm_engine.model_executor.driver_worker.update_weight(name, dtype, shape, empty_cache)
+        else:
+            return self.llm.llm_engine.model_executor._run_workers("update_weight", name, dtype, shape, empty_cache)
 
 
 def create_vllm_engines(num_engines: int, tensor_parallel_size: int, pretrain: str, seed: int):
