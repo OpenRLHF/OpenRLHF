@@ -26,13 +26,13 @@ class WorkerWrap(Worker):
 
         self.vllm_version = vllm.__version__
 
-        if vllm.__version__ < "0.4.1":
+        if vllm.__version__ < "0.2.5":
             from vllm.model_executor.weight_utils import hf_model_weights_iterator
 
             modules = inspect.getmembers(vllm.model_executor.models, inspect.ismodule)
             for _, m in modules:
                 m.hf_model_weights_iterator = _hf_model_weights_iterator_wrap
-        else:
+        elif vllm.__version__ < "0.4.1":
             # NOTE: In 0.2.5, vLLM introduce lazy model loader
             # https://github.com/vllm-project/vllm/pull/2044
             from vllm.model_executor.models import _MODELS, ModelRegistry
@@ -57,6 +57,7 @@ class WorkerWrap(Worker):
         assert group_name != "", f"group name must not be empty"
 
         rank = torch.distributed.get_rank() + rank_offset
+        print(f"vLLM init_process_group - rank {rank}")
         self._model_update_group = init_process_group(
             backend="nccl",
             init_method=f"tcp://{master_address}:{master_port}",
