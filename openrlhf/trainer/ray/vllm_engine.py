@@ -31,6 +31,8 @@ class LLMRayActor:
 
             vllm.engine.llm_engine.set_cuda_visible_devices = _set_cuda_visible_devices
 
+        if vllm.__version__ >= "0.4.1":
+            kwargs["worker_use_ray"] = True
         self.llm = vllm.LLM(*args, **kwargs)
 
     def generate(self, *args, **kwargs):

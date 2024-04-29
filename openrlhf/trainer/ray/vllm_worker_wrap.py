@@ -24,8 +24,10 @@ class WorkerWrap(Worker):
         # Monkey patch hf_model_weights_iterator to allow update single weight
         import vllm
 
-        if vllm.__version__ < "0.2.5":
-            import vllm.model_executor.models
+        self.vllm_version = vllm.__version__
+
+        if vllm.__version__ < "0.4.1":
+            from vllm.model_executor.weight_utils import hf_model_weights_iterator
 
             modules = inspect.getmembers(vllm.model_executor.models, inspect.ismodule)
             for _, m in modules:
@@ -75,7 +77,11 @@ class WorkerWrap(Worker):
         assert dtype == self.model_config.dtype, f"mismatch dtype: src {dtype}, dst {self.model_config.dtype}"
         weight = torch.empty(shape, dtype=dtype, device="cuda")
         torch.distributed.broadcast(weight, 0, group=self._model_update_group)
-        self.model_runner.model.load_weights(model_name_or_path={name: weight})
+
+        if self.vllm_version < "0.4.1":
+            self.model_runner.model.load_weights(model_name_or_path={name: weight})
+        else:
+            self.model_runner.model.load_weights(weights=[(name, weight)])
 
         del weight
         # TODO: should we empty cache if all weights have updated?
