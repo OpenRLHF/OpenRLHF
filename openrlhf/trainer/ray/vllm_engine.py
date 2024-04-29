@@ -17,7 +17,7 @@ class LLMRayActor:
 
         assert vllm.__version__ >= "0.4.1", "OpenRLHF only supports vLLM >= 0.4.1"
 
-        if kwargs["tensor_parallel_size"] > 1:
+        if kwargs["tensor_parallel_size"] == 1:
             kwargs["worker_use_ray"] = True
 
         # See the patch: https://github.com/vllm-project/vllm/commit/479d69fad0538f04cb22bf13e76ff91cfeb8a4e5
