@@ -17,28 +17,27 @@ class LLMRayActor:
 
         assert vllm.__version__ >= "0.4.1", "OpenRLHF only supports vLLM >= 0.4.1"
 
-        # See the patch: https://github.com/vllm-project/vllm/commit/479d69fad0538f04cb22bf13e76ff91cfeb8a4e5
-        if vllm.__version__ > "0.4.1":
+        if kwargs["tensor_parallel_size"] == 1:
+            from openrlhf.trainer.ray.vllm_worker_wrap import WorkerWrap
 
-            class RayWorkerWrapper(vllm.executor.ray_utils.RayWorkerWrapper):
-                def __init__(self, *args, **kwargs) -> None:
-                    kwargs["worker_module_name"] = "openrlhf.trainer.ray.vllm_worker_wrap"
-                    kwargs["worker_class_name"] = "WorkerWrap"
-                    super().__init__(*args, **kwargs)
-
-            vllm.executor.ray_utils.RayWorkerWrapper = RayWorkerWrapper
-
+            vllm.worker.worker.Worker = WorkerWrap
         else:
+            # See the patch: https://github.com/vllm-project/vllm/commit/479d69fad0538f04cb22bf13e76ff91cfeb8a4e5
+            if vllm.__version__ > "0.4.1":
+                RayWorkerWrapperPath = vllm.executor.ray_utils
+            else:
+                RayWorkerWrapperPath = vllm.engine.ray_utils
 
-            class RayWorkerWrapper(vllm.engine.ray_utils.RayWorkerWrapper):
+            class RayWorkerWrapper(RayWorkerWrapperPath.RayWorkerWrapper):
                 def __init__(self, *args, **kwargs) -> None:
                     kwargs["worker_module_name"] = "openrlhf.trainer.ray.vllm_worker_wrap"
                     kwargs["worker_class_name"] = "WorkerWrap"
                     super().__init__(*args, **kwargs)
 
-            vllm.engine.ray_utils.RayWorkerWrapper = RayWorkerWrapper
+            RayWorkerWrapperPath.RayWorkerWrapper = RayWorkerWrapper
 
-        kwargs["worker_use_ray"] = True
+            kwargs["worker_use_ray"] = True
+
         self.llm = vllm.LLM(*args, **kwargs)
 
     def generate(self, *args, **kwargs):
