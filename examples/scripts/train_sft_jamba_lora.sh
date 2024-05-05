@@ -6,7 +6,7 @@ read -r -d '' training_commands <<EOF
     --dataset MaziyarPanahi/WizardLM_evol_instruct_V2_196k \
     --dataset_probs 1.0 \
     --train_batch_size 128 \
-    --micro_train_batch_size 2 \
+    --micro_train_batch_size 4 \
     --pretrain /home/scratch.jianh_gpu/data/models/Jamba-v0.1 \
     --save_path ./ckpt/jamba_wizard\
     --save_steps -1 \
@@ -16,10 +16,10 @@ read -r -d '' training_commands <<EOF
     --max_epochs 2 \
     --bf16 \
     --gradient_checkpointing \
+    --flash_attn \
     --learning_rate 5e-6 \
     --lora_rank 64 \
     --lora_alpha 64 \
-    --target_modules v_proj out_proj x_proj q_proj in_proj \
     --aux_loss_coef 0.001
 EOF
 

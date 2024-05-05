@@ -17,6 +17,7 @@ read -r -d '' training_commands <<EOF
     --max_epochs 1 \
     --bf16 \
     --gradient_checkpointing \
+    --flash_attn \
     --learning_rate 5e-6 \
     --lora_rank 64 \
     --lora_alpha 64 \
