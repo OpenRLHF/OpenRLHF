@@ -9,7 +9,6 @@ from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedModel
 from transformers.deepspeed import HfDeepSpeedConfig
-from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
 
 from .utils import find_all_linear_names, log_probs_from_logits
 
@@ -41,7 +40,7 @@ class Actor(nn.Module):
             attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
 
             # Note: dschf is defined in function scope to avoid global effects
-            # https://huggingface.co/docs/transformers/main_classes/deepspeed#nontrainer-deepspeed-integration
+            # https://huggingface.co/docs/transformers/deepspeed#non-trainer-deepspeed-integration
             if ds_config is not None and ds_config["zero_optimization"]["stage"] == 3:
                 dschf = HfDeepSpeedConfig(ds_config)
             else:
@@ -63,7 +62,7 @@ class Actor(nn.Module):
                 trust_remote_code=True,
                 attn_implementation=attn_implementation,
                 quantization_config=nf4_config,
-                torch_dtype="auto",
+                torch_dtype=torch.bfloat16 if bf16 else "auto",
             )
 
             # LoRA
@@ -90,11 +89,12 @@ class Actor(nn.Module):
                             if hasattr(module, "weight"):
                                 module = module.to(torch.bfloat16)
 
-            # Mixtral 8x7b - balancing loss
-            if "output_router_logits" in self.model.config.to_dict():
-                print("[Mixtral 8x7b] set output_router_logits as True")
+            # MoE - balancing loss
+            model_config = self.model.config.to_dict()
+            if "output_router_logits" in model_config:
+                print("[MoE] set output_router_logits as True")
                 self.model.config.output_router_logits = True
-                deepspeed.utils.set_z3_leaf_modules(self.model, [MixtralSparseMoeBlock])
+
         else:
             self.model = pretrain_or_model
 

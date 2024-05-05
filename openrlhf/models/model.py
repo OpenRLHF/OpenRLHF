@@ -114,7 +114,7 @@ def get_llm_for_sequence_regression(
         model_name_or_path,
         config=config,
         trust_remote_code=True,
-        torch_dtype="auto",
+        torch_dtype=torch.bfloat16 if bf16 else "auto",
         quantization_config=nf4_config,
         **kwargs,
     )
@@ -141,11 +141,11 @@ def get_llm_for_sequence_regression(
                     if hasattr(module, "weight"):
                         module = module.to(torch.bfloat16)
 
-    # Mixtral 8x7b - balancing loss
-    if "output_router_logits" in model.config.to_dict():
-        print("[Mixtral 8x7b] set output_router_logits as True")
+    # MoE - balancing loss
+    model_config = model.config.to_dict()
+    if "output_router_logits" in model_config:
+        print("[MoE] set output_router_logits as True")
         model.config.output_router_logits = True
-        deepspeed.utils.set_z3_leaf_modules(model, [MixtralSparseMoeBlock])
 
     # NOTE: For reward model training only, intialize value_head manually
     # because deepspeed.zero.Init() will not intialize them.
