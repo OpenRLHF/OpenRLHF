@@ -27,7 +27,7 @@ def preprocess_data(data, input_template=None, input_key=None, output_key=None):
             def process_conversations(lll):
                 result = []
                 for l in lll:
-                    if "user" in l["from"]:
+                    if "human" in l["from"]:
                         result.append(input_template.format(l["value"]))
                     else:
                         result.append(l["value"])
