@@ -169,7 +169,7 @@ if __name__ == "__main__":
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
     parser.add_argument("--lora_rank", type=int, default=0)
     parser.add_argument("--lora_alpha", type=int, default=16)
-    parser.add_argument("--target_modules", type=list, default=None)
+    parser.add_argument("--target_modules", type=str, nargs="*", default=None)
     parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
 
