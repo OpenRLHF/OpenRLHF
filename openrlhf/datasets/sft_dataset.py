@@ -10,38 +10,30 @@ def preprocess_data(data, input_template=None, input_key=None, output_key=None):
         prompt = data[input_key]
         target = data[output_key]
     else:
-        # Dahoas/full-hh-rlhf
-        # iamketan25/open-assistant-instructions
-        if exist_and_not_none(data, "prompt") and exist_and_not_none(data, "chosen"):
-            prompt = data["prompt"]
-            target = data["chosen"]
-            input_template = None  # do not modified with input template again
         # pvduy/sharegpt_alpaca_oa_vicuna_format
-        elif exist_and_not_none(data, "prompt") and exist_and_not_none(data, "label"):
+        if exist_and_not_none(data, "prompt") and exist_and_not_none(data, "label"):
             prompt = data["prompt"].replace("USER:", "").replace("ASSISTANT:", "")
             target = data["label"].replace("</s>", "")
-        # BelleGroup/train_0.5M_CN
-        # LLMs/Alpaca-ShareGPT
-        # yahma/alpaca-cleaned
-        # QingyiSi/Alpaca-CoT
-        elif exist_and_not_none(data, "instruction") and exist_and_not_none(data, "output"):
-            input = " " + data["input"] if exist_and_not_none(data, "input") else ""
-            prompt = data["instruction"] + input
-            target = data["output"]
         # Open-Orca/OpenOrca
         elif exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
             prompt = data["system_prompt"] + "\n" + data["question"]
             target = data["response"]
-        # crumb/gpt4all-clean
-        # nomic-ai/gpt4all-j-prompt-generations
-        elif exist_and_not_none(data, "prompt") and exist_and_not_none(data, "response"):
-            prompt = data["prompt"]
-            target = data["response"]
-        # EleutherAI/pile [pretrain !!!]
-        elif exist_and_not_none(data, "text") and exist_and_not_none(data, "meta"):
-            assert input_template is None  # pretrain_mode
-            prompt = ""
-            target = data["text"]
+        # MaziyarPanahi/WizardLM_evol_instruct_V2_196k
+        elif exist_and_not_none(data, "conversations"):
+
+            def process_conversations(lll):
+                result = []
+                for l in lll:
+                    if "user" in l["from"]:
+                        result.append(input_template.format(l["value"]))
+                    else:
+                        result.append(l["value"])
+                return "\n".join(result)
+
+            prompt = data["conversations"][:-1]
+            prompt = process_conversations(prompt)
+            target = data["conversations"][-1]["value"]
+            input_template = None  # do not modified with input template again
         # for batch_inference.py
         elif exist_and_not_none(data, "input") and exist_and_not_none(data, "output"):
             prompt = data["input"]

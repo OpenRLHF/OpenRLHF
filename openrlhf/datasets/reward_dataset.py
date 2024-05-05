@@ -27,11 +27,6 @@ def preprocess_data(data, input_template=None, prompt_key=None, chosen_key=None,
             chosen = data["chosen"]
             reject = data["rejected"]
             input_template = None  # do not modified with input template again
-        # lvwerra/stack-exchange-paired
-        elif exist_and_not_none(data, "response_j"):
-            prompt = data["question"]
-            chosen = data["response_j"]
-            reject = data["response_k"]
         # lmsys/chatbot_arena_conversations
         elif exist_and_not_none(data, "winner") and exist_and_not_none(data, "conversation_a"):
 
@@ -55,11 +50,6 @@ def preprocess_data(data, input_template=None, prompt_key=None, chosen_key=None,
             prompt = data["question"]["full_text"]
             chosen = data["answer_0"] if data["score_0"] > data["score_1"] else data["answer_1"]
             reject = data["answer_1"] if data["score_0"] > data["score_1"] else data["answer_0"]
-        # damo/CValues-Comparison https://www.modelscope.cn/datasets/damo/CValues-Comparison/quickstart
-        elif exist_and_not_none(data, "pos_resp") and exist_and_not_none(data, "neg_resp"):
-            prompt = data["prompt"]
-            chosen = data["pos_resp"]
-            reject = data["neg_resp"]
         else:
             raise ValueError("Unknown reward dataset")
 

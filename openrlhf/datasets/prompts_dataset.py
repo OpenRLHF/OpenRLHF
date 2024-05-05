@@ -20,13 +20,6 @@ def preprocess_data(data, input_template=None, input_key=None) -> str:
         # Open-Orca/OpenOrca
         elif exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
             prompt = data["system_prompt"] + "\n" + data["question"]
-        # BelleGroup/train_0.5M_CN
-        # LLMs/Alpaca-ShareGPT
-        # yahma/alpaca-cleaned
-        # QingyiSi/Alpaca-CoT
-        elif exist_and_not_none(data, "instruction") and exist_and_not_none(data, "output"):
-            input = " " + data["input"] if exist_and_not_none(data, "input") else ""
-            prompt = data["instruction"] + input
         # lmsys/chatbot_arena_conversations
         elif exist_and_not_none(data, "winner") and exist_and_not_none(data, "conversation_a"):
 
