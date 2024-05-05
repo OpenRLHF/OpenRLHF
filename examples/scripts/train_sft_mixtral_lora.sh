@@ -19,7 +19,7 @@ read -r -d '' training_commands <<EOF
     --gradient_checkpointing \
     --learning_rate 5e-6 \
     --lora_rank 64 \
-    --lora_alpha 32 \
+    --lora_alpha 16 \
     --aux_loss_coef 0.001
 EOF
 

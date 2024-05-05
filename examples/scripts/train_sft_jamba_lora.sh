@@ -17,9 +17,9 @@ read -r -d '' training_commands <<EOF
     --bf16 \
     --gradient_checkpointing \
     --learning_rate 5e-6 \
-    --lora_rank 32 \
-    --lora_alpha 32 \
-    --target_modules embed_tokens x_proj in_proj out_proj \
+    --lora_rank 64 \
+    --lora_alpha 16 \
+    --target_modules v_proj out_proj x_proj q_proj in_proj \
     --aux_loss_coef 0.001
 EOF
 
