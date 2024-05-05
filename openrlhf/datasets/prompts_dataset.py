@@ -4,6 +4,8 @@ from .utils import exist_and_not_none
 
 
 def preprocess_data(data, input_template=None, input_key=None) -> str:
+    system_prompt = None
+
     # custom dataset
     if input_key:
         prompt = data[input_key]
@@ -19,7 +21,8 @@ def preprocess_data(data, input_template=None, input_key=None) -> str:
             input_template = None  # do not modified with input template again
         # Open-Orca/OpenOrca
         elif exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
-            prompt = data["system_prompt"] + "\n" + data["question"]
+            system_prompt = data["system_prompt"]
+            prompt = data["question"]
         # lmsys/chatbot_arena_conversations
         elif exist_and_not_none(data, "winner") and exist_and_not_none(data, "conversation_a"):
 
@@ -44,6 +47,9 @@ def preprocess_data(data, input_template=None, input_key=None) -> str:
     # input template
     if input_template:
         prompt = input_template.format(prompt)
+
+    if system_prompt:
+        prompt = system_prompt + prompt
     return prompt
 
 

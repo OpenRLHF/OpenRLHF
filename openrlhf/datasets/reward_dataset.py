@@ -6,6 +6,8 @@ from .utils import exist_and_not_none, zero_pad_sequences
 
 
 def preprocess_data(data, input_template=None, prompt_key=None, chosen_key=None, rejected_key=None) -> str:
+    system_prompt = None
+
     # custom dataset
     if chosen_key and rejected_key:
         if prompt_key:
@@ -59,6 +61,9 @@ def preprocess_data(data, input_template=None, prompt_key=None, chosen_key=None,
     # input template
     if input_template:
         prompt = input_template.format(prompt)
+
+    if system_prompt:
+        prompt = system_prompt + prompt
     return prompt, chosen, reject, margin
 
 
