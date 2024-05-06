@@ -17,30 +17,19 @@ class LLMRayActor:
 
         assert vllm.__version__ >= "0.4.1", "OpenRLHF only supports vLLM >= 0.4.1"
 
+        # See https://github.com/vllm-project/vllm/blob/0650e5935b0f6af35fb2acf71769982c47b804d7/vllm/executor/gpu_executor.py
         self.use_gpu_executor = kwargs["tensor_parallel_size"] == 1
 
-        # See https://github.com/vllm-project/vllm/blob/main/vllm/executor/gpu_executor.py
-        if self.use_gpu_executor:
-            from openrlhf.trainer.ray.vllm_worker_wrap import WorkerWrap
+        # WorkerWrapperBase was used by GPU Executor and Ray GPU Executor in vLLM
+        # We hack this base class to implement weight updates
+        # https://github.com/vllm-project/vllm/blob/0650e5935b0f6af35fb2acf71769982c47b804d7/vllm/worker/worker_base.py#L92
+        class WorkerWrapperBase2(vllm.worker.worker_base.WorkerWrapperBase):
+            def __init__(self, *args, **kwargs) -> None:
+                kwargs["worker_module_name"] = "openrlhf.trainer.ray.vllm_worker_wrap"
+                kwargs["worker_class_name"] = "WorkerWrap"
+                super().__init__(*args, **kwargs)
 
-            vllm.worker.worker.Worker = WorkerWrap
-        else:
-            # RayGPUExecutor
-            # See the patch https://github.com/vllm-project/vllm/commit/479d69fad0538f04cb22bf13e76ff91cfeb8a4e5
-            kwargs["worker_use_ray"] = True
-
-            if vllm.__version__ > "0.4.1":
-                RayWorkerWrapperPath = vllm.executor.ray_utils
-            else:
-                RayWorkerWrapperPath = vllm.engine.ray_utils
-
-            class RayWorkerWrapper(RayWorkerWrapperPath.RayWorkerWrapper):
-                def __init__(self, *args, **kwargs) -> None:
-                    kwargs["worker_module_name"] = "openrlhf.trainer.ray.vllm_worker_wrap"
-                    kwargs["worker_class_name"] = "WorkerWrap"
-                    super().__init__(*args, **kwargs)
-
-            RayWorkerWrapperPath.RayWorkerWrapper = RayWorkerWrapper
+        vllm.worker.worker_base.WorkerWrapperBase = WorkerWrapperBase2
 
         self.llm = vllm.LLM(*args, **kwargs)
 
