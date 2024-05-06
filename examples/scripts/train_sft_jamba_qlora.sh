@@ -7,12 +7,13 @@ read -r -d '' training_commands <<EOF
     --dataset_probs 1.0 \
     --train_batch_size 128 \
     --micro_train_batch_size 4 \
-    --pretrain /home/scratch.jianh_gpu/data/models/Jamba-v0.1 \
+    --pretrain ai21labs/Jamba-v0.1 \
     --save_path ./ckpt/jamba_wizard\
     --save_steps -1 \
     --logging_steps 1 \
     --eval_steps -1 \
-    --zero_stage 3 \
+    --zero_stage 2 \
+    --load_in_4bit \
     --max_epochs 2 \
     --bf16 \
     --gradient_checkpointing \

@@ -157,6 +157,7 @@ class ActorModelRayActor(BasePPORole):
             lora_rank=strategy.args.lora_rank,
             lora_alpha=strategy.args.lora_alpha,
             target_modules=strategy.args.target_modules,
+            lora_alpha=strategy.args.lora_alpha,
             ds_config=strategy.get_ds_train_config(is_actor=True),
         )
 

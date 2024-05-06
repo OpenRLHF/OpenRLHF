@@ -4,13 +4,12 @@ import deepspeed
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from optimum.bettertransformer import BetterTransformer
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedModel
 from transformers.deepspeed import HfDeepSpeedConfig
 
-from .utils import find_all_linear_names, log_probs_from_logits
+from .utils import log_probs_from_logits
 
 
 class Actor(nn.Module):
@@ -31,6 +30,7 @@ class Actor(nn.Module):
         load_in_4bit=False,
         lora_rank=0,
         lora_alpha=16,
+        lora_dropout=0,
         target_modules=None,
         ds_config=None,
     ) -> None:
@@ -73,8 +73,8 @@ class Actor(nn.Module):
                     task_type=TaskType.CAUSAL_LM,
                     r=lora_rank,
                     lora_alpha=lora_alpha,
-                    target_modules=target_modules or find_all_linear_names(self.model, load_in_4bit),
-                    lora_dropout=0,
+                    target_modules=target_modules,
+                    lora_dropout=lora_dropout,
                     bias="none",
                 )
                 self.model = get_peft_model(self.model, lora_config)
@@ -179,12 +179,6 @@ class Actor(nn.Module):
 
     def gradient_checkpointing_disable(self):
         self.model.gradient_checkpointing_disable()
-
-    def to_bettertransformer(self):
-        self.model = BetterTransformer.transform(self.model)
-
-    def reverse_bettertransformer(self):
-        self.model = BetterTransformer.reverse(self.model)
 
     def print_trainable_parameters(self):
         self.model.print_trainable_parameters()
