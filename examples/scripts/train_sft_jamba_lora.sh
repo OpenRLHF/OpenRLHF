@@ -1,8 +1,11 @@
 set -x
 
+# Please note that the dependencies for Jamba are installed.
+# pip install mamba-ssm causal-conv1d>=1.2.0
+
 read -r -d '' training_commands <<EOF
 ../train_sft.py \
-    --max_len 32000 \
+    --max_len 8192 \
     --dataset MaziyarPanahi/WizardLM_evol_instruct_V2_196k \
     --dataset_probs 1.0 \
     --train_batch_size 128 \
