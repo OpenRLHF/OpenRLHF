@@ -26,6 +26,7 @@ def train(args):
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
         target_modules=args.target_modules,
+        lora_dropout=args.lora_dropout,
         ds_config=strategy.get_ds_train_config(is_actor=True),
     )
 
