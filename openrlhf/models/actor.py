@@ -30,6 +30,7 @@ class Actor(nn.Module):
         load_in_4bit=False,
         lora_rank=0,
         lora_alpha=16,
+        lora_dropout=0,
         target_modules=None,
         ds_config=None,
     ) -> None:
@@ -73,7 +74,7 @@ class Actor(nn.Module):
                     r=lora_rank,
                     lora_alpha=lora_alpha,
                     target_modules=target_modules,
-                    lora_dropout=0,
+                    lora_dropout=lora_dropout,
                     bias="none",
                 )
                 self.model = get_peft_model(self.model, lora_config)
