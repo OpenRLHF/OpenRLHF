@@ -4,7 +4,6 @@ import deepspeed
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from optimum.bettertransformer import BetterTransformer
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedModel
@@ -78,16 +77,6 @@ class Actor(nn.Module):
                     bias="none",
                 )
                 self.model = get_peft_model(self.model, lora_config)
-
-                if load_in_4bit:
-                    for name, module in self.model.named_modules():
-                        if isinstance(module, LoraLayer):
-                            module = module.to(torch.bfloat16)
-                        if "norm" in name:
-                            module = module.to(torch.float32)
-                        if "lm_head" in name or "embed_tokens" in name:
-                            if hasattr(module, "weight"):
-                                module = module.to(torch.bfloat16)
 
             # MoE - balancing loss
             model_config = self.model.config.to_dict()
@@ -179,12 +168,6 @@ class Actor(nn.Module):
 
     def gradient_checkpointing_disable(self):
         self.model.gradient_checkpointing_disable()
-
-    def to_bettertransformer(self):
-        self.model = BetterTransformer.transform(self.model)
-
-    def reverse_bettertransformer(self):
-        self.model = BetterTransformer.reverse(self.model)
 
     def print_trainable_parameters(self):
         self.model.print_trainable_parameters()

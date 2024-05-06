@@ -90,8 +90,6 @@ def batch_generate(args):
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
     )
-    if args.to_bettertransformer:
-        model.to_bettertransformer()
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
@@ -298,7 +296,6 @@ if __name__ == "__main__":
     parser.add_argument("--ta_prompt", type=str, default=None)
     parser.add_argument("--prompt_max_len", type=int, default=1024)
     parser.add_argument("--greedy_sampling", action="store_true", default=False)
-    parser.add_argument("--to_bettertransformer", action="store_true", default=False)
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--repetition_penalty", type=float, default=1.2)
