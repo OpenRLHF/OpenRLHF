@@ -2,7 +2,7 @@ set -x
 
 read -r -d '' training_commands <<EOF
 ../train_sft.py \
-    --max_len 128000 \
+    --max_len 32000 \
     --dataset MaziyarPanahi/WizardLM_evol_instruct_V2_196k \
     --dataset_probs 1.0 \
     --train_batch_size 128 \
@@ -12,8 +12,7 @@ read -r -d '' training_commands <<EOF
     --save_steps -1 \
     --logging_steps 1 \
     --eval_steps -1 \
-    --zero_stage 2 \
-    --load_in_4bit \
+    --zero_stage 3 \
     --max_epochs 2 \
     --bf16 \
     --gradient_checkpointing \
