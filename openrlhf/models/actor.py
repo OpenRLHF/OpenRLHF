@@ -79,6 +79,16 @@ class Actor(nn.Module):
                 )
                 self.model = get_peft_model(self.model, lora_config)
 
+                if load_in_4bit:
+                    for name, module in self.model.named_modules():
+                        if isinstance(module, LoraLayer):
+                            module = module.to(torch.bfloat16)
+                        if "norm" in name:
+                            module = module.to(torch.float32)
+                        if "lm_head" in name or "embed_tokens" in name:
+                            if hasattr(module, "weight"):
+                                module = module.to(torch.bfloat16)
+
             # MoE - balancing loss
             model_config = self.model.config.to_dict()
             if "output_router_logits" in model_config:
