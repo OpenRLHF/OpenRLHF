@@ -136,7 +136,7 @@ def get_llm_for_sequence_regression(
                     module = module.to(torch.bfloat16)
                 if "norm" in name:
                     module = module.to(torch.float32)
-                if "lm_head" in name or "embed_tokens" in name:
+                if "value_head" in name or "embed_tokens" in name:
                     if hasattr(module, "weight"):
                         module = module.to(torch.bfloat16)
 
