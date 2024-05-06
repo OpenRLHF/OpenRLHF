@@ -12,8 +12,6 @@ from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
 
 from openrlhf.utils.logging import init_logger
 
-from .utils import find_all_linear_names
-
 logger = init_logger(__name__)
 
 
@@ -125,21 +123,11 @@ def get_llm_for_sequence_regression(
         lora_config = LoraConfig(
             r=lora_rank,
             lora_alpha=lora_alpha,
-            target_modules=target_modules or find_all_linear_names(model, load_in_4bit),
+            target_modules=target_modules,
             lora_dropout=0,
             bias="none",
         )
         model = get_peft_model(model, lora_config)
-
-        if load_in_4bit:
-            for name, module in model.named_modules():
-                if isinstance(module, LoraLayer):
-                    module = module.to(torch.bfloat16)
-                if "norm" in name:
-                    module = module.to(torch.float32)
-                if "value_head" in name or "embed_tokens" in name:
-                    if hasattr(module, "weight"):
-                        module = module.to(torch.bfloat16)
 
     # MoE - balancing loss
     model_config = model.config.to_dict()

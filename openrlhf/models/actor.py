@@ -10,7 +10,7 @@ from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedModel
 from transformers.deepspeed import HfDeepSpeedConfig
 
-from .utils import find_all_linear_names, log_probs_from_logits
+from .utils import log_probs_from_logits
 
 
 class Actor(nn.Module):
@@ -73,21 +73,11 @@ class Actor(nn.Module):
                     task_type=TaskType.CAUSAL_LM,
                     r=lora_rank,
                     lora_alpha=lora_alpha,
-                    target_modules=target_modules or find_all_linear_names(self.model, load_in_4bit),
+                    target_modules=target_modules,
                     lora_dropout=0,
                     bias="none",
                 )
                 self.model = get_peft_model(self.model, lora_config)
-
-                if load_in_4bit:
-                    for name, module in self.model.named_modules():
-                        if isinstance(module, LoraLayer):
-                            module = module.to(torch.bfloat16)
-                        if "norm" in name:
-                            module = module.to(torch.float32)
-                        if "lm_head" in name or "embed_tokens" in name:
-                            if hasattr(module, "weight"):
-                                module = module.to(torch.bfloat16)
 
             # MoE - balancing loss
             model_config = self.model.config.to_dict()
