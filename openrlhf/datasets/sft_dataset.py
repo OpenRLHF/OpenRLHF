@@ -22,6 +22,7 @@ def preprocess_data(data, input_template=None, input_key=None, output_key=None):
             prompt = data["question"]
             response = data["response"]
         # MaziyarPanahi/WizardLM_evol_instruct_V2_196k
+        # jondurbin/airoboros-3.2
         elif exist_and_not_none(data, "conversations"):
 
             def process_conversations(lll):
@@ -29,6 +30,9 @@ def preprocess_data(data, input_template=None, input_key=None, output_key=None):
                 for l in lll:
                     if "human" in l["from"]:
                         result.append(input_template.format(l["value"]))
+                    elif "system" in l["from"]:
+                        nonlocal system_prompt
+                        system_prompt = l["value"]
                     else:
                         result.append(l["value"])
                 return "\n".join(result)
@@ -49,7 +53,7 @@ def preprocess_data(data, input_template=None, input_key=None, output_key=None):
         prompt = input_template.format(prompt)
 
     if system_prompt:
-        prompt = system_prompt + prompt
+        prompt = system_prompt + "\n" + prompt
     return prompt, response
 
 

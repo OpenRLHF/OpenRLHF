@@ -63,7 +63,7 @@ def preprocess_data(data, input_template=None, prompt_key=None, chosen_key=None,
         prompt = input_template.format(prompt)
 
     if system_prompt:
-        prompt = system_prompt + prompt
+        prompt = system_prompt + "\n" + prompt
     return prompt, chosen, reject, margin
 
 

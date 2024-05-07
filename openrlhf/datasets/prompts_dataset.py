@@ -49,7 +49,7 @@ def preprocess_data(data, input_template=None, input_key=None) -> str:
         prompt = input_template.format(prompt)
 
     if system_prompt:
-        prompt = system_prompt + prompt
+        prompt = system_prompt + "\n" + prompt
     return prompt
 
 
