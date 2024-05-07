@@ -34,7 +34,7 @@ def preprocess_data(data, input_template=None, input_key=None, output_key=None):
                         nonlocal system_prompt
                         system_prompt = l["value"]
                     else:
-                        result.append(l["value"])
+                        result.append(l["value"] + "\n")
                 return "".join(result)
 
             prompt = process_conversations(data["conversations"][:-1])

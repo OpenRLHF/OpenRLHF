@@ -39,7 +39,7 @@ def preprocess_data(data, input_template=None, prompt_key=None, chosen_key=None,
                     if "user" in l["role"]:
                         result.append(input_template.format(l["content"]))
                     else:
-                        result.append(l["content"])
+                        result.append(l["content"] + "\n")
                 return "".join(result)
 
             prompt = ""
