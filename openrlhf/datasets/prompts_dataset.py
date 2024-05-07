@@ -16,7 +16,8 @@ def preprocess_data(data, input_template=None, input_key=None) -> str:
             # tasksource/oasst1_pairwise_rlhf_reward
             if prompt.startswith("prompter:"):
                 prompt = (
-                    prompt.replace("prompter:", "\nHuman: ").replace("assistant:", "\nAssistant: ") + "\nAssistant: "
+                    prompt.replace("prompter:", "\nHuman:\n").replace("assistant:", "\nAssistant:\n")
+                    + "\nAssistant:\n"
                 )
             input_template = None  # do not modified with input template again
         # Open-Orca/OpenOrca
@@ -33,7 +34,7 @@ def preprocess_data(data, input_template=None, input_key=None) -> str:
                         result.append(input_template.format(l["content"]))
                     else:
                         result.append(l["content"])
-                return "\n".join(result)
+                return "".join(result)
 
             prompt = data["conversation_a"][:-1]
             prompt = process_chatbot_arena_conversations(prompt)
@@ -68,7 +69,7 @@ class PromptDataset(Dataset):
         dataset,
         tokenizer,
         strategy,
-        input_template="Human: {}\nAssistant: ",
+        input_template="Human:\n{}\nAssistant:\n",
     ) -> None:
         super().__init__()
         self.strategy = strategy

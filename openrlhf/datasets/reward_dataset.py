@@ -24,7 +24,8 @@ def preprocess_data(data, input_template=None, prompt_key=None, chosen_key=None,
             prompt = data["prompt"] if exist_and_not_none(data, "prompt") else ""
             if prompt.startswith("prompter:"):
                 prompt = (
-                    prompt.replace("prompter:", "\nHuman: ").replace("assistant:", "\nAssistant: ") + "\nAssistant: "
+                    prompt.replace("prompter:", "\nHuman:\n").replace("assistant:", "\nAssistant:\n")
+                    + "\nAssistant:\n"
                 )
             chosen = data["chosen"]
             reject = data["rejected"]
@@ -39,7 +40,7 @@ def preprocess_data(data, input_template=None, prompt_key=None, chosen_key=None,
                         result.append(input_template.format(l["content"]))
                     else:
                         result.append(l["content"])
-                return "\n".join(result)
+                return "".join(result)
 
             prompt = ""
             chosen = data["conversation_a"] if data["winner"] == "model_a" else data["conversation_b"]
@@ -83,7 +84,7 @@ class RewardDataset(Dataset):
         tokenizer: Callable,
         max_length: int,
         strategy,
-        input_template="Human: {}\nAssistant: ",
+        input_template="Human:\n{}\nAssistant:\n",
         is_dpo=False,
     ) -> None:
         super().__init__()

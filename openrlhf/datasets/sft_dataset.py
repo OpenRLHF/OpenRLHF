@@ -35,7 +35,7 @@ def preprocess_data(data, input_template=None, input_key=None, output_key=None):
                         system_prompt = l["value"]
                     else:
                         result.append(l["value"])
-                return "\n".join(result)
+                return "".join(result)
 
             prompt = process_conversations(data["conversations"][:-1])
             response = data["conversations"][-1]["value"]
@@ -73,7 +73,7 @@ class SFTDataset(Dataset):
         tokenizer: Callable,
         max_length: int,
         strategy,
-        input_template="Human: {}\nAssistant: ",
+        input_template="Human:\n{}\nAssistant:\n",
         pretrain_mode=False,
     ) -> None:
         super().__init__()
