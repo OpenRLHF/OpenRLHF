@@ -57,18 +57,18 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 
 **PPO Support Matrix**
 
-| Feature | OpenRLHF | DSChat | CAIChat | TRL | NeMo-Aligner |
-| ------------- |:-------------:| :-------------:| :-------------:| :-------------:| :-------------:|
-| 70B+ Full Tuning with 16 A100      | ✅ | ❌ | ❌ | ❌ | ✅ (32+ A100s) |
-| 7B Full Tuning with 4 RTX4090 | ✅      |    ❌ | ❌ | ❌ | ❌ |
-| 34B DPO Full Tuning with 8 A100 | ✅      |    ❌ | ❌ | ❌ | ❌ |  
-| PPO Implementation Tricks | ✅      |    ❌ | ❌ | ✅ | ✅ |
-| Support QLoRA | ✅      |    ❌ | ❌ | ✅ | ❌ |
-| Support Mixtral 8*7b | ✅      |    ❌ | ❌ | ❌ | ❌ |  
-| Support Unmerged Actor-Critic | ✅     |   ✅ | ✅ | ❌ | ✅ |
-| Support Multiple Reward Models | ✅      |    ❌ | ❌ | ❌ | ❌ |   
-| Support Huggingface Models | ✅      |    ✅ | ✅ | ✅ | ❌ (need to convert) |
-| Easy-to-use | ✅      |   ✅ | ✅ | ✅ | ❌ |
+| Feature | OpenRLHF | DSChat | CAIChat | TRL |
+| ------------- |:-------------:| :-------------:| :-------------:| :-------------:|
+| 70B+ Full Tuning with 16 A100      | ✅ | ❌ | ❌ | ❌ |
+| 7B Full Tuning with 4 RTX4090 | ✅      |    ❌ | ❌ | ❌ |
+| 34B DPO Full Tuning with 8 A100 | ✅      |    ❌ | ❌ | ❌ |  
+| PPO Implementation Tricks | ✅      |    ❌ | ❌ | ✅ |
+| Support QLoRA | ✅      |    ❌ | ❌ | ✅ | 
+| Support Mixtral 8*7b | ✅      |    ❌ | ❌ | ❌ |  
+| Support Unmerged Actor-Critic | ✅     |   ✅ | ✅ | ❌ | 
+| Support Multiple Reward Models | ✅      |    ❌ | ❌ | ❌ |   
+| Support Huggingface Models | ✅      |    ✅ | ✅ | ✅ | 
+| Easy-to-use | ✅      |   ✅ | ✅ | ✅ | 
 
 
 ## Performance
