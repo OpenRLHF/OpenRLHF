@@ -229,7 +229,9 @@ class DPOTrainer(ABC):
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
         """
-        input_ids, att_masks = self.concatenated_inputs(chosen_ids, c_mask, reject_ids, r_mask)
+        input_ids, att_masks, prompt_id_lens = self.concatenated_inputs(
+            chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens
+        )
         output = model(input_ids, attention_mask=att_masks, return_output=True)
         all_logits = output["logits"]
         all_logps = self._get_batch_logps(all_logits, input_ids, att_masks, prompt_id_lens, average_log_prob=False)
@@ -238,7 +240,7 @@ class DPOTrainer(ABC):
         aux_loss = output.aux_loss if "aux_loss" in output else []
         return chosen_logps, rejected_logps, aux_loss
 
-    def concatenated_inputs(self, chosen_ids, c_mask, reject_ids, r_mask):
+    def concatenated_inputs(self, chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens):
         """Concatenate the chosen and rejected inputs into a single tensor.
 
         Args:
@@ -268,7 +270,7 @@ class DPOTrainer(ABC):
         )
         max_length = max(c_mask.shape[1], r_mask.shape[1])
         att_masks = torch.cat((pad_to_length(c_mask, max_length, 0), pad_to_length(r_mask, max_length, 0)), dim=0)
-        return inputs_ids, att_masks
+        return inputs_ids, att_masks, prompt_id_lens * 2
 
     def _get_batch_logps(
         self,
