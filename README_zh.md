@@ -33,7 +33,7 @@
 OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 RLHF 框架：
 
 - **简单易用**: OpenRLHF 是目前可用的最简单的高性能 RLHF 库之一，兼容 Huggingface 模型和数据集。
-- **高性能**: RLHF 训练的 80% 时间花费在样本生成阶段。得益于使用 Ray 和 Adam Offload（固定内存）可以使用大批量推理，使用 13B LLaMA2 模型的 OpenRLHF 性能是 DeepSpeedChat 的 4 倍。我们还支持 vLLM 生成加速以进一步提高生成性能。
+- **高性能**: RLHF 训练中 80% 的时间用于样本生成阶段。得益于使用 Ray 和 Adam Offload（固定内存）以及 vLLM 生成加速的能力，OpenRLHF 的性能是极致优化的 DeepSpeedChat with Hybrid Engine 的两倍。
 - **分布式 RLHF**:  OpenRLHF 使用 Ray 将 Actor、Reward、Reference 和 Critic 模型分布到不同的 GPU 上，同时将 Adam 优化器放在 CPU 上。这使得使用多个 A100 80G GPU 和 vLLM 可以全面微调超过 70B+ 的模型 (见 [architecture](./docs/ray_architecture.png)) 以及在多个 24GB RTX 4090 GPU 上微调 7B 模型。
 - **PPO 实现技巧**: 我们集成了 PPO 的实现技巧以提高训练稳定性，参考 https://arxiv.org/abs/2005.12729 和 https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/.
 
@@ -75,29 +75,14 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 
 
 ## 性能
-**通用配置** 
+我们通过启用Adam卸载、奖励模型(RM)和参考模型(Ref)卸载等技术,尽可能优化了DSChat的性能,从而在推理阶段增加小批量大小并避免内存不足问题。我们甚至修复了DSChat中的一些bug,以启用LLaMA2的混合引擎(HE)。使用优化后的DSChat和OpenRLHF训练1024个提示需要1个PPO轮次的平均时间(秒)如下:
 
-- Ray: 用于 Actor 的 4 个 A100 80G，用于 Critic 的 2 个 A100 80G，用于 RM 的 1 个 A100 80G，以及用于 InitPolicy 的 1 个 A100 80G
-- DeepSpeed: 使用 Adam Offload 的 ZeRO2
-- 最大序列长度: 2048 
-
-
-**吞吐量**
-
-| 模型 | 微批量大小 (rollout/train) | 吞吐量 | 生成长度 |
-|-|-|-|-|  
-| 7B llama2 | 16/8 | 0.136 样本/gpu/秒 | 100-300 |
-| 13B llama2 | 8/4 | 0.05 样本/gpu/秒 | 200-400 |
-| 34B codellama | 2/1 | 0.009 样本/gpu/秒 | 300-800 |
-
-样本/gpu/秒 = PPO 样本数量 / A100 GPU 数量 / 秒数
-
-**OpenRLHF vs DSChat**
-
-|        | 7B llama2 PPO | 13B llama2 PPO (50k 样本) | 
-|  ----  | ----  |  ----  |
-| OpenRLHF  | - | 使用 8 个 A100 耗时 17 小时  | 
-| DeepSpeedChat  | - | 使用 16 个 A100 耗时 48 小时  |
+| **Size** | **NVIDIA A800 GPUs** | **Optimized DSChat (with  Hybrid Engine)** | **OpenRLHF** | **Speedup** |
+| :---: | :---: | :---: | :---: | :---: |
+| 7B | 16 | 855.09 | 471.11 | 1.82x |
+| 13B | 32 | 1528.93 | 608.93 | 2.5x |
+| 34B | 32 | 3634.98 | 1526.4 | 2.4x |
+| 70B | 32 | 10407.0 | 4488.53 | 2.3x |
 
 
 ## 运行示例
@@ -117,7 +102,7 @@ cd examples/scripts
 # 安装 nvidia-docker（可选）
 ./nvidia_docker_install.sh
 
-# 使用 vLLM 构建 nvidia 容器（推荐）
+# 构建 vLLM nvidia 容器（推荐）
 ./docker_run.sh build
 
 # 运行 nvidia 容器
@@ -148,13 +133,13 @@ wandb.login()
 # PPO 训练
 ./train_ppo_llama.sh
 
-# DPO
+# DPO 训练
 ./train_dpo_llama.sh
 
-# KTO
+# KTO 
 ./train_kto_llama.sh
 
-# 使用 vLLM 的拒绝采样
+# 使用 vLLM 的拒绝采样训练
 ./train_rejection_sampling_llama.sh
 
 # 条件 SFT
@@ -166,7 +151,7 @@ wandb.login()
 
 **使用Ray进行PPO训练**
 > [!TIP]
-> 适用于V100/A100/H100的13B模型或RTX4090上的7B模型
+> 适用于V100/A100/H100的13B以上模型或RTX4090上的7B模型
 
 ```bash
 # 在容器中启动 ray 的主节点
@@ -292,7 +277,7 @@ pip install flash-attn==2.5.0
 ```
 @misc{hu23openrlhf,
 author = {Jian Hu and Xibin Wu and Xianyu and Chen Su and Leon Qiu and Daoning Jiang and Qing Wang and Weixun Wang},
-title = {OpenRLHF: 一个基于 Ray 的高性能 RLHF 框架},
+title = {OpenRLHF: An Easy-to-use, Scalable and High-performance RLHF Framework},
 year={2023},
 publisher = {GitHub},
 journal = {GitHub repository},

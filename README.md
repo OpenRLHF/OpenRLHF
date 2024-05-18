@@ -30,7 +30,7 @@
 OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Transformers:
 
 - **Simple and easy to use**: OpenRLHF is one of the simplest high-performance RLHF libraries currently available, and compatible with Huggingface models and datasets.
-- **High performance**: RLHF training spends 80% of the time on the sample generation stage. Thanks to the ability to use a large inference batch size with Ray and Adam Offload (Pinned Memory), the performance of OpenRLHF with the 13B LLaMA2 model is 4x that of DeepSpeedChat. We also support vLLM generation acceleration to further improve the generation performance.
+- **High performance**: RLHF training spends 80% of the time on the sample generation stage. Thanks to the ability to use a large inference batch size with Ray and Adam Offload (Pinned Memory) and vLLM generation acceleration, the performance of OpenRLHF 2x that of Optimized DeepSpeedChat with Hybrid Engine.
 - **Distributed RLHF**:  OpenRLHF distribute the Actor, Reward, Reference, and Critic models onto separate GPUs using Ray, while placing the Adam optimizer on the CPU. This enables full-scale fine-tuning of 70B+ models with multiple A100 80G GPUs and vLLM (see [architecture](./docs/ray_architecture.png)) and 7B models across multiple 24GB RTX 4090 GPUs.
 - **PPO Implementation Tricks**: We integrated the implementation tricks for PPO to improve the training stability, referencing https://arxiv.org/abs/2005.12729 and https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/.
 
@@ -72,29 +72,15 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 
 
 ## Performance
-**Common Configuration** 
 
-- Ray: 4 A100 80G for Actor, 2 A100 80G for Critic, 1 A100 80G for RM, and 1 A100 80G for InitPolicy
-- DeepSpeed: ZeRO2 with Adam Offload
-- Max Sequence Length: 2048 
+We optimized DSChat's performance to the greatest extent possible by employing techniques such as enabling Adam offload, along with reward model (RM) and reference model (Ref) offload to increase the micro-batch size during the inference stage and avoid out-of-memory issues. We even fixed some bugs in DSChat to enable the Hybrid Engine (HE) for LLaMA2. The average time (seconds) it took to train 1024 prompts with 1 PPO epoch using the Optimized DSChat and OpenRLHF:
 
-
-**Throughput**
-
-| Model | Micro Batch Size (rollout/train) | Throughput | Generation Length |
-|-|-|-|-|  
-| 7B llama2 | 16/8 | 0.136 samples/gpu/sec | 100-300 |
-| 13B llama2 | 8/4 | 0.05 samples/gpu/sec | 200-400 |
-| 34B codellama | 2/1 | 0.009 samples/gpu/sec | 300-800 |
-
-samples/gpu/secs = Number of PPO Samples / Number of A100 GPUs / Seconds
-
-**OpenRLHF vs DSChat**
-
-|        | 7B llama2 PPO | 13B llama2 PPO (50k samples) | 
-|  ----  | ----  |  ----  |
-| OpenRLHF  | - | 17 hours with 8 A100  | 
-| DeepSpeedChat  | - | 48 hours with 16 A100  |
+| **Size** | **NVIDIA A800 GPUs** | **Optimized DSChat (with  Hybrid Engine)** | **OpenRLHF** | **Speedup** |
+| :---: | :---: | :---: | :---: | :---: |
+| 7B | 16 | 855.09 | 471.11 | 1.82x |
+| 13B | 32 | 1528.93 | 608.93 | 2.5x |
+| 34B | 32 | 3634.98 | 1526.4 | 2.4x |
+| 70B | 32 | 10407.0 | 4488.53 | 2.3x |
 
 
 ## Running Example
@@ -289,7 +275,7 @@ Our project would also like to thank [ColossalChat](https://github.com/hpcaitech
 ```
 @misc{hu23openrlhf,
    author = {Jian Hu and Xibin Wu and Xianyu and Chen Su and Leon Qiu and Daoning Jiang and Qing Wang and Weixun Wang},
-   title = {OpenRLHF: A Ray-based High-performance RLHF framework},
+   title = {OpenRLHF: An Easy-to-use, Scalable and High-performance RLHF Framework},
    year={2023},
    publisher = {GitHub},
    journal = {GitHub repository},
