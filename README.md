@@ -30,7 +30,7 @@
 OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Transformers:
 
 - **Simple and easy to use**: OpenRLHF is one of the simplest high-performance RLHF libraries currently available, and compatible with Huggingface models and datasets.
-- **High performance**: RLHF training spends 80% of the time on the sample generation stage. Thanks to the ability to use a large inference batch size with Ray and Adam Offload (Pinned Memory) and vLLM generation acceleration, the performance of OpenRLHF 2x that of Optimized DeepSpeedChat with Hybrid Engine.
+- **High performance**: RLHF training spends 80% of the time on the sample generation stage. Thanks to the ability to use a large inference batch size with Ray and Adam Offload (Pinned Memory) and vLLM generation acceleration, the performance of OpenRLHF 2x+ that of Optimized DeepSpeedChat with Hybrid Engine.
 - **Distributed RLHF**:  OpenRLHF distribute the Actor, Reward, Reference, and Critic models onto separate GPUs using Ray, while placing the Adam optimizer on the CPU. This enables full-scale fine-tuning of 70B+ models with multiple A100 80G GPUs and vLLM (see [architecture](./docs/ray_architecture.png)) and 7B models across multiple 24GB RTX 4090 GPUs.
 - **PPO Implementation Tricks**: We integrated the implementation tricks for PPO to improve the training stability, referencing https://arxiv.org/abs/2005.12729 and https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/.
 
@@ -62,13 +62,14 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 | 70B+ Full Tuning with 16 A100      | ✅ | ❌ | ❌ | ❌ |
 | 7B Full Tuning with 4 RTX4090 | ✅      |    ❌ | ❌ | ❌ |
 | 34B DPO Full Tuning with 8 A100 | ✅      |    ❌ | ❌ | ❌ |  
+| Inference Engine in PPO | ✅      |    ✅ | ❌ | ❌ |  
 | PPO Implementation Tricks | ✅      |    ❌ | ❌ | ✅ |
 | Support QLoRA | ✅      |    ❌ | ❌ | ✅ | 
 | Support Mixtral 8*7b | ✅      |    ❌ | ❌ | ❌ |  
 | Support Unmerged Actor-Critic | ✅     |   ✅ | ✅ | ❌ | 
 | Support Multiple Reward Models | ✅      |    ❌ | ❌ | ❌ |   
 | Support Huggingface Models | ✅      |    ✅ | ✅ | ✅ | 
-| Easy-to-use | ✅      |   ✅ | ✅ | ✅ | 
+| Easy-to-use | ✅      |   ❌ (HybridEngine bugs) | ✅ | ✅ | 
 
 
 ## Performance

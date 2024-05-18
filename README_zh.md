@@ -33,7 +33,7 @@
 OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 RLHF 框架：
 
 - **简单易用**: OpenRLHF 是目前可用的最简单的高性能 RLHF 库之一，兼容 Huggingface 模型和数据集。
-- **高性能**: RLHF 训练中 80% 的时间用于样本生成阶段。得益于使用 Ray 和 Adam Offload（固定内存）以及 vLLM 生成加速的能力，OpenRLHF 的性能是极致优化的 DeepSpeedChat with Hybrid Engine 的两倍。
+- **高性能**: RLHF 训练中 80% 的时间用于样本生成阶段。得益于使用 Ray 和 Adam Offload（固定内存）以及 vLLM 生成加速的能力，OpenRLHF 的性能是极致优化的 DeepSpeedChat with Hybrid Engine 的两倍以上。
 - **分布式 RLHF**:  OpenRLHF 使用 Ray 将 Actor、Reward、Reference 和 Critic 模型分布到不同的 GPU 上，同时将 Adam 优化器放在 CPU 上。这使得使用多个 A100 80G GPU 和 vLLM 可以全面微调超过 70B+ 的模型 (见 [architecture](./docs/ray_architecture.png)) 以及在多个 24GB RTX 4090 GPU 上微调 7B 模型。
 - **PPO 实现技巧**: 我们集成了 PPO 的实现技巧以提高训练稳定性，参考 https://arxiv.org/abs/2005.12729 和 https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/.
 
@@ -65,13 +65,14 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 | 使用 16 个 A100 完成 70B+ 全微调      | ✅ | ❌ | ❌ | ❌ ||
 | 使用 4 个 RTX4090 完成 7B 全微调 | ✅      |    ❌ | ❌ | ❌ | 
 | 使用 8 个 A100 完成 34B DPO 全微调 | ✅      |    ❌ | ❌ | ❌ |   
+| 支持推理引擎加速 | ✅      |    ✅ | ❌ | ❌ |  
 | PPO 实现技巧 | ✅      |    ❌ | ❌ | ✅ | 
 | 支持 QLoRA | ✅      |    ❌ | ❌ | ✅ | 
 | 支持 Mixtral 8*7b | ✅      |    ❌ | ❌ | ❌ | 
 | 支持未合并的 Actor-Critic | ✅     |   ✅ | ✅ | ❌ | 
 | 支持多个奖励模型 | ✅      |    ❌ | ❌ | ❌ |   
 | 支持 Huggingface 模型 | ✅      |    ✅ | ✅ | ✅ | 
-| 易于使用 | ✅      |   ✅ | ✅ | ✅ | 
+| 易于使用 | ✅      |   ❌ (HybridEngine bugs) | ✅ | ✅ | 
 
 
 ## 性能
