@@ -55,7 +55,8 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 - Allows saving and loading training checkpoints.
 - Support Hybrid vLLM inference engine.
 
-**PPO Support Matrix** <!--- TODO do you mean A100 40GB or A100 80GB? Since you mentioned A100 80GB in line 34, i assume you mean those. --->
+**PPO Support Matrix** 
+<!--- TODO do you mean A100 40GB or A100 80GB? Since you mentioned A100 80GB in line 34, i assume you mean those. --->
 
 | Feature | OpenRLHF | DSChat | CAIChat | TRL |
 | ------------- |:-------------:| :-------------:| :-------------:| :-------------:|
