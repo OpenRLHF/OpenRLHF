@@ -55,13 +55,13 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 - Allows saving and loading training checkpoints.
 - Support Hybrid vLLM inference engine.
 
-**PPO Support Matrix**
+**PPO Support Matrix** <!--- TODO do you mean A100 40GB or A100 80GB? Since you mentioned A100 80GB in line 34, i assume you mean those. --->
 
 | Feature | OpenRLHF | DSChat | CAIChat | TRL |
 | ------------- |:-------------:| :-------------:| :-------------:| :-------------:|
-| 70B+ Full Tuning with 16 A100      | ✅ | ❌ | ❌ | ❌ |
+| 70B+ Full Tuning with 16 A100-80GB      | ✅ | ❌ | ❌ | ❌ |
 | 7B Full Tuning with 4 RTX4090 | ✅      |    ❌ | ❌ | ❌ |
-| 34B DPO Full Tuning with 8 A100 | ✅      |    ❌ | ❌ | ❌ |  
+| 34B DPO Full Tuning with 8 A100-80GB | ✅      |    ❌ | ❌ | ❌ |  
 | Inference Engine in PPO | ✅      |    ✅ | ❌ | ❌ |  
 | PPO Implementation Tricks | ✅      |    ❌ | ❌ | ✅ |
 | Support QLoRA | ✅      |    ❌ | ❌ | ✅ | 
@@ -76,7 +76,8 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 
 We optimized DSChat's performance to the greatest extent possible by employing techniques such as enabling Adam offload, along with reward model (RM) and reference model (Ref) offload to increase the micro-batch size during the inference stage and avoid out-of-memory issues. We even fixed some bugs in DSChat to enable the Hybrid Engine (HE) for LLaMA2. The average time (seconds) it took to train 1024 prompts with 1 PPO epoch using the Optimized DSChat and OpenRLHF:
 
-| **Size** | **NVIDIA A800 GPUs** | **Optimized DSChat (with  Hybrid Engine)** | **OpenRLHF** | **Speedup** |
+<!--- TODO do you mean A100 40GB or A100 80GB? Since you mentioned A100 80GB in line 34, i assume you mean those. --->
+| **Size** | **NVIDIA A100-80GB GPUs** | **Optimized DSChat (with  Hybrid Engine)** | **OpenRLHF** | **Speedup** |
 | :---: | :---: | :---: | :---: | :---: |
 | 7B | 16 | 855.09 | 471.11 | 1.82x |
 | 13B | 32 | 1528.93 | 608.93 | 2.5x |
