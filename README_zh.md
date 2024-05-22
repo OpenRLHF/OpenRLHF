@@ -206,7 +206,7 @@ sbatch ./train_ppo_llama_ray_slurm.sh
 python examples/batch_inference.py {args}
 
 # 交互式聊天
-./interactive_chat_llama.sh { pretrain_model_path }
+python examples/interactive_chat.py --bf16 --pretrain { pretrain_model_path }
 ```
 
 **从 conda 环境构建 openrlhf**
@@ -222,8 +222,7 @@ pip3 install torch
 ninja --version
 echo $? # output: 0
 # 安装 flash-attn：可能需要一些时间。
-# 对于网络错误：您可以从 https://github.com/Dao-AILab/flash-attention/releases 下载指定版本。
-pip install flash-attn==2.5.0
+pip install flash-attn==2.5.8
 ./build_openrlhf.sh
 # 享受它！
 ```

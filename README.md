@@ -203,7 +203,7 @@ After completing the training, you can evaluate your model by using the `inferen
 python examples/batch_inference.py {args}
 
 # interactive_chat
-./interactive_chat_llama.sh { pretrain_model_path }
+python examples/interactive_chat.py --bf16 --pretrain { pretrain_model_path }
 ```
 
 **build openrlhf from conda envs**
@@ -219,8 +219,7 @@ pip3 install torch
 ninja --version
 echo $? # output: 0
 # install flash-attn: may take some time.
-# For network error: you can download specified version from https://github.com/Dao-AILab/flash-attention/releases.
-pip install flash-attn==2.5.0
+pip install flash-attn==2.5.8
 ./build_openrlhf.sh
 # enjoy it!
 ```

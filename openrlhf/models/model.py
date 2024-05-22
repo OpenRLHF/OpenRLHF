@@ -30,6 +30,7 @@ def get_llm_for_sequence_regression(
     use_flash_attention_2=False,
     ds_config: dict = None,
     init_value_head: bool = False,
+    device_map=None,
     **kwargs,
 ) -> nn.Module:
     """Get transformer with a sequence classification head on top (linear layer).
@@ -114,6 +115,7 @@ def get_llm_for_sequence_regression(
         trust_remote_code=True,
         torch_dtype=torch.bfloat16 if bf16 else "auto",
         quantization_config=nf4_config,
+        device_map=device_map,
         **kwargs,
     )
 

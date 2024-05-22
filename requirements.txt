@@ -1,3 +1,4 @@
+accelerate
 bitsandbytes
 datasets
 deepspeed==0.13.5

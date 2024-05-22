@@ -33,6 +33,8 @@ class Actor(nn.Module):
         lora_dropout=0,
         target_modules=None,
         ds_config=None,
+        device_map=None,
+        **kwargs,
     ) -> None:
         super().__init__()
 
@@ -63,6 +65,7 @@ class Actor(nn.Module):
                 attn_implementation=attn_implementation,
                 quantization_config=nf4_config,
                 torch_dtype=torch.bfloat16 if bf16 else "auto",
+                device_map=device_map,
             )
 
             # LoRA
