@@ -365,7 +365,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 output.outputs[0].token_ids = [self.tokenizer.unk_token_id, self.tokenizer.eos_token_id]
 
             max_input_len = max(max_input_len, len(output.prompt_token_ids))
-            max_output_len = max(max_output_len, len(output_token_ids))
+            max_output_len = max(max_output_len, len(output.outputs[0].token_ids))
 
         pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
         sequences = []
