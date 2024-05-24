@@ -360,7 +360,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         for output in outputs:
             # TODO: how to force vLLM generate at least one token?
             output_token_ids = output.outputs[0].token_ids
-            if output_token_ids[0] == self.tokenizer.eos_token_id:
+            if len(output_token_ids) == 0 or output_token_ids[0] == self.tokenizer.eos_token_id:
                 logger.warning(f"Only EOS output for prompt: {output.prompt}")
                 output.outputs[0].token_ids = [self.tokenizer.unk_token_id, self.tokenizer.eos_token_id]
 
