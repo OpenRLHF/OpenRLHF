@@ -251,9 +251,11 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # avoid CUDA OOM when colocate models
         if self.strategy.args.colocate_critic_reward:
             ray.get([value_ref])
+            ray.get([self.critic.empty_cache.remote()])
 
         if self.strategy.args.colocate_actor_ref:
             ray.get([base_action_log_probs_ref])
+            ray.get([self.initial_model.empty_cache.remote()])
 
         # rewards
         r_refs = []
@@ -274,6 +276,13 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         base_action_log_probs, value = base_action_log_probs.to(device), value.to(device)
         rewards = [r.to(device) for r in rewards]
         r = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
+
+        # avoid CUDA OOM when colocate models
+        if self.strategy.args.colocate_critic_reward:
+            ray.get([self.reward_model[0].empty_cache.remote()])
+
+        if self.strategy.args.colocate_actor_ref:
+            torch.cuda.empty_cache()
 
         reward, kl = compute_reward(
             r,

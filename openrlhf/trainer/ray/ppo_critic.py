@@ -155,3 +155,6 @@ class CriticModelRayActor(BasePPORole):
         self.trainer.replay_buffer.clear()
         torch.cuda.empty_cache()
         return status
+
+    def empty_cache(self) -> None:
+        torch.cuda.empty_cache()

@@ -90,6 +90,9 @@ class ReferenceModelRayActor(BasePPORole):
             log_probs = self.model(sequences.to(device), num_actions, attention_mask.to(device), return_output)
         return log_probs.to("cpu")
 
+    def empty_cache(self) -> None:
+        torch.cuda.empty_cache()
+
 
 @ray.remote(num_gpus=1)
 class RewardModelRayActor(BasePPORole):
@@ -119,6 +122,9 @@ class RewardModelRayActor(BasePPORole):
         with torch.no_grad():
             reward = self.model(sequences.to(device), attention_mask.to(device))
         return reward.to("cpu")
+
+    def empty_cache(self) -> None:
+        torch.cuda.empty_cache()
 
 
 class PPORayActorGroup:
