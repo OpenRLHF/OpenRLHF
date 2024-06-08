@@ -51,7 +51,7 @@ def init_process_group(
 
         # Use a PrefixStore to avoid accidental overrides of keys used by
         # different systems (e.g. RPC) in case the store is multi-tenant.
-        store = PrefixStore("openrlhf", store)
+        store = PrefixStore(group_name, store)
 
     pg, _ = _new_process_group_helper(
         world_size,
