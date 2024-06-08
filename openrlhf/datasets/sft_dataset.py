@@ -5,8 +5,6 @@ from .utils import exist_and_not_none, zero_pad_sequences
 
 
 def preprocess_data(data, input_template=None, input_key=None, output_key=None):
-    system_prompt = None
-
     # custom dataset
     if input_key and output_key:
         prompt = data[input_key]
@@ -18,8 +16,7 @@ def preprocess_data(data, input_template=None, input_key=None, output_key=None):
             response = data["label"].replace("</s>", "")
         # Open-Orca/OpenOrca
         elif exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
-            system_prompt = data["system_prompt"]
-            prompt = data["question"]
+            prompt = data["system_prompt"] + " " + data["question"]
             response = data["response"]
         # MaziyarPanahi/WizardLM_evol_instruct_V2_196k
         # jondurbin/airoboros-3.2
@@ -30,9 +27,6 @@ def preprocess_data(data, input_template=None, input_key=None, output_key=None):
                 for l in lll:
                     if "human" in l["from"]:
                         result.append(input_template.format(l["value"]))
-                    elif "system" in l["from"]:
-                        nonlocal system_prompt
-                        system_prompt = l["value"]
                     else:
                         result.append(l["value"] + "\n")
                 return "".join(result)
@@ -51,9 +45,6 @@ def preprocess_data(data, input_template=None, input_key=None, output_key=None):
     # input template
     if input_template:
         prompt = input_template.format(prompt)
-
-    if system_prompt:
-        prompt = system_prompt + "\n" + prompt
     return prompt, response
 
 
@@ -73,7 +64,7 @@ class SFTDataset(Dataset):
         tokenizer: Callable,
         max_length: int,
         strategy,
-        input_template="Human:\n{}\nAssistant:\n",
+        input_template="Human: {}\nAssistant: ",
         pretrain_mode=False,
     ) -> None:
         super().__init__()

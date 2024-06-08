@@ -6,8 +6,6 @@ from .utils import exist_and_not_none, zero_pad_sequences
 
 
 def preprocess_data(data, input_template=None, prompt_key=None, chosen_key=None, rejected_key=None) -> str:
-    system_prompt = None
-
     # custom dataset
     if chosen_key and rejected_key:
         if prompt_key:
@@ -24,8 +22,7 @@ def preprocess_data(data, input_template=None, prompt_key=None, chosen_key=None,
             prompt = data["prompt"] if exist_and_not_none(data, "prompt") else ""
             if prompt.startswith("prompter:"):
                 prompt = (
-                    prompt.replace("prompter:", "\nHuman:\n").replace("assistant:", "\nAssistant:\n")
-                    + "\nAssistant:\n"
+                    prompt.replace("prompter:", "\nHuman: ").replace("assistant:", "\nAssistant: ") + "\nAssistant: "
                 )
             chosen = data["chosen"]
             reject = data["rejected"]
@@ -63,8 +60,6 @@ def preprocess_data(data, input_template=None, prompt_key=None, chosen_key=None,
     if input_template:
         prompt = input_template.format(prompt)
 
-    if system_prompt:
-        prompt = system_prompt + "\n" + prompt
     return prompt, chosen, reject, margin
 
 
@@ -84,7 +79,7 @@ class RewardDataset(Dataset):
         tokenizer: Callable,
         max_length: int,
         strategy,
-        input_template="Human:\n{}\nAssistant:\n",
+        input_template="Human: {}\nAssistant: ",
         is_dpo=False,
     ) -> None:
         super().__init__()

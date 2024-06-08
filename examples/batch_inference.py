@@ -300,7 +300,7 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--repetition_penalty", type=float, default=1.2)
     parser.add_argument("--best_of_n", type=int, default=1)
-    parser.add_argument("--input_template", type=str, default="Human:\n{}\nAssistant:\n")
+    parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
     parser.add_argument("--max_new_tokens", type=int, default=1024)
     parser.add_argument(
         "--post_processor",
