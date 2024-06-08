@@ -17,7 +17,7 @@ class WorkerWrap(Worker):
         assert group_name != "", f"group name must not be empty"
 
         rank = torch.distributed.get_rank() + rank_offset
-        print(f"vLLM init_process_group - rank {rank}")
+        print(f"WorkerWrap init_process_group - rank {rank}")
         self._model_update_group = init_process_group(
             backend="nccl",
             init_method=f"tcp://{master_address}:{master_port}",
