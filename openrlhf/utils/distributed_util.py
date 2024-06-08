@@ -66,7 +66,7 @@ def init_process_group(
 
     _world.pg_group_ranks[pg] = {i: i for i in range(world_size)}
 
-    print(f"Performing barrier after ProcessGroup initialization {rank}")
-    _store_based_barrier(rank, store, group_name, world_size, timeout)
+    # print(f"Performing barrier after ProcessGroup initialization {rank}")
+    # _store_based_barrier(rank, store, group_name, world_size, timeout)
 
     return pg
