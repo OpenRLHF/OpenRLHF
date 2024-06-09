@@ -66,7 +66,7 @@ class LLMRayActor:
 
 def create_vllm_engines(num_engines: int, tensor_parallel_size: int, pretrain: str, seed: int):
     vllm_engines = []
-    for _ in range(num_engines):
+    for i in range(num_engines):
         # When tensor_parallel_size=1, vLLM init model in LLMEngine directly, assign 1 GPU for it.
         num_gpus = int(tensor_parallel_size == 1)
         scheduling_strategy = None
@@ -90,7 +90,7 @@ def create_vllm_engines(num_engines: int, tensor_parallel_size: int, pretrain: s
                 trust_remote_code=True,
                 tensor_parallel_size=tensor_parallel_size,
                 dtype="bfloat16",
-                seed=seed,
+                seed=seed + i,
             )
         )
 
