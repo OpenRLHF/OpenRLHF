@@ -191,6 +191,8 @@ readonly GPUS_PER_NODE=8
 sbatch ./train_llama_slurm.sh
 
 # 对于使用 Slurm 的 Ray PPO 训练
+git checkout v0.2.5 # 稳定版本
+
 sbatch ./train_ppo_llama_ray_slurm.sh
 ```
 

@@ -164,6 +164,8 @@ ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 
 # for 70B models
 # Launch Ray PPO with vLLM, requires 16 A100s in default config
+git checkout v0.2.5 # Stable Version
+
 ./train_ppo_llama_ray_70b.sh
 ```
 
