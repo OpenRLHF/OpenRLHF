@@ -31,8 +31,6 @@ def generate(args):
     if args.ta_prompt:
         with open(args.ta_prompt, "r") as f:
             user_prompt = f.read()
-    else:
-        user_prompt = args.system_prompt
 
     while True:
         inputs = input("Please enter a prompt (or type 'exit' to quit): ")
@@ -40,7 +38,7 @@ def generate(args):
             print("Exiting program...")
             break
         if inputs.strip().lower() == "clear":
-            user_prompt = args.system_prompt
+            user_prompt = ""
             continue
 
         # get input prompt
@@ -82,7 +80,6 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--repetition_penalty", type=float, default=1.2)
     parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
-    parser.add_argument("--system_prompt", type=str, default="")
 
     # QLora
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
