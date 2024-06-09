@@ -10,7 +10,7 @@ loralib
 optimum
 packaging
 peft
-ray[default]==2.23.0
+ray[default]==2.20.0
 torch
 torchmetrics
 tqdm

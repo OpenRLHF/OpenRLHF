@@ -78,7 +78,7 @@ class ActorPPOTrainer(PPOTrainer):
             world_size = vllm_num_engines * vllm_tensor_parallel_size + 1
             refs = [
                 engine.init_process_group.remote(
-                    master_address, master_port, i * vllm_tensor_parallel_size + 1, world_size, "vllm"
+                    master_address, master_port, i * vllm_tensor_parallel_size + 1, world_size, "openrlhf"
                 )
                 for i, engine in enumerate(self.vllm_engines)
             ]
@@ -87,7 +87,7 @@ class ActorPPOTrainer(PPOTrainer):
                 init_method=f"tcp://{master_address}:{master_port}",
                 world_size=world_size,
                 rank=0,
-                group_name="vllm",
+                group_name="openrlhf",
             )
 
             ray.get(refs)
@@ -129,20 +129,16 @@ class ActorPPOTrainer(PPOTrainer):
             # Fire all vllm engines for broadcast
             if torch.distributed.get_rank() == 0:
                 shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
-                [
+                refs = [
                     engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
                     for engine in self.vllm_engines
                 ]
 
-            if self.strategy.args.zero_stage != 3:
-                # For ZeRO-1/2, broadcast parameter to all vllm engines by rank 0
+            # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
+            with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
                 if torch.distributed.get_rank() == 0:
                     torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
-            else:
-                # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
-                with deepspeed.zero.GatheredParameters([param]):
-                    if torch.distributed.get_rank() == 0:
-                        torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
+                    ray.get(refs)
 
 
 @ray.remote(num_gpus=1)
