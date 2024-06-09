@@ -350,8 +350,6 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             max_tokens=kwargs.get("max_new_tokens", 1024),
             min_tokens=kwargs.get("min_new_tokens ", 2),
             truncate_prompt_tokens=self.prompt_max_len,
-            detokenize=False,
-            include_stop_str_in_output=True,
         )
 
         outputs = ray.get(llm.generate.remote(prompts, sampling_params=sampling_params))
