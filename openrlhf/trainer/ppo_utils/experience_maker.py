@@ -98,12 +98,12 @@ class NaiveExperienceMaker(ABC):
         self.reward_fn = reward_fn
 
     # tokenizer
-    def tokenize_fn(self, texts, max_length, device):
+    def tokenize_fn(self, texts, max_length, device, padding=True):
         batch = self.tokenizer(
             texts,
             return_tensors="pt",
             max_length=max_length,
-            padding=True,
+            padding=padding,
             truncation=True,
         )
         return {k: v.to(device) for k, v in batch.items()}
@@ -348,11 +348,18 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             top_p=kwargs.get("top_p", 1.0),
             top_k=kwargs.get("top_k", -1),
             max_tokens=kwargs.get("max_new_tokens", 1024),
-            min_tokens=kwargs.get("min_new_tokens ", 2),
-            truncate_prompt_tokens=self.prompt_max_len,
+            min_tokens=kwargs.get("min_new_tokens", 2),
+            include_stop_str_in_output=True,
         )
 
-        outputs = ray.get(llm.generate.remote(prompts, sampling_params=sampling_params))
+        # TODO: can't pass `max_length` to vLLM's tokenizer for input truncation, remove this once it is supported.
+        input_ids = self.tokenize_fn(prompts, self.prompt_max_len, device="cpu", padding=False)["input_ids"]
+        assert self.tokenizer.padding_side == "left", f"tokenizer padding_size should be left"
+        pad_indices = (input_ids != self.tokenizer.pad_token_id).to(dtype=torch.int).argmax(dim=-1)
+        prompt_token_ids = []
+        for i, pad_index in enumerate(pad_indices.numpy()):
+            prompt_token_ids.append(input_ids[i][pad_index:].tolist())
+        outputs = ray.get(llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
 
         # NOTE: concat all outputs to following format:
         #
