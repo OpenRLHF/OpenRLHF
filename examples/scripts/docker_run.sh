@@ -9,6 +9,6 @@ if [[ "${build}" == *"b"* ]]; then
 	docker build -t $IMAGE_NAME $PROJECT_PATH/dockerfile 
 else 
 	docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
-		-v $PROJECT_PATH:/openrlhf -v  $HOME/.cache/huggingface:/root/.cache/huggingface -v  $HOME/.bash_history2:/root/.bash_history \
+		-v $PROJECT_PATH:/openrlhf -v  $HOME/.cache:/root/.cache -v  $HOME/.bash_history2:/root/.bash_history \
 		$IMAGE_NAME bash
 fi
