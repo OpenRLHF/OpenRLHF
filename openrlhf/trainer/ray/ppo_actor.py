@@ -108,6 +108,7 @@ class ActorPPOTrainer(PPOTrainer):
 
         # 4. broadcast weights to vllm engines
         if self.vllm_engines is not None:
+            torch.distributed.barrier()
             self._broadcast_to_vllm()
 
         # 5. wait remote critic model training done
