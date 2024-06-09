@@ -98,12 +98,12 @@ class NaiveExperienceMaker(ABC):
         self.reward_fn = reward_fn
 
     # tokenizer
-    def tokenize_fn(self, texts, max_length, device, padding=True):
+    def tokenize_fn(self, texts, max_length, device):
         batch = self.tokenizer(
             texts,
             return_tensors="pt",
             max_length=max_length,
-            padding=padding,
+            padding=True,
             truncation=True,
         )
         return {k: v.to(device) for k, v in batch.items()}
@@ -353,7 +353,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         )
 
         # TODO: can't pass `max_length` to vLLM's tokenizer for input truncation, remove this once it is supported.
-        input_ids = self.tokenize_fn(prompts, self.prompt_max_len, device="cpu", padding=False)["input_ids"]
+        input_ids = self.tokenize_fn(prompts, self.prompt_max_len, device="cpu")["input_ids"]
         assert self.tokenizer.padding_side == "left", f"tokenizer padding_size should be left"
         pad_indices = (input_ids != self.tokenizer.pad_token_id).to(dtype=torch.int).argmax(dim=-1)
         prompt_token_ids = []
