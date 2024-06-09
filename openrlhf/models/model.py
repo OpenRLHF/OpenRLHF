@@ -163,7 +163,7 @@ def get_llm_for_sequence_regression(
 
 
 def _get_reward_model(base_pretrained_model, base_llm_model):
-    class LLMForSequenceRegression(base_pretrained_model):
+    class RewardModel(base_pretrained_model):
         supports_gradient_checkpointing = True
 
         def __init__(self, config: AutoConfig):
@@ -212,11 +212,11 @@ def _get_reward_model(base_pretrained_model, base_llm_model):
             else:
                 return reward
 
-    return LLMForSequenceRegression
+    return RewardModel
 
 
 def _get_critic_model(base_pretrained_model, base_llm_model):
-    class LLMForSequenceRegression(base_pretrained_model):
+    class CriticModel(base_pretrained_model):
         supports_gradient_checkpointing = True
 
         def __init__(self, config: AutoConfig):
@@ -263,4 +263,4 @@ def _get_critic_model(base_pretrained_model, base_llm_model):
             else:
                 return values[:, -num_actions:]
 
-    return LLMForSequenceRegression
+    return CriticModel
