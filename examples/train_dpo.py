@@ -152,7 +152,7 @@ if __name__ == "__main__":
     parser.add_argument("--ipo", action="store_true", default=False)  # IPO https://arxiv.org/pdf/2310.12036v2.pdf
     parser.add_argument("--label_smoothing", type=float, default=0.0)  # cDPO https://arxiv.org/pdf/2305.18290.pdf
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
-    parser.add_argument("--seed", type=int, default=1234)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
 
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
