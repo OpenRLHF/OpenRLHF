@@ -348,8 +348,6 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             top_p=kwargs.get("top_p", 1.0),
             top_k=kwargs.get("top_k", -1),
             max_tokens=kwargs.get("max_new_tokens", 1024),
-            min_tokens=kwargs.get("min_new_tokens", 2),
-            include_stop_str_in_output=True,
         )
 
         # TODO: can't pass `max_length` to vLLM's tokenizer for input truncation, remove this once it is supported.
@@ -369,6 +367,11 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # |<---------- prompt ----------->|<-------- answer ------->|
         max_input_len, max_output_len = 0, 0
         for output in outputs:
+            output_token_ids = output.outputs[0].token_ids
+            if len(output_token_ids) < 1 or output_token_ids[0] == self.tokenizer.eos_token_id:
+                logger.warning(f"Only EOS output for prompt: {output.prompt}")
+                output.outputs[0].token_ids = [self.tokenizer.unk_token_id, self.tokenizer.eos_token_id]
+
             max_input_len = max(max_input_len, len(output.prompt_token_ids))
             max_output_len = max(max_output_len, len(output.outputs[0].token_ids))
 
@@ -382,6 +385,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             # right padding output
             output_len = len(output.outputs[0].token_ids)
             output_ids = output.outputs[0].token_ids + [pad_token_id] * (max_output_len - output_len)
+
+            if output_ids[output_len - 1] != eos_token_id:
+                output_ids[min(output_len, len(output_ids) - 1)] = eos_token_id
 
             # concat input and output
             sequences.append(input_ids + output_ids)
