@@ -2,7 +2,7 @@ set -x
 
 build=${1-""}
 PROJECT_PATH=$(cd $(dirname $0)/../../; pwd)
-IMAGE_NAME="nvcr.io/nvidia/pytorch:23.12-py3"
+IMAGE_NAME="nvcr.io/nvidia/pytorch:24.02-py3"
 
 if [[ "${build}" == *"b"* ]]; then
 	docker image rm $IMAGE_NAME

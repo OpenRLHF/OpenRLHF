@@ -17,7 +17,7 @@ readonly training_script="train_ppo_llama.sh"
 readonly GPUS_PER_NODE=8
 
 readonly PROJECT_PATH=$(cd ../../; pwd)
-readonly IMAGE_NAME="nvcr.io/nvidia/pytorch:23.12-py3"
+readonly IMAGE_NAME="nvcr.io/nvidia/pytorch:24.02-py3"
 readonly JOBLOG="$(pwd)/logs/$training_script-$SLURM_JOB_ID.log"
 mkdir logs
 
