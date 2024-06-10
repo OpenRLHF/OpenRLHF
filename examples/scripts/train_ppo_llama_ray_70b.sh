@@ -36,5 +36,6 @@ ray job submit --address="http://127.0.0.1:8265" \
     --normalize_reward \
     --actor_init_on_gpu \
     --adam_offload \
-    --flash_attn \
     --gradient_checkpointing
+
+#    --flash_attn \
