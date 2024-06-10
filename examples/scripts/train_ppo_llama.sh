@@ -21,7 +21,7 @@ read -r -d '' training_commands <<EOF
     --critic_learning_rate 9e-6 \
     --init_kl_coef 0.01 \
     --prompt_data Open-Orca/OpenOrca,Dahoas/full-hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward \
-    --prompt_data_probs 0.2,0.7,0.1 \
+    --prompt_data_probs 0.4,0.5,0.1 \
     --max_samples 100000 \
     --normalize_reward \
     --actor_init_on_gpu \

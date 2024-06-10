@@ -31,7 +31,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --critic_learning_rate 9e-6 \
     --init_kl_coef 0.01 \
     --prompt_data Open-Orca/OpenOrca,Dahoas/full-hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward \
-    --prompt_data_probs 0.2,0.7,0.1 \
+    --prompt_data_probs 0.4,0.5,0.1 \
     --max_samples 100000 \
     --normalize_reward \
     --adam_offload \
