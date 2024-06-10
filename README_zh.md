@@ -165,7 +165,7 @@ ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 
 # 对于 70B 模型
 # 启动使用 vLLM 的 Ray PPO，默认配置需要 16 个 A100
-git checkout v0.2.5 # vLLM 稳定版本
+git checkout v0.2.5 # # stable version for vLLM
 ./train_ppo_llama_ray_70b.sh
 ```
 

@@ -10,11 +10,11 @@ loralib
 optimum
 packaging
 peft
-ray[default]==2.10.0
+ray[default]==2.12.0
 torch
 torchmetrics
 tqdm
-transformers==4.41.2
+transformers==4.40.1
 transformers_stream_generator
 wandb
 wheel
