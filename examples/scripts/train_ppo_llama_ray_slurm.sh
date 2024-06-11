@@ -83,7 +83,7 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --init_kl_coef 0.01 \
     --prompt_data Open-Orca/OpenOrca,Dahoas/full-hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward \
     --prompt_data_probs 0.4,0.5,0.1 \
-    --max_samples 100000 \
+    --max_samples 80000 \
     --normalize_reward \
     --adam_offload \
     --flash_attn \
