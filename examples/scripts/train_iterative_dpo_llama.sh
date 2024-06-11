@@ -10,6 +10,7 @@ TRAINING_ITERS=5
 ROLLOUT_BATCH_SIZE=10240
 
 POLICY_MODEL_PATH=OpenLLMAI/Llama-2-7b-sft-model-ocra-500k
+REF_MODEL_PATH=$POLICY_MODEL_PATH
 
 checkSuccess() {
     if [[ $? != 0 ]]; then
@@ -76,6 +77,7 @@ EOF
     --train_batch_size 128 \
     --micro_train_batch_size 2 \
     --pretrain $POLICY_MODEL_PATH \
+    --ref_pretrain $REF_MODEL_PATH \
     --save_path $MODEL_OUTPUT_PATH \
     --lr_scheduler constant \
     --zero_stage 3 \

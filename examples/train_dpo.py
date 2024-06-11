@@ -38,7 +38,7 @@ def train(args):
 
     # load weights for ref model
     ref_model = Actor(
-        args.pretrain,
+        args.ref_pretrain,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
         load_in_4bit=args.load_in_4bit,
@@ -132,6 +132,7 @@ def train(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--pretrain", type=str, default="bigscience/bloomz-1b7")
+    parser.add_argument("--ref_pretrain", type=str, default=None)
     parser.add_argument("--dataset", type=str, default="Dahoas/full-hh-rlhf")
     parser.add_argument("--dataset_probs", type=str, default="1.0", help="sampling probs for datasets")
     parser.add_argument("--save_path", type=str, default="./ckpt")
@@ -192,4 +193,8 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+
+    if args.ref_pretrain is None or args.ref_pretrain == "":
+        args.ref_pretrain = args.pretrain
+
     train(args)
