@@ -189,8 +189,9 @@ class DPOTrainer(ABC):
                 desc="Eval stage of global_step %d" % steps,
                 disable=not self.strategy.is_rank_0(),
             )
-            acc = 0
+            acc_sum = 0
             loss_sum = 0
+            times = 0
             for chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens in eval_dataloader:
                 chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
                 c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
@@ -206,19 +207,18 @@ class DPOTrainer(ABC):
                 loss, chosen_reward, reject_reward = self.loss_fn(
                     chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
                 )
-                acc += (chosen_reward > reject_reward).float().mean().item()
+                acc_sum += (chosen_reward > reject_reward).float().mean().item()
                 loss_sum += loss.item()
+                times += 1
+
+                logs = {
+                    "eval_loss": loss_sum / times,
+                    "acc_mean": acc_sum / times,
+                }
+                logs = self.strategy.all_reduce(logs)
+                step_bar.set_postfix(logs)
                 step_bar.update()
 
-            acc_mean = acc / self.eval_dataloader.__len__()
-            loss_mean = loss_sum / self.eval_dataloader.__len__()
-
-            logs = {
-                "eval_loss": loss_mean,
-                "acc_mean": acc_mean,
-            }
-            logs = self.strategy.all_reduce(logs)
-            step_bar.set_postfix(logs)
             if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": steps}.items()}
                 self._wandb.log(logs)

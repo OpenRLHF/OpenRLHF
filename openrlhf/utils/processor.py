@@ -53,9 +53,46 @@ def rejection_sampling_processor(args, objs):
     return [{"input": k, "output": v["output"], "reward": v["reward"]} for k, v in out.items()]
 
 
+# Iterative DPO
+# See https://github.com/RLHFlow/Online-RLHF/blob/main/run_loop.sh
+def iterative_dpo_processor(args, objs):
+    out = {}
+    for obj in tqdm(objs, desc=f"Iterative DPO process...."):
+        input = obj["input"]
+        output = obj["output"]
+        reward = float(obj["reward"])
+
+        if input not in out:
+            out[input] = {
+                "output": output,
+                "chosen": output,
+                "chosen_reward": reward,
+                "rejected": output,
+                "rejected_reward": reward,
+            }
+        elif reward > out[input]["chosen_reward"]:
+            out[input]["chosen_reward"] = reward
+            out[input]["chosen"] = output
+        elif reward < out[input]["rejected_reward"]:
+            out[input]["rejected_reward"] = reward
+            out[input]["rejected"] = output
+
+    return [
+        {
+            "prompt": k,
+            "chosen": v["chosen"],
+            "chosen_reward": v["chosen_reward"],
+            "rejected": v["rejected"],
+            "rejected_reward": v["rejected_reward"],
+        }
+        for k, v in out.items()
+    ]
+
+
 PROCESSORS = {
     "rs": rejection_sampling_processor,
     "ca": conditional_sft_processor,
+    "iter_dpo": iterative_dpo_processor,
 }
 
 

@@ -1,13 +1,13 @@
 set -x
 
-mkdir -p ./ckpt/7b_llama_rs
-GENERATE_OUTPUT=./ckpt/7b_llama_rs/generate.jsonl
-RM_OUTPUT=./ckpt/7b_llama_rs/rm.jsonl
-MODEL_OUTPUT_PATH=./ckpt/7b_llama_rs/ckpt
+mkdir -p ./ckpt/7b_llama_iter_dpo
+GENERATE_OUTPUT=./ckpt/7b_llama_iter_dpo/generate.jsonl
+RM_OUTPUT=./ckpt/7b_llama_iter_dpo/rm.jsonl
+MODEL_OUTPUT_PATH=./ckpt/7b_llama_iter_dpo/ckpt
 ITER_LOG_PATH=null
 
-TRAINING_ITERS=20
-ROLLOUT_BATCH_SIZE=2048
+TRAINING_ITERS=5
+ROLLOUT_BATCH_SIZE=10240
 
 POLICY_MODEL_PATH=OpenLLMAI/Llama-2-7b-sft-model-ocra-500k
 
@@ -42,7 +42,7 @@ while (($iter < $TRAINING_ITERS)); do
     --temperature 0.9 \
     --tp_size 4 \
     --best_of_n 16 \
-    --max_num_seqs 64 \
+    --max_num_seqs 32 \
     --iter $iter \
     --rollout_batch_size $ROLLOUT_BATCH_SIZE \
     --output_path $GENERATE_OUTPUT
@@ -60,7 +60,7 @@ EOF
     --dataset $GENERATE_OUTPUT  \
     --dataset_probs 1.0 \
     --zero_stage 0 \
-    --post_processor rs \
+    --post_processor iter_dpo \
     --micro_batch_size 4 \
     --output_path $RM_OUTPUT
 EOF
@@ -68,8 +68,8 @@ EOF
     deepspeed $get_rewards_commands
     checkSuccess "RM"
 
-    read -r -d '' sft_commands <<EOF
-../train_sft.py \
+    read -r -d '' dpo_commands <<EOF
+../train_dpo.py \
     --max_len 2048 \
     --dataset $RM_OUTPUT \
     --dataset_probs 1.0 \
@@ -78,15 +78,15 @@ EOF
     --pretrain $POLICY_MODEL_PATH \
     --save_path $MODEL_OUTPUT_PATH \
     --lr_scheduler constant \
-    --zero_stage 2 \
+    --zero_stage 3 \
     --max_epochs 1 \
     --bf16 \
     --learning_rate 2e-6 \
     --gradient_checkpointing
 EOF
-    echo $sft_commands
-    deepspeed $sft_commands
-    checkSuccess "SFT"
+    echo $dpo_commands
+    deepspeed $dpo_commands
+    checkSuccess "DPO"
 
     iter=$((iter + 1))
     if [[ "$ITER_LOG_PATH" != "null" ]]; then

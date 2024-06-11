@@ -44,6 +44,7 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 - Support [DPO (direct-preference-optimization)/IPO/cDPO](./examples/scripts/train_dpo_llama.sh).
 - Support [Kahneman-Tversky optimization (KTO)](./examples/scripts/train_kto_llama.sh).
 - Support [Rejection Sampling](./examples/scripts/train_rejection_sampling_llama.sh).
+- Support [Iterative DPO](./examples/scripts/train_iterative_dpo_llama.sh) (https://github.com/RLHFlow/Online-RLHF).
 - Support [Conditional SFT](./examples/scripts/train_conditional_llama.sh) (https://arxiv.org/abs/2308.12050).
 - Support [Mixtral 8*7b](./examples/test_scripts/train_sft_mixtral_lora.sh) (--aux_loss_coef)
 - Support Wandb log (--wandb).
@@ -124,6 +125,9 @@ wandb.login()
 **Single-node training**
 
 ```shell
+# Continue Pre-training
+./train_continue_pretrain_llama.sh
+
 # Supervised Finetuning
 ./train_sft_llama.sh
 
@@ -142,11 +146,11 @@ wandb.login()
 # Rejection Sampling with vLLM
 ./train_rejection_sampling_llama.sh
 
+# Iterative DPO with vLLM
+./train_iterative_dpo_llama.sh
+
 # Conditional SFT
 ./train_conditional_llama.sh
-
-# Continue Pre-training
-./train_continue_pretrain_llama.sh
 ```
 
 **PPO training with Ray**
@@ -165,8 +169,6 @@ ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 # for 70B models
 # Launch Ray PPO with vLLM, requires 16 A100s in default config
 ./train_ppo_llama_ray_70b.sh
-
-# Note: If training is unstable with `vllm==0.4.2`, you can try using `git checkout v0.2.5`, which supports `vllm==0.3.2`.
 ```
 
 **Multi-nodes training on Slurm**

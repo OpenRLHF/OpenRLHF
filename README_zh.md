@@ -47,6 +47,7 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 - 支持 [DPO (直接偏好优化)/IPO/cDPO](./examples/scripts/train_dpo_llama.sh).
 - 支持 [Kahneman-Tversky 优化 (KTO)](./examples/scripts/train_kto_llama.sh).
 - 支持 [拒绝采样](./examples/scripts/train_rejection_sampling_llama.sh).
+- 支持 [Iterative DPO](./examples/scripts/train_iterative_dpo_llama.sh) (https://github.com/RLHFlow/Online-RLHF).
 - 支持 [条件 SFT](./examples/scripts/train_conditional_llama.sh) (https://arxiv.org/abs/2308.12050).
 - 支持 [Mixtral 8*7b](./examples/test_scripts/train_sft_mixtral_lora.sh) (--aux_loss_coef)
 - 支持 Wandb 日志 (--wandb).
@@ -125,6 +126,9 @@ wandb.login()
 **单节点训练**
 
 ```shell
+# 继续预训练
+./train_continue_pretrain_llama.sh
+
 # 监督式微调
 ./train_sft_llama.sh
 
@@ -143,11 +147,11 @@ wandb.login()
 # 使用 vLLM 的拒绝采样训练
 ./train_rejection_sampling_llama.sh
 
+# Iterative DPO with vLLM
+./train_iterative_dpo_llama.sh
+
 # 条件 SFT
 ./train_conditional_llama.sh
-
-# 继续预训练
-./train_continue_pretrain_llama.sh
 ```
 
 **使用Ray进行PPO训练**
@@ -166,8 +170,6 @@ ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 # 对于 70B 模型
 # 启动使用 vLLM 的 Ray PPO，默认配置需要 16 个 A100
 ./train_ppo_llama_ray_70b.sh
-
-# Note: If training is unstable with `vllm==0.4.2`, you can try using `git checkout v0.2.5`, which supports `vllm==0.3.2`.
 ```
 
 **在 Slurm 上进行多节点训练**
