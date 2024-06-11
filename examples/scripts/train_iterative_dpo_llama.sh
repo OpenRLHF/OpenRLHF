@@ -40,10 +40,10 @@ while (($iter < $TRAINING_ITERS)); do
     --max_new_tokens 1024 \
     --dataset Open-Orca/OpenOrca,Dahoas/full-hh-rlhf  \
     --dataset_probs 0.5,0.5 \
-    --temperature 0.9 \
+    --temperature 1.0 \
     --tp_size 4 \
     --best_of_n 16 \
-    --max_num_seqs 32 \
+    --max_num_seqs 128 \
     --iter $iter \
     --rollout_batch_size $ROLLOUT_BATCH_SIZE \
     --output_path $GENERATE_OUTPUT
@@ -79,11 +79,10 @@ EOF
     --pretrain $POLICY_MODEL_PATH \
     --ref_pretrain $REF_MODEL_PATH \
     --save_path $MODEL_OUTPUT_PATH \
-    --lr_scheduler constant \
     --zero_stage 3 \
     --max_epochs 1 \
     --bf16 \
-    --learning_rate 2e-6 \
+    --learning_rate 5e-7 \
     --gradient_checkpointing
 EOF
     echo $dpo_commands

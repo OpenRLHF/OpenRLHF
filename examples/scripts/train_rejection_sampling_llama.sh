@@ -42,7 +42,7 @@ while (($iter < $TRAINING_ITERS)); do
     --temperature 0.9 \
     --tp_size 4 \
     --best_of_n 16 \
-    --max_num_seqs 64 \
+    --max_num_seqs 128 \
     --iter $iter \
     --rollout_batch_size $ROLLOUT_BATCH_SIZE \
     --output_path $GENERATE_OUTPUT
