@@ -166,7 +166,7 @@ ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 # Launch Ray PPO with vLLM, requires 16 A100s in default config
 ./train_ppo_llama_ray_70b.sh
 
-# Note: If training is unstable with vllm==0.4.2, you can try using git checkout v0.2.5, which supports vllm==0.3.2.
+# Note: If training is unstable with `vllm==0.4.2`, you can try using `git checkout v0.2.5`, which supports `vllm==0.3.2`.
 ```
 
 **Multi-nodes training on Slurm**
