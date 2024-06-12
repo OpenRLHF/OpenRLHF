@@ -171,7 +171,7 @@ ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 ./train_ppo_llama_ray_70b.sh
 ```
 > [!NOTE]
-> We recommend using vLLM 0.4.2 currently. Due to underlying conflicts, versions 0.4.3+ can only use GLOO (--vllm_sync_backend gloo) for weight transfer. 
+> We recommend using vLLM 0.4.2, as versions 0.4.3+ currently only support weight synchronization (DeepSpeed => vLLM) via GLOO (--vllm_sync_backend gloo).
 
 **Multi-nodes training on Slurm**
 

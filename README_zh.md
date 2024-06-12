@@ -173,7 +173,7 @@ ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 ```
 
 > [!NOTE]
-> We recommend using vLLM 0.4.2 currently. Due to underlying conflicts, versions 0.4.3+ can only use GLOO (--vllm_sync_backend gloo) for weight transfer. 
+> 我们建议使用 vLLM 0.4.2，因为 0.4.3 及以上版本目前只能通过 GLOO (--vllm_sync_backend gloo) 进行权重同步 (DeepSpeed => vLLM)。
 
 **在 Slurm 上进行多节点训练**
 
