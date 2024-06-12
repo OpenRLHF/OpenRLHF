@@ -103,8 +103,12 @@ class SFTDataset(Dataset):
         prompt = self.prompts[idx]
         response = self.responses[idx]
 
+        text = prompt + response
+        if not text.endswith(self.tokenizer.eos_token):
+            text += " " + self.tokenizer.eos_token
+
         input_token = self.tokenizer(
-            prompt + response + " " + self.tokenizer.eos_token,
+            text,
             max_length=self.max_length,
             padding=False,
             truncation=True,

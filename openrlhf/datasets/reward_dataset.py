@@ -96,15 +96,12 @@ class RewardDataset(Dataset):
         self.strategy = strategy
         self.max_length = max_length
         self.is_dpo = is_dpo
-        self.add_eos_token = " " + self.tokenizer.eos_token
 
         prompt_key = getattr(self.strategy.args, "prompt_key", None)
         chosen_key = getattr(self.strategy.args, "chosen_key", None)
         rejected_key = getattr(self.strategy.args, "rejected_key", None)
         apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
         if apply_chat_template:
-            if self.tokenizer.eos_token in self.tokenizer.chat_template:
-                self.add_eos_token = ""
             apply_chat_template = self.tokenizer.apply_chat_template
 
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
@@ -145,7 +142,9 @@ class RewardDataset(Dataset):
         else:
             extra = self.margins[idx]
 
-        chosen = prompt + chosen + self.add_eos_token
+        chosen = prompt + chosen
+        if not chosen.endswith(self.tokenizer.eos_token):
+            chosen += " " + self.tokenizer.eos_token
         chosen_token = self.tokenizer(
             chosen,
             max_length=self.max_length,
@@ -154,7 +153,9 @@ class RewardDataset(Dataset):
             return_tensors="pt",
         )
 
-        reject = prompt + reject + self.add_eos_token
+        reject = prompt + reject
+        if not reject.endswith(self.tokenizer.eos_token):
+            reject += " " + self.tokenizer.eos_token
         reject_token = self.tokenizer(
             reject,
             max_length=self.max_length,

@@ -75,8 +75,6 @@ class UnpairedPreferenceDataset(Dataset):
         apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
         if apply_chat_template:
             apply_chat_template = self.tokenizer.apply_chat_template
-            if self.tokenizer.eos_token in self.tokenizer.chat_template:
-                self.add_eos_token = ""
 
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
             prompt, response, label = preprocess_data(
@@ -94,8 +92,11 @@ class UnpairedPreferenceDataset(Dataset):
 
     def collate_fn(self, item_list):
         def tokenizer(prompt, response):
+            text = prompt + response
+            if not text.endswith(self.tokenizer.eos_token):
+                text += " " + self.tokenizer.eos_token
             inputs = self.tokenizer(
-                prompt + response + self.add_eos_token,
+                text,
                 max_length=self.max_length,
                 padding=False,
                 truncation=True,
