@@ -138,7 +138,7 @@ def get_llm_for_sequence_regression(
                     module = module.to(torch.bfloat16)
                 if "norm" in name:
                     module = module.to(torch.float32)
-                if "value_head" in name or "embed_tokens" in name:
+                if head_prefix in name or "embed_tokens" in name:
                     if hasattr(module, "weight"):
                         module = module.to(torch.bfloat16)
 
@@ -195,7 +195,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model, head_prefix="value_
                 input_ids, attention_mask=attention_mask, position_ids=position_ids
             )
             last_hidden_states = outputs["last_hidden_state"]
-            values = self.value_head(last_hidden_states).squeeze(-1)
+            values = getattr(self, self.head_prefix)(last_hidden_states).squeeze(-1)
 
             # left padding in training mode
             if self.training:
@@ -250,7 +250,7 @@ def _get_critic_model(base_pretrained_model, base_llm_model, head_prefix="value_
                 position_ids=position_ids,
             )
             last_hidden_states = outputs["last_hidden_state"]
-            values = self.value_head(last_hidden_states).squeeze(-1)[:, :-1]
+            values = getattr(self, self.head_prefix)(last_hidden_states).squeeze(-1)[:, :-1]
             num_actions = action_mask.size(1)
 
             # normalize reward
