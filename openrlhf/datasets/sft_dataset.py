@@ -76,11 +76,18 @@ class SFTDataset(Dataset):
         apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
         if apply_chat_template:
             apply_chat_template = self.tokenizer.apply_chat_template
-            if getattr(self.strategy.args, "tokenizer_chat_template", None):
-                self.tokenizer.chat_template = getattr(self.strategy.args, "tokenizer_chat_template")
+            tokenizer_chat_template = getattr(self.strategy.args, "tokenizer_chat_template", None)
+            if tokenizer_chat_template:
+                self.tokenizer.chat_template = tokenizer_chat_template
 
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
-            prompt, response = preprocess_data(data, None if pretrain_mode else input_template, input_key, output_key)
+            prompt, response = preprocess_data(
+                data,
+                None if pretrain_mode else input_template,
+                input_key,
+                output_key,
+                apply_chat_template=apply_chat_template,
+            )
 
             if not self.pretrain_mode:
                 prompt_token = self.tokenizer(
