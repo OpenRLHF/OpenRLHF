@@ -185,7 +185,7 @@ if __name__ == "__main__":
         default=1,
         help="tensor parallel size of vLLM Engine for multi-GPU inference",
     )
-    parser.add_argument("--vllm_sync_backend", type=str, default="nccl", help="number of vLLM Engines")
+    parser.add_argument("--vllm_sync_backend", type=str, default="nccl", help="DeepSpeed -> vLLM weight sync backend")
 
     parser.add_argument("--prompt_data", type=str, default=None)
     parser.add_argument(
@@ -238,7 +238,6 @@ if __name__ == "__main__":
     parser.add_argument("--enable_ema", action="store_true", help="Enable EMA checkpoint for the model.")
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False)
-    parser.add_argument("--ref_reward_offload", action="store_true", default=False)
     parser.add_argument("--actor_init_on_gpu", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False)
     parser.add_argument("--aux_loss_coef", type=float, default=0)
@@ -254,6 +253,7 @@ if __name__ == "__main__":
 
     # reward model
     parser.add_argument("--head_prefix", type=str, default="value_head")
+    parser.add_argument("--ref_reward_offload", action="store_true", default=False)
 
     # custom dataset key name
     parser.add_argument("--input_key", type=str, default=None)
