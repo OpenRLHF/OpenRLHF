@@ -30,6 +30,7 @@ def preprocess_data(
 
         if apply_chat_template:
             response = apply_chat_template(response, tokenize=False)
+            prompt = ""
             input_template = None
     else:
         # Dylan2048/ultrafeedback-unpaired-preferences
@@ -66,12 +67,16 @@ class UnpairedPreferenceDataset(Dataset):
         self.tokenizer = tokenizer
         self.strategy = strategy
         self.max_length = max_length
+        self.add_eos_token = " " + self.tokenizer.eos_token
+
         prompt_key = getattr(self.strategy.args, "prompt_key", None)
         output_key = getattr(self.strategy.args, "output_key", None)
         label_key = getattr(self.strategy.args, "label_key", None)
         apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
         if apply_chat_template:
             apply_chat_template = self.tokenizer.apply_chat_template
+            if self.tokenizer.eos_token in self.tokenizer.chat_template:
+                self.add_eos_token = ""
 
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
             prompt, response, label = preprocess_data(
@@ -90,7 +95,7 @@ class UnpairedPreferenceDataset(Dataset):
     def collate_fn(self, item_list):
         def tokenizer(prompt, response):
             inputs = self.tokenizer(
-                prompt + response + " " + self.tokenizer.eos_token,
+                prompt + response + self.add_eos_token,
                 max_length=self.max_length,
                 padding=False,
                 truncation=True,
