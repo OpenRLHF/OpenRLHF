@@ -6,11 +6,16 @@ from tqdm import tqdm
 from .utils import exist_and_not_none, process_multi_turn_dialogue, zero_pad_sequences
 
 
-def preprocess_data(data, input_template=None, input_key=None, output_key=None):
+def preprocess_data(data, input_template=None, input_key=None, output_key=None, apply_chat_template=None):
     # custom dataset
     if input_key:
         prompt = data[input_key]
         response = data[output_key]
+
+        if apply_chat_template:
+            prompt = apply_chat_template(data[input_key][:-1], tokenize=False, add_generation_prompt=True)
+            response = apply_chat_template(data[input_key], tokenize=False)[len(prompt) :]
+            input_template = None
     else:
         # Open-Orca/OpenOrca
         if exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
@@ -67,6 +72,12 @@ class SFTDataset(Dataset):
         self.max_length = max_length
         input_key = getattr(self.strategy.args, "input_key", None)
         output_key = getattr(self.strategy.args, "output_key", None)
+        output_key = getattr(self.strategy.args, "output_key", None)
+        apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
+        if apply_chat_template:
+            apply_chat_template = self.tokenizer.apply_chat_template
+            if getattr(self.strategy.args, "tokenizer_chat_template", None):
+                self.tokenizer.chat_template = getattr(self.strategy.args, "tokenizer_chat_template")
 
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
             prompt, response = preprocess_data(data, None if pretrain_mode else input_template, input_key, output_key)
@@ -103,7 +114,7 @@ class SFTDataset(Dataset):
         prompt = self.prompts[idx]
         response = self.responses[idx]
 
-        text = prompt + response
+        text = (prompt + response).rstrip("\n")
         if not text.endswith(self.tokenizer.eos_token):
             text += " " + self.tokenizer.eos_token
 

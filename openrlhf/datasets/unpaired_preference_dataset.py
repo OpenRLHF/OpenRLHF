@@ -92,7 +92,7 @@ class UnpairedPreferenceDataset(Dataset):
 
     def collate_fn(self, item_list):
         def tokenizer(prompt, response):
-            text = prompt + response
+            text = (prompt + response).rstrip("\n")
             if not text.endswith(self.tokenizer.eos_token):
                 text += " " + self.tokenizer.eos_token
             inputs = self.tokenizer(

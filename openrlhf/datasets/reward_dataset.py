@@ -142,7 +142,7 @@ class RewardDataset(Dataset):
         else:
             extra = self.margins[idx]
 
-        chosen = prompt + chosen
+        chosen = (prompt + chosen).rstrip("\n")
         if not chosen.endswith(self.tokenizer.eos_token):
             chosen += " " + self.tokenizer.eos_token
         chosen_token = self.tokenizer(
@@ -153,7 +153,7 @@ class RewardDataset(Dataset):
             return_tensors="pt",
         )
 
-        reject = prompt + reject
+        reject = (prompt + reject).rstrip("\n")
         if not reject.endswith(self.tokenizer.eos_token):
             reject += " " + self.tokenizer.eos_token
         reject_token = self.tokenizer(

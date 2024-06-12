@@ -162,6 +162,8 @@ if __name__ == "__main__":
     parser.add_argument("--input_key", type=str, default=None)
     parser.add_argument("--output_key", type=str, default=None)
     parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
+    parser.add_argument("--apply_chat_template", action="store_true", default=False)
+    parser.add_argument("--tokenizer_chat_template", type=str, default=None)
 
     # wandb pamameters
     parser.add_argument("--use_wandb", type=str, default=None)
