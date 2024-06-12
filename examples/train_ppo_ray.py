@@ -185,6 +185,7 @@ if __name__ == "__main__":
         default=1,
         help="tensor parallel size of vLLM Engine for multi-GPU inference",
     )
+    parser.add_argument("--vllm_sync_backend", type=str, default="nccl", help="number of vLLM Engines")
 
     parser.add_argument("--prompt_data", type=str, default=None)
     parser.add_argument(

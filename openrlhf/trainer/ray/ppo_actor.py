@@ -76,14 +76,20 @@ class ActorPPOTrainer(PPOTrainer):
                 self.strategy.args.vllm_tensor_parallel_size,
             )
             world_size = vllm_num_engines * vllm_tensor_parallel_size + 1
+            backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
             refs = [
                 engine.init_process_group.remote(
-                    master_address, master_port, i * vllm_tensor_parallel_size + 1, world_size, "openrlhf"
+                    master_address,
+                    master_port,
+                    i * vllm_tensor_parallel_size + 1,
+                    world_size,
+                    "openrlhf",
+                    backend=backend,
                 )
                 for i, engine in enumerate(self.vllm_engines)
             ]
             self._model_update_group = init_process_group(
-                backend="nccl",
+                backend=backend,
                 init_method=f"tcp://{master_address}:{master_port}",
                 world_size=world_size,
                 rank=0,

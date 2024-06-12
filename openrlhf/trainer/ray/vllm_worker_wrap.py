@@ -11,14 +11,14 @@ logger = init_logger(__name__)
 
 
 class WorkerWrap(Worker):
-    def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name):
+    def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend="nccl"):
         """Init torch process group for model weights update"""
         assert torch.distributed.is_initialized(), f"default torch process group must be initialized"
         assert group_name != "", f"group name must not be empty"
 
         rank = torch.distributed.get_rank() + rank_offset
         self._model_update_group = init_process_group(
-            backend="nccl",
+            backend=backend,
             init_method=f"tcp://{master_address}:{master_port}",
             world_size=world_size,
             rank=rank,
