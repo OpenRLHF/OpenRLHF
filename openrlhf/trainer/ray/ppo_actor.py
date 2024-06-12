@@ -76,7 +76,15 @@ class ActorPPOTrainer(PPOTrainer):
                 self.strategy.args.vllm_tensor_parallel_size,
             )
             world_size = vllm_num_engines * vllm_tensor_parallel_size + 1
+
             backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
+            # https://github.com/OpenLLMAI/OpenRLHF/issues/313
+            import vllm
+
+            if vllm.__version__ > "0.4.2":
+                backend = "gloo"
+                print("Warning: using --vllm_sync_backend=gloo for vLLM version > 0.4.2")
+
             refs = [
                 engine.init_process_group.remote(
                     master_address,

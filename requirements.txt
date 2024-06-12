@@ -18,4 +18,4 @@ transformers==4.40.0
 transformers_stream_generator
 wandb
 wheel
-#vllm==0.4.2 (Ray PPO does not support NCCL backend with vLLM v0.4.3+)
+#vllm==0.4.2
