@@ -296,6 +296,7 @@ if __name__ == "__main__":
     # custom dataset key name
     parser.add_argument("--input_key", type=str, default=None)
     parser.add_argument("--output_key", type=str, default=None)
+    parser.add_argument("--apply_chat_template", action="store_true", default=False)
 
     # for generation
     parser.add_argument("--ta_prompt", type=str, default=None)
