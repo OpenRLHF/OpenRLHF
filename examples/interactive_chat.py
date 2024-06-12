@@ -32,21 +32,31 @@ def generate(args):
         with open(args.ta_prompt, "r") as f:
             user_prompt = f.read()
 
+    if args.apply_chat_template:
+        conversations = []
+
     while True:
         inputs = input("Please enter a prompt (or type 'exit' to quit): ")
         if inputs.strip().lower() == "exit":
             print("Exiting program...")
             break
         if inputs.strip().lower() == "clear":
-            user_prompt = ""
+            if args.apply_chat_template:
+                conversations = []
+            else:
+                user_prompt = ""
             continue
 
         # get input prompt
-        user_prompt = user_prompt + "\n" + args.input_template.format(inputs)
-        if args.enable_ca:
-            user_prompt += args.ca_prompt.strip() + " "
-        user_prompt_len = len(user_prompt)
+        if args.apply_chat_template:
+            conversations.append({"role": "user", "content": inputs})
+            user_prompt = tokenizer.apply_chat_template(conversations, tokenize=False, add_generation_prompt=True)
+        else:
+            user_prompt = user_prompt + "\n" + args.input_template.format(inputs)
+            if args.enable_ca:
+                user_prompt += args.ca_prompt.strip() + " "
 
+        user_prompt_len = len(user_prompt)
         input_ids = tokenizer.encode(user_prompt, return_tensors="pt").to(torch.cuda.current_device())
         outputs = model.generate(
             input_ids=input_ids,
@@ -62,9 +72,13 @@ def generate(args):
             eos_token_id=tokenizer.eos_token_id,
         )
         output = tokenizer.batch_decode(outputs[0], skip_special_tokens=True)
-        user_prompt = output[0]
-        output = output[0][user_prompt_len:].replace(r"\n", "\n")
-        print(output)
+        response = output[0][user_prompt_len:].replace(r"\n", "\n")
+        if args.apply_chat_template:
+            conversations.append({"role": "assistant", "content": response})
+        else:
+            user_prompt = output[0]
+
+        print(response)
 
 
 if __name__ == "__main__":
@@ -80,6 +94,7 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--repetition_penalty", type=float, default=1.2)
     parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
+    parser.add_argument("--apply_chat_template", action="store_true", default=False)
 
     # QLora
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
