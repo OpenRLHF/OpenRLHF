@@ -252,6 +252,9 @@ if __name__ == "__main__":
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
 
+    # reward model
+    parser.add_argument("--head_prefix", type=str, default="value_head")
+
     # custom dataset key name
     parser.add_argument("--input_key", type=str, default=None)
     parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")

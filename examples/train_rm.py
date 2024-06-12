@@ -31,6 +31,7 @@ def train(args):
         lora_dropout=args.lora_dropout,
         ds_config=strategy.get_ds_train_config(is_actor=False),
         init_value_head=True,
+        head_prefix=args.head_prefix,
     )
 
     # configure tokenizer
@@ -156,6 +157,9 @@ if __name__ == "__main__":
     parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
+
+    # reward model
+    parser.add_argument("--head_prefix", type=str, default="value_head")
 
     # custom dataset key name
     parser.add_argument("--prompt_key", type=str, default=None)

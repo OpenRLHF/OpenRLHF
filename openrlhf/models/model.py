@@ -30,6 +30,7 @@ def get_llm_for_sequence_regression(
     use_flash_attention_2=False,
     ds_config: dict = None,
     init_value_head: bool = False,
+    head_prefix="value_head",
     device_map=None,
     **kwargs,
 ) -> nn.Module:
@@ -59,9 +60,9 @@ def get_llm_for_sequence_regression(
         base_class = AutoModel._model_mapping[type(config)]
         base_pretrained_class = base_class.__base__
         if model_type == "reward":
-            cls_class = _get_reward_model(base_pretrained_class, base_class)
+            cls_class = _get_reward_model(base_pretrained_class, base_class, head_prefix)
         else:
-            cls_class = _get_critic_model(base_pretrained_class, base_class)
+            cls_class = _get_critic_model(base_pretrained_class, base_class, head_prefix)
     except Exception as e:
         print("Failed to load from AutoModel, construct from modelling file.")
         module_file, causal_model_name = config.auto_map["AutoModelForCausalLM"].split(".")
@@ -87,9 +88,9 @@ def get_llm_for_sequence_regression(
         )
         base_class = get_class_from_dynamic_module(f"{module_file}.{auto_model_name}", model_name_or_path)
         if model_type == "reward":
-            cls_class = _get_reward_model(base_pretrained_class, base_class)
+            cls_class = _get_reward_model(base_pretrained_class, base_class, head_prefix)
         else:
-            cls_class = _get_critic_model(base_pretrained_class, base_class)
+            cls_class = _get_critic_model(base_pretrained_class, base_class, head_prefix)
 
     # Note: dschf is defined in function scope to avoid global effects
     # https://huggingface.co/docs/transformers/main_classes/deepspeed#nontrainer-deepspeed-integration
@@ -162,15 +163,14 @@ def get_llm_for_sequence_regression(
     return model
 
 
-def _get_reward_model(base_pretrained_model, base_llm_model):
+def _get_reward_model(base_pretrained_model, base_llm_model, head_prefix="value_head"):
     class RewardModel(base_pretrained_model):
         supports_gradient_checkpointing = True
 
         def __init__(self, config: AutoConfig):
             super().__init__(config)
             setattr(self, self.base_model_prefix, base_llm_model(config))
-
-            self.value_head = nn.Linear(config.hidden_size, 1, bias=False)
+            setattr(self, head_prefix, nn.Linear(config.hidden_size, 1, bias=False))
 
             # mean std
             self.normalize_reward = config.normalize_reward
@@ -215,15 +215,14 @@ def _get_reward_model(base_pretrained_model, base_llm_model):
     return RewardModel
 
 
-def _get_critic_model(base_pretrained_model, base_llm_model):
+def _get_critic_model(base_pretrained_model, base_llm_model, head_prefix="value_head"):
     class CriticModel(base_pretrained_model):
         supports_gradient_checkpointing = True
 
         def __init__(self, config: AutoConfig):
             super().__init__(config)
             setattr(self, self.base_model_prefix, base_llm_model(config))
-
-            self.value_head = nn.Linear(config.hidden_size, 1, bias=False)
+            setattr(self, head_prefix, nn.Linear(config.hidden_size, 1, bias=False))
 
             # mean std
             self.normalize_reward = config.normalize_reward

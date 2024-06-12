@@ -205,6 +205,7 @@ def batch_rm_inference(args):
         normalize_reward=True,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
+        head_prefix=args.head_prefix,
     )
 
     # configure tokenizer
@@ -292,6 +293,8 @@ if __name__ == "__main__":
     parser.add_argument("--output_path", type=str, default=None)
     parser.add_argument("--max_samples", type=int, default=1000000)
     parser.add_argument("--seed", type=int, default=1234)
+    # reward model
+    parser.add_argument("--head_prefix", type=str, default="value_head")
 
     # custom dataset key name
     parser.add_argument("--input_key", type=str, default=None)
