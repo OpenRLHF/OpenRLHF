@@ -1,37 +1,27 @@
 from typing import Callable
+
 from torch.utils.data import Dataset
 from tqdm import tqdm
-from .utils import exist_and_not_none, zero_pad_sequences
+
+from .utils import exist_and_not_none, process_multi_turn_dialogue, zero_pad_sequences
 
 
 def preprocess_data(data, input_template=None, input_key=None, output_key=None):
     # custom dataset
-    if input_key and output_key:
+    if input_key:
         prompt = data[input_key]
         response = data[output_key]
     else:
-        # pvduy/sharegpt_alpaca_oa_vicuna_format
-        if exist_and_not_none(data, "prompt") and exist_and_not_none(data, "label"):
-            prompt = data["prompt"].replace("USER:", "").replace("ASSISTANT:", "")
-            response = data["label"].replace("</s>", "")
         # Open-Orca/OpenOrca
-        elif exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
+        if exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
             prompt = data["system_prompt"] + " " + data["question"]
             response = data["response"]
         # MaziyarPanahi/WizardLM_evol_instruct_V2_196k
         # jondurbin/airoboros-3.2
-        elif exist_and_not_none(data, "conversations"):
-
-            def process_conversations(lll):
-                result = []
-                for l in lll:
-                    if "human" in l["from"]:
-                        result.append(input_template.format(l["value"]))
-                    else:
-                        result.append(l["value"] + "\n")
-                return "".join(result)
-
-            prompt = process_conversations(data["conversations"][:-1])
+        elif exist_and_not_none(data, "conversations") and isinstance(data["conversations"], list):
+            prompt = process_multi_turn_dialogue(
+                data["conversations"][:-1], input_template=input_template, content_key="value", role_key="from"
+            )
             response = data["conversations"][-1]["value"]
             input_template = None  # do not modified with input template again
         # for batch_inference.py

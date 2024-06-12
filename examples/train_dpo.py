@@ -173,13 +173,14 @@ if __name__ == "__main__":
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")
     parser.add_argument("--lora_dropout", type=float, default=0)
-    parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
 
     # custom dataset key name
     parser.add_argument("--prompt_key", type=str, default=None)
     parser.add_argument("--chosen_key", type=str, default=None)
     parser.add_argument("--rejected_key", type=str, default=None)
+    parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
+    parser.add_argument("--apply_chat_template", action="store_true", default=False)
 
     # wandb pamameters
     parser.add_argument("--use_wandb", type=str, default=None)
