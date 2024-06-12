@@ -170,6 +170,8 @@ def _get_reward_model(base_pretrained_model, base_llm_model, head_prefix="value_
         def __init__(self, config: AutoConfig):
             super().__init__(config)
             setattr(self, self.base_model_prefix, base_llm_model(config))
+
+            self.head_prefix = head_prefix
             setattr(self, head_prefix, nn.Linear(config.hidden_size, 1, bias=False))
 
             # mean std
@@ -222,6 +224,8 @@ def _get_critic_model(base_pretrained_model, base_llm_model, head_prefix="value_
         def __init__(self, config: AutoConfig):
             super().__init__(config)
             setattr(self, self.base_model_prefix, base_llm_model(config))
+
+            self.head_prefix = head_prefix
             setattr(self, head_prefix, nn.Linear(config.hidden_size, 1, bias=False))
 
             # mean std
