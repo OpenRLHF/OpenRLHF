@@ -152,7 +152,7 @@ class Actor(nn.Module):
         first_token_indices = attention_mask.long().argmax(dim=1, keepdim=True)
 
         # For Llama3 and Qwen2 models, there are some eos_tokens in the middle of the prompt.
-        mask = torch.arange(seq_length).unsqueeze(0).expand(sequences.size(0), -1)
+        mask = torch.arange(seq_length).unsqueeze(0).expand(sequences.size(0), -1).to(device=sequences.device)
         mask = (mask <= eos_indices) & (mask >= first_token_indices)
 
         attention_mask.masked_fill_(mask, 1)
