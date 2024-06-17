@@ -113,7 +113,7 @@ def remove_padding_in_sequences(items):
             item.attention_mask,
             item.action_mask,
         )
-        right_pad = act_mask.long().fliplr().argmax()
+        right_pad = act_mask.long().flip(0).argmax()
         right_pad = None if right_pad == 0 else -right_pad
 
         # left_pad for seq and att_mask
