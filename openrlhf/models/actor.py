@@ -153,9 +153,7 @@ class Actor(nn.Module):
 
         # For Llama3 and Qwen2 models, there are some eos_tokens in the middle of the prompt.
         mask = torch.arange(seq_length).unsqueeze(0).expand(sequences.size(0), -1).to(device=sequences.device)
-        mask = (mask <= eos_indices) & (mask >= first_token_indices)
-
-        attention_mask.masked_fill_(mask, 1)
+        attention_mask = (mask <= eos_indices) & (mask >= first_token_indices).to(dtype=torch.long)
         sequences.scatter_(dim=1, index=eos_indices, value=eos_token_id)
 
         # in RL, state_i (current token) + action_i (next token) -> state_i+1 (next token)
