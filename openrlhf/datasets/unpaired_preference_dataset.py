@@ -166,7 +166,7 @@ class UnpairedRewardDataset(Dataset):
             if not text.endswith(self.tokenizer.eos_token):
                 text += " " + self.tokenizer.eos_token
             response_token = self.tokenizer(
-                response,
+                text,
                 max_length=self.max_length,
                 padding=False,
                 truncation=True,
