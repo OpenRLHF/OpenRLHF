@@ -162,7 +162,9 @@ class UnpairedRewardDataset(Dataset):
 
     def collate_fn(self, item_list):
         def concat_to_tensor(prompt, response):
-            response = prompt + response + " " + self.tokenizer.eos_token
+            text = (prompt + response).rstrip("\n")
+            if not text.endswith(self.tokenizer.eos_token):
+                text += " " + self.tokenizer.eos_token
             response_token = self.tokenizer(
                 response,
                 max_length=self.max_length,
