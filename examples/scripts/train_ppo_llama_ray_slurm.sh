@@ -35,7 +35,7 @@ echo "IP Head: $ip_head"  &>> ${JOBLOG}
 
 echo "STARTING HEAD at $node_1"  &>> ${JOBLOG}
 srun --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" bash -c \
-  && pip install ray[default]==2.10.0 \
+  && pip install ray[default]==2.12.0 \
   && /root/.local/bin/ray start --head --node-ip-address=$ip --port=$port --block" &>> ${JOBLOG} &
 sleep 10s
 
@@ -44,7 +44,7 @@ for ((i = 1; i < worker_num; i++)); do
   node_i=${nodes_array[$i]}
   echo "STARTING WORKER $i at $node_i"  &>> ${JOBLOG}
   srun --nodes=1 --ntasks=1 -w "$node_i" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" bash -c \
-    && pip install ray[default]==2.10.0 \
+    && pip install ray[default]==2.12.0 \
     && /root/.local/bin/ray start --address "$ip_head" --block" &>> ${JOBLOG} &
   sleep 1s;
 done

@@ -50,7 +50,7 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 - Support Wandb log (--wandb).
 - Support FlashAttention2 (--flash_attn).
 - Support QLoRA (--load_in_4bit), LoRA (--lora_rank, --target_modules).
-- Support HuggingFace `tokenizer.apply_chat_template` in Datasets (--apply_chat_template and --input_key).
+- Support HuggingFace `tokenizer.apply_chat_template` in datasets ([--apply_chat_template and --input_key](./examples/scripts/train_ppo_llama3_ray_colocate.sh)).
 - Multi-nodes [training scripts](./examples/scripts/train_llama_slurm.sh) for Slurm.
 
 **TODO** 

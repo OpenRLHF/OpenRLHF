@@ -53,7 +53,7 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 - 支持 Wandb 日志 (--wandb).
 - 支持 FlashAttention2 (--flash_attn).
 - 支持 QLoRA (--load_in_4bit), LoRA (--lora_rank, --target_modules).
-- 支持 HuggingFace `tokenizer.apply_chat_template` 用于数据集处理 (--apply_chat_template and --input_key).
+- 支持 HuggingFace `tokenizer.apply_chat_template` 用于数据集处理 ([--apply_chat_template and --input_key](./examples/scripts/train_ppo_llama3_ray_colocate.sh)).
 - 多节点 [训练脚本](./examples/scripts/train_llama_slurm.sh) 适用于 Slurm.
 
 **待办事项** 
