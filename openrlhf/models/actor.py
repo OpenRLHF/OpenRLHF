@@ -148,19 +148,22 @@ class Actor(nn.Module):
         #             sequences[i][min(t + 1, seq_length - 1)] = eos_token_id
         #             break
         #
-        eos_indices = seq_length - attention_mask.long().fliplr().argmax(dim=1, keepdim=True).clamp(min=1)
-        sequences.scatter_(dim=1, index=eos_indices, value=eos_token_id)
 
         # For Llama3 and Qwen2 models, there are some eos_tokens in the middle of the prompt.
+        # [PAD] [PAD] [TOKEN] | [TOKEN] [PAD] [PAD]
         first_token_indices = attention_mask.long().argmax(dim=1, keepdim=True)
+        last_token_indices = seq_length - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
         mask = torch.arange(seq_length).unsqueeze(0).expand(sequences.size(0), -1).to(device=sequences.device)
-        attention_mask = (mask >= first_token_indices) & (mask <= eos_indices).to(dtype=torch.long)
+        mask = (mask >= first_token_indices) & (mask <= last_token_indices).to(dtype=torch.long)
+
+        # [PAD] [PAD] [TOKEN] | [TOKEN] [EOS] [PAD]
+        eos_indices = seq_length - attention_mask.long().fliplr().argmax(dim=1, keepdim=True).clamp(min=1)
+        sequences.scatter_(dim=1, index=eos_indices, value=eos_token_id)
+        attention_mask = mask.scatter(dim=1, index=eos_indices, value=1)
 
         # in RL, state_i (current token) + action_i (next token) -> state_i+1 (next token)
-        state_seq = sequences[:, input_len - 1 : -1]
-        action_mask = state_seq.ne(eos_token_id) & state_seq.ne(pad_token_id)
-        action_mask[:, 0] = 1
-
+        # [True] | [True] [False]
+        action_mask = mask[:, input_len - 1 : -1].clone()
         return sequences, attention_mask, action_mask
 
     def forward(
