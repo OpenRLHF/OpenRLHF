@@ -111,6 +111,8 @@ class PPOTrainer(ABC):
         self.critic_loss_fn = ValueLoss(value_clip)
         self.ptx_loss_fn = GPTLMLoss()
 
+        self.freezing_actor_steps = getattr(self.args, "freezing_actor_steps", -1)
+
         # Mixtral 8x7b
         self.aux_loss = self.args.aux_loss_coef > 1e-8
 
@@ -155,7 +157,7 @@ class PPOTrainer(ABC):
         self.pretrain_dataloader = pretrain_dataloader
 
         update_timesteps = args.rollout_batch_size // (self.strategy.world_size * self.micro_rollout_batch_size)
-        global_step = 1
+        steps = 1
 
         # get eval and save steps
         if args.eval_steps == -1:
@@ -175,25 +177,26 @@ class PPOTrainer(ABC):
             for rand_prompts in self.prompts_dataloader:
                 experience = self.experience_maker.make_experience(rand_prompts, **self.generate_kwargs)
                 # print prompt/answer in each update step
-                if global_step % update_timesteps == 0:
+                if steps % update_timesteps == 0:
                     output = self.tokenizer.batch_decode(experience.sequences, skip_special_tokens=True)
                     self.strategy.print(output[0])
                 self.replay_buffer.append(experience)
 
-                if global_step % update_timesteps == 0:
+                if steps % update_timesteps == 0:
                     torch.cuda.empty_cache()
                     self.replay_buffer.normalize("advantages", self.strategy)
-                    status = self.ppo_train()
+                    status = self.ppo_train(steps // update_timesteps)
                     self.replay_buffer.clear()
                     torch.cuda.empty_cache()
-                    self.kl_ctl.update(status["kl"], args.rollout_batch_size)
+                    if "kl" in status:
+                        self.kl_ctl.update(status["kl"], args.rollout_batch_size)
                     # logs/checkpoints
-                    self.save_logs_and_checkpoints(args, global_step // update_timesteps, pbar, status)
+                    self.save_logs_and_checkpoints(args, steps // update_timesteps, pbar, status)
 
                 pbar.update()
-                global_step = global_step + 1
+                steps = steps + 1
 
-    def ppo_train(self):
+    def ppo_train(self, global_steps=0):
         # replay buffer may be empty at first, we should rebuild at each training
         dataloader = DataLoader(
             self.replay_buffer,
@@ -215,29 +218,35 @@ class PPOTrainer(ABC):
             )
             for experience in pbar:
                 experience.to_device(device)
-                status = self.training_step(experience)
+                status = self.training_step(experience, global_steps)
 
                 # for DP
                 # weighted mean for kl
-                status["kl"] *= status["response_length"]
-                status = self.strategy.all_reduce(status)
-                status["kl"] /= status["response_length"]
+                if "kl" in status:
+                    status["kl"] *= status["response_length"]
+                    status = self.strategy.all_reduce(status)
+                    status["kl"] /= status["response_length"]
 
-                status_list.append(status)
-                short_status = {
-                    "pg": status["policy_loss"],
-                    "rm": status["reward"],
-                    "ret": status["return"],
-                    "glen": status["response_length"],
-                    "tlen": status["total_length"],
-                    "kl": status["kl"],
-                }
+                short_status = {}
+
+                if "policy_loss" in status:
+                    short_status = {
+                        "pg": status["policy_loss"],
+                        "rm": status["reward"],
+                        "ret": status["return"],
+                        "glen": status["response_length"],
+                        "tlen": status["total_length"],
+                        "kl": status["kl"],
+                    }
+
                 if "critic_loss" in status:
                     short_status["cri"] = status["critic_loss"]
                     short_status["vals"] = status["values"]
 
                 if "ptx_loss" in status:
                     short_status["ptx"] = status["ptx_loss"]
+
+                status_list.append(status)
                 pbar.set_postfix(short_status)
 
         if status_list:
@@ -249,8 +258,10 @@ class PPOTrainer(ABC):
                 status_mean[k] /= len(status_list)
         return status_mean
 
-    def training_step(self, experience: Experience) -> Dict[str, float]:
-        status = self.training_step_actor(experience)
+    def training_step(self, experience: Experience, global_steps) -> Dict[str, float]:
+        status = {}
+        if global_steps > self.freezing_actor_steps:
+            status = self.training_step_actor(experience)
         status.update(self.training_step_critic(experience))
         return status
 

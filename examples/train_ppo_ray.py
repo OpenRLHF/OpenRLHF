@@ -250,6 +250,7 @@ if __name__ == "__main__":
     parser.add_argument("--lora_dropout", type=float, default=0)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
+    parser.add_argument("--freezing_actor_steps", type=int, default=-1)
 
     # reward model
     parser.add_argument("--head_prefix", type=str, default="value_head")

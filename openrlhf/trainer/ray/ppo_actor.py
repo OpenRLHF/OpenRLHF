@@ -108,7 +108,7 @@ class ActorPPOTrainer(PPOTrainer):
 
         torch.distributed.barrier()
 
-    def ppo_train(self):
+    def ppo_train(self, global_steps):
         # 1. ensure all experience makers done
         self.experience_maker.flush()
         torch.distributed.barrier()
@@ -118,12 +118,15 @@ class ActorPPOTrainer(PPOTrainer):
             critic_status_ref = self.critic.fit.remote()
 
         # 3. actor model training
-        status = super().ppo_train()
+        if global_steps > self.freezing_actor_steps:
+            status = super().ppo_train(global_steps)
 
-        # 4. broadcast weights to vllm engines
-        if self.vllm_engines is not None:
-            torch.distributed.barrier()
-            self._broadcast_to_vllm()
+            # 4. broadcast weights to vllm engines
+            if self.vllm_engines is not None:
+                torch.distributed.barrier()
+                self._broadcast_to_vllm()
+        else:
+            status = {}
 
         # 5. wait remote critic model training done
         if self.critic_train_remote:
@@ -132,7 +135,7 @@ class ActorPPOTrainer(PPOTrainer):
 
         return status
 
-    def training_step(self, experience: Experience) -> Dict[str, float]:
+    def training_step(self, experience: Experience, global_steps) -> Dict[str, float]:
         return self.training_step_actor(experience)
 
     def _broadcast_to_vllm(self):
