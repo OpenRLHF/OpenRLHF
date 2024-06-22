@@ -86,7 +86,7 @@ We optimized DSChat's performance to the greatest extent possible by employing t
 
 ## Performance Tuning Guide
 
-To achieve optimal performance, we recommend allocating more nodes to the vLLM Engine. For example, for a 70B model with 32 A100 GPUs, it is advised to allocate more than 16 A100 GPUs to the vLLM Engine, 8 GPUs to the Actor model, and the remaining 8 GPUs to the Critic model. Additionally, enable the `--colocate_critic_reward`, `--colocate_actor_ref`, and `--ref_reward_offload` options to merge nodes. You can refer to the script [Llama3 Ray PPO](./examples/scripts/train_ppo_llama3_ray_colocate.sh) for more details. Finally, you should increase the micro-batch-size as much as possible while avoiding OOM (Out Of Memory) issues, especially during the generation phase of PPO.
+To achieve optimal performance, we recommend allocating more nodes to the vLLM Engine. For example, for a 70B model with 32 A100 GPUs, it is advised to allocate more than 16 A100 GPUs to the vLLM Engine, 8 GPUs to the Actor model, and the remaining 8 GPUs to the Critic model. Additionally, enable the `--colocate_critic_reward`, `--colocate_actor_ref`, and `--ref_reward_offload` options to merge nodes. You can refer to the script [Llama3 Ray PPO](./examples/scripts/train_ppo_llama3_ray_colocate.sh) for more details. Finally, you should increase the micro-batch-size (and minimize the TP size of vLLM engine) as much as possible while avoiding OOM (Out Of Memory) issues, especially during the generation phase of PPO.
 
 
 ## Running Example

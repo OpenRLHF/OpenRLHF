@@ -87,7 +87,7 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 | 70B | 32 | 10407.0 | 4488.53 | 2.3x |
 
 ## 调优指南
-为了获得最佳的性能，我们建议您分配更多的节点给 vLLM Engine。例如，对于 70B 模型以及 32 张 A100，建议分配 16 张以上 A100 给 vLLM Engine，8 张给 Actor 模型，以及最后 8 张给 Critic 模型，同时开启 `--colocate_critic_reward`, `--colocate_actor_ref` 和 `--ref_reward_offload` 选项合并部分节点，可参考脚本 [Llama3 Ray PPO](./examples/scripts/train_ppo_llama3_ray_colocate.sh)。最后您应该尽可能在避免 OOM 的前提下增大 micro-batch-size 尤其对于 PPO 样本推理生成阶段。
+为了获得最佳的性能，我们建议您分配更多的节点给 vLLM Engine。例如，对于 70B 模型以及 32 张 A100，建议分配 16 张以上 A100 给 vLLM Engine，8 张给 Actor 模型，以及最后 8 张给 Critic 模型，同时开启 `--colocate_critic_reward`, `--colocate_actor_ref` 和 `--ref_reward_offload` 选项合并部分节点，可参考脚本 [Llama3 Ray PPO](./examples/scripts/train_ppo_llama3_ray_colocate.sh)。最后您应该尽可能在避免 OOM 的前提下增大 micro-batch-size (以及减小 vLLM 的 TP 切分数量) 尤其对于 PPO 样本推理生成阶段。
 
 
 ## 运行示例
