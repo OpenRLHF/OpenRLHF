@@ -32,7 +32,7 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 - **Simple and easy to use**: OpenRLHF is one of the simplest high-performance RLHF libraries currently available, and compatible with Huggingface models and datasets.
 - **High performance**: RLHF training spends 80% of the time on the sample generation stage. Thanks to the ability to use a large inference batch size with Ray and Adam Offload (Pinned Memory) and vLLM generation acceleration, the performance of OpenRLHF 2x+ that of Optimized DeepSpeedChat with Hybrid Engine.
 - **Distributed RLHF**:  OpenRLHF distribute the Actor, Reward, Reference, and Critic models onto separate GPUs using Ray, while placing the Adam optimizer on the CPU. This enables full-scale fine-tuning of 70B+ models with multiple A100 80G GPUs and vLLM (see [architecture](./docs/ray_architecture.png)) and 7B models across multiple 24GB RTX 4090 GPUs.
-- **PPO Implementation Tricks**: We integrated the implementation tricks for PPO to improve the training stability, referencing https://arxiv.org/abs/2005.12729 and https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/.
+- **PPO Implementation Tricks**: We integrated the implementation tricks for PPO to improve the training stability, referencing the [Notion AI blog](https://difficult-link-dd7.notion.site/eb7b2d1891f44b3a84e7396d19d39e6f?v=01bcb084210149488d730064cbabc99f).
 
 
 ## Features
@@ -83,6 +83,10 @@ We optimized DSChat's performance to the greatest extent possible by employing t
 | 13B | 32 | 1528.93 | 608.93 | 2.5x |
 | 34B | 32 | 3634.98 | 1526.4 | 2.4x |
 | 70B | 32 | 10407.0 | 4488.53 | 2.3x |
+
+## Performance Tuning Guide
+
+To achieve optimal performance, we recommend allocating more nodes to the vLLM Engine. For example, for a 70B model with 32 A100 GPUs, it is advised to allocate more than 16 A100 GPUs to the vLLM Engine, 8 GPUs to the Actor model, and the remaining 8 GPUs to the Critic model. Additionally, enable the `--colocate_critic_reward`, `--colocate_actor_ref`, and `--ref_reward_offload` options to merge nodes. You can refer to the script [Llama3 Ray PPO](./examples/scripts/train_ppo_llama3_ray_colocate.sh) for more details. Finally, you should increase the micro-batch-size as much as possible while avoiding OOM (Out Of Memory) issues, especially during the generation phase of PPO.
 
 
 ## Running Example
