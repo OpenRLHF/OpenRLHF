@@ -59,6 +59,8 @@ class PromptDataset(Dataset):
         self.strategy = strategy
         self.tokenizer = tokenizer
         self.input_template = input_template
+        self.n_samples_per_prompt = getattr(self.strategy.args, "n_samples_per_prompt", 1)
+
         input_key = getattr(self.strategy.args, "input_key", None)
         apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
         if apply_chat_template:
@@ -71,7 +73,7 @@ class PromptDataset(Dataset):
 
     def __len__(self):
         length = len(self.prompts)
-        return length
+        return length * self.n_samples_per_prompt
 
     def __getitem__(self, idx):
-        return self.prompts[idx]
+        return self.prompts[idx // self.n_samples_per_prompt]
