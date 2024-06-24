@@ -132,7 +132,7 @@ def train(args):
     vllm_engines = None
     if args.vllm_num_engines is not None:
         vllm_engines = create_vllm_engines(
-            args.vllm_num_engines, args.vllm_tensor_parallel_size, args.pretrain, args.seed
+            args.vllm_num_engines, args.vllm_tensor_parallel_size, args.pretrain, args.seed, args.enable_prefix_caching
         )
 
     # critic scheduler initialization depends on max_step, so we have to init critic after actor
@@ -250,6 +250,7 @@ if __name__ == "__main__":
     parser.add_argument("--lora_dropout", type=float, default=0)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
+    parser.add_argument("--enable_prefix_caching", action="store_true", default=False)
     parser.add_argument("--freezing_actor_steps", type=int, default=-1)
     parser.add_argument("--n_samples_per_prompt", type=int, default=1)
 

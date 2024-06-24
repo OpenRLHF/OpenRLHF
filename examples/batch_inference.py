@@ -35,6 +35,7 @@ def batch_generate_vllm(args):
         trust_remote_code=True,
         seed=args.seed,
         max_num_seqs=args.max_num_seqs,
+        enable_prefix_caching=args.enable_prefix_caching,
     )
 
     # Create a sampling params object.
@@ -320,6 +321,7 @@ if __name__ == "__main__":
     # for vllm
     parser.add_argument("--tp_size", type=int, default=8)
     parser.add_argument("--max_num_seqs", type=int, default=256)
+    parser.add_argument("--enable_prefix_caching", action="store_true", default=False)
 
     # for Iterative generation and Rejection Sampling
     parser.add_argument("--iter", type=int, default=None)
