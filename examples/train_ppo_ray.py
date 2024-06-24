@@ -292,4 +292,8 @@ if __name__ == "__main__":
 
     if args.critic_pretrain is None:
         args.critic_pretrain = args.reward_pretrain.split(",")[0]
+
+    if args.vllm_num_engines >= 1 and args.n_samples_per_prompt > 1 and not args.enable_prefix_caching:
+        print("[Warning] Please --enable_prefix_caching to accelerate when --n_samples_per_prompt > 1.")
+
     train(args)
