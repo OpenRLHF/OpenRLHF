@@ -138,7 +138,7 @@ def train(args):
     # critic scheduler initialization depends on max_step, so we have to init critic after actor
     # TODO: use first reward model as critic model
     max_steps = ray.get(actor_model._actor_handlers[0].max_steps.remote())
-    refs.extend(critic_model.async_init_model_from_pretrained(strategy, reward_pretrains[0], max_steps))
+    refs.extend(critic_model.async_init_model_from_pretrained(strategy, args.critic_pretrain, max_steps))
     ray.get(refs)
 
     # train actor and critic mdoel
@@ -148,7 +148,10 @@ def train(args):
     ray.get(refs)
 
     # save model
-    ray.get(actor_model.async_save_actor_model())
+    ray.get(actor_model.async_save_model())
+
+    if args.save_value_network:
+        ray.get(critic_model.async_save_model())
 
 
 if __name__ == "__main__":
@@ -203,6 +206,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--pretrain", type=str, default=None)
     parser.add_argument("--reward_pretrain", type=str, default=None)
+    parser.add_argument("--critic_pretrain", type=str, default=None)
     parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--num_episodes", type=int, default=1)
     parser.add_argument("--rollout_batch_size", type=int, default=512)
@@ -254,6 +258,8 @@ if __name__ == "__main__":
     parser.add_argument("--freezing_actor_steps", type=int, default=-1)
     parser.add_argument("--n_samples_per_prompt", type=int, default=1)
 
+    parser.add_argument("--save_value_network", action="store_true", default=False)
+
     # reward model
     parser.add_argument("--head_prefix", type=str, default="value_head")
     parser.add_argument("--ref_reward_offload", action="store_true", default=False)
@@ -283,4 +289,7 @@ if __name__ == "__main__":
     parser.add_argument("--perf", action="store_true", default=False)
 
     args = parser.parse_args()
+
+    if args.critic_pretrain is None:
+        args.critic_pretrain = args.reward_pretrain.split(",")[0]
     train(args)

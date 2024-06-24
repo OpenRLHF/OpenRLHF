@@ -264,7 +264,7 @@ class PPORayActorGroup:
 
         return refs
 
-    def async_save_actor_model(self):
+    def async_save_model(self):
         """Save actor model on rank 0.
 
         Returns:

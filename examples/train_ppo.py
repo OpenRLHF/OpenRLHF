@@ -37,7 +37,7 @@ def train(args):
         actor = actor.to(torch.cuda.current_device())
 
     critic = get_llm_for_sequence_regression(
-        args.reward_pretrain,
+        args.critic_pretrain,
         "critic",
         normalize_reward=args.normalize_reward,
         use_flash_attention_2=args.flash_attn,
@@ -63,7 +63,7 @@ def train(args):
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, actor.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
-    get_tokenizer(args.reward_pretrain, critic, "left", strategy, use_fast=not args.disable_fast_tokenizer)
+    get_tokenizer(args.critic_pretrain, critic, "left", strategy, use_fast=not args.disable_fast_tokenizer)
     get_tokenizer(args.reward_pretrain, reward_model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
 
     strategy.print(actor)
@@ -250,6 +250,13 @@ def train(args):
         args.save_path,
     )
 
+    if args.save_value_network:
+        strategy.save_model(
+            critic,
+            tokenizer,
+            args.save_path + "_critic",
+        )
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -269,6 +276,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--pretrain", type=str, default=None)
     parser.add_argument("--reward_pretrain", type=str, default=None)
+    parser.add_argument("--critic_pretrain", type=str, default=None)
     parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--save_steps", type=int, default=-1)
     parser.add_argument("--logging_steps", type=int, default=1)
@@ -326,6 +334,8 @@ if __name__ == "__main__":
     parser.add_argument("--freezing_actor_steps", type=int, default=-1)
     parser.add_argument("--n_samples_per_prompt", type=int, default=1)
 
+    parser.add_argument("--save_value_network", action="store_true", default=False)
+
     # reward model
     parser.add_argument("--head_prefix", type=str, default="value_head")
 
@@ -346,4 +356,7 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+
+    if args.critic_pretrain is None:
+        args.critic_pretrain = args.reward_pretrain
     train(args)

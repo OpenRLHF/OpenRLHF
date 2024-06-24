@@ -62,6 +62,8 @@ class CriticPPOTrainer(PPOTrainer):
 @ray.remote(num_gpus=1)
 class CriticModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps):
+        args = strategy.args
+
         self._setup_distributed(strategy)
         critic = get_llm_for_sequence_regression(
             pretrain,
@@ -81,7 +83,11 @@ class CriticModelRayActor(BasePPORole):
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
         strategy.print("mean: {}, std {}".format(critic.mean, critic.std))
 
-        args = strategy.args
+        # configure tokenizer
+        if strategy.args.save_value_network:
+            self.tokenizer = get_tokenizer(
+                pretrain, critic, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer
+            )
 
         # configure optimizer
         critic_optim = strategy.create_optimizer(
@@ -159,3 +165,13 @@ class CriticModelRayActor(BasePPORole):
 
     def empty_cache(self) -> None:
         torch.cuda.empty_cache()
+
+    def save_model(self):
+        args = self.strategy.args
+
+        # save model checkpoint after fitting on only rank0
+        self.strategy.save_model(
+            self.critic,
+            self.tokenizer,
+            args.save_path + "_critic",
+        )
