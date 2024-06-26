@@ -15,7 +15,7 @@ def zero_pad_sequences(sequences, side: str = "left", value=0):
 
 
 def exist_and_not_none(d, key):
-    return key in d and d[key] is not None
+    return key in d and not d[key] is None
 
 
 def process_multi_turn_dialogue(
