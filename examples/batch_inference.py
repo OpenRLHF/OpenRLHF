@@ -45,6 +45,7 @@ def batch_generate_vllm(args):
         use_beam_search=False,
         temperature=args.temperature,
         repetition_penalty=args.repetition_penalty,
+        skip_special_tokens=False,
     )
 
     prompts_data = blending_datasets(
