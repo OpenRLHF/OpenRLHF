@@ -148,8 +148,6 @@ class ActorPPOTrainer(PPOTrainer):
             lora_param_info = None
             if hasattr(model, "peft_config"):
                 fan_in_fan_out = model.peft_config["default"].fan_in_fan_out
-                if "lora" in name:
-                    continue
                 print(f"Broadcasting {name} to vllm engines")
                 if "base_layer" in name:
                     print(f"Merging LoRA layer for {name}")
@@ -169,6 +167,8 @@ class ActorPPOTrainer(PPOTrainer):
                         "fan_in_fan_out": fan_in_fan_out,
                     }
                     name = name.replace("base_layer.", "")
+                else:
+                    continue
                 name = name.replace("base_model.model.", "")
 
             # Fire all vllm engines for broadcast
