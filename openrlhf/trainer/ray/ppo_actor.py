@@ -146,7 +146,7 @@ class ActorPPOTrainer(PPOTrainer):
             count += 1  # empty_cache at last param
             lora_param_info = None
             if hasattr(model, "peft_config"):
-                fan_in_fan_out = model.peft_config['default'].fan_in_fan_out
+                fan_in_fan_out = model.peft_config["default"].fan_in_fan_out
                 if "lora" in name:
                     continue
                 print(f"Broadcasting {name} to vllm engines")
@@ -155,13 +155,17 @@ class ActorPPOTrainer(PPOTrainer):
                     lora_weight_A = named_parameters[name.replace("base_layer", "lora_A.default")]
                     lora_weight_B = named_parameters[name.replace("base_layer", "lora_B.default")]
                     scaling_call = f"model.{name.replace('base_layer.weight', 'scaling')}"
-                    scaling = eval(re.sub(r"\.(\d+)", r"[\1]", scaling_call))['default']
+                    scaling = eval(re.sub(r"\.(\d+)", r"[\1]", scaling_call))["default"]
                     lora_param_info = {
                         "dtype": lora_weight_B.dtype,
-                        "shape_A": lora_weight_A.ds_shape if self.strategy.args.zero_stage == 3 else lora_weight_A.shape,
-                        "shape_B": lora_weight_B.ds_shape if self.strategy.args.zero_stage == 3 else lora_weight_B.shape,
+                        "shape_A": (
+                            lora_weight_A.ds_shape if self.strategy.args.zero_stage == 3 else lora_weight_A.shape
+                        ),
+                        "shape_B": (
+                            lora_weight_B.ds_shape if self.strategy.args.zero_stage == 3 else lora_weight_B.shape
+                        ),
                         "scaling": scaling,
-                        "fan_in_fan_out": fan_in_fan_out
+                        "fan_in_fan_out": fan_in_fan_out,
                     }
                     name = name.replace("base_layer.", "")
                 name = name.replace("base_model.model.", "")
@@ -170,7 +174,13 @@ class ActorPPOTrainer(PPOTrainer):
             if torch.distributed.get_rank() == 0:
                 shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
                 refs = [
-                    engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params, lora_param_info=lora_param_info)
+                    engine.update_weight.remote(
+                        name,
+                        dtype=param.dtype,
+                        shape=shape,
+                        empty_cache=count == num_params,
+                        lora_param_info=lora_param_info,
+                    )
                     for engine in self.vllm_engines
                 ]
 
@@ -181,7 +191,9 @@ class ActorPPOTrainer(PPOTrainer):
                         torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
                         ray.get(refs)
             else:
-                with deepspeed.zero.GatheredParameters([param, lora_weight_A, lora_weight_B], enabled=self.strategy.args.zero_stage == 3):
+                with deepspeed.zero.GatheredParameters(
+                    [param, lora_weight_A, lora_weight_B], enabled=self.strategy.args.zero_stage == 3
+                ):
                     if torch.distributed.get_rank() == 0:
                         torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
                         torch.distributed.broadcast(lora_weight_A.data, 0, group=self._model_update_group)

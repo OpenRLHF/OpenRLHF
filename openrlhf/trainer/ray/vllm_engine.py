@@ -62,9 +62,13 @@ class LLMRayActor:
         self.stop_remote_worker_execution_loop()
 
         if self.use_gpu_executor:
-            return self.llm.llm_engine.model_executor.driver_worker.update_weight(name, dtype, shape, empty_cache, lora_param_info)
+            return self.llm.llm_engine.model_executor.driver_worker.update_weight(
+                name, dtype, shape, empty_cache, lora_param_info
+            )
         else:
-            return self.llm.llm_engine.model_executor._run_workers("update_weight", name, dtype, shape, empty_cache, lora_param_info)
+            return self.llm.llm_engine.model_executor._run_workers(
+                "update_weight", name, dtype, shape, empty_cache, lora_param_info
+            )
 
     def stop_remote_worker_execution_loop(self):
         # Fix error for using 2 communication group
