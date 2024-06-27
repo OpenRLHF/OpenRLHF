@@ -141,22 +141,52 @@ class ActorPPOTrainer(PPOTrainer):
     def _broadcast_to_vllm(self):
         model = self.actor.model.module
         count, num_params = 0, len(list(model.named_parameters()))
+        named_parameters = dict(model.named_parameters())
         for name, param in model.named_parameters():
             count += 1  # empty_cache at last param
+            lora_param_info = None
+            if hasattr(model, "peft_config"):
+                fan_in_fan_out = model.peft_config['default'].fan_in_fan_out
+                if "lora" in name:
+                    continue
+                print(f"Broadcasting {name} to vllm engines")
+                if "base_layer" in name:
+                    print(f"Merging LoRA layer for {name}")
+                    lora_weight_A = named_parameters[name.replace("base_layer", "lora_A.default")]
+                    lora_weight_B = named_parameters[name.replace("base_layer", "lora_B.default")]
+                    scaling_call = f"model.{name.replace('base_layer.weight', 'scaling')}"
+                    scaling = eval(re.sub(r"\.(\d+)", r"[\1]", scaling_call))['default']
+                    lora_param_info = {
+                        "dtype": lora_weight_B.dtype,
+                        "shape_A": lora_weight_A.ds_shape if self.strategy.args.zero_stage == 3 else lora_weight_A.shape,
+                        "shape_B": lora_weight_B.ds_shape if self.strategy.args.zero_stage == 3 else lora_weight_B.shape,
+                        "scaling": scaling,
+                        "fan_in_fan_out": fan_in_fan_out
+                    }
+                    name = name.replace("base_layer.", "")
+                name = name.replace("base_model.model.", "")
 
             # Fire all vllm engines for broadcast
             if torch.distributed.get_rank() == 0:
                 shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
                 refs = [
-                    engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
+                    engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params, lora_param_info=lora_param_info)
                     for engine in self.vllm_engines
                 ]
 
             # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
-            with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                if torch.distributed.get_rank() == 0:
-                    torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
-                    ray.get(refs)
+            if lora_param_info is None:
+                with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
+                    if torch.distributed.get_rank() == 0:
+                        torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
+                        ray.get(refs)
+            else:
+                with deepspeed.zero.GatheredParameters([param, lora_weight_A, lora_weight_B], enabled=self.strategy.args.zero_stage == 3):
+                    if torch.distributed.get_rank() == 0:
+                        torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
+                        torch.distributed.broadcast(lora_weight_A.data, 0, group=self._model_update_group)
+                        torch.distributed.broadcast(lora_weight_B.data, 0, group=self._model_update_group)
+                        ray.get(refs)
 
 
 @ray.remote(num_gpus=1)
