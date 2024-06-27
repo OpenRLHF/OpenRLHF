@@ -103,6 +103,9 @@ class RewardDataset(Dataset):
         apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
         if apply_chat_template:
             apply_chat_template = self.tokenizer.apply_chat_template
+            tokenizer_chat_template = getattr(self.strategy.args, "tokenizer_chat_template", None)
+            if tokenizer_chat_template:
+                self.tokenizer.chat_template = tokenizer_chat_template
 
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
             prompt, chosen, reject, margin = preprocess_data(
