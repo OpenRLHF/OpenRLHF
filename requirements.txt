@@ -14,7 +14,7 @@ ray[default]==2.12.0
 torch
 torchmetrics
 tqdm
-transformers==4.41.0
+transformers==4.42.1
 transformers_stream_generator
 wandb
 wheel
