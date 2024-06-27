@@ -1,6 +1,7 @@
 import itertools
 import math
 import os
+import re
 import socket
 from copy import deepcopy
 from typing import Callable, Dict, List, Tuple
@@ -181,9 +182,8 @@ class ActorPPOTrainer(PPOTrainer):
                         torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
                         ray.get(refs)
             else:
-                with deepspeed.zero.GatheredParameters([param, lora_weight_A, lora_weight_B], enabled=self.strategy.args.zero_stage == 3):
+                with deepspeed.zero.GatheredParameters([lora_weight_A, lora_weight_B], enabled=self.strategy.args.zero_stage == 3):
                     if torch.distributed.get_rank() == 0:
-                        torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
                         torch.distributed.broadcast(lora_weight_A.data, 0, group=self._model_update_group)
                         torch.distributed.broadcast(lora_weight_B.data, 0, group=self._model_update_group)
                         ray.get(refs)

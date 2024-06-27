@@ -38,10 +38,12 @@ class WorkerWrap(Worker):
                 print(f"lora_param_info: {lora_param_info}")
 
         assert dtype == self.model_config.dtype, f"mismatch dtype: src {dtype}, dst {self.model_config.dtype}"
-        weight = torch.empty(shape, dtype=dtype, device="cuda")
-        torch.distributed.broadcast(weight, 0, group=self._model_update_group)
 
-        if lora_param_info is not None:
+        if lora_param_info is None:
+            weight = torch.empty(shape, dtype=dtype, device="cuda")
+            torch.distributed.broadcast(weight, 0, group=self._model_update_group)
+        else:
+            weight = self.model_runner.model.get_parameter(name)
             lora_dtype = lora_param_info["dtype"]
             lora_shape_A = lora_param_info["shape_A"]
             lora_shape_B = lora_param_info["shape_B"]
