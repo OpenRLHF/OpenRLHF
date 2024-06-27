@@ -2,8 +2,8 @@ import importlib
 import inspect
 
 import torch
-from vllm.worker.worker import Worker
 from peft.utils.other import transpose
+from vllm.worker.worker import Worker
 
 from openrlhf.utils.distributed_util import init_process_group
 from openrlhf.utils.logging import init_logger
