@@ -131,8 +131,14 @@ def train(args):
     # init vLLM engine for text generation
     vllm_engines = None
     if args.vllm_num_engines is not None:
+        max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
         vllm_engines = create_vllm_engines(
-            args.vllm_num_engines, args.vllm_tensor_parallel_size, args.pretrain, args.seed, args.enable_prefix_caching
+            args.vllm_num_engines,
+            args.vllm_tensor_parallel_size,
+            args.pretrain,
+            args.seed,
+            args.enable_prefix_caching,
+            max_len,
         )
 
     # critic scheduler initialization depends on max_step, so we have to init critic after actor
