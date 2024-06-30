@@ -54,7 +54,7 @@ sleep 30s
 # ===== submit ray job =====
 # Job start
 srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" bash -c \
-  "pip install ray[default]==2.10.0 \
+  "pip install ray[default]==2.12.0 \
   && /root/.local/bin/ray job submit --address=http://localhost:8265 \
     --runtime-env-json='{\"working_dir\": \"/openrlhf\", \"pip\": \"/openrlhf/requirements.txt\"}' \
     -- python3 examples/train_ppo_ray.py \
