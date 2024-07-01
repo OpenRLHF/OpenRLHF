@@ -36,14 +36,14 @@ class DeepspeedStrategy(ABC):
     """
 
     def __init__(
-        self,
-        seed: int = 42,
-        max_norm: float = 0.0,
-        micro_train_batch_size=1,
-        train_batch_size=1,
-        zero_stage=2,
-        bf16=True,
-        args=None,
+            self,
+            seed: int = 42,
+            max_norm: float = 0.0,
+            micro_train_batch_size=1,
+            train_batch_size=1,
+            zero_stage=2,
+            bf16=True,
+            args=None,
     ) -> None:
         super().__init__()
 
@@ -97,26 +97,26 @@ class DeepspeedStrategy(ABC):
         model.backward(loss)
 
     def optimizer_step(
-        self,
-        optimizer: optim.Optimizer,
-        model: nn.Module,
-        scheduler,
-        name="model",
-        **kwargs,
+            self,
+            optimizer: optim.Optimizer,
+            model: nn.Module,
+            scheduler,
+            name="model",
+            **kwargs,
     ) -> None:
         if isinstance(model, Actor):
             model = model.model
         model.step()
 
     def setup_dataloader(
-        self,
-        replay_buffer,
-        batch_size: int,
-        pin_memory: bool = False,
-        shuffle=True,
-        collate_fn=None,
-        drop_last=True,
-        sampler=None,
+            self,
+            replay_buffer,
+            batch_size: int,
+            pin_memory: bool = False,
+            shuffle=True,
+            collate_fn=None,
+            drop_last=True,
+            sampler=None,
     ):
         # DDP only mode, replay buffers on each rank are different.
         if sampler is None:
@@ -147,7 +147,7 @@ class DeepspeedStrategy(ABC):
             return model
 
     def prepare(
-        self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False
+            self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False
     ) -> Union[List[ModelOrModelOptimPair], ModelOrModelOptimPair]:
         ret = []
         self.is_rlhf = is_rlhf
@@ -202,6 +202,8 @@ class DeepspeedStrategy(ABC):
         return ds_config
 
     def _ds_init_eval_model(self, model):
+        if not model:
+            return model
         is_actor = isinstance(model, Actor)
         ds_config = self.get_ds_eval_config(offload=getattr(model, "_offload", False))
 
@@ -242,12 +244,12 @@ class DeepspeedStrategy(ABC):
                                 param_ema.data.copy_((1 - beta) * data + beta * param_ema.data)
 
     def load_model(
-        self,
-        model: nn.Module,
-        path: str,
-        map_location="cpu",
-        strict: bool = False,
-        key_replace_fn=None,
+            self,
+            model: nn.Module,
+            path: str,
+            map_location="cpu",
+            strict: bool = False,
+            key_replace_fn=None,
     ) -> None:
         unwrapped_model = self._unwrap_model(model)
         state_dict = torch.load(path, map_location=map_location)
@@ -400,14 +402,14 @@ class DeepspeedStrategy(ABC):
         model.save_checkpoint(save_dir, tag=tag, client_state=client_state, save_latest=save_latest)
 
     def load_ckpt(
-        self,
-        model,
-        load_dir,
-        tag=None,
-        load_module_strict=True,
-        load_optimizer_states=True,
-        load_lr_scheduler_states=True,
-        load_module_only=False,
+            self,
+            model,
+            load_dir,
+            tag=None,
+            load_module_strict=True,
+            load_optimizer_states=True,
+            load_lr_scheduler_states=True,
+            load_module_only=False,
     ):
         assert isinstance(model, deepspeed.DeepSpeedEngine)
         # basic ckpt: reuse deepspeed.DeepSpeedEngine.load_checkpoint

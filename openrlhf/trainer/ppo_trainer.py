@@ -42,6 +42,8 @@ class PPOTrainer(ABC):
         dataloader_pin_memory (bool, defaults to True): whether to pin memory for data loader
         callbacks (List[Callback], defaults to []): the callbacks to call during training process
         generate_kwargs (dict, optional): the kwargs to use while model generating
+        remote_rm_url (Callable, optional): function for reward model api
+        remote_ref_url (Callable, optional): function for reference model api
     """
 
     def __init__(
@@ -73,6 +75,8 @@ class PPOTrainer(ABC):
         tokenizer: Optional[Callable[[Any], dict]] = None,
         prompt_max_len: int = 128,
         dataloader_pin_memory: bool = True,
+        remote_rm_url: str = None,
+        remote_ref_url: str = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
         **generate_kwargs,
     ) -> None:
@@ -100,7 +104,9 @@ class PPOTrainer(ABC):
         self.actor = actor
         self.critic = critic
         self.reward_model = reward_model
+        self.remote_rm_url = remote_rm_url
         self.initial_model = initial_model
+        self.remote_ref_url = remote_ref_url
         self.ema_model = ema_model
         self.actor_optim = actor_optim
         self.critic_optim = critic_optim
@@ -122,7 +128,8 @@ class PPOTrainer(ABC):
             self.kl_ctl = FixedKLController(init_kl_coef)
 
         self.experience_maker = NaiveExperienceMaker(
-            actor, critic, reward_model, initial_model, tokenizer, prompt_max_len, self.kl_ctl, strategy, reward_fn
+            actor, critic, reward_model, initial_model, tokenizer, prompt_max_len, self.kl_ctl, strategy, remote_rm_url,
+            remote_ref_url, reward_fn
         )
         self.replay_buffer = NaiveReplayBuffer(micro_train_batch_size, buffer_limit, buffer_cpu_offload)
 
@@ -168,11 +175,10 @@ class PPOTrainer(ABC):
         for episode in range(args.num_episodes):
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
                 self.prompts_dataloader.sampler.set_epoch(episode)
-            pbar = tqdm(
-                range(self.prompts_dataloader.__len__()),
-                desc=f"Episode [{episode + 1}/{args.num_episodes}]",
-                disable=not self.strategy.is_rank_0(),
-            )
+            self.tqdm = tqdm(range(self.prompts_dataloader.__len__()),
+                             desc=f"Episode [{episode + 1}/{args.num_episodes}]",
+                             disable=not self.strategy.is_rank_0(), )
+            pbar = self.tqdm
 
             for rand_prompts in self.prompts_dataloader:
                 experience = self.experience_maker.make_experience(rand_prompts, **self.generate_kwargs)
