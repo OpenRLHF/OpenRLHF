@@ -13,7 +13,7 @@ from tqdm import tqdm
 from openrlhf.models.actor import Actor
 from openrlhf.models.utils import compute_reward, masked_mean
 from openrlhf.utils.logging_utils import init_logger
-from openrlhf.utils.utils_for_api import remote_rm_fn, remote_ref_fn
+from openrlhf.utils.utils_for_api import remote_ref_fn, remote_rm_fn
 
 logger = init_logger(__name__)
 
@@ -76,18 +76,18 @@ class NaiveExperienceMaker(ABC):
     """
 
     def __init__(
-            self,
-            actor: Actor,
-            critic: nn.Module,
-            reward_model: nn.Module,
-            initial_model: Actor,
-            tokenizer,
-            prompt_max_len: int,
-            kl_controller,
-            strategy=None,
-            remote_rm_url: str = None,
-            remote_ref_url: str = None,
-            reward_fn=None,
+        self,
+        actor: Actor,
+        critic: nn.Module,
+        reward_model: nn.Module,
+        initial_model: Actor,
+        tokenizer,
+        prompt_max_len: int,
+        kl_controller,
+        strategy=None,
+        remote_rm_url: str = None,
+        remote_ref_url: str = None,
+        reward_fn=None,
     ) -> None:
         super().__init__()
         self.actor = actor
@@ -199,12 +199,12 @@ class NaiveExperienceMaker(ABC):
 
     @torch.no_grad()
     def get_advantages_and_returns(
-            self,
-            values: torch.Tensor,
-            rewards: torch.Tensor,
-            action_mask: torch.Tensor,
-            gamma: float,
-            lambd: float,
+        self,
+        values: torch.Tensor,
+        rewards: torch.Tensor,
+        action_mask: torch.Tensor,
+        gamma: float,
+        lambd: float,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Function that computes advantages and returns from rewards and values.
         Calculated as in the original PPO paper: https://arxiv.org/abs/1707.06347

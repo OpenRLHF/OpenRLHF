@@ -154,9 +154,9 @@ def train(args):
 
     # configure scheduler
     num_update_steps_per_episodes = (
-            int(len(prompts_dataloader) * (args.micro_rollout_batch_size / args.micro_train_batch_size))
-            * args.max_epochs
-            // strategy.accumulated_gradient
+        int(len(prompts_dataloader) * (args.micro_rollout_batch_size / args.micro_train_batch_size))
+        * args.max_epochs
+        // strategy.accumulated_gradient
     )
 
     max_steps = math.ceil(args.num_episodes * num_update_steps_per_episodes)

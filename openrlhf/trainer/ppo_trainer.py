@@ -128,8 +128,17 @@ class PPOTrainer(ABC):
             self.kl_ctl = FixedKLController(init_kl_coef)
 
         self.experience_maker = NaiveExperienceMaker(
-            actor, critic, reward_model, initial_model, tokenizer, prompt_max_len, self.kl_ctl, strategy, remote_rm_url,
-            remote_ref_url, reward_fn
+            actor,
+            critic,
+            reward_model,
+            initial_model,
+            tokenizer,
+            prompt_max_len,
+            self.kl_ctl,
+            strategy,
+            remote_rm_url,
+            remote_ref_url,
+            reward_fn,
         )
         self.replay_buffer = NaiveReplayBuffer(micro_train_batch_size, buffer_limit, buffer_cpu_offload)
 
@@ -175,9 +184,11 @@ class PPOTrainer(ABC):
         for episode in range(args.num_episodes):
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
                 self.prompts_dataloader.sampler.set_epoch(episode)
-            self.tqdm = tqdm(range(self.prompts_dataloader.__len__()),
-                             desc=f"Episode [{episode + 1}/{args.num_episodes}]",
-                             disable=not self.strategy.is_rank_0(), )
+            self.tqdm = tqdm(
+                range(self.prompts_dataloader.__len__()),
+                desc=f"Episode [{episode + 1}/{args.num_episodes}]",
+                disable=not self.strategy.is_rank_0(),
+            )
             pbar = self.tqdm
 
             for rand_prompts in self.prompts_dataloader:
