@@ -1,7 +1,7 @@
 import logging
 import os
 import socket
-from typing import Callable, List, Optional, Type
+from typing import Callable, Dict, List, Optional, Type
 
 import ray
 import torch
@@ -150,32 +150,48 @@ class PPORayActorGroup:
         ray_actor_type: Type[BasePPORole],
         pg: PlacementGroup = None,
         num_gpus_per_actor=1,
+        resources: Dict[str, float] = None,
+        num_resources_per_node: int = None,
     ) -> None:
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
         self.ray_actor_type = ray_actor_type
+
+        # custom resources, see https://docs.ray.io/en/latest/ray-core/scheduling/resources.html
+        self._resources = resources
+        self._num_resources_per_node = num_resources_per_node
+
         self._initiate_actors(pg, num_gpus_per_actor)
 
     def _initiate_actors(self, pg, num_gpus_per_actor):
         world_size = self._num_nodes * self._num_gpus_per_node
+
         # Use placement group to lock resources for models of same type
         if self._num_gpus_per_node > 1 and pg is None:
             bundles = [
                 {"GPU": self._num_gpus_per_node, "CPU": self._num_gpus_per_node} for _ in range(self._num_nodes)
             ]
+            if self._resources:
+                resources_name = list(self._resources.keys())[0]
+                for i in range(len(bundles)):
+                    bundles[i][resources_name] = self._num_resources_per_node
+
             pg = placement_group(bundles, strategy="STRICT_SPREAD")
             ray.get(pg.ready())
         if pg:
             master_actor = self.ray_actor_type.options(
                 num_cpus=num_gpus_per_actor,
                 num_gpus=num_gpus_per_actor,
+                resources=self._resources,
                 scheduling_strategy=PlacementGroupSchedulingStrategy(
                     placement_group=pg, placement_group_bundle_index=0
                 ),
             ).remote(world_size, 0, 0, None, None)
         else:
             master_actor = self.ray_actor_type.options(
-                num_cpus=num_gpus_per_actor, num_gpus=num_gpus_per_actor
+                num_cpus=num_gpus_per_actor,
+                num_gpus=num_gpus_per_actor,
+                resources=self._resources,
             ).remote(world_size, 0, 0, None, None)
         self._actor_handlers = [master_actor]
 
@@ -188,6 +204,7 @@ class PPORayActorGroup:
                     worker_actor = self.ray_actor_type.options(
                         num_cpus=num_gpus_per_actor,
                         num_gpus=num_gpus_per_actor,
+                        resources=self._resources,
                         scheduling_strategy=PlacementGroupSchedulingStrategy(
                             placement_group=pg,
                             placement_group_bundle_index=rank // self._num_gpus_per_node,
@@ -195,7 +212,9 @@ class PPORayActorGroup:
                     ).remote(world_size, rank, local_rank, master_addr, master_port)
                 else:
                     worker_actor = self.ray_actor_type.options(
-                        num_cpus=num_gpus_per_actor, num_gpus=num_gpus_per_actor
+                        num_cpus=num_gpus_per_actor,
+                        num_gpus=num_gpus_per_actor,
+                        resources=self._resources,
                     ).remote(world_size, rank, local_rank, master_addr, master_port)
                 self._actor_handlers.append(worker_actor)
 
