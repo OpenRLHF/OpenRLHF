@@ -148,7 +148,7 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 
 ### Supervised Fine-tuning
 
-OpenRLHF's model checkpoint is fully compatible with HuggingFace models. You can specify the model name or path using `--pretrain`, `--reward_pretrain` and `--critic_pretrain`. We have provided some pre-trained checkpoints and datasets on [HuggingFace OpenLLMAI](https://huggingface.co/OpenLLMAI).
+OpenRLHF's model checkpoint is fully compatible with HuggingFace models. You can specify the model name or path using `--pretrain  {name or path}`, `--reward_pretrain  {name or path}` and `--critic_pretrain  {name or path}`. We have provided some pre-trained checkpoints and datasets on [HuggingFace OpenLLMAI](https://huggingface.co/OpenLLMAI).
 
 Then you can use the startup scripts we provide in the [examples/scripts](./examples/scripts/) directory, or start the training using the following commands.
 
@@ -314,7 +314,7 @@ To achieve optimal performance, we recommend allocating more nodes to the vLLM E
 
 **How to Join?**
 
-1. Email us at xianyuai@openllmai.top(open-source community email) or janhu9527@gmail.com (PIC). Please include the following details:
+1. Email us at xianyuai@openllmai.top(open-source community email) or janhu9527@gmail.com (personal email of PIC). Please include the following details:
    - Your name
    - Your GitHub username
    - Your areas of interest
