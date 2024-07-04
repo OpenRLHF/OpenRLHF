@@ -176,6 +176,11 @@ deepspeed ./train_sft.py \
    --learning_rate 5e-6 \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
+
+# 也支持通过下面选项自定义 chat_template
+# --apply_chat_template 
+# --input_key {JSON Key}
+# --tokenizer_chat_template {HF Chat Template}
 ```
 
 ### Reward Model Training
