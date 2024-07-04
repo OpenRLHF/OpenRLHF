@@ -45,16 +45,17 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 - 基于 Ray 的分布式 [PPO based on Ray](./examples/scripts/train_ppo_llama_ray.sh). 
 - 支持使用 [超过 70 亿参数的模型进行全面 RLHF 微调](./examples/scripts/train_ppo_llama_ray_70b.sh).
 - 支持 vLLM 生成加速在 RLHF 中 (--vllm_num_engines).
-- 支持多个奖励模型 (--reward_pretrain model1,model2...).
+- 支持 多个奖励模型 (--reward_pretrain model1,model2...).
 - 支持 [DPO (直接偏好优化)/IPO/cDPO](./examples/scripts/train_dpo_llama.sh).
 - 支持 [Kahneman-Tversky 优化 (KTO)](./examples/scripts/train_kto_llama.sh).
 - 支持 [拒绝采样](./examples/scripts/train_rejection_sampling_llama.sh).
 - 支持 [Iterative DPO](./examples/scripts/train_iterative_dpo_llama.sh) (https://github.com/RLHFlow/Online-RLHF).
 - 支持 [条件 SFT](./examples/scripts/train_conditional_llama.sh) (https://arxiv.org/abs/2308.12050).
-- 支持 [Mixtral 8*7b](./examples/test_scripts/train_sft_mixtral_lora.sh) (--aux_loss_coef)
+- 支持 [知识蒸馏](./examples/scripts/train_knowledge_distillation.sh) (https://github.com/microsoft/LMOps/tree/main/minillm).
+- 支持 [MoE](./examples/test_scripts/train_sft_mixtral_lora.sh) (--aux_loss_coef)
 - 支持 Wandb 日志 (--wandb).
 - 支持 FlashAttention2 (--flash_attn).
-- 支持 QLoRA (--load_in_4bit), LoRA (--lora_rank, --target_modules).
+- 支持 QLoRA (--load_in_4bit), [LoRA (--lora_rank, --target_modules)]((./examples/scripts/train_sft_mixtral_lora.sh)).
 - 支持 HuggingFace `tokenizer.apply_chat_template` 用于数据集处理 ([--apply_chat_template and --input_key](./examples/scripts/train_ppo_llama3_ray_colocate.sh)).
 - 多节点 [训练脚本](./examples/scripts/train_llama_slurm.sh) 适用于 Slurm.
 
@@ -308,7 +309,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 **如何加入？**
 
-1. 通过官方邮箱 xianyuai@openllmai.top 或个人联系邮箱 janhu9527@gmail.com (PIC) 向我们发送邮件。请包含以下信息：
+1. 通过开源组织邮箱 xianyuai@openllmai.top 或个人联系邮箱 janhu9527@gmail.com (PIC) 向我们发送邮件。请包含以下信息：
    - 您的姓名
    - 您的 GitHub 用户名
    - 您感兴趣的领域

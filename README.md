@@ -48,10 +48,11 @@ More details are in [Technical Report](https://arxiv.org/abs/2405.11143) | [Docu
 - Support [Rejection Sampling](./examples/scripts/train_rejection_sampling_llama.sh).
 - Support [Iterative DPO](./examples/scripts/train_iterative_dpo_llama.sh) (https://github.com/RLHFlow/Online-RLHF).
 - Support [Conditional SFT](./examples/scripts/train_conditional_llama.sh) (https://arxiv.org/abs/2308.12050).
-- Support [Mixtral 8*7b](./examples/test_scripts/train_sft_mixtral_lora.sh) (--aux_loss_coef)
+- Support [Knowledge Distillation](./examples/scripts/train_knowledge_distillation.sh) (https://github.com/microsoft/LMOps/tree/main/minillm).
+- Support [MoE](./examples/test_scripts/train_sft_mixtral_lora.sh) (--aux_loss_coef)
 - Support Wandb log (--wandb).
 - Support FlashAttention2 (--flash_attn).
-- Support QLoRA (--load_in_4bit), LoRA (--lora_rank, --target_modules).
+- Support QLoRA (--load_in_4bit), [LoRA (--lora_rank, --target_modules)](./examples/scripts/train_sft_mixtral_lora.sh).
 - Support HuggingFace `tokenizer.apply_chat_template` in datasets ([--apply_chat_template and --input_key](./examples/scripts/train_ppo_llama3_ray_colocate.sh)).
 - Multi-nodes [training scripts](./examples/scripts/train_llama_slurm.sh) for Slurm.
 
@@ -305,7 +306,7 @@ To achieve optimal performance, we recommend allocating more nodes to the vLLM E
 
 **How to Join?**
 
-1. Email us at xianyuai@openllmai.top(official email) or janhu9527@gmail.com (PIC). Please include the following details:
+1. Email us at xianyuai@openllmai.top(open-source community email) or janhu9527@gmail.com (PIC). Please include the following details:
    - Your name
    - Your GitHub username
    - Your areas of interest
