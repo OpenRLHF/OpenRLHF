@@ -240,7 +240,7 @@ pip install flash-attn==2.5.8
 
 **How to Join?**
 
-1. Email us at xianyuai@openllmai.top(official email) or janhu9527@gmail.com/jjgxw@outlook.com(PIC). Please include the following details:
+1. Email us at xianyuai@openllmai.top(official email) or janhu9527@gmail.com (PIC). Please include the following details:
    - Your name
    - Your GitHub username
    - Your areas of interest
@@ -285,13 +285,11 @@ Our project would also like to thank [ColossalChat](https://github.com/hpcaitech
 
 ## Citation
 ```
-@misc{hu23openrlhf,
-   author = {Jian Hu and Xibin Wu and Xianyu and Chen Su and Leon Qiu and Daoning Jiang and Qing Wang and Weixun Wang},
-   title = {OpenRLHF: An Easy-to-use, Scalable and High-performance RLHF Framework},
-   year={2023},
-   publisher = {GitHub},
-   journal = {GitHub repository},
-   howpublished = {\url{https://github.com/OpenLLMAI/OpenRLHF}}
+@article{hu2024openrlhf,
+  title={OpenRLHF: An Easy-to-use, Scalable and High-performance RLHF Framework},
+  author={Jian Hu and Xibin Wu and Weixun Wang and Xianyu and Dehao Zhang and Yu Cao},
+  journal={arXiv preprint arXiv:2405.11143},
+  year={2024}
 }
 ```
 
