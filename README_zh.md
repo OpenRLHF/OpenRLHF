@@ -92,6 +92,9 @@ docker build -t nvcr.io/nvidia/pytorch:24.02-py3 ./OpenRLHF/dockerfile
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD/OpenRLHF:/openrlhf nvcr.io/nvidia/pytorch:24.02-py3 bash
 ```
 
+> [!NOTE]
+>我们提供了 [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh)
+
 然后在 Docker 容器内 `pip install` openrlhf
 
 ```bash
