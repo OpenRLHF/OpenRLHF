@@ -20,11 +20,12 @@ read -r -d '' training_commands <<EOF
    --chosen_key chosen \
    --rejected_key rejected \
    --flash_attn \
-   --gradient_checkpointing \
+   --gradient_checkpointing
 EOF
      # --wandb [WANDB_TOKENS] or True (use wandb login command)
      # --ipo [for IPO]
      # --label_smoothing 0.1 [for cDPO]
+     # --ref_offload 
 
 
 if [[ ${1} != "slurm" ]]; then
