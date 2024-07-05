@@ -8,9 +8,9 @@ read -r -d '' get_rewards_commands <<EOF
     --eval_task rm \
     --pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
     --bf16 \
-    --max_len 2048 \
-    --prompt_data OpenLLMAI/prompt-collection-v0.1 \
-    --input_key context_messages \
+    --max_len 4096 \
+    --prompt_data OpenLLMAI/preference_dataset_mixture2_and_safe_pku \
+    --input_key chosen \
     --max_samples 128000 \
     --zero_stage 0 \
     --post_processor csft \
@@ -21,7 +21,7 @@ EOF
 
 read -r -d '' sft_commands <<EOF
 ../train_sft.py \
-    --max_len 2048 \
+    --max_len 4096 \
     --dataset $RM_OUTPUT \
     --dataset_probs 1.0 \
     --train_batch_size 128 \

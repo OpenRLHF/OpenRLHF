@@ -33,7 +33,8 @@ while (($iter < $TRAINING_ITERS)); do
 ./batch_inference.py
    --eval_task generate_vllm \
    --pretrain $POLICY_MODEL_PATH \
-   --max_new_tokens 1024 \
+   --max_new_tokens 2048 \
+   --truncate_prompt_tokens 2048 \
    --prompt_data OpenLLMAI/prompt-collection-v0.1 \
    --input_key context_messages \
    --apply_chat_template \
@@ -55,7 +56,7 @@ EOF
    --eval_task rm \
    --pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
    --bf16 \
-   --max_len 2048 \
+   --max_len 4096 \
    --dataset $GENERATE_OUTPUT  \
    --dataset_probs 1.0 \
    --zero_stage 0 \
@@ -69,7 +70,7 @@ EOF
 
    read -r -d '' dpo_commands <<EOF
 ./train_dpo.py \
-   --max_len 2048 \
+   --max_len 4096 \
    --dataset $RM_OUTPUT \
    --dataset_probs 1.0 \
    --train_batch_size 128 \
