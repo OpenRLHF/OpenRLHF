@@ -34,7 +34,7 @@ while (($iter < $TRAINING_ITERS)); do
    --eval_task generate_vllm \
    --pretrain $POLICY_MODEL_PATH \
    --max_new_tokens 2048 \
-   --truncate_prompt_tokens 2048 \
+   --prompt_max_len 2048 \
    --prompt_data OpenLLMAI/prompt-collection-v0.1 \
    --input_key context_messages \
    --apply_chat_template \

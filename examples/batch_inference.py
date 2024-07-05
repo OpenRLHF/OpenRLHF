@@ -46,7 +46,7 @@ def batch_generate_vllm(args):
         temperature=args.temperature,
         repetition_penalty=args.repetition_penalty,
         skip_special_tokens=False,
-        truncate_prompt_tokens=args.truncate_prompt_tokens,
+        truncate_prompt_tokens=args.prompt_max_len,
     )
 
     prompts_data = blending_datasets(
@@ -157,7 +157,7 @@ def batch_generate(args):
             outputs = model.model.generate(
                 **inputs,
                 use_cache=True,
-                max_length=args.max_len,
+                max_new_tokens=args.max_new_tokens,
                 do_sample=not args.greedy_sampling,
                 top_p=args.top_p,
                 early_stopping=True,
@@ -324,7 +324,6 @@ if __name__ == "__main__":
     parser.add_argument("--tp_size", type=int, default=8)
     parser.add_argument("--max_num_seqs", type=int, default=256)
     parser.add_argument("--enable_prefix_caching", action="store_true", default=False)
-    parser.add_argument("--truncate_prompt_tokens", type=int, default=None)
 
     # for Iterative generation and Rejection Sampling
     parser.add_argument("--iter", type=int, default=None)
