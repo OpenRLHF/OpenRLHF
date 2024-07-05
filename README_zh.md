@@ -56,7 +56,7 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 - 支持 Wandb 日志 (--wandb).
 - 支持 FlashAttention2 (--flash_attn).
 - 支持 QLoRA (--load_in_4bit), [LoRA (--lora_rank, --target_modules)]((./examples/scripts/train_sft_mixtral_lora.sh)).
-- 支持 HuggingFace `tokenizer.apply_chat_template` 用于数据集处理 ([--apply_chat_template and --input_key](./examples/scripts/train_ppo_llama3_ray_colocate.sh)).
+- 支持 HuggingFace `tokenizer.apply_chat_template` 用于数据集处理 (--apply_chat_template and --input_key).
 - 多节点 [训练脚本](./examples/scripts/train_llama_slurm.sh) 适用于 Slurm.
 
 
@@ -310,7 +310,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 | 70B | 32 | 10407.0 | 4488.53 | 2.3x |
 
 ## 调优指南
-为了获得最佳的性能，我们建议您分配更多的节点给 vLLM Engine。例如，对于 70B 模型以及 32 张 A100，建议分配 16 张以上 A100 给 vLLM Engine，8 张给 Actor 模型，以及最后 8 张给 Critic 模型，同时开启 `--colocate_critic_reward`, `--colocate_actor_ref` 和 `--ref_reward_offload` 选项合并部分节点，可参考脚本 [Llama3 Ray PPO](./examples/scripts/train_ppo_llama3_ray_colocate.sh)。最后您应该尽可能在避免 OOM 的前提下增大 micro-batch-size (以及减小 vLLM 的 TP 切分数量) 尤其对于 PPO 样本推理生成阶段。
+为了获得最佳的性能，我们建议您分配更多的节点给 vLLM Engine。例如，对于 70B 模型以及 32 张 A100，建议分配 16 张以上 A100 给 vLLM Engine，8 张给 Actor 模型，以及最后 8 张给 Critic 模型，同时开启 `--colocate_critic_reward`, `--colocate_actor_ref` 和 `--ref_reward_offload` 选项合并部分节点。最后您应该尽可能在避免 OOM 的前提下增大 micro-batch-size (以及减小 vLLM 的 TP 切分数量) 尤其对于 PPO 样本推理生成阶段。为 vLLM 开启 `enable_prefix_caching` 当 `n_samples_per_prompt > 1`.
 
 
 ## 加入我们

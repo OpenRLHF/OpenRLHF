@@ -15,8 +15,10 @@ read -r -d '' training_commands <<EOF
      --zero_stage 3 \
      --beta 0.1 \
      --learning_rate 5e-7 \
-     --dataset Anthropic/hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward,lmsys/chatbot_arena_conversations,openai/webgpt_comparisons \
-     --dataset_probs 0.72,0.08,0.12,0.08 \
+     --dataset OpenLLMAI/preference_dataset_mixture2_and_safe_pku\
+     --apply_chat_template \
+     --chosen_key chosen \
+     --rejected_key rejected \
      --flash_attn \
      --gradient_checkpointing \
      --adam_offload

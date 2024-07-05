@@ -11,7 +11,7 @@ read -r -d '' training_commands <<EOF
     --train_batch_size 128 \
     --micro_train_batch_size 4 \
     --pretrain ai21labs/Jamba-v0.1 \
-    --save_path ./ckpt/jamba_wizard\
+    --save_path ./checkpoint/jamba-sft-lora\
     --save_steps -1 \
     --logging_steps 1 \
     --eval_steps -1 \

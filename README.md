@@ -53,7 +53,7 @@ More details are in [Technical Report](https://arxiv.org/abs/2405.11143) | [Docu
 - Support Wandb log (--wandb).
 - Support FlashAttention2 (--flash_attn).
 - Support QLoRA (--load_in_4bit), [LoRA (--lora_rank, --target_modules)](./examples/scripts/train_sft_mixtral_lora.sh).
-- Support HuggingFace `tokenizer.apply_chat_template` in datasets ([--apply_chat_template and --input_key](./examples/scripts/train_ppo_llama3_ray_colocate.sh)).
+- Support HuggingFace `tokenizer.apply_chat_template` in datasets (--apply_chat_template and --input_key).
 - Multi-nodes [training scripts](./examples/scripts/train_llama_slurm.sh) for Slurm.
 
 ### PPO Support Matrix
@@ -307,7 +307,7 @@ We optimized DSChat's performance to the greatest extent possible by employing t
 
 ### Performance Tuning Guide
 
-To achieve optimal performance, we recommend allocating more nodes to the vLLM Engine. For example, for a 70B model with 32 A100 GPUs, it is advised to allocate more than 16 A100 GPUs to the vLLM Engine, 8 GPUs to the Actor model, and the remaining 8 GPUs to the Critic model. Additionally, enable the `--colocate_critic_reward`, `--colocate_actor_ref`, and `--ref_reward_offload` options to merge nodes. You can refer to the script [Llama3 Ray PPO](./examples/scripts/train_ppo_llama3_ray_colocate.sh) for more details. Finally, you should increase the micro-batch-size (and minimize the TP size of vLLM engine) as much as possible while avoiding OOM (Out Of Memory) issues, especially during the generation phase of PPO.
+To achieve optimal performance, we recommend allocating more nodes to the vLLM Engine. For example, for a 70B model with 32 A100 GPUs, it is advised to allocate more than 16 A100 GPUs to the vLLM Engine, 8 GPUs to the Actor model, and the remaining 8 GPUs to the Critic model. Additionally, enable the `--colocate_critic_reward`, `--colocate_actor_ref`, and `--ref_reward_offload` options to merge nodes. Finally, you should increase the micro-batch-size (and minimize the TP size of vLLM engine) as much as possible while avoiding OOM (Out Of Memory) issues, especially during the generation phase of PPO. Enable `enable_prefix_caching` in vLLM generation when `n_samples_per_prompt > 1`.
 
 
 ## Join Us

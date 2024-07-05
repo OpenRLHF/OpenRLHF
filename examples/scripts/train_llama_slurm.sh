@@ -34,8 +34,7 @@ export MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
 export MASTER_PORT=9901
 
 srun --container-image="$IMAGE_NAME" \
-    --container-mounts="$PROJECT_PATH:/root/openrlhf,$HOME/.cache:/root/.cache,$HOME/.local:/root/.local,\
-$HOME/.triton:/root/.triton,/dev/null:/root/.bashrc" \
+    --container-mounts="$PROJECT_PATH:/root/openrlhf,$HOME/.cache:/root/.cache" \
     bash -c "cd /root/openrlhf/examples/scripts; ./build_openrlhf.sh; torchrun \
 --nproc_per_node $GPUS_PER_NODE --nnodes $SLURM_NNODES --node_rank $SLURM_PROCID \
 --master_addr $MASTER_ADDR --master_port $MASTER_PORT ${training_commands}" &>> ${JOBLOG}
