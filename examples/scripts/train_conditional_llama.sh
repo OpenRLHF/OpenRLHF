@@ -11,6 +11,7 @@ read -r -d '' get_rewards_commands <<EOF
     --max_len 4096 \
     --dataset OpenLLMAI/preference_dataset_mixture2_and_safe_pku \
     --input_key chosen \
+    --apply_chat_template \
     --max_samples 128000 \
     --zero_stage 0 \
     --post_processor csft \
