@@ -36,7 +36,7 @@ while (($iter < $TRAINING_ITERS)); do
    --max_new_tokens 2048 \
    --prompt_max_len 2048 \
    --max_samples 128 \
-   --prompt_data OpenLLMAI/prompt-collection-v0.1 \
+   --dataset OpenLLMAI/prompt-collection-v0.1 \
    --input_key context_messages \
    --apply_chat_template \
    --temperature 0.9

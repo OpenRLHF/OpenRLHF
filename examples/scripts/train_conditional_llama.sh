@@ -9,7 +9,7 @@ read -r -d '' get_rewards_commands <<EOF
     --pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
     --bf16 \
     --max_len 4096 \
-    --prompt_data OpenLLMAI/preference_dataset_mixture2_and_safe_pku \
+    --dataset OpenLLMAI/preference_dataset_mixture2_and_safe_pku \
     --input_key chosen \
     --max_samples 128000 \
     --zero_stage 0 \
