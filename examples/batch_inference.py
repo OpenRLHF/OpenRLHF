@@ -69,9 +69,9 @@ def batch_generate_vllm(args):
     prompts = list(prompts_dataset)
 
     # Conditional SFT inference
-    if args.enable_ca:
+    if args.enable_csft:
         for i in range(len(prompts)):
-            prompts[i] += args.ca_prompt.strip() + " "
+            prompts[i] += args.csft_prompt.strip() + " "
 
     # best of n
     N = args.best_of_n
@@ -148,9 +148,9 @@ def batch_generate(args):
 
     for prompts in pbar:
         # Conditional SFT inference
-        if args.enable_ca:
+        if args.enable_csft:
             for i in range(len(prompts)):
-                prompts[i] += args.ca_prompt.strip() + " "
+                prompts[i] += args.csft_prompt.strip() + " "
 
         inputs = tokenize_fn(prompts)
         for _ in range(N):
@@ -332,8 +332,8 @@ if __name__ == "__main__":
     # for Conditional SFT
     parser.add_argument("--normalize_reward", action="store_true", default=False)
     parser.add_argument("--reward_template", type=str, default=None)
-    parser.add_argument("--enable_ca", action="store_true", default=False)
-    parser.add_argument("--ca_prompt", type=str, default="<rm_score>: 5.00", help="Conditional SFT prompt")
+    parser.add_argument("--enable_csft", action="store_true", default=False)
+    parser.add_argument("--csft_prompt", type=str, default="<rm_score>: 5.00", help="Conditional SFT prompt")
 
     args = parser.parse_args()
     if args.eval_task and args.eval_task == "generate":

@@ -53,8 +53,9 @@ def generate(args):
             user_prompt = tokenizer.apply_chat_template(conversations, tokenize=False, add_generation_prompt=True)
         else:
             user_prompt = user_prompt + "\n" + args.input_template.format(inputs)
-            if args.enable_ca:
-                user_prompt += args.ca_prompt.strip() + " "
+
+        if args.enable_csft:
+            user_prompt += args.csft_prompt.strip() + " "
 
         user_prompt_len = len(user_prompt)
         input_ids = tokenizer.encode(user_prompt, return_tensors="pt").to(torch.cuda.current_device())
@@ -100,8 +101,8 @@ if __name__ == "__main__":
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
 
     parser.add_argument("--ta_prompt", type=str, default=None)
-    parser.add_argument("--enable_ca", action="store_true", default=False)
-    parser.add_argument("--ca_prompt", type=str, default="<rm_score>: 5.00", help="conditional SFT prompt")
+    parser.add_argument("--enable_csft", action="store_true", default=False)
+    parser.add_argument("--csft_prompt", type=str, default="<rm_score>: 5.00", help="conditional SFT prompt")
     args = parser.parse_args()
 
     print(args)
