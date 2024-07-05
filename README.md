@@ -293,7 +293,8 @@ ray job submit --address="http://127.0.0.1:8265" \
 ```
 
 > [!NOTE]
-> We recommend using vLLM 0.4.2, as versions 0.4.3+ currently only support weight synchronization (DeepSpeed => vLLM) via GLOO (--vllm_sync_backend gloo).
+> We recommend using vLLM 0.4.2, as versions 0.4.3+ currently only support weight synchronization (DeepSpeed => vLLM) via Gloo (--vllm_sync_backend gloo).
+> Setting --vllm_num_engines 0 means not using the vLLM engine.
 
 The launch scripts and docs for all supported algorithms are in [example/scripts](./examples/scripts/) and [Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)
 
