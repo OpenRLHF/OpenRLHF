@@ -317,7 +317,7 @@ if __name__ == "__main__":
         "--post_processor",
         type=str,
         default=None,
-        help="set to rs (Rejection Sampling), ca (Conditional SFT), iter_dpo (Iterative DPO) or None",
+        help="set to rs (Rejection Sampling), csft (Conditional SFT), iter_dpo (Iterative DPO) or None",
     )
     # for vllm
     parser.add_argument("--tp_size", type=int, default=8)

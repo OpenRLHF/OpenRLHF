@@ -2,7 +2,7 @@ set -x
 
 read -r -d '' training_commands <<EOF
 ../train_dpo.py \
-     --save_path ./ckpt/13b_llama \
+     --save_path ./checkpoint/llama2-34b-dpo \
      --save_steps -1 \
      --logging_steps 1 \
      --eval_steps -1 \

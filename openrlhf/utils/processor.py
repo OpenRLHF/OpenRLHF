@@ -91,7 +91,7 @@ def iterative_dpo_processor(args, objs):
 
 PROCESSORS = {
     "rs": rejection_sampling_processor,
-    "ca": conditional_sft_processor,
+    "csft": conditional_sft_processor,
     "iter_dpo": iterative_dpo_processor,
 }
 

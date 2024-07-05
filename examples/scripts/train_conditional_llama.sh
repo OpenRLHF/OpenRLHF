@@ -13,7 +13,7 @@ read -r -d '' get_rewards_commands <<EOF
     --dataset_probs 0.5,0.5 \
     --max_samples 128000 \
     --zero_stage 0 \
-    --post_processor ca \
+    --post_processor csft \
     --normalize_reward
     --micro_batch_size 4 \
     --output_path $RM_OUTPUT
