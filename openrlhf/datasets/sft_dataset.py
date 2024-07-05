@@ -10,12 +10,13 @@ def preprocess_data(data, input_template=None, input_key=None, output_key=None, 
     # custom dataset
     if input_key:
         prompt = data[input_key]
-        response = data[output_key]
 
         if apply_chat_template:
             prompt = apply_chat_template(data[input_key][:-1], tokenize=False, add_generation_prompt=True)
             response = apply_chat_template(data[input_key], tokenize=False)[len(prompt) :]
             input_template = None
+        else:
+            response = data[output_key]
     else:
         # Open-Orca/OpenOrca
         if exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
@@ -71,7 +72,6 @@ class SFTDataset(Dataset):
         self.pretrain_mode = pretrain_mode
         self.max_length = max_length
         input_key = getattr(self.strategy.args, "input_key", None)
-        output_key = getattr(self.strategy.args, "output_key", None)
         output_key = getattr(self.strategy.args, "output_key", None)
         apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
         if apply_chat_template:
