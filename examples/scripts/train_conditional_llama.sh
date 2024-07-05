@@ -9,8 +9,8 @@ read -r -d '' get_rewards_commands <<EOF
     --pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
     --bf16 \
     --max_len 2048 \
-    --dataset Open-Orca/OpenOrca,Dahoas/full-hh-rlhf \
-    --dataset_probs 0.5,0.5 \
+    --prompt_data OpenLLMAI/prompt-collection-v0.1 \
+    --input_key context_messages \
     --max_samples 128000 \
     --zero_stage 0 \
     --post_processor csft \
