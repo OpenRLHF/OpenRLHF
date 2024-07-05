@@ -173,10 +173,13 @@ deepspeed ./train_sft.py \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
 
-# Customization of chat_template is also supported.
+# Customization of chat_template is supported.
 # --apply_chat_template 
 # --input_key {JSON Key}
 # --tokenizer_chat_template {HF Chat Template}
+
+# Can also be used for continued pre-training
+# --pretrain_mode
 ```
 
 ### Reward Model Training
