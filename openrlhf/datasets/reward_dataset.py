@@ -4,60 +4,27 @@ import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from .utils import exist_and_not_none, process_multi_turn_dialogue, zero_pad_sequences
+from .utils import exist_and_not_none, zero_pad_sequences
 
 
 def preprocess_data(
     data, input_template=None, prompt_key=None, chosen_key=None, rejected_key=None, apply_chat_template=None
 ) -> str:
-    # custom dataset
-    if chosen_key and rejected_key:
+    prompt = ""
+    chosen = data[chosen_key]
+    rejected = data[rejected_key]
+
+    if apply_chat_template:
+        chosen = apply_chat_template(chosen, tokenize=False)
+        rejected = apply_chat_template(rejected, tokenize=False)
+    else:
         if prompt_key:
             prompt = data[prompt_key]
-        else:
-            prompt = ""
-            input_template = None  # do not modified with input template again
-        chosen = data[chosen_key]
-        rejected = data[rejected_key]
-
-        if apply_chat_template:
-            chosen = apply_chat_template(chosen, tokenize=False)
-            rejected = apply_chat_template(rejected, tokenize=False)
-            prompt = ""
-            input_template = None
-    else:
-        # Anthropic/hh-rlhf
-        if exist_and_not_none(data, "chosen") and exist_and_not_none(data, "rejected"):
-            # tasksource/oasst1_pairwise_rlhf_reward
-            prompt = data["prompt"] if exist_and_not_none(data, "prompt") else ""
-            if prompt and prompt.startswith("prompter:"):
-                prompt = (
-                    prompt.replace("prompter:", "\nHuman: ").replace("assistant:", "\nAssistant: ") + "\nAssistant: "
-                )
-            chosen = data["chosen"]
-            rejected = data["rejected"]
-        # lmsys/chatbot_arena_conversations
-        elif exist_and_not_none(data, "winner") and exist_and_not_none(data, "conversation_a"):
-            prompt = ""
-            chosen = data["conversation_a"] if data["winner"] == "model_a" else data["conversation_b"]
-            rejected = data["conversation_b"] if data["winner"] == "model_a" else data["conversation_a"]
-            chosen = process_multi_turn_dialogue(chosen)
-            rejected = process_multi_turn_dialogue(rejected)
-            input_template = None  # do not modified with input template again
-        # openai/webgpt_comparisons
-        elif exist_and_not_none(data, "answer_0") and exist_and_not_none(data, "answer_1"):
-            prompt = data["question"]["full_text"]
-            chosen = data["answer_0"] if data["score_0"] > data["score_1"] else data["answer_1"]
-            rejected = data["answer_1"] if data["score_0"] > data["score_1"] else data["answer_0"]
-        else:
-            raise ValueError("Unknown reward dataset")
+            if input_template:
+                prompt = input_template.format(prompt)
 
     # margin loss
     margin = data["margin"] if exist_and_not_none(data, "margin") else 0
-
-    # input template
-    if input_template:
-        prompt = input_template.format(prompt)
 
     return prompt, chosen, rejected, margin
 
@@ -78,7 +45,7 @@ class RewardDataset(Dataset):
         tokenizer: Callable,
         max_length: int,
         strategy,
-        input_template="Human: {}\nAssistant: ",
+        input_template=None,
         is_dpo=False,
     ) -> None:
         super().__init__()

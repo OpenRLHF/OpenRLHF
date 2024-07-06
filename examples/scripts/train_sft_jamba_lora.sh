@@ -6,8 +6,9 @@ set -x
 read -r -d '' training_commands <<EOF
 ../train_sft.py \
     --max_len 8192 \
-    --dataset MaziyarPanahi/WizardLM_evol_instruct_V2_196k \
-    --dataset_probs 1.0 \
+    --dataset Open-Orca/OpenOrca \
+    --input_key question \
+    --output_key response \
     --train_batch_size 128 \
     --micro_train_batch_size 4 \
     --pretrain ai21labs/Jamba-v0.1 \

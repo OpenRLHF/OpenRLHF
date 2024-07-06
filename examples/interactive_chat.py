@@ -94,7 +94,7 @@ if __name__ == "__main__":
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--repetition_penalty", type=float, default=1.2)
-    parser.add_argument("--input_template", type=str, default="Human: {}\nAssistant: ")
+    parser.add_argument("--input_template", type=str, default="User: {}\nAssistant: ")
     parser.add_argument("--apply_chat_template", action="store_true", default=False)
 
     # QLora

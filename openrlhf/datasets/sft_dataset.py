@@ -3,44 +3,18 @@ from typing import Callable
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from .utils import exist_and_not_none, process_multi_turn_dialogue, zero_pad_sequences
+from .utils import zero_pad_sequences
 
 
-def preprocess_data(data, input_template=None, input_key=None, output_key=None, apply_chat_template=None):
-    # custom dataset
-    if input_key:
-        prompt = data[input_key]
-
-        if apply_chat_template:
-            prompt = apply_chat_template(data[input_key][:-1], tokenize=False, add_generation_prompt=True)
-            response = apply_chat_template(data[input_key], tokenize=False)[len(prompt) :]
-            input_template = None
-        else:
-            response = data[output_key]
+def preprocess_data(data, input_template=None, input_key="input", output_key="output", apply_chat_template=None):
+    if apply_chat_template:
+        prompt = apply_chat_template(data[input_key][:-1], tokenize=False, add_generation_prompt=True)
+        response = apply_chat_template(data[input_key], tokenize=False)[len(prompt) :]
     else:
-        # Open-Orca/OpenOrca
-        if exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
-            prompt = data["system_prompt"] + " " + data["question"]
-            response = data["response"]
-        # MaziyarPanahi/WizardLM_evol_instruct_V2_196k
-        # jondurbin/airoboros-3.2
-        elif exist_and_not_none(data, "conversations") and isinstance(data["conversations"], list):
-            prompt = process_multi_turn_dialogue(
-                data["conversations"][:-1], input_template=input_template, content_key="value", role_key="from"
-            )
-            response = data["conversations"][-1]["value"]
-            input_template = None  # do not modified with input template again
-        # for batch_inference.py
-        elif exist_and_not_none(data, "input") and exist_and_not_none(data, "output"):
-            prompt = data["input"]
-            response = data["output"]
-            input_template = None
-        else:
-            raise ValueError("Unknown SFT dataset")
-
-    # input template
-    if input_template:
-        prompt = input_template.format(prompt)
+        prompt = data[input_key]
+        response = data[output_key]
+        if input_template:
+            prompt = input_template.format(prompt)
     return prompt, response
 
 
@@ -60,7 +34,7 @@ class SFTDataset(Dataset):
         tokenizer: Callable,
         max_length: int,
         strategy,
-        input_template="Human: {}\nAssistant: ",
+        input_template=None,
         pretrain_mode=False,
     ) -> None:
         super().__init__()

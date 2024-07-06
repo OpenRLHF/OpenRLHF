@@ -18,32 +18,17 @@ def preprocess_data(
     Args:
         data: raw data from dataset
     """
-    # custom dataset
-    if output_key and label_key:
+    prompt = ""
+    response = data[output_key]
+    label = data[label_key]
+
+    if apply_chat_template:
+        response = apply_chat_template(response, tokenize=False)
+    else:
         if prompt_key:
             prompt = data[prompt_key]
-        else:
-            prompt = ""
-            input_template = None  # do not modified with input template again
-        response = data[output_key]
-        label = data[label_key]
-
-        if apply_chat_template:
-            response = apply_chat_template(response, tokenize=False)
-            prompt = ""
-            input_template = None
-    else:
-        # Dylan2048/ultrafeedback-unpaired-preferences
-        if exist_and_not_none(data, "score"):
-            prompt = data["instruction"]
-            response = data["response"]
-            label = data["score"]
-        else:
-            raise ValueError("Unknown dataset")
-
-    # input template
-    if input_template:
-        prompt = input_template.format(prompt)
+            if input_template:
+                prompt = input_template.format(prompt)
     return prompt, response, label
 
 
@@ -57,9 +42,7 @@ class UnpairedPreferenceDataset(Dataset):
         self.max_length: max length of input
     """
 
-    def __init__(
-        self, dataset, tokenizer: Callable, max_length: int, strategy, input_template="Human: {}\nAssistant: "
-    ) -> None:
+    def __init__(self, dataset, tokenizer: Callable, max_length: int, strategy, input_template=None) -> None:
         super().__init__()
         self.prompts = []
         self.responses = []

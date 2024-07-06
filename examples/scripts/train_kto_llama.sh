@@ -28,7 +28,9 @@ EOF
 
 # support unpaired-preference dataset, like the following:
 # --dataset Dylan2048/ultrafeedback-unpaired-preferences \
-# --dataset_probs 1.0 \
+# --prompt_key instruction
+# --output_key response
+# --label_key score
 # --unpaired_preference
 
 
