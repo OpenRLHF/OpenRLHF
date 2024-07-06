@@ -303,16 +303,15 @@ if __name__ == "__main__":
     parser.add_argument("--input_key", type=str, default=None)
     parser.add_argument("--output_key", type=str, default=None)
     parser.add_argument("--apply_chat_template", action="store_true", default=False)
+    parser.add_argument("--input_template", type=str, default=None)
 
     # for generation
-    parser.add_argument("--ta_prompt", type=str, default=None)
     parser.add_argument("--prompt_max_len", type=int, default=1024)
     parser.add_argument("--greedy_sampling", action="store_true", default=False)
     parser.add_argument("--top_p", type=float, default=1.0)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--repetition_penalty", type=float, default=1.0)
     parser.add_argument("--best_of_n", type=int, default=1)
-    parser.add_argument("--input_template", type=str, default=None)
     parser.add_argument("--max_new_tokens", type=int, default=1024)
     parser.add_argument(
         "--post_processor",
