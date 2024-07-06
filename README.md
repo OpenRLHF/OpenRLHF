@@ -106,24 +106,14 @@ OpenRLHF provides multiple data processing methods in our dataset classes.
 Such as in the [Prompt Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/7e436a673b9603847429971290cfd46029c4b52b/openrlhf/datasets/prompts_dataset.py#L6):
 
 ```python
-def preprocess_data(data, input_template=None, input_key=None, apply_chat_template=None) -> str:
-  # custom dataset
-  if input_key:
-      if apply_chat_template:
+def preprocess_data(data, input_template=None, input_key="input", apply_chat_template=None) -> str:
+    if apply_chat_template:
         prompt = apply_chat_template(data[input_key], tokenize=False, add_generation_prompt=True)
-        input_template = None
-      else:
+    else:
         prompt = data[input_key]
-  else:
-      # Open-Orca/OpenOrca
-      if exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
-        prompt = data["system_prompt"] + " " + data["question"]
-      .....
-
-  # input template
-  if input_template:
-      prompt = input_template.format(prompt)
-  return prompt
+        if input_template:
+            prompt = input_template.format(prompt)
+    return prompt
 ```
 
 - We can use `--input_key` to specify the `JSON key name` of the input datasets `--prompt_data {name or path}` (PPO) or `--dataset {name or path}`, and use `--apply_chat_template` to utilize the `chat_template` from the [Huggingface Tokenizer](https://huggingface.co/docs/transformers/main/en/chat_templating).

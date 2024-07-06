@@ -109,24 +109,14 @@ OpenRLHF 在其数据集类中提供了多种数据处理方法。
 例如在 [Prompt Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/7e436a673b9603847429971290cfd46029c4b52b/openrlhf/datasets/prompts_dataset.py#L6) 中：
 
 ```python
-def preprocess_data(data, input_template=None, input_key=None, apply_chat_template=None) -> str:
-  # 自定义数据集
-  if input_key:
-      if apply_chat_template:
+def preprocess_data(data, input_template=None, input_key="input", apply_chat_template=None) -> str:
+    if apply_chat_template:
         prompt = apply_chat_template(data[input_key], tokenize=False, add_generation_prompt=True)
-        input_template = None
-      else:
+    else:
         prompt = data[input_key]
-  else:
-      # Open-Orca/OpenOrca
-      if exist_and_not_none(data, "system_prompt") and exist_and_not_none(data, "response"):
-        prompt = data["system_prompt"] + " " + data["question"]
-      .....
-
-  # 输入模板
-  if input_template:
-      prompt = input_template.format(prompt)
-  return prompt
+        if input_template:
+            prompt = input_template.format(prompt)
+    return prompt
 ```
 
 - 我们可以使用 `--input_key` 指定输入数据集的 `JSON key name` `--prompt_data {name or path}` (PPO) 或 `--dataset {name or path}`，并使用 `--apply_chat_template` 利用 [Huggingface Tokenizer](https://huggingface.co/docs/transformers/main/en/chat_templating) 中的 `chat_template`。
