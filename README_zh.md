@@ -123,7 +123,7 @@ def preprocess_data(data, input_template=None, input_key="input", apply_chat_tem
 - 如果不想使用 `--apply_chat_template`，可以改用 `--input_template`，或预先离线处理数据集。
 - OpenRLHF 还支持使用 `--prompt_data_probs 0.1,0.4,0.5` (PPO) 或 `--dataset_probs 0.1,0.4,0.5` 混合多个数据集。
 
-Chat Templating
+Chat Templating 的工作原理如下:
 
 ```python
 dataset = [{"input_key": [

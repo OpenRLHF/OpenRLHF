@@ -120,7 +120,7 @@ def preprocess_data(data, input_template=None, input_key="input", apply_chat_tem
 - If you don't want to use `--apply_chat_template`, you can use `--input_template` instead, or preprocess the datasets offline in advance.
 - OpenRLHF also support mixing multiple datasets using `--prompt_data_probs 0.1,0.4,0.5` (PPO) or `--dataset_probs 0.1,0.4,0.5`.
 
-Chat Templating
+How Chat Templating Works:
 
 ```python
 dataset = [{"input_key": [
