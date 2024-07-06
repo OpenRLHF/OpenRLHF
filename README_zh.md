@@ -152,6 +152,7 @@ deepspeed ./train_sft.py \
    --dataset Open-Orca/OpenOrca \
    --input_key question \
    --output_key response \
+   --input_template 'User: {}\nAssistant: ' \
    --train_batch_size 256 \
    --micro_train_batch_size 2 \
    --max_samples 500000 \
@@ -168,7 +169,7 @@ deepspeed ./train_sft.py \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
 
-# 支持通过下面选项自定义 chat_template
+# 支持 HF tokenizer.apply_chat_template.
 # --apply_chat_template 
 # --input_key {JSON Key}
 # --tokenizer_chat_template {HF Chat Template}
@@ -288,7 +289,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 ```
 
 > [!NOTE]
-> 我们推荐使用 vLLM 0.4.2，因为 0.4.3+ 版本目前仅支持通过 Gloo 进行权重同步（DeepSpeed => vLLM）（--vllm_sync_backend gloo）。
+> 我们推荐使用 vLLM 0.4.2，因为 0.4.3+ 版本目前仅支持通过 Gloo 进行权重同步（DeepSpeed => vLLM）（`--vllm_sync_backend gloo`）。
 > 设置 `--vllm_num_engines 0` 则是不使用 vLLM engine
 
 所有支持算法的启动脚本和文档在 [example/scripts](./examples/scripts/) 和 [Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)

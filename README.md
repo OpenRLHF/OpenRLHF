@@ -148,6 +148,7 @@ deepspeed ./train_sft.py \
    --dataset Open-Orca/OpenOrca \
    --input_key question \
    --output_key response \
+   --input_template 'User: {}\nAssistant: ' \
    --train_batch_size 256 \
    --micro_train_batch_size 2 \
    --max_samples 500000 \
@@ -164,7 +165,7 @@ deepspeed ./train_sft.py \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
 
-# Customization of chat_template is supported.
+# HF tokenizer.apply_chat_template is supported.
 # --apply_chat_template 
 # --input_key {JSON Key}
 # --tokenizer_chat_template {HF Chat Template}
@@ -284,8 +285,8 @@ ray job submit --address="http://127.0.0.1:8265" \
 ```
 
 > [!NOTE]
-> We recommend using vLLM 0.4.2, as versions 0.4.3+ currently only support weight synchronization (DeepSpeed => vLLM) via Gloo (--vllm_sync_backend gloo).
-> Setting --vllm_num_engines 0 means not using the vLLM engine.
+> We recommend using vLLM 0.4.2, as versions 0.4.3+ currently only support weight synchronization (DeepSpeed => vLLM) via Gloo (`--vllm_sync_backend gloo`).
+> Setting `--vllm_num_engines 0` means not using the vLLM engine.
 
 The launch scripts and docs for all supported algorithms are in [example/scripts](./examples/scripts/) and [Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)
 
