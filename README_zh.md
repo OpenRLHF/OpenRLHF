@@ -106,7 +106,7 @@ cd examples
 
 ### 准备数据集
 OpenRLHF 在其数据集类中提供了多种数据处理方法。
-例如在 [Prompt Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/7e436a673b9603847429971290cfd46029c4b52b/openrlhf/datasets/prompts_dataset.py#L6) 中：
+例如在 [Prompt Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/prompts_dataset.py#L6) 中：
 
 ```python
 def preprocess_data(data, input_template=None, input_key="input", apply_chat_template=None) -> str:
@@ -137,7 +137,7 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 "<s>[INST] Hello, how are you? [/INST]I'm doing great. How can I help you today?</s> [INST] I'd like to show off how chat templating works! [/INST]"
 ```
 > [!NOTE]
-> `JSON key` 选项取决于具体的数据集。请参阅 [Reward Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/7e436a673b9603847429971290cfd46029c4b52b/openrlhf/datasets/reward_dataset.py#L10) 和 [SFT Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/7e436a673b9603847429971290cfd46029c4b52b/openrlhf/datasets/sft_dataset.py#L9)
+> `JSON key` 选项取决于具体的数据集。请参阅 [Reward Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/reward_dataset.py#L10) 和 [SFT Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/sft_dataset.py#L9)
 
 
 ### Supervised Fine-tuning
