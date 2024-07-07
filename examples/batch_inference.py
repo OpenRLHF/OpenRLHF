@@ -300,8 +300,8 @@ if __name__ == "__main__":
     parser.add_argument("--head_prefix", type=str, default="value_head")
 
     # custom dataset key name
-    parser.add_argument("--input_key", type=str, default=None)
-    parser.add_argument("--output_key", type=str, default=None)
+    parser.add_argument("--input_key", type=str, default="input")
+    parser.add_argument("--output_key", type=str, default="output")
     parser.add_argument("--apply_chat_template", action="store_true", default=False)
     parser.add_argument("--input_template", type=str, default=None)
 

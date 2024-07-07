@@ -8,7 +8,7 @@ from .utils import exist_and_not_none, zero_pad_sequences
 
 
 def preprocess_data(
-    data, input_template=None, prompt_key=None, chosen_key=None, rejected_key=None, apply_chat_template=None
+    data, input_template=None, prompt_key=None, chosen_key="chosen", rejected_key="rejected", apply_chat_template=None
 ) -> str:
     prompt = ""
     chosen = data[chosen_key]
