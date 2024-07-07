@@ -121,10 +121,20 @@ class PPOTrainer(ABC):
         else:
             self.kl_ctl = FixedKLController(init_kl_coef)
 
-        self.experience_maker = NaiveExperienceMaker(
-            actor, critic, reward_model, initial_model, tokenizer, prompt_max_len, self.kl_ctl, strategy, reward_fn
-        )
         self.replay_buffer = NaiveReplayBuffer(micro_train_batch_size, buffer_limit, buffer_cpu_offload)
+
+        self.experience_maker = NaiveExperienceMaker(
+            actor,
+            critic,
+            reward_model,
+            initial_model,
+            tokenizer,
+            prompt_max_len,
+            self.kl_ctl,
+            strategy,
+            reward_fn,
+            self.replay_buffer,
+        )
 
         self._wandb = None
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():
@@ -180,7 +190,6 @@ class PPOTrainer(ABC):
                 if steps % update_timesteps == 0:
                     output = self.tokenizer.batch_decode(experience.sequences, skip_special_tokens=True)
                     self.strategy.print(output[0])
-                self.replay_buffer.append(experience)
 
                 if steps % update_timesteps == 0:
                     torch.cuda.empty_cache()

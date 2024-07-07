@@ -85,6 +85,7 @@ class NaiveExperienceMaker(ABC):
         kl_controller,
         strategy=None,
         reward_fn=None,
+        replay_buffer=None,
     ) -> None:
         super().__init__()
         self.actor = actor
@@ -96,6 +97,7 @@ class NaiveExperienceMaker(ABC):
         self.kl_ctl = kl_controller
         self.strategy = strategy
         self.reward_fn = reward_fn
+        self.replay_buffer = replay_buffer
 
     # tokenizer
     def tokenize_fn(self, texts, max_length, device):
@@ -158,7 +160,7 @@ class NaiveExperienceMaker(ABC):
         self.actor.train()
         self.critic.train()
 
-        return Experience(
+        experience = Experience(
             sequences,
             action_log_probs,
             value,
@@ -168,6 +170,9 @@ class NaiveExperienceMaker(ABC):
             action_mask,
             info,
         )
+
+        self.replay_buffer.append(experience)
+        return experience
 
     @torch.no_grad()
     def get_advantages_and_returns(
@@ -217,9 +222,10 @@ class NaiveExperienceMaker(ABC):
 
 
 class RemoteExperienceMaker(NaiveExperienceMaker):
-    def __init__(self, *args, vllm_engines: List = None, **kwargs):
+    def __init__(self, *args, vllm_engines: List = None, micro_forward_batch_size=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.vllm_engines = vllm_engines
+        self.micro_forward_batch_size = micro_forward_batch_size
 
     @torch.no_grad()
     def make_experience(self, prompts: Union[str, List[str]], **generate_kwargs) -> Experience:
@@ -236,101 +242,113 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         generate_time = time.time() - start
 
         num_actions = action_mask.size(1)
-        sequences_cpu, attention_mask_cpu, action_mask_cpu = (
-            sequences.to("cpu"),
-            attention_mask.to("cpu"),
-            action_mask.to("cpu"),
-        )
+        micro_rollout_batch_size = sequences.size(0)
 
-        # init log probs
-        base_action_log_probs_ref = self.initial_model.forward.remote(sequences_cpu, num_actions, attention_mask_cpu)
+        # `forward_batch_size` is used to avoid OOM when `micro_rollout_batch_size` is large
+        # split micro_rollout_batch_size to small batches
+        if self.micro_forward_batch_size is None:
+            self.micro_forward_batch_size = micro_rollout_batch_size
 
-        # values
-        value_ref = self.critic.forward.remote(sequences_cpu, action_mask_cpu, attention_mask_cpu)
+        for i in range(0, micro_rollout_batch_size, self.micro_forward_batch_size):
+            right_index = min(i + self.micro_forward_batch_size, micro_rollout_batch_size)
+            sequences_cpu, attention_mask_cpu, action_mask_cpu = (
+                sequences[i:right_index].to("cpu"),
+                attention_mask[i:right_index].to("cpu"),
+                action_mask[i:right_index].to("cpu"),
+            )
 
-        # avoid CUDA OOM when colocate models
-        if self.strategy.args.colocate_critic_reward:
-            ray.get([value_ref])
-            ray.get([self.critic.empty_cache.remote()])
+            # init log probs
+            base_action_log_probs_ref = self.initial_model.forward.remote(
+                sequences_cpu, num_actions, attention_mask_cpu
+            )
+            # values
+            value_ref = self.critic.forward.remote(sequences_cpu, action_mask_cpu, attention_mask_cpu)
 
-        if self.strategy.args.colocate_actor_ref:
-            ray.get([base_action_log_probs_ref])
-            ray.get([self.initial_model.empty_cache.remote()])
+            # avoid CUDA OOM when colocate models
+            if self.strategy.args.colocate_critic_reward:
+                ray.get([value_ref])
+                ray.get([self.critic.empty_cache.remote()])
+            if self.strategy.args.colocate_actor_ref:
+                ray.get([base_action_log_probs_ref])
+                ray.get([self.initial_model.empty_cache.remote()])
 
-        # rewards
-        r_refs = []
-        for rm in self.reward_model:
-            r_refs.append(rm.forward.remote(sequences_cpu, attention_mask_cpu))
+            # rewards
+            r_refs = []
+            for rm in self.reward_model:
+                r_refs.append(rm.forward.remote(sequences_cpu, attention_mask_cpu))
 
-        # log probs
-        start = time.time()
-        action_log_probs = self.actor(sequences, num_actions, attention_mask)
-        actor_time = time.time() - start
+            # log probs
+            start = time.time()
+            action_log_probs = self.actor(
+                sequences_cpu.to(device=device), num_actions, attention_mask_cpu.to(device=device)
+            )
+            actor_time = time.time() - start
 
-        # wait initial/critic/reward model done
-        start = time.time()
-        ref_values = ray.get([base_action_log_probs_ref, value_ref] + r_refs)
-        wait_time = time.time() - start
+            # wait initial/critic/reward model done
+            start = time.time()
+            ref_values = ray.get([base_action_log_probs_ref, value_ref] + r_refs)
+            wait_time = time.time() - start
 
-        base_action_log_probs, value, rewards = ref_values[0], ref_values[1], ref_values[2:]
-        base_action_log_probs, value = base_action_log_probs.to(device), value.to(device)
-        rewards = [r.to(device) for r in rewards]
-        r = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
+            base_action_log_probs, value, rewards = ref_values[0], ref_values[1], ref_values[2:]
+            base_action_log_probs, value = base_action_log_probs.to(device), value.to(device)
+            rewards = [r.to(device) for r in rewards]
+            r = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
 
-        # avoid CUDA OOM when colocate models
-        if self.strategy.args.colocate_critic_reward:
-            ray.get([self.reward_model[0].empty_cache.remote()])
+            # avoid CUDA OOM when colocate models
+            if self.strategy.args.colocate_critic_reward:
+                ray.get([self.reward_model[0].empty_cache.remote()])
+            if self.strategy.args.colocate_actor_ref:
+                torch.cuda.empty_cache()
 
-        if self.strategy.args.colocate_actor_ref:
-            torch.cuda.empty_cache()
+            reward, kl = compute_reward(
+                r,
+                self.kl_ctl.value,
+                action_log_probs,
+                base_action_log_probs,
+                action_mask=action_mask_cpu.to(device=device),
+            )
+            advantage, returns = self.get_advantages_and_returns(
+                value,
+                reward,
+                action_mask_cpu.to(device=device),
+                generate_kwargs["gamma"],
+                generate_kwargs["lambd"],
+            )
 
-        reward, kl = compute_reward(
-            r,
-            self.kl_ctl.value,
-            action_log_probs,
-            base_action_log_probs,
-            action_mask=action_mask,
-        )
-        advantage, returns = self.get_advantages_and_returns(
-            value,
-            reward,
-            action_mask,
-            generate_kwargs["gamma"],
-            generate_kwargs["lambd"],
-        )
+            info = {
+                "kl": masked_mean(kl, action_mask_cpu.to(device=device), dim=-1),
+                "reward": r,
+                "return": reward.sum(dim=-1),
+                "response_length": action_mask_cpu.float().sum(dim=-1),
+                "total_length": attention_mask_cpu.float().sum(dim=-1),
+            }
 
-        info = {
-            "kl": masked_mean(kl, action_mask, dim=-1),
-            "reward": r,
-            "return": reward.sum(dim=-1),
-            "response_length": action_mask.float().sum(dim=-1),
-            "total_length": attention_mask.float().sum(dim=-1),
-        }
+            if self.strategy.args.perf:
+                info["generate_time"] = torch.full((sequences_cpu.size(0),), generate_time, device=device)
+                info["actor_time"] = torch.full((sequences_cpu.size(0),), actor_time, device=device)
+                info["wait_time"] = torch.full((sequences_cpu.size(0),), wait_time, device=device)
 
-        if self.strategy.args.perf:
-            batch_size = 1 if isinstance(prompts, str) else len(prompts)
-            info["generate_time"] = torch.full((batch_size,), generate_time, device=device)
-            info["actor_time"] = torch.full((batch_size,), actor_time, device=device)
-            info["wait_time"] = torch.full((batch_size,), wait_time, device=device)
+            experience = Experience(
+                sequences_cpu,
+                action_log_probs,
+                value,
+                returns,
+                advantage,
+                attention_mask_cpu,
+                action_mask_cpu,
+                info,
+            )
 
-        experience = Experience(
-            sequences,
-            action_log_probs,
-            value,
-            returns,
-            advantage,
-            attention_mask,
-            action_mask,
-            info,
-        )
+            # save experience to actor buffer
+            self.replay_buffer.append(experience)
 
-        # send experience to critic
-        experience_cpu = deepcopy(experience)
-        experience_cpu.to_device("cpu")
-        self._ref = self.critic.append.remote(experience_cpu)
+            # send experience to critic
+            experience_cpu = deepcopy(experience)
+            experience_cpu.to_device("cpu")
+            self._ref = self.critic.append.remote(experience_cpu)
 
         self.actor.train()  # reset model state
-        return experience
+        return experience_cpu
 
     def _generate_local(self, prompts: List[str], **kwargs) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")

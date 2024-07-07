@@ -49,7 +49,9 @@ class ActorPPOTrainer(PPOTrainer):
             self.kl_ctl,
             self.strategy,
             self.reward_fn,
+            self.replay_buffer,
             vllm_engines=self.vllm_engines,
+            micro_forward_batch_size=self.strategy.args.micro_forward_batch_size,
         )
 
         # Create torch group with deepspeed rank 0 and all vllm ranks
