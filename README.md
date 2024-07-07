@@ -283,6 +283,8 @@ ray job submit --address="http://127.0.0.1:8265" \
   --flash_attn \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
+
+# `--micro_forward_batch_size`: GPU-specific batch size for `reward, reference, and critic model` forward passes. This parameter helps prevent Out of Memory (OOM) errors when `micro_rollout_batch_size` is set to a large value. If left as `None`, it defaults to `micro_rollout_batch_size`. 
 ```
 
 > [!NOTE]

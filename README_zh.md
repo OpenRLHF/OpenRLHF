@@ -287,6 +287,8 @@ ray job submit --address="http://127.0.0.1:8265" \
   --flash_attn \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
+
+# `--micro_forward_batch_size`：用于奖励模型、参考模型和评论模型前向传播的GPU特定批量大小。当`micro_rollout_batch_size`设置为较大值时，这个参数有助于防止内存溢出（OOM）错误。如果设置为None，则默认使用`micro_rollout_batch_size`的值。
 ```
 
 > [!NOTE]
