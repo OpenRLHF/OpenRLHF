@@ -9,7 +9,7 @@ from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import SFTDataset
-from openrlhf.models import GPTLMLoss, SwitchBalancingLoss
+from openrlhf.models import GPTLMLoss
 
 
 class SFTTrainer(ABC):
