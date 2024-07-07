@@ -165,7 +165,6 @@ if __name__ == "__main__":
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
 
     # custom dataset key name
-    # pair-wise
     parser.add_argument("--input_key", type=str, default=None)
     parser.add_argument("--output_key", type=str, default=None)
     parser.add_argument("--label_key", type=str, default=None)

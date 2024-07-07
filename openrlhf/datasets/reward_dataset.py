@@ -8,7 +8,13 @@ from .utils import exist_and_not_none, zero_pad_sequences
 
 
 def preprocess_data(
-    data, input_template=None, prompt_key=None, chosen_key="chosen", rejected_key="rejected", apply_chat_template=None
+    data,
+    input_template=None,
+    prompt_key=None,
+    chosen_key="chosen",
+    rejected_key="rejected",
+    apply_chat_template=None,
+    is_dpo=False,
 ) -> str:
     prompt = ""
     chosen = data[chosen_key]
@@ -17,6 +23,11 @@ def preprocess_data(
     if apply_chat_template:
         chosen = apply_chat_template(chosen, tokenize=False)
         rejected = apply_chat_template(rejected, tokenize=False)
+
+        if is_dpo:
+            prompt = apply_chat_template(data[chosen_key][:-1], tokenize=False, add_generation_prompt=True)
+            chosen = chosen[len(prompt) :]
+            rejected = rejected[len(prompt) :]
     else:
         if prompt_key:
             prompt = data[prompt_key]
@@ -76,10 +87,8 @@ class RewardDataset(Dataset):
 
         for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
             prompt, chosen, reject, margin = preprocess_data(
-                data, input_template, prompt_key, chosen_key, rejected_key, apply_chat_template
+                data, input_template, prompt_key, chosen_key, rejected_key, apply_chat_template, self.is_dpo
             )
-
-            # prompt_ids_len for prompt mask
             if self.is_dpo:
                 prompt_token = self.tokenizer(
                     prompt,
