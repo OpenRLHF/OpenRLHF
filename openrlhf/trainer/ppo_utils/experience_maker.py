@@ -249,9 +249,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         for i in range(0, micro_rollout_batch_size, self.micro_forward_batch_size):
             right_index = min(i + self.micro_forward_batch_size, micro_rollout_batch_size)
             sequences_cpu, attention_mask_cpu, action_mask_cpu = (
-                sequences[i:right_index].to("cpu"),
-                attention_mask[i:right_index].to("cpu"),
-                action_mask[i:right_index].to("cpu"),
+                sequences[i:right_index].to("cpu").contiguous(),
+                attention_mask[i:right_index].to("cpu").contiguous(),
+                action_mask[i:right_index].to("cpu").contiguous(),
             )
 
             # init log probs
@@ -408,7 +408,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         sequences, attention_mask, action_mask = self.actor.process_sequences(
             sequences, max_input_len, eos_token_id, pad_token_id
         )
-        return sequences.to("cuda"), attention_mask.to("cuda"), action_mask.to("cuda")
+        return sequences, attention_mask, action_mask
 
     def flush(self):
         "Ensure all experience has been send to critic"
