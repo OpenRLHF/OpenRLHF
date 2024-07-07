@@ -19,9 +19,6 @@ from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
 
 def train(args):
-    if args.unpaired_preference:
-        assert args.vanilla_loss is False, "vanilla_loss is not supported for unpaired_preference"
-
     # configure strategy
     strategy = get_strategy(args)
     strategy.setup_distributed()
@@ -82,8 +79,8 @@ def train(args):
             train_data, tokenizer, args.max_len, strategy, input_template=args.input_template
         )
         eval_dataset = RewardDataset(eval_data, tokenizer, args.max_len, strategy, input_template=args.input_template)
-        train_dataset = UnpairedRewardDataset(train_dataset, vanilla_loss=args.vanilla_loss)
-        eval_dataset = UnpairedRewardDataset(eval_dataset, vanilla_loss=args.vanilla_loss)
+        train_dataset = UnpairedRewardDataset(train_dataset)
+        eval_dataset = UnpairedRewardDataset(eval_dataset)
 
         train_sampler = DistributedVanillaKTOSampler(
             train_dataset,
@@ -164,7 +161,6 @@ def train(args):
         max_norm=args.max_norm,
         beta=args.beta,
         max_epochs=args.max_epochs,
-        vanilla_loss=args.vanilla_loss,
     )
     trainer.fit(args)
 
@@ -195,12 +191,6 @@ if __name__ == "__main__":
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
-    parser.add_argument(
-        "--vanilla_loss",
-        action="store_true",
-        default=False,
-        help="make sure there are as many positive and negative samples in the batch",
-    )
     parser.add_argument(
         "--unpaired_preference",
         action="store_true",

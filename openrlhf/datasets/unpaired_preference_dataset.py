@@ -123,7 +123,6 @@ class UnpairedRewardDataset(Dataset):
     def __init__(
         self,
         dataset,
-        vanilla_loss=False,
     ) -> None:
         super().__init__()
         # directly init from reward dataset
@@ -135,7 +134,6 @@ class UnpairedRewardDataset(Dataset):
         self.tokenizer = dataset.tokenizer
         self.strategy = dataset.strategy
         self.max_length = dataset.max_length
-        self.vanilla_loss = vanilla_loss
 
     def __getitem__(self, index):
         return self.prompts[index], self.responses[index], self.labels[index]
@@ -170,13 +168,12 @@ class UnpairedRewardDataset(Dataset):
             labels.append(label)
 
         # add unmatched y'| x (used to estimate the KL divergence between policy and reference)
-        if not self.vanilla_loss:
-            for prompt_idx in range(len(item_list)):
-                response_idx = (prompt_idx + 1) % len(item_list)
-                input_ids, attention_mask = concat_to_tensor(item_list[prompt_idx][0], item_list[response_idx][1])
-                response_ids.append(input_ids)
-                response_masks.append(attention_mask)
-                labels.append(-1)
+        for prompt_idx in range(len(item_list)):
+            response_idx = (prompt_idx + 1) % len(item_list)
+            input_ids, attention_mask = concat_to_tensor(item_list[prompt_idx][0], item_list[response_idx][1])
+            response_ids.append(input_ids)
+            response_masks.append(attention_mask)
+            labels.append(-1)
 
         response_ids = zero_pad_sequences(response_ids, value=self.tokenizer.pad_token_id)
         response_masks = zero_pad_sequences(response_masks)

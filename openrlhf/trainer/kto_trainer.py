@@ -6,7 +6,7 @@ from torch.optim import Optimizer
 from torch.utils.data import DistributedSampler
 from tqdm import tqdm
 
-from openrlhf.models import KTOLoss, VanillaKTOLoss
+from openrlhf.models import KTOLoss
 
 
 class KTOTrainer(ABC):
@@ -38,7 +38,6 @@ class KTOTrainer(ABC):
         max_norm=0.5,
         beta=0.01,
         max_epochs: int = 2,
-        vanilla_loss=False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -52,13 +51,9 @@ class KTOTrainer(ABC):
         self.optimizer = optim
         self.tokenizer = tokenizer
         self.args = strategy.args
-        self.vanilla_loss = vanilla_loss
 
         self.beta = beta
-        if self.vanilla_loss:
-            self.loss_fn = VanillaKTOLoss(self.beta)
-        else:
-            self.loss_fn = KTOLoss(self.beta, 1.0, 1.0, self.strategy.world_size, torch.cuda.current_device())
+        self.loss_fn = KTOLoss(self.beta, 1.0, 1.0, self.strategy.world_size, torch.cuda.current_device())
 
         # Mixtral 8*7b
         self.aux_loss = self.args.aux_loss_coef > 1e-8
@@ -112,36 +107,21 @@ class KTOTrainer(ABC):
                 input_ids = input_ids.squeeze(1).to(torch.cuda.current_device())
                 attention_mask = attention_mask.squeeze(1).to(torch.cuda.current_device())
 
-                if self.vanilla_loss:
-                    policy_chosen_logps, policy_reject_logps, aux_loss = self.compute_model_logps(
-                        self.model, input_ids, attention_mask, labels
-                    )
-                    with torch.no_grad():
-                        ref_chosen_logps, ref_reject_logps, _ = self.compute_model_logps(
-                            self.ref_model, input_ids, attention_mask, labels
-                        )
+                # make sure local batch size >= 2 (to pack unmatched examples)
+                policy_returns = self.compute_model_logps_with_KL(self.model, input_ids, attention_mask, labels)
+                aux_loss = policy_returns[3]
 
-                    kto_loss, chosen_rewards, rejected_rewards = self.loss_fn(
-                        policy_chosen_logps, policy_reject_logps, ref_chosen_logps, ref_reject_logps
-                    )
-                else:
-                    # make sure local batch size >= 2 (to pack unmatched examples)
-                    policy_returns = self.compute_model_logps_with_KL(self.model, input_ids, attention_mask, labels)
-                    aux_loss = policy_returns[3]
+                with torch.no_grad():
+                    ref_returns = self.compute_model_logps_with_KL(self.ref_model, input_ids, attention_mask, labels)
 
-                    with torch.no_grad():
-                        ref_returns = self.compute_model_logps_with_KL(
-                            self.ref_model, input_ids, attention_mask, labels
-                        )
-
-                    kto_loss, chosen_rewards, rejected_rewards, KL = self.loss_fn(
-                        policy_returns[0],
-                        policy_returns[1],
-                        policy_returns[2],
-                        ref_returns[0],
-                        ref_returns[1],
-                        ref_returns[2],
-                    )
+                kto_loss, chosen_rewards, rejected_rewards, KL = self.loss_fn(
+                    policy_returns[0],
+                    policy_returns[1],
+                    policy_returns[2],
+                    ref_returns[0],
+                    ref_returns[1],
+                    ref_returns[2],
+                )
 
                 # mixtral
                 if not self.aux_loss:
@@ -159,8 +139,7 @@ class KTOTrainer(ABC):
                     "reject_reward": rejected_rewards.mean().item() if len(rejected_rewards) != 0 else 0,
                     "loss_mean": loss_mean,
                 }
-                if not self.vanilla_loss:
-                    logs_dict["kl"] = KL
+                logs_dict["kl"] = KL
 
                 # logs/checkpoints/evaluate
                 self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict)
@@ -213,35 +192,21 @@ class KTOTrainer(ABC):
                 input_ids = input_ids.squeeze(1).to(torch.cuda.current_device())
                 attention_mask = attention_mask.squeeze(1).to(torch.cuda.current_device())
 
-                if self.vanilla_loss:
-                    policy_chosen_logps, policy_reject_logps, _ = self.compute_model_logps(
-                        self.model, input_ids, attention_mask, labels
-                    )
-                    ref_chosen_logps, ref_reject_logps, _ = self.compute_model_logps(
-                        self.ref_model, input_ids, attention_mask, labels
-                    )
+                # make sure local batch size >= 2 (to pack unmatched examples)
+                policy_returns = self.compute_model_logps_with_KL(self.model, input_ids, attention_mask, labels)
+                aux_loss = policy_returns[3]
 
-                    kto_loss, chosen_rewards, rejected_rewards = self.loss_fn(
-                        policy_chosen_logps, policy_reject_logps, ref_chosen_logps, ref_reject_logps
-                    )
-                else:
-                    # make sure local batch size >= 2 (to pack unmatched examples)
-                    policy_returns = self.compute_model_logps_with_KL(self.model, input_ids, attention_mask, labels)
-                    aux_loss = policy_returns[3]
+                with torch.no_grad():
+                    ref_returns = self.compute_model_logps_with_KL(self.ref_model, input_ids, attention_mask, labels)
 
-                    with torch.no_grad():
-                        ref_returns = self.compute_model_logps_with_KL(
-                            self.ref_model, input_ids, attention_mask, labels
-                        )
-
-                    kto_loss, chosen_rewards, rejected_rewards, KL = self.loss_fn(
-                        policy_returns[0],
-                        policy_returns[1],
-                        policy_returns[2],
-                        ref_returns[0],
-                        ref_returns[1],
-                        ref_returns[2],
-                    )
+                kto_loss, chosen_rewards, rejected_rewards, KL = self.loss_fn(
+                    policy_returns[0],
+                    policy_returns[1],
+                    policy_returns[2],
+                    ref_returns[0],
+                    ref_returns[1],
+                    ref_returns[2],
+                )
 
                 chosen_reward += chosen_rewards.mean().item()
                 reject_reward += rejected_rewards.mean().item()

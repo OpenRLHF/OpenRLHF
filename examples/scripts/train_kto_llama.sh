@@ -21,10 +21,8 @@ read -r -d '' training_commands <<EOF
    --flash_attn \
    --beta 0.1 \
    --gradient_checkpointing \
-   --vanilla_loss
 EOF
      # --wandb [WANDB_TOKENS] or True (use wandb login command)
-     # --vanilla_loss [for same num +/- samples in KTO batch]
 
 # support unpaired-preference dataset, like the following:
 # --dataset Dylan2048/ultrafeedback-unpaired-preferences \
