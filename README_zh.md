@@ -178,6 +178,9 @@ deepspeed ./train_sft.py \
 # --pretrain_mode
 ```
 
+> [!NOTE]
+> OpenRLHF SFT 支持 `--packing_samples` [基于 `--flash_attn`](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
+
 ### Reward Model Training
 ```bash
 deepspeed ./train_rm.py \
