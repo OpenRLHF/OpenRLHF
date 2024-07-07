@@ -242,13 +242,10 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         generate_time = time.time() - start
 
         num_actions = action_mask.size(1)
-        micro_rollout_batch_size = sequences.size(0)
+        micro_rollout_batch_size = action_mask.size(0)
 
         # `forward_batch_size` is used to avoid OOM when `micro_rollout_batch_size` is large
         # split micro_rollout_batch_size to small batches
-        if self.micro_forward_batch_size is None:
-            self.micro_forward_batch_size = micro_rollout_batch_size
-
         for i in range(0, micro_rollout_batch_size, self.micro_forward_batch_size):
             right_index = min(i + self.micro_forward_batch_size, micro_rollout_batch_size)
             sequences_cpu, attention_mask_cpu, action_mask_cpu = (

@@ -270,8 +270,7 @@ ray job submit --address="http://127.0.0.1:8265" \
   --save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
   --micro_train_batch_size 8 \
   --train_batch_size 128 \
-  --micro_rollout_batch_size 64 \
-  --micro_forward_batch_size 16 \
+  --micro_rollout_batch_size 16 \
   --rollout_batch_size 1024 \
   --max_samples 100000 \
   --max_epochs 1 \
@@ -291,7 +290,6 @@ ray job submit --address="http://127.0.0.1:8265" \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
 
-# `--micro_forward_batch_size`：用于奖励模型、参考模型和评论模型前向传播的GPU特定批量大小。当`micro_rollout_batch_size`设置为较大值时，这个参数有助于防止内存溢出（OOM）错误。如果设置为None，则默认使用`micro_rollout_batch_size`的值。
 ```
 
 > [!NOTE]
@@ -312,7 +310,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 | 70B | 32 | 10407.0 | 4488.53 | 2.3x |
 
 ## 调优指南
-为了获得最佳的性能，我们建议您分配更多的节点给 vLLM Engine。例如，对于 70B 模型以及 32 张 A100，建议分配 16 张以上 A100 给 vLLM Engine，8 张给 Actor 模型，以及最后 8 张给 Critic 模型，同时开启 `--colocate_critic_reward`, `--colocate_actor_ref` 和 `--ref_reward_offload` 选项合并部分节点。最后您应该尽可能增大 `--rollout_micro_batch_size` ，以及减小 vLLM 的 TP 切分数量，并且使用 `--micro_forward_batch_size` 避免 Reward/Reference 模型 forward 时内存不足。训练阶段的 `micro_train_batch_size` 也是越大越好。为 vLLM 开启 `enable_prefix_caching` 当 `n_samples_per_prompt > 1`.
+为了获得最佳的性能，我们建议您分配更多的节点给 vLLM Engine。例如，对于 70B 模型以及 32 张 A100，建议分配 16 张以上 A100 给 vLLM Engine，8 张给 Actor 模型，以及最后 8 张给 Critic 模型，同时开启 `--colocate_critic_reward`, `--colocate_actor_ref` 和 `--ref_reward_offload` 选项合并部分节点。最后您应该尽可能增大 `--rollout_micro_batch_size` ，以及减小 vLLM 的 TP 切分数量，同时避免 Reward/Reference 模型 forward 时内存不足。训练阶段的 `micro_train_batch_size` 也是越大越好。为 vLLM 开启 `enable_prefix_caching` 当 `n_samples_per_prompt > 1`.
 
 
 ## 加入我们
