@@ -7,12 +7,7 @@ from datetime import datetime
 import torch.distributed as dist
 from transformers.trainer import get_scheduler
 
-from openrlhf.datasets import (
-    DistributedVanillaKTOSampler,
-    RewardDataset,
-    UnpairedPreferenceDataset,
-    UnpairedRewardDataset,
-)
+from openrlhf.datasets import UnpairedPreferenceDataset
 from openrlhf.models import Actor
 from openrlhf.trainer import KTOTrainer
 from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
@@ -74,64 +69,22 @@ def train(args):
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
     eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
 
-    if not args.unpaired_preference:
-        train_dataset = RewardDataset(
-            train_data, tokenizer, args.max_len, strategy, input_template=args.input_template
-        )
-        eval_dataset = RewardDataset(eval_data, tokenizer, args.max_len, strategy, input_template=args.input_template)
-        train_dataset = UnpairedRewardDataset(train_dataset)
-        eval_dataset = UnpairedRewardDataset(eval_dataset)
-
-        train_sampler = DistributedVanillaKTOSampler(
-            train_dataset,
-            num_replicas=dist.get_world_size(),
-            rank=dist.get_rank(),
-            shuffle=False,
-            seed=args.seed,
-            drop_last=False,
-        )
-        train_dataloader = strategy.setup_dataloader(
-            train_dataset,
-            args.micro_train_batch_size,
-            True,
-            True,
-            train_dataset.collate_fn,
-            sampler=train_sampler,
-        )
-
-        eval_sampler = DistributedVanillaKTOSampler(
-            eval_dataset,
-            num_replicas=dist.get_world_size(),
-            rank=dist.get_rank(),
-            shuffle=False,
-            seed=args.seed,
-            drop_last=False,
-        )
-        eval_dataloader = strategy.setup_dataloader(
-            eval_dataset,
-            args.micro_train_batch_size,
-            True,
-            False,
-            eval_dataset.collate_fn,
-            sampler=eval_sampler,
-        )
-    else:
-        train_dataset = UnpairedPreferenceDataset(
-            train_data, tokenizer, args.max_len, strategy, input_template=args.input_template
-        )
-        eval_dataset = UnpairedPreferenceDataset(
-            eval_data, tokenizer, args.max_len, strategy, input_template=args.input_template
-        )
-        train_dataloader = strategy.setup_dataloader(
-            train_dataset,
-            args.micro_train_batch_size,
-            True,
-            True,
-            train_dataset.collate_fn,
-        )
-        eval_dataloader = strategy.setup_dataloader(
-            eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn
-        )
+    train_dataset = UnpairedPreferenceDataset(
+        train_data, tokenizer, args.max_len, strategy, input_template=args.input_template
+    )
+    eval_dataset = UnpairedPreferenceDataset(
+        eval_data, tokenizer, args.max_len, strategy, input_template=args.input_template
+    )
+    train_dataloader = strategy.setup_dataloader(
+        train_dataset,
+        args.micro_train_batch_size,
+        True,
+        True,
+        train_dataset.collate_fn,
+    )
+    eval_dataloader = strategy.setup_dataloader(
+        eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn
+    )
 
     # scheduler
     num_update_steps_per_epoch = len(train_dataloader) * args.max_epochs // strategy.accumulated_gradient
@@ -191,12 +144,6 @@ if __name__ == "__main__":
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
-    parser.add_argument(
-        "--unpaired_preference",
-        action="store_true",
-        default=False,
-        help="dataset is the format of unpaired preference",
-    )
 
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2)
@@ -219,10 +166,7 @@ if __name__ == "__main__":
 
     # custom dataset key name
     # pair-wise
-    parser.add_argument("--prompt_key", type=str, default=None)
-    parser.add_argument("--chosen_key", type=str, default=None)
-    parser.add_argument("--rejected_key", type=str, default=None)
-    # unpair
+    parser.add_argument("--input_key", type=str, default=None)
     parser.add_argument("--output_key", type=str, default=None)
     parser.add_argument("--label_key", type=str, default=None)
 

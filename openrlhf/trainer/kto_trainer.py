@@ -139,7 +139,7 @@ class KTOTrainer(ABC):
                     "reject_reward": rejected_rewards.mean().item() if len(rejected_rewards) != 0 else 0,
                     "loss_mean": loss_mean,
                 }
-                logs_dict["kl"] = KL
+                logs_dict["kl"] = KL.item()
 
                 # logs/checkpoints/evaluate
                 self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict)
