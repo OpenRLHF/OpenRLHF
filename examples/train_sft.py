@@ -62,10 +62,18 @@ def train(args):
     )
 
     train_dataloader = strategy.setup_dataloader(
-        train_dataset, args.micro_train_batch_size, True, True, train_dataset.collate_fn
+        train_dataset,
+        args.micro_train_batch_size,
+        True,
+        True,
+        train_dataset.packing_collate_fn if args.packing_samples else train_dataset.collate_fn,
     )
     eval_dataloader = strategy.setup_dataloader(
-        eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn
+        eval_dataset,
+        args.micro_train_batch_size,
+        True,
+        False,
+        eval_dataset.packing_collate_fn if args.packing_samples else eval_dataset.collate_fn,
     )
 
     # scheduler
@@ -157,6 +165,9 @@ if __name__ == "__main__":
     parser.add_argument("--lora_dropout", type=float, default=0)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
+
+    # packing SFT samples without CrossAttention
+    parser.add_argument("--packing_samples", action="store_true", default=False)
 
     # custom dataset key name
     parser.add_argument("--input_key", type=str, default=None)
