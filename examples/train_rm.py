@@ -129,7 +129,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_epochs", type=int, default=1)
     parser.add_argument("--micro_train_batch_size", type=int, default=8)
     parser.add_argument("--train_batch_size", type=int, default=128)
-    parser.add_argument("--max_samples", type=int, default=1000000)
+    parser.add_argument("--max_samples", type=int, default=10000000)
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
     parser.add_argument("--max_norm", type=float, default=1.0)
     parser.add_argument("--max_len", type=int, default=512)
