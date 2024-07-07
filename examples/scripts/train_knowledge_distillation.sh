@@ -4,9 +4,10 @@ read -r -d '' training_commands <<EOF
 ../train_kd.py \
    --max_len 2048 \
    --dataset Open-Orca/OpenOrca \
-   --dataset_probs 1.0 \
+   --input_key question \
+   --output_key response \
    --train_batch_size 256 \
-   --micro_train_batch_size 1 \
+   --micro_train_batch_size 2 \
    --max_samples 500000 \
    --pretrain meta-llama/Llama-2-7b-hf \
    --teacher_model meta-llama/Llama-2-13b-chat-hf \
