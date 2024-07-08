@@ -217,7 +217,6 @@ if __name__ == "__main__":
     parser.add_argument("--num_episodes", type=int, default=1)
     parser.add_argument("--rollout_batch_size", type=int, default=512)
     parser.add_argument("--micro_rollout_batch_size", type=int, default=8)
-    parser.add_argument("--micro_forward_batch_size", type=int, default=None)
     parser.add_argument("--max_epochs", type=int, default=1)
     parser.add_argument("--prompt_max_len", type=int, default=1024)
     parser.add_argument("--generate_max_len", type=int, default=1024)
@@ -299,9 +298,6 @@ if __name__ == "__main__":
 
     if args.critic_pretrain is None:
         args.critic_pretrain = args.reward_pretrain.split(",")[0]
-
-    if args.micro_forward_batch_size is None:
-        args.micro_forward_batch_size = args.micro_rollout_batch_size
 
     if args.vllm_num_engines >= 1 and args.n_samples_per_prompt > 1 and not args.enable_prefix_caching:
         print("[Warning] Please --enable_prefix_caching to accelerate when --n_samples_per_prompt > 1.")

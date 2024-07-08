@@ -133,7 +133,6 @@ class PPOTrainer(ABC):
             self.kl_ctl,
             strategy,
             reward_fn,
-            self.replay_buffer,
         )
 
         self._wandb = None
@@ -186,12 +185,14 @@ class PPOTrainer(ABC):
 
             for rand_prompts in self.prompts_dataloader:
                 experience = self.experience_maker.make_experience(rand_prompts, **self.generate_kwargs)
-                # print prompt/answer in each update step
+                self.replay_buffer.append(experience)
+
                 if steps % update_timesteps == 0:
+                    # print prompt/answer in each update step
                     output = self.tokenizer.batch_decode(experience.sequences, skip_special_tokens=True)
                     self.strategy.print(output[0])
 
-                if steps % update_timesteps == 0:
+                    # training
                     torch.cuda.empty_cache()
                     self.replay_buffer.normalize("advantages", self.strategy)
                     status = self.ppo_train(steps // update_timesteps)
