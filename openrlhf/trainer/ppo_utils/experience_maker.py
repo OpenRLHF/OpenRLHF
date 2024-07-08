@@ -85,7 +85,6 @@ class NaiveExperienceMaker(ABC):
         kl_controller,
         strategy=None,
         reward_fn=None,
-        replay_buffer=None,
     ) -> None:
         super().__init__()
         self.actor = actor
@@ -97,7 +96,6 @@ class NaiveExperienceMaker(ABC):
         self.kl_ctl = kl_controller
         self.strategy = strategy
         self.reward_fn = reward_fn
-        self.replay_buffer = replay_buffer
 
     # tokenizer
     def tokenize_fn(self, texts, max_length, device):
@@ -171,7 +169,6 @@ class NaiveExperienceMaker(ABC):
             info,
         )
 
-        self.replay_buffer.append(experience)
         return experience
 
     @torch.no_grad()
