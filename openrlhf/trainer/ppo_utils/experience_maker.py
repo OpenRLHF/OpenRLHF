@@ -321,9 +321,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             }
 
             if self.strategy.args.perf:
-                info["generate_time"] = torch.full((micro_rollout_batch_size,), generate_time, device=device)
-                info["actor_time"] = torch.full((micro_rollout_batch_size,), actor_time, device=device)
-                info["wait_time"] = torch.full((micro_rollout_batch_size,), wait_time, device=device)
+                info["generate_time"] = torch.full((action_mask_cpu.size(0),), generate_time, device=device)
+                info["actor_time"] = torch.full((action_mask_cpu.size(0),), actor_time, device=device)
+                info["wait_time"] = torch.full((action_mask_cpu.size(0),), wait_time, device=device)
 
             experience = Experience(
                 sequences_cpu,
