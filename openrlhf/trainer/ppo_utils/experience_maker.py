@@ -158,7 +158,7 @@ class NaiveExperienceMaker(ABC):
         self.actor.train()
         self.critic.train()
 
-        experience = Experience(
+        return Experience(
             sequences,
             action_log_probs,
             value,
@@ -168,8 +168,6 @@ class NaiveExperienceMaker(ABC):
             action_mask,
             info,
         )
-
-        return experience
 
     @torch.no_grad()
     def get_advantages_and_returns(
@@ -236,17 +234,25 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             else self._generate_vllm(prompts, **generate_kwargs)
         )
         generate_time = time.time() - start
+
         num_actions = action_mask.size(1)
+        sequences_cpu, attention_mask_cpu, action_mask_cpu = (
+            sequences.to("cpu"),
+            attention_mask.to("cpu"),
+            action_mask.to("cpu"),
+        )
 
         # init log probs
-        base_action_log_probs_ref = self.initial_model.forward.remote(sequences, num_actions, attention_mask)
+        base_action_log_probs_ref = self.initial_model.forward.remote(sequences_cpu, num_actions, attention_mask_cpu)
+
         # values
-        value_ref = self.critic.forward.remote(sequences, action_mask, attention_mask)
+        value_ref = self.critic.forward.remote(sequences_cpu, action_mask_cpu, attention_mask_cpu)
 
         # avoid CUDA OOM when colocate models
         if self.strategy.args.colocate_critic_reward:
             ray.get([value_ref])
             ray.get([self.critic.empty_cache.remote()])
+
         if self.strategy.args.colocate_actor_ref:
             ray.get([base_action_log_probs_ref])
             ray.get([self.initial_model.empty_cache.remote()])
@@ -254,11 +260,11 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # rewards
         r_refs = []
         for rm in self.reward_model:
-            r_refs.append(rm.forward.remote(sequences, attention_mask))
+            r_refs.append(rm.forward.remote(sequences_cpu, attention_mask_cpu))
 
         # log probs
         start = time.time()
-        action_log_probs = self.actor(sequences.to(device=device), num_actions, attention_mask.to(device=device))
+        action_log_probs = self.actor(sequences, num_actions, attention_mask)
         actor_time = time.time() - start
 
         # wait initial/critic/reward model done
@@ -274,6 +280,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # avoid CUDA OOM when colocate models
         if self.strategy.args.colocate_critic_reward:
             ray.get([self.reward_model[0].empty_cache.remote()])
+
         if self.strategy.args.colocate_actor_ref:
             torch.cuda.empty_cache()
 
@@ -282,18 +289,18 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             self.kl_ctl.value,
             action_log_probs,
             base_action_log_probs,
-            action_mask=action_mask.to(device=device),
+            action_mask=action_mask,
         )
         advantage, returns = self.get_advantages_and_returns(
             value,
             reward,
-            action_mask.to(device=device),
+            action_mask,
             generate_kwargs["gamma"],
             generate_kwargs["lambd"],
         )
 
         info = {
-            "kl": masked_mean(kl, action_mask.to(device=device), dim=-1),
+            "kl": masked_mean(kl, action_mask, dim=-1),
             "reward": r,
             "return": reward.sum(dim=-1),
             "response_length": action_mask.float().sum(dim=-1),
@@ -301,9 +308,10 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         }
 
         if self.strategy.args.perf:
-            info["generate_time"] = torch.full((action_mask.size(0),), generate_time, device=device)
-            info["actor_time"] = torch.full((action_mask.size(0),), actor_time, device=device)
-            info["wait_time"] = torch.full((action_mask.size(0),), wait_time, device=device)
+            batch_size = 1 if isinstance(prompts, str) else len(prompts)
+            info["generate_time"] = torch.full((batch_size,), generate_time, device=device)
+            info["actor_time"] = torch.full((batch_size,), actor_time, device=device)
+            info["wait_time"] = torch.full((batch_size,), wait_time, device=device)
 
         experience = Experience(
             sequences,
@@ -369,11 +377,11 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         for output in outputs:
             # left padding input
             input_len = len(output.prompt_token_ids)
-            input_ids = [pad_token_id] * (max_input_len - input_len) + output.prompt_token_ids
+            input_ids = [pad_token_id] * (max_input_len - input_len) + list(output.prompt_token_ids)
 
             # right padding output
             output_len = len(output.outputs[0].token_ids)
-            output_ids = output.outputs[0].token_ids + [pad_token_id] * (max_output_len - output_len)
+            output_ids = list(output.outputs[0].token_ids) + [pad_token_id] * (max_output_len - output_len)
 
             if output_ids[output_len - 1] != eos_token_id:
                 output_ids[min(output_len, len(output_ids) - 1)] = eos_token_id
@@ -385,7 +393,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         sequences, attention_mask, action_mask = self.actor.process_sequences(
             sequences, max_input_len, eos_token_id, pad_token_id
         )
-        return sequences, attention_mask, action_mask
+        return sequences.to("cuda"), attention_mask.to("cuda"), action_mask.to("cuda")
 
     def flush(self):
         "Ensure all experience has been send to critic"
