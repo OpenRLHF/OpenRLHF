@@ -74,12 +74,7 @@ class LLMRayActor:
 
 
 def create_vllm_engines(
-    num_engines: int,
-    tensor_parallel_size: int,
-    pretrain: str,
-    seed: int,
-    enable_prefix_caching: bool,
-    max_model_len: int,
+    num_engines: int, tensor_parallel_size: int, pretrain: str, seed: int, enable_prefix_caching: bool
 ):
     vllm_engines = []
     for i in range(num_engines):
@@ -108,7 +103,6 @@ def create_vllm_engines(
                 dtype="bfloat16",
                 seed=seed + i,
                 enable_prefix_caching=enable_prefix_caching,
-                max_model_len=max_model_len,
             )
         )
 
