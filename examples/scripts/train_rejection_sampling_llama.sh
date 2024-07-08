@@ -35,7 +35,6 @@ while (($iter < $TRAINING_ITERS)); do
    --bf16 \
    --max_new_tokens 2048 \
    --prompt_max_len 2048 \
-   --max_samples 128 \
    --dataset OpenLLMAI/prompt-collection-v0.1 \
    --input_key context_messages \
    --apply_chat_template \
@@ -44,7 +43,7 @@ while (($iter < $TRAINING_ITERS)); do
    --best_of_n 4 \
    --enable_prefix_caching \
    --tp_size 4 \
-   --micro_batch_size 64 \
+   --max_num_seqs 64 \
    --iter $iter \
    --rollout_batch_size $ROLLOUT_BATCH_SIZE \
    --output_path $GENERATE_OUTPUT

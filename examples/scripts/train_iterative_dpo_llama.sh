@@ -40,9 +40,9 @@ while (($iter < $TRAINING_ITERS)); do
    --apply_chat_template \
    --temperature 1.0 \
    --tp_size 4 \
-   --best_of_n 16 \
+   --best_of_n 8 \
    --enable_prefix_caching \
-   --max_num_seqs 128 \
+   --max_num_seqs 64 \
    --iter $iter \
    --rollout_batch_size $ROLLOUT_BATCH_SIZE \
    --output_path $GENERATE_OUTPUT

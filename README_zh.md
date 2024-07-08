@@ -84,6 +84,7 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 
 ```bash
 git clone https://github.com/openllmai/OpenRLHF.git
+# 也可以 `git checkout` 最近的稳定 release 版本.
 
 # 如果需要使用 vLLM，请构建 Docker 镜像以避免依赖问题（可选）
 docker build -t nvcr.io/nvidia/pytorch:24.02-py3 ./OpenRLHF/dockerfile
@@ -148,7 +149,7 @@ OpenRLHF 的模型检查点完全兼容 HuggingFace 模型。您可以使用 `--
 
 ```bash 
 deepspeed ./train_sft.py \
-   --max_len 2048 \
+   --max_len 4096 \
    --dataset Open-Orca/OpenOrca \
    --input_key question \
    --output_key response \
@@ -174,12 +175,15 @@ deepspeed ./train_sft.py \
 # --input_key {JSON Key}
 # --tokenizer_chat_template {HF Chat Template}
 
+# 支持 SFT 样本 packing
+# --packing_samples
+
 # 也可用于 continued pre-training
 # --pretrain_mode
 ```
 
 > [!NOTE]
-> OpenRLHF SFT 支持 `--packing_samples` [基于 `--flash_attn`](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
+> OpenRLHF SFT 支持的 `--packing_samples` [基于 `--flash_attn`](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
 
 ### Reward Model Training
 ```bash

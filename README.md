@@ -81,6 +81,7 @@ To use OpenRLHF, first ``git clone`` it and launch the docker container (**Recom
 
 ```bash
 git clone https://github.com/openllmai/OpenRLHF.git
+# You can also `git checkout` the latest stable release version.
 
 # If you need to use vLLM, please build a Docker image to avoid dependency issues (Optional)
 docker build -t nvcr.io/nvidia/pytorch:24.02-py3 ./OpenRLHF/dockerfile
@@ -144,7 +145,7 @@ Then you can use the startup scripts we provide in the [examples/scripts](./exam
 
 ```bash 
 deepspeed ./train_sft.py \
-   --max_len 2048 \
+   --max_len 4096 \
    --dataset Open-Orca/OpenOrca \
    --input_key question \
    --output_key response \
@@ -170,13 +171,15 @@ deepspeed ./train_sft.py \
 # --input_key {JSON Key}
 # --tokenizer_chat_template {HF Chat Template}
 
+# SFT samples packing
+# --packing_samples
+
 # Can also be used for continued pre-training
 # --pretrain_mode
-
 ```
 
 > [!NOTE]
-> OpenRLHF SFT supports `--packing_samples` [using `--flash_attn`](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
+> OpenRLHF SFT supports `--packing_samples` [based on `--flash_attn`](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
 
 
 ### Reward Model Training

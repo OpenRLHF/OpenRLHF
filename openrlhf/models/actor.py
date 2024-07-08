@@ -9,6 +9,7 @@ from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedModel
 from transformers.deepspeed import HfDeepSpeedConfig
 
+from openrlhf.datasets.utils import zero_pad_sequences
 from .utils import log_probs_from_logits
 
 
@@ -161,7 +162,25 @@ class Actor(nn.Module):
         action_mask = state_seq.ne(eos_token_id) & state_seq.ne(pad_token_id)
         action_mask[:, 0] = 1
 
-        return sequences, attention_mask, action_mask
+        # removing padding
+        sequences2 = []
+        attention_mask2 = []
+        action_mask2 = []
+
+        for seq, att_mask, act_mask in zip(sequences, attention_mask, action_mask):
+            right_pad = (1 - act_mask.long()).sum()
+            right_pad = None if right_pad == 0 else -right_pad
+            left_pad = att_mask.long().argmax()
+
+            sequences2.append(seq[left_pad:right_pad])
+            attention_mask2.append(att_mask[left_pad:right_pad])
+            action_mask2.append(act_mask[:right_pad])
+
+        return (
+            zero_pad_sequences(sequences2, "left"),
+            zero_pad_sequences(attention_mask2, "left"),
+            zero_pad_sequences(action_mask2, "left"),
+        )
 
     def forward(
         self,
