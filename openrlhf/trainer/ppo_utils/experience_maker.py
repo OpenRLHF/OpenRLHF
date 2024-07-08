@@ -322,7 +322,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         self._ref = self.critic.append.remote(experience_cpu)
 
         self.actor.train()  # reset model state
-        return experience_cpu
+        return experience
 
     def _generate_local(self, prompts: List[str], **kwargs) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
