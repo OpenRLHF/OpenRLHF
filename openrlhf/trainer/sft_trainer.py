@@ -206,22 +206,36 @@ class SFTTrainer(ABC):
                 disable=not self.strategy.is_rank_0(),
             )
 
-            for prompts_id_len, inputs, attention_masks, _ in eval_dataloader:
-                inputs = inputs.squeeze(1).to(torch.cuda.current_device())
-                attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
-                logits = self.model(
-                    inputs, attention_mask=attention_mask, return_output=True, packing_samples=self.packing_samples
-                )["logits"]
+            for prompts_id_lens, inputs, attention_masks, infos in eval_dataloader:
+                if self.packing_samples:
+                    inputs = inputs.to(torch.cuda.current_device())
+                    attention_mask = attention_masks.to(torch.cuda.current_device())
+                else:
+                    inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
+                    attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
 
+                output = self.model(
+                    inputs, attention_mask=attention_mask, return_output=True, packing_samples=self.packing_samples
+                )
+
+                # loss function
                 labels = torch.where(
                     attention_mask.bool(),
                     inputs,
                     self.loss_fn.IGNORE_INDEX,
                 )
+
                 if not self.pretrain_mode:
-                    for label, source_len in zip(labels, prompts_id_len):
-                        label[:source_len] = self.loss_fn.IGNORE_INDEX
-                loss = self.loss_fn(logits, labels)
+                    if self.packing_samples:
+                        index = 0
+                        for input_length, source_len in zip(infos["input_length"], prompts_id_lens):
+                            labels[0][index : index + source_len] = self.loss_fn.IGNORE_INDEX
+                            index += input_length
+                    else:
+                        for label, source_len in zip(labels, prompts_id_lens):
+                            label[:source_len] = self.loss_fn.IGNORE_INDEX
+
+                loss = self.loss_fn(output.logits, labels)
 
                 times += 1
                 loss_sum += loss.item()
