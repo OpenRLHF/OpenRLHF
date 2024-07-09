@@ -96,7 +96,7 @@ def train(args):
         optim,
         num_warmup_steps=math.ceil(max_steps * 0.03),
         num_training_steps=max_steps,
-        scheduler_specific_kwargs={"min_lr_rate": args.learning_rate * 0.1},
+        scheduler_specific_kwargs={"min_lr": args.learning_rate * 0.1},
     )
 
     # strategy prepare

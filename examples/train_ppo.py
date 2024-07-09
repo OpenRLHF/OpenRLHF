@@ -158,7 +158,7 @@ def train(args):
         actor_optim,
         num_warmup_steps=math.ceil(max_steps * 0.03),
         num_training_steps=max_steps,
-        scheduler_specific_kwargs={"min_lr_rate": args.actor_learning_rate * 0.1},
+        scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
     )
 
     critic_scheduler = get_scheduler(
@@ -166,7 +166,7 @@ def train(args):
         critic_optim,
         num_warmup_steps=math.ceil(max_steps * 0.03),
         num_training_steps=max_steps,
-        scheduler_specific_kwargs={"min_lr_rate": args.critic_learning_rate * 0.1},
+        scheduler_specific_kwargs={"min_lr": args.critic_learning_rate * 0.1},
     )
 
     # gradient_checkpointing
