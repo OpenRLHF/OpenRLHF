@@ -52,11 +52,12 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 - 支持 [Iterative DPO](./examples/scripts/train_iterative_dpo_llama.sh) (https://github.com/RLHFlow/Online-RLHF).
 - 支持 [条件 SFT](./examples/scripts/train_conditional_llama.sh) (https://arxiv.org/abs/2308.12050).
 - 支持 [知识蒸馏](./examples/scripts/train_knowledge_distillation.sh) (https://github.com/microsoft/LMOps/tree/main/minillm).
+- 支持 SFT 样本打包 (--packing_samples).
 - 支持 [MoE](./examples/test_scripts/train_sft_mixtral_lora.sh) (--aux_loss_coef)
-- 支持 Wandb 日志 (--wandb).
 - 支持 FlashAttention2 (--flash_attn).
 - 支持 QLoRA (--load_in_4bit), [LoRA (--lora_rank, --target_modules)]((./examples/scripts/train_sft_mixtral_lora.sh)).
 - 支持 HuggingFace `tokenizer.apply_chat_template` 用于数据集处理 (--apply_chat_template and --input_key).
+- 支持 Wandb 日志 (--wandb).
 - 多节点 [训练脚本](./examples/scripts/train_llama_slurm.sh) 适用于 Slurm.
 
 
