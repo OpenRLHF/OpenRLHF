@@ -212,10 +212,11 @@ class ActorModelRayActor(BasePPORole):
         self.max_steps = max_steps
 
         actor_scheduler = get_scheduler(
-            "cosine",
+            "cosine_with_min_lr",
             actor_optim,
             num_warmup_steps=math.ceil(max_steps * 0.03),
             num_training_steps=max_steps,
+            scheduler_specific_kwargs={"min_lr_rate": args.actor_learning_rate * 0.1},
         )
 
         if args.gradient_checkpointing:

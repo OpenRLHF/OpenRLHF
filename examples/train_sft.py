@@ -81,10 +81,11 @@ def train(args):
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
 
     scheduler = get_scheduler(
-        args.lr_scheduler,
+        "cosine_with_min_lr",
         optim,
         num_warmup_steps=math.ceil(max_steps * 0.03),
         num_training_steps=max_steps,
+        scheduler_specific_kwargs={"min_lr_rate": args.learning_rate * 0.1},
     )
 
     # gradient_checkpointing
