@@ -367,6 +367,7 @@ class DeepspeedStrategy(ABC):
         return dist.get_rank()
 
     def save_ckpt(self, model, save_dir, tag=None, max_num=3, max_mem=1000, client_state={}, save_latest=True):
+        assert isinstance(model, deepspeed.DeepSpeedEngine)
         if self.is_rank_0():
             # Check and create the directory
             if not os.path.exists(save_dir):
@@ -401,7 +402,7 @@ class DeepspeedStrategy(ABC):
                 else:
                     break
 
-        assert isinstance(model, deepspeed.DeepSpeedEngine)
+        dist.barrier()
         model.save_checkpoint(save_dir, tag=tag, client_state=client_state, save_latest=save_latest)
 
     def load_ckpt(
