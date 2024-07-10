@@ -20,8 +20,8 @@ def preprocess_data(
     label = data[label_key]
 
     if apply_chat_template:
-        prompt = apply_chat_template(data[output_key][:-1], tokenize=False, add_generation_prompt=True)
-        response = apply_chat_template(data[output_key], tokenize=False)[len(prompt) :]
+        prompt = apply_chat_template(data[input_key][:-1], tokenize=False, add_generation_prompt=True)
+        response = apply_chat_template(data[input_key], tokenize=False)[len(prompt) :]
     else:
         prompt = data[input_key]
         response = data[output_key]
