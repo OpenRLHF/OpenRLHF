@@ -148,6 +148,9 @@ def get_llm_for_sequence_regression(
         print("[MoE] set output_router_logits as True")
         model.config.output_router_logits = True
 
+    # https://github.com/huggingface/transformers/issues/26877
+    model.config.use_cache = False
+
     # NOTE: For reward model training only, intialize value_head manually
     # because deepspeed.zero.Init() will not intialize them.
     # TODO: Find a better way to clarify reward model training.

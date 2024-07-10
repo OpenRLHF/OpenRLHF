@@ -98,6 +98,9 @@ class Actor(nn.Module):
                 print("[MoE] set output_router_logits as True")
                 self.model.config.output_router_logits = True
 
+            # https://github.com/huggingface/transformers/issues/26877
+            # Use `model.generate(use_cache=True)` instead.`
+            self.model.config.use_cache = False
         else:
             self.model = pretrain_or_model
 
