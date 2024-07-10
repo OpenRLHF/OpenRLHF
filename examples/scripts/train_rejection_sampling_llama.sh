@@ -78,7 +78,7 @@ EOF
    --micro_train_batch_size 2 \
    --pretrain $POLICY_MODEL_PATH \
    --save_path ./checkpoint/llama-3-8b-rejection \
-   --lr_scheduler constant \
+   --input_template "" \
    --zero_stage 2 \
    --max_epochs 1 \
    --bf16 \
