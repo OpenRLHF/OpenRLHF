@@ -80,6 +80,7 @@ EOF
    --save_path $MODEL_OUTPUT_PATH \
    --zero_stage 3 \
    --max_epochs 1 \
+   --input_template "" \
    --bf16 \
    --learning_rate 5e-7 \
    --gradient_checkpointing
