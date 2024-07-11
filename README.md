@@ -1,5 +1,5 @@
 <div align="center">
-    <img alt="OpenRLHF logo" src="./docs/logo.png" style="height: 160px;" />
+    <img alt="OpenRLHF logo" src="./docs/logo.png" style="height: 140px;" />
 </div>
 <div align="center">
 <p align="center">
