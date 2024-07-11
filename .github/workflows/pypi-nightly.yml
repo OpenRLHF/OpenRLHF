@@ -3,7 +3,6 @@ name: OPENRLHF PyPi Nightly
 on:
   schedule:
     - cron: '0 0 * * *'
-  # can manually trigger the workflow
   workflow_dispatch:
 
 jobs:
@@ -13,30 +12,38 @@ jobs:
     name: build wheel and upload
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - name: Checkout code
+      uses: actions/checkout@v2
 
     - name: Set up Python 3.10
-      uses: actions/setup-python@v1
+      uses: actions/setup-python@v2
       with:
-        python-version: 3.10.13
+        python-version: 3.10
 
-    - name: days since the commit date
+    - name: Determine if commit was today
+      id: commit_check
       run: |
-          :
-          timestamp=$(git log --no-walk --date=unix --format=%cd $GITHUB_SHA)
-          days=$(( ( $(date --utc +%s) - $timestamp ) / 86400 ))
-          if [ $days -eq 0 ]; then
-              echo COMMIT_TODAY=true >> $GITHUB_ENV
-          fi
+        timestamp=$(git log -1 --format=%at)
+        days=$(( ( $(date +%s) - timestamp ) / 86400 ))
+        if [ $days -eq 0 ]; then
+          echo "COMMIT_TODAY=true" >> $GITHUB_ENV
+        else
+          echo "COMMIT_TODAY=false" >> $GITHUB_ENV
+        fi
+
+    - name: Install dependencies
+      if: env.COMMIT_TODAY == 'true'
+      run: |
+        pip install .
+
     - name: Build wheel
       if: env.COMMIT_TODAY == 'true'
       env:
         OPENRLHF_BUILD_MODE: nightly
       run: |
-          pip install pytest torch cloudpickle cryptography deepspeed # TODO(qwang): installing dev requirements.
-          pip install ray[default]==2.7.0
-          python setup.py bdist_wheel
-    - name: Upload
+        python setup.py bdist_wheel
+
+    - name: Upload to PyPi
       if: env.COMMIT_TODAY == 'true'
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
