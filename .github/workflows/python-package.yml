@@ -14,7 +14,7 @@ jobs:
 
     strategy:
       matrix:
-        python-version: [3.10, 3.11]
+        python-version: [3.10.0, 3.11.0]
         cuda-version: [11.8, 12.1]
 
     steps:
