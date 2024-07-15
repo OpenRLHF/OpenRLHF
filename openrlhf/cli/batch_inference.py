@@ -312,8 +312,8 @@ if __name__ == "__main__":
         "--apply_chat_template", action="store_true", default=False, help="HF tokenizer apply_chat_template"
     )
     parser.add_argument("--input_template", type=str, default=None)
-    parser.add_argument("--max_len", type=int, default=2048)
-    parser.add_argument("--max_samples", type=int, default=1e8)
+    parser.add_argument("--max_len", type=int, default=2048, help="Max tokens for the samples")
+    parser.add_argument("--max_samples", type=int, default=1e8, help="Max number of samples")
     parser.add_argument("--output_path", type=str, default=None, help="Output JSON data path")
 
     # For generation
@@ -345,7 +345,7 @@ if __name__ == "__main__":
     parser.add_argument("--rollout_batch_size", type=int, default=2048, help="Number of samples to generate")
 
     # For Conditional SFT
-    parser.add_argument("--normalize_reward", action="store_true", default=False)
+    parser.add_argument("--normalize_reward", action="store_true", default=False, help="Enable Reward Normazation")
     parser.add_argument("--reward_template", type=str, default=None)
     parser.add_argument("--enable_csft", action="store_true", default=False)
     parser.add_argument("--csft_prompt", type=str, default="<rm_score>: 5.00", help="Conditional SFT prompt")

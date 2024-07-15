@@ -100,7 +100,9 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=0.2, help="temperature for Sampling")
     parser.add_argument("--repetition_penalty", type=float, default=1.2)
     parser.add_argument("--input_template", type=str, default="User: {}\nAssistant: ")
-    parser.add_argument("--apply_chat_template", action="store_true", default=False)
+    parser.add_argument(
+        "--apply_chat_template", action="store_true", default=False, help="Use HF tokenizer chat template"
+    )
 
     parser.add_argument("--ta_prompt", type=str, default=None)
     parser.add_argument("--enable_csft", action="store_true", default=False)

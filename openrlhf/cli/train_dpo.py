@@ -144,33 +144,33 @@ if __name__ == "__main__":
     parser.add_argument("--max_ckpt_mem", type=int, default=1000)  # 1000GB
 
     # DeepSpeed
-    parser.add_argument("--micro_train_batch_size", type=int, default=8)
-    parser.add_argument("--train_batch_size", type=int, default=128)
+    parser.add_argument("--micro_train_batch_size", type=int, default=8, help="batch size per GPU")
+    parser.add_argument("--train_batch_size", type=int, default=128, help="Global training batch size")
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
-    parser.add_argument("--max_norm", type=float, default=1.0)
+    parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
-    parser.add_argument("--zero_stage", type=int, default=2)
+    parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
     parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
     parser.add_argument("--ref_offload", action="store_true", default=False)
     parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
-    parser.add_argument("--adam_offload", action="store_true", default=False)
+    parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
-    parser.add_argument("--grad_accum_dtype", type=str, default=None)
+    parser.add_argument("--grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
     parser.add_argument("--disable_trace_cache", action="store_true", default=False)
-    parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
+    parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
 
     # DPO
     parser.add_argument("--max_epochs", type=int, default=1)
-    parser.add_argument("--l2", type=float, default=0.0)
+    parser.add_argument("--l2", type=float, default=0.0, help="weight decay loss")
     parser.add_argument("--beta", type=float, default=0.1)
     parser.add_argument("--ipo", action="store_true", default=False)  # IPO https://arxiv.org/pdf/2310.12036v2.pdf
     parser.add_argument("--label_smoothing", type=float, default=0.0)  # cDPO https://arxiv.org/pdf/2305.18290.pdf
-    parser.add_argument("--aux_loss_coef", type=float, default=0)
-    parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for optimization")
+    parser.add_argument("--aux_loss_coef", type=float, default=0, help="MoE balancing loss")
+    parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
 
     # LoRA
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
@@ -184,15 +184,17 @@ if __name__ == "__main__":
     parser.add_argument("--ref_pretrain", type=str, default=None)
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--dataset_probs", type=str, default="1.0", help="sampling probs for datasets")
-    parser.add_argument("--train_split", type=str, default="train")
-    parser.add_argument("--eval_split", type=str, default="test")
+    parser.add_argument("--train_split", type=str, default="train", help="train split of the HF dataset")
+    parser.add_argument("--eval_split", type=str, default="test", help="test split of the dataset")
 
     parser.add_argument("--prompt_key", type=str, default="prompt")
     parser.add_argument("--chosen_key", type=str, default="chosen")
     parser.add_argument("--rejected_key", type=str, default="rejected")
     parser.add_argument("--input_template", type=str, default="User: {}\nAssistant: ")
-    parser.add_argument("--apply_chat_template", action="store_true", default=False)
-    parser.add_argument("--max_samples", type=int, default=1e8)
+    parser.add_argument(
+        "--apply_chat_template", action="store_true", default=False, help="Use HF tokenizer chat template"
+    )
+    parser.add_argument("--max_samples", type=int, default=1e8, help="Max number of samples")
     parser.add_argument("--max_len", type=int, default=512)
 
     # wandb pamameters

@@ -279,46 +279,48 @@ if __name__ == "__main__":
     parser.add_argument("--rollout_batch_size", type=int, default=512)
     parser.add_argument("--micro_rollout_batch_size", type=int, default=8)
     parser.add_argument("--max_epochs", type=int, default=1)
-    parser.add_argument("--prompt_max_len", type=int, default=1024)
-    parser.add_argument("--generate_max_len", type=int, default=1024)
-    parser.add_argument("--max_len", type=int, default=None)
+    parser.add_argument("--prompt_max_len", type=int, default=1024, help="Max tokens for each prompt")
+    parser.add_argument("--generate_max_len", type=int, default=1024, help="Max tokens to generate in PPO")
+    parser.add_argument("--max_len", type=int, default=None, help="deprecated max_len")
     parser.add_argument("--max_samples", type=int, default=1000000)
-    parser.add_argument("--max_norm", type=float, default=1.0)
-    parser.add_argument("--l2", type=float, default=0.0)
-    parser.add_argument("--ptx_coef", type=float, default=0.05)
-    parser.add_argument("--eps_clip", type=float, default=0.2)
-    parser.add_argument("--value_clip", type=float, default=0.2)
-    parser.add_argument("--lambd", type=float, default=0.95)
-    parser.add_argument("--gamma", type=float, default=1)
-    parser.add_argument("--micro_train_batch_size", type=int, default=4)
-    parser.add_argument("--train_batch_size", type=int, default=128)
-    parser.add_argument("--normalize_reward", action="store_true", default=False)
+    parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
+    parser.add_argument("--l2", type=float, default=0.0, help="weight decay loss")
+    parser.add_argument("--ptx_coef", type=float, default=0.05, help="PPO-ptx loss coef")
+    parser.add_argument("--eps_clip", type=float, default=0.2, help="PPO clip range")
+    parser.add_argument("--value_clip", type=float, default=0.2, help="PPO value clip range")
+    parser.add_argument("--lambd", type=float, default=0.95, help="PPO GAE lambd")
+    parser.add_argument("--gamma", type=float, default=1, help="PPO GAE gamma")
+    parser.add_argument("--micro_train_batch_size", type=int, default=4, help="batch size per GPU")
+    parser.add_argument("--train_batch_size", type=int, default=128, help="Global training batch size")
+    parser.add_argument("--normalize_reward", action="store_true", default=False, help="Enable Reward Normazation")
     parser.add_argument("--top_p", type=float, default=1.0)
     parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--freezing_actor_steps", type=int, default=-1)
-    parser.add_argument("--n_samples_per_prompt", type=int, default=1)
-    parser.add_argument("--save_value_network", action="store_true", default=False)
+    parser.add_argument("--freezing_actor_steps", type=int, default=-1, help="Used for critic initialization")
+    parser.add_argument(
+        "--n_samples_per_prompt", type=int, default=1, help="number of responses for each prompt in generation"
+    )
+    parser.add_argument("--save_value_network", action="store_true", default=False, help="Save critic model")
     parser.add_argument("--actor_learning_rate", type=float, default=1e-6)
     parser.add_argument("--critic_learning_rate", type=float, default=9e-6)
     parser.add_argument("--kl_target", type=float, default=None)
-    parser.add_argument("--init_kl_coef", type=float, default=0.02)
-    parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for optimization")
+    parser.add_argument("--init_kl_coef", type=float, default=0.01, help="KL penalty in PPO")
+    parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
 
     # DeepSpeed
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
-    parser.add_argument("--zero_stage", type=int, default=2)
+    parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
     parser.add_argument("--enable_ema", action="store_true", help="Enable EMA checkpoint for the model.")
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
-    parser.add_argument("--adam_offload", action="store_true", default=False)
+    parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument("--actor_init_on_gpu", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
-    parser.add_argument("--aux_loss_coef", type=float, default=0)
-    parser.add_argument("--grad_accum_dtype", type=str, default=None)
+    parser.add_argument("--aux_loss_coef", type=float, default=0, help="MoE balancing loss")
+    parser.add_argument("--grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
     parser.add_argument("--disable_trace_cache", action="store_true", default=False)
-    parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
+    parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
 
     # LoRA
@@ -330,12 +332,12 @@ if __name__ == "__main__":
 
     # Models
     parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")
-    parser.add_argument("--reward_pretrain", type=str, default=None)
-    parser.add_argument("--critic_pretrain", type=str, default=None)
+    parser.add_argument("--reward_pretrain", type=str, default=None, help="HF model name or path")
+    parser.add_argument("--critic_pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--value_head_prefix", type=str, default="value_head")
 
     # Custom dataset
-    parser.add_argument("--prompt_data", type=str, default=None)
+    parser.add_argument("--prompt_data", type=str, default=None, help="HF dataset name or path")
     parser.add_argument(
         "--prompt_data_probs",
         type=str,
@@ -343,7 +345,7 @@ if __name__ == "__main__":
         help="sampling probs for datasets",
     )
     parser.add_argument("--prompt_split", type=str, default="train")
-    parser.add_argument("--pretrain_data", type=str, default=None)
+    parser.add_argument("--pretrain_data", type=str, default=None, help="HF dataset name or path")
     parser.add_argument(
         "--pretrain_data_probs",
         type=str,
@@ -351,9 +353,11 @@ if __name__ == "__main__":
         help="sampling probs for datasets",
     )
     parser.add_argument("--pretrain_split", type=str, default="train")
-    parser.add_argument("--input_key", type=str, default="input")
+    parser.add_argument("--input_key", type=str, default="input", help="JSON dataset key")
     parser.add_argument("--input_template", type=str, default="User: {}\nAssistant: ")
-    parser.add_argument("--apply_chat_template", action="store_true", default=False)
+    parser.add_argument(
+        "--apply_chat_template", action="store_true", default=False, help="Use HF tokenizer chat template"
+    )
 
     # wandb pamameters
     parser.add_argument("--use_wandb", type=str, default=None)
