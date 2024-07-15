@@ -40,7 +40,7 @@ def remote_rm_fn(api_url, queries, responses=None, score_key="score", api_batch_
                 [
                     request_api_wrapper(
                         api_url,
-                        {"query": queries[i: i + api_batch_size], "response": responses[i: i + api_batch_size]},
+                        {"query": queries[i : i + api_batch_size], "response": responses[i : i + api_batch_size]},
                         score_key,
                     )
                 ]
@@ -50,7 +50,7 @@ def remote_rm_fn(api_url, queries, responses=None, score_key="score", api_batch_
 
 
 def remote_ref_fn(
-        api_url, queries, num_tokens, attention_mask=None, responses=None, score_key="logits", api_batch_size=1
+    api_url, queries, num_tokens, attention_mask=None, responses=None, score_key="logits", api_batch_size=1
 ):
     """remote reference model API, the actor model and the ref model should use the same tokenizer.
     Note: So far, only the direct use of the token IDs API is considered safe, with the text API reserved for future work.
