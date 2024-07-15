@@ -44,10 +44,10 @@ jobs:
         sudo ldconfig
       shell: bash
 
-    - name: Install dependencies
+    - name: Build package with version suffix
       run: |
-        python -m pip install --upgrade pip
-        pip install setuptools wheel twine
+        python setup.py sdist bdist_wheel
+        mv dist/* dist/${{ matrix.python-version }}-cuda${{ matrix.cuda-version }}-$(basename dist/*)
 
     - name: Build package
       run: python setup.py sdist bdist_wheel
