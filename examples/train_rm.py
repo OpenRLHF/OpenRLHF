@@ -68,7 +68,7 @@ def train(args):
     )
 
     # scheduler
-    num_update_steps_per_epoch = len(train_dataloader) * args.max_epochs // strategy.accumulated_gradient
+    num_update_steps_per_epoch = len(train_dataloader) // strategy.accumulated_gradient
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
 
     scheduler = get_scheduler(
