@@ -40,7 +40,7 @@ def train(args):
     strategy.print(model)
 
     # configure optimizer
-    optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)
+    optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
 
     # prepare for data and dataset
     train_data, eval_data = blending_datasets(
@@ -48,7 +48,7 @@ def train(args):
         args.dataset_probs,
         strategy,
         args.seed,
-        max_count=5000000,
+        max_count=args.max_samples,
         stopping_strategy="all_exhausted",
         train_split=args.train_split,
         eval_split=args.eval_split,
@@ -165,6 +165,7 @@ if __name__ == "__main__":
     parser.add_argument("--train_batch_size", type=int, default=128)
     parser.add_argument("--loss", type=str, default="sigmoid")
     parser.add_argument("--l2", type=float, default=0.0)
+    parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for optimization")
 
     # Custom dataset
     parser.add_argument("--dataset", type=str, default="Dahoas/full-hh-rlhf")

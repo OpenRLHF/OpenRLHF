@@ -84,21 +84,22 @@ def generate(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pretrain", type=str, default=None)
-    parser.add_argument("--max_len", type=int, default=4096)
     parser.add_argument("--bf16", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
 
+    # QLora
+    parser.add_argument("--load_in_4bit", action="store_true", default=False)
+
+    # Sampling
+    parser.add_argument("--pretrain", type=str, default=None)
+    parser.add_argument("--max_len", type=int, default=4096)
     parser.add_argument("--greedy_sampling", action="store_true", default=False)
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--repetition_penalty", type=float, default=1.2)
     parser.add_argument("--input_template", type=str, default="User: {}\nAssistant: ")
     parser.add_argument("--apply_chat_template", action="store_true", default=False)
-
-    # QLora
-    parser.add_argument("--load_in_4bit", action="store_true", default=False)
 
     parser.add_argument("--ta_prompt", type=str, default=None)
     parser.add_argument("--enable_csft", action="store_true", default=False)

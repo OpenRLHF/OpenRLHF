@@ -215,7 +215,6 @@ if __name__ == "__main__":
     parser.add_argument("--adam_offload", action="store_true", default=False)
     parser.add_argument("--actor_init_on_gpu", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False)
-    parser.add_argument("--aux_loss_coef", type=float, default=0)
     parser.add_argument("--grad_accum_dtype", type=str, default=None)
     parser.add_argument("--disable_trace_cache", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
@@ -257,6 +256,8 @@ if __name__ == "__main__":
     parser.add_argument("--critic_learning_rate", type=float, default=9e-6)
     parser.add_argument("--kl_target", type=float, default=None)
     parser.add_argument("--init_kl_coef", type=float, default=0.02)
+    parser.add_argument("--aux_loss_coef", type=float, default=0)
+    parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for optimization")
 
     #  Models
     parser.add_argument("--pretrain", type=str, default=None)

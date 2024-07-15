@@ -95,10 +95,10 @@ def train(args):
 
     # configure optimizer
     actor_optim = strategy.create_optimizer(
-        actor, lr=args.actor_learning_rate, betas=(0.9, 0.95), weight_decay=args.l2
+        actor, lr=args.actor_learning_rate, betas=args.adam_betas, weight_decay=args.l2
     )
     critic_optim = strategy.create_optimizer(
-        critic, lr=args.critic_learning_rate, betas=(0.9, 0.95), weight_decay=args.l2
+        critic, lr=args.critic_learning_rate, betas=args.adam_betas, weight_decay=args.l2
     )
 
     # prepare datasets
@@ -302,6 +302,7 @@ if __name__ == "__main__":
     parser.add_argument("--critic_learning_rate", type=float, default=9e-6)
     parser.add_argument("--kl_target", type=float, default=None)
     parser.add_argument("--init_kl_coef", type=float, default=0.02)
+    parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for optimization")
 
     # DeepSpeed
     parser.add_argument("--seed", type=int, default=42)

@@ -55,7 +55,7 @@ def train(args):
         )
 
     # configure optimizer
-    optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)
+    optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
 
     # prepare for data and dataset
     train_data, eval_data = blending_datasets(
@@ -168,6 +168,7 @@ if __name__ == "__main__":
     parser.add_argument("--pretrain", type=str, default="bigscience/bloomz-1b7")
     parser.add_argument("--l2", type=float, default=0.0)
     parser.add_argument("--aux_loss_coef", type=float, default=0)
+    parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for optimization")
 
     # Custom dataset
     parser.add_argument("--dataset", type=str, default="Dahoas/full-hh-rlhf")

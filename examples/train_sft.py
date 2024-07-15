@@ -36,7 +36,7 @@ def train(args):
     strategy.print(model)
 
     # configure optimizer
-    optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=args.l2)
+    optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
 
     # prepare for data and dataset
     train_data, eval_data = blending_datasets(
@@ -167,6 +167,7 @@ if __name__ == "__main__":
     parser.add_argument("--pretrain_mode", action="store_true", default=False)
     parser.add_argument("--lr_scheduler", type=str, default="cosine")
     parser.add_argument("--l2", type=float, default=0)
+    parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for optimization")
 
     # LoRA
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
