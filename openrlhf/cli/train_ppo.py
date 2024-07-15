@@ -309,12 +309,12 @@ if __name__ == "__main__":
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2)
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
-    parser.add_argument("--bf16", action="store_true", default=False)
+    parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
     parser.add_argument("--enable_ema", action="store_true", help="Enable EMA checkpoint for the model.")
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False)
     parser.add_argument("--actor_init_on_gpu", action="store_true", default=False)
-    parser.add_argument("--flash_attn", action="store_true", default=False)
+    parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
     parser.add_argument("--aux_loss_coef", type=float, default=0)
     parser.add_argument("--grad_accum_dtype", type=str, default=None)
     parser.add_argument("--disable_trace_cache", action="store_true", default=False)
@@ -329,7 +329,7 @@ if __name__ == "__main__":
     parser.add_argument("--lora_dropout", type=float, default=0)
 
     # Models
-    parser.add_argument("--pretrain", type=str, default=None)
+    parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--reward_pretrain", type=str, default=None)
     parser.add_argument("--critic_pretrain", type=str, default=None)
     parser.add_argument("--value_head_prefix", type=str, default="value_head")

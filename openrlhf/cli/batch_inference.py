@@ -285,55 +285,66 @@ def batch_rm_inference(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--eval_task", type=str, default=None, help="set to generate, generate_vllm or rm")
-    parser.add_argument("--zero_stage", type=int, default=0)
-    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
-    parser.add_argument("--bf16", action="store_true", default=False)
-    parser.add_argument("--flash_attn", action="store_true", default=False)
+    parser.add_argument(
+        "--eval_task", type=str, default=None, help="Set to generate_vllm, generate (HF generate) or rm"
+    )
+    parser.add_argument("--zero_stage", type=int, default=0, help="DeepSpeed ZeRO Stage")
+    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed cli")
+    parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16 for deepspeed")
+    parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAtten2")
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument("--micro_batch_size", type=int, default=16)
-    parser.add_argument("--output_path", type=str, default=None)
     parser.add_argument("--seed", type=int, default=1234)
 
-    # models
-    parser.add_argument("--pretrain", type=str, default=None)
-    parser.add_argument("--value_head_prefix", type=str, default="value_head")
+    # Models
+    parser.add_argument("--pretrain", type=str, default=None, help="HF pretrain model name or path")
+    parser.add_argument(
+        "--value_head_prefix", type=str, default="value_head", help="value_head prefix for Reward Model"
+    )
 
-    # custom dataset
+    # Custom dataset
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--dataset_probs", type=str, default="1.0")
     parser.add_argument("--dataset_split", type=str, default=None)
-    parser.add_argument("--input_key", type=str, default="input")
-    parser.add_argument("--output_key", type=str, default="output")
-    parser.add_argument("--apply_chat_template", action="store_true", default=False)
+    parser.add_argument("--input_key", type=str, default="input", help="JSON dataset key")
+    parser.add_argument("--output_key", type=str, default="output", help="JSON dataset key")
+    parser.add_argument(
+        "--apply_chat_template", action="store_true", default=False, help="HF tokenizer apply_chat_template"
+    )
     parser.add_argument("--input_template", type=str, default=None)
     parser.add_argument("--max_len", type=int, default=2048)
-    parser.add_argument("--max_samples", type=int, default=1000000)
+    parser.add_argument("--max_samples", type=int, default=1e8)
+    parser.add_argument("--output_path", type=str, default=None, help="Output JSON data path")
 
-    # for generation
-    parser.add_argument("--prompt_max_len", type=int, default=1024)
-    parser.add_argument("--greedy_sampling", action="store_true", default=False)
-    parser.add_argument("--top_p", type=float, default=1.0)
-    parser.add_argument("--temperature", type=float, default=1.0)
+    # For generation
+    parser.add_argument("--prompt_max_len", type=int, default=1024, help="Max tokens for prompt")
+    parser.add_argument("--max_new_tokens", type=int, default=1024, help="Max new tokens in generation")
+    parser.add_argument("--greedy_sampling", action="store_true", default=False, help="Use Greedy sampling")
+    parser.add_argument("--top_p", type=float, default=1.0, help="top_p for Sampling")
+    parser.add_argument("--temperature", type=float, default=1.0, help="temperature for Sampling")
     parser.add_argument("--repetition_penalty", type=float, default=1.0)
-    parser.add_argument("--best_of_n", type=int, default=1)
-    parser.add_argument("--max_new_tokens", type=int, default=1024)
+    parser.add_argument("--best_of_n", type=int, default=1, help="Number of responses to generate per prompt")
     parser.add_argument(
         "--post_processor",
         type=str,
         default=None,
         help="set to rs (Rejection Sampling), csft (Conditional SFT), iter_dpo (Iterative DPO) or None",
     )
-    # for vllm
+    # For vllm
     parser.add_argument("--tp_size", type=int, default=8)
     parser.add_argument("--max_num_seqs", type=int, default=256)
     parser.add_argument("--enable_prefix_caching", action="store_true", default=False)
 
-    # for Iterative generation and Rejection Sampling
-    parser.add_argument("--iter", type=int, default=None)
-    parser.add_argument("--rollout_batch_size", type=int, default=2048)
+    # For Iterative generation and Rejection Sampling
+    parser.add_argument(
+        "--iter",
+        type=int,
+        default=None,
+        help="Used to slice the datasets in range iter * rollout_batch_size: (iter + 1) * rollout_batch_size",
+    )
+    parser.add_argument("--rollout_batch_size", type=int, default=2048, help="Number of samples to generate")
 
-    # for Conditional SFT
+    # For Conditional SFT
     parser.add_argument("--normalize_reward", action="store_true", default=False)
     parser.add_argument("--reward_template", type=str, default=None)
     parser.add_argument("--enable_csft", action="store_true", default=False)

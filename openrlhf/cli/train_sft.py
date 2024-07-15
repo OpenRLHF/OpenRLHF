@@ -150,10 +150,10 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2)
-    parser.add_argument("--bf16", action="store_true", default=False)
+    parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False)
-    parser.add_argument("--flash_attn", action="store_true", default=False)
+    parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
     parser.add_argument("--grad_accum_dtype", type=str, default=None)
     parser.add_argument("--disable_trace_cache", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
@@ -162,8 +162,8 @@ if __name__ == "__main__":
     # SFT
     parser.add_argument("--max_epochs", type=int, default=2)
     parser.add_argument("--aux_loss_coef", type=float, default=0)
-    parser.add_argument("--pretrain", type=str, default="bigscience/bloomz-1b7")
-    parser.add_argument("--learning_rate", type=float, default=2e-6)
+    parser.add_argument("--pretrain", type=str, default=None)
+    parser.add_argument("--learning_rate", type=float, default=5e-6)
     parser.add_argument("--pretrain_mode", action="store_true", default=False)
     parser.add_argument("--lr_scheduler", type=str, default="cosine")
     parser.add_argument("--l2", type=float, default=0)
@@ -180,7 +180,7 @@ if __name__ == "__main__":
     parser.add_argument("--packing_samples", action="store_true", default=False)
 
     # custom dataset
-    parser.add_argument("--dataset", type=str, default="Dahoas/full-hh-rlhf")
+    parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--dataset_probs", type=str, default="1.0", help="sampling probs for datasets")
     parser.add_argument("--train_split", type=str, default="train")
     parser.add_argument("--eval_split", type=str, default="test")
@@ -190,8 +190,8 @@ if __name__ == "__main__":
     parser.add_argument("--input_template", type=str, default="User: {}\nAssistant: ")
     parser.add_argument("--apply_chat_template", action="store_true", default=False)
     parser.add_argument("--tokenizer_chat_template", type=str, default=None)
-    parser.add_argument("--max_samples", type=int, default=10000000)
-    parser.add_argument("--max_len", type=int, default=512)
+    parser.add_argument("--max_samples", type=int, default=1e8)
+    parser.add_argument("--max_len", type=int, default=2048)
 
     # wandb pamameters
     parser.add_argument("--use_wandb", type=str, default=None)

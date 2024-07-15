@@ -154,10 +154,10 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2)
-    parser.add_argument("--bf16", action="store_true", default=False)
+    parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False)
-    parser.add_argument("--flash_attn", action="store_true", default=False)
+    parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
     parser.add_argument("--aux_loss_coef", type=float, default=0)
     parser.add_argument("--teacher_offload", action="store_true", default=False)
     parser.add_argument("--grad_accum_dtype", type=str, default=None)
@@ -173,9 +173,8 @@ if __name__ == "__main__":
     parser.add_argument("--lora_dropout", type=float, default=0)
 
     # KD
-    parser.add_argument("--pretrain", type=str, default="meta-llama/Llama-2-7b-hf")
-    parser.add_argument("--teacher_model", type=str, default="meta-llama/Llama-2-70b-hf")
-    parser.add_argument("--teacher_peft_model", type=str, default=None)
+    parser.add_argument("--pretrain", type=str, default=None)
+    parser.add_argument("--teacher_model", type=str, default=None)
     parser.add_argument("--max_epochs", type=int, default=1)
     parser.add_argument("--kd_coef", type=float, default=0.4)
     parser.add_argument("--learning_rate", type=float, default=2e-6)
@@ -185,7 +184,7 @@ if __name__ == "__main__":
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for optimization")
 
     # Custom dataset
-    parser.add_argument("--dataset", type=str, default="Dahoas/full-hh-rlhf")
+    parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--dataset_probs", type=str, default="1.0", help="sampling probs for datasets")
     parser.add_argument("--train_split", type=str, default="train")
     parser.add_argument("--eval_split", type=str, default="test")
@@ -195,8 +194,8 @@ if __name__ == "__main__":
     parser.add_argument("--input_template", type=str, default="User: {}\nAssistant: ")
     parser.add_argument("--apply_chat_template", action="store_true", default=False)
 
-    parser.add_argument("--max_samples", type=int, default=10000000)
-    parser.add_argument("--max_len", type=int, default=512)
+    parser.add_argument("--max_samples", type=int, default=1e8)
+    parser.add_argument("--max_len", type=int, default=2048)
 
     # wandb pamameters
     parser.add_argument("--use_wandb", type=str, default=None)
