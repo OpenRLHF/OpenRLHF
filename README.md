@@ -99,9 +99,9 @@ pip install .
 
 # If you want to accelerate with vLLM
 # vLLM 0.4.2
-pip install .[vllm]
+pip install --user .[vllm]
 # vLLM 0.5.0+
-pip install .[vllm_latest]
+pip install --user .[vllm_latest]
 
 cd examples
 ```
@@ -324,7 +324,7 @@ To achieve optimal performance, we recommend allocating more nodes to the vLLM E
 
 **How to Join?**
 
-1. Email us at xianyuai@openllmai.top(open-source community email) and janhu9527@gmail.com (personal email of PIC). Please include the following details:
+1. Email us at janhu9527@gmail.com (personal email of the PIC) or xianyuai@openllmai.top(open-source community email). Please include the following details:
    - Your name
    - Your GitHub username
    - Your areas of interest

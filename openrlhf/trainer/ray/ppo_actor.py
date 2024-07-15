@@ -248,6 +248,7 @@ class ActorModelRayActor(BasePPORole):
             args.seed,
             max_count=args.max_samples,
             return_eval=False,
+            train_split=args.prompt_split,
         )
         prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
         prompts_dataset = PromptDataset(prompts_data, self.tokenizer, strategy, input_template=args.input_template)
@@ -260,6 +261,7 @@ class ActorModelRayActor(BasePPORole):
                 strategy,
                 args.seed,
                 return_eval=False,
+                train_split=args.pretrain_split,
             )
             pretrain_max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
             pretrain_dataset = SFTDataset(

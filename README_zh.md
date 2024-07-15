@@ -102,9 +102,9 @@ pip install .
 
 # 如果你需要使用 vLLM 加速
 # vLLM 0.4.2
-pip install .[vllm]
+pip install --user .[vllm]
 # vLLM 0.5.0+
-pip install .[vllm_latest]
+pip install --user .[vllm_latest]
 
 cd examples
 ```
@@ -327,7 +327,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 **如何加入？**
 
-1. 通过开源组织邮箱 xianyuai@openllmai.top 和个人联系邮箱 janhu9527@gmail.com (PIC) 向我们发送邮件。请包含以下信息：
+1. 通过 PIC 联系邮箱 janhu9527@gmail.com 或者开源组织邮箱 xianyuai@openllmai.top 向我们发送邮件。请包含以下信息：
    - 您的姓名
    - 您的 GitHub 用户名
    - 您感兴趣的领域

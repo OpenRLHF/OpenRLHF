@@ -46,6 +46,8 @@ def blending_datasets(
     max_count=5000000,
     return_eval=True,
     stopping_strategy="first_exhausted",
+    train_split=None,
+    eval_split=None,
 ):
     datasets = datasets.split(",")
     probabilities = list(map(float, probabilities.split(",")))
@@ -96,21 +98,18 @@ def blending_datasets(
         else:
             raise Exception(f"Dataset Name {dataset}: Format error")
 
-        if "train" in data:
-            train_data_list.append(data["train"].select(range(min(max_count, len(data["train"])))))
+        if train_split and train_split in data:
+            train_data = data[train_split].select(range(min(max_count, len(data[train_split]))))
         else:
-            train_data_list.append(data.select(range(min(max_count, len(data)))))  # train will contains eval? TODO
+            train_data = data.select(range(min(max_count, len(data))))
+        train_data_list.append(train_data)
 
         if return_eval:
-            max_count01 = int(max_count * 0.1)
-            if "test" in data:
-                eval_data = data["test"].select(range(min(max_count01, len(data["test"]))))
-            elif "validation" in data:
-                eval_data = data["validation"].select(range(min(max_count01, len(data["validation"]))))
-            elif "train" in data:
-                eval_data = data["train"].select(range(min(max_count01, int(len(data["train"]) * 0.01))))
+            if eval_split and eval_split in data:
+                eval_data = data[eval_split].select(range(min(max_count, len(data[eval_split]))))
+            # train will contains eval? TODO
             else:
-                eval_data = data.select(range(min(int(max_count01), int(len(data) * 0.01))))
+                eval_data = train_data.select(range(min(max_count, int(len(train_data) * 0.03))))
             eval_data_list.append(eval_data)
 
     # merge datasets

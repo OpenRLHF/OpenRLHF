@@ -162,6 +162,7 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    # Ray and vLLM
     parser.add_argument("--ref_num_nodes", type=int, default=1, help="number of nodes for reference")
     parser.add_argument("--ref_num_gpus_per_node", type=int, default=8, help="number of gpus per node for reference")
     parser.add_argument("--reward_num_nodes", type=int, default=1, help="number of nodes for reward model")
@@ -195,24 +196,43 @@ if __name__ == "__main__":
         help="tensor parallel size of vLLM Engine for multi-GPU inference",
     )
     parser.add_argument("--vllm_sync_backend", type=str, default="nccl", help="DeepSpeed -> vLLM weight sync backend")
+    parser.add_argument("--enable_prefix_caching", action="store_true", default=False)
 
-    parser.add_argument("--prompt_data", type=str, default=None)
-    parser.add_argument(
-        "--prompt_data_probs",
-        type=str,
-        default="1.0",
-        help="sampling probs for datasets",
-    )
-    parser.add_argument("--pretrain_data", type=str, default=None)
-    parser.add_argument(
-        "--pretrain_data_probs",
-        type=str,
-        default="1.0",
-        help="sampling probs for datasets",
-    )
-    parser.add_argument("--pretrain", type=str, default=None)
-    parser.add_argument("--reward_pretrain", type=str, default=None)
-    parser.add_argument("--critic_pretrain", type=str, default=None)
+    # Checkpoints
+    parser.add_argument("--eval_steps", type=int, default=-1)
+    parser.add_argument("--save_steps", type=int, default=-1)
+    parser.add_argument("--logging_steps", type=int, default=1)
+    parser.add_argument("--load_checkpoint", action="store_true", default=False)
+
+    # DeepSpeed
+    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
+    parser.add_argument("--zero_stage", type=int, default=2)
+    parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
+    parser.add_argument("--bf16", action="store_true", default=False)
+    parser.add_argument("--actor_learning_rate", type=float, default=1e-6)
+    parser.add_argument("--critic_learning_rate", type=float, default=9e-6)
+    parser.add_argument("--kl_target", type=float, default=None)
+    parser.add_argument("--init_kl_coef", type=float, default=0.02)
+    ## Make EMA as an optional feature
+    parser.add_argument("--enable_ema", action="store_true", help="Enable EMA checkpoint for the model.")
+    parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
+    parser.add_argument("--adam_offload", action="store_true", default=False)
+    parser.add_argument("--actor_init_on_gpu", action="store_true", default=False)
+    parser.add_argument("--flash_attn", action="store_true", default=False)
+    parser.add_argument("--aux_loss_coef", type=float, default=0)
+    parser.add_argument("--grad_accum_dtype", type=str, default=None)
+    parser.add_argument("--disable_trace_cache", action="store_true", default=False)
+    parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
+    parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
+
+    # LoRA
+    parser.add_argument("--load_in_4bit", action="store_true", default=False)
+    parser.add_argument("--lora_rank", type=int, default=0)
+    parser.add_argument("--lora_alpha", type=int, default=16)
+    parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")
+    parser.add_argument("--lora_dropout", type=float, default=0)
+
+    # PPO
     parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--num_episodes", type=int, default=1)
     parser.add_argument("--rollout_batch_size", type=int, default=512)
@@ -231,54 +251,41 @@ if __name__ == "__main__":
     parser.add_argument("--gamma", type=float, default=1)
     parser.add_argument("--micro_train_batch_size", type=int, default=4)
     parser.add_argument("--train_batch_size", type=int, default=128)
-    parser.add_argument("--load_checkpoint", action="store_true", default=False)
     parser.add_argument("--normalize_reward", action="store_true", default=False)
     parser.add_argument("--top_p", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=42)
-
-    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
-    parser.add_argument("--zero_stage", type=int, default=2)
-    parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
-    parser.add_argument("--bf16", action="store_true", default=False)
-    parser.add_argument("--actor_learning_rate", type=float, default=1e-6)
-    parser.add_argument("--critic_learning_rate", type=float, default=9e-6)
-    parser.add_argument("--kl_target", type=float, default=None)
-    parser.add_argument("--init_kl_coef", type=float, default=0.02)
-    ## Make EMA as an optional feature
-    parser.add_argument("--enable_ema", action="store_true", help="Enable EMA checkpoint for the model.")
-    parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
-    parser.add_argument("--adam_offload", action="store_true", default=False)
-    parser.add_argument("--actor_init_on_gpu", action="store_true", default=False)
-    parser.add_argument("--flash_attn", action="store_true", default=False)
-    parser.add_argument("--aux_loss_coef", type=float, default=0)
-    parser.add_argument("--grad_accum_dtype", type=str, default=None)
-    parser.add_argument("--disable_trace_cache", action="store_true", default=False)
-    parser.add_argument("--load_in_4bit", action="store_true", default=False)
-    parser.add_argument("--lora_rank", type=int, default=0)
-    parser.add_argument("--lora_alpha", type=int, default=16)
-    parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")
-    parser.add_argument("--lora_dropout", type=float, default=0)
-    parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true")
-    parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
-    parser.add_argument("--enable_prefix_caching", action="store_true", default=False)
     parser.add_argument("--freezing_actor_steps", type=int, default=-1)
     parser.add_argument("--n_samples_per_prompt", type=int, default=1)
-
     parser.add_argument("--save_value_network", action="store_true", default=False)
 
-    # reward model
+    #  Models
+    parser.add_argument("--pretrain", type=str, default=None)
+    parser.add_argument("--reward_pretrain", type=str, default=None)
+    parser.add_argument("--critic_pretrain", type=str, default=None)
     parser.add_argument("--head_prefix", type=str, default="value_head")
     parser.add_argument("--ref_reward_offload", action="store_true", default=False)
 
-    # custom dataset key name
+    # Custom dataset
+    parser.add_argument("--prompt_data", type=str, default=None)
+    parser.add_argument(
+        "--prompt_data_probs",
+        type=str,
+        default="1.0",
+        help="sampling probs for datasets",
+    )
+    parser.add_argument("--prompt_split", type=str, default="train")
+    parser.add_argument("--pretrain_data", type=str, default="train")
+    parser.add_argument(
+        "--pretrain_data_probs",
+        type=str,
+        default="1.0",
+        help="sampling probs for datasets",
+    )
+    parser.add_argument("--pretrain_split", type=str, default=None)
+
     parser.add_argument("--input_key", type=str, default="input")
     parser.add_argument("--input_template", type=str, default="User: {}\nAssistant: ")
     parser.add_argument("--apply_chat_template", action="store_true", default=False)
-
-    # evaluation
-    parser.add_argument("--eval_steps", type=int, default=-1)
-    parser.add_argument("--save_steps", type=int, default=-1)
-    parser.add_argument("--logging_steps", type=int, default=1)
 
     # wandb pamameters
     parser.add_argument("--use_wandb", type=str, default=None)

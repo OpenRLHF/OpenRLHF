@@ -56,6 +56,7 @@ def batch_generate_vllm(args):
         args.seed,
         return_eval=False,
         max_count=args.max_samples,
+        train_split=args.dataset_split,
     )
     if args.iter is None:
         prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
@@ -124,6 +125,7 @@ def batch_generate(args):
         args.seed,
         return_eval=False,
         max_count=args.max_samples,
+        train_split=args.dataset_split,
     )
     if args.iter is None:
         prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
@@ -225,6 +227,7 @@ def batch_rm_inference(args):
         args.seed,
         return_eval=False,
         max_count=args.max_samples,
+        train_split=args.dataset_split,
     )
     dataset = dataset.select(range(min(args.max_samples, len(dataset))))
     dataset = SFTDataset(
@@ -283,27 +286,29 @@ def batch_rm_inference(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--eval_task", type=str, default=None, help="set to generate, generate_vllm or rm")
-    parser.add_argument("--pretrain", type=str, default=None)
-    parser.add_argument("--max_len", type=int, default=2048)
     parser.add_argument("--zero_stage", type=int, default=0)
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--bf16", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument("--micro_batch_size", type=int, default=16)
-    parser.add_argument("--dataset", type=str, default=None)
-    parser.add_argument("--dataset_probs", type=str, default="1.0")
     parser.add_argument("--output_path", type=str, default=None)
-    parser.add_argument("--max_samples", type=int, default=1000000)
     parser.add_argument("--seed", type=int, default=1234)
-    # reward model
+
+    # models
+    parser.add_argument("--pretrain", type=str, default=None)
     parser.add_argument("--head_prefix", type=str, default="value_head")
 
-    # custom dataset key name
+    # custom dataset
+    parser.add_argument("--dataset", type=str, default=None)
+    parser.add_argument("--dataset_probs", type=str, default="1.0")
+    parser.add_argument("--dataset_split", type=str, default=None)
     parser.add_argument("--input_key", type=str, default="input")
     parser.add_argument("--output_key", type=str, default="output")
     parser.add_argument("--apply_chat_template", action="store_true", default=False)
     parser.add_argument("--input_template", type=str, default=None)
+    parser.add_argument("--max_len", type=int, default=2048)
+    parser.add_argument("--max_samples", type=int, default=1000000)
 
     # for generation
     parser.add_argument("--prompt_max_len", type=int, default=1024)

@@ -62,7 +62,7 @@ class SFTDataset(Dataset):
                 None if pretrain_mode else input_template,
                 input_key,
                 output_key,
-                apply_chat_template=apply_chat_template,
+                apply_chat_template=None if pretrain_mode else apply_chat_template,
             )
 
             if not self.pretrain_mode:
