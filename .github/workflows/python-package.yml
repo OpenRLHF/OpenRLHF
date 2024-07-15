@@ -7,6 +7,9 @@ on:
   pull_request:
     branches:
       - main
+  release:
+    types: [published]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -50,7 +53,7 @@ jobs:
       run: python setup.py sdist bdist_wheel
 
     - name: Publish package
-      if: github.event_name == 'push'
+      if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
