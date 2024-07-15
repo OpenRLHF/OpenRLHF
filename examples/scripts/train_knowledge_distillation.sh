@@ -9,9 +9,9 @@ read -r -d '' training_commands <<EOF
    --train_batch_size 256 \
    --micro_train_batch_size 2 \
    --max_samples 500000 \
-   --pretrain meta-llama/Llama-2-7b-hf \
-   --teacher_model meta-llama/Llama-2-13b-chat-hf \
-   --save_path ./checkpoint/llama2-7b-kd \
+   --pretrain meta-llama/Meta-Llama-3-8B-Instruct \
+   --teacher_model meta-llama/Meta-Llama-3-70B-Instruct \
+   --save_path ./checkpoint/llama3-8b-kd \
    --save_steps -1 \
    --logging_steps 1 \
    --eval_steps -1 \
@@ -21,6 +21,7 @@ read -r -d '' training_commands <<EOF
    --flash_attn \
    --kd_coef 0.4 \
    --learning_rate 5e-6 \
+   --teacher_offload \
    --gradient_checkpointing
 EOF
      # --wandb [WANDB_TOKENS] or True (use wandb login command)
