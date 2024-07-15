@@ -1,7 +1,7 @@
 set -x 
 
 read -r -d '' training_commands <<EOF
-../train_dpo.py \
+openrlhf.entrypoints.train_dpo \
      --save_path ./checkpoint/llama2-34b-dpo \
      --save_steps -1 \
      --logging_steps 1 \
@@ -15,7 +15,7 @@ read -r -d '' training_commands <<EOF
      --zero_stage 3 \
      --beta 0.1 \
      --learning_rate 5e-7 \
-     --dataset OpenLLMAI/preference_dataset_mixture2_and_safe_pku\
+     --dataset OpenLLMAI/preference_dataset_mixture2_and_safe_pku \
      --apply_chat_template \
      --chosen_key chosen \
      --rejected_key rejected \
@@ -29,5 +29,5 @@ EOF
 
 
 if [[ ${1} != "slurm" ]]; then
-    deepspeed $training_commands
+    deepspeed --module $training_commands
 fi

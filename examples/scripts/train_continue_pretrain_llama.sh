@@ -1,7 +1,7 @@
 set -x
 
 read -r -d '' training_commands <<EOF
-../train_sft.py \
+openrlhf.entrypoints.train_sft \
     --max_len 4096 \
     --dataset {your_pretrain_dataset} \
     --dataset_probs 1.0 \
@@ -20,9 +20,8 @@ read -r -d '' training_commands <<EOF
     --gradient_checkpointing \
     --pretrain_mode
 EOF
-
-     # --wandb [WANDB_TOKENS] or True (use wandb login command)
+    # --wandb [WANDB_TOKENS] or True (use wandb login command)
 
 if [[ ${1} != "slurm" ]]; then
-    deepspeed $training_commands
+    deepspeed --module $training_commands
 fi

@@ -78,36 +78,26 @@ More details are in [Technical Report](https://arxiv.org/abs/2405.11143) | [Docu
 
 ### Installation
 
-To use OpenRLHF, first ``git clone`` it and launch the docker container (**Recommended**):
+To use OpenRLHF, first launch the docker container (**Recommended**) and ``pip install`` openrlhf inside the docker container:
 
 ```bash
-git clone https://github.com/openllmai/OpenRLHF.git
-# You can also `git checkout` the latest stable release version.
-
 # Launch the docker container
-docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD/OpenRLHF:/openrlhf nvcr.io/nvidia/pytorch:24.02-py3 bash
-```
+docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:24.02-py3 bash
 
-> [!NOTE]
->We provided the [dockerfiles](./dockerfile/) and [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh)
-
-Then ``pip install`` openrlhf inside the docker container
-
-```bash
-cd /openrlhf
-pip install .
+# pip install
+pip install git+https://github.com/openllmai/OpenRLHF.git
 
 # If you want to accelerate with vLLM
-# vLLM 0.4.2
-pip install --user .[vllm]
-# vLLM 0.5.0+
-pip install --user .[vllm_latest]
+git clone https://github.com/openllmai/OpenRLHF.git
+cd OpenRLHF
 
-cd examples
+pip install -e .[vllm] # vLLM 0.4.2
+pip install -e .[vllm_latest] # vLLM 0.5.0+
 ```
 
 > [!NOTE]
-> We recommend using vLLM 0.4.2, as versions 0.4.3+ currently only support weight synchronization (DeepSpeed => vLLM) via Gloo (`--vllm_sync_backend gloo`).
+>We recommend using vLLM 0.4.2, as versions 0.4.3+ currently only support weight synchronization (DeepSpeed => vLLM) via Gloo (`--vllm_sync_backend gloo`).
+>We provided the [dockerfiles](./dockerfile/) and [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh).
 
 ### Prepare Datasets
 OpenRLHF provides multiple data processing methods in our dataset classes.
@@ -142,6 +132,7 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 "<s>[INST] Hello, how are you? [/INST]I'm doing great. How can I help you today?</s> [INST] I'd like to show off how chat templating works! [/INST]"
 ```
 > [!NOTE]
+> By default, we use `train` and `test` as splits to distinguish training and testing datasets from Huggingface.
 > The ``JSON key`` options depends on the specific datasets. See [Reward Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/reward_dataset.py#L10) and [SFT Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/sft_dataset.py#L9)
 
 ### Supervised Fine-tuning
@@ -151,7 +142,7 @@ OpenRLHF's model checkpoint is fully compatible with HuggingFace models. You can
 Then you can use the startup scripts we provide in the [examples/scripts](./examples/scripts/) directory, or start the training using the following commands.
 
 ```bash 
-deepspeed ./train_sft.py \
+deepspeed --module openrlhf.entrypoints.train_sft \
    --max_len 4096 \
    --dataset Open-Orca/OpenOrca \
    --input_key question \
@@ -191,7 +182,7 @@ deepspeed ./train_sft.py \
 
 ### Reward Model Training
 ```bash
-deepspeed ./train_rm.py \
+deepspeed --module openrlhf.entrypoints.train_rm \
    --save_path ./checkpoint/llama3-8b-rm \
    --save_steps -1 \
    --logging_steps 1 \
@@ -216,7 +207,7 @@ deepspeed ./train_rm.py \
 ### PPO without Ray
 
 ```bash
-deepspeed ./train_ppo.py \
+deepspeed --module openrlhf.entrypoints.train_ppo \
   --pretrain OpenLLMAI/Llama-3-8b-sft-mixture \
   --reward_pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
   --save_path ./checkpoint/llama-3-8b-rlhf \
@@ -259,7 +250,7 @@ ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 
 ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf", "pip": "/openrlhf/requirements.txt"}' \
-  -- python3 examples/train_ppo_ray.py \
+  -- python3 -m openrlhf.entrypoints.train_ppo_ray \
   --ref_num_nodes 1 \
   --ref_num_gpus_per_node 2 \
   --reward_num_nodes 1 \

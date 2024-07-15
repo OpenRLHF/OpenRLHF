@@ -1,7 +1,7 @@
 set -x 
 
 read -r -d '' training_commands <<EOF
-../train_kto.py \
+openrlhf.entrypoints.train_kto \
    --save_path ./checkpoint/llama3-8b-kto \
    --save_steps -1 \
    --logging_steps 1 \
@@ -23,9 +23,9 @@ read -r -d '' training_commands <<EOF
    --max_samples 1024 \
    --gradient_checkpointing
 EOF
-     # --wandb [WANDB_TOKENS] or True (use wandb login command)
+    # --wandb [WANDB_TOKENS] or True (use wandb login command)
 
 
 if [[ ${1} != "slurm" ]]; then
-    deepspeed $training_commands
+    deepspeed --module $training_commands
 fi

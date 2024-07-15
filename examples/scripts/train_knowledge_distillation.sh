@@ -1,7 +1,7 @@
 set -x 
 
 read -r -d '' training_commands <<EOF
-../train_kd.py \
+openrlhf.entrypoints.train_kd \
    --max_len 2048 \
    --dataset Open-Orca/OpenOrca \
    --input_key question \
@@ -24,9 +24,9 @@ read -r -d '' training_commands <<EOF
    --teacher_offload \
    --gradient_checkpointing
 EOF
-     # --wandb [WANDB_TOKENS] or True (use wandb login command)
+    # --wandb [WANDB_TOKENS] or True (use wandb login command)
 
 
 if [[ ${1} != "slurm" ]]; then
-    deepspeed $training_commands
+    deepspeed --module $training_commands
 fi

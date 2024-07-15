@@ -81,36 +81,26 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 
 ### 安装
 
-要使用 OpenRLHF，首先 `git clone` 并启动 Docker 容器（**推荐**）：
+要使用 OpenRLHF，首先启动 Docker 容器（**推荐**）然后执行 `pip install` 安装 `openrlhf`：
 
 ```bash
-git clone https://github.com/openllmai/OpenRLHF.git
-# 也可以 `git checkout` 最近的稳定 release 版本.
+# 启动 docker container
+docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:24.02-py3 bash
 
-# 启动 Docker 容器
-docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD/OpenRLHF:/openrlhf nvcr.io/nvidia/pytorch:24.02-py3 bash
-```
-
-> [!NOTE]
->我们提供了 [dockerfiles](./dockerfile/) 和 [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh)
-
-然后在 Docker 容器内 `pip install` openrlhf
-
-```bash
-cd /openrlhf
-pip install .
+# pip install
+pip install git+https://github.com/openllmai/OpenRLHF.git
 
 # 如果你需要使用 vLLM 加速
-# vLLM 0.4.2
-pip install --user .[vllm]
-# vLLM 0.5.0+
-pip install --user .[vllm_latest]
+git clone https://github.com/openllmai/OpenRLHF.git
+cd OpenRLHF
 
-cd examples
+pip install -e .[vllm] # vLLM 0.4.2
+pip install -e .[vllm_latest] # vLLM 0.5.0+
 ```
 
 > [!NOTE]
-> 我们推荐使用 vLLM 0.4.2，因为 0.4.3+ 版本目前仅支持通过 Gloo 进行权重同步（DeepSpeed => vLLM）（`--vllm_sync_backend gloo`）。
+>我们推荐使用 vLLM 0.4.2，因为 0.4.3+ 版本目前仅支持通过 Gloo 进行权重同步（DeepSpeed => vLLM）（`--vllm_sync_backend gloo`）。
+>我们提供了 [dockerfiles](./dockerfile/) 和 [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh)。
 
 ### 准备数据集
 OpenRLHF 在其数据集类中提供了多种数据处理方法。
@@ -127,7 +117,7 @@ def preprocess_data(data, input_template=None, input_key="input", apply_chat_tem
     return prompt
 ```
 
-- 我们可以使用 `--input_key` 指定输入数据集的 `JSON key name` `--prompt_data {name or path}` (PPO) 或 `--dataset {name or path}`，并使用 `--apply_chat_template` 利用 [Huggingface Tokenizer](https://huggingface.co/docs/transformers/main/en/chat_templating) 中的 `chat_template`。
+- 我们可以使用 `--input_key` 指定 `JSON key name` 为输入数据集 `--prompt_data {name or path}` (PPO) 或 `--dataset {name or path}`，并使用 `--apply_chat_template` 利用 [Huggingface Tokenizer](https://huggingface.co/docs/transformers/main/en/chat_templating) 中的 `chat_template`。
 - 如果不想使用 `--apply_chat_template`，可以改用 `--input_template`，或预先离线处理数据集。
 - OpenRLHF 还支持使用 `--prompt_data_probs 0.1,0.4,0.5` (PPO) 或 `--dataset_probs 0.1,0.4,0.5` 混合多个数据集。
 
@@ -145,7 +135,8 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 "<s>[INST] Hello, how are you? [/INST]I'm doing great. How can I help you today?</s> [INST] I'd like to show off how chat templating works! [/INST]"
 ```
 > [!NOTE]
-> `JSON key` 选项取决于具体的数据集。请参阅 [Reward Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/reward_dataset.py#L10) 和 [SFT Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/sft_dataset.py#L9)
+>默认情况下我们使用 `train` 和 `test` 作为 split 区分 Huggingface 的训练/测试数据
+>`JSON key` 选项取决于具体的数据集。请参阅 [Reward Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/reward_dataset.py#L10) 和 [SFT Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/sft_dataset.py#L9)
 
 
 ### Supervised Fine-tuning
@@ -155,7 +146,7 @@ OpenRLHF 的模型检查点完全兼容 HuggingFace 模型。您可以使用 `--
 然后您可以使用我们在 [examples/scripts](./examples/scripts/) 目录中提供的启动脚本，或者使用以下命令启动训练：
 
 ```bash 
-deepspeed ./train_sft.py \
+deepspeed --module openrlhf.entrypoints.train_sft \
    --max_len 4096 \
    --dataset Open-Orca/OpenOrca \
    --input_key question \
@@ -194,7 +185,7 @@ deepspeed ./train_sft.py \
 
 ### Reward Model Training
 ```bash
-deepspeed ./train_rm.py \
+deepspeed --module openrlhf.entrypoints.train_rm \
    --save_path ./checkpoint/llama3-8b-rm \
    --save_steps -1 \
    --logging_steps 1 \
@@ -219,7 +210,7 @@ deepspeed ./train_rm.py \
 ### 不使用 Ray 的 PPO
 
 ```bash
-deepspeed ./train_ppo.py \
+deepspeed --module openrlhf.entrypoints.train_ppo \
   --pretrain OpenLLMAI/Llama-3-8b-sft-mixture \
   --reward_pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
   --save_path ./checkpoint/llama-3-8b-rlhf \
@@ -262,7 +253,7 @@ ray start --address {MASTER-NODE-ADDRESS}:6379 --num-gpus 8
 
 ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf", "pip": "/openrlhf/requirements.txt"}' \
-  -- python3 examples/train_ppo_ray.py \
+  -- python3 -m openrlhf.entrypoints.train_ppo_ray \
   --ref_num_nodes 1 \
   --ref_num_gpus_per_node 2 \
   --reward_num_nodes 1 \

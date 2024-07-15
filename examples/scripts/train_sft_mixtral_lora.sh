@@ -1,7 +1,7 @@
 set -x
 
 read -r -d '' training_commands <<EOF
-../train_sft.py \
+openrlhf.entrypoints.train_sft \
     --max_len 2048 \
     --dataset Open-Orca/OpenOrca \
     --input_key question \
@@ -26,5 +26,5 @@ read -r -d '' training_commands <<EOF
 EOF
 
 if [[ ${1} != "slurm" ]]; then
-    deepspeed $training_commands
+    deepspeed --module $training_commands
 fi

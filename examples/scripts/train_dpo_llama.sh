@@ -1,7 +1,7 @@
 set -x 
 
 read -r -d '' training_commands <<EOF
-../train_dpo.py \
+openrlhf.entrypoints.train_dpo \
    --save_path ./checkpoint/llama3-8b-dpo \
    --save_steps -1 \
    --logging_steps 1 \
@@ -15,19 +15,19 @@ read -r -d '' training_commands <<EOF
    --zero_stage 3 \
    --learning_rate 9e-6 \
    --beta 0.1 \
-   --dataset OpenLLMAI/preference_dataset_mixture2_and_safe_pku\
+   --dataset OpenLLMAI/preference_dataset_mixture2_and_safe_pku \
    --apply_chat_template \
    --chosen_key chosen \
    --rejected_key rejected \
    --flash_attn \
    --gradient_checkpointing
 EOF
-     # --wandb [WANDB_TOKENS] or True (use wandb login command)
-     # --ipo [for IPO]
-     # --label_smoothing 0.1 [for cDPO]
-     # --ref_offload 
+    # --wandb [WANDB_TOKENS] or True (use wandb login command)
+    # --ipo [for IPO]
+    # --label_smoothing 0.1 [for cDPO]
+    # --ref_offload 
 
 
 if [[ ${1} != "slurm" ]]; then
-    deepspeed $training_commands
+    deepspeed --module $training_commands
 fi

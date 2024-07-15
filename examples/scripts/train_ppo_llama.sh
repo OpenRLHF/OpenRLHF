@@ -1,7 +1,7 @@
 set -x 
 
 read -r -d '' training_commands <<EOF
-../train_ppo.py \
+openrlhf.entrypoints.train_ppo \
    --pretrain OpenLLMAI/Llama-3-8b-sft-mixture \
    --reward_pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
    --save_path ./checkpoint/llama-3-8b-rlhf \
@@ -29,8 +29,8 @@ read -r -d '' training_commands <<EOF
    --flash_attn \
    --gradient_checkpointing
 EOF
-     # --wandb [WANDB_TOKENS] or True (use wandb login command)
+    # --wandb [WANDB_TOKENS] or True (use wandb login command)
 
 if [[ ${1} != "slurm" ]]; then
-    deepspeed $training_commands
+    deepspeed --module $training_commands
 fi

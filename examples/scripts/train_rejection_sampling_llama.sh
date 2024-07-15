@@ -11,8 +11,8 @@ RM_OUTPUT=./checkpoint/llama-3-8b-rejection/rm.jsonl
 ITER_LOG_PATH=./checkpoint/llama-3-8b-rejection/iter.log
 MODEL_OUTPUT_PATH=./checkpoint/llama-3-8b-rejection
 
-TRAINING_ITERS=20
-ROLLOUT_BATCH_SIZE=2048
+TRAINING_ITERS=10
+ROLLOUT_BATCH_SIZE=10240
 
 POLICY_MODEL_PATH=OpenLLMAI/Llama-3-8b-sft-mixture
 
@@ -29,7 +29,7 @@ while (($iter < $TRAINING_ITERS)); do
    fi
 
    read -r -d '' generate_commands <<EOF
-../batch_inference.py
+openrlhf.entrypoints.batch_inference
    --eval_task generate_vllm \
    --pretrain $POLICY_MODEL_PATH \
    --bf16 \
@@ -49,11 +49,11 @@ while (($iter < $TRAINING_ITERS)); do
    --output_path $GENERATE_OUTPUT
 EOF
    echo $generate_commands
-   python $generate_commands
+   python -m $generate_commands
    checkSuccess "GENERATE"
 
    read -r -d '' get_rewards_commands <<EOF
-../batch_inference.py
+openrlhf.entrypoints.batch_inference
    --eval_task rm \
    --pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
    --bf16 \
@@ -66,11 +66,11 @@ EOF
    --output_path $RM_OUTPUT
 EOF
    echo $get_rewards_commands
-   deepspeed $get_rewards_commands
+   deepspeed --module $get_rewards_commands
    checkSuccess "RM"
 
    read -r -d '' sft_commands <<EOF
-../train_sft.py \
+openrlhf.entrypoints.train_sft \
    --max_len 4096 \
    --dataset $RM_OUTPUT \
    --dataset_probs 1.0 \
@@ -86,7 +86,7 @@ EOF
    --gradient_checkpointing
 EOF
    echo $sft_commands
-   deepspeed $sft_commands
+   deepspeed --module $sft_commands
    checkSuccess "SFT"
 
    iter=$((iter + 1))

@@ -1,3 +1,5 @@
+set -x
+
 checkSuccess() {
    if [[ $? != 0 ]]; then
       echo "FAILED $1"
@@ -30,7 +32,7 @@ while (($iter < $TRAINING_ITERS)); do
    fi
 
    read -r -d '' generate_commands <<EOF
-../batch_inference.py
+openrlhf.entrypoints.batch_inference
    --eval_task generate_vllm \
    --pretrain $POLICY_MODEL_PATH \
    --max_new_tokens 2048 \
@@ -52,7 +54,7 @@ EOF
    checkSuccess "GENERATE"
 
    read -r -d '' get_rewards_commands <<EOF
-../batch_inference.py
+openrlhf.entrypoints.batch_inference
    --eval_task rm \
    --pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
    --bf16 \
@@ -65,11 +67,11 @@ EOF
    --output_path $RM_OUTPUT
 EOF
    echo $get_rewards_commands
-   deepspeed $get_rewards_commands
+   deepspeed --module $get_rewards_commands
    checkSuccess "RM"
 
    read -r -d '' dpo_commands <<EOF
-../train_dpo.py \
+openrlhf.entrypoints.train_dpo \
    --max_len 4096 \
    --dataset $RM_OUTPUT \
    --dataset_probs 1.0 \
@@ -86,7 +88,7 @@ EOF
    --gradient_checkpointing
 EOF
    echo $dpo_commands
-   deepspeed $dpo_commands
+   deepspeed --module $dpo_commands
    checkSuccess "DPO"
 
    iter=$((iter + 1))

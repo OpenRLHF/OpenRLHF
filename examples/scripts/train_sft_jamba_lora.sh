@@ -1,10 +1,9 @@
 set -x
 
-# Please note that the dependencies for Jamba are installed.
 # pip install mamba-ssm causal-conv1d>=1.2.0
 
 read -r -d '' training_commands <<EOF
-../train_sft.py \
+openrlhf.entrypoints.train_sft \
     --max_len 8192 \
     --dataset Open-Orca/OpenOrca \
     --input_key question \
@@ -29,5 +28,5 @@ EOF
 
 if [[ ${1} != "slurm" ]]; then
     export PATH=$HOME/.local/bin/:$PATH
-    deepspeed $training_commands
+    deepspeed --module $training_commands
 fi
