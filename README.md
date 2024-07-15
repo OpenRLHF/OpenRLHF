@@ -78,7 +78,7 @@ More details are in [Technical Report](https://arxiv.org/abs/2405.11143) | [Docu
 
 ### Installation
 
-To use OpenRLHF, first launch the docker container (**Recommended**) and ``pip install`` openrlhf inside the docker container:
+To use OpenRLHF, first launch the docker container (**Recommended**) and `pip install` openrlhf inside the docker container:
 
 ```bash
 # Launch the docker container
@@ -96,7 +96,7 @@ pip install -e .[vllm_latest] # vLLM 0.5.0+
 ```
 
 > [!NOTE]
->We recommend using vLLM 0.4.2, as versions 0.4.3+ currently only support weight synchronization (DeepSpeed => vLLM) via Gloo (`--vllm_sync_backend gloo`).
+>We recommend using vLLM 0.4.2, as versions 0.4.3+ currently only support weight synchronization (DeepSpeed to vLLM) via Gloo (`--vllm_sync_backend gloo`).
 >We provided the [dockerfiles](./dockerfile/) and [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh).
 
 ### Prepare Datasets

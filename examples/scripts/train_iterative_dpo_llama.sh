@@ -50,7 +50,7 @@ openrlhf.entrypoints.batch_inference
    --output_path $GENERATE_OUTPUT
 EOF
    echo $generate_commands
-   python $generate_commands
+   python -m $generate_commands
    checkSuccess "GENERATE"
 
    read -r -d '' get_rewards_commands <<EOF

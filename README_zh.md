@@ -99,7 +99,7 @@ pip install -e .[vllm_latest] # vLLM 0.5.0+
 ```
 
 > [!NOTE]
->我们推荐使用 vLLM 0.4.2，因为 0.4.3+ 版本目前仅支持通过 Gloo 进行权重同步（DeepSpeed => vLLM）（`--vllm_sync_backend gloo`）。
+>我们推荐使用 vLLM 0.4.2，因为 0.4.3+ 版本目前仅支持通过 Gloo 进行权重同步（DeepSpeed to vLLM）（`--vllm_sync_backend gloo`）。
 >我们提供了 [dockerfiles](./dockerfile/) 和 [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh)。
 
 ### 准备数据集
