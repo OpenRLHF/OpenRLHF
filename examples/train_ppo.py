@@ -342,14 +342,14 @@ if __name__ == "__main__":
         help="sampling probs for datasets",
     )
     parser.add_argument("--prompt_split", type=str, default="train")
-    parser.add_argument("--pretrain_data", type=str, default="train")
+    parser.add_argument("--pretrain_data", type=str, default=None)
     parser.add_argument(
         "--pretrain_data_probs",
         type=str,
         default="1.0",
         help="sampling probs for datasets",
     )
-    parser.add_argument("--pretrain_split", type=str, default=None)
+    parser.add_argument("--pretrain_split", type=str, default="train")
     parser.add_argument("--input_key", type=str, default="input")
     parser.add_argument("--input_template", type=str, default="User: {}\nAssistant: ")
     parser.add_argument("--apply_chat_template", action="store_true", default=False)
