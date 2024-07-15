@@ -298,6 +298,10 @@ if __name__ == "__main__":
     parser.add_argument("--freezing_actor_steps", type=int, default=-1)
     parser.add_argument("--n_samples_per_prompt", type=int, default=1)
     parser.add_argument("--save_value_network", action="store_true", default=False)
+    parser.add_argument("--actor_learning_rate", type=float, default=1e-6)
+    parser.add_argument("--critic_learning_rate", type=float, default=9e-6)
+    parser.add_argument("--kl_target", type=float, default=None)
+    parser.add_argument("--init_kl_coef", type=float, default=0.02)
 
     # DeepSpeed
     parser.add_argument("--seed", type=int, default=42)
@@ -305,10 +309,6 @@ if __name__ == "__main__":
     parser.add_argument("--zero_stage", type=int, default=2)
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--bf16", action="store_true", default=False)
-    parser.add_argument("--actor_learning_rate", type=float, default=1e-6)
-    parser.add_argument("--critic_learning_rate", type=float, default=9e-6)
-    parser.add_argument("--kl_target", type=float, default=None)
-    parser.add_argument("--init_kl_coef", type=float, default=0.02)
     parser.add_argument("--enable_ema", action="store_true", help="Enable EMA checkpoint for the model.")
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False)
