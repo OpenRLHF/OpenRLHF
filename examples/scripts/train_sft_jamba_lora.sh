@@ -27,6 +27,6 @@ openrlhf.entrypoints.train_sft \
 EOF
 
 if [[ ${1} != "slurm" ]]; then
-    export PATH=$HOME/.local/bin/:$PATH
+    
     deepspeed --module $training_commands
 fi
