@@ -110,27 +110,34 @@ def train(args):
     # multiple reward models
     reward_pretrains = args.reward_pretrain.split(",")
     reward_models = []
-    for _ in reward_pretrains:
-        reward_models.append(
-            PPORayActorGroup(
-                args.reward_num_nodes,
-                args.reward_num_gpus_per_node,
-                RewardModelRayActor,
-                pg=pg,
-                num_gpus_per_actor=0.25 if pg else 1,
+    remote_rm_urls = []
+    if isinstance(args.remote_rm_url, str):
+        remote_rm_urls = args.remote_rm_url.split(",")
+    if not args.remote_rm_url:
+        for _ in reward_pretrains:
+            reward_models.append(
+                PPORayActorGroup(
+                    args.reward_num_nodes,
+                    args.reward_num_gpus_per_node,
+                    RewardModelRayActor,
+                    pg=pg,
+                    num_gpus_per_actor=0.25 if pg else 1,
+                )
             )
-        )
+    else:
+        reward_models = [None] * len(remote_rm_urls)
 
     # init reference/reward/actor model
     refs = []
     refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.pretrain))
     refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.pretrain))
-    for reward_model, reward_pretrain in zip(reward_models, reward_pretrains):
-        refs.extend(reward_model.async_init_model_from_pretrained(strategy, reward_pretrain))
+    if not args.remote_rm_url:
+        for reward_model, reward_pretrain in zip(reward_models, reward_pretrains):
+            refs.extend(reward_model.async_init_model_from_pretrained(strategy, reward_pretrain))
 
     # init vLLM engine for text generation
     vllm_engines = None
-    if args.vllm_num_engines is not None:
+    if args.vllm_num_engines > 0:
         max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
         vllm_engines = create_vllm_engines(
             args.vllm_num_engines,
@@ -149,7 +156,7 @@ def train(args):
 
     # train actor and critic mdoel
     refs = actor_model.async_fit_actor_model(
-        critic_model, ref_model, reward_models, reward_fn=reward_fn, vllm_engines=vllm_engines
+        critic_model, ref_model, reward_models, remote_rm_urls, reward_fn=reward_fn, vllm_engines=vllm_engines
     )
     ray.get(refs)
 
@@ -189,7 +196,7 @@ if __name__ == "__main__":
 
     # optional vLLM for text generation
     parser.add_argument(
-        "--vllm_num_engines", type=int, default=None, help="number of vLLM Engines, set to 0 to disable vLLM"
+        "--vllm_num_engines", type=int, default=0, help="number of vLLM Engines, set to 0 to disable vLLM"
     )
     parser.add_argument(
         "--vllm_tensor_parallel_size",
@@ -266,6 +273,8 @@ if __name__ == "__main__":
     #  Models
     parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--reward_pretrain", type=str, default=None, help="HF model name or path")
+    parser.add_argument("--remote_rm_url", type=str, default=None)
+    parser.add_argument("--remote_ref_url", type=str, default=None)
     parser.add_argument("--critic_pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--value_head_prefix", type=str, default="value_head")
     parser.add_argument("--ref_reward_offload", action="store_true", default=False)

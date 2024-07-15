@@ -12,7 +12,8 @@ from tqdm import tqdm
 
 from openrlhf.models.actor import Actor
 from openrlhf.models.utils import compute_reward, masked_mean
-from openrlhf.utils.logging import init_logger
+from openrlhf.utils.logging_utils import init_logger
+from openrlhf.utils.utils_for_api import remote_ref_fn, remote_rm_fn, remote_rm_fn_ray
 
 logger = init_logger(__name__)
 
@@ -84,13 +85,17 @@ class NaiveExperienceMaker(ABC):
         prompt_max_len: int,
         kl_controller,
         strategy=None,
+        remote_rm_url: str = None,
+        remote_ref_url: str = None,
         reward_fn=None,
     ) -> None:
         super().__init__()
         self.actor = actor
         self.critic = critic
         self.reward_model = reward_model
+        self.remote_rm_url = remote_rm_url
         self.initial_model = initial_model
+        self.remote_ref_url = remote_ref_url
         self.tokenizer = tokenizer
         self.prompt_max_len = prompt_max_len
         self.kl_ctl = kl_controller
@@ -112,8 +117,10 @@ class NaiveExperienceMaker(ABC):
     def make_experience(self, prompts: Union[str, List[str]], **generate_kwargs) -> Experience:
         self.actor.eval()
         self.critic.eval()
-        self.initial_model.eval()
-        self.reward_model.eval()
+        if self.initial_model is not None:
+            self.initial_model.eval()
+        if self.reward_model is not None:
+            self.reward_model.eval()
 
         # generate seq
         inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
@@ -124,13 +131,38 @@ class NaiveExperienceMaker(ABC):
         action_log_probs = self.actor(sequences, num_actions, attention_mask)
 
         # init log probs
-        base_action_log_probs = self.initial_model(sequences, num_actions, attention_mask)
+        if self.remote_ref_url is not None:
+            # Experimental remote reference model features:
+            # Note: The use of remote reference model should be approached with caution, even when the tokenizers are
+            # the same, due to the current irreversibility of encoding and decoding, it may be difficult to ensure
+            # perfect token alignment. see https://github.com/OpenLLMAI/OpenRLHF/pull/341
+            # token ids api
+            base_action_log_probs = remote_ref_fn(self.remote_ref_url, sequences, num_actions, attention_mask)
+            base_action_log_probs = torch.tensor(base_action_log_probs, device=sequences.device)
+            # TODO: Better solutions are reserved for future work, such as a text API that can guarantee the alignment \
+            #  of token logits.
+            # responses = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=True)
+            # base_action_log_probs = remote_ref_fn(self.remote_ref_url, responses, num_actions)
+            # base_action_log_probs = torch.tensor(base_action_log_probs, device=sequences.device)
+        else:
+            # local ref model
+            base_action_log_probs = self.initial_model(sequences, num_actions, attention_mask)
 
         # values
         value = self.critic(sequences, action_mask, attention_mask)
 
         # rewards
-        r = self.reward_model(sequences, attention_mask)
+        if self.remote_rm_url is not None:
+            # remote RM
+            # TODO: decoded responses may contain some special tokens：'<|im_start|>','<|im_end|>'
+            responses = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=True)
+            # tips: responses = list of query+response
+            # We assume that the API supports two modes: merging query + response and not merging
+            r = remote_rm_fn(self.remote_rm_url, queries=responses, responses=None)
+            r = torch.tensor(r, device=sequences.device)
+        else:
+            # local RM
+            r = self.reward_model(sequences, attention_mask)
 
         reward, kl = compute_reward(
             r,
@@ -243,6 +275,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         )
 
         # init log probs
+        # TODO: support remote ref model API with ray
         base_action_log_probs_ref = self.initial_model.forward.remote(sequences_cpu, num_actions, attention_mask_cpu)
 
         # values
@@ -259,8 +292,16 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         # rewards
         r_refs = []
-        for rm in self.reward_model:
-            r_refs.append(rm.forward.remote(sequences_cpu, attention_mask_cpu))
+        # support remote RM API with ray
+        if not self.remote_rm_url:
+            for rm in self.reward_model:
+                r_refs.append(rm.forward.remote(sequences_cpu, attention_mask_cpu))
+        else:
+            # remote RM
+            for rm in self.remote_rm_url:
+                responses = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=True)
+                r = remote_rm_fn_ray.remote(rm, queries=responses, responses=None)
+                r_refs.append(r)
 
         # log probs
         start = time.time()
@@ -274,8 +315,14 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         base_action_log_probs, value, rewards = ref_values[0], ref_values[1], ref_values[2:]
         base_action_log_probs, value = base_action_log_probs.to(device), value.to(device)
-        rewards = [r.to(device) for r in rewards]
-        r = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
+        rewards = [r.to(device) if not self.remote_rm_url else torch.tensor(r).to(device) for r in rewards]
+        if len(rewards) > 1:
+            if self.reward_fn is not None:
+                r = self.reward_fn(rewards)
+            else:
+                r = torch.mean(torch.stack(rewards), dim=0)
+        else:
+            r = rewards[0]
 
         # avoid CUDA OOM when colocate models
         if self.strategy.args.colocate_critic_reward:
