@@ -1,7 +1,7 @@
 set -x
 
 read -r -d '' training_commands <<EOF
-openrlhf.entrypoints.train_sft \
+openrlhf.cli.train_sft \
     --max_len 2048 \
     --dataset Open-Orca/OpenOrca \
     --input_key question \

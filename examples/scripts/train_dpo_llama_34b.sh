@@ -1,7 +1,7 @@
 set -x 
 
 read -r -d '' training_commands <<EOF
-openrlhf.entrypoints.train_dpo \
+openrlhf.cli.train_dpo \
      --save_path ./checkpoint/llama2-34b-dpo \
      --save_steps -1 \
      --logging_steps 1 \

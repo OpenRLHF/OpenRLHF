@@ -29,7 +29,7 @@ while (($iter < $TRAINING_ITERS)); do
    fi
 
    read -r -d '' generate_commands <<EOF
-openrlhf.entrypoints.batch_inference
+openrlhf.cli.batch_inference
    --eval_task generate_vllm \
    --pretrain $POLICY_MODEL_PATH \
    --bf16 \
@@ -53,7 +53,7 @@ EOF
    checkSuccess "GENERATE"
 
    read -r -d '' get_rewards_commands <<EOF
-openrlhf.entrypoints.batch_inference
+openrlhf.cli.batch_inference
    --eval_task rm \
    --pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
    --bf16 \
@@ -70,7 +70,7 @@ EOF
    checkSuccess "RM"
 
    read -r -d '' sft_commands <<EOF
-openrlhf.entrypoints.train_sft \
+openrlhf.cli.train_sft \
    --max_len 4096 \
    --dataset $RM_OUTPUT \
    --dataset_probs 1.0 \

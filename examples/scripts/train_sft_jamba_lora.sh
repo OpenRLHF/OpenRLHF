@@ -3,7 +3,7 @@ set -x
 # pip install mamba-ssm causal-conv1d>=1.2.0
 
 read -r -d '' training_commands <<EOF
-openrlhf.entrypoints.train_sft \
+openrlhf.cli.train_sft \
     --max_len 8192 \
     --dataset Open-Orca/OpenOrca \
     --input_key question \

@@ -145,7 +145,7 @@ OpenRLHF's model checkpoint is fully compatible with HuggingFace models. You can
 Then you can use the startup scripts we provide in the [examples/scripts](./examples/scripts/) directory, or start the training using the following commands.
 
 ```bash 
-deepspeed --module openrlhf.entrypoints.train_sft \
+deepspeed --module openrlhf.cli.train_sft \
    --max_len 4096 \
    --dataset Open-Orca/OpenOrca \
    --input_key question \
@@ -185,7 +185,7 @@ deepspeed --module openrlhf.entrypoints.train_sft \
 
 ### Reward Model Training
 ```bash
-deepspeed --module openrlhf.entrypoints.train_rm \
+deepspeed --module openrlhf.cli.train_rm \
    --save_path ./checkpoint/llama3-8b-rm \
    --save_steps -1 \
    --logging_steps 1 \
@@ -210,7 +210,7 @@ deepspeed --module openrlhf.entrypoints.train_rm \
 ### PPO without Ray
 
 ```bash
-deepspeed --module openrlhf.entrypoints.train_ppo \
+deepspeed --module openrlhf.cli.train_ppo \
   --pretrain OpenLLMAI/Llama-3-8b-sft-mixture \
   --reward_pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
   --save_path ./checkpoint/llama-3-8b-rlhf \
@@ -253,7 +253,7 @@ ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 
 ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
-  -- python3 -m openrlhf.entrypoints.train_ppo_ray \
+  -- python3 -m openrlhf.cli.train_ppo_ray \
   --ref_num_nodes 1 \
   --ref_num_gpus_per_node 2 \
   --reward_num_nodes 1 \

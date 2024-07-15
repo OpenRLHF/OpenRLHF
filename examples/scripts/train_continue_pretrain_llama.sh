@@ -1,7 +1,7 @@
 set -x
 
 read -r -d '' training_commands <<EOF
-openrlhf.entrypoints.train_sft \
+openrlhf.cli.train_sft \
     --max_len 4096 \
     --dataset {your_pretrain_dataset} \
     --dataset_probs 1.0 \

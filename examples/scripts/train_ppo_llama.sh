@@ -1,7 +1,7 @@
 set -x 
 
 read -r -d '' training_commands <<EOF
-openrlhf.entrypoints.train_ppo \
+openrlhf.cli.train_ppo \
    --pretrain OpenLLMAI/Llama-3-8b-sft-mixture \
    --reward_pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
    --save_path ./checkpoint/llama-3-8b-rlhf \

@@ -11,7 +11,7 @@ mkdir -p ./checkpoint/llama-2-8b-csft
 RM_OUTPUT=./checkpoint/llama-2-8b-csft/rm.jsonl
 
 read -r -d '' get_rewards_commands <<EOF
-openrlhf.entrypoints.batch_inference \
+openrlhf.cli.batch_inference \
     --eval_task rm \
     --pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
     --bf16 \
@@ -28,7 +28,7 @@ openrlhf.entrypoints.batch_inference \
 EOF
 
 read -r -d '' sft_commands <<EOF
-openrlhf.entrypoints.train_sft \
+openrlhf.cli.train_sft \
     --max_len 4096 \
     --dataset $RM_OUTPUT \
     --dataset_probs 1.0 \
