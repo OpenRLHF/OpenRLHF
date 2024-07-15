@@ -87,12 +87,15 @@ docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PW
 # pip install
 pip install git+https://github.com/openllmai/OpenRLHF.git
 
-# If you want to accelerate with vLLM
+# Or git clone
 git clone https://github.com/openllmai/OpenRLHF.git
 cd OpenRLHF
+pip install -e .
 
-pip install -e .[vllm] # vLLM 0.4.2
-pip install -e .[vllm_latest] # vLLM 0.5.0+
+# If you want to use vLLM acceleration
+pip install vllm==0.4.2
+# latest vLLM is also supported (using Gloo)
+pip install vllm --upgrade
 ```
 
 > [!NOTE]
