@@ -54,7 +54,7 @@ sleep 30s
 srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" bash -c \
 "pip install ray[default]==$RAY_VERSION \
 && /root/.local/bin/ray job submit --address=http://localhost:8265 \
-    --runtime-env-json='{\"working_dir\": \"/openrlhf\"}' \
+    --runtime-env-json='{\"working_dir\": \"/openrlhf\", \"pip\": \"/openrlhf/requirements.txt\"}' \
     -- python3 -m openrlhf.entrypoints.train_ppo_ray \
     --ref_num_nodes 1 \
     --ref_num_gpus_per_node 4 \
