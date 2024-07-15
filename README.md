@@ -296,7 +296,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 > [!NOTE]
 > Setting `--vllm_num_engines 0` means not using the vLLM engine.
 
-The launch scripts and docs for all supported algorithms are in [example/scripts](./examples/scripts/) and [Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)
+The launch scripts and documents for supported algorithms are in [example/scripts](./examples/scripts/) and [Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)
 
 ## Performance
 
@@ -354,7 +354,7 @@ We would like to express our gratitude to the following projects and organizatio
 
 - [Hugging Face Transformers ↗](https://github.com/huggingface/transformers)
 - [OpenAI GPT ↗](https://github.com/openai/gpt-3)
-- [LLaMA2 ↗](https://ai.meta.com/llama/)
+- [LLaMA ↗](https://ai.meta.com/llama/)
 - [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
 - [Ray ↗](https://github.com/ray-project/ray)
 
