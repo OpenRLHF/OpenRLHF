@@ -12,7 +12,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-and-publish:
+    # do not run in forks
+    if: ${{ github.repository_owner == 'OpenLLMAI' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch') }}
+    name: build wheel and upload
     runs-on: ubuntu-22.04
 
     strategy:
@@ -44,16 +47,16 @@ jobs:
         sudo ldconfig
       shell: bash
 
-    - name: Build package with version suffix
+    - name: Install dependencies
       run: |
-        python setup.py sdist bdist_wheel
-        mv dist/* dist/${{ matrix.python-version }}-cuda${{ matrix.cuda-version }}-$(basename dist/*)
-
+        python -m pip install --upgrade pip
+        pip install setuptools wheel twine
+        
     - name: Build package
-      run: python setup.py sdist bdist_wheel
+      run: |
+        python setup.py bdist_wheel --dist-dir=dist
 
     - name: Publish package
-      if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
