@@ -100,7 +100,7 @@ pip install vllm --upgrade
 
 > [!NOTE]
 >We recommend using vLLM 0.4.2, as versions 0.4.3+ currently only support weight synchronization (DeepSpeed to vLLM) via Gloo (`--vllm_sync_backend gloo`).
->We also provided the [dockerfiles](./dockerfile/) for vLLM and [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh).
+>We also provided the [Dockerfiles for vLLM](./dockerfile/) and [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh).
 
 ### Prepare Datasets
 OpenRLHF provides multiple data processing methods in our dataset classes.

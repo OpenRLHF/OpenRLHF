@@ -103,7 +103,7 @@ pip install vllm --upgrade
 
 > [!NOTE]
 >我们推荐使用 vLLM 0.4.2，因为 0.4.3+ 版本目前仅支持通过 Gloo 进行权重同步（DeepSpeed to vLLM）（`--vllm_sync_backend gloo`）。
->我们也提供了支持 vLLM 的 [dockerfiles](./dockerfile/) 和 [Nvidia-Docker 一键安装脚本](./examples/scripts/nvidia_docker_install.sh)。
+>我们也提供了 [Dockerfiles for vLLM](./dockerfile/) 和 [Nvidia-Docker 一键安装脚本](./examples/scripts/nvidia_docker_install.sh)。
 
 ### 准备数据集
 OpenRLHF 在其数据集类中提供了多种数据处理方法。
