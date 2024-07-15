@@ -103,9 +103,8 @@ pip install .
 # 如果你需要使用 vLLM 加速
 # vLLM 0.4.2
 pip install .[vllm]
-
 # vLLM 0.5.0+
-pip install .[vllm_latestS]
+pip install .[vllm_latest]
 
 cd examples
 ```

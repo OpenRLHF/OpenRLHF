@@ -100,7 +100,6 @@ pip install .
 # If you want to accelerate with vLLM
 # vLLM 0.4.2
 pip install .[vllm]
-
 # vLLM 0.5.0+
 pip install .[vllm_latest]
 
