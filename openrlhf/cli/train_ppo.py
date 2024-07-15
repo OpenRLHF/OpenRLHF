@@ -50,37 +50,46 @@ def train(args):
         ds_config=strategy.get_ds_train_config(is_actor=False),
         value_head_prefix=args.value_head_prefix,
     )
-    reward_model = get_llm_for_sequence_regression(
-        args.reward_pretrain,
-        "reward",
-        normalize_reward=args.normalize_reward,
-        use_flash_attention_2=args.flash_attn,
-        bf16=args.bf16,
-        load_in_4bit=args.load_in_4bit,
-        ds_config=strategy.get_ds_train_config(is_actor=False),
-        value_head_prefix=args.value_head_prefix,
-    )
+    if not args.remote_rm_url:
+        reward_model = get_llm_for_sequence_regression(
+            args.reward_pretrain,
+            "reward",
+            normalize_reward=args.normalize_reward,
+            use_flash_attention_2=args.flash_attn,
+            bf16=args.bf16,
+            load_in_4bit=args.load_in_4bit,
+            ds_config=strategy.get_ds_train_config(is_actor=False),
+            value_head_prefix=args.value_head_prefix,
+        )
+        get_tokenizer(args.reward_pretrain, reward_model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
+    else:
+        # TODO:better to package it like local RM, so that we can treat the mean/std... in a unified way
+        reward_model = None
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, actor.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
-    get_tokenizer(args.critic_pretrain, critic, "left", strategy, use_fast=not args.disable_fast_tokenizer)
-    get_tokenizer(args.reward_pretrain, reward_model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
+    get_tokenizer(args.reward_pretrain, critic, "left", strategy, use_fast=not args.disable_fast_tokenizer)
 
     strategy.print(actor)
     strategy.print(critic)
 
     # load weights for reference actor
-    initial_model = Actor(
-        args.pretrain,
-        use_flash_attention_2=args.flash_attn,
-        bf16=args.bf16,
-        load_in_4bit=args.load_in_4bit,
-        ds_config=strategy.get_ds_eval_config(offload=False),
-    )
-    get_tokenizer(args.pretrain, initial_model.model, "left", strategy)
+    if not args.remote_ref_url:
+        initial_model = Actor(
+            args.pretrain,
+            use_flash_attention_2=args.flash_attn,
+            bf16=args.bf16,
+            load_in_4bit=args.load_in_4bit,
+            ds_config=strategy.get_ds_eval_config(offload=False),
+        )
+        get_tokenizer(args.pretrain, initial_model.model, "left", strategy)
+    else:
+        # TODO:better to package it like local ref model
+        initial_model = None
 
     strategy.print("reward normalization status: {}".format(args.normalize_reward))
-    strategy.print("mean: {}, std {}".format(reward_model.mean, reward_model.std))
+    if not args.remote_rm_url:
+        strategy.print("mean: {}, std {}".format(reward_model.mean, reward_model.std))
 
     if args.enable_ema:
         ema_model = Actor(
@@ -239,6 +248,9 @@ def train(args):
         top_p=args.top_p,
         pad_token_id=tokenizer.pad_token_id,
         eos_token_id=tokenizer.eos_token_id,
+        # remote RM/Ref
+        remote_rm_url=args.remote_rm_url,
+        remote_ref_url=args.remote_ref_url,
     )
 
     trainer.fit(
@@ -264,6 +276,25 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--prompt_data", type=str, default=None)
+    parser.add_argument(
+        "--prompt_data_probs",
+        type=str,
+        default="1.0",
+        help="sampling probs for datasets",
+    )
+    parser.add_argument("--pretrain_data", type=str, default=None)
+    parser.add_argument(
+        "--pretrain_data_probs",
+        type=str,
+        default="1.0",
+        help="sampling probs for datasets",
+    )
+    parser.add_argument("--pretrain", type=str, default=None)
+    parser.add_argument("--reward_pretrain", type=str, default=None)
+    parser.add_argument("--critic_pretrain", type=str, default=None)
+    parser.add_argument("--remote_rm_url", type=str, default=None)
+    parser.add_argument("--remote_ref_url", type=str, default=None)
     # Checkpoint
     parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--save_steps", type=int, default=-1)

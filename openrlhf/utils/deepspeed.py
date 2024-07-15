@@ -202,6 +202,8 @@ class DeepspeedStrategy(ABC):
         return ds_config
 
     def _ds_init_eval_model(self, model):
+        if not model:
+            return model
         is_actor = isinstance(model, Actor)
         ds_config = self.get_ds_eval_config(offload=getattr(model, "_offload", False))
 
