@@ -138,8 +138,8 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 "<s>[INST] Hello, how are you? [/INST]I'm doing great. How can I help you today?</s> [INST] I'd like to show off how chat templating works! [/INST]"
 ```
 > [!NOTE]
->默认情况下我们使用 `train` 和 `test` 作为 split 区分 Huggingface 的训练/测试数据
->`JSON key` 选项取决于具体的数据集。请参阅 [Reward Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/reward_dataset.py#L10) 和 [SFT Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/sft_dataset.py#L9)
+>默认情况下我们使用 `train` 和 `test` 作为 split 区分 Huggingface 的训练/测试数据。
+>`JSON key` 选项取决于具体的数据集。请参阅 [Reward Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/9ab08aace2c9af7dfa7d8790380d400902deef00/openrlhf/datasets/reward_dataset.py#L10) 和 [SFT Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/9ab08aace2c9af7dfa7d8790380d400902deef00/openrlhf/datasets/sft_dataset.py#L9)。
 
 
 ### Supervised Fine-tuning

@@ -136,7 +136,7 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 ```
 > [!NOTE]
 > By default, we use `train` and `test` as splits to distinguish training and testing datasets from Huggingface.
-> The ``JSON key`` options depends on the specific datasets. See [Reward Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/reward_dataset.py#L10) and [SFT Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/sft_dataset.py#L9)
+> The ``JSON key`` options depends on the specific datasets. See [Reward Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/9ab08aace2c9af7dfa7d8790380d400902deef00/openrlhf/datasets/reward_dataset.py#L10) and [SFT Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/9ab08aace2c9af7dfa7d8790380d400902deef00/openrlhf/datasets/sft_dataset.py#L9)
 
 ### Supervised Fine-tuning
 
