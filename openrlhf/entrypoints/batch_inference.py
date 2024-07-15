@@ -210,7 +210,7 @@ def batch_rm_inference(args):
         normalize_reward=True,
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
-        head_prefix=args.head_prefix,
+        value_head_prefix=args.value_head_prefix,
     )
 
     # configure tokenizer
@@ -297,7 +297,7 @@ if __name__ == "__main__":
 
     # models
     parser.add_argument("--pretrain", type=str, default=None)
-    parser.add_argument("--head_prefix", type=str, default="value_head")
+    parser.add_argument("--value_head_prefix", type=str, default="value_head")
 
     # custom dataset
     parser.add_argument("--dataset", type=str, default=None)

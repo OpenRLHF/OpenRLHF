@@ -106,7 +106,7 @@ class RewardModelRayActor(BasePPORole):
             bf16=strategy.args.bf16,
             load_in_4bit=strategy.args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
-            head_prefix=strategy.args.head_prefix,
+            value_head_prefix=strategy.args.value_head_prefix,
         )
         strategy.print(model)
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))

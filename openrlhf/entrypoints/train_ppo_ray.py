@@ -263,7 +263,7 @@ if __name__ == "__main__":
     parser.add_argument("--pretrain", type=str, default=None)
     parser.add_argument("--reward_pretrain", type=str, default=None)
     parser.add_argument("--critic_pretrain", type=str, default=None)
-    parser.add_argument("--head_prefix", type=str, default="value_head")
+    parser.add_argument("--value_head_prefix", type=str, default="value_head")
     parser.add_argument("--ref_reward_offload", action="store_true", default=False)
 
     # Custom dataset

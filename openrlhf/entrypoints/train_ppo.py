@@ -48,7 +48,7 @@ def train(args):
         target_modules=args.target_modules,
         lora_dropout=args.lora_dropout,
         ds_config=strategy.get_ds_train_config(is_actor=False),
-        head_prefix=args.head_prefix,
+        value_head_prefix=args.value_head_prefix,
     )
     reward_model = get_llm_for_sequence_regression(
         args.reward_pretrain,
@@ -58,7 +58,7 @@ def train(args):
         bf16=args.bf16,
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_train_config(is_actor=False),
-        head_prefix=args.head_prefix,
+        value_head_prefix=args.value_head_prefix,
     )
 
     # configure tokenizer
@@ -332,7 +332,7 @@ if __name__ == "__main__":
     parser.add_argument("--pretrain", type=str, default=None)
     parser.add_argument("--reward_pretrain", type=str, default=None)
     parser.add_argument("--critic_pretrain", type=str, default=None)
-    parser.add_argument("--head_prefix", type=str, default="value_head")
+    parser.add_argument("--value_head_prefix", type=str, default="value_head")
 
     # Custom dataset
     parser.add_argument("--prompt_data", type=str, default=None)

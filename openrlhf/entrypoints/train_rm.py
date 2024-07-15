@@ -31,7 +31,7 @@ def train(args):
         lora_dropout=args.lora_dropout,
         ds_config=strategy.get_ds_train_config(is_actor=False),
         init_value_head=True,
-        head_prefix=args.head_prefix,
+        value_head_prefix=args.value_head_prefix,
     )
 
     # configure tokenizer
@@ -146,7 +146,7 @@ if __name__ == "__main__":
 
     # Models
     parser.add_argument("--pretrain", type=str, default="bigscience/bloomz-1b7")
-    parser.add_argument("--head_prefix", type=str, default="value_head")
+    parser.add_argument("--value_head_prefix", type=str, default="value_head")
 
     # LoRA
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
