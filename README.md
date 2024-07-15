@@ -249,7 +249,7 @@ ray start --head --node-ip-address 0.0.0.0 --num-gpus 8
 ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 
 ray job submit --address="http://127.0.0.1:8265" \
-  --runtime-env-json='{"working_dir": "/openrlhf", "pip": "/openrlhf/requirements.txt"}' \
+  --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.entrypoints.train_ppo_ray \
   --ref_num_nodes 1 \
   --ref_num_gpus_per_node 2 \
