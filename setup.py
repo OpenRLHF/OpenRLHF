@@ -47,6 +47,10 @@ setup(
     long_description=_fetch_readme(),
     long_description_content_type="text/markdown",
     install_requires=_fetch_requirements("requirements.txt"),
+    extras_require={
+        "vllm": ["vllm==0.4.2"],
+        "vllm_latest": ["vllm>0.4.2"],
+    },
     python_requires=">=3.10",
     classifiers=[
         "Programming Language :: Python :: 3",

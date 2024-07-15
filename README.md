@@ -84,24 +84,31 @@ To use OpenRLHF, first ``git clone`` it and launch the docker container (**Recom
 git clone https://github.com/openllmai/OpenRLHF.git
 # You can also `git checkout` the latest stable release version.
 
-# If you need to use vLLM, please build a Docker image to avoid dependency issues (Optional)
-docker build -t nvcr.io/nvidia/pytorch:24.02-py3 ./OpenRLHF/dockerfile
-
 # Launch the docker container
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD/OpenRLHF:/openrlhf nvcr.io/nvidia/pytorch:24.02-py3 bash
 ```
 
 > [!NOTE]
->We provided the [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh)
+>We provided the [dockerfiles](./dockerfile/) and [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh)
 
 Then ``pip install`` openrlhf inside the docker container
 
 ```bash
 cd /openrlhf
-pip install --user .
+pip install .
+
+# If you want to accelerate with vLLM
+# vLLM 0.4.2
+pip install .[vllm]
+
+# vLLM 0.5.0+
+pip install .[vllm_latest]
 
 cd examples
 ```
+
+> [!NOTE]
+> We recommend using vLLM 0.4.2, as versions 0.4.3+ currently only support weight synchronization (DeepSpeed => vLLM) via Gloo (`--vllm_sync_backend gloo`).
 
 ### Prepare Datasets
 OpenRLHF provides multiple data processing methods in our dataset classes.
@@ -293,9 +300,7 @@ ray job submit --address="http://127.0.0.1:8265" \
   --use_wandb {wandb_token}
 
 ```
-
 > [!NOTE]
-> We recommend using vLLM 0.4.2, as versions 0.4.3+ currently only support weight synchronization (DeepSpeed => vLLM) via Gloo (`--vllm_sync_backend gloo`).
 > Setting `--vllm_num_engines 0` means not using the vLLM engine.
 
 The launch scripts and docs for all supported algorithms are in [example/scripts](./examples/scripts/) and [Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)

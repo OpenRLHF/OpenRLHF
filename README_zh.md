@@ -87,24 +87,31 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 git clone https://github.com/openllmai/OpenRLHF.git
 # 也可以 `git checkout` 最近的稳定 release 版本.
 
-# 如果需要使用 vLLM，请构建 Docker 镜像以避免依赖问题（可选）
-docker build -t nvcr.io/nvidia/pytorch:24.02-py3 ./OpenRLHF/dockerfile
-
 # 启动 Docker 容器
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD/OpenRLHF:/openrlhf nvcr.io/nvidia/pytorch:24.02-py3 bash
 ```
 
 > [!NOTE]
->我们提供了 [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh)
+>我们提供了 [dockerfiles](./dockerfile/) 和 [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh)
 
 然后在 Docker 容器内 `pip install` openrlhf
 
 ```bash
 cd /openrlhf
-pip install --user .
+pip install .
+
+# 如果你需要使用 vLLM 加速
+# vLLM 0.4.2
+pip install .[vllm]
+
+# vLLM 0.5.0+
+pip install .[vllm_latestS]
 
 cd examples
 ```
+
+> [!NOTE]
+> 我们推荐使用 vLLM 0.4.2，因为 0.4.3+ 版本目前仅支持通过 Gloo 进行权重同步（DeepSpeed => vLLM）（`--vllm_sync_backend gloo`）。
 
 ### 准备数据集
 OpenRLHF 在其数据集类中提供了多种数据处理方法。
@@ -298,7 +305,6 @@ ray job submit --address="http://127.0.0.1:8265" \
 ```
 
 > [!NOTE]
-> 我们推荐使用 vLLM 0.4.2，因为 0.4.3+ 版本目前仅支持通过 Gloo 进行权重同步（DeepSpeed => vLLM）（`--vllm_sync_backend gloo`）。
 > 设置 `--vllm_num_engines 0` 则是不使用 vLLM engine
 
 所有支持算法的启动脚本和文档在 [example/scripts](./examples/scripts/) 和 [Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)
