@@ -297,7 +297,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 ```
 > [!NOTE]
-> Setting `--vllm_num_engines 0` means not using the vLLM engine.
+> Do not set `--vllm_num_engines` means not using the vLLM engine.
 > You can also use setup_commands to let Ray automatically deploy the environment.: `--runtime-env-json='{"setup_commands": ["pip install -e path_to_openrlhf[vllm]"]}'`.
 
 The launch scripts and documents for supported algorithms are in [example/scripts](./examples/scripts/) and [Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)
