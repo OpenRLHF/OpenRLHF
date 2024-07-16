@@ -25,32 +25,14 @@ def _fetch_readme():
         return f.read()
 
 
-def get_nvcc_cuda_version() -> Version:
-    cuda_path = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
-    if cuda_path:
-        nvcc_output = subprocess.check_output([cuda_path + "/bin/nvcc", "-V"], universal_newlines=True)
-        output = nvcc_output.split()
-        release_idx = output.index("release") + 1
-        nvcc_cuda_version = parse(output[release_idx].split(",")[0])
-    else:
-        print("Warning: Get nvcc cuda path failed. Set cuda version to 12.1.")
-        nvcc_cuda_version = Version("12.1")
-    return nvcc_cuda_version
-
-
 def _fetch_version():
     with open("version.txt", "r") as f:
         version = f.read().strip()
 
-    cuda_version = get_nvcc_cuda_version()
-    cuda_version_str = f"{cuda_version.major}{cuda_version.minor}"
-
     if _is_nightly():
         now = datetime.now()
         date_str = now.strftime("%Y%m%d")
-        version += f".dev{date_str}+cu{cuda_version_str}"
-    else:
-        version += f"+cu{cuda_version_str}"
+        version += f".dev{date_str}"
 
     return version
 
