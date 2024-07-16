@@ -78,9 +78,10 @@ setup(
         "vllm": ["vllm==0.4.2"],
         "vllm_latest": ["vllm>0.4.2"],
     },
-    python_requires=f">={sys.version_info.major}.{sys.version_info.minor}",
+    python_requires=">=3.10",
     classifiers=[
-        f"Programming Language :: Python :: {sys.version_info.major}.{sys.version_info.minor}",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
         "Environment :: GPU :: NVIDIA CUDA",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
         "Topic :: System :: Distributed Computing",
