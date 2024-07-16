@@ -17,14 +17,19 @@ def preprocess_data(
     is_dpo=False,
 ) -> str:
     if apply_chat_template:
-        prompt = ""
-        chosen = apply_chat_template(data[chosen_key], tokenize=False)
-        rejected = apply_chat_template(data[rejected_key], tokenize=False)
+        if prompt_key:
+            prompt = apply_chat_template(data[prompt_key], tokenize=False, add_generation_prompt=True)
+            chosen = apply_chat_template(data[prompt_key] + data[chosen_key], tokenize=False)[len(prompt) :]
+            rejected = apply_chat_template(data[prompt_key] + data[rejected_key], tokenize=False)[len(prompt) :]
+        else:
+            prompt = ""
+            chosen = apply_chat_template(data[chosen_key], tokenize=False)
+            rejected = apply_chat_template(data[rejected_key], tokenize=False)
 
-        if is_dpo:
-            prompt = apply_chat_template(data[chosen_key][:-1], tokenize=False, add_generation_prompt=True)
-            chosen = chosen[len(prompt) :]
-            rejected = rejected[len(prompt) :]
+            if is_dpo:
+                prompt = apply_chat_template(data[chosen_key][:-1], tokenize=False, add_generation_prompt=True)
+                chosen = chosen[len(prompt) :]
+                rejected = rejected[len(prompt) :]
     else:
         chosen = data[chosen_key]
         rejected = data[rejected_key]
