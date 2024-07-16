@@ -88,17 +88,20 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:24.02-py3 bash
 
 # pip install
+pip install openrlhf
+
+# 如果你需要使用 vLLM 加速 (安装 vLLM 0.4.2)
+pip install openrlhf[vllm]
+# 最新的 vLLM 也是支持的 (支持 Gloo 权重传输)
+pip install openrlhf[vllm_latest]
+
+# pip install GitHub 上的最新版
 pip install git+https://github.com/openllmai/OpenRLHF.git
 
 # 或者 git clone
 git clone https://github.com/openllmai/OpenRLHF.git
 cd OpenRLHF
 pip install -e .
-
-# 如果你需要使用 vLLM 加速
-pip install vllm==0.4.2
-# 最近的版本也是支持的 (使用 Gloo)
-pip install vllm --upgrade
 ```
 
 > [!NOTE]

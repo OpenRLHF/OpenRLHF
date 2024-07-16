@@ -85,17 +85,20 @@ To use OpenRLHF, first launch the docker container (**Recommended**) and `pip in
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:24.02-py3 bash
 
 # pip install
+pip install openrlhf
+
+# If you want to use vLLM acceleration (To install vLLM 0.4.2)
+pip install openrlhf[vllm]
+# latest vLLM is also supported (using Gloo)
+pip install openrlhf[vllm_latest]
+
+# pip install the latest version
 pip install git+https://github.com/openllmai/OpenRLHF.git
 
 # Or git clone
 git clone https://github.com/openllmai/OpenRLHF.git
 cd OpenRLHF
 pip install -e .
-
-# If you want to use vLLM acceleration
-pip install vllm==0.4.2
-# latest vLLM is also supported (using Gloo)
-pip install vllm --upgrade
 ```
 
 > [!NOTE]
