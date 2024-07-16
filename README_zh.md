@@ -302,7 +302,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 > [!NOTE]
 > 不设置 `--vllm_num_engines` 则是不使用 vLLM engine。
-> 您也可以通过 setup_commands 让 Ray 自动初始化环境, 比如 `--runtime-env-json='{"setup_commands": ["pip install -e path_to_openrlhf[vllm]"]}'`
+> 您也可以通过 ``setup_commands`` 让 Ray 自动初始化环境, 比如 `--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`
 
 所有支持算法的启动脚本和文档在 [example/scripts](./examples/scripts/) 和 [Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)
 
