@@ -6,7 +6,6 @@ import platform
 from datetime import datetime
 from packaging.version import Version, parse
 from setuptools import find_packages, setup
-from torch.utils.cpp_extension import CUDA_HOME
 from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
 
 _build_mode = os.getenv("OPENRLHF_BUILD_MODE", "")
@@ -27,11 +26,15 @@ def _fetch_readme():
 
 
 def get_nvcc_cuda_version() -> Version:
-    assert CUDA_HOME is not None, "CUDA_HOME is not set"
-    nvcc_output = subprocess.check_output([CUDA_HOME + "/bin/nvcc", "-V"], universal_newlines=True)
-    output = nvcc_output.split()
-    release_idx = output.index("release") + 1
-    nvcc_cuda_version = parse(output[release_idx].split(",")[0])
+    cuda_path = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
+    if cuda_path:
+        nvcc_output = subprocess.check_output([cuda_path + "/bin/nvcc", "-V"], universal_newlines=True)
+        output = nvcc_output.split()
+        release_idx = output.index("release") + 1
+        nvcc_cuda_version = parse(output[release_idx].split(",")[0])
+    else:
+        print("Warning: Get nvcc cuda path failed. Set cuda version to 12.1.")
+        nvcc_cuda_version = Version("12.1")
     return nvcc_cuda_version
 
 
