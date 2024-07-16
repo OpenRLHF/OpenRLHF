@@ -4,7 +4,6 @@ import subprocess
 import platform
 
 from datetime import datetime
-from packaging.version import Version, parse
 from setuptools import find_packages, setup
 from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
 
