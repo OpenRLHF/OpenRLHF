@@ -31,12 +31,14 @@ def preprocess_data(
                 chosen = chosen[len(prompt) :]
                 rejected = rejected[len(prompt) :]
     else:
-        chosen = data[chosen_key]
-        rejected = data[rejected_key]
         if prompt_key:
             prompt = data[prompt_key]
             if input_template:
                 prompt = input_template.format(prompt)
+        else:
+            prompt = ""
+        chosen = data[chosen_key]
+        rejected = data[rejected_key]
 
     # margin loss
     margin = data["margin"] if exist_and_not_none(data, "margin") else 0
