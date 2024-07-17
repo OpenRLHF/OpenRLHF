@@ -1,4 +1,4 @@
-# Copyright 2024 Musab Gultekin, LlamaFactory team, and OpenLLMAI team.
+# Copyright 2024 Musab Gultekin, LlamaFactory team, and OpenRLHF team.
 #
 # This code is based on the Musab Gultekin's functionary library:
 # https://github.com/MeetKai/functionary/tree/main/functionary/train/packing

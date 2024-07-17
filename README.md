@@ -3,19 +3,19 @@
 </div>
 <div align="center">
 <p align="center">
-      <a href="https://github.com/openllmai/OpenRLHF/graphs/contributors">
-        <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/openllmai/OpenRLHF" />
+      <a href="https://github.com/OpenRLHF/OpenRLHF/graphs/contributors">
+        <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/OpenRLHF/OpenRLHF" />
       </a>
-      <a href="https://github.com/openllmai/OpenRLHF/issues">
-        <img alt="Issues" src="https://img.shields.io/github/issues/openllmai/OpenRLHF?color=0088ff" />
+      <a href="https://github.com/OpenRLHF/OpenRLHF/issues">
+        <img alt="Issues" src="https://img.shields.io/github/issues/OpenRLHF/OpenRLHF?color=0088ff" />
       </a>
-      <a href="https://github.com/openllmai/OpenRLHF/discussions">
-        <img alt="Issues" src="https://img.shields.io/github/discussions/openllmai/OpenRLHF?color=0088ff" />
+      <a href="https://github.com/OpenRLHF/OpenRLHF/discussions">
+        <img alt="Issues" src="https://img.shields.io/github/discussions/OpenRLHF/OpenRLHF?color=0088ff" />
       </a>
-      <a href="https://github.com/openllmai/OpenRLHF/pulls">
-        <img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/openllmai/OpenRLHF?color=0088ff" />
-      <a href="https://github.com/openllmai/OpenRLHF/stargazers">
-        <img alt="GitHub stars" src="https://img.shields.io/github/stars/openllmai/OpenRLHF?color=ccf" />
+      <a href="https://github.com/OpenRLHF/OpenRLHF/pulls">
+        <img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/OpenRLHF/OpenRLHF?color=0088ff" />
+      <a href="https://github.com/OpenRLHF/OpenRLHF/stargazers">
+        <img alt="GitHub stars" src="https://img.shields.io/github/stars/OpenRLHF/OpenRLHF?color=ccf" />
       </a>
       <br>
       <em>Open-source / Comprehensive / Lightweight / Easy-to-use</em>
@@ -93,10 +93,10 @@ pip install openrlhf[vllm]
 pip install openrlhf[vllm_latest]
 
 # pip install the latest version
-pip install git+https://github.com/openllmai/OpenRLHF.git
+pip install git+https://github.com/OpenRLHF/OpenRLHF.git
 
 # Or git clone
-git clone https://github.com/openllmai/OpenRLHF.git
+git clone https://github.com/OpenRLHF/OpenRLHF.git
 cd OpenRLHF
 pip install -e .
 ```
@@ -107,7 +107,7 @@ pip install -e .
 
 ### Prepare Datasets
 OpenRLHF provides multiple data processing methods in our dataset classes.
-Such as in the [Prompt Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/prompts_dataset.py#L6):
+Such as in the [Prompt Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/prompts_dataset.py#L6):
 
 ```python
 def preprocess_data(data, input_template=None, input_key="input", apply_chat_template=None) -> str:
@@ -139,11 +139,11 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 ```
 > [!NOTE]
 > By default, we use `train` and `test` as splits to distinguish training and testing datasets from Huggingface.
-> The ``JSON key`` options depends on the specific datasets. See [Reward Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/9ab08aace2c9af7dfa7d8790380d400902deef00/openrlhf/datasets/reward_dataset.py#L10) and [SFT Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/9ab08aace2c9af7dfa7d8790380d400902deef00/openrlhf/datasets/sft_dataset.py#L9)
+> The ``JSON key`` options depends on the specific datasets. See [Reward Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/9ab08aace2c9af7dfa7d8790380d400902deef00/openrlhf/datasets/reward_dataset.py#L10) and [SFT Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/9ab08aace2c9af7dfa7d8790380d400902deef00/openrlhf/datasets/sft_dataset.py#L9)
 
 ### Supervised Fine-tuning
 
-OpenRLHF's model checkpoint is fully compatible with HuggingFace models. You can specify the model name or path using `--pretrain  {name or path}`, `--reward_pretrain  {name or path}` and `--critic_pretrain  {name or path}`. We have provided some pre-trained checkpoints and datasets on [HuggingFace OpenLLMAI](https://huggingface.co/OpenLLMAI).
+OpenRLHF's model checkpoint is fully compatible with HuggingFace models. You can specify the model name or path using `--pretrain  {name or path}`, `--reward_pretrain  {name or path}` and `--critic_pretrain  {name or path}`. We have provided some pre-trained checkpoints and datasets on [HuggingFace OpenRLHF](https://huggingface.co/OpenRLHF).
 
 Then you can use the startup scripts we provide in the [examples/scripts](./examples/scripts/) directory, or start the training using the following commands.
 
@@ -195,13 +195,13 @@ deepspeed --module openrlhf.cli.train_rm \
    --eval_steps -1 \
    --train_batch_size 256 \
    --micro_train_batch_size 1 \
-   --pretrain OpenLLMAI/Llama-3-8b-sft-mixture \
+   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
    --bf16 \
    --max_epochs 1 \
    --max_len 8192 \
    --zero_stage 3 \
    --learning_rate 9e-6 \
-   --dataset OpenLLMAI/preference_dataset_mixture2_and_safe_pku \
+   --dataset OpenRLHF/preference_dataset_mixture2_and_safe_pku \
    --apply_chat_template \
    --chosen_key chosen \
    --rejected_key rejected \
@@ -214,8 +214,8 @@ deepspeed --module openrlhf.cli.train_rm \
 
 ```bash
 deepspeed --module openrlhf.cli.train_ppo \
-  --pretrain OpenLLMAI/Llama-3-8b-sft-mixture \
-  --reward_pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
+  --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
+  --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
   --save_path ./checkpoint/llama-3-8b-rlhf \
   --save_steps -1 \
   --logging_steps 1 \
@@ -232,7 +232,7 @@ deepspeed --module openrlhf.cli.train_ppo \
   --actor_learning_rate 5e-7 \
   --critic_learning_rate 9e-6 \
   --init_kl_coef 0.01 \
-  --prompt_data OpenLLMAI/prompt-collection-v0.1 \
+  --prompt_data OpenRLHF/prompt-collection-v0.1 \
   --input_key context_messages \
   --apply_chat_template \
   --max_samples 100000 \
@@ -270,8 +270,8 @@ ray job submit --address="http://127.0.0.1:8265" \
   --colocate_critic_reward \
   --colocate_actor_ref \
   --ref_reward_offload \
-  --pretrain OpenLLMAI/Llama-3-8b-sft-mixture \
-  --reward_pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
+  --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
+  --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
   --save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
   --micro_train_batch_size 8 \
   --train_batch_size 128 \
@@ -286,7 +286,7 @@ ray job submit --address="http://127.0.0.1:8265" \
   --actor_learning_rate 5e-7 \
   --critic_learning_rate 9e-6 \
   --init_kl_coef 0.01 \
-  --prompt_data OpenLLMAI/prompt-collection-v0.1 \
+  --prompt_data OpenRLHF/prompt-collection-v0.1 \
   --input_key context_messages \
   --apply_chat_template \
   --normalize_reward \
@@ -322,12 +322,12 @@ To achieve optimal performance, we recommend allocating more nodes to the vLLM E
 
 **How to Join?**
 
-1. Email us at janhu9527@gmail.com (personal email of the PIC) or xianyuai@openllmai.top(open-source community email). Please include the following details:
+1. Email us at janhu9527@gmail.com or join [GitHub Organization](https://github.com/OpenRLHF). Please include the following details:
    - Your name
    - Your GitHub username
    - Your areas of interest
    - Your skills and experience related to NLP and/or AI
-1. You can also join us through the official GitHub [OpenRLHF ↗](https://github.com/openllmai/OpenRLHF) project page. Just create an issue about your interest to contribute and we will get back to you.
+1. You can also join us through the official GitHub [OpenRLHF ↗](https://github.com/OpenRLHF/OpenRLHF) project page. Just create an issue about your interest to contribute and we will get back to you.
 
 **What can you do?**
 
@@ -338,18 +338,18 @@ To achieve optimal performance, we recommend allocating more nodes to the vLLM E
 
 ## Sponsor Us
 
-Your sponsorship can help us maintain and improve OpenRLHF. If you find this project useful, please consider sponsoring us. You can sponsor us on [Open Collective ↗](https://opencollective.com/openllmai).
+Your sponsorship can help us maintain and improve OpenRLHF. If you find this project useful, please consider sponsoring us. You can sponsor us on [Open Collective ↗](https://opencollective.com/OpenRLHF).
 
 ## Starchart
 
-[![Star History Chart](https://api.star-history.com/svg?repos=openllmai/OpenRLHF&type=Date)](https://star-history.com/#openllmai/OpenRLHF&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=OpenRLHF/OpenRLHF&type=Date)](https://star-history.com/#OpenRLHF/OpenRLHF&Date)
 
 ## Contributors
 
 A big thank you to all our contributors! If you want to contribute, feel free to make a pull request or create an issue.
 
-<a href="https://github.com/openllmai/OpenRLHF/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=openllmai/OpenRLHF" />
+<a href="https://github.com/OpenRLHF/OpenRLHF/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=OpenRLHF/OpenRLHF" />
 </a>
 
 ## References & Acknowledgements
@@ -358,7 +358,7 @@ We would like to express our gratitude to the following projects and organizatio
 
 - [Hugging Face Transformers ↗](https://github.com/huggingface/transformers)
 - [OpenAI GPT ↗](https://github.com/openai/gpt-3)
-- [LLaMA ↗](https://ai.meta.com/llama/)
+- [LLaMA ↗](https://llama.meta.com/)
 - [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
 - [Ray ↗](https://github.com/ray-project/ray)
 
@@ -377,4 +377,4 @@ Our project would also like to thank [ColossalChat](https://github.com/hpcaitech
 
 ______________________________________________________________________
 
-*OpenRLHF © 2024 OpenLLMAI. All Rights Reserved.*
+*OpenRLHF © 2024 OpenRLHF. All Rights Reserved.*

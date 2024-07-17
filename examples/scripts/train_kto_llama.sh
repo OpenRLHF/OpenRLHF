@@ -8,7 +8,7 @@ openrlhf.cli.train_kto \
    --eval_steps -1 \
    --train_batch_size 64 \
    --micro_train_batch_size 1 \
-   --pretrain OpenLLMAI/Llama-3-8b-sft-mixture \
+   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
    --bf16 \
    --max_epochs 1 \
    --max_len 8192 \

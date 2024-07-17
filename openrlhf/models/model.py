@@ -193,7 +193,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             attention_mask: Optional[torch.Tensor] = None,
             return_output=False,
         ) -> torch.Tensor:
-            # https://github.com/OpenLLMAI/OpenRLHF/issues/217
+            # https://github.com/OpenRLHF/OpenRLHF/issues/217
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
             outputs = getattr(self, self.base_model_prefix)(
@@ -248,7 +248,7 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             attention_mask: Optional[torch.Tensor] = None,
             return_output=False,
         ) -> torch.Tensor:
-            # https://github.com/OpenLLMAI/OpenRLHF/issues/217
+            # https://github.com/OpenRLHF/OpenRLHF/issues/217
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
             outputs = getattr(self, self.base_model_prefix)(

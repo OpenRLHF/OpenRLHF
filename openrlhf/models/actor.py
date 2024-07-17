@@ -176,7 +176,7 @@ class Actor(nn.Module):
     ) -> torch.Tensor:
         """Returns action log probs"""
         if not packing_samples:
-            # https://github.com/OpenLLMAI/OpenRLHF/issues/217
+            # https://github.com/OpenRLHF/OpenRLHF/issues/217
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
         else:

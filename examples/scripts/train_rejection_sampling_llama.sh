@@ -14,7 +14,7 @@ MODEL_OUTPUT_PATH=./checkpoint/llama-3-8b-rejection
 TRAINING_ITERS=10
 ROLLOUT_BATCH_SIZE=10240
 
-POLICY_MODEL_PATH=OpenLLMAI/Llama-3-8b-sft-mixture
+POLICY_MODEL_PATH=OpenRLHF/Llama-3-8b-sft-mixture
 
 iter=0
 if [ -f $ITER_LOG_PATH ]; then
@@ -35,7 +35,7 @@ openrlhf.cli.batch_inference
    --bf16 \
    --max_new_tokens 2048 \
    --prompt_max_len 2048 \
-   --dataset OpenLLMAI/prompt-collection-v0.1 \
+   --dataset OpenRLHF/prompt-collection-v0.1 \
    --input_key context_messages \
    --apply_chat_template \
    --temperature 0.9
@@ -55,7 +55,7 @@ EOF
    read -r -d '' get_rewards_commands <<EOF
 openrlhf.cli.batch_inference
    --eval_task rm \
-   --pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
+   --pretrain OpenRLHF/Llama-3-8b-rm-mixture \
    --bf16 \
    --max_len 4096 \
    --dataset $GENERATE_OUTPUT  \
