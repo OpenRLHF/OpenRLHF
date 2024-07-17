@@ -6,19 +6,19 @@
 
 <div align="center">
 <p align="center">
-      <a href="https://github.com/openllmai/OpenRLHF/graphs/contributors">
-        <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/openllmai/OpenRLHF" />
+      <a href="https://github.com/OpenRLHF/OpenRLHF/graphs/contributors">
+        <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/OpenRLHF/OpenRLHF" />
       </a>
-      <a href="https://github.com/openllmai/OpenRLHF/issues">
-        <img alt="Issues" src="https://img.shields.io/github/issues/openllmai/OpenRLHF?color=0088ff" />
+      <a href="https://github.com/OpenRLHF/OpenRLHF/issues">
+        <img alt="Issues" src="https://img.shields.io/github/issues/OpenRLHF/OpenRLHF?color=0088ff" />
       </a>
-      <a href="https://github.com/openllmai/OpenRLHF/discussions">
-        <img alt="Issues" src="https://img.shields.io/github/discussions/openllmai/OpenRLHF?color=0088ff" />
+      <a href="https://github.com/OpenRLHF/OpenRLHF/discussions">
+        <img alt="Issues" src="https://img.shields.io/github/discussions/OpenRLHF/OpenRLHF?color=0088ff" />
       </a>
-      <a href="https://github.com/openllmai/OpenRLHF/pulls">
-        <img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/openllmai/OpenRLHF?color=0088ff" />
-      <a href="https://github.com/openllmai/OpenRLHF/stargazers">
-        <img alt="GitHub stars" src="https://img.shields.io/github/stars/openllmai/OpenRLHF?color=ccf" />
+      <a href="https://github.com/OpenRLHF/OpenRLHF/pulls">
+        <img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/OpenRLHF/OpenRLHF?color=0088ff" />
+      <a href="https://github.com/OpenRLHF/OpenRLHF/stargazers">
+        <img alt="GitHub stars" src="https://img.shields.io/github/stars/OpenRLHF/OpenRLHF?color=ccf" />
       </a>
       <br>
       <em>开源 / 全面 / 轻量级 / 易用</em>
@@ -96,10 +96,10 @@ pip install openrlhf[vllm]
 pip install openrlhf[vllm_latest]
 
 # pip install GitHub 上的最新版
-pip install git+https://github.com/openllmai/OpenRLHF.git
+pip install git+https://github.com/OpenRLHF/OpenRLHF.git
 
 # 或者 git clone
-git clone https://github.com/openllmai/OpenRLHF.git
+git clone https://github.com/OpenRLHF/OpenRLHF.git
 cd OpenRLHF
 pip install -e .
 ```
@@ -110,7 +110,7 @@ pip install -e .
 
 ### 准备数据集
 OpenRLHF 在其数据集类中提供了多种数据处理方法。
-例如在 [Prompt Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/prompts_dataset.py#L6) 中：
+例如在 [Prompt Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/prompts_dataset.py#L6) 中：
 
 ```python
 def preprocess_data(data, input_template=None, input_key="input", apply_chat_template=None) -> str:
@@ -142,12 +142,12 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 ```
 > [!NOTE]
 >默认情况下我们使用 `train` 和 `test` 作为 split 区分 Huggingface 的训练/测试数据。
->`JSON key` 选项取决于具体的数据集。请参阅 [Reward Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/9ab08aace2c9af7dfa7d8790380d400902deef00/openrlhf/datasets/reward_dataset.py#L10) 和 [SFT Dataset](https://github.com/OpenLLMAI/OpenRLHF/blob/9ab08aace2c9af7dfa7d8790380d400902deef00/openrlhf/datasets/sft_dataset.py#L9)。
+>`JSON key` 选项取决于具体的数据集。请参阅 [Reward Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/9ab08aace2c9af7dfa7d8790380d400902deef00/openrlhf/datasets/reward_dataset.py#L10) 和 [SFT Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/9ab08aace2c9af7dfa7d8790380d400902deef00/openrlhf/datasets/sft_dataset.py#L9)。
 
 
 ### Supervised Fine-tuning
 
-OpenRLHF 的模型检查点完全兼容 HuggingFace 模型。您可以使用 `--pretrain  {name or path}`、`--reward_pretrain  {name or path}` 和 `--critic_pretrain  {name or path}` 指定模型名称或路径。我们在 [HuggingFace OpenLLMAI](https://huggingface.co/OpenLLMAI) 上提供了一些预训练的检查点和数据集。
+OpenRLHF 的模型检查点完全兼容 HuggingFace 模型。您可以使用 `--pretrain  {name or path}`、`--reward_pretrain  {name or path}` 和 `--critic_pretrain  {name or path}` 指定模型名称或路径。我们在 [HuggingFace OpenRLHF](https://huggingface.co/OpenRLHF) 上提供了一些预训练的检查点和数据集。
 
 然后您可以使用我们在 [examples/scripts](./examples/scripts/) 目录中提供的启动脚本，或者使用以下命令启动训练：
 
@@ -198,13 +198,13 @@ deepspeed --module openrlhf.cli.train_rm \
    --eval_steps -1 \
    --train_batch_size 256 \
    --micro_train_batch_size 1 \
-   --pretrain OpenLLMAI/Llama-3-8b-sft-mixture \
+   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
    --bf16 \
    --max_epochs 1 \
    --max_len 8192 \
    --zero_stage 3 \
    --learning_rate 9e-6 \
-   --dataset OpenLLMAI/preference_dataset_mixture2_and_safe_pku \
+   --dataset OpenRLHF/preference_dataset_mixture2_and_safe_pku \
    --apply_chat_template \
    --chosen_key chosen \
    --rejected_key rejected \
@@ -217,8 +217,8 @@ deepspeed --module openrlhf.cli.train_rm \
 
 ```bash
 deepspeed --module openrlhf.cli.train_ppo \
-  --pretrain OpenLLMAI/Llama-3-8b-sft-mixture \
-  --reward_pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
+  --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
+  --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
   --save_path ./checkpoint/llama-3-8b-rlhf \
   --save_steps -1 \
   --logging_steps 1 \
@@ -235,7 +235,7 @@ deepspeed --module openrlhf.cli.train_ppo \
   --actor_learning_rate 5e-7 \
   --critic_learning_rate 9e-6 \
   --init_kl_coef 0.01 \
-  --prompt_data OpenLLMAI/prompt-collection-v0.1 \
+  --prompt_data OpenRLHF/prompt-collection-v0.1 \
   --input_key context_messages \
   --apply_chat_template \
   --max_samples 100000 \
@@ -273,8 +273,8 @@ ray job submit --address="http://127.0.0.1:8265" \
   --colocate_critic_reward \
   --colocate_actor_ref \
   --ref_reward_offload \
-  --pretrain OpenLLMAI/Llama-3-8b-sft-mixture \
-  --reward_pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
+  --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
+  --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
   --save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
   --micro_train_batch_size 8 \
   --train_batch_size 128 \
@@ -289,7 +289,7 @@ ray job submit --address="http://127.0.0.1:8265" \
   --actor_learning_rate 5e-7 \
   --critic_learning_rate 9e-6 \
   --init_kl_coef 0.01 \
-  --prompt_data OpenLLMAI/prompt-collection-v0.1 \
+  --prompt_data OpenRLHF/prompt-collection-v0.1 \
   --input_key context_messages \
   --apply_chat_template \
   --normalize_reward \
@@ -325,12 +325,12 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 **如何加入？**
 
-1. 通过 PIC 联系邮箱 janhu9527@gmail.com 或者开源组织邮箱 xianyuai@openllmai.top 向我们发送邮件。请包含以下信息：
+1. 通过联系邮箱 janhu9527@gmail.com 或者加入 [GitHub Organization](https://github.com/OpenRLHF)。请包含以下信息：
    - 您的姓名
    - 您的 GitHub 用户名
    - 您感兴趣的领域
    - 您在 NLP 和/或 AI 相关的技能和经验
-2. 您也可以通过官方 GitHub [OpenRLHF ↗](https://github.com/openllmai/OpenRLHF) 项目页面加入我们。只需创建一个关于您想要贡献的兴趣的 issue，我们会与您联系。
+2. 您也可以通过官方 GitHub [OpenRLHF ↗](https://github.com/OpenRLHF/OpenRLHF) 项目页面加入我们。只需创建一个关于您想要贡献的兴趣的 issue，我们会与您联系。
 
 **您能做什么？**
 
@@ -341,18 +341,18 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 ## 赞助我们
 
-您的赞助可以帮助我们维护和改进 OpenRLHF。如果您觉得这个项目有用，请考虑赞助我们。您可以在 [Open Collective ↗](https://opencollective.com/openllmai) 上赞助我们。
+您的赞助可以帮助我们维护和改进 OpenRLHF。如果您觉得这个项目有用，请考虑赞助我们。您可以在 [Open Collective ↗](https://opencollective.com/OpenRLHF) 上赞助我们。
 
 ## 星图
 
-[![Star History Chart](https://api.star-history.com/svg?repos=openllmai/OpenRLHF&type=Date)](https://star-history.com/#openllmai/OpenRLHF&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=OpenRLHF/OpenRLHF&type=Date)](https://star-history.com/#OpenRLHF/OpenRLHF&Date)
 
 ## 贡献者
 
 非常感谢所有的贡献者！如果您想贡献，请随时创建 pull 请求或创建 issue。
 
-<a href="https://github.com/openllmai/OpenRLHF/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=openllmai/OpenRLHF" />
+<a href="https://github.com/OpenRLHF/OpenRLHF/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=OpenRLHF/OpenRLHF" />
 </a>
 
 ## 引用与致谢
@@ -361,7 +361,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 - [Hugging Face Transformers ↗](https://github.com/huggingface/transformers)
 - [OpenAI GPT ↗](https://github.com/openai/gpt-3)
-- [LLaMA ↗](https://ai.meta.com/llama/)
+- [LLaMA ↗](https://llama.meta.com/)
 - [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
 - [Ray ↗](https://github.com/ray-project/ray)
 
@@ -380,4 +380,4 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 ______________________________________________________________________
 
-*OpenRLHF © 2024 OpenLLMAI. 版权所有。*
+*OpenRLHF © 2024 OpenRLHF. 版权所有。*

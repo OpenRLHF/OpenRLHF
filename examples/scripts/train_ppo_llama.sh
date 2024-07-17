@@ -2,8 +2,8 @@ set -x
 
 read -r -d '' training_commands <<EOF
 openrlhf.cli.train_ppo \
-   --pretrain OpenLLMAI/Llama-3-8b-sft-mixture \
-   --reward_pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
+   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
+   --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
    --save_path ./checkpoint/llama-3-8b-rlhf \
    --save_steps -1 \
    --logging_steps 1 \
@@ -20,7 +20,7 @@ openrlhf.cli.train_ppo \
    --actor_learning_rate 5e-7 \
    --critic_learning_rate 9e-6 \
    --init_kl_coef 0.01 \
-   --prompt_data OpenLLMAI/prompt-collection-v0.1 \
+   --prompt_data OpenRLHF/prompt-collection-v0.1 \
    --input_key context_messages \
    --apply_chat_template \
    --max_samples 100000 \

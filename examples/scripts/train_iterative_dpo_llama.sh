@@ -16,7 +16,7 @@ ITER_LOG_PATH=null
 TRAINING_ITERS=5
 ROLLOUT_BATCH_SIZE=10240
 
-POLICY_MODEL_PATH=OpenLLMAI/Llama-3-8b-sft-mixture
+POLICY_MODEL_PATH=OpenRLHF/Llama-3-8b-sft-mixture
 REF_MODEL_PATH=$POLICY_MODEL_PATH
 
 iter=0
@@ -37,7 +37,7 @@ openrlhf.cli.batch_inference
    --pretrain $POLICY_MODEL_PATH \
    --max_new_tokens 2048 \
    --prompt_max_len 2048 \
-   --dataset OpenLLMAI/prompt-collection-v0.1 \
+   --dataset OpenRLHF/prompt-collection-v0.1 \
    --input_key context_messages \
    --apply_chat_template \
    --temperature 1.0 \
@@ -56,7 +56,7 @@ EOF
    read -r -d '' get_rewards_commands <<EOF
 openrlhf.cli.batch_inference
    --eval_task rm \
-   --pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
+   --pretrain OpenRLHF/Llama-3-8b-rm-mixture \
    --bf16 \
    --max_len 4096 \
    --dataset $GENERATE_OUTPUT  \
