@@ -13,7 +13,7 @@ openrlhf.cli.train_dpo \
    --max_epochs 1 \
    --max_len 8192 \
    --zero_stage 3 \
-   --learning_rate 9e-6 \
+   --learning_rate 5e-7 \
    --beta 0.1 \
    --dataset OpenRLHF/preference_dataset_mixture2_and_safe_pku \
    --apply_chat_template \

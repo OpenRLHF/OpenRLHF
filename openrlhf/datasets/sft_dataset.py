@@ -7,10 +7,14 @@ from tqdm import tqdm
 from .utils import zero_pad_sequences
 
 
-def preprocess_data(data, input_template=None, input_key="input", output_key="output", apply_chat_template=None):
+def preprocess_data(data, input_template=None, input_key="input", output_key=None, apply_chat_template=None):
     if apply_chat_template:
-        prompt = apply_chat_template(data[input_key][:-1], tokenize=False, add_generation_prompt=True)
-        response = apply_chat_template(data[input_key], tokenize=False)[len(prompt) :]
+        if output_key:
+            prompt = apply_chat_template(data[input_key], tokenize=False, add_generation_prompt=True)
+            response = apply_chat_template(data[input_key] + data[output_key], tokenize=False)[len(prompt) :]
+        else:
+            prompt = apply_chat_template(data[input_key][:-1], tokenize=False, add_generation_prompt=True)
+            response = apply_chat_template(data[input_key], tokenize=False)[len(prompt) :]
     else:
         prompt = data[input_key]
         response = data[output_key]
