@@ -47,6 +47,7 @@ def batch_generate_vllm(args):
         repetition_penalty=args.repetition_penalty,
         skip_special_tokens=False,
         truncate_prompt_tokens=args.prompt_max_len,
+        include_stop_str_in_output=True,
     )
 
     prompts_data = blending_datasets(
