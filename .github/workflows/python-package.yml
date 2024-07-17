@@ -1,12 +1,6 @@
 name: Python package
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
   release:
     types: [published]
   workflow_dispatch:

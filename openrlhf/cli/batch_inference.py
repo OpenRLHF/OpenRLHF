@@ -305,7 +305,7 @@ if __name__ == "__main__":
     # Custom dataset
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--dataset_probs", type=str, default="1.0")
-    parser.add_argument("--dataset_split", type=str, default=None)
+    parser.add_argument("--dataset_split", type=str, default="train")
     parser.add_argument("--input_key", type=str, default="input", help="JSON dataset key")
     parser.add_argument("--output_key", type=str, default="output", help="JSON dataset key")
     parser.add_argument(
