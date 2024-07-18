@@ -46,8 +46,8 @@ def blending_datasets(
     max_count=5000000,
     return_eval=True,
     stopping_strategy="first_exhausted",
-    train_split=None,
-    eval_split=None,
+    train_split="train",
+    eval_split="test",
 ):
     datasets = datasets.split(",")
     probabilities = list(map(float, probabilities.split(",")))
