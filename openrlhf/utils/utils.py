@@ -59,12 +59,12 @@ def blending_datasets(
         dataset = dataset.strip()
         strategy.print(f"dataset: {dataset}")
 
-        data_dir = None if "@" not in dataset else dataset.split("@")[1].strip()
+        data_dir = dataset.split("@")[1].strip() if "@" in dataset else None
         dataset = dataset.split("@")[0].strip()
         dataset_basename = os.path.basename(dataset)
 
         # local python script
-        if dataset.endwith(".py") or (
+        if dataset.endswith(".py") or (
             os.path.isdir(dataset) and os.path.exists(os.path.join(dataset, f"{dataset_basename}.py"))
         ):
             data = load_dataset(dataset, trust_remote_code=True)
