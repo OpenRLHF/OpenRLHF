@@ -294,7 +294,7 @@ if __name__ == "__main__":
         "--apply_chat_template", action="store_true", default=False, help="Use HF tokenizer chat template"
     )
 
-    # wandb pamameters
+    # wandb parameters
     parser.add_argument("--use_wandb", type=str, default=None)
     parser.add_argument("--wandb_org", type=str, default=None)
     parser.add_argument("--wandb_group", type=str, default=None)
