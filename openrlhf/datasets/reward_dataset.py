@@ -185,3 +185,30 @@ class RewardDataset(Dataset):
         reject_ids = zero_pad_sequences(reject_ids, side=padding_side, value=self.tokenizer.pad_token_id)
         rejects_masks = zero_pad_sequences(rejects_masks, side=padding_side)
         return chosen_ids, chosen_masks, reject_ids, rejects_masks, extras
+
+    def packing_collate_fn(self, item_list):
+        packed_input_ids = []
+        packed_attention_masks = []
+        packed_seq_lens = []
+        extras = []
+
+        index = 1
+        for chosen_id, chosen_mask, reject_id, rejects_mask, extra in item_list:
+            packed_input_ids.append(chosen_id.flatten())
+            packed_attention_masks.append(chosen_mask.flatten() * index)
+            packed_seq_lens.append(len(chosen_id))
+            extras.append(extra)
+            index += 1
+
+        for chosen_id, chosen_mask, reject_id, rejects_mask, extra in item_list:
+            packed_input_ids.append(reject_id.flatten())
+            packed_attention_masks.append(rejects_mask.flatten() * index)
+            packed_seq_lens.append(len(reject_id))
+            extras.append(extra)
+            index += 1
+
+        # Concatenate all tensors into a single row
+        packed_input_ids = torch.cat(packed_input_ids, dim=0).unsqueeze(0)
+        packed_attention_masks = torch.cat(packed_attention_masks, dim=0).unsqueeze(0)
+
+        return packed_input_ids, packed_attention_masks, packed_seq_lens, extras

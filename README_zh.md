@@ -187,7 +187,7 @@ deepspeed --module openrlhf.cli.train_sft \
 ```
 
 > [!NOTE]
-> OpenRLHF SFT 支持的 `--packing_samples` [基于 `--flash_attn`](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
+> OpenRLHF SFT/DPO/RewardModel 训练支持 `--packing_samples` [基于 `--flash_attn`](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
 
 ### Reward Model Training
 ```bash
@@ -211,6 +211,9 @@ deepspeed --module openrlhf.cli.train_rm \
    --flash_attn \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
+
+# RM samples packing
+# --packing_samples
 ```
 
 ### 不使用 Ray 的 PPO

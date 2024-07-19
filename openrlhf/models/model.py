@@ -192,10 +192,15 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             input_ids: torch.LongTensor = None,
             attention_mask: Optional[torch.Tensor] = None,
             return_output=False,
+            packing_samples=False,
         ) -> torch.Tensor:
-            # https://github.com/OpenRLHF/OpenRLHF/issues/217
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
+            if not packing_samples:
+                # https://github.com/OpenRLHF/OpenRLHF/issues/217
+                position_ids = attention_mask.long().cumsum(-1) - 1
+                position_ids.masked_fill_(attention_mask == 0, 1)
+            else:
+                position_ids = None
+
             outputs = getattr(self, self.base_model_prefix)(
                 input_ids, attention_mask=attention_mask, position_ids=position_ids
             )
@@ -204,7 +209,10 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
 
             # left padding in training mode
             if self.training:
-                reward = values[:, -1]
+                if not packing_samples:
+                    reward = values[:, -1]
+                else:
+                    reward = values
             else:
                 eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
                 reward = values.gather(dim=1, index=eos_indices).squeeze(1)

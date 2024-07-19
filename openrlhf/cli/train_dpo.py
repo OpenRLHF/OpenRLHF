@@ -82,11 +82,15 @@ def train(args):
         args.micro_train_batch_size,
         True,
         True,
-        train_dataset.collate_fn,
+        train_dataset.packing_collate_fn if args.packing_samples else train_dataset.collate_fn,
     )
 
     eval_dataloader = strategy.setup_dataloader(
-        eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn
+        eval_dataset,
+        args.micro_train_batch_size,
+        True,
+        False,
+        eval_dataset.packing_collate_fn if args.packing_samples else eval_dataset.collate_fn,
     )
 
     # scheduler
@@ -178,6 +182,9 @@ if __name__ == "__main__":
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")
     parser.add_argument("--lora_dropout", type=float, default=0)
+
+    # packing samples using Flash Attention2
+    parser.add_argument("--packing_samples", action="store_true", default=False)
 
     # Custom dataset
     parser.add_argument("--pretrain", type=str, default=None)
