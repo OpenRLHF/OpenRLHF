@@ -251,15 +251,14 @@ class DPOTrainer(ABC):
                 acc_sum += (chosen_reward > reject_reward).float().mean().item()
                 loss_sum += loss.item()
                 times += 1
-
-                logs = {
-                    "eval_loss": loss_sum / times,
-                    "acc_mean": acc_sum / times,
-                }
-                logs = self.strategy.all_reduce(logs)
-                step_bar.set_postfix(logs)
                 step_bar.update()
 
+            logs = {
+                "eval_loss": loss_sum / times,
+                "acc_mean": acc_sum / times,
+            }
+            logs = self.strategy.all_reduce(logs)
+            step_bar.set_postfix(logs)
             if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": steps}.items()}
                 self._wandb.log(logs)
