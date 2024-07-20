@@ -341,8 +341,8 @@ class RewardModelTrainer(ABC):
             rewards.append(all_values[batch, index - 1])
         rewards = torch.stack(rewards)
 
-        chosen_rewards = rewards[: len(packed_seq_lens) // 2]
-        rejected_rewards = rewards[len(packed_seq_lens) // 2 :]
+        chosen_rewards = rewards[:half_len]
+        rejected_rewards = rewards[half_len:]
         aux_loss = output.aux_loss if "aux_loss" in output else []
 
         return chosen_rewards, rejected_rewards, aux_loss
