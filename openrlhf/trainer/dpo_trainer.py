@@ -383,31 +383,27 @@ class DPOTrainer(ABC):
         logits = logits[:, :-1, :]
 
         loss_masks = attention_mask.clone().bool()
-        # mask prompts
-        index1 = 0
-        index2 = 0
-        for i in range(len(packed_seq_lens) // 2):
-            # chosen
-            loss_masks[0, index1 : prompt_id_lens[i]] = False
-            index1 += packed_seq_lens[i]
-            # rejected
-            loss_masks[1, index2 : prompt_id_lens[i + len(packed_seq_lens) // 2]] = False
-            index2 += packed_seq_lens[i + len(packed_seq_lens) // 2]
-        loss_masks = loss_masks[:, 1:]
 
-        # dummy token; we'll ignore the losses on these tokens later
+        half_len = len(packed_seq_lens) // 2
+        chosen_indices = torch.arange(half_len)
+        rejected_indices = torch.arange(half_len, len(packed_seq_lens))
+
+        for i in range(half_len):
+            loss_masks[0, chosen_indices[i] : prompt_id_lens[i]] = False
+            loss_masks[1, rejected_indices[i] : prompt_id_lens[i + half_len]] = False
+
+        loss_masks = loss_masks[:, 1:]
         labels[loss_masks == False] = 0
+
         per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
 
         logprobs_sums = []
         index = 0
         for i, seq_len in enumerate(packed_seq_lens):
-            batch = 0 if i < len(packed_seq_lens) // 2 else 1
+            batch = 0 if i < half_len else 1
             seq = per_token_logps[batch, index : seq_len - 1]
             mask = loss_masks[batch, index : seq_len - 1]
             logprobs_sums.append((seq * mask).sum())
-            if i == len(packed_seq_lens) // 2 - 1:
-                index = 0
-            else:
-                index += seq_len
+            index = index + seq_len if i != half_len - 1 else 0
+
         return torch.stack(logprobs_sums)
