@@ -330,12 +330,13 @@ class RewardModelTrainer(ABC):
         all_values, output = model(
             packed_input_ids, attention_mask=packed_attention_masks, packing_samples=True, return_output=True
         )
+        half_len = len(packed_seq_lens) // 2
         rewards = []
         index = 0
-        all_values = all_values.flatten()
-        for seq_len in packed_seq_lens:
-            index += seq_len
-            rewards.append(all_values[index - 1])
+        for i, seq_len in enumerate(packed_seq_lens):
+            index = index + seq_len if i != half_len - 1 else seq_len
+            batch = 0 if i < half_len else 1
+            rewards.append(all_values[batch, index - 1])
         rewards = torch.stack(rewards)
 
         chosen_rewards = rewards[: len(packed_seq_lens) // 2]
