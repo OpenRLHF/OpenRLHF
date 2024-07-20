@@ -217,7 +217,7 @@ class DPOTrainer(ABC):
             acc_sum = 0
             loss_sum = 0
             times = 0
-            for data in self.train_dataloader:
+            for data in eval_dataloader:
                 if not self.packing_samples:
                     chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens = data
                     chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
