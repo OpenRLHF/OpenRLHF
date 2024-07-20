@@ -106,6 +106,7 @@ def get_unpad_data(attention_mask: "torch.Tensor") -> Tuple["torch.Tensor", "tor
 
 
 def patch_for_block_diag_attn(model_type: str) -> None:
+    print(f"patch_for_block_diag_attn: {model_type}")
     if model_type == "cohere":
         transformers.models.cohere.modeling_cohere._get_unpad_data = get_unpad_data
     elif model_type == "falcon":
