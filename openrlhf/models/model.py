@@ -215,19 +215,25 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             last_hidden_states = outputs["last_hidden_state"]
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
 
-            # left padding in training mode
-            if self.training:
-                if not packing_samples:
+            # return all values for packing_samples
+            if self.packing_samples:
+                reward = values
+                # normalize reward in eval mode
+                if not self.training and self.normalize_reward:
+                    reward = (reward - self.mean) / self.std
+            else:
+                # left padding in training mode
+                if self.training:
                     reward = values[:, -1]
                 else:
-                    reward = values
-            else:
-                eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
-                reward = values.gather(dim=1, index=eos_indices).squeeze(1)
-
-                # normalize reward in eval mode
-                if self.normalize_reward:
-                    reward = (reward - self.mean) / self.std
+                    eos_indices = (
+                        attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
+                    )
+                    reward = values.gather(dim=1, index=eos_indices).squeeze(1)
+                    # normalize reward in eval mode
+                    if self.normalize_reward:
+                        reward = (reward - self.mean) / self.std
+            # return
             if return_output:
                 return reward, outputs
             else:
@@ -263,10 +269,15 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             action_mask: Optional[torch.Tensor] = None,
             attention_mask: Optional[torch.Tensor] = None,
             return_output=False,
+            packing_samples=False,
         ) -> torch.Tensor:
-            # https://github.com/OpenRLHF/OpenRLHF/issues/217
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
+            if not packing_samples:
+                # https://github.com/OpenRLHF/OpenRLHF/issues/217
+                position_ids = attention_mask.long().cumsum(-1) - 1
+                position_ids.masked_fill_(attention_mask == 0, 1)
+            else:
+                position_ids = None
+
             outputs = getattr(self, self.base_model_prefix)(
                 input_ids, attention_mask=attention_mask, position_ids=position_ids
             )
