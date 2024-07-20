@@ -30,6 +30,7 @@ def train(args):
         lora_dropout=args.lora_dropout,
         target_modules=args.target_modules,
         ds_config=strategy.get_ds_train_config(is_actor=True),
+        packing_samples=args.packing_samples,
     )
 
     # configure tokenizer
@@ -43,6 +44,7 @@ def train(args):
         bf16=args.bf16,
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
+        packing_samples=args.packing_samples,
     )
     if args.ref_offload:
         ref_model._offload = True

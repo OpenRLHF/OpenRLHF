@@ -32,6 +32,7 @@ def train(args):
         ds_config=strategy.get_ds_train_config(is_actor=False),
         init_value_head=True,
         value_head_prefix=args.value_head_prefix,
+        packing_samples=args.packing_samples,
     )
 
     # configure tokenizer
