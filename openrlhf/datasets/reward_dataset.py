@@ -187,27 +187,36 @@ class RewardDataset(Dataset):
         return chosen_ids, chosen_masks, reject_ids, rejects_masks, extras
 
     def packing_collate_fn(self, item_list):
-        packed_input_ids = []
-        packed_attention_masks = []
-        packed_seq_lens = []
         extras = []
 
+        chosen_ids = []
+        chosen_att_masks = []
+        chosen_seq_lens = []
+        rejected_id = []
+        rejected_att_mask = []
+        rejected_seq_lens = []
         index = 1
         for chosen_id, chosen_mask, reject_id, rejects_mask, extra in item_list:
-            packed_input_ids.append(chosen_id.flatten())
-            packed_attention_masks.append(torch.ones_like(chosen_id.flatten()) * index)
-            packed_seq_lens.append(len(chosen_id.flatten()))
+            chosen_ids.append(chosen_id.flatten())
+            chosen_att_masks.append(torch.ones_like(chosen_id.flatten()) * index)
+            chosen_seq_lens.append(len(chosen_id.flatten()))
+
+            rejected_id.append(reject_id.flatten())
+            rejected_att_mask.append(torch.ones_like(reject_id.flatten()) * index)
+            rejected_seq_lens.append(len(reject_id.flatten()))
             extras.append(extra)
             index += 1
 
-        for chosen_id, chosen_mask, reject_id, rejects_mask, extra in item_list:
-            packed_input_ids.append(reject_id.flatten())
-            packed_attention_masks.append(torch.ones_like(reject_id.flatten()) * index)
-            packed_seq_lens.append(len(reject_id.flatten()))
-            index += 1
-
         # Concatenate all tensors into a single row
-        packed_input_ids = torch.cat(packed_input_ids, dim=0).unsqueeze(0)
-        packed_attention_masks = torch.cat(packed_attention_masks, dim=0).unsqueeze(0)
+        chosen_ids = torch.cat(chosen_ids, dim=0)
+        chosen_att_mask = torch.cat(chosen_att_masks, dim=0)
+        rejected_id = torch.cat(rejected_id, dim=0)
+        rejected_att_mask = torch.cat(rejected_att_mask, dim=0)
 
+        # padding
+        packed_input_ids = zero_pad_sequences(
+            [chosen_ids, rejected_id], side="right", value=self.tokenizer.pad_token_id
+        )
+        packed_attention_masks = zero_pad_sequences([chosen_att_mask, rejected_att_mask], side="right")
+        packed_seq_lens = chosen_seq_lens + rejected_seq_lens
         return packed_input_ids, packed_attention_masks, packed_seq_lens, extras

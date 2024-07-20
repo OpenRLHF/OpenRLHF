@@ -224,7 +224,7 @@ class RewardModelTrainer(ABC):
                     reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
                     r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
 
-                    chosen_reward, reject_reward, aux_loss = self.concatenated_forward(
+                    chosen_reward, reject_reward, _ = self.concatenated_forward(
                         self.model, chosen_ids, c_mask, reject_ids, r_mask
                     )
                 else:
@@ -233,7 +233,7 @@ class RewardModelTrainer(ABC):
                         torch.cuda.current_device()
                     ), packed_attention_masks.to(torch.cuda.current_device())
 
-                    chosen_reward, reject_reward, aux_loss = self.packed_samples_forward(
+                    chosen_reward, reject_reward, _ = self.packed_samples_forward(
                         self.model, packed_input_ids, packed_attention_masks, packed_seq_lens
                     )
 
@@ -332,9 +332,10 @@ class RewardModelTrainer(ABC):
         )
         rewards = []
         index = 0
+        all_values = all_values.flatten()
         for seq_len in packed_seq_lens:
             index += seq_len
-            rewards.append(all_values[0, index - 1])
+            rewards.append(all_values[index - 1])
         rewards = torch.stack(rewards)
 
         chosen_rewards = rewards[: len(packed_seq_lens) // 2]
