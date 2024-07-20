@@ -158,15 +158,17 @@ class RewardModelTrainer(ABC):
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-                acc_mean = acc_mean * 0.9 + 0.1 * (chosen_reward > reject_reward).float().mean().item()
+                acc = (chosen_reward > reject_reward).float().mean().item()
+                acc_mean = acc_mean * 0.9 + 0.1 * acc
                 loss_mean = loss_mean * 0.9 + 0.1 * preference_loss.item()
                 # optional rm info
                 logs_dict = {
-                    "preference_loss": preference_loss.item(),
+                    "loss": preference_loss.item(),
+                    "acc": acc,
                     "chosen_reward": chosen_reward.mean().item(),
                     "reject_reward": reject_reward.mean().item(),
-                    "acc_mean": acc_mean,
                     "loss_mean": loss_mean,
+                    "acc_mean": acc_mean,
                 }
                 if self.aux_loss:
                     logs_dict["aux_loss"] = aux_loss.item()
