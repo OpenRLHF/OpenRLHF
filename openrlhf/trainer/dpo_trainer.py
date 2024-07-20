@@ -358,7 +358,7 @@ class DPOTrainer(ABC):
             all_logits,
             packed_input_ids,
             packed_attention_masks,
-            prompt_id_lens,
+            prompt_id_lens * 2,
             packed_seq_lens,
             average_log_prob=False,
         )
