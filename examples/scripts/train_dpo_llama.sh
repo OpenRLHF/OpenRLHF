@@ -26,6 +26,7 @@ EOF
     # --ipo [for IPO]
     # --label_smoothing 0.1 [for cDPO]
     # --ref_offload 
+    # --packing_samples
 
 
 if [[ ${1} != "slurm" ]]; then
