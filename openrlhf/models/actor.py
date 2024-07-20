@@ -9,6 +9,7 @@ from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedModel
 from transformers.deepspeed import HfDeepSpeedConfig
 
+from .packing_utils import patch_for_block_diag_attn
 from .utils import log_probs_from_logits
 
 
@@ -34,6 +35,7 @@ class Actor(nn.Module):
         target_modules=None,
         ds_config=None,
         device_map=None,
+        packing_samples=False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -101,6 +103,12 @@ class Actor(nn.Module):
             # https://github.com/huggingface/transformers/issues/26877
             # Use `model.generate(use_cache=True)` instead.`
             self.model.config.use_cache = False
+
+            # packing samples using Flash Attention 2
+            if packing_samples:
+                assert use_flash_attention_2, "Only support `--packing_samples` with Flash Attention 2."
+                model_type = getattr(self.model.config, "model_type", None)
+                patch_for_block_diag_attn(model_type)
         else:
             self.model = pretrain_or_model
 

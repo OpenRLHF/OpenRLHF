@@ -183,7 +183,7 @@ deepspeed --module openrlhf.cli.train_sft \
 ```
 
 > [!NOTE]
-> OpenRLHF SFT supports `--packing_samples` [based on `--flash_attn`](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
+> OpenRLHF SFT/DPO/RewardModel Training supports `--packing_samples` [based on `--flash_attn`](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
 
 
 ### Reward Model Training
@@ -208,6 +208,9 @@ deepspeed --module openrlhf.cli.train_rm \
    --flash_attn \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
+
+# RM samples packing
+# --packing_samples
 ```
 
 ### PPO without Ray

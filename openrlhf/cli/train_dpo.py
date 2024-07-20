@@ -30,6 +30,7 @@ def train(args):
         lora_dropout=args.lora_dropout,
         target_modules=args.target_modules,
         ds_config=strategy.get_ds_train_config(is_actor=True),
+        packing_samples=args.packing_samples,
     )
 
     # configure tokenizer
@@ -43,6 +44,7 @@ def train(args):
         bf16=args.bf16,
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
+        packing_samples=args.packing_samples,
     )
     if args.ref_offload:
         ref_model._offload = True
@@ -82,11 +84,15 @@ def train(args):
         args.micro_train_batch_size,
         True,
         True,
-        train_dataset.collate_fn,
+        train_dataset.packing_collate_fn if args.packing_samples else train_dataset.collate_fn,
     )
 
     eval_dataloader = strategy.setup_dataloader(
-        eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn
+        eval_dataset,
+        args.micro_train_batch_size,
+        True,
+        False,
+        eval_dataset.packing_collate_fn if args.packing_samples else eval_dataset.collate_fn,
     )
 
     # scheduler
@@ -178,6 +184,9 @@ if __name__ == "__main__":
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")
     parser.add_argument("--lora_dropout", type=float, default=0)
+
+    # packing samples using Flash Attention2
+    parser.add_argument("--packing_samples", action="store_true", default=False)
 
     # Custom dataset
     parser.add_argument("--pretrain", type=str, default=None)
