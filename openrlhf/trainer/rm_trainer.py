@@ -337,7 +337,7 @@ class RewardModelTrainer(ABC):
         index = 0
         for i, seq_len in enumerate(packed_seq_lens):
             batch = 0 if i < half_len else 1
-            index = index + seq_len if i != half_len - 1 else seq_len
+            index = index + seq_len if i != half_len else seq_len
             rewards.append(all_values[batch, index - 1])
         rewards = torch.stack(rewards)
 
