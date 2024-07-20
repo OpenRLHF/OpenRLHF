@@ -406,7 +406,7 @@ class DPOTrainer(ABC):
             seq = per_token_logps[batch, index : seq_len - 1]
             mask = loss_masks[batch, index : seq_len - 1]
             logprobs_sums.append((seq * mask).sum())
-            if i == len(packed_seq_lens) // 2:
+            if i == len(packed_seq_lens) // 2 - 1:
                 index = 0
             else:
                 index += seq_len
