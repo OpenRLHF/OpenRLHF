@@ -340,4 +340,5 @@ class RewardModelTrainer(ABC):
         chosen_rewards = rewards[: len(packed_seq_lens) // 2]
         rejected_rewards = rewards[len(packed_seq_lens) // 2 :]
         aux_loss = output.aux_loss if "aux_loss" in output else []
+
         return chosen_rewards, rejected_rewards, aux_loss
