@@ -391,7 +391,7 @@ class DPOTrainer(ABC):
             loss_masks[0, index1 : prompt_id_lens[i]] = False
             index1 += packed_seq_lens[i]
             # rejected
-            loss_masks[1, index : prompt_id_lens[i + len(packed_seq_lens) // 2]] = False
+            loss_masks[1, index2 : prompt_id_lens[i + len(packed_seq_lens) // 2]] = False
             index2 += packed_seq_lens[i + len(packed_seq_lens) // 2]
         loss_masks = loss_masks[:, 1:]
 
