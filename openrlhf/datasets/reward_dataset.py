@@ -195,14 +195,14 @@ class RewardDataset(Dataset):
         index = 1
         for chosen_id, chosen_mask, reject_id, rejects_mask, extra in item_list:
             packed_input_ids.append(chosen_id.flatten())
-            packed_attention_masks.append(chosen_mask.flatten() * index)
+            packed_attention_masks.append(torch.ones_like(chosen_id.flatten()) * index)
             packed_seq_lens.append(len(chosen_id.flatten()))
             extras.append(extra)
             index += 1
 
         for chosen_id, chosen_mask, reject_id, rejects_mask, extra in item_list:
             packed_input_ids.append(reject_id.flatten())
-            packed_attention_masks.append(rejects_mask.flatten() * index)
+            packed_attention_masks.append(torch.ones_like(reject_id.flatten()) * index)
             packed_seq_lens.append(len(reject_id.flatten()))
             index += 1
 
