@@ -107,7 +107,7 @@ class Actor(nn.Module):
             # packing samples using Flash Attention 2
             if packing_samples:
                 assert use_flash_attention_2, "Only support `--packing_samples` with Flash Attention 2."
-                model_type = getattr(self.model.config.config, "model_type", None)
+                model_type = getattr(self.model.config, "model_type", None)
                 patch_for_block_diag_attn(model_type)
         else:
             self.model = pretrain_or_model

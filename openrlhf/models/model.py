@@ -156,7 +156,7 @@ def get_llm_for_sequence_regression(
     # packing samples using Flash Attention 2
     if packing_samples:
         assert use_flash_attention_2, "Only support `--packing_samples` with Flash Attention 2."
-        model_type = getattr(model.config.config, "model_type", None)
+        model_type = getattr(model.config, "model_type", None)
         patch_for_block_diag_attn(model_type)
 
     # NOTE: For reward model training only, intialize value_head manually
