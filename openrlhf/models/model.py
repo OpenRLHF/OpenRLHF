@@ -10,6 +10,7 @@ from transformers.deepspeed import HfDeepSpeedConfig
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
 from openrlhf.utils.logging import init_logger
+from .packing_utils import patch_for_block_diag_attn
 
 logger = init_logger(__name__)
 
@@ -32,6 +33,7 @@ def get_llm_for_sequence_regression(
     init_value_head: bool = False,
     value_head_prefix="value_head",
     device_map=None,
+    packing_samples=False,
     **kwargs,
 ) -> nn.Module:
     """Get transformer with a sequence classification head on top (linear layer).
@@ -150,6 +152,12 @@ def get_llm_for_sequence_regression(
 
     # https://github.com/huggingface/transformers/issues/26877
     model.config.use_cache = False
+
+    # packing samples using Flash Attention 2
+    if packing_samples:
+        assert use_flash_attention_2, "Only support `--packing_samples` with Flash Attention 2."
+        model_type = getattr(model.config.config, "model_type", None)
+        patch_for_block_diag_attn(model_type)
 
     # NOTE: For reward model training only, intialize value_head manually
     # because deepspeed.zero.Init() will not intialize them.

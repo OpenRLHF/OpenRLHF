@@ -9,7 +9,6 @@ from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import SFTDataset
-from openrlhf.datasets.packing_utils import patch_for_block_diag_attn
 from openrlhf.models import GPTLMLoss
 
 

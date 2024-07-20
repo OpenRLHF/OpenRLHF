@@ -127,3 +127,5 @@ def patch_for_block_diag_attn(model_type: str) -> None:
         transformers.models.qwen2.modeling_qwen2._get_unpad_data = get_unpad_data
     elif model_type == "starcoder2":
         transformers.models.starcoder2.modeling_starcoder2._get_unpad_data = get_unpad_data
+    else:
+        raise Exception(f"Unsupported mode type {model_type} for patch_for_block_diag_attn!")

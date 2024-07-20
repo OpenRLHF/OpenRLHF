@@ -8,7 +8,6 @@ from torch.optim import Optimizer
 from torch.utils.data import DistributedSampler
 from tqdm import tqdm
 
-from openrlhf.datasets.packing_utils import patch_for_block_diag_attn
 from openrlhf.models import DPOLoss
 
 
@@ -62,12 +61,6 @@ class DPOTrainer(ABC):
 
         # packing samples
         self.packing_samples = strategy.args.packing_samples
-
-        # packing samples using Flash Attention 2
-        if self.packing_samples:
-            assert strategy.args.flash_attn, "Only support `--packing_samples` with Flash Attention 2."
-            model_type = getattr(strategy._unwrap_model(model).config, "model_type", None)
-            patch_for_block_diag_attn(model_type)
 
         self._wandb = None
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():
