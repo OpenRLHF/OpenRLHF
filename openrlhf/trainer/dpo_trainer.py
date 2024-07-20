@@ -387,7 +387,7 @@ class DPOTrainer(ABC):
 
         half_len = len(packed_seq_lens) // 2
         index = 0
-        for i in range(packed_seq_lens):
+        for i, seq_len in enumerate(packed_seq_lens):
             batch = 0 if i < half_len else 1
             loss_masks[batch, index : index + prompt_id_lens[i]] = False
             index = index + seq_len if i != half_len - 1 else 0
