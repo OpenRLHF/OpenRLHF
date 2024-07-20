@@ -216,7 +216,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
 
             # return all values for packing_samples
-            if self.packing_samples:
+            if packing_samples:
                 reward = values
                 # normalize reward in eval mode
                 if not self.training and self.normalize_reward:
