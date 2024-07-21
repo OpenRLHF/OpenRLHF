@@ -43,7 +43,6 @@ class PPOTrainer(ABC):
         callbacks (List[Callback], defaults to []): the callbacks to call during training process
         generate_kwargs (dict, optional): the kwargs to use while model generating
         remote_rm_url (str, optional): function for reward model api
-        remote_ref_url (str, optional): function for reference model api
     """
 
     def __init__(
@@ -76,7 +75,6 @@ class PPOTrainer(ABC):
         prompt_max_len: int = 128,
         dataloader_pin_memory: bool = True,
         remote_rm_url: str = None,
-        remote_ref_url: str = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
         **generate_kwargs,
     ) -> None:
@@ -106,7 +104,6 @@ class PPOTrainer(ABC):
         self.reward_model = reward_model
         self.remote_rm_url = remote_rm_url
         self.initial_model = initial_model
-        self.remote_ref_url = remote_ref_url
         self.ema_model = ema_model
         self.actor_optim = actor_optim
         self.critic_optim = critic_optim
@@ -137,7 +134,6 @@ class PPOTrainer(ABC):
             self.kl_ctl,
             strategy,
             remote_rm_url,
-            remote_ref_url,
             reward_fn,
         )
         self.replay_buffer = NaiveReplayBuffer(micro_train_batch_size, buffer_limit, buffer_cpu_offload)
