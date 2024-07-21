@@ -39,7 +39,7 @@ def conditional_sft_processor(args, objs):
 # See https://arxiv.org/abs/2307.09288
 def rejection_sampling_processor(args, objs):
     out = {}
-    for obj in tqdm(objs, desc=f"Rejection Sampling process...."):
+    for obj in tqdm(objs, desc="Rejection Sampling process...."):
         input = obj["input"]
         output = obj["output"]
         reward = float(obj["reward"])
@@ -57,7 +57,7 @@ def rejection_sampling_processor(args, objs):
 # See https://github.com/RLHFlow/Online-RLHF/blob/main/run_loop.sh
 def iterative_dpo_processor(args, objs):
     out = {}
-    for obj in tqdm(objs, desc=f"Iterative DPO process...."):
+    for obj in tqdm(objs, desc="Iterative DPO process...."):
         input = obj["input"]
         output = obj["output"]
         reward = float(obj["reward"])

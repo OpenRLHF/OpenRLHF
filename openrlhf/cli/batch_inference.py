@@ -142,6 +142,7 @@ def batch_generate(args):
     )
     pbar = tqdm(
         prompts_dataloader,
+        desc="Generating",
         disable=not strategy.is_rank_0(),
     )
 
@@ -239,6 +240,7 @@ def batch_rm_inference(args):
     )
     pbar = tqdm(
         dataloader,
+        desc="Rewarding",
         disable=not strategy.is_rank_0(),
     )
 
