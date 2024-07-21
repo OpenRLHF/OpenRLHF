@@ -69,8 +69,8 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --colocate_critic_reward \
     --colocate_actor_ref \
     --ref_reward_offload \
-    --pretrain OpenLLMAI/Llama-3-8b-sft-mixture \
-    --reward_pretrain OpenLLMAI/Llama-3-8b-rm-mixture \
+    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
+    --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
     --save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
     --micro_train_batch_size 8 \
     --train_batch_size 128 \
@@ -85,7 +85,7 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --actor_learning_rate 5e-7 \
     --critic_learning_rate 9e-6 \
     --init_kl_coef 0.01 \
-    --prompt_data OpenLLMAI/prompt-collection-v0.1 \
+    --prompt_data OpenRLHF/prompt-collection-v0.1 \
     --input_key context_messages \
     --apply_chat_template \
     --normalize_reward \

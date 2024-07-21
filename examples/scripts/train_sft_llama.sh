@@ -22,6 +22,7 @@ openrlhf.cli.train_sft \
    --gradient_checkpointing
 EOF
     # --wandb [WANDB_TOKENS]
+    # --packing_samples
 
 if [[ ${1} != "slurm" ]]; then
     deepspeed --module $training_commands

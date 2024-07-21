@@ -32,6 +32,7 @@ def train(args):
         ds_config=strategy.get_ds_train_config(is_actor=False),
         init_value_head=True,
         value_head_prefix=args.value_head_prefix,
+        packing_samples=args.packing_samples,
     )
 
     # configure tokenizer
@@ -63,10 +64,14 @@ def train(args):
         args.micro_train_batch_size,
         True,
         True,
-        train_dataset.collate_fn,
+        train_dataset.packing_collate_fn if args.packing_samples else train_dataset.collate_fn,
     )
     eval_dataloader = strategy.setup_dataloader(
-        eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn
+        eval_dataset,
+        args.micro_train_batch_size,
+        True,
+        False,
+        eval_dataset.packing_collate_fn if args.packing_samples else eval_dataset.collate_fn,
     )
 
     # scheduler
@@ -167,6 +172,9 @@ if __name__ == "__main__":
     parser.add_argument("--l2", type=float, default=0.0, help="weight decay loss")
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
 
+    # packing samples using Flash Attention2
+    parser.add_argument("--packing_samples", action="store_true", default=False)
+
     # Custom dataset
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--dataset_probs", type=str, default="1.0", help="sampling probs for datasets")
@@ -183,7 +191,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_samples", type=int, default=1e8, help="Max number of samples")
     parser.add_argument("--max_len", type=int, default=512)
 
-    # wandb pamameters
+    # wandb parameters
     parser.add_argument("--use_wandb", type=str, default=None)
     parser.add_argument("--wandb_org", type=str, default=None)
     parser.add_argument("--wandb_group", type=str, default=None)

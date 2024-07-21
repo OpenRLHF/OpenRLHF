@@ -7,10 +7,14 @@ from tqdm import tqdm
 from .utils import zero_pad_sequences
 
 
-def preprocess_data(data, input_template=None, input_key="input", output_key="output", apply_chat_template=None):
+def preprocess_data(data, input_template=None, input_key="input", output_key=None, apply_chat_template=None):
     if apply_chat_template:
-        prompt = apply_chat_template(data[input_key][:-1], tokenize=False, add_generation_prompt=True)
-        response = apply_chat_template(data[input_key], tokenize=False)[len(prompt) :]
+        if output_key:
+            prompt = apply_chat_template(data[input_key], tokenize=False, add_generation_prompt=True)
+            response = apply_chat_template(data[input_key] + data[output_key], tokenize=False)[len(prompt) :]
+        else:
+            prompt = apply_chat_template(data[input_key][:-1], tokenize=False, add_generation_prompt=True)
+            response = apply_chat_template(data[input_key], tokenize=False)[len(prompt) :]
     else:
         prompt = data[input_key]
         response = data[output_key]
@@ -56,7 +60,7 @@ class SFTDataset(Dataset):
             if tokenizer_chat_template:
                 self.tokenizer.chat_template = tokenizer_chat_template
 
-        for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
+        for data in tqdm(dataset, desc="Preprocessing data", disable=not self.strategy.is_rank_0()):
             prompt, response = preprocess_data(
                 data,
                 None if pretrain_mode else input_template,
@@ -141,12 +145,16 @@ class SFTDataset(Dataset):
         index = 1
         for prompt_ids_len, input_id, attention_mask, info in item_list:
             packed_input_ids.append(input_id.flatten())
-            packed_attention_masks.append(attention_mask.flatten() * index)
+            packed_attention_masks.append(torch.ones_like(input_id.flatten()) * index)
             prompt_ids_lens.append(prompt_ids_len)
             infos["input_length"].append(info["input_length"])
             index += 1
 
         # Concatenate all tensors into a single row
+        # https://github.com/huggingface/transformers/blob/v4.42.4/src/transformers/models/llama/modeling_llama.py#L1028
+        packed_input_ids.append(torch.tensor([self.tokenizer.pad_token_id]))
+        packed_attention_masks.append(torch.tensor([0]))
+
         packed_input_ids = torch.cat(packed_input_ids, dim=0).unsqueeze(0)
         packed_attention_masks = torch.cat(packed_attention_masks, dim=0).unsqueeze(0)
 

@@ -1,8 +1,11 @@
+import os
+import sys
+import subprocess
+import platform
+
 from datetime import datetime
 from setuptools import find_packages, setup
-
-import os
-
+from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
 
 _build_mode = os.getenv("OPENRLHF_BUILD_MODE", "")
 
@@ -23,16 +26,39 @@ def _fetch_readme():
 
 def _fetch_version():
     with open("version.txt", "r") as f:
-        raw_version_number = f.read().strip()
-        return (
-            f'{raw_version_number}{datetime.today().strftime("b%Y%m%d.dev0")}' if _is_nightly() else raw_version_number
-        )
+        version = f.read().strip()
+
+    if _is_nightly():
+        now = datetime.now()
+        date_str = now.strftime("%Y%m%d")
+        version += f".dev{date_str}"
+
+    return version
 
 
 def _fetch_package_name():
     return "openrlhf-nightly" if _is_nightly() else "openrlhf"
 
 
+# Custom wheel class to modify the wheel name
+class bdist_wheel(_bdist_wheel):
+    def finalize_options(self):
+        _bdist_wheel.finalize_options(self)
+        self.root_is_pure = False
+
+    def get_tag(self):
+        python_version = f"cp{sys.version_info.major}{sys.version_info.minor}"
+        abi_tag = f"{python_version}"
+
+        if platform.system() == "Linux":
+            platform_tag = "manylinux1_x86_64"
+        else:
+            platform_tag = platform.system().lower()
+
+        return python_version, abi_tag, platform_tag
+
+
+# Setup configuration
 setup(
     name=_fetch_package_name(),
     version=_fetch_version(),
@@ -53,9 +79,11 @@ setup(
     },
     python_requires=">=3.10",
     classifiers=[
-        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
         "Environment :: GPU :: NVIDIA CUDA",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
         "Topic :: System :: Distributed Computing",
     ],
+    cmdclass={"bdist_wheel": bdist_wheel},
 )

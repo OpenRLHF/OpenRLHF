@@ -1,3 +1,11 @@
+[build-system]
+requires = [
+    "packaging",
+    "setuptools >= 49.4.0",
+    "wheel",
+]
+build-backend = "setuptools.build_meta"
+
 [tool.isort]
 profile = "black"  # black-compatible
 line_length = 119  # should match black parameters

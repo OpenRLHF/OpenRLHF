@@ -177,7 +177,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_split", type=str, default="test", help="test split of the dataset")
 
     parser.add_argument("--input_key", type=str, default="input", help="JSON dataset key")
-    parser.add_argument("--output_key", type=str, default="output", help="JSON dataset key")
+    parser.add_argument("--output_key", type=str, default=None, help="JSON dataset key")
     parser.add_argument("--label_key", type=str, default="label")
 
     parser.add_argument("--input_template", type=str, default="User: {}\nAssistant: ")
@@ -187,7 +187,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_len", type=int, default=2048, help="Max tokens for the samples")
     parser.add_argument("--max_samples", type=int, default=1e8, help="Max number of samples")
 
-    # wandb pamameters
+    # wandb parameters
     parser.add_argument("--use_wandb", type=str, default=None)
     parser.add_argument("--wandb_org", type=str, default=None)
     parser.add_argument("--wandb_group", type=str, default=None)

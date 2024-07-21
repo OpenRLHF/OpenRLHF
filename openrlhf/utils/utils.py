@@ -46,8 +46,8 @@ def blending_datasets(
     max_count=5000000,
     return_eval=True,
     stopping_strategy="first_exhausted",
-    train_split=None,
-    eval_split=None,
+    train_split="train",
+    eval_split="test",
 ):
     datasets = datasets.split(",")
     probabilities = list(map(float, probabilities.split(",")))
@@ -57,46 +57,22 @@ def blending_datasets(
     eval_data_list = []
     for i, dataset in enumerate(datasets):
         dataset = dataset.strip()
-        dataset_subfold_list = dataset.split("@")
         strategy.print(f"dataset: {dataset}")
-        # local dir with python script or common local file
-        if os.path.isdir(os.path.join(os.getcwd(), dataset)) or dataset.endswith(
-            (".json", ".jsonl", ".csv", ".parquet", ".txt")
+
+        data_dir = dataset.split("@")[1].strip() if "@" in dataset else None
+        dataset = dataset.split("@")[0].strip()
+        dataset_basename = os.path.basename(dataset)
+
+        # local python script
+        if dataset.endswith(".py") or (
+            os.path.isdir(dataset) and os.path.exists(os.path.join(dataset, f"{dataset_basename}.py"))
         ):
-            if dataset.endswith((".json", ".jsonl", ".csv", ".parquet", ".txt")):
-                files = dataset
-                data_type = os.path.splitext(files)[1][1:]
-            else:
-                path = Path(dataset)
-                script = [str(file.resolve()) for file in Path(path).rglob("*.py")]
-                extensions = ("*.json", "*.jsonl", "*.csv", "*.parquet", "*.txt")
-                files = [str(file) for ext in extensions for file in Path(path).rglob(ext)]
-                strategy.print(f"script: {script}")
-                strategy.print(f"files: {files}")
-                # For dir, follow python script or first file type
-                data_type = script[0] if len(script) == 1 else os.path.splitext(files[0])[1][1:]
-            # reformat data type
-            if data_type in ["json", "jsonl"]:
-                data_type = "json"
-            elif data_type == "txt":
-                data_type = "text"
-            elif data_type.endswith(".py"):
-                # load local dir with python script
-                files = None
-            if data_type.endswith(".py"):
-                strategy.print(f"load {dataset} with script {data_type}")
-            else:
-                strategy.print(f"load {files} from {dataset}")
-            data = load_dataset(data_type, data_files=files)
-        elif len(dataset_subfold_list) == 2:
-            dataset = dataset_subfold_list[0]
-            subfold = dataset_subfold_list[1]
-            data = load_dataset(dataset, data_dir=subfold.strip())
-        elif len(dataset_subfold_list) == 1:
-            dataset = dataset_subfold_list[0]
-            data = load_dataset(dataset)
+            data = load_dataset(dataset, trust_remote_code=True)
+            strategy.print(f"loaded {dataset} with python script")
+        # remote/local folder or common file
         else:
-            raise Exception(f"Dataset Name {dataset}: Format error")
+            data = load_dataset(dataset, data_dir=data_dir)
+            strategy.print(f"loaded {dataset} from files")
 
         if train_split and train_split in data:
             train_data = data[train_split].select(range(min(max_count, len(data[train_split]))))

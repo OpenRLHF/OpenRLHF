@@ -47,6 +47,7 @@ def batch_generate_vllm(args):
         repetition_penalty=args.repetition_penalty,
         skip_special_tokens=False,
         truncate_prompt_tokens=args.prompt_max_len,
+        include_stop_str_in_output=True,
     )
 
     prompts_data = blending_datasets(
@@ -141,6 +142,7 @@ def batch_generate(args):
     )
     pbar = tqdm(
         prompts_dataloader,
+        desc="Generating",
         disable=not strategy.is_rank_0(),
     )
 
@@ -238,6 +240,7 @@ def batch_rm_inference(args):
     )
     pbar = tqdm(
         dataloader,
+        desc="Rewarding",
         disable=not strategy.is_rank_0(),
     )
 
@@ -305,7 +308,7 @@ if __name__ == "__main__":
     # Custom dataset
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--dataset_probs", type=str, default="1.0")
-    parser.add_argument("--dataset_split", type=str, default=None)
+    parser.add_argument("--dataset_split", type=str, default="train")
     parser.add_argument("--input_key", type=str, default="input", help="JSON dataset key")
     parser.add_argument("--output_key", type=str, default="output", help="JSON dataset key")
     parser.add_argument(
@@ -331,7 +334,7 @@ if __name__ == "__main__":
         help="set to rs (Rejection Sampling), csft (Conditional SFT), iter_dpo (Iterative DPO) or None",
     )
     # For vllm
-    parser.add_argument("--tp_size", type=int, default=8)
+    parser.add_argument("--tp_size", type=int, default=torch.cuda.device_count())
     parser.add_argument("--max_num_seqs", type=int, default=256)
     parser.add_argument("--enable_prefix_caching", action="store_true", default=False)
 

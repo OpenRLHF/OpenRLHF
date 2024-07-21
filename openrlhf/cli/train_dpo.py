@@ -30,6 +30,7 @@ def train(args):
         lora_dropout=args.lora_dropout,
         target_modules=args.target_modules,
         ds_config=strategy.get_ds_train_config(is_actor=True),
+        packing_samples=args.packing_samples,
     )
 
     # configure tokenizer
@@ -43,6 +44,7 @@ def train(args):
         bf16=args.bf16,
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
+        packing_samples=args.packing_samples,
     )
     if args.ref_offload:
         ref_model._offload = True
@@ -82,11 +84,15 @@ def train(args):
         args.micro_train_batch_size,
         True,
         True,
-        train_dataset.collate_fn,
+        train_dataset.packing_collate_fn if args.packing_samples else train_dataset.collate_fn,
     )
 
     eval_dataloader = strategy.setup_dataloader(
-        eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn
+        eval_dataset,
+        args.micro_train_batch_size,
+        True,
+        False,
+        eval_dataset.packing_collate_fn if args.packing_samples else eval_dataset.collate_fn,
     )
 
     # scheduler
@@ -179,6 +185,9 @@ if __name__ == "__main__":
     parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")
     parser.add_argument("--lora_dropout", type=float, default=0)
 
+    # packing samples using Flash Attention2
+    parser.add_argument("--packing_samples", action="store_true", default=False)
+
     # Custom dataset
     parser.add_argument("--pretrain", type=str, default=None)
     parser.add_argument("--ref_pretrain", type=str, default=None)
@@ -187,7 +196,7 @@ if __name__ == "__main__":
     parser.add_argument("--train_split", type=str, default="train", help="train split of the HF dataset")
     parser.add_argument("--eval_split", type=str, default="test", help="test split of the dataset")
 
-    parser.add_argument("--prompt_key", type=str, default="prompt")
+    parser.add_argument("--prompt_key", type=str, default=None)
     parser.add_argument("--chosen_key", type=str, default="chosen")
     parser.add_argument("--rejected_key", type=str, default="rejected")
     parser.add_argument("--input_template", type=str, default="User: {}\nAssistant: ")
@@ -197,7 +206,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_samples", type=int, default=1e8, help="Max number of samples")
     parser.add_argument("--max_len", type=int, default=512)
 
-    # wandb pamameters
+    # wandb parameters
     parser.add_argument("--use_wandb", type=str, default=None)
     parser.add_argument("--wandb_org", type=str, default=None)
     parser.add_argument("--wandb_group", type=str, default=None)

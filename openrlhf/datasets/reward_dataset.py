@@ -17,21 +17,28 @@ def preprocess_data(
     is_dpo=False,
 ) -> str:
     if apply_chat_template:
-        prompt = ""
-        chosen = apply_chat_template(data[chosen_key], tokenize=False)
-        rejected = apply_chat_template(data[rejected_key], tokenize=False)
+        if prompt_key:
+            prompt = apply_chat_template(data[prompt_key], tokenize=False, add_generation_prompt=True)
+            chosen = apply_chat_template(data[prompt_key] + data[chosen_key], tokenize=False)[len(prompt) :]
+            rejected = apply_chat_template(data[prompt_key] + data[rejected_key], tokenize=False)[len(prompt) :]
+        else:
+            prompt = ""
+            chosen = apply_chat_template(data[chosen_key], tokenize=False)
+            rejected = apply_chat_template(data[rejected_key], tokenize=False)
 
-        if is_dpo:
-            prompt = apply_chat_template(data[chosen_key][:-1], tokenize=False, add_generation_prompt=True)
-            chosen = chosen[len(prompt) :]
-            rejected = rejected[len(prompt) :]
+            if is_dpo:
+                prompt = apply_chat_template(data[chosen_key][:-1], tokenize=False, add_generation_prompt=True)
+                chosen = chosen[len(prompt) :]
+                rejected = rejected[len(prompt) :]
     else:
-        chosen = data[chosen_key]
-        rejected = data[rejected_key]
         if prompt_key:
             prompt = data[prompt_key]
             if input_template:
                 prompt = input_template.format(prompt)
+        else:
+            prompt = ""
+        chosen = data[chosen_key]
+        rejected = data[rejected_key]
 
     # margin loss
     margin = data["margin"] if exist_and_not_none(data, "margin") else 0
@@ -84,7 +91,7 @@ class RewardDataset(Dataset):
             if tokenizer_chat_template:
                 self.tokenizer.chat_template = tokenizer_chat_template
 
-        for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
+        for data in tqdm(dataset, desc="Tokenizing", disable=not self.strategy.is_rank_0()):
             prompt, chosen, reject, margin = preprocess_data(
                 data, input_template, prompt_key, chosen_key, rejected_key, apply_chat_template, self.is_dpo
             )
@@ -178,3 +185,35 @@ class RewardDataset(Dataset):
         reject_ids = zero_pad_sequences(reject_ids, side=padding_side, value=self.tokenizer.pad_token_id)
         rejects_masks = zero_pad_sequences(rejects_masks, side=padding_side)
         return chosen_ids, chosen_masks, reject_ids, rejects_masks, extras
+
+    def packing_collate_fn(self, item_list):
+        extras = []
+
+        chosen_ids = []
+        chosen_att_masks = []
+        chosen_seq_lens = []
+        rejected_ids = []
+        rejected_att_masks = []
+        rejected_seq_lens = []
+        index = 1
+        half_len = len(item_list) // 2
+        for chosen_id, chosen_mask, reject_id, rejects_mask, extra in item_list:
+            chosen_ids.append(chosen_id.flatten())
+            chosen_att_masks.append(torch.ones_like(chosen_id.flatten()) * index)
+            chosen_seq_lens.append(len(chosen_id.flatten()))
+            extras.append(extra)
+
+            rejected_ids.append(reject_id.flatten())
+            rejected_att_masks.append(torch.ones_like(reject_id.flatten()) * (index + half_len))
+            rejected_seq_lens.append(len(reject_id.flatten()))
+            index += 1
+
+        # Concatenate all tensors into a single row
+        # https://github.com/huggingface/transformers/blob/v4.42.4/src/transformers/models/llama/modeling_llama.py#L1028
+        rejected_ids.append(torch.tensor([self.tokenizer.pad_token_id]))
+        rejected_att_masks.append(torch.tensor([0]))
+
+        packed_input_ids = torch.cat(chosen_ids + rejected_ids, dim=0).unsqueeze(0)
+        packed_attention_masks = torch.cat(chosen_att_masks + rejected_att_masks, dim=0).unsqueeze(0)
+        packed_seq_lens = chosen_seq_lens + rejected_seq_lens
+        return packed_input_ids, packed_attention_masks, packed_seq_lens, extras

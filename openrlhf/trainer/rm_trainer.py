@@ -61,6 +61,9 @@ class RewardModelTrainer(ABC):
         # Mixtral 8*7b
         self.aux_loss = self.args.aux_loss_coef > 1e-8
 
+        # packing samples
+        self.packing_samples = strategy.args.packing_samples
+
         self.margin_loss = self.strategy.args.margin_loss
         self.compute_fp32_loss = self.strategy.args.compute_fp32_loss
 
@@ -108,20 +111,31 @@ class RewardModelTrainer(ABC):
             self.model.train()
             acc_mean = 0
             loss_mean = 0
-            for chosen_ids, c_mask, reject_ids, r_mask, margin in self.train_dataloader:
-                chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
-                c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
-                reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
-                r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
+            for data in self.train_dataloader:
+                if not self.packing_samples:
+                    chosen_ids, c_mask, reject_ids, r_mask, margin = data
+                    chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
+                    c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
+                    reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
+                    r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
+
+                    chosen_reward, reject_reward, aux_loss = self.concatenated_forward(
+                        self.model, chosen_ids, c_mask, reject_ids, r_mask
+                    )
+                else:
+                    packed_input_ids, packed_attention_masks, packed_seq_lens, margin = data
+                    packed_input_ids, packed_attention_masks = packed_input_ids.to(
+                        torch.cuda.current_device()
+                    ), packed_attention_masks.to(torch.cuda.current_device())
+
+                    chosen_reward, reject_reward, aux_loss = self.packed_samples_forward(
+                        self.model, packed_input_ids, packed_attention_masks, packed_seq_lens
+                    )
 
                 if self.margin_loss:
                     margin = torch.tensor(margin).to(torch.cuda.current_device())
                 else:
                     margin = None
-
-                chosen_reward, reject_reward, aux_loss = self.concatenated_forward(
-                    self.model, chosen_ids, c_mask, reject_ids, r_mask
-                )
 
                 # loss function
                 if self.compute_fp32_loss:
@@ -137,15 +151,17 @@ class RewardModelTrainer(ABC):
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-                acc_mean = acc_mean * 0.9 + 0.1 * (chosen_reward > reject_reward).float().mean().item()
+                acc = (chosen_reward > reject_reward).float().mean().item()
+                acc_mean = acc_mean * 0.9 + 0.1 * acc
                 loss_mean = loss_mean * 0.9 + 0.1 * preference_loss.item()
                 # optional rm info
                 logs_dict = {
-                    "preference_loss": preference_loss.item(),
+                    "loss": preference_loss.item(),
+                    "acc": acc,
                     "chosen_reward": chosen_reward.mean().item(),
                     "reject_reward": reject_reward.mean().item(),
-                    "acc_mean": acc_mean,
                     "loss_mean": loss_mean,
+                    "acc_mean": acc_mean,
                 }
                 if self.aux_loss:
                     logs_dict["aux_loss"] = aux_loss.item()
@@ -195,16 +211,32 @@ class RewardModelTrainer(ABC):
             acc = 0
             rewards = []
             loss_sum = 0
-            for chosen_ids, c_mask, reject_ids, r_mask, margin in eval_dataloader:
-                chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
-                c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
-                reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
-                r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
-                margin = torch.tensor(margin).to(torch.cuda.current_device())
+            for data in eval_dataloader:
+                if not self.packing_samples:
+                    chosen_ids, c_mask, reject_ids, r_mask, margin = data
+                    chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
+                    c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
+                    reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
+                    r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
 
-                chosen_reward, reject_reward, _ = self.concatenated_forward(
-                    self.model, chosen_ids, c_mask, reject_ids, r_mask
-                )
+                    chosen_reward, reject_reward, _ = self.concatenated_forward(
+                        self.model, chosen_ids, c_mask, reject_ids, r_mask
+                    )
+                else:
+                    packed_input_ids, packed_attention_masks, packed_seq_lens, margin = data
+                    packed_input_ids, packed_attention_masks = packed_input_ids.to(
+                        torch.cuda.current_device()
+                    ), packed_attention_masks.to(torch.cuda.current_device())
+
+                    chosen_reward, reject_reward, _ = self.packed_samples_forward(
+                        self.model, packed_input_ids, packed_attention_masks, packed_seq_lens
+                    )
+
+                if self.margin_loss:
+                    margin = torch.tensor(margin).to(torch.cuda.current_device())
+                else:
+                    margin = None
+
                 loss = self.loss_fn(chosen_reward, reject_reward, margin)
 
                 rewards += [chosen_reward.flatten(), reject_reward.flatten()]
@@ -288,3 +320,21 @@ class RewardModelTrainer(ABC):
         max_length = max(c_mask.shape[1], r_mask.shape[1])
         att_masks = torch.cat((pad_to_length(c_mask, max_length, 0), pad_to_length(r_mask, max_length, 0)), dim=0)
         return inputs_ids, att_masks
+
+    def packed_samples_forward(self, model, packed_input_ids, packed_attention_masks, packed_seq_lens):
+        all_values, output = model(
+            packed_input_ids, attention_mask=packed_attention_masks, packing_samples=True, return_output=True
+        )
+        half_len = len(packed_seq_lens) // 2
+        rewards = []
+        index = 0
+        for i, seq_len in enumerate(packed_seq_lens):
+            index = index + seq_len
+            rewards.append(all_values[0, index - 1])
+        rewards = torch.stack(rewards)
+
+        chosen_rewards = rewards[:half_len]
+        rejected_rewards = rewards[half_len:]
+        aux_loss = output.aux_loss if "aux_loss" in output else []
+
+        return chosen_rewards, rejected_rewards, aux_loss

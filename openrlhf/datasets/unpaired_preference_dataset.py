@@ -20,8 +20,12 @@ def preprocess_data(
     label = data[label_key]
 
     if apply_chat_template:
-        prompt = apply_chat_template(data[input_key][:-1], tokenize=False, add_generation_prompt=True)
-        response = apply_chat_template(data[input_key], tokenize=False)[len(prompt) :]
+        if output_key:
+            prompt = apply_chat_template(data[input_key], tokenize=False, add_generation_prompt=True)
+            response = apply_chat_template(data[input_key] + data[output_key], tokenize=False)[len(prompt) :]
+        else:
+            prompt = apply_chat_template(data[input_key][:-1], tokenize=False, add_generation_prompt=True)
+            response = apply_chat_template(data[input_key], tokenize=False)[len(prompt) :]
     else:
         prompt = data[input_key]
         response = data[output_key]
@@ -57,7 +61,7 @@ class UnpairedPreferenceDataset(Dataset):
         if apply_chat_template:
             apply_chat_template = self.tokenizer.apply_chat_template
 
-        for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
+        for data in tqdm(dataset, desc="Preprocessing data", disable=not self.strategy.is_rank_0()):
             prompt, response, label = preprocess_data(
                 data, input_template, input_key, output_key, label_key, apply_chat_template
             )

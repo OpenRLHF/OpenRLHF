@@ -10,6 +10,7 @@ from transformers.deepspeed import HfDeepSpeedConfig
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
 from openrlhf.utils.logging_utils import init_logger
+from .packing_utils import patch_for_block_diag_attn
 
 logger = init_logger(__name__)
 
@@ -32,6 +33,7 @@ def get_llm_for_sequence_regression(
     init_value_head: bool = False,
     value_head_prefix="value_head",
     device_map=None,
+    packing_samples=False,
     **kwargs,
 ) -> nn.Module:
     """Get transformer with a sequence classification head on top (linear layer).
@@ -151,6 +153,12 @@ def get_llm_for_sequence_regression(
     # https://github.com/huggingface/transformers/issues/26877
     model.config.use_cache = False
 
+    # packing samples using Flash Attention 2
+    if packing_samples:
+        assert use_flash_attention_2, "Only support `--packing_samples` with Flash Attention 2."
+        model_type = getattr(model.config, "model_type", None)
+        patch_for_block_diag_attn(model_type)
+
     # NOTE: For reward model training only, intialize value_head manually
     # because deepspeed.zero.Init() will not intialize them.
     # TODO: Find a better way to clarify reward model training.
@@ -192,26 +200,40 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             input_ids: torch.LongTensor = None,
             attention_mask: Optional[torch.Tensor] = None,
             return_output=False,
+            packing_samples=False,
         ) -> torch.Tensor:
-            # https://github.com/OpenLLMAI/OpenRLHF/issues/217
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
+            if not packing_samples:
+                # https://github.com/OpenRLHF/OpenRLHF/issues/217
+                position_ids = attention_mask.long().cumsum(-1) - 1
+                position_ids.masked_fill_(attention_mask == 0, 1)
+            else:
+                position_ids = None
+
             outputs = getattr(self, self.base_model_prefix)(
                 input_ids, attention_mask=attention_mask, position_ids=position_ids
             )
             last_hidden_states = outputs["last_hidden_state"]
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
 
-            # left padding in training mode
-            if self.training:
-                reward = values[:, -1]
-            else:
-                eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
-                reward = values.gather(dim=1, index=eos_indices).squeeze(1)
-
+            # return all values for packing_samples
+            if packing_samples:
+                reward = values
                 # normalize reward in eval mode
-                if self.normalize_reward:
+                if not self.training and self.normalize_reward:
                     reward = (reward - self.mean) / self.std
+            else:
+                # left padding in training mode
+                if self.training:
+                    reward = values[:, -1]
+                else:
+                    eos_indices = (
+                        attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
+                    )
+                    reward = values.gather(dim=1, index=eos_indices).squeeze(1)
+                    # normalize reward in eval mode
+                    if self.normalize_reward:
+                        reward = (reward - self.mean) / self.std
+            # return
             if return_output:
                 return reward, outputs
             else:
@@ -247,10 +269,15 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             action_mask: Optional[torch.Tensor] = None,
             attention_mask: Optional[torch.Tensor] = None,
             return_output=False,
+            packing_samples=False,
         ) -> torch.Tensor:
-            # https://github.com/OpenLLMAI/OpenRLHF/issues/217
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
+            if not packing_samples:
+                # https://github.com/OpenRLHF/OpenRLHF/issues/217
+                position_ids = attention_mask.long().cumsum(-1) - 1
+                position_ids.masked_fill_(attention_mask == 0, 1)
+            else:
+                position_ids = None
+
             outputs = getattr(self, self.base_model_prefix)(
                 input_ids, attention_mask=attention_mask, position_ids=position_ids
             )

@@ -81,7 +81,7 @@ class ActorPPOTrainer(PPOTrainer):
             world_size = vllm_num_engines * vllm_tensor_parallel_size + 1
 
             backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
-            # https://github.com/OpenLLMAI/OpenRLHF/issues/313
+            # https://github.com/OpenRLHF/OpenRLHF/issues/313
             import vllm
 
             if vllm.__version__ > "0.4.2":
