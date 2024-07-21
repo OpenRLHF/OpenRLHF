@@ -332,7 +332,7 @@ if __name__ == "__main__":
         help="set to rs (Rejection Sampling), csft (Conditional SFT), iter_dpo (Iterative DPO) or None",
     )
     # For vllm
-    parser.add_argument("--tp_size", type=int, default=8)
+    parser.add_argument("--tp_size", type=int, default=torch.cuda.device_count())
     parser.add_argument("--max_num_seqs", type=int, default=256)
     parser.add_argument("--enable_prefix_caching", action="store_true", default=False)
 
