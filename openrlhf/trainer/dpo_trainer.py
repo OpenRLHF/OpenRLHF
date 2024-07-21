@@ -344,9 +344,7 @@ class DPOTrainer(ABC):
             return (per_token_logps * loss_masks).sum(-1)
 
     def packed_samples_forward(self, model, packed_input_ids, packed_attention_masks, packed_seq_lens, prompt_id_lens):
-        output = model(
-            packed_input_ids, attention_mask=packed_attention_masks, return_output=True, packing_samples=True
-        )
+        output = model(packed_input_ids, attention_mask=packed_attention_masks, return_output=True)
         all_logits = output["logits"]
         all_logps = self._packed_get_batch_logps(
             all_logits,

@@ -322,9 +322,7 @@ class RewardModelTrainer(ABC):
         return inputs_ids, att_masks
 
     def packed_samples_forward(self, model, packed_input_ids, packed_attention_masks, packed_seq_lens):
-        all_values, output = model(
-            packed_input_ids, attention_mask=packed_attention_masks, packing_samples=True, return_output=True
-        )
+        all_values, output = model(packed_input_ids, attention_mask=packed_attention_masks, return_output=True)
         half_len = len(packed_seq_lens) // 2
         rewards = []
         index = 0

@@ -119,9 +119,7 @@ class SFTTrainer(ABC):
                     inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
                     attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
 
-                output = self.model(
-                    inputs, attention_mask=attention_mask, return_output=True, packing_samples=self.packing_samples
-                )
+                output = self.model(inputs, attention_mask=attention_mask, return_output=True)
 
                 # loss function
                 labels = torch.where(
@@ -207,9 +205,7 @@ class SFTTrainer(ABC):
                     inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
                     attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
 
-                output = self.model(
-                    inputs, attention_mask=attention_mask, return_output=True, packing_samples=self.packing_samples
-                )
+                output = self.model(inputs, attention_mask=attention_mask, return_output=True)
 
                 # loss function
                 labels = torch.where(

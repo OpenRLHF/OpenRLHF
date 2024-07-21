@@ -105,6 +105,7 @@ class Actor(nn.Module):
             self.model.config.use_cache = False
 
             # packing samples using Flash Attention 2
+            self.packing_samples = packing_samples
             if packing_samples:
                 assert use_flash_attention_2, "Only support `--packing_samples` with Flash Attention 2."
                 model_type = getattr(self.model.config, "model_type", None)
@@ -180,10 +181,9 @@ class Actor(nn.Module):
         num_actions: int = None,
         attention_mask: Optional[torch.Tensor] = None,
         return_output=False,
-        packing_samples=False,
     ) -> torch.Tensor:
         """Returns action log probs"""
-        if not packing_samples:
+        if not self.packing_samples:
             # https://github.com/OpenRLHF/OpenRLHF/issues/217
             position_ids = attention_mask.long().cumsum(-1) - 1
         else:

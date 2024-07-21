@@ -62,9 +62,9 @@ def get_llm_for_sequence_regression(
         base_class = AutoModel._model_mapping[type(config)]
         base_pretrained_class = base_class.__base__
         if model_type == "reward":
-            cls_class = _get_reward_model(base_pretrained_class, base_class, value_head_prefix)
+            cls_class = _get_reward_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
         else:
-            cls_class = _get_critic_model(base_pretrained_class, base_class, value_head_prefix)
+            cls_class = _get_critic_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
     except Exception as e:
         print("Failed to load from AutoModel, construct from modelling file.")
         module_file, causal_model_name = config.auto_map["AutoModelForCausalLM"].split(".")
@@ -90,9 +90,9 @@ def get_llm_for_sequence_regression(
         )
         base_class = get_class_from_dynamic_module(f"{module_file}.{auto_model_name}", model_name_or_path)
         if model_type == "reward":
-            cls_class = _get_reward_model(base_pretrained_class, base_class, value_head_prefix)
+            cls_class = _get_reward_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
         else:
-            cls_class = _get_critic_model(base_pretrained_class, base_class, value_head_prefix)
+            cls_class = _get_critic_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
 
     # Note: dschf is defined in function scope to avoid global effects
     # https://huggingface.co/docs/transformers/main_classes/deepspeed#nontrainer-deepspeed-integration
@@ -174,7 +174,7 @@ def get_llm_for_sequence_regression(
     return model
 
 
-def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="value_head"):
+def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="value_head", packing_samples=False):
     class RewardModel(base_pretrained_model):
         supports_gradient_checkpointing = True
 
@@ -184,6 +184,8 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
 
             self.value_head_prefix = value_head_prefix
             setattr(self, value_head_prefix, nn.Linear(config.hidden_size, 1, bias=False))
+
+            self.packing_samples = packing_samples
 
             # mean std
             self.normalize_reward = config.normalize_reward
@@ -200,9 +202,8 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             input_ids: torch.LongTensor = None,
             attention_mask: Optional[torch.Tensor] = None,
             return_output=False,
-            packing_samples=False,
         ) -> torch.Tensor:
-            if not packing_samples:
+            if not self.packing_samples:
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
                 position_ids = attention_mask.long().cumsum(-1) - 1
             else:
@@ -217,7 +218,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
 
             # return all values for packing_samples
-            if packing_samples:
+            if self.packing_samples:
                 reward = values
                 # normalize reward in eval mode
                 if not self.training and self.normalize_reward:
@@ -243,7 +244,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
     return RewardModel
 
 
-def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="value_head"):
+def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="value_head", packing_samples=False):
     class CriticModel(base_pretrained_model):
         supports_gradient_checkpointing = True
 
@@ -253,6 +254,8 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
 
             self.value_head_prefix = value_head_prefix
             setattr(self, value_head_prefix, nn.Linear(config.hidden_size, 1, bias=False))
+
+            self.packing_samples = packing_samples
 
             # mean std
             self.normalize_reward = config.normalize_reward
@@ -270,9 +273,8 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             action_mask: Optional[torch.Tensor] = None,
             attention_mask: Optional[torch.Tensor] = None,
             return_output=False,
-            packing_samples=False,
         ) -> torch.Tensor:
-            if not packing_samples:
+            if not self.packing_samples:
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
                 position_ids = attention_mask.long().cumsum(-1) - 1
             else:
