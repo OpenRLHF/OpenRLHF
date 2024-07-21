@@ -61,7 +61,7 @@ class UnpairedPreferenceDataset(Dataset):
         if apply_chat_template:
             apply_chat_template = self.tokenizer.apply_chat_template
 
-        for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
+        for data in tqdm(dataset, desc="Preprocessing data", disable=not self.strategy.is_rank_0()):
             prompt, response, label = preprocess_data(
                 data, input_template, input_key, output_key, label_key, apply_chat_template
             )

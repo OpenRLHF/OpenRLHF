@@ -60,7 +60,7 @@ class SFTDataset(Dataset):
             if tokenizer_chat_template:
                 self.tokenizer.chat_template = tokenizer_chat_template
 
-        for data in tqdm(dataset, disable=not self.strategy.is_rank_0()):
+        for data in tqdm(dataset, desc="Preprocessing data", disable=not self.strategy.is_rank_0()):
             prompt, response = preprocess_data(
                 data,
                 None if pretrain_mode else input_template,
