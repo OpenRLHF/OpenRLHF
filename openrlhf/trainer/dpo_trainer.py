@@ -377,12 +377,10 @@ class DPOTrainer(ABC):
         logits = logits[:, :-1, :]
         loss_masks = attention_mask.clone().bool()
 
-        half_len = len(packed_seq_lens) // 2
         index = 0
         for i, seq_len in enumerate(packed_seq_lens):
-            batch = 0 if i < half_len else 1
-            loss_masks[batch, index : index + prompt_id_lens[i]] = False
-            index = index + seq_len if i != half_len - 1 else 0
+            loss_masks[0, index : index + prompt_id_lens[i]] = False
+            index = index + seq_len
 
         loss_masks = loss_masks[:, 1:]
         labels[loss_masks == False] = 0
@@ -392,10 +390,9 @@ class DPOTrainer(ABC):
         logprobs_sums = []
         index = 0
         for i, seq_len in enumerate(packed_seq_lens):
-            batch = 0 if i < half_len else 1
-            seq = per_token_logps[batch, index : index + seq_len - 1]
-            mask = loss_masks[batch, index : index + seq_len - 1]
+            seq = per_token_logps[0, index : index + seq_len - 1]
+            mask = loss_masks[0, index : index + seq_len - 1]
             logprobs_sums.append((seq * mask).sum())
-            index = index + seq_len if i != half_len - 1 else 0
+            index = index + seq_len
 
         return torch.stack(logprobs_sums)

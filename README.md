@@ -183,7 +183,7 @@ deepspeed --module openrlhf.cli.train_sft \
 ```
 
 > [!NOTE]
-> OpenRLHF SFT/DPO/RewardModel Training supports `--packing_samples` [based on `--flash_attn`](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
+> OpenRLHF SFT/DPO/RewardModel trainers support `--packing_samples` [based on `--flash_attn`](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
 
 
 ### Reward Model Training
@@ -365,8 +365,9 @@ We would like to express our gratitude to the following projects and organizatio
 - [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
 - [Ray ↗](https://github.com/ray-project/ray)
 
-Our project would also like to thank [ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/Chat) and [DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat). In the early stages of the project, we referred to their code design.
+Our project would also like to thank [ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/Chat) and [DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat). In the early stages of the project, we referred to their code design. 
 
+(2024/7) Our GitHub organization has changed from OpenLLMAI to OpenRLHF.
 
 ## Citation
 ```

@@ -151,6 +151,10 @@ class SFTDataset(Dataset):
             index += 1
 
         # Concatenate all tensors into a single row
+        # https://github.com/huggingface/transformers/blob/v4.42.4/src/transformers/models/llama/modeling_llama.py#L1028
+        packed_input_ids.append(torch.tensor([self.tokenizer.pad_token_id]))
+        packed_attention_masks.append(torch.tensor([0]))
+
         packed_input_ids = torch.cat(packed_input_ids, dim=0).unsqueeze(0)
         packed_attention_masks = torch.cat(packed_attention_masks, dim=0).unsqueeze(0)
 

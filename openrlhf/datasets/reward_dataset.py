@@ -196,27 +196,24 @@ class RewardDataset(Dataset):
         rejected_att_masks = []
         rejected_seq_lens = []
         index = 1
+        half_len = len(item_list) // 2
         for chosen_id, chosen_mask, reject_id, rejects_mask, extra in item_list:
             chosen_ids.append(chosen_id.flatten())
             chosen_att_masks.append(torch.ones_like(chosen_id.flatten()) * index)
             chosen_seq_lens.append(len(chosen_id.flatten()))
+            extras.append(extra)
 
             rejected_ids.append(reject_id.flatten())
-            rejected_att_masks.append(torch.ones_like(reject_id.flatten()) * index)
+            rejected_att_masks.append(torch.ones_like(reject_id.flatten()) * (index + half_len))
             rejected_seq_lens.append(len(reject_id.flatten()))
-            extras.append(extra)
             index += 1
 
         # Concatenate all tensors into a single row
-        chosen_ids = torch.cat(chosen_ids, dim=0)
-        chosen_att_masks = torch.cat(chosen_att_masks, dim=0)
-        rejected_ids = torch.cat(rejected_ids, dim=0)
-        rejected_att_masks = torch.cat(rejected_att_masks, dim=0)
+        # https://github.com/huggingface/transformers/blob/v4.42.4/src/transformers/models/llama/modeling_llama.py#L1028
+        rejected_ids.append(torch.tensor([self.tokenizer.pad_token_id]))
+        rejected_att_masks.append(torch.tensor([0]))
 
-        # padding
-        packed_input_ids = zero_pad_sequences(
-            [chosen_ids, rejected_ids], side="right", value=self.tokenizer.pad_token_id
-        )
-        packed_attention_masks = zero_pad_sequences([chosen_att_masks, rejected_att_masks], side="right")
+        packed_input_ids = torch.cat(chosen_ids + rejected_ids, dim=0).unsqueeze(0)
+        packed_attention_masks = torch.cat(chosen_att_masks + rejected_att_masks, dim=0).unsqueeze(0)
         packed_seq_lens = chosen_seq_lens + rejected_seq_lens
         return packed_input_ids, packed_attention_masks, packed_seq_lens, extras
