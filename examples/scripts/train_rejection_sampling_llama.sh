@@ -1,3 +1,6 @@
+set -x
+export VLLM_WORKER_MULTIPROC_METHOD=spawn
+
 checkSuccess() {
    if [[ $? != 0 ]]; then
       echo "FAILED $1"
