@@ -196,7 +196,6 @@ class RewardDataset(Dataset):
         rejected_att_masks = []
         rejected_seq_lens = []
         index = 1
-        half_len = len(item_list) // 2
         for chosen_id, chosen_mask, reject_id, rejects_mask, extra in item_list:
             chosen_ids.append(chosen_id.flatten())
             chosen_att_masks.append(torch.ones_like(chosen_id.flatten()) * index)
@@ -204,7 +203,7 @@ class RewardDataset(Dataset):
             extras.append(extra)
 
             rejected_ids.append(reject_id.flatten())
-            rejected_att_masks.append(torch.ones_like(reject_id.flatten()) * (index + half_len))
+            rejected_att_masks.append(torch.ones_like(reject_id.flatten()) * (index + len(item_list)))
             rejected_seq_lens.append(len(reject_id.flatten()))
             index += 1
 
