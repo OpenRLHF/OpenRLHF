@@ -63,12 +63,19 @@ def blending_datasets(
         dataset = dataset.split("@")[0].strip()
         dataset_basename = os.path.basename(dataset)
 
+        ext = os.path.splitext(dataset)[-1]
         # local python script
-        if dataset.endswith(".py") or (
+        if ext == ".py" or (
             os.path.isdir(dataset) and os.path.exists(os.path.join(dataset, f"{dataset_basename}.py"))
         ):
             data = load_dataset(dataset, trust_remote_code=True)
             strategy.print(f"loaded {dataset} with python script")
+        # local text file
+        elif ext in [".json", ".jsonl", ".csv"]:
+            ext = ext.lower().strip(".")
+            if ext == "jsonl":
+                ext = "json"
+            data = load_dataset(ext, data_files=dataset)
         # remote/local folder or common file
         else:
             data = load_dataset(dataset, data_dir=data_dir)
