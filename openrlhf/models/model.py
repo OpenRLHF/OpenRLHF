@@ -11,6 +11,7 @@ from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
 from openrlhf.utils.logging import init_logger
 from .packing_utils import patch_for_block_diag_attn
+from .utils import reset_position_ids
 
 logger = init_logger(__name__)
 
@@ -207,8 +208,8 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
                 position_ids = attention_mask.long().cumsum(-1) - 1
             else:
-                # TODO: reset the positions for packed samples, there's no need to do this for RoPE at the moment.
-                position_ids = (attention_mask != 0).long().cumsum(-1) - 1
+                # reset the positions for packed samples
+                position_ids = reset_position_ids(attention_mask)
             position_ids.masked_fill_(attention_mask == 0, 1)
 
             outputs = getattr(self, self.base_model_prefix)(
@@ -278,8 +279,8 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
                 position_ids = attention_mask.long().cumsum(-1) - 1
             else:
-                # TODO: reset the positions for packed samples, there's no need to do this for RoPE at the moment.
-                position_ids = (attention_mask != 0).long().cumsum(-1) - 1
+                # reset the positions for packed samples
+                position_ids = reset_position_ids(attention_mask)
             position_ids.masked_fill_(attention_mask == 0, 1)
 
             outputs = getattr(self, self.base_model_prefix)(

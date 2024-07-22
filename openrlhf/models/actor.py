@@ -4,13 +4,14 @@ import deepspeed
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedModel
 from transformers.deepspeed import HfDeepSpeedConfig
 
 from .packing_utils import patch_for_block_diag_attn
-from .utils import log_probs_from_logits
+from .utils import log_probs_from_logits, reset_position_ids
 
 
 class Actor(nn.Module):
@@ -187,8 +188,8 @@ class Actor(nn.Module):
             # https://github.com/OpenRLHF/OpenRLHF/issues/217
             position_ids = attention_mask.long().cumsum(-1) - 1
         else:
-            # TODO: reset the positions for packed samples, there's no need to do this for RoPE at the moment.
-            position_ids = (attention_mask != 0).long().cumsum(-1) - 1
+            # reset the positions for packed samples
+            position_ids = reset_position_ids(attention_mask)
         position_ids.masked_fill_(attention_mask == 0, 1)
 
         output = self.model(sequences, attention_mask=attention_mask, position_ids=position_ids)

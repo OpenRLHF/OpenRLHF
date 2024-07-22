@@ -76,3 +76,19 @@ def masked_normalize(tensor: torch.Tensor, mask: torch.Tensor, dim: int = 1, eps
     mean_centered = tensor - mean
     var = masked_mean(mean_centered**2, mask, dim=dim)
     return mean_centered * var.clamp(min=eps).rsqrt()
+
+
+# Reset positions for packed samples
+# For example
+# Input: attention_mask = torch.tensor([[1, 1, 1, 2, 2, 2, 3, 3, 0]])
+# Output: position_ids  = torch.tensor([[0, 1, 2, 0, 1, 2, 0, 1, 0]])
+def reset_position_ids(attention_mask):
+    position_ids = torch.zeros_like(attention_mask, dtype=torch.long)
+    for i in range(attention_mask.size(0)):
+        mask = attention_mask[i]
+        seq_num = mask.max().item()
+        for index in range(1, seq_num + 1):
+            sample_mask = mask == index
+            sample_length = sample_mask.sum().item()
+            position_ids[i, sample_mask] = torch.arange(sample_length, device=mask.device)
+    return position_ids
