@@ -74,18 +74,14 @@ def train(args):
     strategy.print(critic)
 
     # load weights for reference actor
-    if not args.remote_ref_url:
-        initial_model = Actor(
-            args.pretrain,
-            use_flash_attention_2=args.flash_attn,
-            bf16=args.bf16,
-            load_in_4bit=args.load_in_4bit,
-            ds_config=strategy.get_ds_eval_config(offload=False),
-        )
-        get_tokenizer(args.pretrain, initial_model.model, "left", strategy)
-    else:
-        # TODO:better to package it like local ref model
-        initial_model = None
+    initial_model = Actor(
+        args.pretrain,
+        use_flash_attention_2=args.flash_attn,
+        bf16=args.bf16,
+        load_in_4bit=args.load_in_4bit,
+        ds_config=strategy.get_ds_eval_config(offload=False),
+    )
+    get_tokenizer(args.pretrain, initial_model.model, "left", strategy)
 
     strategy.print("reward normalization status: {}".format(args.normalize_reward))
     if not args.remote_rm_url:
@@ -157,9 +153,9 @@ def train(args):
 
     # configure scheduler
     num_update_steps_per_episodes = (
-        int(len(prompts_dataloader) * (args.micro_rollout_batch_size / args.micro_train_batch_size))
-        * args.max_epochs
-        // strategy.accumulated_gradient
+            int(len(prompts_dataloader) * (args.micro_rollout_batch_size / args.micro_train_batch_size))
+            * args.max_epochs
+            // strategy.accumulated_gradient
     )
 
     max_steps = math.ceil(args.num_episodes * num_update_steps_per_episodes)
@@ -250,7 +246,6 @@ def train(args):
         eos_token_id=tokenizer.eos_token_id,
         # remote RM/Ref
         remote_rm_url=args.remote_rm_url,
-        remote_ref_url=args.remote_ref_url,
     )
 
     trainer.fit(
@@ -276,25 +271,6 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--prompt_data", type=str, default=None)
-    parser.add_argument(
-        "--prompt_data_probs",
-        type=str,
-        default="1.0",
-        help="sampling probs for datasets",
-    )
-    parser.add_argument("--pretrain_data", type=str, default=None)
-    parser.add_argument(
-        "--pretrain_data_probs",
-        type=str,
-        default="1.0",
-        help="sampling probs for datasets",
-    )
-    parser.add_argument("--pretrain", type=str, default=None)
-    parser.add_argument("--reward_pretrain", type=str, default=None)
-    parser.add_argument("--critic_pretrain", type=str, default=None)
-    parser.add_argument("--remote_rm_url", type=str, default=None)
-    parser.add_argument("--remote_ref_url", type=str, default=None)
     # Checkpoint
     parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--save_steps", type=int, default=-1)
@@ -364,6 +340,7 @@ if __name__ == "__main__":
     # Models
     parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--reward_pretrain", type=str, default=None, help="HF model name or path")
+    parser.add_argument("--remote_rm_url", type=str, default=None, help="remote RM API")
     parser.add_argument("--critic_pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--value_head_prefix", type=str, default="value_head")
 
@@ -404,5 +381,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.critic_pretrain is None:
-        args.critic_pretrain = args.reward_pretrain
+        if not args.remote_rm_url and args.reward_pretrain is not None:
+            args.critic_pretrain = args.reward_pretrain
+        else:
+            args.critic_pretrain = args.pretrain
     train(args)
