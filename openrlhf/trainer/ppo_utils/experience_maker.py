@@ -13,7 +13,7 @@ from tqdm import tqdm
 from openrlhf.models.actor import Actor
 from openrlhf.models.utils import compute_reward, masked_mean
 from openrlhf.utils.logging_utils import init_logger
-from openrlhf.utils.utils_for_api import remote_ref_fn, remote_rm_fn, remote_rm_fn_ray
+from openrlhf.utils.utils_for_api import remote_rm_fn, remote_rm_fn_ray
 
 logger = init_logger(__name__)
 
@@ -86,7 +86,6 @@ class NaiveExperienceMaker(ABC):
         kl_controller,
         strategy=None,
         remote_rm_url: str = None,
-        remote_ref_url: str = None,
         reward_fn=None,
     ) -> None:
         super().__init__()
@@ -95,7 +94,6 @@ class NaiveExperienceMaker(ABC):
         self.reward_model = reward_model
         self.remote_rm_url = remote_rm_url
         self.initial_model = initial_model
-        self.remote_ref_url = remote_ref_url
         self.tokenizer = tokenizer
         self.prompt_max_len = prompt_max_len
         self.kl_ctl = kl_controller
@@ -131,22 +129,7 @@ class NaiveExperienceMaker(ABC):
         action_log_probs = self.actor(sequences, num_actions, attention_mask)
 
         # init log probs
-        if self.remote_ref_url is not None:
-            # Experimental remote reference model features:
-            # Note: The use of remote reference model should be approached with caution, even when the tokenizers are
-            # the same, due to the current irreversibility of encoding and decoding, it may be difficult to ensure
-            # perfect token alignment. see https://github.com/OpenLLMAI/OpenRLHF/pull/341
-            # token ids api
-            base_action_log_probs = remote_ref_fn(self.remote_ref_url, sequences, num_actions, attention_mask)
-            base_action_log_probs = torch.tensor(base_action_log_probs, device=sequences.device)
-            # TODO: Better solutions are reserved for future work, such as a text API that can guarantee the alignment \
-            #  of token logits.
-            # responses = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=True)
-            # base_action_log_probs = remote_ref_fn(self.remote_ref_url, responses, num_actions)
-            # base_action_log_probs = torch.tensor(base_action_log_probs, device=sequences.device)
-        else:
-            # local ref model
-            base_action_log_probs = self.initial_model(sequences, num_actions, attention_mask)
+        base_action_log_probs = self.initial_model(sequences, num_actions, attention_mask)
 
         # values
         value = self.critic(sequences, action_mask, attention_mask)
@@ -275,7 +258,6 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         )
 
         # init log probs
-        # TODO: support remote ref model API with ray
         base_action_log_probs_ref = self.initial_model.forward.remote(sequences_cpu, num_actions, attention_mask_cpu)
 
         # values

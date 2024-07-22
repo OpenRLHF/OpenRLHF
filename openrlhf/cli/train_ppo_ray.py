@@ -137,7 +137,7 @@ def train(args):
 
     # init vLLM engine for text generation
     vllm_engines = None
-    if args.vllm_num_engines > 0:
+    if args.vllm_num_engines is not None and args.vllm_num_engines > 0:
         max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
         vllm_engines = create_vllm_engines(
             args.vllm_num_engines,
@@ -273,8 +273,7 @@ if __name__ == "__main__":
     #  Models
     parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--reward_pretrain", type=str, default=None, help="HF model name or path")
-    parser.add_argument("--remote_rm_url", type=str, default=None)
-    parser.add_argument("--remote_ref_url", type=str, default=None)
+    parser.add_argument("--remote_rm_url", type=str, default=None,  help="remote RM API")
     parser.add_argument("--critic_pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--value_head_prefix", type=str, default="value_head")
     parser.add_argument("--ref_reward_offload", action="store_true", default=False)
@@ -320,7 +319,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.critic_pretrain is None:
-        args.critic_pretrain = args.reward_pretrain.split(",")[0]
+        if not args.remote_rm_url and args.reward_pretrain is not None:
+            args.critic_pretrain = args.reward_pretrain.split(",")[0]
+        else:
+            args.critic_pretrain = args.pretrain
 
     if args.vllm_num_engines >= 1 and args.n_samples_per_prompt > 1 and not args.enable_prefix_caching:
         print("[Warning] Please --enable_prefix_caching to accelerate when --n_samples_per_prompt > 1.")

@@ -1,24 +1,21 @@
 set -x
-export DS_SKIP_CUDA_CHECK=1
 export PATH=$HOME/.local/bin/:$PATH
 
-root_dir=/OpenRLHF/
 # tiny llama for dev
-pretrain_path=$root_dir/models/TinyLlama-1.1B-Chat-v0.2
-critic_pretrain_path=$root_dir/models/TinyLlama-1.1B-Chat-v0.2
-reward_model_path=$root_dir/ckpt/tiny_llama/tiny_llama_rm
+pretrain_path=TinyLlama-1.1B-Chat-v0.2
+critic_pretrain_path=./ckpt/tiny_llama/tiny_llama_rm
+reward_model_path=./ckpt/tiny_llama/tiny_llama_rm
 
-save_path=$root_dir/ckpt/tiny_llama
+save_path=./ckpt/tiny_llama
 remote_rm_url=http://127.0.0.1:5000/get_rm_score
-#--remote_rm_url ${remote_rm_url} \
 
 prompt_data=yahma/alpaca-cleaned,Dahoas/full-hh-rlhf,tasksource/oasst1_pairwise_rlhf_reward
 prompt_data_probs=0.3,0.6,0.1
 
 ray job submit --address="http://127.0.0.1:8265" \
-    --runtime-env-json='{"working_dir": "/openrlhf", "pip": "/openrlhf/requirements.txt"}' \
+    --runtime-env-json='{"working_dir": "/openrlhf"}' \
     --no-wait \
-    -- python3 examples/train_ppo_ray.py \
+    -- python3 -m openrlhf.cli.train_ppo_ray \
     --ref_num_nodes 1 \
     --ref_num_gpus_per_node 1 \
     --reward_num_nodes 1 \
@@ -32,6 +29,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --pretrain ${pretrain_path} \
     --reward_pretrain ${reward_model_path} \
     --remote_rm_url ${remote_rm_url} \
+    --critic_pretrain ${critic_pretrain_path} \
     --save_path ${save_path} \
     --logging_steps 1 \
     --micro_train_batch_size 1 \
