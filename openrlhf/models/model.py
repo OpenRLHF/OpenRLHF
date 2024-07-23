@@ -207,7 +207,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
                 position_ids = attention_mask.long().cumsum(-1) - 1
             else:
-                # TODO: reset the positions for packed samples
+                # TODO: reset the positions for packed samples, there's no need to do this for RoPE at the moment.
                 position_ids = (attention_mask != 0).long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
 
@@ -278,7 +278,7 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
                 position_ids = attention_mask.long().cumsum(-1) - 1
             else:
-                # TODO: reset the positions for packed samples
+                # TODO: reset the positions for packed samples, there's no need to do this for RoPE at the moment.
                 position_ids = (attention_mask != 0).long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
 
