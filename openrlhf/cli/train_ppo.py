@@ -63,12 +63,11 @@ def train(args):
         )
         get_tokenizer(args.reward_pretrain, reward_model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
     else:
-        # TODO:better to package it like local RM, so that we can treat the mean/std... in a unified way
         reward_model = None
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, actor.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
-    get_tokenizer(args.reward_pretrain, critic, "left", strategy, use_fast=not args.disable_fast_tokenizer)
+    get_tokenizer(args.critic_pretrain, critic, "left", strategy, use_fast=not args.disable_fast_tokenizer)
 
     strategy.print(actor)
     strategy.print(critic)
@@ -83,9 +82,9 @@ def train(args):
     )
     get_tokenizer(args.pretrain, initial_model.model, "left", strategy)
 
-    strategy.print("reward normalization status: {}".format(args.normalize_reward))
     if not args.remote_rm_url:
-        strategy.print("mean: {}, std {}".format(reward_model.mean, reward_model.std))
+        strategy.print("reward normalization status: {}".format(args.normalize_reward))
+        strategy.print("mean: {}, std {}".format(critic.mean, critic.std))
 
     if args.enable_ema:
         ema_model = Actor(
@@ -153,9 +152,9 @@ def train(args):
 
     # configure scheduler
     num_update_steps_per_episodes = (
-            int(len(prompts_dataloader) * (args.micro_rollout_batch_size / args.micro_train_batch_size))
-            * args.max_epochs
-            // strategy.accumulated_gradient
+        int(len(prompts_dataloader) * (args.micro_rollout_batch_size / args.micro_train_batch_size))
+        * args.max_epochs
+        // strategy.accumulated_gradient
     )
 
     max_steps = math.ceil(args.num_episodes * num_update_steps_per_episodes)
@@ -381,7 +380,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.critic_pretrain is None:
-        if not args.remote_rm_url and args.reward_pretrain is not None:
+        if not args.remote_rm_url:
             args.critic_pretrain = args.reward_pretrain
         else:
             args.critic_pretrain = args.pretrain
