@@ -108,12 +108,9 @@ def train(args):
     )
 
     # multiple reward models
-    reward_pretrains = args.reward_pretrain.split(",")
-    reward_models = []
-    remote_rm_urls = []
-    if isinstance(args.remote_rm_url, str):
-        remote_rm_urls = args.remote_rm_url.split(",")
     if not args.remote_rm_url:
+        reward_pretrains = args.reward_pretrain.split(",")
+        reward_models = []
         for _ in reward_pretrains:
             reward_models.append(
                 PPORayActorGroup(
@@ -125,6 +122,7 @@ def train(args):
                 )
             )
     else:
+        remote_rm_urls = args.remote_rm_url.split(",")
         reward_models = [None] * len(remote_rm_urls)
 
     # init reference/reward/actor model
@@ -196,7 +194,7 @@ if __name__ == "__main__":
 
     # optional vLLM for text generation
     parser.add_argument(
-        "--vllm_num_engines", type=int, default=0, help="number of vLLM Engines, set to 0 to disable vLLM"
+        "--vllm_num_engines", type=int, default=None, help="number of vLLM Engines, set to 0 to disable vLLM"
     )
     parser.add_argument(
         "--vllm_tensor_parallel_size",
@@ -273,7 +271,7 @@ if __name__ == "__main__":
     #  Models
     parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--reward_pretrain", type=str, default=None, help="HF model name or path")
-    parser.add_argument("--remote_rm_url", type=str, default=None,  help="remote RM API")
+    parser.add_argument("--remote_rm_url", type=str, default=None, help="remote RM API")
     parser.add_argument("--critic_pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--value_head_prefix", type=str, default="value_head")
     parser.add_argument("--ref_reward_offload", action="store_true", default=False)
@@ -319,7 +317,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.critic_pretrain is None:
-        if not args.remote_rm_url and args.reward_pretrain is not None:
+        if not args.remote_rm_url:
             args.critic_pretrain = args.reward_pretrain.split(",")[0]
         else:
             args.critic_pretrain = args.pretrain

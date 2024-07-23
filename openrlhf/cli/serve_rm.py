@@ -1,0 +1,82 @@
+import argparse
+
+# from vllm import LLM, SamplingParams
+from flask import Flask, jsonify, request
+
+from openrlhf.models import get_llm_for_sequence_regression
+from openrlhf.utils import get_tokenizer
+from openrlhf.utils.logging_utils import init_logger
+
+logger = init_logger(__name__)
+
+
+class RMServer:
+    """RM server"""
+
+    def __init__(self, args):
+        self.reward_model = get_llm_for_sequence_regression(
+            args.reward_pretrain,
+            "reward",
+            normalize_reward=args.normalize_reward,
+            use_flash_attention_2=args.flash_attn,
+            bf16=args.bf16,
+            load_in_4bit=args.load_in_4bit,
+            value_head_prefix=args.value_head_prefix,
+            device_map="auto",
+        )
+        self.tokenizer = get_tokenizer(
+            args.reward_pretrain, self.reward_model, "left", None, use_fast=not args.disable_fast_tokenizer
+        )
+        self.max_length = args.max_len
+
+    def get_reward(self, queries):
+        inputs = self.tokenize_fn(queries, device=self.reward_model.device)
+        r = self.reward_model(inputs["input_ids"], inputs["attention_mask"])
+        r = r.tolist()
+        if len(r) == 1:
+            return r[0]
+        return r
+
+    def tokenize_fn(self, texts, device):
+        batch = self.tokenizer(
+            texts,
+            return_tensors="pt",
+            max_length=self.max_length,
+            padding=True,
+            truncation=True,
+        )
+        return {k: v.to(device) for k, v in batch.items()}
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    # Reward Model
+    parser.add_argument("--reward_pretrain", type=str, default=None, help="HF model name or path")
+    parser.add_argument("--normalize_reward", action="store_true", default=False, help="Enable Reward Normazation")
+    parser.add_argument("--value_head_prefix", type=str, default="value_head")
+    parser.add_argument("--max_len", type=int, default="2048")
+
+    parser.add_argument("--port", type=int, default=5000, help="Port number for the server")
+
+    # Performance
+    parser.add_argument("--load_in_4bit", action="store_true", default=False)
+    parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
+    parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
+    parser.add_argument("--disable_trace_cache", action="store_true", default=False)
+    parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
+
+    # server
+    args = parser.parse_args()
+
+    app = Flask(__name__)
+    rm_server = RMServer(args)
+
+    @app.route("/get_reward", methods=["POST"])
+    def get_reward():
+        data = request.json
+        queries = data.get("query")
+        rewards = rm_server.get_reward(queries)
+        result = {"rewards": rewards}
+        return jsonify(result)
+
+    app.run(port=args.port)
