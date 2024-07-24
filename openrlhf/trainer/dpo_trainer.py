@@ -159,7 +159,7 @@ class DPOTrainer(ABC):
 
                 acc = (chosen_reward > reject_reward).float().mean().item()
                 acc_mean = acc_mean * 0.9 + 0.1 * acc
-                loss_mean = loss_mean * 0.9 + 0.1 * loss.item()
+                loss_mean = loss_mean * 0.9 + 0.1 * preference_loss.item()
                 # dpo logs
                 logs_dict = {
                     "loss": preference_loss.item(),
