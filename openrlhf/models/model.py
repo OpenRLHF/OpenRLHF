@@ -218,29 +218,16 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             last_hidden_states = outputs["last_hidden_state"]
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
 
-            # return all values for packing_samples
             if self.packing_samples:
                 reward = values
-                # normalize reward in eval mode
-                if not self.training and self.normalize_reward:
-                    reward = (reward - self.mean) / self.std
             else:
-                # left padding in training mode
-                if self.training:
-                    reward = values[:, -1]
-                else:
-                    eos_indices = (
-                        attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
-                    )
-                    reward = values.gather(dim=1, index=eos_indices).squeeze(1)
-                    # normalize reward in eval mode
-                    if self.normalize_reward:
-                        reward = (reward - self.mean) / self.std
-            # return
-            if return_output:
-                return reward, outputs
-            else:
-                return reward
+                eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
+                reward = values.gather(dim=1, index=eos_indices).squeeze(1)
+
+            if not self.training and self.normalize_reward:
+                reward = (reward - self.mean) / self.std
+
+            return (reward, outputs) if return_output else reward
 
     return RewardModel
 
