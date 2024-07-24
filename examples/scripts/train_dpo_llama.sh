@@ -27,6 +27,7 @@ EOF
     # --label_smoothing 0.1 [for cDPO]
     # --ref_offload 
     # --packing_samples
+    # --nll_loss_coef (Regularization with NLL loss)
 
 
 if [[ ${1} != "slurm" ]]; then
