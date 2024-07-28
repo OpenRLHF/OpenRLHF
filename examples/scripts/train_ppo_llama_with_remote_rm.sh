@@ -27,7 +27,7 @@ openrlhf.cli.train_ppo \
    --normalize_reward \
    --adam_offload \
    --flash_attn \
-   --gradient_checkpointing \
+   --gradient_checkpointing
 EOF
     # --wandb [WANDB_TOKENS] or True (use wandb login command)
 
