@@ -8,11 +8,11 @@ logger = init_logger(__name__)
 
 
 @ray.remote
-def remote_rm_fn_ray(api_url, queries, responses=None, score_key="score", api_batch_size=1):
-    return remote_rm_fn(api_url, queries, responses, score_key, api_batch_size)
+def remote_rm_fn_ray(api_url, queries, score_key="score", api_batch_size=None):
+    return remote_rm_fn(api_url, queries, score_key, api_batch_size)
 
 
-def remote_rm_fn(api_url, queries, responses=None, score_key="score", api_batch_size=1):
+def remote_rm_fn(api_url, queries, score_key="score", api_batch_size=None):
     """remote reward model API
     api_url: RM API, We assume that the API supports two modes: merging query + response and not merging
     queries: query or query+response with the template
@@ -22,29 +22,21 @@ def remote_rm_fn(api_url, queries, responses=None, score_key="score", api_batch_
     score_key: RM score key
     api_batch_size: RM API batch size.
     """
-    if not api_url:
-        api_url = "xxx"  # TODO: OpenLLMAI default remote RM API
-    if not responses:
-        responses = [""] * len(queries)
-    if api_batch_size == 1:
-        scores = [
-            request_api_wrapper(api_url, {"query": query, "response": response}, score_key)
-            for query, response in zip(queries, responses)
-        ]
-    else:
-        scores = []
-        # batch
-        for i in range(0, len(queries), api_batch_size):
-            scores.extend(
-                [
-                    request_api_wrapper(
-                        api_url,
-                        {"query": queries[i: i + api_batch_size], "response": responses[i: i + api_batch_size]},
-                        score_key,
-                    )
-                ]
-            )
+    if api_batch_size is None:
+        api_batch_size = len(queries)
 
+    scores = []
+    # batch
+    for i in range(0, len(queries), api_batch_size):
+        scores.extend(
+            [
+                request_api_wrapper(
+                    api_url,
+                    {"query": queries[i : i + api_batch_size]},
+                    score_key,
+                )
+            ]
+        )
     return scores
 
 
@@ -62,7 +54,6 @@ def request_api_wrapper(url, data, score_key="score", try_max_times=10):
         except Exception as e:
             logger.info(f"request url error, please check: {e}")
             time.sleep(0.5)
-            continue
     logger.info(f"Request url error for {try_max_times} times, return None. Please check the api server.")
     return None
 

@@ -123,7 +123,7 @@ def train(args):
             )
     else:
         remote_rm_urls = args.remote_rm_url.split(",")
-        reward_models = [None] * len(remote_rm_urls)
+        reward_models = None
 
     # init reference/reward/actor model
     refs = []

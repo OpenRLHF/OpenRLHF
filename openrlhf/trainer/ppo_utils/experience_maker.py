@@ -13,7 +13,7 @@ from tqdm import tqdm
 from openrlhf.models.actor import Actor
 from openrlhf.models.utils import compute_reward, masked_mean
 from openrlhf.utils.logging_utils import init_logger
-from openrlhf.utils.utils_for_api import remote_rm_fn, remote_rm_fn_ray
+from openrlhf.utils.remote_rm_utils import remote_rm_fn, remote_rm_fn_ray
 
 logger = init_logger(__name__)
 
@@ -115,8 +115,7 @@ class NaiveExperienceMaker(ABC):
     def make_experience(self, prompts: Union[str, List[str]], **generate_kwargs) -> Experience:
         self.actor.eval()
         self.critic.eval()
-        if self.initial_model is not None:
-            self.initial_model.eval()
+        self.initial_model.eval()
         if self.reward_model is not None:
             self.reward_model.eval()
 
@@ -137,11 +136,8 @@ class NaiveExperienceMaker(ABC):
         # rewards
         if self.remote_rm_url is not None:
             # remote RM
-            # TODO: decoded responses may contain some special tokens：'<|im_start|>','<|im_end|>'
-            responses = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=True)
-            # tips: responses = list of query+response
-            # We assume that the API supports two modes: merging query + response and not merging
-            r = remote_rm_fn(self.remote_rm_url, queries=responses, responses=None)
+            quries = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=False)
+            r = remote_rm_fn(self.remote_rm_url, queries=quries)
             r = torch.tensor(r, device=sequences.device)
         else:
             # local RM
@@ -281,8 +277,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         else:
             # remote RM
             for rm in self.remote_rm_url:
-                responses = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=True)
-                r = remote_rm_fn_ray.remote(rm, queries=responses, responses=None)
+                responses = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=False)
+                r = remote_rm_fn_ray.remote(rm, queries=responses)
                 r_refs.append(r)
 
         # log probs
@@ -297,14 +293,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         base_action_log_probs, value, rewards = ref_values[0], ref_values[1], ref_values[2:]
         base_action_log_probs, value = base_action_log_probs.to(device), value.to(device)
-        rewards = [r.to(device) if not self.remote_rm_url else torch.tensor(r).to(device) for r in rewards]
-        if len(rewards) > 1:
-            if self.reward_fn is not None:
-                r = self.reward_fn(rewards)
-            else:
-                r = torch.mean(torch.stack(rewards), dim=0)
-        else:
-            r = rewards[0]
+        rewards = [r.to(device) for r in rewards]
+        r = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
 
         # avoid CUDA OOM when colocate models
         if self.strategy.args.colocate_critic_reward:
