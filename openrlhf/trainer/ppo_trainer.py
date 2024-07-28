@@ -180,12 +180,11 @@ class PPOTrainer(ABC):
         for episode in range(args.num_episodes):
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
                 self.prompts_dataloader.sampler.set_epoch(episode)
-            self.tqdm = tqdm(
+            pbar = tqdm(
                 range(self.prompts_dataloader.__len__()),
                 desc=f"Episode [{episode + 1}/{args.num_episodes}]",
                 disable=not self.strategy.is_rank_0(),
             )
-            pbar = self.tqdm
 
             for rand_prompts in self.prompts_dataloader:
                 experience = self.experience_maker.make_experience(rand_prompts, **self.generate_kwargs)
