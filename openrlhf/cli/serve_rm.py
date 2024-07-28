@@ -1,7 +1,7 @@
 import argparse
-
-# from vllm import LLM, SamplingParams
-from flask import Flask, jsonify, request
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from openrlhf.models import get_llm_for_sequence_regression
 from openrlhf.utils import get_tokenizer
@@ -10,9 +10,7 @@ from openrlhf.utils.logging_utils import init_logger
 logger = init_logger(__name__)
 
 
-class RewardModelServer:
-    """RM server"""
-
+class RewardModelProxy:
     def __init__(self, args):
         self.reward_model = get_llm_for_sequence_regression(
             args.reward_pretrain,
@@ -76,18 +74,18 @@ if __name__ == "__main__":
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument("--batch_size", type=int, default=None)
 
-    # server
     args = parser.parse_args()
 
-    app = Flask(__name__)
-    rm_server = RewardModelServer(args)
+    # server
+    reward_model = RewardModelProxy(args)
+    app = FastAPI()
 
-    @app.route("/get_reward", methods=["POST"])
-    def get_reward():
-        data = request.json
+    @app.post("/get_reward")
+    async def get_reward(request: Request):
+        data = await request.json()
         queries = data.get("query")
-        rewards = rm_server.get_reward(queries)
+        rewards = reward_model.get_reward(queries)
         result = {"rewards": rewards}
-        return jsonify(result)
+        return JSONResponse(result)
 
-    app.run(port=args.port, host=args.host)
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
