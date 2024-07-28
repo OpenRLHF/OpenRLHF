@@ -41,3 +41,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    --flash_attn \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
+
+# --remote_rm_url [use remote rm]

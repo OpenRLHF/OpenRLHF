@@ -28,14 +28,23 @@ class RMServer:
             args.reward_pretrain, self.reward_model, "left", None, use_fast=not args.disable_fast_tokenizer
         )
         self.max_length = args.max_len
+        self.batch_size = args.batch_size
 
     def get_reward(self, queries):
-        inputs = self.tokenize_fn(queries, device=self.reward_model.device)
-        r = self.reward_model(inputs["input_ids"], inputs["attention_mask"])
-        r = r.tolist()
-        if len(r) == 1:
-            return r[0]
-        return r
+        batch_size = self.batch_size
+        if batch_size is None:
+            batch_size = len(queries)
+
+        scores = []
+        # batch
+        for i in range(0, len(queries), batch_size):
+            inputs = self.tokenize_fn(
+                queries[i * batch_size : min(len(queries), i * (batch_size + 1))], device=self.reward_model.device
+            )
+            r = self.reward_model(inputs["input_ids"], inputs["attention_mask"])
+            r = r.tolist()
+            scores.extend(r)
+        return scores
 
     def tokenize_fn(self, texts, device):
         batch = self.tokenizer(
@@ -64,6 +73,7 @@ if __name__ == "__main__":
     parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
     parser.add_argument("--disable_trace_cache", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
+    parser.add_argument("--batch_size", type=int, default=None)
 
     # server
     args = parser.parse_args()
