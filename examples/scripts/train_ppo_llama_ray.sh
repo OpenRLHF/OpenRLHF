@@ -1,6 +1,5 @@
 set -x 
 
-
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{"working_dir": "/openrlhf"}' \
    -- python3 -m openrlhf.cli.train_ppo_ray \
@@ -42,4 +41,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
 
-# --remote_rm_url [use remote rm]
+# Support Remote Reward model
+# --remote_rm_url http://localhost:5000/get_reward

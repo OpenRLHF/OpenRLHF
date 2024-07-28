@@ -3,7 +3,7 @@ set -x
 read -r -d '' training_commands <<EOF
 openrlhf.cli.train_ppo \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-   --remote_rm_url https://localhost:5000/get_reward \
+   --remote_rm_url http://localhost:5000/get_reward \
    --save_path ./checkpoint/llama-3-8b-rlhf \
    --save_steps -1 \
    --logging_steps 1 \
