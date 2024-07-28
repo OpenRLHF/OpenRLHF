@@ -66,6 +66,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_len", type=int, default="2048")
 
     parser.add_argument("--port", type=int, default=5000, help="Port number for the server")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="IP for the server")
 
     # Performance
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
@@ -89,4 +90,4 @@ if __name__ == "__main__":
         result = {"rewards": rewards}
         return jsonify(result)
 
-    app.run(port=args.port)
+    app.run(port=args.port, host=args.host)
