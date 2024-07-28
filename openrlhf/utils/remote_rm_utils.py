@@ -9,19 +9,22 @@ logger = init_logger(__name__)
 
 
 def request_api_wrapper(url, data, score_key="score", try_max_times=10):
-    """request api wrapper"""
+    """Synchronous request API wrapper"""
     headers = {
         "Content-Type": "application/json",
     }
     for _ in range(try_max_times):
         try:
-            result = requests.post(url=url, json=data, headers=headers)
-            result = result.json()
-            return result[score_key]
+            response = requests.post(url=url, json=data, headers=headers)
+            response.raise_for_status()  # Raise an HTTPError for bad responses
+            result = response.json()
+            return result.get(score_key)
+        except requests.RequestException as e:
+            logger.info(f"Request error, please check: {e}")
         except Exception as e:
-            logger.info(f"request url error, please check: {e}")
-            time.sleep(0.5)
-    logger.info(f"Request url error for {try_max_times} times, return None. Please check the api server.")
+            logger.info(f"Unexpected error, please check: {e}")
+        time.sleep(0.5)
+    logger.info(f"Request error for {try_max_times} times, returning None. Please check the API server.")
     return None
 
 
