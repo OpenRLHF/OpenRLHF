@@ -10,7 +10,7 @@ from openrlhf.utils.logging_utils import init_logger
 logger = init_logger(__name__)
 
 
-class RMServer:
+class RewardModelServer:
     """RM server"""
 
     def __init__(self, args):
@@ -79,7 +79,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     app = Flask(__name__)
-    rm_server = RMServer(args)
+    rm_server = RewardModelServer(args)
 
     @app.route("/get_reward", methods=["POST"])
     def get_reward():
