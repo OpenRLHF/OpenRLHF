@@ -71,7 +71,6 @@ if __name__ == "__main__":
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
     parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
     parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
-    parser.add_argument("--disable_trace_cache", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument("--batch_size", type=int, default=None)
 
