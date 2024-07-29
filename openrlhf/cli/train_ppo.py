@@ -64,12 +64,11 @@ def train(args):
             value_head_prefix=args.value_head_prefix,
         )
         get_tokenizer(args.reward_pretrain, reward_model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
-
-        strategy.print("mean: {}, std {}".format(reward_model.mean, reward_model.std))
     else:
         reward_model = None
 
     strategy.print("reward normalization status: {}".format(args.normalize_reward))
+    strategy.print("mean: {}, std {}".format(critic.mean, critic.std))
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, actor.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
