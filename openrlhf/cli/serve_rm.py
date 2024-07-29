@@ -47,12 +47,13 @@ class RewardModelProxy:
         # remove pad_token
         for i in range(len(queries)):
             queries[i] = (
-                strip_sequence(strip_sequence(queries[i], self.tokenizer.pad_token), self.tokenizer_eos_token)
+                strip_sequence(strip_sequence(queries[i], self.tokenizer.pad_token), self.tokenizer.eos_token)
                 + self.tokenizer.eos_token
             )
 
         scores = []
         # batch
+        print(queries)
         with torch.no_grad():
             for i in range(0, len(queries), batch_size):
                 inputs = self.tokenize_fn(
