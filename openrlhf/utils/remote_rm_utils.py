@@ -17,8 +17,9 @@ def request_api_wrapper(url, data, score_key="rewards", try_max_times=10):
         try:
             response = requests.post(url=url, json=data, headers=headers)
             response.raise_for_status()  # Raise an HTTPError for bad responses
-            result = response.json().get(score_key)
-            return result
+            response = response.json()
+            assert score_key in response
+            return response.get(score_key)
         except requests.RequestException as e:
             logger.info(f"Request error, please check: {e}")
         except Exception as e:
