@@ -91,6 +91,7 @@ if __name__ == "__main__":
         queries = data.get("query")
         rewards = reward_model.get_reward(queries)
         result = {"rewards": rewards}
+        logger.info(f"Sent JSON: {result}")
         return JSONResponse(result)
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")

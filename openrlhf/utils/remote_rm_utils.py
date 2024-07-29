@@ -8,7 +8,7 @@ from openrlhf.utils.logging_utils import init_logger
 logger = init_logger(__name__)
 
 
-def request_api_wrapper(url, data, score_key="score", try_max_times=10):
+def request_api_wrapper(url, data, score_key="rewards", try_max_times=10):
     """Synchronous request API wrapper"""
     headers = {
         "Content-Type": "application/json",
@@ -28,7 +28,7 @@ def request_api_wrapper(url, data, score_key="score", try_max_times=10):
     raise Exception(f"Request error for {try_max_times} times, returning None. Please check the API server.")
 
 
-def remote_rm_fn(api_url, queries, score_key="score"):
+def remote_rm_fn(api_url, queries, score_key="rewards"):
     """remote reward model API
     api_url: RM API, We assume that the API supports two modes: merging query + response and not merging
     queries: query+response with the template
