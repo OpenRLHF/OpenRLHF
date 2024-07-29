@@ -5,7 +5,7 @@ import ray
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from openrlhf.utils.logging import init_logger
+from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
 

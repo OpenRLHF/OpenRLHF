@@ -42,6 +42,7 @@ class PPOTrainer(ABC):
         dataloader_pin_memory (bool, defaults to True): whether to pin memory for data loader
         callbacks (List[Callback], defaults to []): the callbacks to call during training process
         generate_kwargs (dict, optional): the kwargs to use while model generating
+        remote_rm_url (str, optional): function for reward model api
     """
 
     def __init__(
@@ -73,6 +74,7 @@ class PPOTrainer(ABC):
         tokenizer: Optional[Callable[[Any], dict]] = None,
         prompt_max_len: int = 128,
         dataloader_pin_memory: bool = True,
+        remote_rm_url: str = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
         **generate_kwargs,
     ) -> None:
@@ -100,6 +102,7 @@ class PPOTrainer(ABC):
         self.actor = actor
         self.critic = critic
         self.reward_model = reward_model
+        self.remote_rm_url = remote_rm_url
         self.initial_model = initial_model
         self.ema_model = ema_model
         self.actor_optim = actor_optim
@@ -122,7 +125,16 @@ class PPOTrainer(ABC):
             self.kl_ctl = FixedKLController(init_kl_coef)
 
         self.experience_maker = NaiveExperienceMaker(
-            actor, critic, reward_model, initial_model, tokenizer, prompt_max_len, self.kl_ctl, strategy, reward_fn
+            actor,
+            critic,
+            reward_model,
+            initial_model,
+            tokenizer,
+            prompt_max_len,
+            self.kl_ctl,
+            strategy,
+            remote_rm_url,
+            reward_fn,
         )
         self.replay_buffer = NaiveReplayBuffer(micro_train_batch_size, buffer_limit, buffer_cpu_offload)
 

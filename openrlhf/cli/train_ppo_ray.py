@@ -108,29 +108,33 @@ def train(args):
     )
 
     # multiple reward models
-    reward_pretrains = args.reward_pretrain.split(",")
-    reward_models = []
-    for _ in reward_pretrains:
-        reward_models.append(
-            PPORayActorGroup(
-                args.reward_num_nodes,
-                args.reward_num_gpus_per_node,
-                RewardModelRayActor,
-                pg=pg,
-                num_gpus_per_actor=0.25 if pg else 1,
+    if not args.remote_rm_url:
+        reward_pretrains = args.reward_pretrain.split(",")
+        reward_models = []
+        for _ in reward_pretrains:
+            reward_models.append(
+                PPORayActorGroup(
+                    args.reward_num_nodes,
+                    args.reward_num_gpus_per_node,
+                    RewardModelRayActor,
+                    pg=pg,
+                    num_gpus_per_actor=0.25 if pg else 1,
+                )
             )
-        )
+    else:
+        reward_models = None
 
     # init reference/reward/actor model
     refs = []
     refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.pretrain))
     refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.pretrain))
-    for reward_model, reward_pretrain in zip(reward_models, reward_pretrains):
-        refs.extend(reward_model.async_init_model_from_pretrained(strategy, reward_pretrain))
+    if not args.remote_rm_url:
+        for reward_model, reward_pretrain in zip(reward_models, reward_pretrains):
+            refs.extend(reward_model.async_init_model_from_pretrained(strategy, reward_pretrain))
 
     # init vLLM engine for text generation
     vllm_engines = None
-    if args.vllm_num_engines is not None:
+    if args.vllm_num_engines is not None and args.vllm_num_engines > 0:
         max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
         vllm_engines = create_vllm_engines(
             args.vllm_num_engines,
@@ -149,7 +153,7 @@ def train(args):
 
     # train actor and critic mdoel
     refs = actor_model.async_fit_actor_model(
-        critic_model, ref_model, reward_models, reward_fn=reward_fn, vllm_engines=vllm_engines
+        critic_model, ref_model, reward_models, args.remote_rm_url, reward_fn=reward_fn, vllm_engines=vllm_engines
     )
     ray.get(refs)
 
@@ -266,6 +270,7 @@ if __name__ == "__main__":
     #  Models
     parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--reward_pretrain", type=str, default=None, help="HF model name or path")
+    parser.add_argument("--remote_rm_url", type=str, default=None, help="remote RM API (HTTP)")
     parser.add_argument("--critic_pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--value_head_prefix", type=str, default="value_head")
     parser.add_argument("--ref_reward_offload", action="store_true", default=False)
@@ -311,7 +316,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.critic_pretrain is None:
-        args.critic_pretrain = args.reward_pretrain.split(",")[0]
+        if not args.remote_rm_url:
+            args.critic_pretrain = args.reward_pretrain.split(",")[0]
+        else:
+            args.critic_pretrain = args.pretrain
+
+    if args.remote_rm_url:
+        args.remote_rm_url = args.remote_rm_url.split(",")
 
     if args.vllm_num_engines >= 1 and args.n_samples_per_prompt > 1 and not args.enable_prefix_caching:
         print("[Warning] Please --enable_prefix_caching to accelerate when --n_samples_per_prompt > 1.")

@@ -13,11 +13,10 @@ ray job submit --address="http://127.0.0.1:8265" \
    --actor_num_gpus_per_node 2 \
    --vllm_num_engines 2 \
    --vllm_tensor_parallel_size 2 \
-   --colocate_critic_reward \
    --colocate_actor_ref \
    --ref_reward_offload \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-   --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
+   --remote_rm_url http://localhost:5000/get_reward \
    --save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
    --micro_train_batch_size 8 \
    --train_batch_size 128 \

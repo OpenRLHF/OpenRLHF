@@ -235,6 +235,7 @@ class PPORayActorGroup:
         critic_model_group: "PPORayActorGroup",
         initial_model_group: "PPORayActorGroup",
         reward_model_groups: List["PPORayActorGroup"],
+        remote_rm_urls: List[str] = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
         vllm_engines: List = None,
     ):
@@ -244,6 +245,7 @@ class PPORayActorGroup:
             critic_model_group (PPORayActorGroup): critic model group.
             initial_model_group (PPORayActorGroup): reference model group.
             reward_model_groups (PPORayActorGroup): reward model groups.
+            remote_rm_urls: remote RM APIs.
             reward_fn: reward calculate function, must be specified if using multiple reward models.
             vllm_engines: vllm engines for text generation, if not specified, generate text by actor model directly.
 
@@ -251,7 +253,9 @@ class PPORayActorGroup:
             List: list of remote object refs.
         """
         assert (
-            len(reward_model_groups) == 1 or reward_fn is not None
+            (remote_rm_urls and len(remote_rm_urls) == 1)
+            or (reward_model_groups and len(reward_model_groups) == 1)
+            or reward_fn is not None
         ), "reward_fn must be specified if using multiple reward models"
 
         critic_actors = critic_model_group._actor_handlers
@@ -265,15 +269,17 @@ class PPORayActorGroup:
             initial_actor = initial_actors[i % len(initial_actors)]
 
             reward_actors = []
-            for reward_model_group in reward_model_groups:
-                actors = reward_model_group._actor_handlers
-                reward_actors.append(actors[i % len(actors)])
+            if not remote_rm_urls:
+                for reward_model_group in reward_model_groups:
+                    actors = reward_model_group._actor_handlers
+                    reward_actors.append(actors[i % len(actors)])
 
             refs.append(
                 actor.fit.remote(
                     critic_model=critic_actor,
                     initial_model=initial_actor,
                     reward_model=reward_actors,
+                    remote_rm_url=remote_rm_urls,
                     reward_fn=reward_fn,
                     vllm_engines=vllm_engines,
                     # whether this actor should triger corresponding critic model training

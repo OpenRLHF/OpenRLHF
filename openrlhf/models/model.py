@@ -9,9 +9,9 @@ from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
 from transformers.deepspeed import HfDeepSpeedConfig
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
-from openrlhf.utils.logging import init_logger
 from .packing_utils import patch_for_block_diag_attn
 from .utils import reset_position_ids
+from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
 

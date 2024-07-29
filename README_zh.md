@@ -247,6 +247,9 @@ deepspeed --module openrlhf.cli.train_ppo \
   --flash_attn \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
+
+  # 支持远程 reward model (HTTP)
+  # --remote_rm_url http://localhost:5000/get_reward
 ```
 
 ### 使用 Ray 和 vLLM 的 PPO
@@ -301,6 +304,8 @@ ray job submit --address="http://127.0.0.1:8265" \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
 
+  # 支持远程 reward model (HTTP)
+   # --remote_rm_url http://localhost:5000/get_reward
 ```
 
 > [!NOTE]

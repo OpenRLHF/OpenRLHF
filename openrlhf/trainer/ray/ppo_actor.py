@@ -26,6 +26,7 @@ class ActorPPOTrainer(PPOTrainer):
         self,
         *args,
         vllm_engines: List = None,
+        remote_rm_url: List[str] = None,
         critic_train_remote: bool = False,
         **kwargs,
     ):
@@ -36,6 +37,7 @@ class ActorPPOTrainer(PPOTrainer):
             critic_train_remote (bool, optional): whether this actor should triger corresponding critic model training. Defaults to False.
         """
         super().__init__(*args, **kwargs)
+        self.remote_rm_url = remote_rm_url
         self.vllm_engines = vllm_engines
         self.critic_train_remote = critic_train_remote
 
@@ -48,6 +50,7 @@ class ActorPPOTrainer(PPOTrainer):
             self.prompt_max_len,
             self.kl_ctl,
             self.strategy,
+            self.remote_rm_url,
             self.reward_fn,
             vllm_engines=self.vllm_engines,
         )
@@ -294,6 +297,7 @@ class ActorModelRayActor(BasePPORole):
         critic_model: ray.actor.ActorHandle,
         initial_model: ray.actor.ActorHandle,
         reward_model: List[ray.actor.ActorHandle],
+        remote_rm_url: List[str] = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
         vllm_engines: List[ray.actor.ActorHandle] = None,
         critic_train_remote: bool = False,
@@ -314,6 +318,7 @@ class ActorModelRayActor(BasePPORole):
             critic_optim=None,
             actor_scheduler=self.actor_scheduler,
             critic_scheduler=None,
+            remote_rm_url=remote_rm_url,
             reward_fn=reward_fn,
             vllm_engines=vllm_engines,
             max_epochs=args.max_epochs,
