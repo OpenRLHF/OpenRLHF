@@ -29,9 +29,10 @@ class RewardModelProxy:
         self.batch_size = args.batch_size
 
     def get_reward(self, queries):
-        batch_size = self.batch_size
-        if batch_size is None:
+        if self.batch_size is None:
             batch_size = len(queries)
+        else:
+            batch_size = self.batch_size
 
         scores = []
         # batch

@@ -23,9 +23,8 @@ def request_api_wrapper(url, data, score_key="score", try_max_times=10):
             logger.info(f"Request error, please check: {e}")
         except Exception as e:
             logger.info(f"Unexpected error, please check: {e}")
-        time.sleep(0.5)
-    logger.info(f"Request error for {try_max_times} times, returning None. Please check the API server.")
-    return None
+        time.sleep(1)
+    raise Exception(f"Request error for {try_max_times} times, returning None. Please check the API server.")
 
 
 def remote_rm_fn(api_url, queries, score_key="score"):

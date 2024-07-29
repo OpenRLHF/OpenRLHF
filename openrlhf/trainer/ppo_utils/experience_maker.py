@@ -136,8 +136,8 @@ class NaiveExperienceMaker(ABC):
         # rewards
         if self.remote_rm_url is not None:
             # remote RM
-            quries = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=False)
-            r = remote_rm_fn(self.remote_rm_url, queries=quries)
+            queries = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=False)
+            r = remote_rm_fn(self.remote_rm_url, queries=queries)
             r = torch.tensor(r, device=sequences.device)
         else:
             # local RM
@@ -277,8 +277,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         else:
             # remote RM
             for rm in self.remote_rm_url:
-                responses = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=False)
-                r = remote_rm_fn_ray.remote(rm, queries=responses)
+                queries = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=False)
+                r = remote_rm_fn_ray.remote(rm, queries=queries)
                 r_refs.append(r)
 
         # log probs
