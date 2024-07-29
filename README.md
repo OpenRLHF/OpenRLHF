@@ -244,6 +244,9 @@ deepspeed --module openrlhf.cli.train_ppo \
   --flash_attn \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
+
+   # Support remote reward model (HTTP)
+   # --remote_rm_url http://localhost:5000/get_reward
 ```
 
 ### PPO with Ray and vLLM
@@ -298,6 +301,8 @@ ray job submit --address="http://127.0.0.1:8265" \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
 
+   # Support remote reward model (HTTP)
+   # --remote_rm_url http://localhost:5000/get_reward
 ```
 > [!NOTE]
 > Do not set `--vllm_num_engines` means not using the vLLM engine.
