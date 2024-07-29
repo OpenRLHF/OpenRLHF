@@ -38,6 +38,12 @@ class RewardModelProxy:
         else:
             batch_size = self.batch_size
 
+        # remove pad_token
+        for i in range(len(queries)):
+            queries[i] = (
+                queries[i].strip(self.tokenizer.pad_token).strip(self.tokenizer.eos_token) + self.tokenizer.eos_token
+            )
+
         scores = []
         # batch
         with torch.no_grad():
