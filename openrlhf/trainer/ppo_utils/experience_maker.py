@@ -138,7 +138,6 @@ class NaiveExperienceMaker(ABC):
             # remote RM
             queries = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=False)
             r = remote_rm_fn(self.remote_rm_url, queries=queries)
-            r = torch.tensor(r, device=sequences.device)
         else:
             # local RM
             r = self.reward_model(sequences, attention_mask)
