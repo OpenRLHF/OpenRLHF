@@ -49,6 +49,7 @@ def train(args):
         lora_dropout=args.lora_dropout,
         ds_config=strategy.get_ds_train_config(is_actor=False),
         value_head_prefix=args.value_head_prefix,
+        init_value_head=strategy.args.pretrain == strategy.args.critic_pretrain,
     )
 
     if not args.remote_rm_url:
