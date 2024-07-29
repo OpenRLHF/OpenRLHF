@@ -270,7 +270,7 @@ if __name__ == "__main__":
     #  Models
     parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--reward_pretrain", type=str, default=None, help="HF model name or path")
-    parser.add_argument("--remote_rm_url", type=str, default=None, help="remote RM API")
+    parser.add_argument("--remote_rm_url", type=str, default=None, help="remote RM API (HTTP)")
     parser.add_argument("--critic_pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--value_head_prefix", type=str, default="value_head")
     parser.add_argument("--ref_reward_offload", action="store_true", default=False)
@@ -321,8 +321,8 @@ if __name__ == "__main__":
         else:
             args.critic_pretrain = args.pretrain
 
-    if args.remote_rm_urls:
-        args.remote_rm_urls = args.remote_rm_url.split(",")
+    if args.remote_rm_url:
+        args.remote_rm_url = args.remote_rm_url.split(",")
 
     if args.vllm_num_engines >= 1 and args.n_samples_per_prompt > 1 and not args.enable_prefix_caching:
         print("[Warning] Please --enable_prefix_caching to accelerate when --n_samples_per_prompt > 1.")
