@@ -30,6 +30,7 @@ openrlhf.cli.train_ppo \
    --gradient_checkpointing
 EOF
     # --wandb [WANDB_TOKENS] or True (use wandb login command)
+    # --remote_rm_url http://localhost:5000/get_reward
 
 if [[ ${1} != "slurm" ]]; then
     deepspeed --module $training_commands

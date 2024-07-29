@@ -42,7 +42,7 @@ More details are in [Technical Report](https://arxiv.org/abs/2405.11143) | [Docu
 - Distributed [PPO based on Ray](./examples/scripts/train_ppo_llama_ray.sh). 
 - Support full RLHF fine-tuning of models with [over 70 billion parameters](./examples/scripts/train_ppo_llama_ray_70b.sh).
 - Support vLLM generation acceleration in RLHF (--vllm_num_engines).
-- Support multiple reward models (--reward_pretrain model1,model2...).
+- Support multiple reward models (--reward_pretrain model1,model2...) and remote reward model(--remote_rm_url).
 - Support [DPO (direct-preference-optimization)/IPO/cDPO](./examples/scripts/train_dpo_llama.sh).
 - Support [Kahneman-Tversky optimization (KTO)](./examples/scripts/train_kto_llama.sh).
 - Support [Rejection Sampling](./examples/scripts/train_rejection_sampling_llama.sh).
@@ -170,12 +170,12 @@ deepspeed --module openrlhf.cli.train_sft \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
 
-# HF tokenizer.apply_chat_template is supported.
+# Support HF tokenizer.apply_chat_template
 # --apply_chat_template 
 # --input_key {JSON Key}
 # --tokenizer_chat_template {HF Chat Template}
 
-# SFT samples packing
+# Support samples packing
 # --packing_samples
 
 # Can also be used for continued pre-training
@@ -209,7 +209,7 @@ deepspeed --module openrlhf.cli.train_rm \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
 
-# RM samples packing
+# Support samples packing
 # --packing_samples
 ```
 
@@ -245,8 +245,8 @@ deepspeed --module openrlhf.cli.train_ppo \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
 
-   # Support remote reward model (HTTP)
-   # --remote_rm_url http://localhost:5000/get_reward
+# Support remote reward model (HTTP)
+# --remote_rm_url http://localhost:5000/get_reward
 ```
 
 ### PPO with Ray and vLLM
@@ -301,8 +301,8 @@ ray job submit --address="http://127.0.0.1:8265" \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
 
-   # Support remote reward model (HTTP)
-   # --remote_rm_url http://localhost:5000/get_reward
+# Support remote reward model (HTTP)
+# --remote_rm_url http://localhost:5000/get_reward
 ```
 > [!NOTE]
 > Do not set `--vllm_num_engines` means not using the vLLM engine.
