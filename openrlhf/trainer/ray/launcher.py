@@ -253,7 +253,9 @@ class PPORayActorGroup:
             List: list of remote object refs.
         """
         assert (
-            len(reward_model_groups) == 1 or reward_fn is not None
+            (remote_rm_urls and len(remote_rm_urls) == 1)
+            or (reward_model_groups and len(reward_model_groups) == 1)
+            or reward_fn is not None
         ), "reward_fn must be specified if using multiple reward models"
 
         critic_actors = critic_model_group._actor_handlers
