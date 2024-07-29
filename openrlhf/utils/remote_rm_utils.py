@@ -17,13 +17,14 @@ def request_api_wrapper(url, data, score_key="score", try_max_times=10):
         try:
             response = requests.post(url=url, json=data, headers=headers)
             response.raise_for_status()  # Raise an HTTPError for bad responses
-            result = response.json()
-            return result.get(score_key)
+            result = response.json().get(score_key)
+            return result
         except requests.RequestException as e:
             logger.info(f"Request error, please check: {e}")
         except Exception as e:
             logger.info(f"Unexpected error, please check: {e}")
         time.sleep(1)
+
     raise Exception(f"Request error for {try_max_times} times, returning None. Please check the API server.")
 
 
