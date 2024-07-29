@@ -1,4 +1,6 @@
 import argparse
+
+import torch
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -22,6 +24,8 @@ class RewardModelProxy:
             value_head_prefix=args.value_head_prefix,
             device_map="auto",
         )
+        self.reward_model.eval()
+
         self.tokenizer = get_tokenizer(
             args.reward_pretrain, self.reward_model, "left", None, use_fast=not args.disable_fast_tokenizer
         )
@@ -36,11 +40,14 @@ class RewardModelProxy:
 
         scores = []
         # batch
-        for i in range(0, len(queries), batch_size):
-            inputs = self.tokenize_fn(queries[i : min(len(queries), i + batch_size)], device=self.reward_model.device)
-            r = self.reward_model(inputs["input_ids"], inputs["attention_mask"])
-            r = r.tolist()
-            scores.extend(r)
+        with torch.no_grad():
+            for i in range(0, len(queries), batch_size):
+                inputs = self.tokenize_fn(
+                    queries[i : min(len(queries), i + batch_size)], device=self.reward_model.device
+                )
+                r = self.reward_model(inputs["input_ids"], inputs["attention_mask"])
+                r = r.tolist()
+                scores.extend(r)
         return scores
 
     def tokenize_fn(self, texts, device):
