@@ -37,9 +37,7 @@ class RewardModelProxy:
         scores = []
         # batch
         for i in range(0, len(queries), batch_size):
-            inputs = self.tokenize_fn(
-                queries[i * batch_size : min(len(queries), i * (batch_size + 1))], device=self.reward_model.device
-            )
+            inputs = self.tokenize_fn(queries[i : min(len(queries), i + batch_size)], device=self.reward_model.device)
             r = self.reward_model(inputs["input_ids"], inputs["attention_mask"])
             r = r.tolist()
             scores.extend(r)
