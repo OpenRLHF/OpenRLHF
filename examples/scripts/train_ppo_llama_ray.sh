@@ -40,6 +40,3 @@ ray job submit --address="http://127.0.0.1:8265" \
    --flash_attn \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
-
-   # Support remote reward model (HTTP)
-   # --remote_rm_url http://localhost:5000/get_reward

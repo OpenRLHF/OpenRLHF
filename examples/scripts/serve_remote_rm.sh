@@ -6,4 +6,5 @@ python -m openrlhf.cli.serve_rm \
     --bf16 \
     --flash_attn \
     --normalize_reward \
-    --max_len 8192
+    --max_len 8192 \
+    --batch_size 16
