@@ -1,4 +1,5 @@
 import argparse
+import re
 
 import torch
 import uvicorn
@@ -10,6 +11,11 @@ from openrlhf.utils import get_tokenizer
 from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
+
+
+def strip_sequence(text, seq):
+    pattern = f"^{re.escape(seq)}+|{re.escape(seq)}+$"
+    return re.sub(pattern, "", text)
 
 
 class RewardModelProxy:
@@ -41,7 +47,8 @@ class RewardModelProxy:
         # remove pad_token
         for i in range(len(queries)):
             queries[i] = (
-                queries[i].strip(self.tokenizer.pad_token).strip(self.tokenizer.eos_token) + self.tokenizer.eos_token
+                strip_sequence(strip_sequence(queries[i], self.tokenizer.pad_token), self.tokenizer_eos_token)
+                + self.tokenizer.eos_token
             )
 
         scores = []
