@@ -40,7 +40,7 @@ def remote_rm_fn(api_url, queries, score_key="rewards"):
 
 
 @ray.remote
-def remote_rm_fn_ray(api_url, queries, score_key="score"):
+def remote_rm_fn_ray(api_url, queries, score_key="rewards"):
     return remote_rm_fn(api_url, queries, score_key)
 
 
