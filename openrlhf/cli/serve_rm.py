@@ -57,7 +57,7 @@ class RewardModelProxy:
                 strip_sequence(queries[i], self.tokenizer.pad_token, self.tokenizer.eos_token)
                 + self.tokenizer.eos_token
             )
-        logger.info(f"quires[0]: {queries[0]}")
+        logger.info(f"queries[0]: {queries[0]}")
 
         scores = []
         # batch
