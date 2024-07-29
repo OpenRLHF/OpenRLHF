@@ -13,12 +13,16 @@ from openrlhf.utils.logging_utils import init_logger
 logger = init_logger(__name__)
 
 
-def rstrip_sequence(text, pad_token, eos_token):
+def strip_sequence(text, pad_token, eos_token):
     pad_token_escaped = re.escape(pad_token)
     eos_token_escaped = re.escape(eos_token)
 
     pattern = f"({eos_token_escaped}|{pad_token_escaped})+$"
-    return re.sub(pattern, "", text)
+    text = re.sub(pattern, "", text)
+
+    pattern = f"^({eos_token_escaped}|{pad_token_escaped})+"
+    text = re.sub(pattern, "", text)
+    return text
 
 
 class RewardModelProxy:
@@ -50,7 +54,7 @@ class RewardModelProxy:
         # remove pad_token
         for i in range(len(queries)):
             queries[i] = (
-                rstrip_sequence(queries[i], self.tokenizer.pad_token, self.tokenizer.eos_token)
+                strip_sequence(queries[i], self.tokenizer.pad_token, self.tokenizer.eos_token)
                 + self.tokenizer.eos_token
             )
 
