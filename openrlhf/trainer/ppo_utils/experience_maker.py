@@ -296,7 +296,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         r = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
 
         # avoid CUDA OOM when colocate models
-        if self.strategy.args.colocate_critic_reward:
+        if self.strategy.args.colocate_critic_reward and not self.remote_rm_url:
             ray.get([self.reward_model[0].empty_cache.remote()])
 
         if self.strategy.args.colocate_actor_ref:
