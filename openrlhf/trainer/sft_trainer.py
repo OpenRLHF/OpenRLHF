@@ -4,12 +4,12 @@ from abc import ABC
 import torch
 from torch import nn
 from torch.optim import Optimizer
-from torch.utils.data import DistributedSampler
 from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import SFTDataset
 from openrlhf.models import GPTLMLoss
+from openrlhf.utils.distributed_sampler import DistributedSampler
 
 
 class SFTTrainer(ABC):

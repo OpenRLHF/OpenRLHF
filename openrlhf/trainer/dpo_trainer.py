@@ -5,10 +5,10 @@ from typing import Dict, List, Optional, Tuple, Union
 import torch
 from torch import nn
 from torch.optim import Optimizer
-from torch.utils.data import DistributedSampler
 from tqdm import tqdm
 
 from openrlhf.models import DPOLoss
+from openrlhf.utils.distributed_sampler import DistributedSampler
 
 
 class DPOTrainer(ABC):

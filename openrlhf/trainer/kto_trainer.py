@@ -3,10 +3,10 @@ from abc import ABC
 import torch
 import torch.distributed as dist
 from torch.optim import Optimizer
-from torch.utils.data import DistributedSampler
 from tqdm import tqdm
 
 from openrlhf.models import KTOLoss
+from openrlhf.utils.distributed_sampler import DistributedSampler
 
 
 class KTOTrainer(ABC):

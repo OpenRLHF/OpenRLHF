@@ -15,9 +15,10 @@ from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
 from peft import PeftModel, get_peft_model_state_dict
 from torch import distributed as dist
 from torch.optim import Optimizer
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader
 
 from openrlhf.models import Actor
+from openrlhf.utils.distributed_sampler import DistributedSampler
 
 from .deepspeed_utils import (
     _z3_params_to_fetch,
