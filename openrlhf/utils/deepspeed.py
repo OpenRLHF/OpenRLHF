@@ -118,6 +118,7 @@ class DeepspeedStrategy(ABC):
         collate_fn=None,
         drop_last=True,
         sampler=None,
+        consumed_samples=0,
     ):
         # DDP only mode, replay buffers on each rank are different.
         if sampler is None:
@@ -128,6 +129,7 @@ class DeepspeedStrategy(ABC):
                 shuffle=shuffle,
                 seed=self.seed,
                 drop_last=drop_last,
+                consumed_samples=consumed_samples,
             )
 
         return DataLoader(
