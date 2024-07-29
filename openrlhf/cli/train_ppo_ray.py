@@ -122,7 +122,6 @@ def train(args):
                 )
             )
     else:
-        remote_rm_urls = args.remote_rm_url.split(",")
         reward_models = None
 
     # init reference/reward/actor model
@@ -154,7 +153,7 @@ def train(args):
 
     # train actor and critic mdoel
     refs = actor_model.async_fit_actor_model(
-        critic_model, ref_model, reward_models, remote_rm_urls, reward_fn=reward_fn, vllm_engines=vllm_engines
+        critic_model, ref_model, reward_models, args.remote_rm_url, reward_fn=reward_fn, vllm_engines=vllm_engines
     )
     ray.get(refs)
 
@@ -321,6 +320,9 @@ if __name__ == "__main__":
             args.critic_pretrain = args.reward_pretrain.split(",")[0]
         else:
             args.critic_pretrain = args.pretrain
+
+    if args.remote_rm_urls:
+        args.remote_rm_urls = args.remote_rm_url.split(",")
 
     if args.vllm_num_engines >= 1 and args.n_samples_per_prompt > 1 and not args.enable_prefix_caching:
         print("[Warning] Please --enable_prefix_caching to accelerate when --n_samples_per_prompt > 1.")
