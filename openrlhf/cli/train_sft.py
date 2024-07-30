@@ -39,6 +39,26 @@ def train(args):
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
 
+    # gradient_checkpointing
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
+        )
+
+    # prepare models
+    (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
+
+    # load checkpoint
+    consumed_samples = 0
+    start_epoch = 0
+    if args.load_checkpoint and os.path.exists(args.ckpt_path):
+        _, states = strategy.load_ckpt(model.model, os.path.join(args.ckpt_path, "_actor"))
+        consumed_samples = states["consumed_samples"]
+        start_epoch = states["epoch"]
+        strategy.print(
+            f"Loaded the checkpoint: {args.ckpt_path}, epoch: {start_epoch}, consumed_samples: {consumed_samples}"
+        )
+
     # prepare for data and dataset
     train_data, eval_data = blending_datasets(
         args.dataset,
@@ -74,6 +94,7 @@ def train(args):
         True,
         True,
         train_dataset.packing_collate_fn if args.packing_samples else train_dataset.collate_fn,
+        consumed_samples=consumed_samples,
     )
     eval_dataloader = strategy.setup_dataloader(
         eval_dataset,
@@ -84,7 +105,7 @@ def train(args):
     )
 
     # scheduler
-    num_update_steps_per_epoch = len(train_dataloader) // strategy.accumulated_gradient
+    num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
 
     scheduler = get_scheduler(
@@ -94,19 +115,6 @@ def train(args):
         num_training_steps=max_steps,
         scheduler_specific_kwargs={"min_lr": args.learning_rate * 0.1},
     )
-
-    # gradient_checkpointing
-    if args.gradient_checkpointing:
-        model.gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
-        )
-
-    # prepare models
-    (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
-
-    # load checkpoint
-    if args.load_checkpoint:
-        strategy.print("Load checkpoint: ", args.save_path)
 
     os.makedirs(args.save_path, exist_ok=True)
 
@@ -125,7 +133,7 @@ def train(args):
         tokenizer=tokenizer,
     )
 
-    trainer.fit(args)
+    trainer.fit(args, start_epoch)
 
     # save model checkpoint after fitting on only rank0
     strategy.save_model(model, tokenizer, args.save_path)

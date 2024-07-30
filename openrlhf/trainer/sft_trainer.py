@@ -85,20 +85,22 @@ class SFTTrainer(ABC):
             wandb.define_metric("eval/global_step")
             wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
 
-    def fit(self, args):
+    def fit(self, args, start_epoch=0):
         # get eval and save steps
         if args.eval_steps == -1:
-            args.eval_steps = self.train_dataloader.__len__()  # Evaluate once per epoch
+            args.eval_steps = (
+                self.train_dataloader.__len__() // self.strategy.accumulated_gradient
+            )  # Evaluate once per epoch
         if args.save_steps == -1:
             args.save_steps = float("inf")  # do not save ckpt
 
-        global_step = 1
+        step = 1
         epoch_bar = tqdm(
             range(self.epochs),
             desc="Train epoch",
             disable=not self.strategy.is_rank_0(),
         )
-        for epoch in range(self.epochs):
+        for epoch in range(start_epoch, self.epochs):
             if isinstance(self.train_dataloader.sampler, DistributedSampler):
                 self.train_dataloader.sampler.set_epoch(epoch)
 
@@ -154,15 +156,17 @@ class SFTTrainer(ABC):
                     logs_dict["aux_loss"] = aux_loss.item()
 
                 # logs/checkpoints/evaluation
-                self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict)
+                global_step = step // self.strategy.accumulated_gradient
+                client_states = {"consumed_samples": global_step * args.train_batch_size, "epoch": epoch}
+                self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
 
                 step_bar.update()
-                global_step += 1
+                step += 1
 
             epoch_bar.update()
 
     # logs/checkpoints/evaluation
-    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}):
+    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         if global_step % args.logging_steps == 0:
             # step bar
             logs_dict = self.strategy.all_reduce(logs_dict)
@@ -184,7 +188,9 @@ class SFTTrainer(ABC):
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
-            self.strategy.save_ckpt(self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem)
+            self.strategy.save_ckpt(
+                self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+            )
 
     def evaluate(self, eval_dataloader, steps=0):
         times = 0
