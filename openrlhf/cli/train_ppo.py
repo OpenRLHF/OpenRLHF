@@ -98,14 +98,6 @@ def train(args):
     else:
         ema_model = None
 
-    # configure optimizer
-    actor_optim = strategy.create_optimizer(
-        actor, lr=args.actor_learning_rate, betas=args.adam_betas, weight_decay=args.l2
-    )
-    critic_optim = strategy.create_optimizer(
-        critic, lr=args.critic_learning_rate, betas=args.adam_betas, weight_decay=args.l2
-    )
-
     # gradient_checkpointing
     if args.gradient_checkpointing:
         actor.gradient_checkpointing_enable(
@@ -114,6 +106,65 @@ def train(args):
         critic.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
         )
+
+    # configure optimizer
+    actor_optim = strategy.create_optimizer(
+        actor, lr=args.actor_learning_rate, betas=args.adam_betas, weight_decay=args.l2
+    )
+    critic_optim = strategy.create_optimizer(
+        critic, lr=args.critic_learning_rate, betas=args.adam_betas, weight_decay=args.l2
+    )
+
+    # prepare datasets
+    prompts_data = blending_datasets(
+        args.prompt_data,
+        args.prompt_data_probs,
+        strategy,
+        args.seed,
+        max_count=args.max_samples,
+        return_eval=False,
+        train_split=args.prompt_split,
+    )
+    prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
+    prompts_dataset = PromptDataset(prompts_data, tokenizer, strategy, input_template=args.input_template)
+
+    if args.pretrain_data:
+        pretrain_data = blending_datasets(
+            args.pretrain_data,
+            args.pretrain_data_probs,
+            strategy,
+            args.seed,
+            return_eval=False,
+            train_split=args.pretrain_split,
+        )
+        pretrain_max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
+        pretrain_dataset = SFTDataset(
+            pretrain_data.select(range(min(len(pretrain_data), args.max_epochs * len(prompts_dataset)))),
+            tokenizer,
+            pretrain_max_len,
+            strategy,
+            pretrain_mode=True,
+        )
+
+    # configure scheduler
+    num_update_steps_per_episodes = int(len(prompts_dataset) / args.train_batch_size * args.max_epochs)
+    max_steps = math.ceil(args.num_episodes * num_update_steps_per_episodes)
+
+    actor_scheduler = get_scheduler(
+        "cosine_with_min_lr",
+        actor_optim,
+        num_warmup_steps=math.ceil(max_steps * 0.03),
+        num_training_steps=max_steps,
+        scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
+    )
+
+    critic_scheduler = get_scheduler(
+        "cosine_with_min_lr",
+        critic_optim,
+        num_warmup_steps=math.ceil(max_steps * 0.03),
+        num_training_steps=max_steps,
+        scheduler_specific_kwargs={"min_lr": args.critic_learning_rate * 0.1},
+    )
 
     # prepare models/optimizers...
     (
@@ -145,39 +196,11 @@ def train(args):
             f"Loaded the checkpoint: {args.ckpt_path}, epoch: {start_episode}, consumed_samples: {consumed_samples}"
         )
 
-    # prepare datasets
-    prompts_data = blending_datasets(
-        args.prompt_data,
-        args.prompt_data_probs,
-        strategy,
-        args.seed,
-        max_count=args.max_samples,
-        return_eval=False,
-        train_split=args.prompt_split,
-    )
-    prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
-    prompts_dataset = PromptDataset(prompts_data, tokenizer, strategy, input_template=args.input_template)
+    # prepare dataloader
     prompts_dataloader = strategy.setup_dataloader(
         prompts_dataset, args.micro_rollout_batch_size, True, True, consumed_samples=consumed_samples
     )
-
     if args.pretrain_data:
-        pretrain_data = blending_datasets(
-            args.pretrain_data,
-            args.pretrain_data_probs,
-            strategy,
-            args.seed,
-            return_eval=False,
-            train_split=args.pretrain_split,
-        )
-        pretrain_max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
-        pretrain_dataset = SFTDataset(
-            pretrain_data.select(range(min(len(pretrain_data), args.max_epochs * len(prompts_dataset)))),
-            tokenizer,
-            pretrain_max_len,
-            strategy,
-            pretrain_mode=True,
-        )
         pretrain_dataloader = itertools.cycle(
             iter(
                 strategy.setup_dataloader(
@@ -192,26 +215,6 @@ def train(args):
         )
     else:
         pretrain_dataloader = None
-
-    # configure scheduler
-    num_update_steps_per_episodes = int(len(prompts_dataset) / args.train_batch_size * args.max_epochs)
-    max_steps = math.ceil(args.num_episodes * num_update_steps_per_episodes)
-
-    actor_scheduler = get_scheduler(
-        "cosine_with_min_lr",
-        actor_optim,
-        num_warmup_steps=math.ceil(max_steps * 0.03),
-        num_training_steps=max_steps,
-        scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
-    )
-
-    critic_scheduler = get_scheduler(
-        "cosine_with_min_lr",
-        critic_optim,
-        num_warmup_steps=math.ceil(max_steps * 0.03),
-        num_training_steps=max_steps,
-        scheduler_specific_kwargs={"min_lr": args.critic_learning_rate * 0.1},
-    )
 
     os.makedirs(args.save_path, exist_ok=True)
 

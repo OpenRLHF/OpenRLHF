@@ -30,14 +30,9 @@ def train(args):
         ds_config=strategy.get_ds_train_config(is_actor=True),
         packing_samples=args.packing_samples,
     )
-
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
-
     strategy.print(model)
-
-    # configure optimizer
-    optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
 
     # gradient_checkpointing
     if args.gradient_checkpointing:
@@ -45,19 +40,8 @@ def train(args):
             gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
         )
 
-    # prepare models
-    (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
-
-    # load checkpoint
-    consumed_samples = 0
-    start_epoch = 0
-    if args.load_checkpoint and os.path.exists(args.ckpt_path):
-        _, states = strategy.load_ckpt(model.model, os.path.join(args.ckpt_path, "_actor"))
-        consumed_samples = states["consumed_samples"]
-        start_epoch = states["epoch"]
-        strategy.print(
-            f"Loaded the checkpoint: {args.ckpt_path}, epoch: {start_epoch}, consumed_samples: {consumed_samples}"
-        )
+    # configure optimizer
+    optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
 
     # prepare for data and dataset
     train_data, eval_data = blending_datasets(
@@ -88,6 +72,33 @@ def train(args):
         input_template=args.input_template,
     )
 
+    # scheduler
+    num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size
+    max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
+
+    scheduler = get_scheduler(
+        args.lr_scheduler,
+        optim,
+        num_warmup_steps=math.ceil(max_steps * 0.03),
+        num_training_steps=max_steps,
+        scheduler_specific_kwargs={"min_lr": args.learning_rate * 0.1},
+    )
+
+    # prepare models
+    (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
+
+    # load checkpoint
+    consumed_samples = 0
+    start_epoch = 0
+    if args.load_checkpoint and os.path.exists(args.ckpt_path):
+        _, states = strategy.load_ckpt(model.model, os.path.join(args.ckpt_path, "_actor"))
+        consumed_samples = states["consumed_samples"]
+        start_epoch = states["epoch"]
+        strategy.print(
+            f"Loaded the checkpoint: {args.ckpt_path}, epoch: {start_epoch}, consumed_samples: {consumed_samples}"
+        )
+
+    # prepare dataloader
     train_dataloader = strategy.setup_dataloader(
         train_dataset,
         args.micro_train_batch_size,
@@ -102,18 +113,6 @@ def train(args):
         True,
         False,
         eval_dataset.packing_collate_fn if args.packing_samples else eval_dataset.collate_fn,
-    )
-
-    # scheduler
-    num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size
-    max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
-
-    scheduler = get_scheduler(
-        args.lr_scheduler,
-        optim,
-        num_warmup_steps=math.ceil(max_steps * 0.03),
-        num_training_steps=max_steps,
-        scheduler_specific_kwargs={"min_lr": args.learning_rate * 0.1},
     )
 
     os.makedirs(args.save_path, exist_ok=True)
