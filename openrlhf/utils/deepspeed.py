@@ -374,36 +374,30 @@ class DeepspeedStrategy(ABC):
     def save_ckpt(self, model, save_dir, tag=None, max_num=3, max_mem=1000, client_state={}, save_latest=True):
         assert isinstance(model, deepspeed.DeepSpeedEngine)
         if self.is_rank_0():
-            # Check and create the directory
-            if not os.path.exists(save_dir):
-                os.makedirs(save_dir, exist_ok=True)
-
-            # max hard drive space limit
-            MAX_SIZE = max_mem * 1024 * 1024 * 1024
+            os.makedirs(save_dir, exist_ok=True)
+            MAX_SIZE = max_mem * 1024**3  # Convert GB to bytes
 
             while True:
-                # Get all subdirectory and modification time
-                subdirs = [
-                    (os.path.join(save_dir, d), os.path.getmtime(os.path.join(save_dir, d)))
-                    for d in os.listdir(save_dir)
-                    if os.path.isdir(os.path.join(save_dir, d))
-                ]
-                # Sort by modification time, oldest first
-                subdirs.sort(key=lambda x: x[1])
-                # Calculate the total size of all sub -directory
-                total_size = 0
-                for subdir, _ in subdirs:
-                    for dirpath, dirnames, filenames in os.walk(subdir):
-                        for f in filenames:
-                            fp = os.path.join(dirpath, f)
-                            total_size += os.path.getsize(fp)
+                subdirs = sorted(
+                    [
+                        (os.path.join(save_dir, d), os.path.getmtime(os.path.join(save_dir, d)))
+                        for d in os.listdir(save_dir)
+                        if os.path.isdir(os.path.join(save_dir, d))
+                    ],
+                    key=lambda x: x[1],
+                )
+                total_size = sum(
+                    os.path.getsize(os.path.join(dirpath, f))
+                    for subdir, _ in subdirs
+                    for dirpath, _, filenames in os.walk(subdir)
+                    for f in filenames
+                )
 
-                # If the number of subdire directors is greater than equal to max_num or the total size is greater than max_mem, the oldest Checkpoint is deleted
                 if len(subdirs) >= max_num or total_size > MAX_SIZE:
-                    oldest_dir, _ = subdirs[0]  # The oldest directory
-                    if os.path.exists(oldest_dir):  # Ensure that the directory exists
-                        shutil.rmtree(oldest_dir)  # Delete directory
-                        self.print(f"Deleted oldest ckpt {oldest_dir}")  # The standard print function is used here
+                    oldest_dir = subdirs[0][0]
+                    if os.path.exists(oldest_dir):
+                        shutil.rmtree(oldest_dir)
+                        self.print(f"Deleted oldest ckpt {oldest_dir}")
                 else:
                     break
 
