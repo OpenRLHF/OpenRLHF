@@ -152,6 +152,9 @@ class KTOTrainer(ABC):
                     "loss_mean": loss_mean,
                 }
                 logs_dict["kl"] = KL.item()
+                logs_dict = self.strategy.all_reduce(logs_dict)
+                step_bar.set_postfix(logs_dict)
+                step_bar.update()
 
                 # logs/checkpoints/evaluation
                 if step % self.strategy.accumulated_gradient == 0:
@@ -159,7 +162,6 @@ class KTOTrainer(ABC):
                     client_states = {"consumed_samples": global_step * args.train_batch_size, "epoch": epoch}
                     self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
 
-                step_bar.update()
                 step += 1
             epoch_bar.update()
 
@@ -170,10 +172,6 @@ class KTOTrainer(ABC):
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         # logs
         if global_step % args.logging_steps == 0:
-            # step bar
-            logs_dict = self.strategy.all_reduce(logs_dict)
-            step_bar.set_postfix(logs_dict)
-
             # wandb
             if (
                 self._wandb is not None

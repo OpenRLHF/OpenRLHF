@@ -205,6 +205,10 @@ class PPOTrainer(ABC):
                     self.strategy.print(output[0])
                 self.replay_buffer.append(experience)
 
+                # step bar
+                pbar.set_postfix(status)
+                pbar.update()
+
                 if steps % update_timesteps == 0:
                     torch.cuda.empty_cache()
                     self.replay_buffer.normalize("advantages", self.strategy)
@@ -218,7 +222,6 @@ class PPOTrainer(ABC):
                     client_states = {"consumed_samples": global_steps * args.rollout_batch_size, "epoch": episode}
                     self.save_logs_and_checkpoints(args, global_steps, pbar, status, client_states)
 
-                pbar.update()
                 steps = steps + 1
 
     def ppo_train(self, global_steps=0):
@@ -392,8 +395,6 @@ class PPOTrainer(ABC):
 
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         if global_step % args.logging_steps == 0:
-            # step bar
-            step_bar.set_postfix(logs_dict)
             # wandb
             if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {

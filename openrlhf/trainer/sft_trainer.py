@@ -160,6 +160,10 @@ class SFTTrainer(ABC):
                 logs_dict = {"gpt_loss": gpt_loss.item(), "loss_mean": loss_mean}
                 if self.aux_loss:
                     logs_dict["aux_loss"] = aux_loss.item()
+                # step bar
+                logs_dict = self.strategy.all_reduce(logs_dict)
+                step_bar.set_postfix(logs_dict)
+                step_bar.update()
 
                 # logs/checkpoints/evaluation
                 if step % self.strategy.accumulated_gradient == 0:
@@ -167,7 +171,6 @@ class SFTTrainer(ABC):
                     client_states = {"consumed_samples": global_step * args.train_batch_size, "epoch": epoch}
                     self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
 
-                step_bar.update()
                 step += 1
 
             epoch_bar.update()
@@ -175,10 +178,6 @@ class SFTTrainer(ABC):
     # logs/checkpoints/evaluation
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         if global_step % args.logging_steps == 0:
-            # step bar
-            logs_dict = self.strategy.all_reduce(logs_dict)
-            step_bar.set_postfix(logs_dict)
-
             # wandb
             if (
                 self._wandb is not None
