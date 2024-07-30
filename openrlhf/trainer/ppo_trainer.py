@@ -175,7 +175,7 @@ class PPOTrainer(ABC):
 
         # get eval and save steps
         if args.eval_steps == -1:
-            args.eval_steps = prompts_dataloader.__len__() // update_timesteps  # Evaluate once per epoch
+            args.eval_steps = float("inf")  # do not save evaluate
         if args.save_steps == -1:
             args.save_steps = float("inf")  # do not save ckpt
 
