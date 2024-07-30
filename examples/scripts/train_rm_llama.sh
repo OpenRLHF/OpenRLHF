@@ -19,6 +19,7 @@ openrlhf.cli.train_rm \
    --chosen_key chosen \
    --rejected_key rejected \
    --flash_attn \
+   --load_checkpoint \
    --gradient_checkpointing
 EOF
      # --wandb [WANDB_TOKENS] or True (use wandb login command)

@@ -173,6 +173,7 @@ deepspeed --module openrlhf.cli.train_sft \
    --flash_attn \
    --learning_rate 5e-6 \
    --gradient_checkpointing \
+   --load_checkpoint \
    --use_wandb {wandb_token}
 
 # 支持 HF tokenizer.apply_chat_template
@@ -211,6 +212,7 @@ deepspeed --module openrlhf.cli.train_rm \
    --rejected_key rejected \
    --flash_attn \
    --gradient_checkpointing \
+   --load_checkpoint \
    --use_wandb {wandb_token}
 
 # 支持样本 packing
@@ -247,6 +249,7 @@ deepspeed --module openrlhf.cli.train_ppo \
   --adam_offload \
   --flash_attn \
   --gradient_checkpointing \
+  --load_checkpoint \
   --use_wandb {wandb_token}
 
 # 支持远程 reward model (HTTP)
@@ -303,6 +306,7 @@ ray job submit --address="http://127.0.0.1:8265" \
   --adam_offload \
   --flash_attn \
   --gradient_checkpointing \
+  --load_checkpoint \
   --use_wandb {wandb_token}
 
 # 支持远程 reward model (HTTP)
