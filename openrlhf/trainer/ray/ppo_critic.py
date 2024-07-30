@@ -184,3 +184,9 @@ class CriticModelRayActor(BasePPORole):
             self.tokenizer,
             args.save_path + "_critic",
         )
+
+    def save_checkpoint(self, tag):
+        args = self.strategy.args
+        self.strategy.save_ckpt(
+            self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
+        )

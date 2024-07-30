@@ -414,16 +414,17 @@ class PPOTrainer(ABC):
         # TODO: save best model on dev, use loss/perplexity/others on whole dev dataset as metric
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
-            if not self.actor is None:
-                self.strategy.save_ckpt(
-                    self.actor.model,
-                    os.path.join(args.ckpt_path, "_actor"),
-                    tag,
-                    args.max_ckpt_num,
-                    args.max_ckpt_mem,
-                    client_states,
-                )
-            if not self.critic is None:
-                self.strategy.save_ckpt(
-                    self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
-                )
+            self._save_checkpoint(self, args, tag, client_states)
+
+    def _save_checkpoint(self, args, tag, client_states):
+        self.strategy.save_ckpt(
+            self.actor.model,
+            os.path.join(args.ckpt_path, "_actor"),
+            tag,
+            args.max_ckpt_num,
+            args.max_ckpt_mem,
+            client_states,
+        )
+        self.strategy.save_ckpt(
+            self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
+        )
