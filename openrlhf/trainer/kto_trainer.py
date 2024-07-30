@@ -167,7 +167,7 @@ class KTOTrainer(ABC):
             self._wandb.finish()
 
     # logs/checkpoints/evaluate
-    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}):
+    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         # logs
         if global_step % args.logging_steps == 0:
             # step bar
@@ -190,7 +190,9 @@ class KTOTrainer(ABC):
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
-            self.strategy.save_ckpt(self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem)
+            self.strategy.save_ckpt(
+                self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+            )
 
     def evaluate(self, steps=0):
         self.model.eval()
