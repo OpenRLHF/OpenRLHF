@@ -100,14 +100,14 @@ class DPOTrainer(ABC):
             disable=not self.strategy.is_rank_0(),
         )
         for epoch in range(self.epochs):
+            if isinstance(self.train_dataloader.sampler, DistributedSampler):
+                self.train_dataloader.sampler.set_epoch(epoch, reset_consumed_indicies=epoch > start_epoch)
+
             step_bar = tqdm(
                 range(self.train_dataloader.__len__()),
                 desc="Train step of epoch %d" % epoch,
                 disable=not self.strategy.is_rank_0(),
             )
-
-            if isinstance(self.train_dataloader.sampler, DistributedSampler):
-                self.train_dataloader.sampler.set_epoch(epoch)
 
             self.model.train()
             self.ref_model.eval()

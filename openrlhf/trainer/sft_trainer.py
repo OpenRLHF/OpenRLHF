@@ -100,7 +100,7 @@ class SFTTrainer(ABC):
         )
         for epoch in range(start_epoch, self.epochs):
             if isinstance(self.train_dataloader.sampler, DistributedSampler):
-                self.train_dataloader.sampler.set_epoch(epoch)
+                self.train_dataloader.sampler.set_epoch(epoch, reset_consumed_indicies=epoch > start_epoch)
 
             step_bar = tqdm(
                 range(self.train_dataloader.__len__()),
