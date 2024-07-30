@@ -71,6 +71,7 @@ class UnpairedPreferenceDataset(Dataset):
                 padding=False,
                 truncation=True,
                 return_tensors="pt",
+                add_special_tokens=False,
             )
             prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
             # filter the sample whose length is greater than max_length (2 for answer length)
@@ -100,6 +101,7 @@ class UnpairedPreferenceDataset(Dataset):
                 padding=False,
                 truncation=True,
                 return_tensors="pt",
+                add_special_tokens=False,
             )
 
             inputs["input_ids"][0][-1] = self.tokenizer.eos_token_id

@@ -102,6 +102,7 @@ class RewardDataset(Dataset):
                     padding=False,
                     truncation=True,
                     return_tensors="pt",
+                    add_special_tokens=False,
                 )
                 prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
                 # filter the sample whose length is greater than max_length (2 for answer length)
@@ -136,6 +137,7 @@ class RewardDataset(Dataset):
             padding=False,
             truncation=True,
             return_tensors="pt",
+            add_special_tokens=False,
         )
 
         reject = (prompt + reject).rstrip("\n")
@@ -147,6 +149,7 @@ class RewardDataset(Dataset):
             padding=False,
             truncation=True,
             return_tensors="pt",
+            add_special_tokens=False,
         )
 
         # to avoid EOS_token truncation

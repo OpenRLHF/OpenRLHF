@@ -105,6 +105,7 @@ class NaiveExperienceMaker(ABC):
         batch = self.tokenizer(
             texts,
             return_tensors="pt",
+            add_special_tokens=False,
             max_length=max_length,
             padding=True,
             truncation=True,

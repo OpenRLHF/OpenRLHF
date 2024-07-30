@@ -75,6 +75,7 @@ class RewardModelProxy:
         batch = self.tokenizer(
             texts,
             return_tensors="pt",
+            add_special_tokens=False,
             max_length=self.max_length,
             padding=True,
             truncation=True,

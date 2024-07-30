@@ -113,6 +113,7 @@ def batch_generate(args):
         batch = tokenizer(
             texts,
             return_tensors="pt",
+            add_special_tokens=False,
             max_length=args.prompt_max_len,
             padding=True,
             truncation=True,
