@@ -156,9 +156,10 @@ class SFTTrainer(ABC):
                     logs_dict["aux_loss"] = aux_loss.item()
 
                 # logs/checkpoints/evaluation
-                global_step = step // self.strategy.accumulated_gradient
-                client_states = {"consumed_samples": global_step * args.train_batch_size, "epoch": epoch}
-                self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
+                if step % self.strategy.accumulated_gradient == 0:
+                    global_step = step // self.strategy.accumulated_gradient
+                    client_states = {"consumed_samples": global_step * args.train_batch_size, "epoch": epoch}
+                    self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
 
                 step_bar.update()
                 step += 1
