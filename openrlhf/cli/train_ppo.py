@@ -255,7 +255,7 @@ def train(args):
     )
 
     trainer.fit(
-        prompts_dataloader, pretrain_dataloader, args, start_episode, consumed_samples, num_update_steps_per_episodes
+        args, prompts_dataloader, pretrain_dataloader, start_episode, consumed_samples, num_update_steps_per_episodes
     )
 
     # save model checkpoint after fitting on only rank0

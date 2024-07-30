@@ -162,9 +162,9 @@ class PPOTrainer(ABC):
 
     def fit(
         self,
+        args,
         prompts_dataloader,
         pretrain_dataloader,
-        args,
         start_episode=0,
         consumed_samples=0,
         num_update_steps_per_episodes=1,
