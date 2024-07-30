@@ -165,6 +165,7 @@ class PPOTrainer(ABC):
         prompts_dataloader,
         pretrain_dataloader,
         args,
+        start_episode=0,
     ) -> None:
         self.prompts_dataloader = prompts_dataloader
         self.pretrain_dataloader = pretrain_dataloader
@@ -178,7 +179,7 @@ class PPOTrainer(ABC):
         if args.save_steps == -1:
             args.save_steps = float("inf")  # do not save ckpt
 
-        for episode in range(args.num_episodes):
+        for episode in range(start_episode, args.num_episodes):
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
                 self.prompts_dataloader.sampler.set_epoch(episode)
             pbar = tqdm(
@@ -204,7 +205,9 @@ class PPOTrainer(ABC):
                     if "kl" in status:
                         self.kl_ctl.update(status["kl"], args.rollout_batch_size)
                     # logs/checkpoints
-                    self.save_logs_and_checkpoints(args, steps // update_timesteps, pbar, status)
+                    global_steps = steps // update_timesteps
+                    client_states = {"consumed_samples": global_steps * args.rollout_batch_size, "epoch": episode}
+                    self.save_logs_and_checkpoints(args, global_steps, pbar, status, client_states)
 
                 pbar.update()
                 steps = steps + 1
@@ -378,7 +381,7 @@ class PPOTrainer(ABC):
         }
         return status
 
-    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}):
+    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         if global_step % args.logging_steps == 0:
             # step bar
             step_bar.set_postfix(logs_dict)
@@ -402,7 +405,12 @@ class PPOTrainer(ABC):
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
             self.strategy.save_ckpt(
-                self.actor.model, os.path.join(args.ckpt_path, "_actor"), tag, args.max_ckpt_num, args.max_ckpt_mem
+                self.actor.model,
+                os.path.join(args.ckpt_path, "_actor"),
+                tag,
+                args.max_ckpt_num,
+                args.max_ckpt_mem,
+                client_states,
             )
             self.strategy.save_ckpt(
                 self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
