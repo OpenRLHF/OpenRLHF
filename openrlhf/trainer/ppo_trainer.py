@@ -166,22 +166,31 @@ class PPOTrainer(ABC):
         pretrain_dataloader,
         args,
         start_episode=0,
+        consumed_samples=0,
+        num_update_steps_per_episodes=1,
     ) -> None:
+        # get eval and save steps
+        if args.eval_steps == -1:
+            args.eval_steps = num_update_steps_per_episodes  # Evaluate once per epoch
+        if args.save_steps == -1:
+            args.save_steps = float("inf")  # do not save ckpt
+
         self.prompts_dataloader = prompts_dataloader
         self.pretrain_dataloader = pretrain_dataloader
 
         update_timesteps = args.rollout_batch_size // (self.strategy.world_size * self.micro_rollout_batch_size)
         steps = 1
-
-        # get eval and save steps
-        if args.eval_steps == -1:
-            args.eval_steps = float("inf")  # do not save evaluate
-        if args.save_steps == -1:
-            args.save_steps = float("inf")  # do not save ckpt
+        # Restore step
+        if start_episode != 0 or consumed_samples != 0:
+            steps = (
+                start_episode * num_update_steps_per_episodes + consumed_samples / args.train_batch_size
+            ) * self.strategy.accumulated_gradient + 1
 
         for episode in range(start_episode, args.num_episodes):
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
-                self.prompts_dataloader.sampler.set_epoch(episode)
+                self.prompts_dataloader.sampler.set_epoch(
+                    episode, consumed_samples=0 if episode > start_episode else consumed_samples
+                )
             pbar = tqdm(
                 range(self.prompts_dataloader.__len__()),
                 desc=f"Episode [{episode + 1}/{args.num_episodes}]",

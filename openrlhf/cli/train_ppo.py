@@ -146,6 +146,23 @@ def train(args):
             pretrain_mode=True,
         )
 
+    # prepare dataloader
+    prompts_dataloader = strategy.setup_dataloader(prompts_dataset, args.micro_rollout_batch_size, True, True)
+    if args.pretrain_data:
+        pretrain_dataloader = itertools.cycle(
+            iter(
+                strategy.setup_dataloader(
+                    pretrain_dataset,
+                    args.micro_train_batch_size,
+                    True,
+                    True,
+                    pretrain_dataset.collate_fn,
+                )
+            )
+        )
+    else:
+        pretrain_dataloader = None
+
     # configure scheduler
     num_update_steps_per_episodes = int(len(prompts_dataset) / args.train_batch_size * args.max_epochs)
     max_steps = math.ceil(args.num_episodes * num_update_steps_per_episodes)
@@ -196,26 +213,6 @@ def train(args):
             f"Loaded the checkpoint: {args.ckpt_path}, epoch: {start_episode}, consumed_samples: {consumed_samples}"
         )
 
-    # prepare dataloader
-    prompts_dataloader = strategy.setup_dataloader(
-        prompts_dataset, args.micro_rollout_batch_size, True, True, consumed_samples=consumed_samples
-    )
-    if args.pretrain_data:
-        pretrain_dataloader = itertools.cycle(
-            iter(
-                strategy.setup_dataloader(
-                    pretrain_dataset,
-                    args.micro_train_batch_size,
-                    True,
-                    True,
-                    pretrain_dataset.collate_fn,
-                    consumed_samples=consumed_samples * args.max_epochs,
-                )
-            )
-        )
-    else:
-        pretrain_dataloader = None
-
     os.makedirs(args.save_path, exist_ok=True)
 
     # configure Trainer
@@ -258,10 +255,7 @@ def train(args):
     )
 
     trainer.fit(
-        prompts_dataloader,
-        pretrain_dataloader,
-        args,
-        start_episode,
+        prompts_dataloader, pretrain_dataloader, args, start_episode, consumed_samples, num_update_steps_per_episodes
     )
 
     # save model checkpoint after fitting on only rank0
