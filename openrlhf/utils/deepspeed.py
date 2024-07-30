@@ -415,8 +415,7 @@ class DeepspeedStrategy(ABC):
         load_module_only=False,
     ):
         assert isinstance(model, deepspeed.DeepSpeedEngine)
-        # basic ckpt: reuse deepspeed.DeepSpeedEngine.load_checkpoint
-        return model.load_checkpoint(
+        load_path, states = model.load_checkpoint(
             load_dir,
             tag,
             load_module_strict=load_module_strict,
@@ -424,3 +423,6 @@ class DeepspeedStrategy(ABC):
             load_lr_scheduler_states=load_lr_scheduler_states,
             load_module_only=load_module_only,
         )
+        if load_path is None:
+            raise Exception(f"[deepspeed] failed to resume from checkpoint {load_dir}")
+        return load_path, states
