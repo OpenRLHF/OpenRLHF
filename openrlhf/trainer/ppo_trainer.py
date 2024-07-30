@@ -169,22 +169,24 @@ class PPOTrainer(ABC):
         consumed_samples=0,
         num_update_steps_per_episodes=1,
     ) -> None:
+        num_rollouts_per_episodes = num_update_steps_per_episodes // (args.rollout_batch_size // args.train_batch_size)
+        update_timesteps = args.rollout_batch_size // (self.strategy.world_size * self.micro_rollout_batch_size)
+
         # get eval and save steps
         if args.eval_steps == -1:
-            args.eval_steps = num_update_steps_per_episodes  # Evaluate once per epoch
+            args.eval_steps = num_rollouts_per_episodes  # Evaluate once per epoch
         if args.save_steps == -1:
             args.save_steps = float("inf")  # do not save ckpt
 
         self.prompts_dataloader = prompts_dataloader
         self.pretrain_dataloader = pretrain_dataloader
 
-        update_timesteps = args.rollout_batch_size // (self.strategy.world_size * self.micro_rollout_batch_size)
         steps = 1
         # Restore step
         if start_episode != 0 or consumed_samples != 0:
             steps = (
-                start_episode * num_update_steps_per_episodes + consumed_samples // args.train_batch_size
-            ) * self.strategy.accumulated_gradient + 1
+                start_episode * num_rollouts_per_episodes + consumed_samples // args.rollout_batch_size
+            ) * update_timesteps + 1
 
         for episode in range(start_episode, args.num_episodes):
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
