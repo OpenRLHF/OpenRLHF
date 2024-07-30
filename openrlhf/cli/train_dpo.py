@@ -79,6 +79,23 @@ def train(args):
         eval_data, tokenizer, args.max_len, strategy, input_template=args.input_template, is_dpo=True
     )
 
+    # prepare dataloader
+    train_dataloader = strategy.setup_dataloader(
+        train_dataset,
+        args.micro_train_batch_size,
+        True,
+        True,
+        train_dataset.packing_collate_fn if args.packing_samples else train_dataset.collate_fn,
+    )
+
+    eval_dataloader = strategy.setup_dataloader(
+        eval_dataset,
+        args.micro_train_batch_size,
+        True,
+        False,
+        eval_dataset.packing_collate_fn if args.packing_samples else eval_dataset.collate_fn,
+    )
+
     # scheduler
     num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
@@ -105,24 +122,6 @@ def train(args):
             f"Loaded the checkpoint: {args.ckpt_path}, epoch: {start_epoch}, consumed_samples: {consumed_samples}"
         )
 
-    # prepare dataloader
-    train_dataloader = strategy.setup_dataloader(
-        train_dataset,
-        args.micro_train_batch_size,
-        True,
-        True,
-        train_dataset.packing_collate_fn if args.packing_samples else train_dataset.collate_fn,
-        consumed_samples=consumed_samples,
-    )
-
-    eval_dataloader = strategy.setup_dataloader(
-        eval_dataset,
-        args.micro_train_batch_size,
-        True,
-        False,
-        eval_dataset.packing_collate_fn if args.packing_samples else eval_dataset.collate_fn,
-    )
-
     os.makedirs(args.save_path, exist_ok=True)
 
     # batch_size here is expected to be C(k,2), k means # response of each prompt
@@ -141,7 +140,7 @@ def train(args):
         max_epochs=args.max_epochs,
     )
 
-    trainer.fit(args, start_epoch, num_update_steps_per_epoch)
+    trainer.fit(args, start_epoch, consumed_samples, num_update_steps_per_epoch)
 
     # save model checkpoint after fitting on only rank0
     strategy.save_model(model, tokenizer, args.save_path)

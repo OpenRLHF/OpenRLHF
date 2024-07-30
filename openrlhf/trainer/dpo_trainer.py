@@ -86,7 +86,7 @@ class DPOTrainer(ABC):
             wandb.define_metric("eval/global_step")
             wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
 
-    def fit(self, args, start_epoch=0, num_update_steps_per_epoch=1):
+    def fit(self, args, start_epoch=0, consumed_samples=0, num_update_steps_per_epoch=1):
         # get eval and save steps
         if args.eval_steps == -1:
             args.eval_steps = num_update_steps_per_epoch  # Evaluate once per epoch
@@ -94,17 +94,23 @@ class DPOTrainer(ABC):
             args.save_steps = float("inf")  # do not save ckpt
 
         step = 1
+        # Restore step
+        if start_epoch != 0 or consumed_samples != 0:
+            step = (
+                start_epoch * num_update_steps_per_epoch + consumed_samples / args.train_batch_size
+            ) * self.strategy.accumulated_gradient + 1
+
         epoch_bar = tqdm(
             range(start_epoch, self.epochs),
             desc="Train epoch",
             disable=not self.strategy.is_rank_0(),
         )
-        for epoch in range(self.epochs):
+        for epoch in range(start_epoch, self.epochs):
             if isinstance(self.train_dataloader.sampler, DistributedSampler):
                 self.train_dataloader.sampler.set_epoch(epoch, reset_consumed_indicies=epoch > start_epoch)
 
             step_bar = tqdm(
-                range(self.train_dataloader.__len__()),
+                range(step - 1, step - 1 + self.train_dataloader.__len__()),
                 desc="Train step of epoch %d" % epoch,
                 disable=not self.strategy.is_rank_0(),
             )

@@ -136,7 +136,7 @@ class DistributedSampler(Sampler[_T_co]):
     def __len__(self) -> int:
         return self.num_samples - self.consumed_indicies
 
-    def set_epoch(self, epoch: int, reset_consumed_indicies=False) -> None:
+    def set_epoch(self, epoch: int, consumed_samples=0) -> None:
         r"""
         Set the epoch for this sampler.
 
@@ -148,5 +148,4 @@ class DistributedSampler(Sampler[_T_co]):
             epoch (int): Epoch number.
         """
         self.epoch = epoch
-        if reset_consumed_indicies:
-            self.consumed_indicies = 0
+        self.consumed_indicies = consumed_samples // self.num_replicas
