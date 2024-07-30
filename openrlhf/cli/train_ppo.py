@@ -186,7 +186,7 @@ def train(args):
                     True,
                     True,
                     pretrain_dataset.collate_fn,
-                    consumed_samples=start_episode * len(prompts_dataset) + consumed_samples,
+                    consumed_samples=consumed_samples * args.max_epochs,
                 )
             )
         )
