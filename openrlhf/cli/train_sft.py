@@ -132,7 +132,7 @@ def train(args):
         tokenizer=tokenizer,
     )
 
-    trainer.fit(args, start_epoch)
+    trainer.fit(args, start_epoch, num_update_steps_per_epoch)
 
     # save model checkpoint after fitting on only rank0
     strategy.save_model(model, tokenizer, args.save_path)

@@ -79,24 +79,8 @@ def train(args):
         eval_data, tokenizer, args.max_len, strategy, input_template=args.input_template, is_dpo=True
     )
 
-    train_dataloader = strategy.setup_dataloader(
-        train_dataset,
-        args.micro_train_batch_size,
-        True,
-        True,
-        train_dataset.packing_collate_fn if args.packing_samples else train_dataset.collate_fn,
-    )
-
-    eval_dataloader = strategy.setup_dataloader(
-        eval_dataset,
-        args.micro_train_batch_size,
-        True,
-        False,
-        eval_dataset.packing_collate_fn if args.packing_samples else eval_dataset.collate_fn,
-    )
-
     # scheduler
-    num_update_steps_per_epoch = len(train_dataloader) // strategy.accumulated_gradient
+    num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
 
     scheduler = get_scheduler(
@@ -110,9 +94,34 @@ def train(args):
     # strategy prepare
     ((model, optim, scheduler), ref_model) = strategy.prepare((model, optim, scheduler), ref_model)
 
-    if args.load_checkpoint:
-        strategy.print("Load checkpoint: ", args.save_path)
-        # strategy.load_checkpoint(args.save_path + '/rm_model.pt')
+    # load checkpoint
+    consumed_samples = 0
+    start_epoch = 0
+    if args.load_checkpoint and os.path.exists(args.ckpt_path):
+        _, states = strategy.load_ckpt(model.model, args.ckpt_path)
+        consumed_samples = states["consumed_samples"]
+        start_epoch = states["epoch"]
+        strategy.print(
+            f"Loaded the checkpoint: {args.ckpt_path}, epoch: {start_epoch}, consumed_samples: {consumed_samples}"
+        )
+
+    # prepare dataloader
+    train_dataloader = strategy.setup_dataloader(
+        train_dataset,
+        args.micro_train_batch_size,
+        True,
+        True,
+        train_dataset.packing_collate_fn if args.packing_samples else train_dataset.collate_fn,
+        consumed_samples=consumed_samples,
+    )
+
+    eval_dataloader = strategy.setup_dataloader(
+        eval_dataset,
+        args.micro_train_batch_size,
+        True,
+        False,
+        eval_dataset.packing_collate_fn if args.packing_samples else eval_dataset.collate_fn,
+    )
 
     os.makedirs(args.save_path, exist_ok=True)
 
@@ -132,7 +141,7 @@ def train(args):
         max_epochs=args.max_epochs,
     )
 
-    trainer.fit(args)
+    trainer.fit(args, start_epoch, num_update_steps_per_epoch)
 
     # save model checkpoint after fitting on only rank0
     strategy.save_model(model, tokenizer, args.save_path)

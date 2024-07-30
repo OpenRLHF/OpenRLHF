@@ -85,12 +85,10 @@ class SFTTrainer(ABC):
             wandb.define_metric("eval/global_step")
             wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
 
-    def fit(self, args, start_epoch=0):
+    def fit(self, args, start_epoch=0, num_update_steps_per_epoch=1):
         # get eval and save steps
         if args.eval_steps == -1:
-            args.eval_steps = (
-                self.train_dataloader.__len__() // self.strategy.accumulated_gradient
-            )  # Evaluate once per epoch
+            args.eval_steps = num_update_steps_per_epoch  # Evaluate once per epoch
         if args.save_steps == -1:
             args.save_steps = float("inf")  # do not save ckpt
 

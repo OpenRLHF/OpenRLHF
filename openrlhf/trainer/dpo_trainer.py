@@ -86,16 +86,16 @@ class DPOTrainer(ABC):
             wandb.define_metric("eval/global_step")
             wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
 
-    def fit(self, args):
+    def fit(self, args, start_epoch=0, num_update_steps_per_epoch=1):
         # get eval and save steps
         if args.eval_steps == -1:
-            args.eval_steps = self.train_dataloader.__len__()  # Evaluate once per epoch
+            args.eval_steps = num_update_steps_per_epoch  # Evaluate once per epoch
         if args.save_steps == -1:
             args.save_steps = float("inf")  # do not save ckpt
 
-        global_step = 1
+        step = 1
         epoch_bar = tqdm(
-            range(self.epochs),
+            range(start_epoch, self.epochs),
             desc="Train epoch",
             disable=not self.strategy.is_rank_0(),
         )
@@ -171,18 +171,21 @@ class DPOTrainer(ABC):
                 }
                 if self.nll_loss:
                     logs_dict["nll_loss"] = nll_loss.item()
-                # logs/checkpoints/evaluate
-                self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict)
+                # logs/checkpoints/evaluation
+                if step % self.strategy.accumulated_gradient == 0:
+                    global_step = step // self.strategy.accumulated_gradient
+                    client_states = {"consumed_samples": global_step * args.train_batch_size, "epoch": epoch}
+                    self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
 
                 step_bar.update()
-                global_step += 1
+                step += 1
             epoch_bar.update()
 
         if self._wandb is not None and self.strategy.is_rank_0():
             self._wandb.finish()
 
     # logs/checkpoints/evaluate
-    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}):
+    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         # logs
         if global_step % args.logging_steps == 0:
             # step bar
@@ -205,7 +208,9 @@ class DPOTrainer(ABC):
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
-            self.strategy.save_ckpt(self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem)
+            self.strategy.save_ckpt(
+                self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+            )
 
     def evaluate(self, eval_dataloader, steps=0):
         self.model.eval()
