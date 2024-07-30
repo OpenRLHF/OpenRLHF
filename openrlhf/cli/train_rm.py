@@ -75,7 +75,7 @@ def train(args):
     )
 
     # scheduler
-    num_update_steps_per_epoch = len(train_dataloader) // strategy.accumulated_gradient
+    num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
 
     scheduler = get_scheduler(
@@ -95,8 +95,16 @@ def train(args):
     # strategy prepare
     (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
 
-    if args.load_checkpoint:
-        strategy.print("Load checkpoint: ", args.save_path)
+    # load checkpoint
+    consumed_samples = 0
+    start_epoch = 0
+    if args.load_checkpoint and os.path.exists(args.ckpt_path):
+        _, states = strategy.load_ckpt(model.model, args.ckpt_path)
+        consumed_samples = states["consumed_samples"]
+        start_epoch = states["epoch"]
+        strategy.print(
+            f"Loaded the checkpoint: {args.ckpt_path}, epoch: {start_epoch}, consumed_samples: {consumed_samples}"
+        )
 
     os.makedirs(args.save_path, exist_ok=True)
 
@@ -115,7 +123,7 @@ def train(args):
         loss=args.loss,
     )
 
-    trainer.fit(args)
+    trainer.fit(args, start_epoch, consumed_samples, num_update_steps_per_epoch)
 
     # save model checkpoint after fitting on only rank0
     strategy.save_model(model, tokenizer, args.save_path)
