@@ -110,7 +110,7 @@ class DPOTrainer(ABC):
                 self.train_dataloader.sampler.set_epoch(epoch, reset_consumed_indicies=epoch > start_epoch)
 
             step_bar = tqdm(
-                range(step - 1, step - 1 + self.train_dataloader.__len__()),
+                range(self.train_dataloader.__len__()),
                 desc="Train step of epoch %d" % epoch,
                 disable=not self.strategy.is_rank_0(),
             )
