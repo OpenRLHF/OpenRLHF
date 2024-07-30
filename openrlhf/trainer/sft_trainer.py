@@ -96,7 +96,7 @@ class SFTTrainer(ABC):
         # Restore step
         if start_epoch != 0 or consumed_samples != 0:
             step = (
-                start_epoch * num_update_steps_per_epoch + consumed_samples / args.train_batch_size
+                start_epoch * num_update_steps_per_epoch + consumed_samples // args.train_batch_size
             ) * self.strategy.accumulated_gradient + 1
 
         epoch_bar = tqdm(
