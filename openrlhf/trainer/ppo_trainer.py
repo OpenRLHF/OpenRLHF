@@ -183,7 +183,7 @@ class PPOTrainer(ABC):
         # Restore step
         if start_episode != 0 or consumed_samples != 0:
             steps = (
-                start_episode * num_update_steps_per_episodes + consumed_samples / args.train_batch_size
+                start_episode * num_update_steps_per_episodes + consumed_samples // args.train_batch_size
             ) * self.strategy.accumulated_gradient + 1
 
         for episode in range(start_episode, args.num_episodes):
