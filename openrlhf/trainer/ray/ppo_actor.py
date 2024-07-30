@@ -222,7 +222,7 @@ class ActorModelRayActor(BasePPORole):
         self.prepare_datasets()
 
         # configure scheduler
-        self.num_update_steps_per_episodes = int(len(self.prompts_dataset) / args.train_batch_size * args.max_epochs)
+        self.num_update_steps_per_episodes = len(self.prompts_dataset) // args.train_batch_size * args.max_epochs
         max_steps = math.ceil(args.num_episodes * self.num_update_steps_per_episodes)
         self.max_steps = max_steps
 
