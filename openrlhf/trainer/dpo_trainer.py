@@ -107,7 +107,9 @@ class DPOTrainer(ABC):
         )
         for epoch in range(start_epoch, self.epochs):
             if isinstance(self.train_dataloader.sampler, DistributedSampler):
-                self.train_dataloader.sampler.set_epoch(epoch, reset_consumed_indicies=epoch > start_epoch)
+                self.train_dataloader.sampler.set_epoch(
+                    epoch, consumed_samples=0 if epoch > start_epoch else consumed_samples
+                )
 
             step_bar = tqdm(
                 range(self.train_dataloader.__len__()),

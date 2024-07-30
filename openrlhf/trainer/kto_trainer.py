@@ -79,24 +79,32 @@ class KTOTrainer(ABC):
             wandb.define_metric("eval/global_step")
             wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
 
-    def fit(self, args):
+    def fit(self, args, start_epoch=0, consumed_samples=0, num_update_steps_per_epoch=1):
         # get eval and save steps
         if args.eval_steps == -1:
-            args.eval_steps = self.train_dataloader.__len__()  # Evaluate once per epoch
+            args.eval_steps = num_update_steps_per_epoch  # Evaluate once per epoch
         if args.save_steps == -1:
             args.save_steps = float("inf")  # do not save ckpt
 
-        global_step = 1
-        epoch_bar = tqdm(range(self.epochs), desc="Train epoch", disable=not self.strategy.is_rank_0())
-        for epoch in range(self.epochs):
+        step = 1
+        # Restore step
+        if start_epoch != 0 or consumed_samples != 0:
+            step = (
+                start_epoch * num_update_steps_per_epoch + consumed_samples / args.train_batch_size
+            ) * self.strategy.accumulated_gradient + 1
+
+        epoch_bar = tqdm(range(start_epoch, self.epochs), desc="Train epoch", disable=not self.strategy.is_rank_0())
+        for epoch in range(start_epoch, self.epochs):
+            if isinstance(self.train_dataloader.sampler, DistributedSampler):
+                self.train_dataloader.sampler.set_epoch(
+                    epoch, consumed_samples=0 if epoch > start_epoch else consumed_samples
+                )
+
             step_bar = tqdm(
                 range(self.train_dataloader.__len__()),
                 desc="Train step of epoch %d" % epoch,
                 disable=not self.strategy.is_rank_0(),
             )
-
-            if isinstance(self.train_dataloader.sampler, DistributedSampler):
-                self.train_dataloader.sampler.set_epoch(epoch)
 
             self.model.train()
             self.ref_model.eval()
@@ -145,11 +153,14 @@ class KTOTrainer(ABC):
                 }
                 logs_dict["kl"] = KL.item()
 
-                # logs/checkpoints/evaluate
-                self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict)
+                # logs/checkpoints/evaluation
+                if step % self.strategy.accumulated_gradient == 0:
+                    global_step = step // self.strategy.accumulated_gradient
+                    client_states = {"consumed_samples": global_step * args.train_batch_size, "epoch": epoch}
+                    self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
 
                 step_bar.update()
-                global_step += 1
+                step += 1
             epoch_bar.update()
 
         if self._wandb is not None and self.strategy.is_rank_0():
