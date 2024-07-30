@@ -158,7 +158,6 @@ class KDTrainer(ABC):
                     client_states = {"consumed_samples": global_step * args.train_batch_size, "epoch": epoch}
                     self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
 
-                step_bar.update()
                 step += 1
 
             epoch_bar.update()
