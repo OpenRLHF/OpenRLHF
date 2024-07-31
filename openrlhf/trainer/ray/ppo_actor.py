@@ -142,6 +142,8 @@ class ActorPPOTrainer(PPOTrainer):
         return self.training_step_actor(experience)
 
     def _broadcast_to_vllm(self):
+        # avoid OOM
+        torch.cuda.empty_cache()
         model = self.actor.model.module
         count, num_params = 0, len(list(model.named_parameters()))
         for name, param in model.named_parameters():
