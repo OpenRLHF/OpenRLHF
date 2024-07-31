@@ -10,7 +10,7 @@ jobs:
     # do not run in forks
     if: ${{ github.repository_owner == 'OpenRLHF' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch') }}
     name: build wheel and upload
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
 
     strategy:
       matrix:
