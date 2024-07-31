@@ -155,7 +155,11 @@ class SFTTrainer(ABC):
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item()
-                logs_dict = {"gpt_loss": gpt_loss.item(), "loss_mean": loss_mean}
+                logs_dict = {
+                    "gpt_loss": gpt_loss.item(),
+                    "loss_mean": loss_mean,
+                    "lr": self.scheduler.get_last_lr()[0],
+                }
                 if self.aux_loss:
                     logs_dict["aux_loss"] = aux_loss.item()
                 # step bar

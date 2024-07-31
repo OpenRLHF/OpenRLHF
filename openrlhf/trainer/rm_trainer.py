@@ -168,6 +168,7 @@ class RewardModelTrainer(ABC):
                     "reject_reward": reject_reward.mean().item(),
                     "loss_mean": loss_mean,
                     "acc_mean": acc_mean,
+                    "lr": self.scheduler.get_last_lr()[0],
                 }
                 if self.aux_loss:
                     logs_dict["aux_loss"] = aux_loss.item()

@@ -144,7 +144,12 @@ class KDTrainer(ABC):
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item()
-                logs_dict = {"gpt_loss": gpt_loss.item(), "distil_loss": distil_loss.item(), "loss_mean": loss_mean}
+                logs_dict = {
+                    "gpt_loss": gpt_loss.item(),
+                    "distil_loss": distil_loss.item(),
+                    "loss_mean": loss_mean,
+                    "lr": self.scheduler.get_last_lr()[0],
+                }
                 # step bar
                 logs_dict = self.strategy.all_reduce(logs_dict)
                 step_bar.set_postfix(logs_dict)

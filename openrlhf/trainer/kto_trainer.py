@@ -148,6 +148,7 @@ class KTOTrainer(ABC):
                     "chosen_reward": chosen_rewards.mean().item() if len(chosen_rewards) != 0 else 0,
                     "reject_reward": rejected_rewards.mean().item() if len(rejected_rewards) != 0 else 0,
                     "loss_mean": loss_mean,
+                    "lr": self.scheduler.get_last_lr()[0],
                 }
                 logs_dict["kl"] = KL.item()
                 logs_dict = self.strategy.all_reduce(logs_dict)

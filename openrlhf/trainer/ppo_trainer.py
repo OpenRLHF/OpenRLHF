@@ -265,11 +265,13 @@ class PPOTrainer(ABC):
                         "glen": status["response_length"],
                         "tlen": status["total_length"],
                         "kl": status["kl"],
+                        "act_lr": status["actor_lr"],
                     }
 
                 if "critic_loss" in status:
                     short_status["cri"] = status["critic_loss"]
                     short_status["vals"] = status["values"]
+                    short_status["cri_lr"] = status["critic_lr"]
 
                 if "ptx_loss" in status:
                     short_status["ptx"] = status["ptx_loss"]
@@ -346,9 +348,7 @@ class PPOTrainer(ABC):
             self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cpu")
 
         # status
-        status = {
-            "policy_loss": actor_loss.item(),
-        }
+        status = {"policy_loss": actor_loss.item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}
         if self.pretrain_dataloader is not None:
             status["ptx_loss"] = ptx_loss.item()
         for k, v in experience.info.items():
@@ -390,6 +390,7 @@ class PPOTrainer(ABC):
         status = {
             "critic_loss": critic_loss.item(),
             "values": masked_mean(values, experience.action_mask).item(),
+            "critic_lr": self.critic_scheduler.get_last_lr()[0],
         }
         return status
 
