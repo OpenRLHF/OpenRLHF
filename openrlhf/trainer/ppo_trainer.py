@@ -168,7 +168,9 @@ class PPOTrainer(ABC):
         consumed_samples=0,
         num_update_steps_per_episodes=1,
     ) -> None:
-        num_rollouts_per_episodes = num_update_steps_per_episodes // (args.rollout_batch_size // args.train_batch_size)
+        num_rollouts_per_episodes = (
+            num_update_steps_per_episodes * args.train_batch_size // args.max_epochs // args.rollout_batch_size
+        )
         update_timesteps = args.rollout_batch_size // (self.strategy.world_size * self.micro_rollout_batch_size)
 
         # get eval and save steps
