@@ -93,7 +93,7 @@ class CriticModelRayActor(BasePPORole):
 
         # configure optimizer
         critic_optim = strategy.create_optimizer(
-            critic, lr=args.critic_learning_rate, betas=(0.9, 0.95), weight_decay=args.l2
+            critic, lr=args.critic_learning_rate, betas=args.adam_betas, weight_decay=args.l2
         )
 
         # configure scheduler
