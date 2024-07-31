@@ -375,6 +375,12 @@ class ActorModelRayActor(BasePPORole):
             eos_token_id=self.tokenizer.eos_token_id,
         )
 
+        # broadcast checkpoint
+        ckpt_path = os.path.join(args.ckpt_path, "_actor")
+        if args.load_checkpoint and os.path.exists(ckpt_path) and not vllm_engines is None:
+            torch.distributed.barrier()
+            trainer._broadcast_to_vllm()
+
         trainer.fit(
             args,
             self.prompts_dataloader,
