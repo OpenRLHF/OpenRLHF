@@ -181,8 +181,8 @@ class PPOTrainer(ABC):
         self.pretrain_dataloader = pretrain_dataloader
 
         # Restore step and start_epoch
-        steps = consumed_samples // args.rollout_batch_size * self.strategy.accumulated_gradient + 1
-        start_episode = consumed_samples // args.train_batch_size // num_rollouts_per_episodes
+        steps = consumed_samples // args.rollout_batch_size * update_timesteps + 1
+        start_episode = consumed_samples // args.rollout_batch_size // num_rollouts_per_episodes
         consumed_samples = consumed_samples % (num_rollouts_per_episodes * args.rollout_batch_size)
 
         for episode in range(start_episode, args.num_episodes):
