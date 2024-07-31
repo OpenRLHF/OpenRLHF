@@ -30,11 +30,15 @@ def train(args):
         ds_config=strategy.get_ds_train_config(is_actor=True),
         packing_samples=args.packing_samples,
     )
-
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
-
     strategy.print(model)
+
+    # gradient_checkpointing
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
+        )
 
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
@@ -68,6 +72,7 @@ def train(args):
         input_template=args.input_template,
     )
 
+    # prepare dataloader
     train_dataloader = strategy.setup_dataloader(
         train_dataset,
         args.micro_train_batch_size,
@@ -84,7 +89,7 @@ def train(args):
     )
 
     # scheduler
-    num_update_steps_per_epoch = len(train_dataloader) // strategy.accumulated_gradient
+    num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
 
     scheduler = get_scheduler(
@@ -95,18 +100,19 @@ def train(args):
         scheduler_specific_kwargs={"min_lr": args.learning_rate * 0.1},
     )
 
-    # gradient_checkpointing
-    if args.gradient_checkpointing:
-        model.gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
-        )
-
     # prepare models
     (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
 
     # load checkpoint
-    if args.load_checkpoint:
-        strategy.print("Load checkpoint: ", args.save_path)
+    consumed_samples = 0
+    start_epoch = 0
+    if args.load_checkpoint and os.path.exists(args.ckpt_path):
+        _, states = strategy.load_ckpt(model.model, args.ckpt_path)
+        consumed_samples = states["consumed_samples"]
+        start_epoch = states["epoch"]
+        strategy.print(
+            f"Loaded the checkpoint: {args.ckpt_path}, epoch: {start_epoch}, consumed_samples: {consumed_samples}"
+        )
 
     os.makedirs(args.save_path, exist_ok=True)
 
@@ -125,7 +131,7 @@ def train(args):
         tokenizer=tokenizer,
     )
 
-    trainer.fit(args)
+    trainer.fit(args, start_epoch, consumed_samples, num_update_steps_per_epoch)
 
     # save model checkpoint after fitting on only rank0
     strategy.save_model(model, tokenizer, args.save_path)
@@ -140,7 +146,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_steps", type=int, default=-1)
     parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_sft")
     parser.add_argument("--max_ckpt_num", type=int, default=3)
-    parser.add_argument("--max_ckpt_mem", type=int, default=1000)  # 1000GB
+    parser.add_argument("--max_ckpt_mem", type=int, default=1e8)
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
 
     # DeepSpeed

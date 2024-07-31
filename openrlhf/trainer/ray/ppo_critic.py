@@ -1,4 +1,5 @@
 import math
+import os
 from typing import Dict, Optional
 
 import ray
@@ -115,6 +116,12 @@ class CriticModelRayActor(BasePPORole):
             is_rlhf=True,
         )
 
+        # load checkpoint
+        if args.load_checkpoint and os.path.exists(os.path.join(args.ckpt_path, "_actor")):
+            ckpt_path = os.path.join(args.ckpt_path, "_critic")
+            strategy.load_ckpt(self.critic, ckpt_path)
+            strategy.print(f"Loaded the checkpoint: {ckpt_path}")
+
         # configure Trainer
         # only use wandb at actor model
         strategy.args.use_wandb = False
@@ -176,4 +183,10 @@ class CriticModelRayActor(BasePPORole):
             self.critic,
             self.tokenizer,
             args.save_path + "_critic",
+        )
+
+    def save_checkpoint(self, tag):
+        args = self.strategy.args
+        self.strategy.save_ckpt(
+            self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
         )

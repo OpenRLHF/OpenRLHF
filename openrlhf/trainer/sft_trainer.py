@@ -4,12 +4,12 @@ from abc import ABC
 import torch
 from torch import nn
 from torch.optim import Optimizer
-from torch.utils.data import DistributedSampler
 from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import SFTDataset
 from openrlhf.models import GPTLMLoss
+from openrlhf.utils.distributed_sampler import DistributedSampler
 
 
 class SFTTrainer(ABC):
@@ -85,22 +85,30 @@ class SFTTrainer(ABC):
             wandb.define_metric("eval/global_step")
             wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
 
-    def fit(self, args):
+    def fit(self, args, start_epoch=0, consumed_samples=0, num_update_steps_per_epoch=None):
         # get eval and save steps
         if args.eval_steps == -1:
-            args.eval_steps = self.train_dataloader.__len__()  # Evaluate once per epoch
+            args.eval_steps = num_update_steps_per_epoch  # Evaluate once per epoch
         if args.save_steps == -1:
             args.save_steps = float("inf")  # do not save ckpt
 
-        global_step = 1
+        step = 1
+        # Restore step
+        if start_epoch != 0 or consumed_samples != 0:
+            step = (
+                start_epoch * num_update_steps_per_epoch + consumed_samples // args.train_batch_size
+            ) * self.strategy.accumulated_gradient + 1
+
         epoch_bar = tqdm(
-            range(self.epochs),
+            range(start_epoch, self.epochs),
             desc="Train epoch",
             disable=not self.strategy.is_rank_0(),
         )
-        for epoch in range(self.epochs):
+        for epoch in range(start_epoch, self.epochs):
             if isinstance(self.train_dataloader.sampler, DistributedSampler):
-                self.train_dataloader.sampler.set_epoch(epoch)
+                self.train_dataloader.sampler.set_epoch(
+                    epoch, consumed_samples=0 if epoch > start_epoch else consumed_samples
+                )
 
             step_bar = tqdm(
                 range(self.train_dataloader.__len__()),
@@ -152,22 +160,24 @@ class SFTTrainer(ABC):
                 logs_dict = {"gpt_loss": gpt_loss.item(), "loss_mean": loss_mean}
                 if self.aux_loss:
                     logs_dict["aux_loss"] = aux_loss.item()
+                # step bar
+                logs_dict = self.strategy.all_reduce(logs_dict)
+                step_bar.set_postfix(logs_dict)
+                step_bar.update()
 
                 # logs/checkpoints/evaluation
-                self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict)
+                if step % self.strategy.accumulated_gradient == 0:
+                    global_step = step // self.strategy.accumulated_gradient
+                    client_states = {"consumed_samples": global_step * args.train_batch_size, "epoch": epoch}
+                    self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
 
-                step_bar.update()
-                global_step += 1
+                step += 1
 
             epoch_bar.update()
 
     # logs/checkpoints/evaluation
-    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}):
+    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         if global_step % args.logging_steps == 0:
-            # step bar
-            logs_dict = self.strategy.all_reduce(logs_dict)
-            step_bar.set_postfix(logs_dict)
-
             # wandb
             if (
                 self._wandb is not None
@@ -184,7 +194,9 @@ class SFTTrainer(ABC):
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
-            self.strategy.save_ckpt(self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem)
+            self.strategy.save_ckpt(
+                self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+            )
 
     def evaluate(self, eval_dataloader, steps=0):
         times = 0

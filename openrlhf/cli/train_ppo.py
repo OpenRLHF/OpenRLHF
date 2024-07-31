@@ -98,6 +98,15 @@ def train(args):
     else:
         ema_model = None
 
+    # gradient_checkpointing
+    if args.gradient_checkpointing:
+        actor.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
+        )
+        critic.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
+        )
+
     # configure optimizer
     actor_optim = strategy.create_optimizer(
         actor, lr=args.actor_learning_rate, betas=args.adam_betas, weight_decay=args.l2
@@ -118,7 +127,6 @@ def train(args):
     )
     prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
     prompts_dataset = PromptDataset(prompts_data, tokenizer, strategy, input_template=args.input_template)
-    prompts_dataloader = strategy.setup_dataloader(prompts_dataset, args.micro_rollout_batch_size, True, True)
 
     if args.pretrain_data:
         pretrain_data = blending_datasets(
@@ -137,6 +145,10 @@ def train(args):
             strategy,
             pretrain_mode=True,
         )
+
+    # prepare dataloader
+    prompts_dataloader = strategy.setup_dataloader(prompts_dataset, args.micro_rollout_batch_size, True, True)
+    if args.pretrain_data:
         pretrain_dataloader = itertools.cycle(
             iter(
                 strategy.setup_dataloader(
@@ -152,12 +164,7 @@ def train(args):
         pretrain_dataloader = None
 
     # configure scheduler
-    num_update_steps_per_episodes = (
-        int(len(prompts_dataloader) * (args.micro_rollout_batch_size / args.micro_train_batch_size))
-        * args.max_epochs
-        // strategy.accumulated_gradient
-    )
-
+    num_update_steps_per_episodes = len(prompts_dataset) // args.train_batch_size * args.max_epochs
     max_steps = math.ceil(args.num_episodes * num_update_steps_per_episodes)
 
     actor_scheduler = get_scheduler(
@@ -175,15 +182,6 @@ def train(args):
         num_training_steps=max_steps,
         scheduler_specific_kwargs={"min_lr": args.critic_learning_rate * 0.1},
     )
-
-    # gradient_checkpointing
-    if args.gradient_checkpointing:
-        actor.gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
-        )
-        critic.gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
-        )
 
     # prepare models/optimizers...
     (
@@ -204,8 +202,16 @@ def train(args):
         ema_model = strategy.prepare(ema_model, is_rlhf=True)
 
     # load checkpoint
-    if args.load_checkpoint:
-        strategy.print("Load checkpoint: ", args.save_path)
+    consumed_samples = 0
+    start_episode = 0
+    if args.load_checkpoint and os.path.exists(os.path.join(args.ckpt_path, "_actor")):
+        _, states = strategy.load_ckpt(actor.model, os.path.join(args.ckpt_path, "_actor"))
+        strategy.load_ckpt(critic, os.path.join(args.ckpt_path, "_critic"))
+        consumed_samples = states["consumed_samples"]
+        start_episode = states["epoch"]
+        strategy.print(
+            f"Loaded the checkpoint: {args.ckpt_path}, epoch: {start_episode}, consumed_samples: {consumed_samples}"
+        )
 
     os.makedirs(args.save_path, exist_ok=True)
 
@@ -249,9 +255,7 @@ def train(args):
     )
 
     trainer.fit(
-        prompts_dataloader,
-        pretrain_dataloader,
-        args,
+        args, prompts_dataloader, pretrain_dataloader, start_episode, consumed_samples, num_update_steps_per_episodes
     )
 
     # save model checkpoint after fitting on only rank0
@@ -278,7 +282,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_steps", type=int, default=-1)
     parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_ppo")
     parser.add_argument("--max_ckpt_num", type=int, default=3)
-    parser.add_argument("--max_ckpt_mem", type=int, default=1000)  # 1000GB
+    parser.add_argument("--max_ckpt_mem", type=int, default=1e8)
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
 
     # PPO

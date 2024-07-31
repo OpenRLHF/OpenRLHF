@@ -39,4 +39,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    --adam_offload \
    --flash_attn \
    --gradient_checkpointing \
+   --load_checkpoint \
    --use_wandb {wandb_token}

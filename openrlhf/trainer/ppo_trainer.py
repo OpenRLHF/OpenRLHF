@@ -8,11 +8,12 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from torch.optim import Optimizer
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
 from openrlhf.models.utils import masked_mean
+from openrlhf.utils.distributed_sampler import DistributedSampler
 
 from .ppo_utils import AdaptiveKLController, Experience, FixedKLController, NaiveExperienceMaker, NaiveReplayBuffer
 
@@ -161,25 +162,37 @@ class PPOTrainer(ABC):
 
     def fit(
         self,
+        args,
         prompts_dataloader,
         pretrain_dataloader,
-        args,
+        start_episode=0,
+        consumed_samples=0,
+        num_update_steps_per_episodes=1,
     ) -> None:
-        self.prompts_dataloader = prompts_dataloader
-        self.pretrain_dataloader = pretrain_dataloader
-
+        num_rollouts_per_episodes = num_update_steps_per_episodes // (args.rollout_batch_size // args.train_batch_size)
         update_timesteps = args.rollout_batch_size // (self.strategy.world_size * self.micro_rollout_batch_size)
-        steps = 1
 
         # get eval and save steps
         if args.eval_steps == -1:
-            args.eval_steps = prompts_dataloader.__len__() // update_timesteps  # Evaluate once per epoch
+            args.eval_steps = num_rollouts_per_episodes  # Evaluate once per epoch
         if args.save_steps == -1:
             args.save_steps = float("inf")  # do not save ckpt
 
-        for episode in range(args.num_episodes):
+        self.prompts_dataloader = prompts_dataloader
+        self.pretrain_dataloader = pretrain_dataloader
+
+        steps = 1
+        # Restore step
+        if start_episode != 0 or consumed_samples != 0:
+            steps = (
+                start_episode * num_rollouts_per_episodes + consumed_samples // args.rollout_batch_size
+            ) * update_timesteps + 1
+
+        for episode in range(start_episode, args.num_episodes):
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
-                self.prompts_dataloader.sampler.set_epoch(episode)
+                self.prompts_dataloader.sampler.set_epoch(
+                    episode, consumed_samples=0 if episode > start_episode else consumed_samples
+                )
             pbar = tqdm(
                 range(self.prompts_dataloader.__len__()),
                 desc=f"Episode [{episode + 1}/{args.num_episodes}]",
@@ -195,15 +208,21 @@ class PPOTrainer(ABC):
                 self.replay_buffer.append(experience)
 
                 if steps % update_timesteps == 0:
+                    global_steps = steps // update_timesteps
+
                     torch.cuda.empty_cache()
                     self.replay_buffer.normalize("advantages", self.strategy)
-                    status = self.ppo_train(steps // update_timesteps)
+                    status = self.ppo_train(global_steps)
                     self.replay_buffer.clear()
                     torch.cuda.empty_cache()
+
                     if "kl" in status:
                         self.kl_ctl.update(status["kl"], args.rollout_batch_size)
+                    pbar.set_postfix(status)
+
                     # logs/checkpoints
-                    self.save_logs_and_checkpoints(args, steps // update_timesteps, pbar, status)
+                    client_states = {"consumed_samples": global_steps * args.rollout_batch_size, "epoch": episode}
+                    self.save_logs_and_checkpoints(args, global_steps, pbar, status, client_states)
 
                 pbar.update()
                 steps = steps + 1
@@ -377,10 +396,8 @@ class PPOTrainer(ABC):
         }
         return status
 
-    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}):
+    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         if global_step % args.logging_steps == 0:
-            # step bar
-            step_bar.set_postfix(logs_dict)
             # wandb
             if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {
@@ -400,9 +417,17 @@ class PPOTrainer(ABC):
         # TODO: save best model on dev, use loss/perplexity/others on whole dev dataset as metric
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
-            self.strategy.save_ckpt(
-                self.actor.model, os.path.join(args.ckpt_path, "_actor"), tag, args.max_ckpt_num, args.max_ckpt_mem
-            )
-            self.strategy.save_ckpt(
-                self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
-            )
+            self._save_checkpoint(args, tag, client_states)
+
+    def _save_checkpoint(self, args, tag, client_states):
+        self.strategy.save_ckpt(
+            self.actor.model,
+            os.path.join(args.ckpt_path, "_actor"),
+            tag,
+            args.max_ckpt_num,
+            args.max_ckpt_mem,
+            client_states,
+        )
+        self.strategy.save_ckpt(
+            self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
+        )

@@ -161,11 +161,29 @@ class ActorPPOTrainer(PPOTrainer):
                     torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
                     ray.get(refs)
 
+    def _save_checkpoint(self, args, tag, client_states):
+        # call remote critic
+        if self.critic_train_remote:
+            ref = self.critic.save_checkpoint.remote(tag)
+        self.strategy.save_ckpt(
+            self.actor.model,
+            os.path.join(args.ckpt_path, "_actor"),
+            tag,
+            args.max_ckpt_num,
+            args.max_ckpt_mem,
+            client_states,
+        )
+        # wait
+        if self.critic_train_remote:
+            ray.get(ref)
+
 
 @ray.remote(num_gpus=1)
 class ActorModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+        args = strategy.args
         self._setup_distributed(strategy)
+
         actor = Actor(
             pretrain,
             use_flash_attention_2=strategy.args.flash_attn,
@@ -177,16 +195,12 @@ class ActorModelRayActor(BasePPORole):
             lora_dropout=strategy.args.lora_dropout,
             ds_config=strategy.get_ds_train_config(is_actor=True),
         )
+        strategy.print(actor)
 
         # configure tokenizer
         self.tokenizer = get_tokenizer(
             pretrain, actor.model, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer
         )
-
-        strategy.print(actor)
-        self.prepare_datasets()
-
-        args = strategy.args
 
         if args.enable_ema:
             ema_model = Actor(
@@ -201,17 +215,15 @@ class ActorModelRayActor(BasePPORole):
 
         # configure optimizer
         actor_optim = strategy.create_optimizer(
-            actor, lr=args.actor_learning_rate, betas=(0.9, 0.95), weight_decay=args.l2
+            actor, lr=args.actor_learning_rate, betas=strategy.args.adam_betas, weight_decay=args.l2
         )
+
+        # prepare_datasets
+        self.prepare_datasets()
 
         # configure scheduler
-        num_update_steps_per_episodes = (
-            int(len(self.prompts_dataloader) * (args.micro_rollout_batch_size / args.micro_train_batch_size))
-            * args.max_epochs
-            // strategy.accumulated_gradient
-        )
-
-        max_steps = math.ceil(args.num_episodes * num_update_steps_per_episodes)
+        self.num_update_steps_per_episodes = len(self.prompts_dataset) // args.train_batch_size * args.max_epochs
+        max_steps = math.ceil(args.num_episodes * self.num_update_steps_per_episodes)
         self.max_steps = max_steps
 
         actor_scheduler = get_scheduler(
@@ -239,6 +251,18 @@ class ActorModelRayActor(BasePPORole):
         else:
             self.ema_model = None
 
+        # load checkpoint
+        self.consumed_samples = 0
+        self.start_episode = 0
+        ckpt_path = os.path.join(args.ckpt_path, "_actor")
+        if args.load_checkpoint and os.path.exists(ckpt_path):
+            _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
+            self.consumed_samples = states["consumed_samples"]
+            self.start_episode = states["epoch"]
+            strategy.print(
+                f"Loaded the checkpoint: {ckpt_path}, epoch: {self.start_episode}, consumed_samples: {self.consumed_samples}"
+            )
+
     def prepare_datasets(self):
         strategy = self.strategy
         args = self.strategy.args
@@ -254,8 +278,12 @@ class ActorModelRayActor(BasePPORole):
             train_split=args.prompt_split,
         )
         prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
-        prompts_dataset = PromptDataset(prompts_data, self.tokenizer, strategy, input_template=args.input_template)
-        self.prompts_dataloader = strategy.setup_dataloader(prompts_dataset, args.micro_rollout_batch_size, True, True)
+        self.prompts_dataset = PromptDataset(
+            prompts_data, self.tokenizer, strategy, input_template=args.input_template
+        )
+        self.prompts_dataloader = strategy.setup_dataloader(
+            self.prompts_dataset, args.micro_rollout_batch_size, True, True
+        )
 
         if args.pretrain_data:
             pretrain_data = blending_datasets(
@@ -268,7 +296,7 @@ class ActorModelRayActor(BasePPORole):
             )
             pretrain_max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
             pretrain_dataset = SFTDataset(
-                pretrain_data.select(range(min(len(pretrain_data), args.max_epochs * len(prompts_dataset)))),
+                pretrain_data.select(range(min(len(pretrain_data), args.max_epochs * len(self.prompts_dataset)))),
                 self.tokenizer,
                 pretrain_max_len,
                 strategy,
@@ -347,7 +375,14 @@ class ActorModelRayActor(BasePPORole):
             eos_token_id=self.tokenizer.eos_token_id,
         )
 
-        trainer.fit(self.prompts_dataloader, self.pretrain_dataloader, args)
+        trainer.fit(
+            args,
+            self.prompts_dataloader,
+            self.pretrain_dataloader,
+            self.start_episode,
+            self.consumed_samples,
+            self.num_update_steps_per_episodes,
+        )
 
     def save_model(self):
         args = self.strategy.args

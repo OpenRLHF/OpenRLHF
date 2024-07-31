@@ -79,6 +79,7 @@ def train(args):
         eval_data, tokenizer, args.max_len, strategy, input_template=args.input_template, is_dpo=True
     )
 
+    # prepare dataloader
     train_dataloader = strategy.setup_dataloader(
         train_dataset,
         args.micro_train_batch_size,
@@ -96,7 +97,7 @@ def train(args):
     )
 
     # scheduler
-    num_update_steps_per_epoch = len(train_dataloader) // strategy.accumulated_gradient
+    num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
 
     scheduler = get_scheduler(
@@ -110,9 +111,16 @@ def train(args):
     # strategy prepare
     ((model, optim, scheduler), ref_model) = strategy.prepare((model, optim, scheduler), ref_model)
 
-    if args.load_checkpoint:
-        strategy.print("Load checkpoint: ", args.save_path)
-        # strategy.load_checkpoint(args.save_path + '/rm_model.pt')
+    # load checkpoint
+    consumed_samples = 0
+    start_epoch = 0
+    if args.load_checkpoint and os.path.exists(args.ckpt_path):
+        _, states = strategy.load_ckpt(model.model, args.ckpt_path)
+        consumed_samples = states["consumed_samples"]
+        start_epoch = states["epoch"]
+        strategy.print(
+            f"Loaded the checkpoint: {args.ckpt_path}, epoch: {start_epoch}, consumed_samples: {consumed_samples}"
+        )
 
     os.makedirs(args.save_path, exist_ok=True)
 
@@ -132,7 +140,7 @@ def train(args):
         max_epochs=args.max_epochs,
     )
 
-    trainer.fit(args)
+    trainer.fit(args, start_epoch, consumed_samples, num_update_steps_per_epoch)
 
     # save model checkpoint after fitting on only rank0
     strategy.save_model(model, tokenizer, args.save_path)
@@ -147,7 +155,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_steps", type=int, default=-1)
     parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_dpo")
     parser.add_argument("--max_ckpt_num", type=int, default=3)
-    parser.add_argument("--max_ckpt_mem", type=int, default=1000)  # 1000GB
+    parser.add_argument("--max_ckpt_mem", type=int, default=1e8)
 
     # DeepSpeed
     parser.add_argument("--micro_train_batch_size", type=int, default=8, help="batch size per GPU")
