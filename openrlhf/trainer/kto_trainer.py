@@ -86,12 +86,10 @@ class KTOTrainer(ABC):
         if args.save_steps == -1:
             args.save_steps = float("inf")  # do not save ckpt
 
-        step = 1
-        # Restore step
-        if start_epoch != 0 or consumed_samples != 0:
-            step = (
-                start_epoch * num_update_steps_per_epoch + consumed_samples // args.train_batch_size
-            ) * self.strategy.accumulated_gradient + 1
+        # Restore step and start_epoch
+        step = consumed_samples // args.train_batch_size * self.strategy.accumulated_gradient + 1
+        start_epoch = consumed_samples // args.train_batch_size // num_update_steps_per_epoch
+        consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train_batch_size)
 
         epoch_bar = tqdm(range(start_epoch, self.epochs), desc="Train epoch", disable=not self.strategy.is_rank_0())
         for epoch in range(start_epoch, self.epochs):

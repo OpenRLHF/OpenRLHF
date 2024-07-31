@@ -165,7 +165,6 @@ class PPOTrainer(ABC):
         args,
         prompts_dataloader,
         pretrain_dataloader,
-        start_episode=0,
         consumed_samples=0,
         num_update_steps_per_episodes=1,
     ) -> None:
@@ -181,12 +180,10 @@ class PPOTrainer(ABC):
         self.prompts_dataloader = prompts_dataloader
         self.pretrain_dataloader = pretrain_dataloader
 
-        steps = 1
-        # Restore step
-        if start_episode != 0 or consumed_samples != 0:
-            steps = (
-                start_episode * num_rollouts_per_episodes + consumed_samples // args.rollout_batch_size
-            ) * update_timesteps + 1
+        # Restore step and start_epoch
+        steps = consumed_samples // args.rollout_batch_size * self.strategy.accumulated_gradient + 1
+        start_episode = consumed_samples // args.train_batch_size // num_rollouts_per_episodes
+        consumed_samples = consumed_samples % (num_rollouts_per_episodes * args.rollout_batch_size)
 
         for episode in range(start_episode, args.num_episodes):
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
@@ -221,7 +218,7 @@ class PPOTrainer(ABC):
                     pbar.set_postfix(status)
 
                     # logs/checkpoints
-                    client_states = {"consumed_samples": global_steps * args.rollout_batch_size, "epoch": episode}
+                    client_states = {"consumed_samples": global_steps * args.rollout_batch_size}
                     self.save_logs_and_checkpoints(args, global_steps, pbar, status, client_states)
 
                 pbar.update()

@@ -253,15 +253,11 @@ class ActorModelRayActor(BasePPORole):
 
         # load checkpoint
         self.consumed_samples = 0
-        self.start_episode = 0
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path):
             _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
             self.consumed_samples = states["consumed_samples"]
-            self.start_episode = states["epoch"]
-            strategy.print(
-                f"Loaded the checkpoint: {ckpt_path}, epoch: {self.start_episode}, consumed_samples: {self.consumed_samples}"
-            )
+            strategy.print(f"Loaded the checkpoint: {ckpt_path}, consumed_samples: {self.consumed_samples}")
 
     def prepare_datasets(self):
         strategy = self.strategy
@@ -385,7 +381,6 @@ class ActorModelRayActor(BasePPORole):
             args,
             self.prompts_dataloader,
             self.pretrain_dataloader,
-            self.start_episode,
             self.consumed_samples,
             self.num_update_steps_per_episodes,
         )

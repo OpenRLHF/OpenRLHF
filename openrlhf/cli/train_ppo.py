@@ -203,15 +203,11 @@ def train(args):
 
     # load checkpoint
     consumed_samples = 0
-    start_episode = 0
     if args.load_checkpoint and os.path.exists(os.path.join(args.ckpt_path, "_actor")):
         _, states = strategy.load_ckpt(actor.model, os.path.join(args.ckpt_path, "_actor"))
         strategy.load_ckpt(critic, os.path.join(args.ckpt_path, "_critic"))
         consumed_samples = states["consumed_samples"]
-        start_episode = states["epoch"]
-        strategy.print(
-            f"Loaded the checkpoint: {args.ckpt_path}, epoch: {start_episode}, consumed_samples: {consumed_samples}"
-        )
+        strategy.print(f"Loaded the checkpoint: {args.ckpt_path}, consumed_samples: {consumed_samples}")
 
     os.makedirs(args.save_path, exist_ok=True)
 
@@ -254,9 +250,7 @@ def train(args):
         remote_rm_url=args.remote_rm_url,
     )
 
-    trainer.fit(
-        args, prompts_dataloader, pretrain_dataloader, start_episode, consumed_samples, num_update_steps_per_episodes
-    )
+    trainer.fit(args, prompts_dataloader, pretrain_dataloader, consumed_samples, num_update_steps_per_episodes)
 
     # save model checkpoint after fitting on only rank0
     strategy.save_model(

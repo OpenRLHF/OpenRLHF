@@ -113,14 +113,10 @@ def train(args):
 
     # load checkpoint
     consumed_samples = 0
-    start_epoch = 0
     if args.load_checkpoint and os.path.exists(args.ckpt_path):
         _, states = strategy.load_ckpt(model.model, args.ckpt_path)
         consumed_samples = states["consumed_samples"]
-        start_epoch = states["epoch"]
-        strategy.print(
-            f"Loaded the checkpoint: {args.ckpt_path}, epoch: {start_epoch}, consumed_samples: {consumed_samples}"
-        )
+        strategy.print(f"Loaded the checkpoint: {args.ckpt_path}, consumed_samples: {consumed_samples}")
 
     os.makedirs(args.save_path, exist_ok=True)
 
@@ -140,7 +136,7 @@ def train(args):
         max_epochs=args.max_epochs,
     )
 
-    trainer.fit(args, start_epoch, consumed_samples, num_update_steps_per_epoch)
+    trainer.fit(args, consumed_samples, num_update_steps_per_epoch)
 
     # save model checkpoint after fitting on only rank0
     strategy.save_model(model, tokenizer, args.save_path)
