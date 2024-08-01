@@ -1,4 +1,4 @@
-set -x 
+set -x
 
 read -r -d '' training_commands <<EOF
 openrlhf.cli.train_kd \
@@ -24,7 +24,7 @@ openrlhf.cli.train_kd \
    --teacher_offload \
    --gradient_checkpointing
 EOF
-    # --wandb [WANDB_TOKENS] or True (use wandb login command)
+    # --use_wandb [WANDB_TOKENS] or True (use wandb login command)
 
 
 if [[ ${1} != "slurm" ]]; then

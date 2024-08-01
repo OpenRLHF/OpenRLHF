@@ -1,4 +1,4 @@
-set -x 
+set -x
 
 read -r -d '' training_commands <<EOF
 openrlhf.cli.train_rm \
@@ -22,8 +22,8 @@ openrlhf.cli.train_rm \
    --load_checkpoint \
    --gradient_checkpointing
 EOF
-     # --wandb [WANDB_TOKENS] or True (use wandb login command)
-     # --packing_samples 
+     # --use_wandb [WANDB_TOKENS] or True (use wandb login command)
+     # --packing_samples
 
 
 if [[ ${1} != "slurm" ]]; then
