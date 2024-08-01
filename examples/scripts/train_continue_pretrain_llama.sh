@@ -20,7 +20,7 @@ openrlhf.cli.train_sft \
     --gradient_checkpointing \
     --pretrain_mode
 EOF
-    # --wandb [WANDB_TOKENS] or True (use wandb login command)
+    # --use_wandb [WANDB_TOKENS] or True (use wandb login command)
 
 if [[ ${1} != "slurm" ]]; then
     deepspeed --module $training_commands
