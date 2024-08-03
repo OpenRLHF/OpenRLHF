@@ -41,3 +41,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --gradient_checkpointing \
    --load_checkpoint \
    --use_wandb {wandb_token}
+
+# --runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}' [Install deps]
+# --ref_reward_offload [Offload to CPU]

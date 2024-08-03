@@ -108,7 +108,7 @@ pip install -e .
 
 ### Prepare Datasets
 OpenRLHF provides multiple data processing methods in our dataset classes.
-Such as in the [Prompt Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/895e8089dc0b1db230316207ca702d5133ae18fd/openrlhf/datasets/prompts_dataset.py#L6):
+Such as in the [Prompt Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/ab89f6b857d22430190a5742924661134e40725c/openrlhf/datasets/prompts_dataset.py#L6):
 
 ```python
 def preprocess_data(data, input_template=None, input_key="input", apply_chat_template=None) -> str:
@@ -329,7 +329,8 @@ To achieve optimal performance, we recommend allocating more nodes to the vLLM E
 ## Companies and Organizations using OpenRLHF
 
 - ByteDance
-- Nexusflow
+- NexusFlow
+- Baidu
 - Jülich Supercomputing Centre (JSC)
 - Berkeley Starling Team
 - ...
