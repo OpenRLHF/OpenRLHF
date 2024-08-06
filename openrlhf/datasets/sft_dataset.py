@@ -17,9 +17,10 @@ def preprocess_data(data, input_template=None, input_key="input", output_key=Non
             response = apply_chat_template(data[input_key], tokenize=False)[len(prompt) :]
     else:
         prompt = data[input_key]
-        response = data[output_key]
         if input_template:
             prompt = input_template.format(prompt)
+        # output_key is None for continue pretrain
+        response = data[output_key] if output_key else ""
     return prompt, response
 
 
@@ -90,13 +91,12 @@ class SFTDataset(Dataset):
                 add_special_tokens=False,
             )
             prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
-        else:
-            prompt_ids_len = 0
 
-        if not self.pretrain_mode:
             # filter the sample whose length is greater than max_length (2 for answer length)
             if not prompt or not response or prompt_ids_len >= self.max_length - 2:
                 prompt = None
+        else:
+            prompt_ids_len = 0
 
         return {"prompt": prompt, "response": response, "prompt_ids_len": prompt_ids_len}
 

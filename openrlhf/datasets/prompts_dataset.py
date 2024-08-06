@@ -33,11 +33,13 @@ class PromptDataset(Dataset):
         super().__init__()
         self.strategy = strategy
         self.tokenizer = tokenizer
-        self.input_template = input_template
         self.n_samples_per_prompt = getattr(self.strategy.args, "n_samples_per_prompt", 1)
 
+        # chat_template
+        self.input_template = input_template
         input_key = getattr(self.strategy.args, "input_key", None)
         apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
+
         if apply_chat_template:
             apply_chat_template = self.tokenizer.apply_chat_template
 
