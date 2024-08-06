@@ -109,9 +109,12 @@ class SFTDataset(Dataset):
         prompt = self.prompts[idx]
         response = self.responses[idx]
 
-        text = (prompt + response).rstrip("\n")
-        if not text.endswith(self.tokenizer.eos_token):
-            text += " " + self.tokenizer.eos_token
+        if not self.pretrain_mode:
+            text = (prompt + response).rstrip("\n")
+            if not text.endswith(self.tokenizer.eos_token):
+                text += " " + self.tokenizer.eos_token
+        else:
+            text = prompt
 
         input_token = self.tokenizer(
             text,
@@ -121,11 +124,13 @@ class SFTDataset(Dataset):
             return_tensors="pt",
             add_special_tokens=False,
         )
-        # to avoid EOS_token truncation
-        input_token["input_ids"][0][-1] = self.tokenizer.eos_token_id
-        input_token["attention_mask"][0][-1] = True
 
+        if not self.pretrain_mode:
+            # to avoid EOS_token truncation
+            input_token["input_ids"][0][-1] = self.tokenizer.eos_token_id
+            input_token["attention_mask"][0][-1] = True
         info = {"input": prompt, "output": response, "input_length": input_token["attention_mask"].int().sum().item()}
+
         return prompt_ids_len, input_token["input_ids"], input_token["attention_mask"], info
 
     def collate_fn(self, item_list):
