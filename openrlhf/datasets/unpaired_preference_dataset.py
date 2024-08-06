@@ -58,7 +58,11 @@ class UnpairedPreferenceDataset(Dataset):
         prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
         # filter the sample whose length is greater than max_length (2 for answer length)
         if prompt_ids_len >= self.max_length - 2:
-            return None
+            return {
+                'prompt': None,
+                'response': None,
+                'label': None,
+            }
         else:
             self.prompt_ids_lens.append(prompt_ids_len)
 
@@ -82,9 +86,9 @@ class UnpairedPreferenceDataset(Dataset):
         processed_dataset = processed_dataset.filter(lambda x: x['prompt'] is not None)
 
         # Store the processed data in class attributes
-        self.prompt = processed_dataset['prompt']
-        self.response = processed_dataset['response']
-        self.label = processed_dataset['label']
+        self.prompts = processed_dataset['prompt']
+        self.responses = processed_dataset['response']
+        self.labels = processed_dataset['label']
 
     def __init__(self, dataset, tokenizer: Callable, max_length: int, strategy, input_template=None) -> None:
         super().__init__()

@@ -74,7 +74,12 @@ class RewardDataset(Dataset):
             
             # Filter the sample whose length is greater than max_length (2 for answer length)
             if prompt_ids_len >= self.max_length - 2:
-                return None  # Skip this entry
+                return {
+                    'prompt': None,
+                    'chosen': None,
+                    'reject': None,
+                    'margin': None
+                }
             else:
                 self.prompt_ids_lens.append(prompt_ids_len)
         else:
@@ -115,7 +120,7 @@ class RewardDataset(Dataset):
     ) -> None:
         super().__init__()
         self.is_dpo = is_dpo
-
+        self.num_processors = num_processors
         self.prompts = []
         self.chosens = []
         self.rejects = []
@@ -123,7 +128,7 @@ class RewardDataset(Dataset):
             self.prompt_ids_lens = []
         else:
             self.margins = []
-        self.num_processors = num_processors  # Specify the number of processors you want to use
+
         self.tokenizer = tokenizer
         self.strategy = strategy
         self.max_length = max_length

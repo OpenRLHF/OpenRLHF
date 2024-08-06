@@ -56,15 +56,24 @@ class SFTDataset(Dataset):
         if not self.pretrain_mode:
             # filter the sample whose length is greater than max_length (2 for answer length)
             if prompt_ids_len >= self.max_length - 2:
-                return None
+                return {
+                    'prompt': None,
+                    'response': None,
+                    'prompt_ids_len': None
+                }
             if not prompt or not response:
-                return None
+                return {
+                    'prompt': None,
+                    'response': None,
+                    'prompt_ids_len': None
+                }
+
         return {
-            'prompt_ids_len': prompt_ids_len,
             'prompt': prompt,
             'response': response,
+            'prompt_ids_len': prompt_ids_len
         }
-    
+
     def process_dataset(self):
         processed_dataset = self.dataset.map(
             self.process_data,
@@ -72,13 +81,12 @@ class SFTDataset(Dataset):
             num_proc=self.num_processors
         )
 
-        # Filter out None values if necessary
         processed_dataset = processed_dataset.filter(lambda x: x['prompt'] is not None)
 
         # Store the processed data in class attributes
         self.prompts = processed_dataset['prompt']
-        self.response = processed_dataset['response']
-        self.prompt_ids_len = processed_dataset['prompt_ids_len']
+        self.responses = processed_dataset['response']
+        self.prompt_ids_lens = processed_dataset['prompt_ids_len']
 
     def __init__(
         self,
