@@ -43,6 +43,52 @@ class UnpairedPreferenceDataset(Dataset):
         self.tokenizer: self.tokenizer for model
         self.max_length: max length of input
     """
+    def process_data(self, data):
+        prompt, response, label = preprocess_data(
+                data, self.input_template, self.input_key, self.output_key, self.label_key, self.apply_chat_template
+            )
+        prompt_token = self.tokenizer(
+            prompt,
+            max_length=self.max_length,
+            padding=False,
+            truncation=True,
+            return_tensors="pt",
+            add_special_tokens=False,
+        )
+        prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
+        # filter the sample whose length is greater than max_length (2 for answer length)
+        if prompt_ids_len >= self.max_length - 2:
+            return {
+                'prompt': None,
+                'response': None,
+                'label': None,
+            }
+        else:
+            self.prompt_ids_lens.append(prompt_ids_len)
+
+        self.prompts.append(prompt)
+        self.responses.append(response)
+        self.labels.append(label)
+        return {
+            'prompt': prompt,
+            'response': response,
+            'label': label,
+        }
+    
+    def process_dataset(self):
+        processed_dataset = self.dataset.map(
+            self.process_data,
+            remove_columns=self.dataset.column_names,
+            num_proc=self.num_processors
+        )
+
+        # Filter out None values if necessary
+        processed_dataset = processed_dataset.filter(lambda x: x['prompt'] is not None)
+
+        # Store the processed data in class attributes
+        self.prompts = processed_dataset['prompt']
+        self.responses = processed_dataset['response']
+        self.labels = processed_dataset['label']
 
     def __init__(self, dataset, tokenizer: Callable, max_length: int, strategy, input_template=None) -> None:
         super().__init__()
@@ -54,35 +100,20 @@ class UnpairedPreferenceDataset(Dataset):
         self.strategy = strategy
         self.max_length = max_length
 
-        input_key = getattr(self.strategy.args, "input_key", None)
-        output_key = getattr(self.strategy.args, "output_key", None)
-        label_key = getattr(self.strategy.args, "label_key", None)
-        apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
-        if apply_chat_template:
-            apply_chat_template = self.tokenizer.apply_chat_template
+        self.input_key = getattr(self.strategy.args, "input_key", None)
+        self.output_key = getattr(self.strategy.args, "output_key", None)
+        self.label_key = getattr(self.strategy.args, "label_key", None)
+        self.apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
+        if self.apply_chat_template:
+            self.apply_chat_template = self.tokenizer.apply_chat_template
+            tokenizer_chat_template = getattr(self.strategy.args, "tokenizer_chat_template", None)
+            if tokenizer_chat_template:
+                self.tokenizer.chat_template = tokenizer_chat_template
 
-        for data in tqdm(dataset, desc="Preprocessing data", disable=not self.strategy.is_rank_0()):
-            prompt, response, label = preprocess_data(
-                data, input_template, input_key, output_key, label_key, apply_chat_template
-            )
-            prompt_token = self.tokenizer(
-                prompt,
-                max_length=self.max_length,
-                padding=False,
-                truncation=True,
-                return_tensors="pt",
-                add_special_tokens=False,
-            )
-            prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
-            # filter the sample whose length is greater than max_length (2 for answer length)
-            if prompt_ids_len >= self.max_length - 2:
-                continue
-            else:
-                self.prompt_ids_lens.append(prompt_ids_len)
+        self.dataset = dataset
+        self.process_dataset()
 
-            self.prompts.append(prompt)
-            self.responses.append(response)
-            self.labels.append(label)
+        
 
     def __len__(self):
         return len(self.prompts)
