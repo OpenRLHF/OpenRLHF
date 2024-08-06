@@ -41,22 +41,20 @@ class SFTDataset(Dataset):
         strategy,
         input_template=None,
         pretrain_mode=False,
-        num_processors=16,  # Specify the number of processors you want to use
+        num_processors=8,  # Specify the number of processors you want to use
     ) -> None:
         super().__init__()
-
-        self.prompts = []
-        self.responses = []
-        self.prompt_ids_lens = []
         self.tokenizer = tokenizer
         self.strategy = strategy
         self.pretrain_mode = pretrain_mode
         self.max_length = max_length
 
+        # chat template
         self.input_template = input_template
         self.input_key = getattr(self.strategy.args, "input_key", None)
         self.output_key = getattr(self.strategy.args, "output_key", None)
         self.apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
+
         if self.apply_chat_template:
             self.apply_chat_template = self.tokenizer.apply_chat_template
             tokenizer_chat_template = getattr(self.strategy.args, "tokenizer_chat_template", None)

@@ -64,28 +64,21 @@ class RewardDataset(Dataset):
         strategy,
         input_template=None,
         is_dpo=False,
-        num_processors=16,
+        num_processors=8,
     ) -> None:
         super().__init__()
         self.is_dpo = is_dpo
-        self.prompts = []
-        self.chosens = []
-        self.rejects = []
-        if self.is_dpo:
-            self.prompt_ids_lens = []
-        else:
-            self.margins = []
-
         self.tokenizer = tokenizer
         self.strategy = strategy
         self.max_length = max_length
-        self.is_dpo = is_dpo
 
+        # chat_template
         self.input_template = input_template
         self.prompt_key = getattr(self.strategy.args, "prompt_key", None)
         self.chosen_key = getattr(self.strategy.args, "chosen_key", None)
         self.rejected_key = getattr(self.strategy.args, "rejected_key", None)
         self.apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
+
         if self.apply_chat_template:
             self.apply_chat_template = self.tokenizer.apply_chat_template
             tokenizer_chat_template = getattr(self.strategy.args, "tokenizer_chat_template", None)
