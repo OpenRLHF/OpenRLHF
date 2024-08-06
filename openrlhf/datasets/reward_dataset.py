@@ -56,58 +56,6 @@ class RewardDataset(Dataset):
         self.max_length: max length of input
     """
 
-    def process_data(self, data):
-        prompt, chosen, reject, margin = preprocess_data(
-            data, self.input_template, self.prompt_key, self.chosen_key, self.rejected_key, self.apply_chat_template, self.is_dpo
-        )
-        
-        if self.is_dpo:
-            prompt_token = self.tokenizer(
-                prompt,
-                max_length=self.max_length,
-                padding=False,
-                truncation=True,
-                return_tensors="pt",
-                add_special_tokens=False,
-            )
-            prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
-            
-            # Filter the sample whose length is greater than max_length (2 for answer length)
-            if prompt_ids_len >= self.max_length - 2:
-                return {
-                    'prompt': None,
-                    'chosen': None,
-                    'reject': None,
-                    'margin': None
-                }
-            else:
-                self.prompt_ids_lens.append(prompt_ids_len)
-        else:
-            self.margins.append(margin)
-
-        return {
-            'prompt': prompt,
-            'chosen': chosen,
-            'reject': reject,
-            'margin': margin
-        }
-
-    def process_dataset(self):
-        processed_dataset = self.dataset.map(
-            self.process_data,
-            remove_columns=self.dataset.column_names,
-            num_proc=self.num_processors
-        )
-
-        # Filter out None values if necessary
-        processed_dataset = processed_dataset.filter(lambda x: x['prompt'] is not None)
-
-        # Store the processed data in class attributes
-        self.prompts = processed_dataset['prompt']
-        self.chosens = processed_dataset['chosen']
-        self.rejects = processed_dataset['reject']
-        self.margins = processed_dataset['margin']
-
     def __init__(
         self,
         dataset,
@@ -116,11 +64,10 @@ class RewardDataset(Dataset):
         strategy,
         input_template=None,
         is_dpo=False,
-        num_processors=80
+        num_processors=16,
     ) -> None:
         super().__init__()
         self.is_dpo = is_dpo
-        self.num_processors = num_processors
         self.prompts = []
         self.chosens = []
         self.rejects = []
@@ -133,6 +80,7 @@ class RewardDataset(Dataset):
         self.strategy = strategy
         self.max_length = max_length
         self.is_dpo = is_dpo
+
         self.input_template = input_template
         self.prompt_key = getattr(self.strategy.args, "prompt_key", None)
         self.chosen_key = getattr(self.strategy.args, "chosen_key", None)
@@ -144,21 +92,59 @@ class RewardDataset(Dataset):
             if tokenizer_chat_template:
                 self.tokenizer.chat_template = tokenizer_chat_template
 
-        self.dataset = dataset
-        self.process_dataset()
+        # Parallel loading datasets
+        processed_dataset = dataset.map(
+            self.process_data, remove_columns=dataset.column_names, num_proc=num_processors
+        )
 
+        # Filter out None values if necessary
+        processed_dataset = processed_dataset.filter(lambda x: x["prompt"] is not None)
 
+        # Store the processed data in class attributes
+        self.prompts = processed_dataset["prompt"]
+        self.chosens = processed_dataset["chosen"]
+        self.rejects = processed_dataset["reject"]
+        self.extras = processed_dataset["extra"]
+
+    def process_data(self, data):
+        prompt, chosen, reject, margin = preprocess_data(
+            data,
+            self.input_template,
+            self.prompt_key,
+            self.chosen_key,
+            self.rejected_key,
+            self.apply_chat_template,
+            self.is_dpo,
+        )
+
+        if self.is_dpo:
+            prompt_token = self.tokenizer(
+                prompt,
+                max_length=self.max_length,
+                padding=False,
+                truncation=True,
+                return_tensors="pt",
+                add_special_tokens=False,
+            )
+            prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
+
+            # Filter the sample whose length is greater than max_length (2 for answer length)
+            if prompt_ids_len >= self.max_length - 2:
+                prompt = None
+
+        return {
+            "prompt": prompt,
+            "chosen": chosen,
+            "reject": reject,
+            "extra": prompt_ids_len if self.is_dpo else margin,
+        }
 
     def __len__(self):
         length = len(self.chosens)
         return length
 
     def __getitem__(self, idx):
-        prompt, chosen, reject = self.prompts[idx], self.chosens[idx], self.rejects[idx]
-        if self.is_dpo:
-            extra = self.prompt_ids_lens[idx]
-        else:
-            extra = self.margins[idx]
+        prompt, chosen, reject, extra = self.prompts[idx], self.chosens[idx], self.rejects[idx], self.extras[idx]
 
         chosen = (prompt + chosen).rstrip("\n")
         if not chosen.endswith(self.tokenizer.eos_token):
