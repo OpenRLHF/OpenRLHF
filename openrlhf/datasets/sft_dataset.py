@@ -32,6 +32,53 @@ class SFTDataset(Dataset):
         tokenizer: tokenizer for SFT model
         max_length: max length of input
     """
+    def process_data(self, data):
+        prompt, response = preprocess_data(
+            data,
+            None if self.pretrain_mode else self.input_template,
+            self.input_key,
+            self.output_key,
+            apply_chat_template=None if self.pretrain_mode else self.apply_chat_template,
+        )
+        if not self.pretrain_mode:
+            prompt_token = self.tokenizer(
+                prompt,
+                max_length=self.max_length,
+                padding=False,
+                truncation=True,
+                return_tensors="pt",
+                add_special_tokens=False,
+            )
+            prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
+        else:
+            prompt_ids_len = 0
+
+        if not self.pretrain_mode:
+            # filter the sample whose length is greater than max_length (2 for answer length)
+            if prompt_ids_len >= self.max_length - 2:
+                return None
+            if not prompt or not response:
+                return None
+        return {
+            'prompt_ids_len': prompt_ids_len,
+            'prompt': prompt,
+            'response': response,
+        }
+    
+    def process_dataset(self):
+        processed_dataset = self.dataset.map(
+            self.process_data,
+            remove_columns=self.dataset.column_names,
+            num_proc=self.num_processors
+        )
+
+        # Filter out None values if necessary
+        processed_dataset = processed_dataset.filter(lambda x: x['prompt'] is not None)
+
+        # Store the processed data in class attributes
+        self.prompts = processed_dataset['prompt']
+        self.response = processed_dataset['response']
+        self.prompt_ids_len = processed_dataset['prompt_ids_len']
 
     def __init__(
         self,
@@ -41,8 +88,11 @@ class SFTDataset(Dataset):
         strategy,
         input_template=None,
         pretrain_mode=False,
+        num_processors=80
     ) -> None:
         super().__init__()
+
+        self.num_processors = num_processors  # Specify the number of processors you want to use
         self.prompts = []
         self.responses = []
         self.prompt_ids_lens = []
@@ -50,48 +100,20 @@ class SFTDataset(Dataset):
         self.strategy = strategy
         self.pretrain_mode = pretrain_mode
         self.max_length = max_length
-
-        input_key = getattr(self.strategy.args, "input_key", None)
-        output_key = getattr(self.strategy.args, "output_key", None)
-        apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
-        if apply_chat_template:
-            apply_chat_template = self.tokenizer.apply_chat_template
+        self.input_template = input_template
+        self.input_key = getattr(self.strategy.args, "input_key", None)
+        self.output_key = getattr(self.strategy.args, "output_key", None)
+        self.apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
+        if self.apply_chat_template:
+            self.apply_chat_template = self.tokenizer.apply_chat_template
             tokenizer_chat_template = getattr(self.strategy.args, "tokenizer_chat_template", None)
             if tokenizer_chat_template:
                 self.tokenizer.chat_template = tokenizer_chat_template
 
-        for data in tqdm(dataset, desc="Preprocessing data", disable=not self.strategy.is_rank_0()):
-            prompt, response = preprocess_data(
-                data,
-                None if pretrain_mode else input_template,
-                input_key,
-                output_key,
-                apply_chat_template=None if pretrain_mode else apply_chat_template,
-            )
+        self.dataset = dataset
+        self.process_dataset()
 
-            if not self.pretrain_mode:
-                prompt_token = self.tokenizer(
-                    prompt,
-                    max_length=self.max_length,
-                    padding=False,
-                    truncation=True,
-                    return_tensors="pt",
-                    add_special_tokens=False,
-                )
-                prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
-            else:
-                prompt_ids_len = 0
 
-            if not self.pretrain_mode:
-                # filter the sample whose length is greater than max_length (2 for answer length)
-                if prompt_ids_len >= self.max_length - 2:
-                    continue
-                if not prompt or not response:
-                    continue
-
-            self.prompt_ids_lens.append(prompt_ids_len)
-            self.prompts.append(prompt)
-            self.responses.append(response)
 
     def __len__(self):
         length = len(self.prompts)
