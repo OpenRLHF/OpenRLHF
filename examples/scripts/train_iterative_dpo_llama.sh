@@ -76,6 +76,7 @@ openrlhf.cli.train_dpo \
    --max_len 4096 \
    --dataset $RM_OUTPUT \
    --dataset_probs 1.0 \
+   --prompt_key prompt \
    --train_batch_size 128 \
    --micro_train_batch_size 2 \
    --pretrain $POLICY_MODEL_PATH \

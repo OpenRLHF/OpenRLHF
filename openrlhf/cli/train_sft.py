@@ -210,4 +210,9 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+
+    if args.input_template and not "{}" in args.input_template:
+        print("[Warning] {} not in args.input_template, set to None")
+        args.input_template = None
+
     train(args)

@@ -297,7 +297,7 @@ if __name__ == "__main__":
     parser.add_argument("--pretrain_split", type=str, default="train")
 
     parser.add_argument("--input_key", type=str, default="input", help="JSON dataset key")
-    parser.add_argument("--input_template", type=str, default="User: {}\nAssistant: ")
+    parser.add_argument("--input_template", type=str, default=None)
     parser.add_argument(
         "--apply_chat_template", action="store_true", default=False, help="Use HF tokenizer chat template"
     )
@@ -329,5 +329,9 @@ if __name__ == "__main__":
 
     if args.vllm_num_engines >= 1 and args.n_samples_per_prompt > 1 and not args.enable_prefix_caching:
         print("[Warning] Please --enable_prefix_caching to accelerate when --n_samples_per_prompt > 1.")
+
+    if args.input_template and not "{}" in args.input_template:
+        print("[Warning] {} not in args.input_template, set to None")
+        args.input_template = None
 
     train(args)

@@ -229,4 +229,8 @@ if __name__ == "__main__":
     if args.ref_pretrain is None or args.ref_pretrain == "":
         args.ref_pretrain = args.pretrain
 
+    if args.input_template and not "{}" in args.input_template:
+        print("[Warning] {} not in args.input_template, set to None")
+        args.input_template = None
+
     train(args)
