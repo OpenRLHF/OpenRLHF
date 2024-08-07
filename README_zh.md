@@ -87,6 +87,7 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 ```bash
 # 启动 docker container
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:24.02-py3 bash
+pip uninstall xgboost transformer_engine flash_attn -y
 
 # pip install
 pip install openrlhf
@@ -143,7 +144,7 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 ```
 > [!NOTE]
 >默认情况下我们使用 `train` 和 `test` 作为 split 区分 Huggingface 的训练/测试数据。
->`JSON key` 选项取决于具体的数据集。请参阅 [Reward Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/9ab08aace2c9af7dfa7d8790380d400902deef00/openrlhf/datasets/reward_dataset.py#L10) 和 [SFT Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/9ab08aace2c9af7dfa7d8790380d400902deef00/openrlhf/datasets/sft_dataset.py#L9)。
+>`JSON key` 选项取决于具体的数据集。请参阅 [Reward Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/ab89f6b857d22430190a5742924661134e40725c/openrlhf/datasets/reward_dataset.py#L10) 和 [SFT Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/ab89f6b857d22430190a5742924661134e40725c/openrlhf/datasets/sft_dataset.py#L9)。
 
 
 ### Supervised Fine-tuning
