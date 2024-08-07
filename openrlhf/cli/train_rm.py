@@ -185,7 +185,7 @@ if __name__ == "__main__":
     parser.add_argument("--prompt_key", type=str, default=None)
     parser.add_argument("--chosen_key", type=str, default="chosen")
     parser.add_argument("--rejected_key", type=str, default="rejected")
-    parser.add_argument("--input_template", type=str, default="User: {}\nAssistant: ")
+    parser.add_argument("--input_template", type=str, default=None)
     parser.add_argument(
         "--apply_chat_template", action="store_true", default=False, help="Use HF tokenizer chat template"
     )
@@ -207,4 +207,8 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+
+    if args.input_template and not "{}" in args.input_template:
+        print("[Warning] {} not in args.input_template, set to None")
+        args.input_template = None
     train(args)
