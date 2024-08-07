@@ -112,7 +112,7 @@ pip install -e .
 
 ### 准备数据集
 OpenRLHF 在其数据集类中提供了多种数据处理方法。
-例如在 [Prompt Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/ab89f6b857d22430190a5742924661134e40725c/openrlhf/datasets/prompts_dataset.py#L6) 中：
+例如在 [Prompt Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/prompts_dataset.py#L6) 中：
 
 ```python
 def preprocess_data(data, input_template=None, input_key="input", apply_chat_template=None) -> str:
@@ -144,7 +144,7 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 ```
 > [!NOTE]
 >默认情况下我们使用 `train` 和 `test` 作为 split 区分 Huggingface 的训练/测试数据。
->`JSON key` 选项取决于具体的数据集。请参阅 [Reward Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/ab89f6b857d22430190a5742924661134e40725c/openrlhf/datasets/reward_dataset.py#L10) 和 [SFT Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/ab89f6b857d22430190a5742924661134e40725c/openrlhf/datasets/sft_dataset.py#L9)。
+>`JSON key` 选项取决于具体的数据集。请参阅 [Reward Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/reward_dataset.py#L10) 和 [SFT Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/mai
 
 
 ### Supervised Fine-tuning
