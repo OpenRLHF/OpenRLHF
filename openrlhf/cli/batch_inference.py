@@ -258,6 +258,7 @@ def batch_rm_inference(args):
 
             dist.barrier()
 
+    os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
     with jsonlines.open(args.output_path + str(strategy.get_rank()), mode="w") as writer:
         writer.write_all(output_dataset)
 
