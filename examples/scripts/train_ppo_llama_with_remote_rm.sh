@@ -23,7 +23,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_num_engines 2 \
    --vllm_tensor_parallel_size 2 \
    --colocate_actor_ref \
-   --ref_reward_offload \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
    --remote_rm_url http://localhost:5000/get_reward \
    --save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
