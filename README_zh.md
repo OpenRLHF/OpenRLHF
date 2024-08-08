@@ -142,6 +142,17 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 
 "<s>[INST] Hello, how are you? [/INST]I'm doing great. How can I help you today?</s> [INST] I'd like to show off how chat templating works! [/INST]"
 ```
+
+如何指定训练和测试数据分区 ?
+
+你可以使用 `data_type@data_dir` 的方式指定, 比如下面的数据集可以设置为 `--dataset json@./data`
+
+```
+data
+├── test.jsonl
+└── train.jsonl
+```
+
 > [!NOTE]
 >默认情况下我们使用 `train` 和 `test` 作为 split 区分 Huggingface 的训练/测试数据。
 >`JSON key` 选项取决于具体的数据集。请参阅 [Reward Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/reward_dataset.py#L10) 和 [SFT Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/mai

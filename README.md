@@ -139,6 +139,17 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 
 "<s>[INST] Hello, how are you? [/INST]I'm doing great. How can I help you today?</s> [INST] I'd like to show off how chat templating works! [/INST]"
 ```
+
+How to specify training and test datasets ?
+
+You can specify it using the `data_type@data_dir` format. For example, the dataset can be set as `--dataset json@./data`.
+
+```
+data
+├── test.jsonl
+└── train.jsonl
+```
+
 > [!NOTE]
 > By default, we use `train` and `test` as splits to distinguish training and testing datasets from Huggingface.
 > The ``JSON key`` options depends on the specific datasets. See [Reward Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/reward_dataset.py#L10) and [SFT Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/sft_dataset.py#L9)
