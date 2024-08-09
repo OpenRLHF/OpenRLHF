@@ -84,7 +84,7 @@ To use OpenRLHF, first launch the docker container (**Recommended**) and `pip in
 ```bash
 # Launch the docker container
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:24.02-py3 bash
-pip uninstall xgboost transformer_engine flash_attn -y
+sudo pip uninstall xgboost transformer_engine flash_attn -y
 
 # pip install
 pip install openrlhf
@@ -288,7 +288,6 @@ ray job submit --address="http://127.0.0.1:8265" \
   --vllm_tensor_parallel_size 2 \
   --colocate_critic_reward \
   --colocate_actor_ref \
-  --ref_reward_offload \
   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
   --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
   --save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
@@ -345,6 +344,8 @@ To achieve optimal performance, we recommend allocating more nodes to the vLLM E
 - Baidu
 - Jülich Supercomputing Centre (JSC)
 - Berkeley Starling Team
+- Tencent
+- Alibaba
 - ...
 
 ## Join Us
