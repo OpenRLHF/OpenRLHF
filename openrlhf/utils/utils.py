@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from datasets import Dataset, interleave_datasets, load_dataset
+from datasets import Dataset, interleave_datasets, load_dataset, load_from_disk
 from transformers import AutoTokenizer
 
 from openrlhf.utils import DeepspeedStrategy
@@ -76,6 +76,11 @@ def blending_datasets(
             if ext == "jsonl":
                 ext = "json"
             data = load_dataset(ext, data_files=dataset)
+            strategy.print(f"loaded {dataset} with data_files={dataset}")
+        # local dataset saved with `datasets.Dataset.save_to_disk`
+        elif os.path.isdir(dataset):
+            data = load_from_disk(dataset)
+            strategy.print(f"loaded {dataset} from disk")
         # remote/local folder or common file
         else:
             data = load_dataset(dataset, data_dir=data_dir)
