@@ -172,11 +172,7 @@ class KTOTrainer(ABC):
         # logs
         if global_step % args.logging_steps == 0:
             # wandb
-            if (
-                self._wandb is not None
-                and self.strategy.is_rank_0()
-                and global_step % self.strategy.accumulated_gradient == 0
-            ):
+            if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {"train/%s" % k: v for k, v in {**logs_dict, "global_step": global_step}.items()}
                 self._wandb.log(logs)
 
