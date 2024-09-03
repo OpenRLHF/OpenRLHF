@@ -111,31 +111,29 @@ def patch_for_block_diag_attn(model_type: str) -> None:
     # https://github.com/huggingface/transformers/pull/31446
     if hasattr(transformers, "modeling_flash_attention_utils"):
         transformers.modeling_flash_attention_utils._get_unpad_data = get_unpad_data
-    else:
-        # for transformers <= v4.42.4
-        if model_type == "cohere":
-            transformers.models.cohere.modeling_cohere._get_unpad_data = get_unpad_data
-        elif model_type == "falcon":
-            transformers.models.falcon.modeling_falcon._get_unpad_data = get_unpad_data
-        elif model_type == "gemma":
-            transformers.models.gemma.modeling_gemma._get_unpad_data = get_unpad_data
-        elif model_type == "gemma2":
-            transformers.models.gemma2.modeling_gemma2._get_unpad_data = get_unpad_data
-        elif model_type == "llama":
-            transformers.models.llama.modeling_llama._get_unpad_data = get_unpad_data
-        elif model_type == "mistral":
-            transformers.models.mistral.modeling_mistral._get_unpad_data = get_unpad_data
-        elif model_type == "mixtral":
-            transformers.models.mixtral.modeling_mixtral._get_unpad_data = get_unpad_data
-        elif model_type == "phi":
-            transformers.models.phi.modeling_phi._get_unpad_data = get_unpad_data
-        elif model_type == "phi3":
-            transformers.models.phi3.modeling_phi3._get_unpad_data = get_unpad_data
-        elif model_type == "qwen2":
-            transformers.models.qwen2.modeling_qwen2._get_unpad_data = get_unpad_data
-        elif model_type == "qwen2_moe":
-            transformers.models.qwen2_moe.modeling_qwen2_moe._get_unpad_data = get_unpad_data
-        elif model_type == "starcoder2":
-            transformers.models.starcoder2.modeling_starcoder2._get_unpad_data = get_unpad_data
-        else:
-            raise Exception(f"Unsupported mode type {model_type} for patch_for_block_diag_attn!")
+
+    # for transformers <= v4.42.4 and remote file
+    if model_type == "cohere":
+        transformers.models.cohere.modeling_cohere._get_unpad_data = get_unpad_data
+    elif model_type == "falcon":
+        transformers.models.falcon.modeling_falcon._get_unpad_data = get_unpad_data
+    elif model_type == "gemma":
+        transformers.models.gemma.modeling_gemma._get_unpad_data = get_unpad_data
+    elif model_type == "gemma2":
+        transformers.models.gemma2.modeling_gemma2._get_unpad_data = get_unpad_data
+    elif model_type == "llama":
+        transformers.models.llama.modeling_llama._get_unpad_data = get_unpad_data
+    elif model_type == "mistral":
+        transformers.models.mistral.modeling_mistral._get_unpad_data = get_unpad_data
+    elif model_type == "mixtral":
+        transformers.models.mixtral.modeling_mixtral._get_unpad_data = get_unpad_data
+    elif model_type == "phi":
+        transformers.models.phi.modeling_phi._get_unpad_data = get_unpad_data
+    elif model_type == "phi3":
+        transformers.models.phi3.modeling_phi3._get_unpad_data = get_unpad_data
+    elif model_type == "qwen2":
+        transformers.models.qwen2.modeling_qwen2._get_unpad_data = get_unpad_data
+    elif model_type == "qwen2_moe":
+        transformers.models.qwen2_moe.modeling_qwen2_moe._get_unpad_data = get_unpad_data
+    elif model_type == "starcoder2":
+        transformers.models.starcoder2.modeling_starcoder2._get_unpad_data = get_unpad_data
