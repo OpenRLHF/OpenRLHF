@@ -91,7 +91,7 @@ pip install openrlhf
 
 # If you want to use vLLM acceleration (To install vLLM 0.4.2)
 pip install openrlhf[vllm]
-# latest vLLM is also supported (Please use `export NCCL_P2P_DISABLE=1` or `--vllm_sync_backend gloo`)
+# latest vLLM is also supported (Please use `--vllm_sync_backend gloo` or `export NCCL_P2P_DISABLE=1`)
 pip install openrlhf[vllm_latest]
 
 # pip install the latest version
@@ -104,7 +104,7 @@ pip install -e .
 ```
 
 > [!NOTE]
->We recommend using vLLM 0.4.2, as the 0.4.3+ versions currently require disabling P2P communication (`export NCCL_P2P_DISABLE=1`) or synchronizing weights via Gloo (`--vllm_sync_backend gloo`).
+>We recommend using vLLM 0.4.2, as the 0.4.3+ versions currently require synchronizing weights via Gloo (`--vllm_sync_backend gloo`) or disabling P2P communication (`export NCCL_P2P_DISABLE=1`).
 >We also provided the [Dockerfiles for vLLM](./dockerfile/) and [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh).
 
 ### Prepare Datasets
