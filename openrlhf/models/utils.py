@@ -1,6 +1,5 @@
 from typing import Optional, Tuple, Union
 
-import bitsandbytes as bnb
 import deepspeed
 import torch
 import torch.nn as nn
