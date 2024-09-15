@@ -3,12 +3,16 @@ from abc import ABC
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
+import torch.distributed as dist
+from flash_attn.utils.distributed import all_gather
 from torch import nn
+from torch.nn import functional as F
 from torch.optim import Optimizer
 from tqdm import tqdm
 
 from openrlhf.models import DPOLoss
 from openrlhf.utils.distributed_sampler import DistributedSampler
+from openrlhf.utils.ring_attn import reset_position_ids
 
 
 class DPOTrainer(ABC):
@@ -39,6 +43,7 @@ class DPOTrainer(ABC):
         max_norm=0.5,
         beta=0.01,
         max_epochs: int = 2,
+        ring_attn_group=None,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -64,6 +69,12 @@ class DPOTrainer(ABC):
 
         # packing samples
         self.packing_samples = strategy.args.packing_samples
+
+        # ring attn
+        self.ring_attn_group = ring_attn_group
+        if self.ring_attn_group is not None:
+            self.ring_rank = dist.get_rank(group=self.ring_attn_group)
+            self.ring_world_size = dist.get_world_size(group=self.ring_attn_group)
 
         self._wandb = None
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():
@@ -362,7 +373,25 @@ class DPOTrainer(ABC):
         return logprobs_sums, logprobs_means
 
     def packed_samples_forward(self, model, packed_input_ids, packed_attention_masks, packed_seq_lens, prompt_id_lens):
-        output = model(packed_input_ids, attention_mask=packed_attention_masks, return_output=True)
+        if self.ring_attn_group is not None:
+            # each rank within the ring group will process input_ids[start:end]
+            total_seq_len = packed_input_ids.numel()
+            self._update_ring_flash_attn_params(packed_seq_lens, total_seq_len)
+            local_seq_len = total_seq_len // self.ring_world_size
+            start, end = self.ring_rank * local_seq_len, (self.ring_rank + 1) * local_seq_len
+            position_ids = reset_position_ids(start, end, packed_seq_lens)
+            output = model(
+                packed_input_ids[:, start:end],
+                attention_mask=packed_attention_masks[:, start:end],
+                return_output=True,
+                position_ids=position_ids,
+            )
+        else:
+            output = model(
+                packed_input_ids,
+                attention_mask=packed_attention_masks,
+                return_output=True,
+            )
         all_logits = output["logits"]
         all_logps_sum, all_logps_mean = self._packed_get_batch_logps(
             all_logits,
@@ -387,10 +416,28 @@ class DPOTrainer(ABC):
         average_log_prob: bool = False,
     ) -> torch.FloatTensor:
         assert average_log_prob == False
-        assert logits.shape[:-1] == labels.shape
 
-        labels = labels[:, 1:].clone()
-        logits = logits[:, :-1, :]
+        if self.ring_attn_group is not None:
+            total_seq_len = labels.numel()
+            local_seq_len = total_seq_len // self.ring_world_size
+            local_slice = slice(self.ring_rank * local_seq_len + 1, (self.ring_rank + 1) * local_seq_len + 1)
+            local_label = labels[:, local_slice]
+            if self.ring_rank == self.ring_world_size - 1:
+                # add a dummy label to the last logit
+                local_label = F.pad(local_label, (0, 1), value=0)
+            local_per_token_logps = torch.gather(
+                logits.log_softmax(-1), dim=2, index=local_label.unsqueeze(2)
+            ).squeeze(2)
+            # we may not need to all_gather the entire tensor, but it's easier to implement.
+            # use the flash_attn all_gather so that the all_gather has correct backward.
+            per_token_logps = all_gather(local_per_token_logps, self.ring_attn_group).reshape((1, -1))
+            per_token_logps = per_token_logps[:, :-1]
+        else:
+            assert logits.shape[:-1] == labels.shape
+            labels = labels[:, 1:]
+            logits = logits[:, :-1, :]
+            per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+
         loss_masks = attention_mask.clone().bool()
 
         index = 0
@@ -399,9 +446,6 @@ class DPOTrainer(ABC):
             index = index + seq_len
 
         loss_masks = loss_masks[:, 1:]
-        labels[loss_masks == False] = 0
-
-        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
 
         logprobs_sums = []
         logprobs_means = []
@@ -414,3 +458,19 @@ class DPOTrainer(ABC):
             index = index + seq_len
 
         return torch.stack(logprobs_sums), torch.stack(logprobs_means)
+
+    def _update_ring_flash_attn_params(self, packed_seq_lens, total_seq_len):
+        """
+        Calculate the cu_seqlens for the current forward pass and pass the value to
+        the substituted ring_flash_attn.
+        """
+        cu_seqlens = torch.cumsum(
+            torch.tensor(packed_seq_lens, device=torch.cuda.current_device(), dtype=torch.int32),
+            dim=-1,
+            dtype=torch.int32,
+        )
+        cu_seqlens = F.pad(F.pad(cu_seqlens, (1, 0), value=0), (0, 1), value=total_seq_len)
+
+        from ring_flash_attn import update_ring_flash_attn_params
+
+        update_ring_flash_attn_params(cu_seqlens, self.ring_attn_group)

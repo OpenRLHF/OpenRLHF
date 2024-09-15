@@ -1,6 +1,7 @@
 from typing import Callable
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
@@ -65,12 +66,14 @@ class RewardDataset(Dataset):
         input_template=None,
         is_dpo=False,
         num_processors=8,
+        multiple_of=1,
     ) -> None:
         super().__init__()
         self.is_dpo = is_dpo
         self.tokenizer = tokenizer
         self.strategy = strategy
         self.max_length = max_length
+        self.multiple_of = multiple_of
 
         # chat_template
         self.input_template = input_template
@@ -212,12 +215,12 @@ class RewardDataset(Dataset):
         index = 1
         for chosen_id, chosen_mask, reject_id, rejects_mask, extra in item_list:
             chosen_ids.append(chosen_id.flatten())
-            chosen_att_masks.append(torch.ones_like(chosen_id.flatten()) * index)
+            chosen_att_masks.append(torch.full_like(chosen_id.flatten(), index))
             chosen_seq_lens.append(len(chosen_id.flatten()))
             extras.append(extra)
 
             rejected_ids.append(reject_id.flatten())
-            rejected_att_masks.append(torch.ones_like(reject_id.flatten()) * (index + len(item_list)))
+            rejected_att_masks.append(torch.full_like(reject_id.flatten(), index + len(item_list)))
             rejected_seq_lens.append(len(reject_id.flatten()))
             index += 1
 
@@ -229,4 +232,10 @@ class RewardDataset(Dataset):
         packed_input_ids = torch.cat(chosen_ids + rejected_ids, dim=0).unsqueeze(0)
         packed_attention_masks = torch.cat(chosen_att_masks + rejected_att_masks, dim=0).unsqueeze(0)
         packed_seq_lens = chosen_seq_lens + rejected_seq_lens
+
+        if self.multiple_of > 1 and packed_input_ids.numel() % self.multiple_of != 0:
+            padding_len = self.multiple_of - (packed_input_ids.numel() % self.multiple_of)
+            packed_input_ids = F.pad(packed_input_ids, (0, padding_len), value=self.tokenizer.pad_token_id)
+            packed_attention_masks = F.pad(packed_attention_masks, (0, padding_len), value=0)
+
         return packed_input_ids, packed_attention_masks, packed_seq_lens, extras
