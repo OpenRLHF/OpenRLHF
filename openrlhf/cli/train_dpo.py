@@ -10,15 +10,13 @@ from transformers.trainer import get_scheduler
 from openrlhf.datasets import RewardDataset
 from openrlhf.models import Actor
 from openrlhf.trainer import DPOTrainer
-from openrlhf.utils import blending_datasets, get_sampler, get_strategy, get_tokenizer, register_ring_attn
+from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
 
 def train(args):
     # configure strategy
     strategy = get_strategy(args)
     strategy.setup_distributed()
-
-    ring_attn_group = register_ring_attn(args)
 
     # configure model
     # load huggingface model
@@ -96,20 +94,18 @@ def train(args):
     # prepare dataloader
     train_dataloader = strategy.setup_dataloader(
         train_dataset,
-        args.micro_train_batch_size * args.ring_attn_size,
+        args.micro_train_batch_size,
         True,
         True,
         train_dataset.packing_collate_fn if args.packing_samples else train_dataset.collate_fn,
-        sampler=get_sampler(args, train_dataset),
     )
 
     eval_dataloader = strategy.setup_dataloader(
         eval_dataset,
-        args.micro_train_batch_size * args.ring_attn_size,
+        args.micro_train_batch_size,
         True,
         False,
         eval_dataset.packing_collate_fn if args.packing_samples else eval_dataset.collate_fn,
-        sampler=get_sampler(args, eval_dataset),
     )
 
     # scheduler
@@ -150,7 +146,6 @@ def train(args):
         max_norm=args.max_norm,
         beta=args.beta,
         max_epochs=args.max_epochs,
-        ring_attn_group=ring_attn_group,
     )
 
     trainer.fit(args, consumed_samples, num_update_steps_per_epoch)
@@ -203,8 +198,15 @@ if __name__ == "__main__":
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
 
     # Parser
-    parser.add_argument("--ring_attn_size", type=int, default=1)
-    parser.add_argument("--ring_head_stride", type=int, default=1)
+    parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")
+    parser.add_argument(
+        "--ring_head_stride",
+        type=int,
+        default=1,
+        help="the number of heads to do ring attention each time. "
+        "It should be a divisor of the number of heads. "
+        "A larger value may results in faster training but will consume more memory.",
+    )
 
     # LoRA
     parser.add_argument("--load_in_4bit", action="store_true", default=False)

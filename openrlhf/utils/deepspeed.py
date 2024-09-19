@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader
 from openrlhf.models import Actor
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
+from ..models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
 from .deepspeed_utils import (
     _z3_params_to_fetch,
     get_eval_ds_config,
@@ -80,8 +81,38 @@ class DeepspeedStrategy(ABC):
             torch.cuda.set_device(self.args.local_rank)
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         deepspeed.init_distributed(timeout=timeout)
+        self.setup_ring_attn()
         self.world_size = dist.get_world_size()
-        self.accumulated_gradient = self.train_batch_size // self.micro_train_batch_size // self.world_size
+        self.accumulated_gradient = (
+            self.train_batch_size // self.micro_train_batch_size // self.world_size * self.ring_attn_size
+        )
+
+    def setup_ring_attn(self):
+        self.ring_attn_size = getattr(self.args, "ring_attn_size", 1)
+        if self.ring_attn_size == 1:
+            self.ring_attn_rank = 0
+            return
+
+        ring_head_stride = getattr(self.args, "ring_head_stride", 1)
+        for i in range(dist.get_world_size() // self.ring_attn_size):
+            ring_attn_ranks = list(
+                range(
+                    i * self.ring_attn_size,
+                    (i + 1) * self.ring_attn_size,
+                )
+            )
+            group = dist.new_group(ranks=ring_attn_ranks, backend="nccl")
+            if dist.get_rank() in ring_attn_ranks:
+                set_ring_attn_group(group)
+                self.ring_attn_rank = dist.get_rank(group=group)
+
+        from ring_flash_attn import substitute_hf_flash_attn
+
+        substitute_hf_flash_attn(self.ring_attn_group, ring_head_stride)
+
+    @property
+    def ring_attn_group(self):
+        return get_ring_attn_group()
 
     def create_optimizer(self, model, **kwargs) -> Optimizer:
         if isinstance(model, Actor):
@@ -122,10 +153,12 @@ class DeepspeedStrategy(ABC):
     ):
         # DDP only mode, replay buffers on each rank are different.
         if sampler is None:
+            num_replicas = dist.get_world_size() // self.ring_attn_size
+            rank = dist.get_rank() // self.ring_attn_size
             sampler = DistributedSampler(
                 replay_buffer,
-                num_replicas=dist.get_world_size(),
-                rank=dist.get_rank(),
+                num_replicas=num_replicas,
+                rank=rank,
                 shuffle=shuffle,
                 seed=self.seed,
                 drop_last=drop_last,
@@ -200,7 +233,7 @@ class DeepspeedStrategy(ABC):
         # corner case for ptx loss (backward twice)
         if self.is_rlhf and is_actor and self.args.pretrain_data is not None:
             train_batch_size *= 2
-        ds_config["train_batch_size"] = train_batch_size
+        ds_config["train_batch_size"] = train_batch_size * self.ring_attn_size
 
         return ds_config
 
