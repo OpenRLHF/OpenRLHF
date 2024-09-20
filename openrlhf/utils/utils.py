@@ -120,3 +120,12 @@ def blending_datasets(
         return train_dataset, eval_dataset
     else:
         return train_dataset
+
+
+def convert_token_to_id(token, tokenizer):
+    if isinstance(token, str):
+        token = tokenizer.encode(token, add_special_tokens=False)
+        assert len(token) == 1
+        return token[0]
+    else:
+        raise ValueError("token should be int or str")
