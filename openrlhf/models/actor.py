@@ -2,6 +2,7 @@ from typing import Optional, Tuple, Union
 
 import deepspeed
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from peft import LoraConfig, TaskType, get_peft_model
@@ -10,6 +11,7 @@ from transformers import AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedMod
 from transformers.deepspeed import HfDeepSpeedConfig
 
 from .packing_utils import patch_for_block_diag_attn
+from .ring_attn_utils import reset_ring_attn_position_ids, update_ring_attn_params
 from .utils import log_probs_from_logits, reset_position_ids
 
 
@@ -181,21 +183,39 @@ class Actor(nn.Module):
         num_actions: int = None,
         attention_mask: Optional[torch.Tensor] = None,
         return_output=False,
+        ring_attn_group: Optional[dist.ProcessGroup] = None,
+        packed_seq_lens: Optional[list[int]] = None,
     ) -> torch.Tensor:
         """Returns action log probs"""
         if not self.packing_samples:
             # https://github.com/OpenRLHF/OpenRLHF/issues/217
             position_ids = attention_mask.long().cumsum(-1) - 1
         else:
-            # reset the positions for packed samples
-            position_ids = reset_position_ids(attention_mask)
+            if ring_attn_group is not None:
+                # each rank within the ring group will process sequences[start:end]
+                ring_attn_rank = dist.get_rank(group=ring_attn_group)
+                ring_attn_size = dist.get_world_size(group=ring_attn_group)
+                total_seq_len = sequences.numel()
+                local_seq_len = total_seq_len // ring_attn_size
+                start, end = ring_attn_rank * local_seq_len, (ring_attn_rank + 1) * local_seq_len
+                sequences = sequences[:, start:end]
+                attention_mask = attention_mask[:, start:end]
+                position_ids = reset_ring_attn_position_ids(start, end, packed_seq_lens)
+                update_ring_attn_params(packed_seq_lens, total_seq_len)
+            else:
+                # reset the positions for packed samples
+                position_ids = reset_position_ids(attention_mask)
         position_ids.masked_fill_(attention_mask == 0, 1)
 
         output = self.model(sequences, attention_mask=attention_mask, position_ids=position_ids)
+
+        if return_output and num_actions is None:
+            return output
+
         log_probs = log_probs_from_logits(output["logits"][:, :-1, :], sequences[:, 1:])
 
         if return_output:
-            return output if num_actions is None else (log_probs[:, -num_actions:], output)
+            return (log_probs[:, -num_actions:], output)
         else:
             return log_probs[:, -num_actions:]
 
