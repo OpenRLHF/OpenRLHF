@@ -36,6 +36,7 @@ def get_llm_for_sequence_regression(
     value_head_prefix="value_head",
     device_map=None,
     packing_samples=False,
+    cls_class=None,
     **kwargs,
 ) -> nn.Module:
     """Get transformer with a sequence classification head on top (linear layer).
@@ -60,37 +61,11 @@ def get_llm_for_sequence_regression(
     config.normalize_reward = normalize_reward
     config._attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
 
-    try:
+    # default cls_class
+    if cls_class is None:
         base_class = AutoModel._model_mapping[type(config)]
         base_pretrained_class = base_class.__base__
-        if model_type == "reward":
-            cls_class = _get_reward_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
-        else:
-            cls_class = _get_critic_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
-    except Exception as e:
-        print("Failed to load from AutoModel, construct from modelling file.")
-        module_file, causal_model_name = config.auto_map["AutoModelForCausalLM"].split(".")
 
-        # special case
-        if causal_model_name == "QWenLMHeadModel":
-            auto_model_name = "QWenModel"
-            pretrained_model_name = "QWenPreTrainedModel"
-        elif causal_model_name == "InternLMForCausalLM":
-            auto_model_name = "InternLMModel"
-            pretrained_model_name = "InternLMPreTrainedModel"
-        else:
-            if "AutoModel" not in config.auto_map:
-                auto_model_name = causal_model_name.split("For")[0] + "Model"
-            else:
-                auto_model_name = config.auto_map["AutoModel"].split(".")[1]
-            pretrained_model_name = causal_model_name.split("For")[0] + "PreTrainedModel"
-
-        logger.info(f"BASE_MODEL_CLASS: {auto_model_name}, PRETRAINED_MODEL_CLASS: {pretrained_model_name}")
-
-        base_pretrained_class = get_class_from_dynamic_module(
-            f"{module_file}.{pretrained_model_name}", model_name_or_path
-        )
-        base_class = get_class_from_dynamic_module(f"{module_file}.{auto_model_name}", model_name_or_path)
         if model_type == "reward":
             cls_class = _get_reward_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
         else:
@@ -165,13 +140,14 @@ def get_llm_for_sequence_regression(
     # because deepspeed.zero.Init() will not intialize them.
     # TODO: Find a better way to clarify reward model training.
     if init_value_head:
+        value_head = getattr(model, value_head_prefix)
         if dschf is not None:
             logger.info("initialize value_head for ZeRO-3 reward model training.")
-            with deepspeed.zero.GatheredParameters([model.value_head.weight], modifier_rank=0):
+            with deepspeed.zero.GatheredParameters([value_head.weight], modifier_rank=0):
                 if torch.distributed.get_rank() == 0:
-                    model.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
+                    value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
         else:
-            model.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
+            value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
 
     return model
 
