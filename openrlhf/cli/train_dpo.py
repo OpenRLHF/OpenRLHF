@@ -197,7 +197,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
 
-    # Parser
+    # Context Parallel
     parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")
     parser.add_argument(
         "--ring_head_stride",

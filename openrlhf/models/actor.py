@@ -11,7 +11,7 @@ from transformers import AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedMod
 from transformers.deepspeed import HfDeepSpeedConfig
 
 from .packing_utils import patch_for_block_diag_attn
-from .ring_attn_utils import reset_ring_attn_position_ids, update_ring_attn_params
+from .ring_attn_utils import convert_ring_attn_params
 from .utils import log_probs_from_logits, reset_position_ids
 
 
@@ -192,16 +192,9 @@ class Actor(nn.Module):
             position_ids = attention_mask.long().cumsum(-1) - 1
         else:
             if ring_attn_group is not None:
-                # each rank within the ring group will process sequences[start:end]
-                ring_attn_rank = dist.get_rank(group=ring_attn_group)
-                ring_attn_size = dist.get_world_size(group=ring_attn_group)
-                total_seq_len = sequences.numel()
-                local_seq_len = total_seq_len // ring_attn_size
-                start, end = ring_attn_rank * local_seq_len, (ring_attn_rank + 1) * local_seq_len
-                sequences = sequences[:, start:end]
-                attention_mask = attention_mask[:, start:end]
-                position_ids = reset_ring_attn_position_ids(start, end, packed_seq_lens)
-                update_ring_attn_params(packed_seq_lens, total_seq_len)
+                sequences, attention_mask, position_ids = convert_ring_attn_params(
+                    sequences, attention_mask, packed_seq_lens, ring_attn_group
+                )
             else:
                 # reset the positions for packed samples
                 position_ids = reset_position_ids(attention_mask)

@@ -3,6 +3,7 @@ from typing import Optional
 import deepspeed
 import torch
 import torch.nn as nn
+from flash_attn.utils.distributed import all_gather
 from peft import LoraConfig, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
@@ -12,6 +13,7 @@ from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from openrlhf.utils.logging_utils import init_logger
 
 from .packing_utils import patch_for_block_diag_attn
+from .ring_attn_utils import convert_ring_attn_params
 from .utils import reset_position_ids
 
 logger = init_logger(__name__)
@@ -204,13 +206,20 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             input_ids: torch.LongTensor = None,
             attention_mask: Optional[torch.Tensor] = None,
             return_output=False,
+            ring_attn_group=None,
+            packed_seq_lens=None,
         ) -> torch.Tensor:
             if not self.packing_samples:
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
                 position_ids = attention_mask.long().cumsum(-1) - 1
             else:
-                # reset the positions for packed samples
-                position_ids = reset_position_ids(attention_mask)
+                if ring_attn_group is not None:
+                    input_ids, attention_mask, position_ids = convert_ring_attn_params(
+                        input_ids, attention_mask, packed_seq_lens, ring_attn_group
+                    )
+                else:
+                    # reset the positions for packed samples
+                    position_ids = reset_position_ids(attention_mask)
             position_ids.masked_fill_(attention_mask == 0, 1)
 
             outputs = getattr(self, self.base_model_prefix)(
@@ -220,7 +229,10 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
 
             if self.packing_samples:
-                reward = values
+                if ring_attn_group is not None:
+                    reward = all_gather(values, ring_attn_group).reshape(1, -1)
+                else:
+                    reward = values
             else:
                 eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
                 reward = values.gather(dim=1, index=eos_indices).squeeze(1)
