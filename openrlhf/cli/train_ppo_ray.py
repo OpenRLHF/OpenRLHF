@@ -228,6 +228,7 @@ if __name__ == "__main__":
     parser.add_argument("--disable_trace_cache", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
+    parser.add_argument("--use_linger_kernel", action="store_true", default=False)
 
     # LoRA
     parser.add_argument("--load_in_4bit", action="store_true", default=False)

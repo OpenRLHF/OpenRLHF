@@ -28,6 +28,7 @@ def train(args):
         target_modules=args.target_modules,
         lora_dropout=args.lora_dropout,
         ds_config=strategy.get_ds_train_config(is_actor=True),
+        use_linger_kernel=args.use_linger_kernel,
     )
 
     # load teacher model for inference
@@ -37,6 +38,7 @@ def train(args):
         bf16=args.bf16,
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=args.teacher_offload),
+        use_linger_kernel=args.use_linger_kernel,
     )
     if args.teacher_offload:
         teacher_model._offload = True
@@ -166,6 +168,7 @@ if __name__ == "__main__":
     parser.add_argument("--disable_trace_cache", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
+    parser.add_argument("--use_linger_kernel", action="store_true", default=False)
 
     # LoRA
     parser.add_argument("--load_in_4bit", action="store_true", default=False)

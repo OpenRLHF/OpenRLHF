@@ -12,7 +12,7 @@ from transformers.deepspeed import HfDeepSpeedConfig
 
 from .packing_utils import patch_for_block_diag_attn
 from .ring_attn_utils import reset_ring_attn_position_ids, update_ring_attn_params
-from .utils import log_probs_from_logits, reset_position_ids
+from .utils import log_probs_from_logits, patch_for_linger_kernel, reset_position_ids
 
 
 class Actor(nn.Module):
@@ -38,6 +38,7 @@ class Actor(nn.Module):
         ds_config=None,
         device_map=None,
         packing_samples=False,
+        use_linger_kernel=False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -106,11 +107,14 @@ class Actor(nn.Module):
             # Use `model.generate(use_cache=True)` instead.`
             self.model.config.use_cache = False
 
+            model_type = getattr(self.model.config, "model_type", None)
+            if use_linger_kernel:
+                patch_for_linger_kernel(model_type)
+
             # packing samples using Flash Attention 2
             self.packing_samples = packing_samples
             if packing_samples:
                 assert use_flash_attention_2, "Only support `--packing_samples` with Flash Attention 2."
-                model_type = getattr(self.model.config, "model_type", None)
                 patch_for_block_diag_attn(model_type)
         else:
             self.model = pretrain_or_model

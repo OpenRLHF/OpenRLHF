@@ -33,6 +33,7 @@ def train(args):
         init_value_head=True,
         value_head_prefix=args.value_head_prefix,
         packing_samples=args.packing_samples,
+        use_linger_kernel=args.use_linger_kernel,
     )
 
     # configure tokenizer
@@ -152,6 +153,7 @@ if __name__ == "__main__":
     parser.add_argument("--disable_trace_cache", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
+    parser.add_argument("--use_linger_kernel", action="store_true", default=False)
 
     # Models
     parser.add_argument("--pretrain", type=str, default=None)

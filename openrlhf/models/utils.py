@@ -91,3 +91,13 @@ def reset_position_ids(attention_mask):
             sample_length = sample_mask.sum().item()
             position_ids[i, sample_mask] = torch.arange(sample_length, device=mask.device)
     return position_ids
+
+
+# https://github.com/linkedin/Liger-Kernel
+def patch_for_linger_kernel(model_type: str) -> None:
+    print(f"patch_for_linger_kernel: {model_type}")
+
+    from liger_kernel import transformers as trans
+
+    apply_liger_kernel = getattr(trans, f"apply_liger_kernel_to_{model_type}")
+    apply_liger_kernel()

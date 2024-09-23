@@ -31,6 +31,7 @@ def train(args):
         target_modules=args.target_modules,
         ds_config=strategy.get_ds_train_config(is_actor=True),
         packing_samples=args.packing_samples,
+        use_linger_kernel=args.use_linger_kernel,
     )
 
     # configure tokenizer
@@ -45,6 +46,7 @@ def train(args):
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
         packing_samples=args.packing_samples,
+        use_linger_kernel=args.use_linger_kernel,
     )
     if args.ref_offload:
         ref_model._offload = True
@@ -184,6 +186,7 @@ if __name__ == "__main__":
     parser.add_argument("--grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
     parser.add_argument("--disable_trace_cache", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
+    parser.add_argument("--use_linger_kernel", action="store_true", default=False)
 
     # DPO
     parser.add_argument("--max_epochs", type=int, default=1)

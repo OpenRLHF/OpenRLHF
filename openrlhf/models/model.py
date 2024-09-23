@@ -12,7 +12,7 @@ from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from openrlhf.utils.logging_utils import init_logger
 
 from .packing_utils import patch_for_block_diag_attn
-from .utils import reset_position_ids
+from .utils import patch_for_linger_kernel, reset_position_ids
 
 logger = init_logger(__name__)
 
@@ -36,6 +36,7 @@ def get_llm_for_sequence_regression(
     value_head_prefix="value_head",
     device_map=None,
     packing_samples=False,
+    use_linger_kernel=False,
     **kwargs,
 ) -> nn.Module:
     """Get transformer with a sequence classification head on top (linear layer).
@@ -155,23 +156,27 @@ def get_llm_for_sequence_regression(
     # https://github.com/huggingface/transformers/issues/26877
     model.config.use_cache = False
 
+    model_type = getattr(self.model.config, "model_type", None)
+    if use_linger_kernel:
+        patch_for_linger_kernel(model_type)
+
     # packing samples using Flash Attention 2
     if packing_samples:
         assert use_flash_attention_2, "Only support `--packing_samples` with Flash Attention 2."
-        model_type = getattr(model.config, "model_type", None)
         patch_for_block_diag_attn(model_type)
 
     # NOTE: For reward model training only, intialize value_head manually
     # because deepspeed.zero.Init() will not intialize them.
     # TODO: Find a better way to clarify reward model training.
     if init_value_head:
+        value_head = getattr(model, "value_head_prefix")
         if dschf is not None:
             logger.info("initialize value_head for ZeRO-3 reward model training.")
-            with deepspeed.zero.GatheredParameters([model.value_head.weight], modifier_rank=0):
+            with deepspeed.zero.GatheredParameters([value_head.weight], modifier_rank=0):
                 if torch.distributed.get_rank() == 0:
-                    model.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
+                    value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
         else:
-            model.value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
+            value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
 
     return model
 

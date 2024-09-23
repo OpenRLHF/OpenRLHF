@@ -80,6 +80,7 @@ class CriticModelRayActor(BasePPORole):
             ds_config=strategy.get_ds_train_config(is_actor=False),
             value_head_prefix=strategy.args.value_head_prefix,
             init_value_head=strategy.args.pretrain == strategy.args.critic_pretrain,
+            use_linger_kernel=strategy.args.use_linger_kernel,
         )
         strategy.print(critic)
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
