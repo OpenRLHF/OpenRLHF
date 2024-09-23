@@ -8,6 +8,7 @@ from torch.optim import Optimizer
 from tqdm import tqdm
 
 from openrlhf.models import LogExpLoss, PairWiseLoss
+from openrlhf.models.ring_attn_utils import convert_ring_attn_params
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 
@@ -331,7 +332,13 @@ class RewardModelTrainer(ABC):
         return inputs_ids, att_masks
 
     def packed_samples_forward(self, model, packed_input_ids, packed_attention_masks, packed_seq_lens):
-        all_values, output = model(packed_input_ids, attention_mask=packed_attention_masks, return_output=True)
+        all_values, output = model(
+            packed_input_ids,
+            attention_mask=packed_attention_masks,
+            return_output=True,
+            ring_attn_group=self.strategy.ring_attn_group,
+            packed_seq_lens=packed_seq_lens,
+        )
         half_len = len(packed_seq_lens) // 2
         rewards = []
         index = 0
