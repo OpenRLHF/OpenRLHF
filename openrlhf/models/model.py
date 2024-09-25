@@ -1,7 +1,8 @@
-from typing import Optional
+from typing import Optional, Union
 
 import deepspeed
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 from flash_attn.utils.distributed import all_gather
 from peft import LoraConfig, get_peft_model
@@ -233,6 +234,10 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
                     reward = all_gather(values, ring_attn_group).reshape(1, -1)
                 else:
                     reward = values
+                # TODO: convert packed_seq_lens into torch tensor in advance
+                packed_seq_lens = torch.tensor(packed_seq_lens, device=values.device)
+                eos_indices = packed_seq_lens.cumsum(dim=0) - 1
+                reward = reward.squeeze(0).gather(dim=0, index=eos_indices)
             else:
                 eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
                 reward = values.gather(dim=1, index=eos_indices).squeeze(1)
@@ -271,9 +276,10 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
         def forward(
             self,
             input_ids: torch.LongTensor = None,
-            action_mask: Optional[torch.Tensor] = None,
+            num_actions: Optional[Union[int, list[int]]] = None,
             attention_mask: Optional[torch.Tensor] = None,
             return_output=False,
+            packed_seq_lens=None,
         ) -> torch.Tensor:
             if not self.packing_samples:
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
@@ -288,15 +294,30 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             )
             last_hidden_states = outputs["last_hidden_state"]
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)[:, :-1]
-            num_actions = action_mask.size(1)
 
             # normalize reward
             if self.normalize_reward:
                 values = (values - self.mean) / self.std
 
-            if return_output:
-                return outputs if num_actions is None else (values[:, -num_actions:], outputs)
+            if num_actions is not None:
+                assert return_output
+                return outputs
+
+            if not self.packing_samples:
+                action_values = values[:, -num_actions:]
             else:
-                return values[:, -num_actions:]
+                assert isinstance(num_actions, list) and len(num_actions) == len(packed_seq_lens)
+                action_values = []
+                offset = 0
+                for num_action, seq_len in zip(num_actions, packed_seq_lens):
+                    start, end = max(0, offset + seq_len - num_action - 1), offset + seq_len - 1
+                    action_values.append(values[:, start:end])
+                    offset += seq_len
+                action_values = torch.cat(action_values, dim=1)
+
+            if return_output:
+                return (action_values, outputs)
+            else:
+                return action_values
 
     return CriticModel

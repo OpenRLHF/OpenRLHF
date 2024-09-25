@@ -368,7 +368,7 @@ class PPOTrainer(ABC):
         # critic loss
         values, output = self.critic(
             experience.sequences,
-            action_mask=experience.action_mask,
+            num_actions=experience.action_mask.size(1),
             attention_mask=experience.attention_mask,
             return_output=True,
         )
