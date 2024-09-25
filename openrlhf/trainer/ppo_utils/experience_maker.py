@@ -132,7 +132,7 @@ class NaiveExperienceMaker(ABC):
         base_action_log_probs = self.initial_model(sequences, num_actions, attention_mask)
 
         # values
-        value = self.critic(sequences, action_mask, attention_mask)
+        value = self.critic(sequences, num_actions, attention_mask)
 
         # rewards
         if self.remote_rm_url is not None:
@@ -247,17 +247,16 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         generate_time = time.time() - start
 
         num_actions = action_mask.size(1)
-        sequences_cpu, attention_mask_cpu, action_mask_cpu = (
+        sequences_cpu, attention_mask_cpu = (
             sequences.to("cpu"),
             attention_mask.to("cpu"),
-            action_mask.to("cpu"),
         )
 
         # init log probs
         base_action_log_probs_ref = self.initial_model.forward.remote(sequences_cpu, num_actions, attention_mask_cpu)
 
         # values
-        value_ref = self.critic.forward.remote(sequences_cpu, action_mask_cpu, attention_mask_cpu)
+        value_ref = self.critic.forward.remote(sequences_cpu, num_actions, attention_mask_cpu)
 
         # avoid CUDA OOM when colocate models
         if self.strategy.args.colocate_critic_reward:
