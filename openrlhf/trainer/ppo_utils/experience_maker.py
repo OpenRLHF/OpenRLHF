@@ -290,7 +290,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             total_length = packed_seq_lens
         generate_time = time.time() - start
 
-        sequences_cpu, attention_mask_cpu = (
+        num_actions = action_mask.size(1)
+        sequences_cpu, attention_mask_cpu, action_mask_cpu = (
             sequences.to("cpu"),
             attention_mask.to("cpu"),
         )
@@ -301,9 +302,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         )
 
         # values
-        value_ref = self.critic.forward.remote(
-            sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens
-        )
+        value_ref = self.critic.forward.remote(sequences_cpu, action_mask_cpu, attention_mask_cpu)
 
         # avoid CUDA OOM when colocate models
         if self.strategy.args.colocate_critic_reward:
