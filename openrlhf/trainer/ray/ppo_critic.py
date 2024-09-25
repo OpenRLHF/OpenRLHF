@@ -1,6 +1,6 @@
 import math
 import os
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 import ray
 import torch
@@ -80,6 +80,7 @@ class CriticModelRayActor(BasePPORole):
             ds_config=strategy.get_ds_train_config(is_actor=False),
             value_head_prefix=strategy.args.value_head_prefix,
             init_value_head=strategy.args.pretrain == strategy.args.critic_pretrain,
+            packing_samples=strategy.args.packing_samples,
         )
         strategy.print(critic)
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
@@ -148,14 +149,17 @@ class CriticModelRayActor(BasePPORole):
     def forward(
         self,
         sequences: torch.LongTensor,
-        action_mask: Optional[torch.Tensor] = None,
+        num_actions: Optional[Union[int, list[int]]] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        packed_seq_lens=None,
     ) -> torch.Tensor:
         """Generates critic values."""
         device = torch.cuda.current_device()
         self.critic.eval()
         with torch.no_grad():
-            value = self.critic(sequences.to(device), action_mask.size(1), attention_mask.to(device))
+            value = self.critic(
+                sequences.to(device), num_actions, attention_mask.to(device), packed_seq_lens=packed_seq_lens
+            )
         self.critic.train()  # reset model state
         return value.to("cpu")
 

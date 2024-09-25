@@ -215,4 +215,8 @@ if __name__ == "__main__":
         print("[Warning] {} not in args.input_template, set to None")
         args.input_template = None
 
+    if args.packing_samples and not args.flash_attn:
+        print("[Warning] Please --flash_attn to accelerate when --packing_samples is enabled.")
+        args.flash_attn = True
+
     train(args)

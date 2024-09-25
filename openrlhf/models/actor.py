@@ -180,7 +180,7 @@ class Actor(nn.Module):
     def forward(
         self,
         sequences: torch.LongTensor,
-        num_actions: int = None,
+        num_actions: Optional[Union[int, list[int]]] = None,
         attention_mask: Optional[torch.Tensor] = None,
         return_output=False,
         ring_attn_group: Optional[dist.ProcessGroup] = None,
@@ -202,15 +202,28 @@ class Actor(nn.Module):
 
         output = self.model(sequences, attention_mask=attention_mask, position_ids=position_ids)
 
-        if return_output and num_actions is None:
+        if num_actions is None:
+            assert return_output
             return output
 
         log_probs = log_probs_from_logits(output["logits"][:, :-1, :], sequences[:, 1:])
 
-        if return_output:
-            return (log_probs[:, -num_actions:], output)
+        if not self.packing_samples:
+            action_log_probs = log_probs[:, -num_actions:]
         else:
-            return log_probs[:, -num_actions:]
+            assert isinstance(num_actions, list) and len(num_actions) == len(packed_seq_lens)
+            action_log_probs = []
+            offset = 0
+            for num_action, seq_len in zip(num_actions, packed_seq_lens):
+                start, end = max(0, offset + seq_len - num_action - 1), offset + seq_len - 1
+                action_log_probs.append(log_probs[:, start:end])
+                offset += seq_len
+            action_log_probs = torch.cat(action_log_probs, dim=1)
+
+        if return_output:
+            return (action_log_probs, output)
+        else:
+            return action_log_probs
 
     def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs={"use_reentrant": False}):
         self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)

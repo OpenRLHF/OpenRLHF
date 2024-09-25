@@ -299,7 +299,7 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             if self.normalize_reward:
                 values = (values - self.mean) / self.std
 
-            if num_actions is not None:
+            if num_actions is None:
                 assert return_output
                 return outputs
 

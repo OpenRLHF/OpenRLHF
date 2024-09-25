@@ -53,6 +53,7 @@ class ActorPPOTrainer(PPOTrainer):
             self.remote_rm_url,
             self.reward_fn,
             vllm_engines=self.vllm_engines,
+            packing_samples=self.strategy.args.packing_samples,
         )
 
         # Create torch group with deepspeed rank 0 and all vllm ranks
@@ -198,6 +199,7 @@ class ActorModelRayActor(BasePPORole):
             target_modules=strategy.args.target_modules,
             lora_dropout=strategy.args.lora_dropout,
             ds_config=strategy.get_ds_train_config(is_actor=True),
+            packing_samples=strategy.args.packing_samples,
         )
         strategy.print(actor)
 
@@ -213,6 +215,7 @@ class ActorModelRayActor(BasePPORole):
                 bf16=strategy.args.bf16,
                 load_in_4bit=strategy.args.load_in_4bit,
                 ds_config=strategy.get_ds_eval_config(offload=True),
+                packing_samples=strategy.args.packing_samples,
             )
         else:
             ema_model = None

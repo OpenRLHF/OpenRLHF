@@ -11,11 +11,23 @@ import torch.nn as nn
 from tqdm import tqdm
 
 from openrlhf.models.actor import Actor
-from openrlhf.models.utils import compute_reward, masked_mean
+from openrlhf.models.utils import compute_reward, masked_mean, unpacking_samples
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn, remote_rm_fn_ray
 
 logger = init_logger(__name__)
+
+
+def to(tensor: Union[torch.Tensor, list[torch.Tensor]], device):
+    if isinstance(tensor, list):
+        return [to(t, device) for t in tensor]
+    return tensor.to(device)
+
+
+def pin_memory(tensor: Union[torch.Tensor, list[torch.Tensor]]):
+    if isinstance(tensor, list):
+        return [pin_memory(t) for t in tensor]
+    return tensor.pin_memory()
 
 
 @dataclass
@@ -47,11 +59,11 @@ class Experience:
 
     @torch.no_grad()
     def to_device(self, device: torch.device) -> None:
-        self.sequences = self.sequences.to(device)
-        self.action_log_probs = self.action_log_probs.to(device)
-        self.values = self.values.to(device)
-        self.returns = self.returns.to(device)
-        self.advantages = self.advantages.to(device)
+        self.sequences = to(self.sequences, device)
+        self.action_log_probs = to(self.action_log_probs, device)
+        self.values = to(self.values, device)
+        self.returns = to(self.returns, device)
+        self.advantages = to(self.advantages, device)
         if self.attention_mask is not None:
             self.attention_mask = self.attention_mask.to(device)
         if self.action_mask is not None:
@@ -59,10 +71,10 @@ class Experience:
 
     def pin_memory(self):
         self.sequences = self.sequences.pin_memory()
-        self.action_log_probs = self.action_log_probs.pin_memory()
-        self.values = self.values.pin_memory()
-        self.returns = self.returns.pin_memory()
-        self.advantages = self.advantages.pin_memory()
+        self.action_log_probs = pin_memory(self.action_log_probs)
+        self.values = pin_memory(self.values)
+        self.returns = pin_memory(self.returns)
+        self.advantages = pin_memory(self.advantages)
         if self.attention_mask is not None:
             self.attention_mask = self.attention_mask.pin_memory()
         if self.action_mask is not None:
@@ -101,7 +113,15 @@ class NaiveExperienceMaker(ABC):
         self.reward_fn = reward_fn
 
     # tokenizer
-    def tokenize_fn(self, texts, max_length, device):
+    def tokenize_fn(self, texts, max_length, padding=True, device=None):
+        if not padding:
+            # when padding is False, return tokenized texts as list
+            return self.tokenizer(
+                texts,
+                add_special_tokens=False,
+                max_length=max_length,
+                truncation=True,
+            )
         batch = self.tokenizer(
             texts,
             return_tensors="pt",
@@ -209,13 +229,25 @@ class NaiveExperienceMaker(ABC):
         - advantages: Tensor of shape (batch_size, response_size)
         - returns: Tensor of shape (batch_size, response_size)
         """
+        if isinstance(values, list):
+            # packing samples
+            # TODO: this is slow...
+            advantages = []
+            returns = []
+            for v, r in zip(values, rewards):
+                adv, ret = self.get_advantages_and_returns(v.unsqueeze(0), r.unsqueeze(0), action_mask, gamma, lambd)
+                advantages.append(adv.squeeze(0))
+                returns.append(ret.squeeze(0))
+            return advantages, returns
+
         lastgaelam = 0
         advantages_reversed = []
         response_length = rewards.size(1)
 
         # Mask invalid responses
-        values = action_mask * values
-        rewards = action_mask * rewards
+        if action_mask is not None:
+            values = action_mask * values
+            rewards = action_mask * rewards
 
         for t in reversed(range(response_length)):
             nextvalues = values[:, t + 1] if t < response_length - 1 else 0.0
@@ -228,9 +260,10 @@ class NaiveExperienceMaker(ABC):
 
 
 class RemoteExperienceMaker(NaiveExperienceMaker):
-    def __init__(self, *args, vllm_engines: List = None, **kwargs):
+    def __init__(self, *args, vllm_engines: List = None, packing_samples=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.vllm_engines = vllm_engines
+        self.packing_samples = packing_samples
 
     @torch.no_grad()
     def make_experience(self, prompts: Union[str, List[str]], **generate_kwargs) -> Experience:
@@ -239,24 +272,38 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         # generate sequence
         start = time.time()
-        sequences, attention_mask, action_mask = (
-            self._generate_local(prompts, **generate_kwargs)
-            if self.vllm_engines is None
-            else self._generate_vllm(prompts, **generate_kwargs)
-        )
+        if not self.packing_samples:
+            sequences, attention_mask, action_mask = (
+                self._generate_local(prompts, **generate_kwargs)
+                if self.vllm_engines is None
+                else self._generate_vllm(prompts, **generate_kwargs)
+            )
+            num_actions = action_mask.size(1)
+            packed_seq_lens = None
+            response_length = action_mask.float().sum(dim=-1)
+            total_length = attention_mask.float().sum(dim=-1)
+        else:
+            assert self.vllm_engines is not None, "vllm_engines must be provided for packed samples"
+            sequences, attention_mask, packed_seq_lens, num_actions = self._generate_vllm(prompts, **generate_kwargs)
+            action_mask = None
+            response_length = num_actions
+            total_length = packed_seq_lens
         generate_time = time.time() - start
 
-        num_actions = action_mask.size(1)
         sequences_cpu, attention_mask_cpu = (
             sequences.to("cpu"),
             attention_mask.to("cpu"),
         )
 
         # init log probs
-        base_action_log_probs_ref = self.initial_model.forward.remote(sequences_cpu, num_actions, attention_mask_cpu)
+        base_action_log_probs_ref = self.initial_model.forward.remote(
+            sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens
+        )
 
         # values
-        value_ref = self.critic.forward.remote(sequences_cpu, num_actions, attention_mask_cpu)
+        value_ref = self.critic.forward.remote(
+            sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens
+        )
 
         # avoid CUDA OOM when colocate models
         if self.strategy.args.colocate_critic_reward:
@@ -272,7 +319,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # support remote RM API with ray
         if not self.remote_rm_url:
             for rm in self.reward_model:
-                r_refs.append(rm.forward.remote(sequences_cpu, attention_mask_cpu))
+                r_refs.append(rm.forward.remote(sequences_cpu, attention_mask_cpu, packed_seq_lens=packed_seq_lens))
         else:
             # remote RM
             for rm in self.remote_rm_url:
@@ -282,7 +329,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         # log probs
         start = time.time()
-        action_log_probs = self.actor(sequences, num_actions, attention_mask)
+        action_log_probs = self.actor(sequences, num_actions, attention_mask, packed_seq_lens=packed_seq_lens)
         actor_time = time.time() - start
 
         # wait initial/critic/reward model done
@@ -308,7 +355,25 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             action_log_probs,
             base_action_log_probs,
             action_mask=action_mask,
+            num_actions=num_actions,
         )
+
+        if not self.packing_samples:
+            kl = masked_mean(kl, action_mask, dim=-1)
+            return_sums = reward.sum(dim=-1)
+        else:
+            # convert tensor into list of tensors so that it's easier to manipulate
+            # within dataset.
+            sequences = unpacking_samples(sequences, packed_seq_lens)
+            attention_mask = None
+            action_log_probs = unpacking_samples(action_log_probs, num_actions)
+            value = unpacking_samples(value, num_actions)
+            reward = unpacking_samples(reward, num_actions)
+
+            kl = unpacking_samples(kl, num_actions)
+            kl = [each_kl.mean() for each_kl in kl]
+            return_sums = [each_reward.sum() for each_reward in reward]
+
         advantage, returns = self.get_advantages_and_returns(
             value,
             reward,
@@ -318,11 +383,11 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         )
 
         info = {
-            "kl": masked_mean(kl, action_mask, dim=-1),
+            "kl": kl,
             "reward": r,
-            "return": reward.sum(dim=-1),
-            "response_length": action_mask.float().sum(dim=-1),
-            "total_length": attention_mask.float().sum(dim=-1),
+            "return": return_sums,
+            "response_length": response_length,
+            "total_length": total_length,
         }
 
         if self.strategy.args.perf:
@@ -371,47 +436,67 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         )
 
         # TODO: can't pass `max_length` to vLLM's tokenizer for input truncation, remove this once it is supported.
-        input_ids = self.tokenize_fn(prompts, self.prompt_max_len, device="cpu")["input_ids"]
-        assert self.tokenizer.padding_side == "left", f"tokenizer padding_size should be left"
-        pad_indices = (input_ids != self.tokenizer.pad_token_id).to(dtype=torch.int).argmax(dim=-1)
-        prompt_token_ids = []
-        for i, pad_index in enumerate(pad_indices.numpy()):
-            prompt_token_ids.append(input_ids[i][pad_index:].tolist())
+        prompt_token_ids = self.tokenize_fn(prompts, self.prompt_max_len, padding=False)["input_ids"]
         outputs = ray.get(llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
 
-        # NOTE: concat all outputs to following format:
-        #
-        # | [PAD] [PAD] token token token | token token [EOS] [PAD] |
-        # | token token token token token | token token [EOS] [PAD] |
-        # | [PAD] [PAD] [PAD] token token | token token token [EOS] |
-        # |<---------- prompt ----------->|<-------- answer ------->|
-        max_input_len, max_output_len = 0, 0
-        for output in outputs:
-            max_input_len = max(max_input_len, len(output.prompt_token_ids))
-            max_output_len = max(max_output_len, len(output.outputs[0].token_ids))
+        if not self.packing_samples:
+            # NOTE: concat all outputs to following format:
+            #
+            # | [PAD] [PAD] token token token | token token [EOS] [PAD] |
+            # | token token token token token | token token [EOS] [PAD] |
+            # | [PAD] [PAD] [PAD] token token | token token token [EOS] |
+            # |<---------- prompt ----------->|<-------- answer ------->|
+            max_input_len, max_output_len = 0, 0
+            for output in outputs:
+                max_input_len = max(max_input_len, len(output.prompt_token_ids))
+                max_output_len = max(max_output_len, len(output.outputs[0].token_ids))
 
-        pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
-        sequences = []
-        for output in outputs:
-            # left padding input
-            input_len = len(output.prompt_token_ids)
-            input_ids = [pad_token_id] * (max_input_len - input_len) + list(output.prompt_token_ids)
+            pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
+            sequences = []
+            for output in outputs:
+                # left padding input
+                input_len = len(output.prompt_token_ids)
+                input_ids = [pad_token_id] * (max_input_len - input_len) + list(output.prompt_token_ids)
 
-            # right padding output
-            output_len = len(output.outputs[0].token_ids)
-            output_ids = list(output.outputs[0].token_ids) + [pad_token_id] * (max_output_len - output_len)
+                # right padding output
+                output_len = len(output.outputs[0].token_ids)
+                output_ids = list(output.outputs[0].token_ids) + [pad_token_id] * (max_output_len - output_len)
 
-            if output_ids[output_len - 1] != eos_token_id:
-                output_ids[min(output_len, len(output_ids) - 1)] = eos_token_id
+                if output_ids[output_len - 1] != eos_token_id:
+                    output_ids[min(output_len, len(output_ids) - 1)] = eos_token_id
 
-            # concat input and output
-            sequences.append(input_ids + output_ids)
+                # concat input and output
+                sequences.append(input_ids + output_ids)
 
-        sequences = torch.tensor(sequences)
-        sequences, attention_mask, action_mask = self.actor.process_sequences(
-            sequences, max_input_len, eos_token_id, pad_token_id
-        )
-        return sequences.to("cuda"), attention_mask.to("cuda"), action_mask.to("cuda")
+            sequences = torch.tensor(sequences)
+            sequences, attention_mask, action_mask = self.actor.process_sequences(
+                sequences, max_input_len, eos_token_id, pad_token_id
+            )
+            return sequences.to("cuda"), attention_mask.to("cuda"), action_mask.to("cuda")
+        else:
+            # NOTE: concat all outputs to following format:
+            #
+            # | token token token | token token [EOS] | token token token token token | token token [EOS] | token token | token token token [EOS] |
+            # |<---  prompt ----->|<---- answer ----->|<---------- prompt ----------->|<----- answer ---->|<- prompt -->|<-------- answer ------->|
+            pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
+            sequences = []
+            packed_seq_lens = []
+            attention_mask = []
+            num_actions = []
+            for i, output in enumerate(outputs):
+                input_len = len(output.prompt_token_ids)
+                output_len = len(output.outputs[0].token_ids)
+                packed_seq_lens.append(input_len + output_len)
+                sequences.extend(output.prompt_token_ids + list(output.outputs[0].token_ids))
+                attention_mask.extend([i + 1] * (input_len + output_len))
+
+                current_action_mask = [0] * (input_len - 1) + [1] * output_len + [0]
+                current_action_mask[0] = 1
+                num_actions.append(sum(current_action_mask))
+
+            sequences = torch.tensor(sequences, device="cuda").unsqueeze(0)
+            attention_mask = torch.tensor(attention_mask, device="cuda").unsqueeze(0)
+            return sequences, attention_mask, packed_seq_lens, num_actions
 
     def flush(self):
         "Ensure all experience has been send to critic"

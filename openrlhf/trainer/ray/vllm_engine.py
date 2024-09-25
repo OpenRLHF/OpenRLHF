@@ -79,6 +79,7 @@ def create_vllm_engines(
     pretrain: str,
     seed: int,
     enable_prefix_caching: bool,
+    enforce_eager: bool,
     max_model_len: int,
 ):
     vllm_engines = []
@@ -108,6 +109,7 @@ def create_vllm_engines(
                 dtype="bfloat16",
                 seed=seed + i,
                 enable_prefix_caching=enable_prefix_caching,
+                enforce_eager=enforce_eager,
                 max_model_len=max_model_len,
             )
         )
