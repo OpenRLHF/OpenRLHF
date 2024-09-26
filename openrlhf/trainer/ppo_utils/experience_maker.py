@@ -70,7 +70,7 @@ class Experience:
             self.action_mask = self.action_mask.to(device)
 
     def pin_memory(self):
-        self.sequences = self.sequences.pin_memory()
+        self.sequences = pin_memory(self.sequences)
         self.action_log_probs = pin_memory(self.action_log_probs)
         self.values = pin_memory(self.values)
         self.returns = pin_memory(self.returns)
@@ -286,12 +286,11 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             assert self.vllm_engines is not None, "vllm_engines must be provided for packed samples"
             sequences, attention_mask, packed_seq_lens, num_actions = self._generate_vllm(prompts, **generate_kwargs)
             action_mask = None
-            response_length = num_actions
-            total_length = packed_seq_lens
+            response_length = torch.tensor(num_actions, device=device, dtype=torch.float)
+            total_length = torch.tensor(packed_seq_lens, device=device, dtype=torch.float)
         generate_time = time.time() - start
 
-        num_actions = action_mask.size(1)
-        sequences_cpu, attention_mask_cpu, action_mask_cpu = (
+        sequences_cpu, attention_mask_cpu = (
             sequences.to("cpu"),
             attention_mask.to("cpu"),
         )
@@ -302,7 +301,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         )
 
         # values
-        value_ref = self.critic.forward.remote(sequences_cpu, action_mask_cpu, attention_mask_cpu)
+        value_ref = self.critic.forward.remote(
+            sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens
+        )
 
         # avoid CUDA OOM when colocate models
         if self.strategy.args.colocate_critic_reward:
@@ -370,8 +371,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             reward = unpacking_samples(reward, num_actions)
 
             kl = unpacking_samples(kl, num_actions)
-            kl = [each_kl.mean() for each_kl in kl]
-            return_sums = [each_reward.sum() for each_reward in reward]
+            kl = torch.tensor([each_kl.mean() for each_kl in kl], device=device)
+            return_sums = torch.tensor([each_reward.sum() for each_reward in reward], device=device)
 
         advantage, returns = self.get_advantages_and_returns(
             value,

@@ -65,11 +65,7 @@ def split_experience_batch(experience: Experience) -> List[BufferItem]:
     for i in range(batch_size):
         batch_kwargs[i]["info"] = {}
     for k, v in experience.info.items():
-        if isinstance(v, torch.Tensor):
-            vals = torch.unbind(v)
-        else:
-            assert isinstance(v, list), f"info[{k}] must be a list, but got {type(v)}, {v}"
-            vals = v
+        vals = torch.unbind(v)
         assert batch_size == len(vals)
         for i, vv in enumerate(vals):
             if isinstance(vv, torch.Tensor):
@@ -219,6 +215,23 @@ class NaiveReplayBuffer(ABC):
             action_masks.append(item.action_mask)
 
         items_vector = torch.cat(items).float().flatten()
+
+        if action_masks[0] is None:
+            # for DP
+            # mean
+            sum_and_count = torch.tensor([items_vector.sum(), items_vector.numel()], device=items_vector.device)
+            all_sum, all_count = strategy.all_reduce(sum_and_count, "sum")
+            mean = all_sum / all_count
+            # std
+            std = (items_vector - mean).pow(2).sum()
+            all_std = strategy.all_reduce(std, "sum")
+            rstd = (all_std / all_count).clamp(min=1e-8).rsqrt()
+
+            for i, item in enumerate(self):
+                setattr(item, attribute, (items[i] - mean) * rstd)
+
+            return
+
         action_masks_vector = torch.cat(action_masks).flatten()
 
         # for DP

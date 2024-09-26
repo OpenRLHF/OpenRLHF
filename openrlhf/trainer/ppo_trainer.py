@@ -398,18 +398,22 @@ class PPOTrainer(ABC):
             returns = torch.cat(experience.returns, dim=0).unsqueeze(0)
             num_actions = [v.numel() for v in experience.values]
             packed_seq_lens = [s.numel() for s in experience.sequences]
+            attention_mask = torch.cat(
+                [torch.full_like(s, i + 1) for i, s in enumerate(experience.sequences)], dim=0
+            ).unsqueeze(0)
         else:
             sequences = experience.sequences
             old_values = experience.values
             returns = experience.returns
             num_actions = experience.action_mask.size(1)
             packed_seq_lens = None
+            attention_mask = experience.attention_mask
 
         # critic loss
         values, output = self.critic(
             sequences,
             num_actions=num_actions,
-            attention_mask=experience.attention_mask,
+            attention_mask=attention_mask,
             return_output=True,
             packed_seq_lens=packed_seq_lens,
         )
