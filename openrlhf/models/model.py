@@ -13,7 +13,6 @@ from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
 from openrlhf.utils.logging_utils import init_logger
 
-from .packing_utils import patch_for_block_diag_attn
 from .ring_attn_utils import convert_ring_attn_params
 from .utils import reset_position_ids
 
@@ -157,12 +156,6 @@ def get_llm_for_sequence_regression(
 
     # https://github.com/huggingface/transformers/issues/26877
     model.config.use_cache = False
-
-    # packing samples using Flash Attention 2
-    if packing_samples:
-        assert use_flash_attention_2, "Only support `--packing_samples` with Flash Attention 2."
-        model_type = getattr(model.config, "model_type", None)
-        patch_for_block_diag_attn(model_type)
 
     # NOTE: For reward model training only, intialize value_head manually
     # because deepspeed.zero.Init() will not intialize them.

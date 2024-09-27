@@ -224,11 +224,6 @@ class RewardDataset(Dataset):
             rejected_seq_lens.append(len(reject_id.flatten()))
             index += 1
 
-        # Concatenate all tensors into a single row
-        # https://github.com/huggingface/transformers/blob/v4.42.4/src/transformers/models/llama/modeling_llama.py#L1028
-        rejected_ids.append(torch.tensor([self.tokenizer.pad_token_id]))
-        rejected_att_masks.append(torch.tensor([0]))
-
         packed_input_ids = torch.cat(chosen_ids + rejected_ids, dim=0).unsqueeze(0)
         packed_attention_masks = torch.cat(chosen_att_masks + rejected_att_masks, dim=0).unsqueeze(0)
         packed_seq_lens = chosen_seq_lens + rejected_seq_lens

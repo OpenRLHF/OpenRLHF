@@ -10,7 +10,6 @@ from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedModel
 from transformers.deepspeed import HfDeepSpeedConfig
 
-from .packing_utils import patch_for_block_diag_attn
 from .ring_attn_utils import convert_ring_attn_params
 from .utils import log_probs_from_logits, reset_position_ids
 
@@ -108,10 +107,6 @@ class Actor(nn.Module):
 
             # packing samples using Flash Attention 2
             self.packing_samples = packing_samples
-            if packing_samples:
-                assert use_flash_attention_2, "Only support `--packing_samples` with Flash Attention 2."
-                model_type = getattr(self.model.config, "model_type", None)
-                patch_for_block_diag_attn(model_type)
         else:
             self.model = pretrain_or_model
 
