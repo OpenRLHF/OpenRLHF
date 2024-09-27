@@ -217,26 +217,16 @@ class NaiveReplayBuffer(ABC):
         items_vector = torch.cat(items).float().flatten()
 
         if action_masks[0] is None:
-            # for DP
-            # mean
-            sum_and_count = torch.tensor([items_vector.sum(), items_vector.numel()], device=items_vector.device)
-            all_sum, all_count = strategy.all_reduce(sum_and_count, "sum")
-            mean = all_sum / all_count
-            # std
-            std = (items_vector - mean).pow(2).sum()
-            all_std = strategy.all_reduce(std, "sum")
-            rstd = (all_std / all_count).clamp(min=1e-8).rsqrt()
-
-            for i, item in enumerate(self):
-                setattr(item, attribute, (items[i] - mean) * rstd)
-
-            return
-
-        action_masks_vector = torch.cat(action_masks).flatten()
+            # packing samples has no action mask
+            action_masks_vector = 1
+            num_actions = items_vector.numel()
+        else:
+            action_masks_vector = torch.cat(action_masks).flatten()
+            num_actions = action_masks_vector.sum()
 
         # for DP
         # mean
-        sum_and_count = torch.tensor([items_vector.sum(), action_masks_vector.sum()], device=items_vector.device)
+        sum_and_count = torch.tensor([items_vector.sum(), num_actions], device=items_vector.device)
         all_sum, all_count = strategy.all_reduce(sum_and_count, "sum")
         mean = all_sum / all_count
         # std
