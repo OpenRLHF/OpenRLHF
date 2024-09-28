@@ -490,9 +490,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 sequences.extend(output.prompt_token_ids + list(output.outputs[0].token_ids))
                 attention_mask.extend([i + 1] * (input_len + output_len))
 
-                current_action_mask = [0] * (input_len - 1) + [1] * output_len + [0]
-                current_action_mask[0] = 1
-                num_actions.append(sum(current_action_mask))
+                # current_action_mask = [0] * (input_len - 1) + [1] * output_len + [0]
+                # num_actions.append(max(1, sum(current_action_mask)))
+                num_actions.append(max(1, output_len))
 
             sequences = torch.tensor(sequences, device="cuda").unsqueeze(0)
             attention_mask = torch.tensor(attention_mask, device="cuda").unsqueeze(0)
