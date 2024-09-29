@@ -142,6 +142,7 @@ def train(args):
             args.pretrain,
             args.seed,
             args.enable_prefix_caching,
+            args.enforce_eager,
             max_len,
         )
 
@@ -203,6 +204,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--vllm_sync_backend", type=str, default="nccl", help="DeepSpeed -> vLLM weight sync backend")
     parser.add_argument("--enable_prefix_caching", action="store_true", default=False)
+    parser.add_argument("--enforce_eager", action="store_true", default=False, help="Disable CUDA graph in vLLM")
 
     # Checkpoints
     parser.add_argument("--eval_steps", type=int, default=-1)
@@ -228,6 +230,9 @@ if __name__ == "__main__":
     parser.add_argument("--disable_trace_cache", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
+
+    # packing samples using Flash Attention2
+    parser.add_argument("--packing_samples", action="store_true", default=False)
 
     # LoRA
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
@@ -333,5 +338,13 @@ if __name__ == "__main__":
     if args.input_template and not "{}" in args.input_template:
         print("[Warning] {} not in args.input_template, set to None")
         args.input_template = None
+
+    if args.packing_samples:
+        if not args.flash_attn:
+            print("[Warning] Please --flash_attn to accelerate when --packing_samples is enabled.")
+            args.flash_attn = True
+        assert args.vllm_num_engines > 0, "Only support `--packing_samples` with vLLM."
+        assert not args.remote_rm_url, "Only support `--packing_samples` with local reward models."
+        assert not args.pretrain_data, "`--pretrain_data` is not supported with `--packing_samples` yet."
 
     train(args)

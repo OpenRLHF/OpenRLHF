@@ -22,7 +22,9 @@ def compute_approx_kl(
     """
 
     log_ratio = log_probs - log_probs_base
-    return log_ratio * action_mask
+    if action_mask is not None:
+        log_ratio = log_ratio * action_mask
+    return log_ratio
 
 
 def compute_reward(
@@ -31,6 +33,7 @@ def compute_reward(
     log_probs: torch.Tensor,
     log_probs_base: torch.Tensor,
     action_mask: Optional[torch.Tensor] = None,
+    num_actions: Optional[Union[int, list[int]]] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     if kl_coef <= 0.0:
         kl_coef = 0.0
@@ -40,17 +43,27 @@ def compute_reward(
 
     r = r.clamp(min=-10, max=10)
 
-    # The following code is equivalent to:
-    #
-    # last_reward = torch.zeros_like(kl)
-    # for i in range(last_reward.size(0)):
-    #     for t in reversed(range(last_reward.size(1))):
-    #         if action_mask[i][t] > 0.5:
-    #             last_reward[i][t] = r[i]
-    #             break
-    #
-    eos_indices = action_mask.size(1) - 1 - action_mask.long().fliplr().argmax(dim=1, keepdim=True)
-    last_reward = torch.zeros_like(kl).scatter_(dim=1, index=eos_indices, src=r.unsqueeze(1).to(kl.dtype))
+    if action_mask is not None:
+        # The following code is equivalent to:
+        #
+        # last_reward = torch.zeros_like(kl)
+        # for i in range(last_reward.size(0)):
+        #     for t in reversed(range(last_reward.size(1))):
+        #         if action_mask[i][t] > 0.5:
+        #             last_reward[i][t] = r[i]
+        #             break
+        #
+        eos_indices = action_mask.size(1) - 1 - action_mask.long().fliplr().argmax(dim=1, keepdim=True)
+        last_reward = torch.zeros_like(kl).scatter_(dim=1, index=eos_indices, src=r.unsqueeze(1).to(kl.dtype))
+    else:
+        # The following code is equivalent to:
+        #
+        # TODO: write a more efficient version with cumsum
+        last_reward = torch.zeros_like(kl)
+        offset = 0
+        for i, action_len in enumerate(num_actions):
+            last_reward[0, offset + action_len - 1] = r[i]
+            offset += action_len
 
     reward = last_reward + kl_reward
     return reward, kl
@@ -62,11 +75,10 @@ def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor) -> torch.T
     return log_probs_labels.squeeze(-1)
 
 
-def masked_mean(tensor: torch.Tensor, mask: torch.Tensor, dim: int = None) -> torch.Tensor:
-    if dim is not None:
-        return (tensor * mask).sum(axis=dim) / mask.sum(axis=dim)
-    else:
-        return (tensor * mask).sum() / mask.sum()
+def masked_mean(tensor: torch.Tensor, mask: Optional[torch.Tensor], dim: int = None) -> torch.Tensor:
+    if mask is None:
+        return tensor.mean(axis=dim)
+    return (tensor * mask).sum(axis=dim) / mask.sum(axis=dim)
 
 
 def masked_normalize(tensor: torch.Tensor, mask: torch.Tensor, dim: int = 1, eps: float = 1e-8) -> torch.Tensor:
@@ -91,3 +103,13 @@ def reset_position_ids(attention_mask):
             sample_length = sample_mask.sum().item()
             position_ids[i, sample_mask] = torch.arange(sample_length, device=mask.device)
     return position_ids
+
+
+def unpacking_samples(values: torch.Tensor, packed_seqlens: list[int]):
+    values = values.squeeze(0)
+    unpacked_values = []
+    offset = 0
+    for seqlen in packed_seqlens:
+        unpacked_values.append(values[offset : offset + seqlen])
+        offset += seqlen
+    return unpacked_values

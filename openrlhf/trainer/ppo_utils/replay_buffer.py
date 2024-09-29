@@ -38,7 +38,7 @@ class BufferItem:
 
 
 def split_experience_batch(experience: Experience) -> List[BufferItem]:
-    batch_size = experience.sequences.size(0)
+    batch_size = len(experience.sequences)
     batch_kwargs = [{} for _ in range(batch_size)]
     keys = (
         "sequences",
@@ -51,7 +51,13 @@ def split_experience_batch(experience: Experience) -> List[BufferItem]:
     )
     for key in keys:
         value = getattr(experience, key)
-        vals = torch.unbind(value)
+        if value is None:
+            for i in range(batch_size):
+                batch_kwargs[i][key] = None
+            continue
+        vals = value
+        if isinstance(vals, torch.Tensor):
+            vals = torch.unbind(vals)
         assert batch_size == len(vals)
         for i, v in enumerate(vals):
             batch_kwargs[i][key] = v
@@ -62,7 +68,10 @@ def split_experience_batch(experience: Experience) -> List[BufferItem]:
         vals = torch.unbind(v)
         assert batch_size == len(vals)
         for i, vv in enumerate(vals):
-            batch_kwargs[i]["info"][k] = vv.item()
+            if isinstance(vv, torch.Tensor):
+                assert vv.numel() == 1, f"info[{k}] must be a scalar tensor, but got {vv.shape}"
+                vv = vv.item()
+            batch_kwargs[i]["info"][k] = vv
 
     items = [BufferItem(**kwargs) for kwargs in batch_kwargs]
     return items
@@ -79,7 +88,7 @@ def zero_pad_sequences(sequences: List[torch.Tensor], side: str = "left") -> tor
     return torch.stack(padded_sequences, dim=0)
 
 
-def make_experience_batch(items: List[BufferItem]) -> Experience:
+def make_experience_batch(items: List[BufferItem], packing_samples=False) -> Experience:
     kwargs = {}
     keys = (
         "sequences",
@@ -92,7 +101,10 @@ def make_experience_batch(items: List[BufferItem]) -> Experience:
     )
     for key in keys:
         vals = [getattr(item, key) for item in items]
-        batch_data = zero_pad_sequences(vals, "left")
+        if not packing_samples:
+            batch_data = zero_pad_sequences(vals, "left")
+        else:
+            batch_data = vals if vals[0] is not None else None
         kwargs[key] = batch_data
 
     kwargs["info"] = {}
@@ -147,12 +159,15 @@ class NaiveReplayBuffer(ABC):
         cpu_offload (bool, optional): Whether to offload experience to cpu when sampling. Defaults to True.
     """
 
-    def __init__(self, sample_batch_size: int, limit: int = 0, cpu_offload: bool = True) -> None:
+    def __init__(
+        self, sample_batch_size: int, limit: int = 0, cpu_offload: bool = True, packing_samples: bool = False
+    ) -> None:
         super().__init__()
         self.sample_batch_size = sample_batch_size
         # limit <= 0 means unlimited
         self.limit = limit
         self.cpu_offload = cpu_offload
+        self.packing_samples = packing_samples
         self.target_device = torch.device(f"cuda:{torch.cuda.current_device()}")
         self.items: List[BufferItem] = []
 
@@ -161,7 +176,9 @@ class NaiveReplayBuffer(ABC):
         if self.cpu_offload:
             experience.to_device(torch.device("cpu"))
         items = split_experience_batch(experience)
-        items = remove_padding_in_sequences(items)
+        # the packed samples comes with no padding
+        if not self.packing_samples:
+            items = remove_padding_in_sequences(items)
         self.items.extend(items)
         if self.limit > 0:
             samples_to_remove = len(self.items) - self.limit
@@ -174,7 +191,7 @@ class NaiveReplayBuffer(ABC):
     @torch.no_grad()
     def sample(self) -> Experience:
         items = random.sample(self.items, self.sample_batch_size)
-        experience = make_experience_batch(items)
+        experience = make_experience_batch(items, self.packing_samples)
         if self.cpu_offload:
             experience.to_device(self.target_device)
         return experience
@@ -186,7 +203,7 @@ class NaiveReplayBuffer(ABC):
         return self.items[idx]
 
     def collate_fn(self, batch) -> Experience:
-        experience = make_experience_batch(batch)
+        experience = make_experience_batch(batch, self.packing_samples)
         return experience
 
     def normalize(self, attribute: str, strategy) -> None:
@@ -198,11 +215,18 @@ class NaiveReplayBuffer(ABC):
             action_masks.append(item.action_mask)
 
         items_vector = torch.cat(items).float().flatten()
-        action_masks_vector = torch.cat(action_masks).flatten()
+
+        if action_masks[0] is None:
+            # packing samples has no action mask
+            action_masks_vector = 1
+            num_actions = items_vector.numel()
+        else:
+            action_masks_vector = torch.cat(action_masks).flatten()
+            num_actions = action_masks_vector.sum()
 
         # for DP
         # mean
-        sum_and_count = torch.tensor([items_vector.sum(), action_masks_vector.sum()], device=items_vector.device)
+        sum_and_count = torch.tensor([items_vector.sum(), num_actions], device=items_vector.device)
         all_sum, all_count = strategy.all_reduce(sum_and_count, "sum")
         mean = all_sum / all_count
         # std

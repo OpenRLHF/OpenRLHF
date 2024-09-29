@@ -69,6 +69,7 @@ class ReferenceModelRayActor(BasePPORole):
             bf16=strategy.args.bf16,
             load_in_4bit=strategy.args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
+            packing_samples=strategy.args.packing_samples,
         )
         strategy.print(model)
 
@@ -84,10 +85,17 @@ class ReferenceModelRayActor(BasePPORole):
         num_actions: int = None,
         attention_mask: Optional[torch.Tensor] = None,
         return_output=False,
+        packed_seq_lens: Optional[list[int]] = None,
     ) -> torch.Tensor:
         device = torch.cuda.current_device()
         with torch.no_grad():
-            log_probs = self.model(sequences.to(device), num_actions, attention_mask.to(device), return_output)
+            log_probs = self.model(
+                sequences.to(device),
+                num_actions,
+                attention_mask.to(device),
+                return_output=return_output,
+                packed_seq_lens=packed_seq_lens,
+            )
         return log_probs.to("cpu")
 
     def empty_cache(self) -> None:
@@ -107,6 +115,7 @@ class RewardModelRayActor(BasePPORole):
             load_in_4bit=strategy.args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
             value_head_prefix=strategy.args.value_head_prefix,
+            packing_samples=strategy.args.packing_samples,
         )
         strategy.print(model)
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
@@ -118,10 +127,12 @@ class RewardModelRayActor(BasePPORole):
         self.model = self.strategy.prepare(model, is_rlhf=True)
         self.model.eval()
 
-    def forward(self, sequences: torch.LongTensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self, sequences: torch.LongTensor, attention_mask: Optional[torch.Tensor] = None, packed_seq_lens=None
+    ) -> torch.Tensor:
         device = torch.cuda.current_device()
         with torch.no_grad():
-            reward = self.model(sequences.to(device), attention_mask.to(device))
+            reward = self.model(sequences.to(device), attention_mask.to(device), packed_seq_lens=packed_seq_lens)
         return reward.to("cpu")
 
     def empty_cache(self) -> None:

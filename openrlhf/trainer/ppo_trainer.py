@@ -137,7 +137,10 @@ class PPOTrainer(ABC):
             remote_rm_url,
             reward_fn,
         )
-        self.replay_buffer = NaiveReplayBuffer(micro_train_batch_size, buffer_limit, buffer_cpu_offload)
+        packing_samples = getattr(self.args, "packing_samples", False)
+        self.replay_buffer = NaiveReplayBuffer(
+            micro_train_batch_size, buffer_limit, buffer_cpu_offload, packing_samples
+        )
 
         self._wandb = None
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():
@@ -202,8 +205,10 @@ class PPOTrainer(ABC):
                 experience = self.experience_maker.make_experience(rand_prompts, **self.generate_kwargs)
                 # print prompt/answer in each update step
                 if steps % update_timesteps == 0:
-                    output = self.tokenizer.batch_decode(experience.sequences, skip_special_tokens=True)
-                    self.strategy.print(output[0])
+                    output = self.tokenizer.batch_decode(
+                        experience.sequences[0].unsqueeze(0), skip_special_tokens=True
+                    )
+                    self.strategy.print(output)
                 self.replay_buffer.append(experience)
 
                 if steps % update_timesteps == 0:
@@ -300,17 +305,38 @@ class PPOTrainer(ABC):
     def training_step_actor(self, experience: Experience) -> Dict[str, float]:
         self.actor.train()
 
-        num_actions = experience.action_mask.size(1)
+        # TODO: this is a bad indicator to say that data is packed...
+        if isinstance(experience.sequences, list):
+            sequences = torch.cat(experience.sequences, dim=0).unsqueeze(0)
+            old_action_log_probs = torch.cat(experience.action_log_probs, dim=0).unsqueeze(0)
+            advantages = torch.cat(experience.advantages, dim=0).unsqueeze(0)
+            num_actions = [v.numel() for v in experience.values]
+            packed_seq_lens = [s.numel() for s in experience.sequences]
+            attention_mask = torch.cat(
+                [torch.full_like(s, i + 1) for i, s in enumerate(experience.sequences)], dim=0
+            ).unsqueeze(0)
+        else:
+            sequences = experience.sequences
+            old_action_log_probs = experience.action_log_probs
+            advantages = experience.advantages
+            num_actions = experience.action_mask.size(1)
+            packed_seq_lens = None
+            attention_mask = experience.attention_mask
+
         # actor loss
         action_log_probs, output = self.actor(
-            experience.sequences, num_actions, attention_mask=experience.attention_mask, return_output=True
+            sequences,
+            num_actions,
+            attention_mask=attention_mask,
+            return_output=True,
+            packed_seq_lens=packed_seq_lens,
         )
 
         # loss function
         actor_loss = self.actor_loss_fn(
             action_log_probs,
-            experience.action_log_probs,
-            experience.advantages,
+            old_action_log_probs,
+            advantages,
             action_mask=experience.action_mask,
         )
         # mixtral
@@ -365,18 +391,37 @@ class PPOTrainer(ABC):
     def training_step_critic(self, experience: Experience) -> Dict[str, float]:
         self.critic.train()
 
+        # TODO: this is a bad indicator to say that data is packed...
+        if isinstance(experience.sequences, list):
+            sequences = torch.cat(experience.sequences, dim=0).unsqueeze(0)
+            old_values = torch.cat(experience.values, dim=0).unsqueeze(0)
+            returns = torch.cat(experience.returns, dim=0).unsqueeze(0)
+            num_actions = [v.numel() for v in experience.values]
+            packed_seq_lens = [s.numel() for s in experience.sequences]
+            attention_mask = torch.cat(
+                [torch.full_like(s, i + 1) for i, s in enumerate(experience.sequences)], dim=0
+            ).unsqueeze(0)
+        else:
+            sequences = experience.sequences
+            old_values = experience.values
+            returns = experience.returns
+            num_actions = experience.action_mask.size(1)
+            packed_seq_lens = None
+            attention_mask = experience.attention_mask
+
         # critic loss
         values, output = self.critic(
-            experience.sequences,
-            num_actions=experience.action_mask.size(1),
-            attention_mask=experience.attention_mask,
+            sequences,
+            num_actions=num_actions,
+            attention_mask=attention_mask,
             return_output=True,
+            packed_seq_lens=packed_seq_lens,
         )
         # loss function
         critic_loss = self.critic_loss_fn(
             values,
-            experience.values,
-            experience.returns,
+            old_values,
+            returns,
             action_mask=experience.action_mask,
         )
         # mixtral
