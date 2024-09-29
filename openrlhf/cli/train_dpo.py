@@ -247,6 +247,9 @@ if __name__ == "__main__":
         default="exp_%s" % datetime.now().strftime("%m%dT%H:%M"),
     )
 
+    # TensorBoard parameter
+    parser.add_argument("--use_tensorboard", action="store_true", default=False, help="Enable TensorBoard logging")
+
     args = parser.parse_args()
 
     if args.ref_pretrain is None or args.ref_pretrain == "":

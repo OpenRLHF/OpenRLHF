@@ -1,5 +1,6 @@
 import math
 import os.path
+import os
 from abc import ABC
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -142,7 +143,9 @@ class PPOTrainer(ABC):
             micro_train_batch_size, buffer_limit, buffer_cpu_offload, packing_samples
         )
 
+        # wandb/tensorboard setting
         self._wandb = None
+        self._tensorboard = None
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():
             import wandb
 
@@ -162,6 +165,15 @@ class PPOTrainer(ABC):
             wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
             wandb.define_metric("eval/epoch")
             wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
+
+        # Initialize TensorBoard writer if wandb is not available
+        if self.strategy.args.use_tensorboard and self._wandb is None and self.strategy.is_rank_0():
+            from torch.utils.tensorboard import SummaryWriter
+
+            if not os.path.exists("logs/tensorboard"):
+                os.makedirs("logs/tensorboard")
+            log_dir = os.path.join("logs", "tensorboard", strategy.args.wandb_run_name)
+            self._tensorboard = SummaryWriter(log_dir=log_dir)
 
     def fit(
         self,
@@ -230,6 +242,11 @@ class PPOTrainer(ABC):
 
                 pbar.update()
                 steps = steps + 1
+
+        if self._wandb is not None and self.strategy.is_rank_0():
+            self._wandb.finish()
+        if self._tensorboard is not None and self.strategy.is_rank_0():
+            self._tensorboard.close()
 
     def ppo_train(self, global_steps=0):
         # replay buffer may be empty at first, we should rebuild at each training
@@ -453,6 +470,10 @@ class PPOTrainer(ABC):
                     }.items()
                 }
                 self._wandb.log(logs)
+            # TensorBoard
+            elif self._tensorboard is not None and self.strategy.is_rank_0():
+                for k, v in logs_dict.items():
+                    self._tensorboard.add_scalar(f"train/{k}", v, global_step)
 
         # TODO: Add evaluation mechanism for PPO
         if global_step % args.eval_steps == 0:

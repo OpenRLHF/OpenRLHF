@@ -1,5 +1,6 @@
 import math
 from abc import ABC
+import os
 
 import torch
 from torch import nn
@@ -28,18 +29,18 @@ class SFTTrainer(ABC):
     """
 
     def __init__(
-        self,
-        model,
-        strategy,
-        optim: Optimizer,
-        train_dataloader,
-        eval_dataloader,
-        scheduler,
-        max_norm: float = 1,
-        pretrain_mode: bool = False,
-        batch_size: int = 1,
-        max_epochs: int = 2,
-        tokenizer=None,
+            self,
+            model,
+            strategy,
+            optim: Optimizer,
+            train_dataloader,
+            eval_dataloader,
+            scheduler,
+            max_norm: float = 1,
+            pretrain_mode: bool = False,
+            batch_size: int = 1,
+            max_epochs: int = 2,
+            tokenizer=None,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -63,8 +64,9 @@ class SFTTrainer(ABC):
         # packing samples
         self.packing_samples = strategy.args.packing_samples
 
-        # wandb setting
+        # wandb/tensorboard setting
         self._wandb = None
+        self._tensorboard = None
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():
             import wandb
 
@@ -84,6 +86,15 @@ class SFTTrainer(ABC):
             wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
             wandb.define_metric("eval/global_step")
             wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
+
+        # Initialize TensorBoard writer if wandb is not available
+        if self.strategy.args.use_tensorboard and self._wandb is None and self.strategy.is_rank_0():
+            from torch.utils.tensorboard import SummaryWriter
+
+            if not os.path.exists("logs/tensorboard"):
+                os.makedirs("logs/tensorboard")
+            log_dir = os.path.join("logs", "tensorboard", strategy.args.wandb_run_name)
+            self._tensorboard = SummaryWriter(log_dir=log_dir)
 
     def fit(self, args, consumed_samples=0, num_update_steps_per_epoch=None):
         # get eval and save steps
@@ -143,7 +154,7 @@ class SFTTrainer(ABC):
                     if self.packing_samples:
                         index = 0
                         for input_length, source_len in zip(infos["input_length"], prompts_id_lens):
-                            labels[0][index : index + source_len] = self.loss_fn.IGNORE_INDEX
+                            labels[0][index: index + source_len] = self.loss_fn.IGNORE_INDEX
                             index += input_length
                     else:
                         for label, source_len in zip(labels, prompts_id_lens):
@@ -177,6 +188,11 @@ class SFTTrainer(ABC):
 
             epoch_bar.update()
 
+        if self._wandb is not None and self.strategy.is_rank_0():
+            self._wandb.finish()
+        if self._tensorboard is not None and self.strategy.is_rank_0():
+            self._tensorboard.close()
+
     # logs/checkpoints/evaluation
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         if global_step % args.logging_steps == 0:
@@ -184,6 +200,10 @@ class SFTTrainer(ABC):
             if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {"train/%s" % k: v for k, v in {**logs_dict, "global_step": global_step}.items()}
                 self._wandb.log(logs)
+            # TensorBoard
+            elif self._tensorboard is not None and self.strategy.is_rank_0():
+                for k, v in logs_dict.items():
+                    self._tensorboard.add_scalar(f"train/{k}", v, global_step)
 
         # eval
         if global_step % args.eval_steps == 0:
@@ -228,7 +248,7 @@ class SFTTrainer(ABC):
                     if self.packing_samples:
                         index = 0
                         for input_length, source_len in zip(infos["input_length"], prompts_id_lens):
-                            labels[0][index : index + source_len] = self.loss_fn.IGNORE_INDEX
+                            labels[0][index: index + source_len] = self.loss_fn.IGNORE_INDEX
                             index += input_length
                     else:
                         for label, source_len in zip(labels, prompts_id_lens):
@@ -243,7 +263,11 @@ class SFTTrainer(ABC):
                 logs = self.strategy.all_reduce(bar_dict)
                 step_bar.set_postfix(logs)
 
-            if self._wandb is not None and self.strategy.is_rank_0():
-                logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": steps}.items()}
-                self._wandb.log(logs)
+            if self.strategy.is_rank_0():
+                if self._wandb is not None:
+                    logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": steps}.items()}
+                    self._wandb.log(logs)
+                elif self._tensorboard is not None:
+                    for k, v in logs.items():
+                        self._tensorboard.add_scalar(f"eval/{k}", v, steps)
         self.model.train()  # reset model state

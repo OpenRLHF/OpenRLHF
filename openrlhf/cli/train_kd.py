@@ -213,5 +213,8 @@ if __name__ == "__main__":
         default="sft_%s" % datetime.now().strftime("%m%dT%H:%M"),
     )
 
+    # TensorBoard parameter
+    parser.add_argument("--use_tensorboard", action="store_true", default=False, help="Enable TensorBoard logging")
+
     args = parser.parse_args()
     train(args)

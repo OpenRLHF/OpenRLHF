@@ -17,4 +17,5 @@ tqdm
 transformers==4.44.2
 transformers_stream_generator
 wandb
+tensorboard
 wheel
