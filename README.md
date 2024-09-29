@@ -49,7 +49,7 @@ More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csof
 - Support [Iterative DPO](./examples/scripts/train_iterative_dpo_llama.sh) (https://github.com/RLHFlow/Online-RLHF).
 - Support [Conditional SFT](./examples/scripts/train_conditional_llama.sh) (https://arxiv.org/abs/2308.12050).
 - Support [Knowledge Distillation](./examples/scripts/train_knowledge_distillation.sh) (https://github.com/microsoft/LMOps/tree/main/minillm).
-- Support SFT/DPO/RM training samples packing (--packing_samples).
+- Support SFT/DPO/RM/PPO training samples packing (--packing_samples).
 - Support [RingAttention](./examples/scripts/train_dpo_ring_llama.sh) (--ring_attn_size, --ring_head_stride)
 - Support [MoE](./examples/test_scripts/train_sft_mixtral_lora.sh) (--aux_loss_coef)
 - Support FlashAttention2 (--flash_attn).
@@ -314,6 +314,9 @@ ray job submit --address="http://127.0.0.1:8265" \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
 
+# Support samples packing
+# --packing_samples (Recommended)
+
 # Support remote reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
 ```
@@ -334,9 +337,12 @@ We optimized DSChat's performance to the greatest extent possible by employing t
 | 34B | 32 | 3634.98 | 1526.4 | 2.4x |
 | 70B | 32 | 10407.0 | 4488.53 | 2.3x |
 
+> [!NOTE]
+> The data is outdated; please refer to the performance tuning section for re-testing.
+
 ### Performance Tuning Guide
 
-To achieve optimal performance, we recommend allocating more nodes to the vLLM Engine. For example, for a 70B model with 32 A100 GPUs, it is advised to allocate more than 16 A100 GPUs to the vLLM Engine, 8 GPUs to the Actor model, and the remaining 8 GPUs to the Critic model. Additionally, enable the `--colocate_critic_reward`, `--colocate_actor_ref`, and `--ref_reward_offload` options to merge nodes. Finally, you should increase the `rollout_micro_batch_size` (and minimize the TP size of vLLM engine) as much as possible, and avoid `Reward/Reference` models forward OOM (Out Of Memory) issues. During the training phase, a larger `--micro_train_batch_size` is better. Enable `enable_prefix_caching` in vLLM generation when `n_samples_per_prompt > 1`.
+To achieve optimal performance, we recommend allocating more nodes to the vLLM Engine. For example, for a 70B model with 32 A100 GPUs, it is advised to allocate more than 16 A100 GPUs to the vLLM Engine, 8 GPUs to the Actor model, and the remaining 8 GPUs to the Critic model. Additionally, enable the `--colocate_critic_reward`, `--colocate_actor_ref`, or `--ref_reward_offload` options to merge nodes. Finally, you should increase the `rollout_micro_batch_size` (and minimize the TP size of vLLM engine) as much as possible, and avoid `Reward/Reference` models forward OOM (Out Of Memory) issues using `--packing_samples`. During the training phase, a larger `--micro_train_batch_size` is better. Enable `enable_prefix_caching` in vLLM generation when `n_samples_per_prompt > 1`.
 
 ## Companies and Organizations using OpenRLHF
 

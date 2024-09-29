@@ -52,7 +52,7 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 - 支持 [Iterative DPO](./examples/scripts/train_iterative_dpo_llama.sh) (https://github.com/RLHFlow/Online-RLHF).
 - 支持 [条件 SFT](./examples/scripts/train_conditional_llama.sh) (https://arxiv.org/abs/2308.12050).
 - 支持 [知识蒸馏](./examples/scripts/train_knowledge_distillation.sh) (https://github.com/microsoft/LMOps/tree/main/minillm).
-- 支持 SFT/DPO/RM 训练样本打包 (--packing_samples).
+- 支持 SFT/DPO/RM/PPO 训练样本打包 (--packing_samples).
 - 支持 [RingAttention](./examples/scripts/train_dpo_ring_llama.sh) (--ring_attn_size, --ring_head_stride)
 - 支持 [MoE](./examples/test_scripts/train_sft_mixtral_lora.sh) (--aux_loss_coef)
 - 支持 FlashAttention2 (--flash_attn).
@@ -321,6 +321,9 @@ ray job submit --address="http://127.0.0.1:8265" \
   --load_checkpoint \
   --use_wandb {wandb_token}
 
+# 支持样本 packing (推荐使用)
+# --packing_samples
+
 # 支持远程 reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
 ```
@@ -342,8 +345,12 @@ ray job submit --address="http://127.0.0.1:8265" \
 | 34B | 32 | 3634.98 | 1526.4 | 2.4x |
 | 70B | 32 | 10407.0 | 4488.53 | 2.3x |
 
+
+> [!NOTE]
+> 数据已经过时; 请参考后面的调优指南重新测试
+
 ## 调优指南
-为了获得最佳的性能，我们建议您分配更多的节点给 vLLM Engine。例如，对于 70B 模型以及 32 张 A100，建议分配 16 张以上 A100 给 vLLM Engine，8 张给 Actor 模型，以及最后 8 张给 Critic 模型，同时开启 `--colocate_critic_reward`, `--colocate_actor_ref` 和 `--ref_reward_offload` 选项合并部分节点。最后您应该尽可能增大 `--rollout_micro_batch_size` ，以及减小 vLLM 的 TP 切分数量，同时避免 Reward/Reference 模型 forward 时内存不足。训练阶段的 `micro_train_batch_size` 也是越大越好。为 vLLM 开启 `enable_prefix_caching` 当 `n_samples_per_prompt > 1`.
+为了获得最佳的性能，我们建议您分配更多的节点给 vLLM Engine。例如，对于 70B 模型以及 32 张 A100，建议分配 16 张以上 A100 给 vLLM Engine，8 张给 Actor 模型，以及最后 8 张给 Critic 模型，同时开启 `--colocate_critic_reward`, `--colocate_actor_ref` 和 `--ref_reward_offload` 选项合并部分节点。最后您应该尽可能增大 `--rollout_micro_batch_size` ，以及减小 vLLM 的 TP 切分数量，同时使用 `--packing_samples` 避免 Reward/Reference 模型 forward 时内存不足。训练阶段的 `micro_train_batch_size` 也是越大越好。为 vLLM 开启 `enable_prefix_caching` 当 `n_samples_per_prompt > 1`.
 
 ## 使用 OpenRLHF 的公司和组织
 

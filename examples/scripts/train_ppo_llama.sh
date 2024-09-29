@@ -30,6 +30,8 @@ openrlhf.cli.train_ppo \
    --load_checkpoint \
    --gradient_checkpointing
 EOF
+
+    # --packing_samples
     # --use_wandb [WANDB_TOKENS] or True (use wandb login command)
     # --remote_rm_url http://localhost:5000/get_reward
 
