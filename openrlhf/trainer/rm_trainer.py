@@ -1,4 +1,5 @@
 import math
+import os
 from abc import ABC
 
 import loralib as lora
@@ -68,7 +69,9 @@ class RewardModelTrainer(ABC):
         self.margin_loss = self.strategy.args.margin_loss
         self.compute_fp32_loss = self.strategy.args.compute_fp32_loss
 
+        # wandb/tensorboard setting
         self._wandb = None
+        self._tensorboard = None
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():
             import wandb
 
@@ -88,6 +91,14 @@ class RewardModelTrainer(ABC):
             wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
             wandb.define_metric("eval/global_step")
             wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
+
+        # Initialize TensorBoard writer if wandb is not available
+        if self.strategy.args.use_tensorboard and self._wandb is None and self.strategy.is_rank_0():
+            from torch.utils.tensorboard import SummaryWriter
+
+            os.makedirs(self.strategy.args.use_tensorboard, exist_ok=True)
+            log_dir = os.path.join(self.strategy.args.use_tensorboard, strategy.args.wandb_run_name)
+            self._tensorboard = SummaryWriter(log_dir=log_dir)
 
     def fit(self, args, consumed_samples=0, num_update_steps_per_epoch=None):
         # get eval and save steps
@@ -190,6 +201,8 @@ class RewardModelTrainer(ABC):
 
         if self._wandb is not None and self.strategy.is_rank_0():
             self._wandb.finish()
+        if self._tensorboard is not None and self.strategy.is_rank_0():
+            self._tensorboard.close()
 
     # logs/checkpoints/evaluate
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
@@ -198,6 +211,10 @@ class RewardModelTrainer(ABC):
             if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {"train/%s" % k: v for k, v in {**logs_dict, "global_step": global_step}.items()}
                 self._wandb.log(logs)
+            # TensorBoard
+            elif self._tensorboard is not None and self.strategy.is_rank_0():
+                for k, v in logs_dict.items():
+                    self._tensorboard.add_scalar(f"train/{k}", v, global_step)
 
         # eval
         if global_step % args.eval_steps == 0:
@@ -281,9 +298,13 @@ class RewardModelTrainer(ABC):
             self.strategy.print("histgram")
             self.strategy.print(histgram)
 
-            if self._wandb is not None and self.strategy.is_rank_0():
-                logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": steps}.items()}
-                self._wandb.log(logs)
+            if self.strategy.is_rank_0():
+                if self._wandb is not None:
+                    logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": steps}.items()}
+                    self._wandb.log(logs)
+                elif self._tensorboard is not None:
+                    for k, v in logs.items():
+                        self._tensorboard.add_scalar(f"eval/{k}", v, steps)
         self.model.train()  # reset model state
 
     def concatenated_forward(self, model, chosen_ids, c_mask, reject_ids, r_mask):
