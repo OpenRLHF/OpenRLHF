@@ -205,8 +205,8 @@ if __name__ == "__main__":
         default="rm_%s" % datetime.now().strftime("%m%dT%H:%M"),
     )
 
-    # TensorBoard parameter
-    parser.add_argument("--use_tensorboard", action="store_true", default=False, help="Enable TensorBoard logging")
+    # TensorBoard parameters
+    parser.add_argument("--use_tensorboard", type=str, default=None, help="TensorBoard logging path")
 
     args = parser.parse_args()
 

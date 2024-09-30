@@ -96,9 +96,8 @@ class DPOTrainer(ABC):
         if self.strategy.args.use_tensorboard and self._wandb is None and self.strategy.is_rank_0():
             from torch.utils.tensorboard import SummaryWriter
 
-            if not os.path.exists("logs/tensorboard"):
-                os.makedirs("logs/tensorboard")
-            log_dir = os.path.join("logs", "tensorboard", strategy.args.wandb_run_name)
+            os.makedirs(self.strategy.args.use_tensorboard, exist_ok=True)
+            log_dir = os.path.join(self.strategy.args.use_tensorboard, strategy.args.wandb_run_name)
             self._tensorboard = SummaryWriter(log_dir=log_dir)
 
     def fit(self, args, consumed_samples=0, num_update_steps_per_epoch=None):
