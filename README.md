@@ -55,7 +55,7 @@ More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csof
 - Support FlashAttention2 (--flash_attn).
 - Support QLoRA (--load_in_4bit), [LoRA (--lora_rank, --target_modules)](./examples/scripts/train_sft_mixtral_lora.sh).
 - Support HuggingFace `tokenizer.apply_chat_template` in datasets (--apply_chat_template and --input_key).
-- Support Wandb log (--wandb) and tensorboard (--use_tensorboard).
+- Support Wandb log (--use_wandb) and tensorboard (--use_tensorboard).
 - Support for recovering from checkpoint (--load_checkpoint and --save_steps).
 - Multi-nodes [training scripts](./examples/scripts/train_llama_slurm.sh) for Slurm.
 
