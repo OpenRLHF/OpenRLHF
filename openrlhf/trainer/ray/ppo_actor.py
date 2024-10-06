@@ -231,7 +231,7 @@ class ActorModelRayActor(BasePPORole):
         # configure scheduler
         self.num_update_steps_per_episodes = len(self.prompts_dataset) // args.train_batch_size * args.max_epochs
         max_steps = math.ceil(args.num_episodes * self.num_update_steps_per_episodes)
-        self.max_steps = max_steps
+        self._max_steps = max_steps
 
         actor_scheduler = get_scheduler(
             "cosine_with_min_lr",
@@ -321,7 +321,7 @@ class ActorModelRayActor(BasePPORole):
 
     def max_steps(self):
         """Return the maximum number of steps."""
-        return self.max_steps
+        return self._max_steps
 
     def fit(
         self,
