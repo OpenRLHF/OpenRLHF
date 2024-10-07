@@ -27,7 +27,7 @@ class GPTLMLoss(nn.Module):
 
 class PolicyLoss(nn.Module):
     """
-    Policy Loss for PPO
+    Policy Loss for PPO and GRPO
     """
 
     def __init__(self, clip_eps: float = 0.2) -> None:
@@ -39,15 +39,17 @@ class PolicyLoss(nn.Module):
         log_probs: torch.Tensor,
         old_log_probs: torch.Tensor,
         advantages: torch.Tensor,
+        kl_penalty: Optional[torch.Tensor] = None,
         action_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         ratio = (log_probs - old_log_probs).exp()
         surr1 = ratio * advantages
         surr2 = ratio.clamp(1 - self.clip_eps, 1 + self.clip_eps) * advantages
         loss = -torch.min(surr1, surr2)
+        if kl_penalty is not None:
+            loss += kl_penalty
         loss = masked_mean(loss, action_mask, dim=-1).mean()
         return loss
-
 
 class ValueLoss(nn.Module):
     """

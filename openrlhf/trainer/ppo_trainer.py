@@ -13,11 +13,11 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
-from openrlhf.models.utils import masked_mean
+from openrlhf.models.utils import masked_mean, compute_approx_kl
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 from .ppo_utils import AdaptiveKLController, Experience, FixedKLController, NaiveExperienceMaker, NaiveReplayBuffer
-
+from .grpo_utils import GRPOExperience, GRPOExperienceMaker, GRPOReplayBuffer
 
 class PPOTrainer(ABC):
     """
@@ -59,6 +59,8 @@ class PPOTrainer(ABC):
         critic_optim: Optimizer,
         actor_scheduler,
         critic_scheduler,
+        use_grpo: bool = False,
+        n_responses: int = 4,
         ema_beta: float = 0.992,
         init_kl_coef: float = 0.001,
         kl_target: float = None,
@@ -112,6 +114,10 @@ class PPOTrainer(ABC):
         self.actor_scheduler = actor_scheduler
         self.critic_scheduler = critic_scheduler
 
+        # GRPO parameters
+        self.use_grpo = use_grpo
+        self.n_responses = n_responses
+
         self.actor_loss_fn = PolicyLoss(eps_clip)
         self.critic_loss_fn = ValueLoss(value_clip)
         self.ptx_loss_fn = GPTLMLoss()
@@ -126,22 +132,39 @@ class PPOTrainer(ABC):
         else:
             self.kl_ctl = FixedKLController(init_kl_coef)
 
-        self.experience_maker = NaiveExperienceMaker(
-            actor,
-            critic,
-            reward_model,
-            initial_model,
-            tokenizer,
-            prompt_max_len,
-            self.kl_ctl,
-            strategy,
-            remote_rm_url,
-            reward_fn,
-        )
+        if not use_grpo:
+            self.experience_maker = NaiveExperienceMaker(
+                actor,
+                critic,
+                reward_model,
+                initial_model,
+                tokenizer,
+                prompt_max_len,
+                self.kl_ctl,
+                strategy,
+                remote_rm_url,
+                reward_fn,
+            )
+        else:
+            self.experience_maker = GRPOExperienceMaker(
+                actor,
+                reward_model,
+                initial_model,
+                tokenizer,
+                prompt_max_len,
+                n_responses,
+                strategy,
+                remote_rm_url,
+                reward_fn,
+            )
         packing_samples = getattr(self.args, "packing_samples", False)
-        self.replay_buffer = NaiveReplayBuffer(
-            micro_train_batch_size, buffer_limit, buffer_cpu_offload, packing_samples
-        )
+        if not use_grpo:
+            self.replay_buffer = NaiveReplayBuffer(
+                micro_train_batch_size, buffer_limit, buffer_cpu_offload, packing_samples
+            )
+        else:
+            self.replay_buffer = GRPOReplayBuffer(
+                micro_train_batch_size, n_responses, buffer_limit, buffer_cpu_offload)
 
         # wandb/tensorboard setting
         self._wandb = None
@@ -226,8 +249,11 @@ class PPOTrainer(ABC):
                     global_steps = steps // update_timesteps
 
                     torch.cuda.empty_cache()
-                    self.replay_buffer.normalize("advantages", self.strategy)
-                    status = self.ppo_train(global_steps)
+                    if not self.use_grpo:
+                        self.replay_buffer.normalize("advantages", self.strategy)
+                        status = self.ppo_train(global_steps)
+                    else:
+                        status = self.grpo_train()
                     self.replay_buffer.clear()
                     torch.cuda.empty_cache()
 
@@ -298,6 +324,61 @@ class PPOTrainer(ABC):
 
                 if "ptx_loss" in status:
                     short_status["ptx"] = status["ptx_loss"]
+
+                status_list.append(status)
+                pbar.set_postfix(short_status)
+
+        if status_list:
+            status_mean = status_list[0]
+            for m in status_list[1:]:
+                for k, v in m.items():
+                    status_mean[k] += v
+            for k in status_mean.keys():
+                status_mean[k] /= len(status_list)
+        return status_mean
+
+    def grpo_train(self):
+        # replay buffer may be empty at first, we should rebuild at each training
+        dataloader = DataLoader(
+            self.replay_buffer,
+            batch_size=self.replay_buffer.sample_batch_size,
+            shuffle=True,
+            drop_last=True,
+            pin_memory=self.dataloader_pin_memory,
+            collate_fn=self.replay_buffer.collate_fn,
+        )
+        device = torch.cuda.current_device()
+
+        status_list = []
+        status_mean = {}
+        for epoch in range(self.max_epochs):
+            pbar = tqdm(
+                dataloader,
+                desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
+                disable=not self.strategy.is_rank_0(),
+            )
+            for experience in pbar:
+                experience.to_device(device)
+                status = self.training_step_grpo(experience)
+
+                # for DP
+                # weighted mean for kl
+                if "kl" in status:
+                    status["kl"] *= status["response_length"]
+                    status = self.strategy.all_reduce(status)
+                    status["kl"] /= status["response_length"]
+
+                short_status = {}
+
+                if "policy_loss" in status:
+                    short_status = {
+                        "pg": status["policy_loss"],
+                        "rm": status["reward"],
+                        "glen": status["response_length"],
+                        "tlen": status["total_length"],
+                        "kl": status["kl"],
+                        "act_lr": status["actor_lr"],
+                    }
 
                 status_list.append(status)
                 pbar.set_postfix(short_status)
@@ -455,6 +536,48 @@ class PPOTrainer(ABC):
             "values": masked_mean(values, experience.action_mask).item(),
             "critic_lr": self.critic_scheduler.get_last_lr()[0],
         }
+        return status
+
+    def training_step_grpo(self, experience: GRPOExperience) -> Dict[str, float]:
+        self.actor.train()
+
+        num_actions = experience.action_mask.size(1)
+        # actor loss
+        action_log_probs, output = self.actor(
+            experience.sequences, num_actions, attention_mask=experience.attention_mask, return_output=True
+        )
+        # loss function
+        kl = compute_approx_kl(action_log_probs,
+                               experience.base_action_log_probs,
+                               action_mask=experience.action_mask)
+        kl_penalty = -self.kl_ctl.value * kl
+        actor_loss = self.actor_loss_fn(
+            action_log_probs,
+            experience.action_log_probs,
+            experience.advantages,
+            kl_penalty = kl_penalty,
+            action_mask=experience.action_mask,
+        )
+        kl = masked_mean(kl, experience.action_mask, dim=-1)
+        # mixtral
+        if self.aux_loss:
+            aux_loss = output.aux_loss
+        else:
+            aux_loss = 0
+        loss = actor_loss + aux_loss * self.args.aux_loss_coef
+        self.strategy.backward(loss, self.actor, self.actor_optim)
+
+        self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
+        if self.ema_model:
+            self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cpu")
+
+        # status
+        status = {"policy_loss": actor_loss.item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}
+        status["kl"] = (
+                (kl * experience.info["response_length"]).sum() / experience.info["response_length"].sum()
+        ).item()
+        for k, v in experience.info.items():
+            status[k] = v.mean().item()
         return status
 
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
