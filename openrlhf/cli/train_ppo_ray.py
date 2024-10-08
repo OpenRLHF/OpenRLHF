@@ -132,6 +132,8 @@ def train(args):
         for reward_model, reward_pretrain in zip(reward_models, reward_pretrains):
             refs.extend(reward_model.async_init_model_from_pretrained(strategy, reward_pretrain))
 
+    ray.get(refs)
+
     # init vLLM engine for text generation
     vllm_engines = None
     if args.vllm_num_engines is not None and args.vllm_num_engines > 0:
