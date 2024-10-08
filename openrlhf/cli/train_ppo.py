@@ -19,6 +19,13 @@ def train(args):
     strategy = get_strategy(args)
     strategy.setup_distributed()
 
+    if args.use_grpo:
+        assert args.micro_train_batch_size % args.n_responses == 0, \
+            "For grpo, micro train batch size must be multiple of n generated responses"
+
+        assert args.micro_rollout_batch_size % args.n_responses == 0, \
+            "For grpo, micro roll out batch size must be multiple of n generated responses"
+
     # configure model
     # load huggingface model
     actor = Actor(
@@ -36,21 +43,24 @@ def train(args):
     if args.actor_init_on_gpu:
         actor = actor.to(torch.cuda.current_device())
 
-    critic = get_llm_for_sequence_regression(
-        args.critic_pretrain,
-        "critic",
-        normalize_reward=args.normalize_reward,
-        use_flash_attention_2=args.flash_attn,
-        bf16=args.bf16,
-        load_in_4bit=args.load_in_4bit,
-        lora_rank=args.lora_rank,
-        lora_alpha=args.lora_alpha,
-        target_modules=args.target_modules,
-        lora_dropout=args.lora_dropout,
-        ds_config=strategy.get_ds_train_config(is_actor=False),
-        value_head_prefix=args.value_head_prefix,
-        init_value_head=strategy.args.pretrain == strategy.args.critic_pretrain,
-    )
+    if not args.use_grpo:
+        critic = get_llm_for_sequence_regression(
+            args.critic_pretrain,
+            "critic",
+            normalize_reward=args.normalize_reward,
+            use_flash_attention_2=args.flash_attn,
+            bf16=args.bf16,
+            load_in_4bit=args.load_in_4bit,
+            lora_rank=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+            target_modules=args.target_modules,
+            lora_dropout=args.lora_dropout,
+            ds_config=strategy.get_ds_train_config(is_actor=False),
+            value_head_prefix=args.value_head_prefix,
+            init_value_head=strategy.args.pretrain == strategy.args.critic_pretrain,
+        )
+    else:
+        critic = None
 
     if not args.remote_rm_url:
         reward_model = get_llm_for_sequence_regression(
@@ -68,14 +78,17 @@ def train(args):
         reward_model = None
 
     strategy.print("reward normalization status: {}".format(args.normalize_reward))
-    strategy.print("mean: {}, std {}".format(critic.mean, critic.std))
+    if not args.use_grpo:
+        strategy.print("mean: {}, std {}".format(critic.mean, critic.std))
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, actor.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
-    get_tokenizer(args.critic_pretrain, critic, "left", strategy, use_fast=not args.disable_fast_tokenizer)
+    if not args.use_grpo:
+        get_tokenizer(args.critic_pretrain, critic, "left", strategy, use_fast=not args.disable_fast_tokenizer)
 
     strategy.print(actor)
-    strategy.print(critic)
+    if not args.use_grpo:
+        strategy.print(critic)
 
     # load weights for reference actor
     initial_model = Actor(
@@ -103,17 +116,21 @@ def train(args):
         actor.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
         )
-        critic.gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
-        )
+        if not args.use_grpo:
+            critic.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
+            )
 
     # configure optimizer
     actor_optim = strategy.create_optimizer(
         actor, lr=args.actor_learning_rate, betas=args.adam_betas, weight_decay=args.l2
     )
-    critic_optim = strategy.create_optimizer(
-        critic, lr=args.critic_learning_rate, betas=args.adam_betas, weight_decay=args.l2
-    )
+    if not args.use_grpo:
+        critic_optim = strategy.create_optimizer(
+            critic, lr=args.critic_learning_rate, betas=args.adam_betas, weight_decay=args.l2
+        )
+    else:
+        critic_optim = None
 
     # prepare datasets
     prompts_data = blending_datasets(
@@ -146,8 +163,9 @@ def train(args):
             pretrain_mode=True,
         )
 
+    micro_generate_batch_size = args.micro_rollout_batch_size // args.n_responses if args.use_grpo else args.micro_rollout_batch_size
     # prepare dataloader
-    prompts_dataloader = strategy.setup_dataloader(prompts_dataset, args.micro_rollout_batch_size, True, True)
+    prompts_dataloader = strategy.setup_dataloader(prompts_dataset, micro_generate_batch_size, True, True)
     if args.pretrain_data:
         pretrain_dataloader = itertools.cycle(
             iter(
@@ -164,7 +182,8 @@ def train(args):
         pretrain_dataloader = None
 
     # configure scheduler
-    num_update_steps_per_episodes = len(prompts_dataset) // args.train_batch_size * args.max_epochs
+    num_all_samples = len(prompts_dataset) if not args.use_grpo else len(prompts_dataset) * args.n_responses
+    num_update_steps_per_episodes = num_all_samples // args.train_batch_size * args.max_epochs
     max_steps = math.ceil(args.num_episodes * num_update_steps_per_episodes)
 
     actor_scheduler = get_scheduler(
@@ -175,27 +194,42 @@ def train(args):
         scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
     )
 
-    critic_scheduler = get_scheduler(
-        "cosine_with_min_lr",
-        critic_optim,
-        num_warmup_steps=math.ceil(max_steps * 0.03),
-        num_training_steps=max_steps,
-        scheduler_specific_kwargs={"min_lr": args.critic_learning_rate * 0.1},
-    )
+    if not args.use_grpo:
+        critic_scheduler = get_scheduler(
+            "cosine_with_min_lr",
+            critic_optim,
+            num_warmup_steps=math.ceil(max_steps * 0.03),
+            num_training_steps=max_steps,
+            scheduler_specific_kwargs={"min_lr": args.critic_learning_rate * 0.1},
+        )
+    else:
+        critic_scheduler = None
 
     # prepare models/optimizers...
-    (
-        (actor, actor_optim, actor_scheduler),
-        (critic, critic_optim, critic_scheduler),
-        reward_model,
-        initial_model,
-    ) = strategy.prepare(
-        (actor, actor_optim, actor_scheduler),
-        (critic, critic_optim, critic_scheduler),
-        reward_model,
-        initial_model,
-        is_rlhf=True,
-    )
+    if not args.use_grpo:
+        (
+            (actor, actor_optim, actor_scheduler),
+            (critic, critic_optim, critic_scheduler),
+            reward_model,
+            initial_model,
+        ) = strategy.prepare(
+            (actor, actor_optim, actor_scheduler),
+            (critic, critic_optim, critic_scheduler),
+            reward_model,
+            initial_model,
+            is_rlhf=True,
+        )
+    else:
+        (
+            (actor, actor_optim, actor_scheduler),
+            reward_model,
+            initial_model,
+        ) = strategy.prepare(
+            (actor, actor_optim, actor_scheduler),
+            reward_model,
+            initial_model,
+            is_rlhf=True,
+        )
 
     if ema_model:
         ema_model._offload = True
@@ -205,7 +239,8 @@ def train(args):
     consumed_samples = 0
     if args.load_checkpoint and os.path.exists(os.path.join(args.ckpt_path, "_actor")):
         _, states = strategy.load_ckpt(actor.model, os.path.join(args.ckpt_path, "_actor"))
-        strategy.load_ckpt(critic, os.path.join(args.ckpt_path, "_critic"))
+        if not args.use_grpo:
+            strategy.load_ckpt(critic, os.path.join(args.ckpt_path, "_critic"))
         consumed_samples = states["consumed_samples"]
         strategy.print(f"Loaded the checkpoint: {args.ckpt_path}, consumed_samples: {consumed_samples}")
 
@@ -223,6 +258,8 @@ def train(args):
         critic_optim,
         actor_scheduler,
         critic_scheduler,
+        use_grpo=args.use_grpo,
+        n_responses=args.n_responses,
         max_epochs=args.max_epochs,
         micro_train_batch_size=args.micro_train_batch_size,
         micro_rollout_batch_size=args.micro_rollout_batch_size,
@@ -259,7 +296,7 @@ def train(args):
         args.save_path,
     )
 
-    if args.save_value_network:
+    if args.save_value_network and not args.use_grpo:
         strategy.save_model(
             critic,
             tokenizer,
@@ -310,6 +347,10 @@ if __name__ == "__main__":
     parser.add_argument("--kl_target", type=float, default=None)
     parser.add_argument("--init_kl_coef", type=float, default=0.01, help="KL penalty in PPO")
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
+    
+    # GRPO
+    parser.add_argument("--use_grpo", action="store_true", default=False, help="Activate grpo training")
+    parser.add_argument("--n_responses", type=int, default=4, help="number of responses for one prompt")
 
     # DeepSpeed
     parser.add_argument("--seed", type=int, default=42)
