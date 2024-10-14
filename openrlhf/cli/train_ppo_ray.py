@@ -349,7 +349,6 @@ if __name__ == "__main__":
             print("[Warning] Please --flash_attn to accelerate when --packing_samples is enabled.")
             args.flash_attn = True
         assert args.vllm_num_engines > 0, "Only support `--packing_samples` with vLLM."
-        assert not args.remote_rm_url, "Only support `--packing_samples` with local reward models."
         assert not args.pretrain_data, "`--pretrain_data` is not supported with `--packing_samples` yet."
 
     train(args)
