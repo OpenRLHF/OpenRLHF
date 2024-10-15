@@ -1,6 +1,6 @@
 import math
-import os.path
 import os
+import os.path
 from abc import ABC
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -183,9 +183,12 @@ class PPOTrainer(ABC):
         num_update_steps_per_episodes=1,
     ) -> None:
         num_rollouts_per_episodes = (
-            num_update_steps_per_episodes * args.train_batch_size // args.max_epochs // args.rollout_batch_size
+            num_update_steps_per_episodes
+            * args.train_batch_size
+            // args.max_epochs
+            // args.rollout_batch_size
+            // args.n_samples_per_prompt
         )
-        update_timesteps = args.rollout_batch_size // (self.strategy.world_size * self.micro_rollout_batch_size)
 
         # get eval and save steps
         if args.eval_steps == -1:
@@ -197,7 +200,7 @@ class PPOTrainer(ABC):
         self.pretrain_dataloader = pretrain_dataloader
 
         # Restore step and start_epoch
-        steps = consumed_samples // args.rollout_batch_size * update_timesteps + 1
+        steps = consumed_samples // args.rollout_batch_size + 1
         start_episode = consumed_samples // args.rollout_batch_size // num_rollouts_per_episodes
         consumed_samples = consumed_samples % (num_rollouts_per_episodes * args.rollout_batch_size)
 
@@ -213,31 +216,30 @@ class PPOTrainer(ABC):
             )
 
             for rand_prompts in self.prompts_dataloader:
-                experience = self.experience_maker.make_experience(rand_prompts, **self.generate_kwargs)
-                # print prompt/answer in each update step
-                if steps % update_timesteps == 0:
-                    output = self.tokenizer.batch_decode(
-                        experience.sequences[0].unsqueeze(0), skip_special_tokens=True
-                    )
-                    self.strategy.print(output)
-                self.replay_buffer.append(experience)
+                rand_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in rand_prompts], [])
+                for i in range(0, len(rand_prompts), args.micro_rollout_batch_size):
+                    prompts = rand_prompts[i : i + args.micro_rollout_batch_size]
+                    experience = self.experience_maker.make_experience(prompts, **self.generate_kwargs)
+                    if i == 0:
+                        output = self.tokenizer.batch_decode(
+                            experience.sequences[0].unsqueeze(0), skip_special_tokens=True
+                        )
+                        self.strategy.print(output)
+                    self.replay_buffer.append(experience)
 
-                if steps % update_timesteps == 0:
-                    global_steps = steps // update_timesteps
+                torch.cuda.empty_cache()
+                self.replay_buffer.normalize("advantages", self.strategy)
+                status = self.ppo_train(steps)
+                self.replay_buffer.clear()
+                torch.cuda.empty_cache()
 
-                    torch.cuda.empty_cache()
-                    self.replay_buffer.normalize("advantages", self.strategy)
-                    status = self.ppo_train(global_steps)
-                    self.replay_buffer.clear()
-                    torch.cuda.empty_cache()
+                if "kl" in status:
+                    self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
+                pbar.set_postfix(status)
 
-                    if "kl" in status:
-                        self.kl_ctl.update(status["kl"], args.rollout_batch_size)
-                    pbar.set_postfix(status)
-
-                    # logs/checkpoints
-                    client_states = {"consumed_samples": global_steps * args.rollout_batch_size}
-                    self.save_logs_and_checkpoints(args, global_steps, pbar, status, client_states)
+                # logs/checkpoints
+                client_states = {"consumed_samples": steps * args.rollout_batch_size}
+                self.save_logs_and_checkpoints(args, steps, pbar, status, client_states)
 
                 pbar.update()
                 steps = steps + 1

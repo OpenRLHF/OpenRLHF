@@ -229,7 +229,9 @@ class ActorModelRayActor(BasePPORole):
         self.prepare_datasets()
 
         # configure scheduler
-        self.num_update_steps_per_episodes = len(self.prompts_dataset) // args.train_batch_size * args.max_epochs
+        self.num_update_steps_per_episodes = (
+            len(self.prompts_dataset) * args.n_samples_per_prompt // args.train_batch_size * args.max_epochs
+        )
         max_steps = math.ceil(args.num_episodes * self.num_update_steps_per_episodes)
         self._max_steps = max_steps
 
@@ -285,7 +287,7 @@ class ActorModelRayActor(BasePPORole):
             prompts_data, self.tokenizer, strategy, input_template=args.input_template
         )
         self.prompts_dataloader = strategy.setup_dataloader(
-            self.prompts_dataset, args.micro_rollout_batch_size, True, True
+            self.prompts_dataset, args.rollout_batch_size // strategy.world_size, True, True
         )
 
         if args.pretrain_data:
@@ -299,7 +301,13 @@ class ActorModelRayActor(BasePPORole):
             )
             pretrain_max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
             pretrain_dataset = SFTDataset(
-                pretrain_data.select(range(min(len(pretrain_data), args.max_epochs * len(self.prompts_dataset)))),
+                pretrain_data.select(
+                    range(
+                        min(
+                            len(pretrain_data), args.max_epochs * len(self.prompts_dataset) * args.n_samples_per_prompt
+                        )
+                    )
+                ),
                 self.tokenizer,
                 pretrain_max_len,
                 strategy,
