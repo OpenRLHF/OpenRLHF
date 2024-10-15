@@ -139,7 +139,9 @@ def train(args):
         )
         pretrain_max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
         pretrain_dataset = SFTDataset(
-            pretrain_data.select(range(min(len(pretrain_data), args.max_epochs * len(prompts_dataset)))),
+            pretrain_data.select(
+                range(min(len(pretrain_data), args.max_epochs * len(prompts_dataset) * args.n_samples_per_prompt))
+            ),
             tokenizer,
             pretrain_max_len,
             strategy,
@@ -166,7 +168,9 @@ def train(args):
         pretrain_dataloader = None
 
     # configure scheduler
-    num_update_steps_per_episodes = len(prompts_dataset) // args.train_batch_size * args.max_epochs
+    num_update_steps_per_episodes = (
+        len(prompts_dataset) * args.n_samples_per_prompt // args.train_batch_size * args.max_epochs
+    )
     max_steps = math.ceil(args.num_episodes * num_update_steps_per_episodes)
 
     actor_scheduler = get_scheduler(

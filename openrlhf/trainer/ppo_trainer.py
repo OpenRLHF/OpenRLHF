@@ -183,7 +183,11 @@ class PPOTrainer(ABC):
         num_update_steps_per_episodes=1,
     ) -> None:
         num_rollouts_per_episodes = (
-            num_update_steps_per_episodes * args.train_batch_size // args.max_epochs // args.rollout_batch_size
+            num_update_steps_per_episodes
+            * args.train_batch_size
+            // args.max_epochs
+            // args.rollout_batch_size
+            // args.n_samples_per_prompt
         )
 
         # get eval and save steps
@@ -217,11 +221,10 @@ class PPOTrainer(ABC):
                     prompts = rand_prompts[i : i + args.micro_rollout_batch_size]
                     experience = self.experience_maker.make_experience(prompts, **self.generate_kwargs)
                     if i == 0:
-                        # print prompt/answer in each update step
                         output = self.tokenizer.batch_decode(
                             experience.sequences[0].unsqueeze(0), skip_special_tokens=True
                         )
-                    self.strategy.print(output)
+                        self.strategy.print(output)
                     self.replay_buffer.append(experience)
 
                 torch.cuda.empty_cache()
@@ -231,7 +234,7 @@ class PPOTrainer(ABC):
                 torch.cuda.empty_cache()
 
                 if "kl" in status:
-                    self.kl_ctl.update(status["kl"], args.rollout_batch_size)
+                    self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
                 pbar.set_postfix(status)
 
                 # logs/checkpoints
