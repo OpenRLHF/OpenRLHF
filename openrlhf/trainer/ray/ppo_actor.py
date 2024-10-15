@@ -285,7 +285,7 @@ class ActorModelRayActor(BasePPORole):
             prompts_data, self.tokenizer, strategy, input_template=args.input_template
         )
         self.prompts_dataloader = strategy.setup_dataloader(
-            self.prompts_dataset, args.micro_rollout_batch_size, True, True
+            self.prompts_dataset, args.rollout_batch_size // strategy.world_size, True, True
         )
 
         if args.pretrain_data:

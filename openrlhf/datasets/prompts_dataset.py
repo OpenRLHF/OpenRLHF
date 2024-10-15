@@ -5,7 +5,10 @@ from .utils import exist_and_not_none
 
 def preprocess_data(data, input_template=None, input_key="input", apply_chat_template=None) -> str:
     if apply_chat_template:
-        prompt = apply_chat_template(data[input_key], tokenize=False, add_generation_prompt=True)
+        chat = data[input_key]
+        if isinstance(chat, str):
+            chat = [{"role": "user", "content": chat}]
+        prompt = apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
     else:
         prompt = data[input_key]
         if input_template:
@@ -33,7 +36,6 @@ class PromptDataset(Dataset):
         super().__init__()
         self.strategy = strategy
         self.tokenizer = tokenizer
-        self.n_samples_per_prompt = getattr(self.strategy.args, "n_samples_per_prompt", 1)
 
         # chat_template
         self.input_template = input_template
@@ -50,7 +52,7 @@ class PromptDataset(Dataset):
 
     def __len__(self):
         length = len(self.prompts)
-        return length * self.n_samples_per_prompt
+        return length
 
     def __getitem__(self, idx):
-        return self.prompts[idx // self.n_samples_per_prompt]
+        return self.prompts[idx]
