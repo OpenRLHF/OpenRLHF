@@ -52,7 +52,8 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 - 支持 [Iterative DPO](./examples/scripts/train_iterative_dpo_llama.sh) (https://github.com/RLHFlow/Online-RLHF).
 - 支持 [条件 SFT](./examples/scripts/train_conditional_llama.sh) (https://arxiv.org/abs/2308.12050).
 - 支持 [知识蒸馏](./examples/scripts/train_knowledge_distillation.sh) (https://github.com/microsoft/LMOps/tree/main/minillm).
-- 支持 SFT/DPO/RM/PPO 训练样本打包 (--packing_samples).
+- 支持 [过程 Reward Model (PRM)](./examples/scripts/train_prm_mistral.sh).
+- 支持 SFT/DPO/RM/PRM/PPO 训练样本打包 (--packing_samples).
 - 支持 [RingAttention](./examples/scripts/train_dpo_ring_llama.sh) (--ring_attn_size, --ring_head_stride)
 - 支持 [MoE](./examples/test_scripts/train_sft_mixtral_lora.sh) (--aux_loss_coef)
 - 支持 FlashAttention2 (--flash_attn).
@@ -362,6 +363,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 - Tencent
 - Alibaba
 - Google
+- China Telecom
 - ...
 
 

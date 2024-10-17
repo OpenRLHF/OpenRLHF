@@ -49,7 +49,8 @@ More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csof
 - Support [Iterative DPO](./examples/scripts/train_iterative_dpo_llama.sh) (https://github.com/RLHFlow/Online-RLHF).
 - Support [Conditional SFT](./examples/scripts/train_conditional_llama.sh) (https://arxiv.org/abs/2308.12050).
 - Support [Knowledge Distillation](./examples/scripts/train_knowledge_distillation.sh) (https://github.com/microsoft/LMOps/tree/main/minillm).
-- Support SFT/DPO/RM/PPO training samples packing (--packing_samples).
+- Support [Process Reward Model (PRM)](./examples/scripts/train_prm_mistral.sh).
+- Support SFT/DPO/RM/PRM/PPO training samples packing (--packing_samples).
 - Support [RingAttention](./examples/scripts/train_dpo_ring_llama.sh) (--ring_attn_size, --ring_head_stride)
 - Support [MoE](./examples/test_scripts/train_sft_mixtral_lora.sh) (--aux_loss_coef)
 - Support FlashAttention2 (--flash_attn).
@@ -354,6 +355,7 @@ To achieve optimal performance, we recommend allocating more nodes to the vLLM E
 - Tencent
 - Alibaba
 - Google
+- China Telecom
 - ...
 
 ## Join Us
