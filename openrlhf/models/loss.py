@@ -254,3 +254,34 @@ class KDLoss(nn.Module):
         distil_loss = -torch.sum(x * mask.view(-1), dim=0) / torch.sum(mask.view(-1), dim=0)
 
         return distil_loss
+
+
+class PRMLoss(nn.Module):
+    """
+    Process Reward Model Loss
+    """
+
+    def __init__(self, placeholder_token_id: int, reward_token_ids: Optional[list[int]] = None):
+        super().__init__()
+        self.IGNORE_INDEX = -100
+        self.loss = nn.CrossEntropyLoss(ignore_index=self.IGNORE_INDEX)
+        self.placeholder_token_id = placeholder_token_id
+        self.reward_token_ids = reward_token_ids
+
+    def forward(self, inputs: torch.Tensor, logits: torch.Tensor, labels: torch.Tensor, *, return_acc: bool = False):
+        placeholder_mask = inputs == self.placeholder_token_id
+        logits = logits[placeholder_mask]
+        labels = labels[placeholder_mask]
+        if self.reward_token_ids is not None:
+            logits = logits[..., self.reward_token_ids]
+            logits = logits.softmax(dim=-1)
+            # this is bad....
+            for i, token in enumerate(self.reward_token_ids):
+                labels = torch.where(labels == token, i, labels)
+
+        loss = self.loss(logits, labels)
+        if not return_acc:
+            return loss
+
+        acc = (logits.argmax(dim=-1) == labels).float().mean()
+        return loss, acc
