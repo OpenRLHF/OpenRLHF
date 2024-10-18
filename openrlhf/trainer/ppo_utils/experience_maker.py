@@ -3,7 +3,7 @@ import time
 from abc import ABC
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Union
+from typing import Generator, List, Optional, Tuple, Union
 
 import ray
 import torch
@@ -11,7 +11,7 @@ import torch.nn as nn
 from tqdm import tqdm
 
 from openrlhf.models.actor import Actor
-from openrlhf.models.utils import compute_reward, masked_mean, unpacking_samples
+from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean, unpacking_samples
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn, remote_rm_fn_ray
 
@@ -44,6 +44,7 @@ class Experience:
     advatanges: (B, A)
     attention_mask: (B, S)
     action_mask: (B, A)
+    kl: (B, A)
 
     "A" is the number of actions.
     """
@@ -51,11 +52,12 @@ class Experience:
     sequences: torch.Tensor
     action_log_probs: torch.Tensor
     values: torch.Tensor
-    returns: torch.Tensor
-    advantages: torch.Tensor
+    returns: Optional[torch.Tensor]
+    advantages: Optional[torch.Tensor]
     attention_mask: Optional[torch.LongTensor]
     action_mask: Optional[torch.BoolTensor]
     info: Optional[dict]
+    kl: Optional[torch.Tensor] = None
 
     @torch.no_grad()
     def to_device(self, device: torch.device) -> None:
@@ -133,6 +135,55 @@ class NaiveExperienceMaker(ABC):
         return {k: v.to(device) for k, v in batch.items()}
 
     @torch.no_grad()
+    def make_experience_list(self, all_prompts: Union[str, List[str]], **generate_kwargs) -> List[Experience]:
+        """
+        Make a list of experience with the micro_rollout_batch_size.
+
+        This method will first calculate the response sequences and rewards for the given prompts.
+        Then, if we need certain processing for the rewards or do certain filtering, we can process the rollout as a whole.
+        After that, we will calculate the advantages and returns for each experience.
+        """
+        args = self.strategy.args
+        # sample multiple response
+        all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
+        experiences = []
+        for i in range(0, len(all_prompts), args.micro_rollout_batch_size):
+            prompts = all_prompts[i : i + args.micro_rollout_batch_size]
+            experiences.append(self.make_experience(prompts, **generate_kwargs))
+
+        experiences = self.process_experiences(experiences)
+
+        # calculate return and advantages
+        for experience in experiences:
+            num_actions = experience.info["num_actions"]
+            reward = compute_reward(
+                experience.info["reward"],
+                self.kl_ctl.value,
+                experience.kl,
+                action_mask=experience.action_mask,
+                num_actions=num_actions,
+            )
+            experience.advantages, experience.returns = self.get_advantages_and_returns(
+                experience.values,
+                reward,
+                experience.action_mask,
+                generate_kwargs["gamma"],
+                generate_kwargs["lambd"],
+            )
+            # calculate the return info.
+            if not self.packing_samples:
+                return_sums = reward.sum(dim=-1)
+            else:
+                return_sums = torch.tensor(
+                    [each_reward.sum() for each_reward in reward], device=torch.cuda.current_device()
+                )
+            experience.info["return"] = return_sums
+            # remove unnecessary info
+            experience.kl = None
+            del experience.info["num_actions"]
+        return experiences
+
+    @torch.no_grad()
     def make_experience(self, prompts: Union[str, List[str]], **generate_kwargs) -> Experience:
         self.actor.eval()
         self.critic.eval()
@@ -163,27 +214,14 @@ class NaiveExperienceMaker(ABC):
             # local RM
             r = self.reward_model(sequences, attention_mask)
 
-        reward, kl = compute_reward(
-            r,
-            self.kl_ctl.value,
-            action_log_probs,
-            base_action_log_probs,
-            action_mask=action_mask,
-        )
-        advantage, returns = self.get_advantages_and_returns(
-            value,
-            reward,
-            action_mask,
-            generate_kwargs["gamma"],
-            generate_kwargs["lambd"],
-        )
+        kl = compute_approx_kl(action_log_probs, base_action_log_probs, action_mask=action_mask)
 
         info = {
             "kl": masked_mean(kl, action_mask, dim=-1),
             "reward": r,
-            "return": reward.sum(dim=-1),
             "response_length": action_mask.float().sum(dim=-1),
             "total_length": attention_mask.float().sum(dim=-1),
+            "num_actions": num_actions,
         }
         # reset model state
         self.actor.train()
@@ -193,12 +231,18 @@ class NaiveExperienceMaker(ABC):
             sequences,
             action_log_probs,
             value,
-            returns,
-            advantage,
+            None,
+            None,
             attention_mask,
             action_mask,
             info,
+            kl,
         )
+
+    @torch.no_grad()
+    def process_experiences(self, experiences: List[Experience]) -> List[Experience]:
+        # TODO: add more methods to process experiences
+        return experiences
 
     @torch.no_grad()
     def get_advantages_and_returns(
@@ -264,6 +308,16 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         super().__init__(*args, **kwargs)
         self.vllm_engines = vllm_engines
         self.packing_samples = packing_samples
+
+    @torch.no_grad()
+    def make_experience_list(self, all_prompts: Union[str, List[str]], **generate_kwargs) -> List[Experience]:
+        experiences = super().make_experience_list(all_prompts, **generate_kwargs)
+        for experience in experiences:
+            # send experience to critic
+            experience_cpu = deepcopy(experience)
+            experience_cpu.to_device("cpu")
+            self._ref = self.critic.append.remote(experience_cpu)
+        return experiences
 
     @torch.no_grad()
     def make_experience(self, prompts: Union[str, List[str]], **generate_kwargs) -> Experience:
@@ -360,18 +414,10 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         if self.strategy.args.colocate_actor_ref:
             torch.cuda.empty_cache()
 
-        reward, kl = compute_reward(
-            r,
-            self.kl_ctl.value,
-            action_log_probs,
-            base_action_log_probs,
-            action_mask=action_mask,
-            num_actions=num_actions,
-        )
+        kl = compute_approx_kl(action_log_probs, base_action_log_probs, action_mask=action_mask)
 
         if not self.packing_samples:
-            kl = masked_mean(kl, action_mask, dim=-1)
-            return_sums = reward.sum(dim=-1)
+            kl_mean = masked_mean(kl, action_mask, dim=-1)
         else:
             # convert tensor into list of tensors so that it's easier to manipulate
             # within dataset.
@@ -379,26 +425,16 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             attention_mask = None
             action_log_probs = unpacking_samples(action_log_probs, num_actions)
             value = unpacking_samples(value, num_actions)
-            reward = unpacking_samples(reward, num_actions)
 
             kl = unpacking_samples(kl, num_actions)
-            kl = torch.tensor([each_kl.mean() for each_kl in kl], device=device)
-            return_sums = torch.tensor([each_reward.sum() for each_reward in reward], device=device)
-
-        advantage, returns = self.get_advantages_and_returns(
-            value,
-            reward,
-            action_mask,
-            generate_kwargs["gamma"],
-            generate_kwargs["lambd"],
-        )
+            kl_mean = torch.tensor([each_kl.mean() for each_kl in kl], device=device)
 
         info = {
-            "kl": kl,
+            "kl": kl_mean,
             "reward": r,
-            "return": return_sums,
             "response_length": response_length,
             "total_length": total_length,
+            "num_actions": num_actions,
         }
 
         if self.strategy.args.perf:
@@ -411,17 +447,13 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             sequences,
             action_log_probs,
             value,
-            returns,
-            advantage,
+            None,
+            None,
             attention_mask,
             action_mask,
             info,
+            kl,
         )
-
-        # send experience to critic
-        experience_cpu = deepcopy(experience)
-        experience_cpu.to_device("cpu")
-        self._ref = self.critic.append.remote(experience_cpu)
 
         self.actor.train()  # reset model state
         return experience
