@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
-from openrlhf.models.utils import masked_mean
+from openrlhf.models.utils import compute_reward, masked_mean
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 from .ppo_utils import AdaptiveKLController, Experience, FixedKLController, NaiveExperienceMaker, NaiveReplayBuffer
@@ -216,10 +216,9 @@ class PPOTrainer(ABC):
             )
 
             for rand_prompts in self.prompts_dataloader:
-                rand_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in rand_prompts], [])
-                for i in range(0, len(rand_prompts), args.micro_rollout_batch_size):
-                    prompts = rand_prompts[i : i + args.micro_rollout_batch_size]
-                    experience = self.experience_maker.make_experience(prompts, **self.generate_kwargs)
+                for i, experience in enumerate(
+                    self.experience_maker.make_experiences(rand_prompts, **self.generate_kwargs)
+                ):
                     if i == 0:
                         output = self.tokenizer.batch_decode(
                             experience.sequences[0].unsqueeze(0), skip_special_tokens=True
