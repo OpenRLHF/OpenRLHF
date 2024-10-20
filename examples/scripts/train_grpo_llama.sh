@@ -9,11 +9,11 @@ openrlhf.cli.train_ppo \
    --logging_steps 1 \
    --eval_steps -1 \
    --use_grpo \
-   --n_responses 8 \
+   --n_samples_per_prompt 8 \
    --micro_train_batch_size 8 \
    --train_batch_size 128 \
    --micro_rollout_batch_size 8 \
-   --rollout_batch_size 256 \
+   --rollout_batch_size 128 \
    --max_epochs 1 \
    --prompt_max_len 1024 \
    --generate_max_len 1024 \
