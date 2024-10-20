@@ -4,6 +4,7 @@ import os
 import socket
 from copy import deepcopy
 from typing import Callable, Dict, List, Tuple
+from abc import ABC, abstractmethod
 
 import deepspeed
 import ray
@@ -330,6 +331,7 @@ class ActorModelRayActor(BasePPORole):
         """Return the maximum number of steps."""
         return self._max_steps
 
+    @abstractmethod
     def fit(
         self,
         critic_model: ray.actor.ActorHandle,
@@ -341,63 +343,7 @@ class ActorModelRayActor(BasePPORole):
         critic_train_remote: bool = False,
     ):
         """Train actor model with prompt datasets."""
-        strategy = self.strategy
-        args = self.strategy.args
-
-        # configure Trainer
-        trainer = ActorPPOTrainer(
-            strategy,
-            self.actor,
-            critic_model,
-            reward_model,
-            initial_model,
-            ema_model=self.ema_model,
-            actor_optim=None,
-            critic_optim=None,
-            actor_scheduler=self.actor_scheduler,
-            critic_scheduler=None,
-            remote_rm_url=remote_rm_url,
-            reward_fn=reward_fn,
-            vllm_engines=vllm_engines,
-            max_epochs=args.max_epochs,
-            micro_train_batch_size=args.micro_train_batch_size,
-            micro_rollout_batch_size=args.micro_rollout_batch_size,
-            gradient_checkpointing=args.gradient_checkpointing,
-            critic_train_remote=critic_train_remote,
-            tokenizer=self.tokenizer,
-            prompt_max_len=args.prompt_max_len,
-            value_clip=args.value_clip,
-            eps_clip=args.eps_clip,
-            gamma=args.gamma,
-            lambd=args.lambd,
-            init_kl_coef=args.init_kl_coef,
-            kl_target=args.kl_target,
-            ema_beta=0.992,
-            ptx_coef=args.ptx_coef,
-            max_norm=args.max_norm,
-            # fro GPT generation
-            do_sample=True,
-            max_new_tokens=args.generate_max_len,
-            max_length=args.max_len,
-            temperature=1,
-            top_p=args.top_p,
-            pad_token_id=self.tokenizer.pad_token_id,
-            eos_token_id=self.tokenizer.eos_token_id,
-        )
-
-        # broadcast checkpoint
-        ckpt_path = os.path.join(args.ckpt_path, "_actor")
-        if args.load_checkpoint and os.path.exists(ckpt_path) and not vllm_engines is None:
-            torch.distributed.barrier()
-            trainer._broadcast_to_vllm()
-
-        trainer.fit(
-            args,
-            self.prompts_dataloader,
-            self.pretrain_dataloader,
-            self.consumed_samples,
-            self.num_update_steps_per_episodes,
-        )
+        ...
 
     def save_model(self):
         args = self.strategy.args
@@ -421,7 +367,6 @@ class PPOActorModelRayActor(ActorModelRayActor):
         vllm_engines: List[ray.actor.ActorHandle] = None,
         critic_train_remote: bool = False,
     ):
-        """Train actor model with prompt datasets."""
         strategy = self.strategy
         args = self.strategy.args
 

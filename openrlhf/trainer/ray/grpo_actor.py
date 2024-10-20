@@ -144,7 +144,6 @@ class GRPOActorModelRayActor(ActorModelRayActor):
         vllm_engines: List[ray.actor.ActorHandle] = None,
         critic_train_remote: bool = False,
     ):
-        """Train actor model with prompt datasets."""
         strategy = self.strategy
         args = self.strategy.args
 
