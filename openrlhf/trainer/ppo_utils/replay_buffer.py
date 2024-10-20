@@ -252,8 +252,9 @@ class NaiveReplayBuffer(ABC):
             setattr(item, attribute, (items[i] - mean) * rstd)
 
 
+
 class GRPOReplayBuffer(NaiveReplayBuffer):
-    """GRPO replay buffer class. Using dictionary to store BufferItem with same query.
+    """GRPO replay buffer class. Using dictionary to store bufferitem with same query.
 
     """
     def __init__(self, *args, **kwargs):

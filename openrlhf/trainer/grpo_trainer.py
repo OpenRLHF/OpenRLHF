@@ -9,9 +9,9 @@ from tqdm import tqdm
 from openrlhf.models.utils import masked_mean, compute_approx_kl
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
+
 from .ppo_utils import Experience, GRPOExperienceMaker, GRPOReplayBuffer
 from . import PPOTrainer
-
 class GRPOTrainer(PPOTrainer):
     def __init__(
         self,
