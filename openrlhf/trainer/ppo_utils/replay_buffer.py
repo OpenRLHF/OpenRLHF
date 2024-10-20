@@ -1,7 +1,9 @@
 import random
 from abc import ABC
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Dict
+from collections import defaultdict
+from itertools import islice
 
 import torch
 import torch.nn.functional as F
@@ -29,12 +31,14 @@ class BufferItem:
 
     sequences: torch.Tensor
     action_log_probs: torch.Tensor
-    values: torch.Tensor
-    returns: torch.Tensor
-    advantages: torch.Tensor
-    attention_mask: Optional[torch.LongTensor]
-    action_mask: Optional[torch.BoolTensor]
-    info: Optional[dict]
+    values: Optional[torch.Tensor] = None
+    returns: Optional[torch.Tensor] = None
+    advantages: Optional[torch.Tensor] = None
+    attention_mask: Optional[torch.LongTensor] = None
+    action_mask: Optional[torch.BoolTensor] = None
+    base_log_probs: Optional[torch.Tensor] = None
+    prompts: Optional[str] = None
+    info: Optional[dict] = None
 
 
 def split_experience_batch(experience: Experience) -> List[BufferItem]:
@@ -46,6 +50,7 @@ def split_experience_batch(experience: Experience) -> List[BufferItem]:
         "values",
         "returns",
         "advantages",
+        "base_log_probs",
         "attention_mask",
         "action_mask",
     )
@@ -61,6 +66,11 @@ def split_experience_batch(experience: Experience) -> List[BufferItem]:
         assert batch_size == len(vals)
         for i, v in enumerate(vals):
             batch_kwargs[i][key] = v
+
+    prompts = getattr(experience, "prompts")
+    if prompts is not None:
+        for i, prompt in enumerate(prompts):
+            batch_kwargs[i]["prompts"] = prompt
 
     for i in range(batch_size):
         batch_kwargs[i]["info"] = {}
@@ -96,13 +106,14 @@ def make_experience_batch(items: List[BufferItem], packing_samples=False) -> Exp
         "values",
         "returns",
         "advantages",
+        "base_log_probs",
         "attention_mask",
         "action_mask",
     )
     for key in keys:
         vals = [getattr(item, key) for item in items]
         if not packing_samples:
-            batch_data = zero_pad_sequences(vals, "left")
+            batch_data = zero_pad_sequences(vals, "left") if vals[0] is not None else None
         else:
             batch_data = vals if vals[0] is not None else None
         kwargs[key] = batch_data
@@ -116,12 +127,13 @@ def make_experience_batch(items: List[BufferItem], packing_samples=False) -> Exp
 
 def remove_padding_in_sequences(items):
     for item in items:
-        seq, act_log_prob, value, ret, adv, att_mask, act_mask = (
+        seq, act_log_prob, value, ret, adv, base_log_prob, att_mask, act_mask = (
             item.sequences,
             item.action_log_probs,
             item.values,
             item.returns,
             item.advantages,
+            item.base_log_probs,
             item.attention_mask,
             item.action_mask,
         )
@@ -136,14 +148,16 @@ def remove_padding_in_sequences(items):
             item.values,
             item.returns,
             item.advantages,
+            item.base_log_probs,
             item.attention_mask,
             item.action_mask,
         ) = (
             seq[left_pad:right_pad],
             act_log_prob[:right_pad],
-            value[:right_pad],
-            ret[:right_pad],
-            adv[:right_pad],
+            value[:right_pad] if value is not None else value,
+            ret[:right_pad] if ret is not None else ret,
+            adv[:right_pad] if value is not None else value,
+            base_log_prob[:right_pad] if base_log_prob is not None else base_log_prob,
             att_mask[left_pad:right_pad],
             act_mask[:right_pad],
         )
@@ -231,6 +245,89 @@ class NaiveReplayBuffer(ABC):
         mean = all_sum / all_count
         # std
         std = ((items_vector - mean).pow(2) * action_masks_vector).sum()
+        all_std = strategy.all_reduce(std, "sum")
+        rstd = (all_std / all_count).clamp(min=1e-8).rsqrt()
+
+        for i, item in enumerate(self):
+            setattr(item, attribute, (items[i] - mean) * rstd)
+
+
+class GRPOReplayBuffer(NaiveReplayBuffer):
+    """GRPO replay buffer class. Using dictionary to store BufferItem with same query.
+
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.prompts_dic: Dict[str, List[BufferItem]] = defaultdict(list)
+
+    @torch.no_grad()
+    def append(self, experience: Experience) -> None:
+        if self.cpu_offload:
+            experience.to_device(torch.device("cpu"))
+        items = split_experience_batch(experience)
+        # the packed samples comes with no padding
+        if not self.packing_samples:
+            items = remove_padding_in_sequences(items)
+        for item in items:
+            self.prompts_dic[item.prompts].append(item)
+        if self.limit > 0:
+            samples_to_remove = len(self.prompts_dic) - self.limit
+            if samples_to_remove > 0:
+                keys_to_delete = islice(self.prompts_dic.keys(), samples_to_remove)
+                for key in keys_to_delete:
+                    del self.prompts_dic[key]
+
+    def clear(self) -> None:
+        self.items.clear()
+        self.prompts_dic.clear()
+
+    def dic2items(self):
+        for _, item_list in self.prompts_dic.items():
+            self.items.extend(item_list)
+
+    @torch.no_grad()
+    def get_advantages(self, rewards: torch.Tensor) -> torch.Tensor:
+        mean = rewards.mean()
+        std = rewards.std()
+        advantages = (rewards - mean) / (std + 1e-8)
+        return advantages
+
+    @torch.no_grad()
+    def calculate_advantages(self):
+        for prompt, item_list in self.prompts_dic.items():
+            rewards = [item.info["reward"]  for item in item_list]
+            advantages = self.get_advantages(torch.tensor(rewards))
+            advantages = [adv.item() for adv in torch.unbind(advantages)]
+            for i, adv in enumerate(advantages):
+                self.prompts_dic[prompt][i].advantages = torch.tensor([adv])
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __getitem__(self, idx: int) -> BufferItem:
+        return self.items[idx]
+
+    def collate_fn(self, batch) -> Experience:
+        experience = make_experience_batch(batch, self.packing_samples)
+        return experience
+
+    def normalize(self, attribute: str, strategy) -> None:
+        assert attribute == "advantages"
+        items = []
+        action_masks = []
+        for item in self.items:
+            items.append(getattr(item, attribute))
+            action_masks.append(item.action_mask)
+
+        items_vector = torch.cat(items).float().flatten()
+
+        # for DP
+        # mean
+        sum_and_count = torch.tensor([items_vector.sum(), len(items)], device=items_vector.device)
+        all_sum, all_count = strategy.all_reduce(sum_and_count, "sum")
+        mean = all_sum / all_count
+        # std
+        std = ((items_vector - mean).pow(2)).sum()
         all_std = strategy.all_reduce(std, "sum")
         rstd = (all_std / all_count).clamp(min=1e-8).rsqrt()
 

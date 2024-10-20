@@ -10,6 +10,7 @@ def compute_approx_kl(
     log_probs: torch.Tensor,
     log_probs_base: torch.Tensor,
     action_mask: Optional[torch.Tensor] = None,
+    with_low_variance: bool = False,
 ) -> torch.Tensor:
     """
     Compute the approximate KL divergence between two distributions.
@@ -20,11 +21,16 @@ def compute_approx_kl(
         log_probs_base: Log probabilities of the base distribution.
         action_mask: Mask for actions.
     """
-
     log_ratio = log_probs - log_probs_base
     if action_mask is not None:
         log_ratio = log_ratio * action_mask
-    return log_ratio
+    if with_low_variance:
+        log_ratio = -log_ratio
+        ratio = torch.exp(log_ratio)
+        kl_loss = (ratio - log_ratio - 1).contiguous()
+    else:
+        kl_loss = log_ratio
+    return kl_loss
 
 
 def compute_reward(

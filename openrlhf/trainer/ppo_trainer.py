@@ -111,6 +111,8 @@ class PPOTrainer(ABC):
         self.critic_optim = critic_optim
         self.actor_scheduler = actor_scheduler
         self.critic_scheduler = critic_scheduler
+        self.buffer_limit = buffer_limit
+        self.buffer_cpu_offload = buffer_cpu_offload
 
         self.actor_loss_fn = PolicyLoss(eps_clip)
         self.critic_loss_fn = ValueLoss(value_clip)
@@ -138,9 +140,9 @@ class PPOTrainer(ABC):
             remote_rm_url,
             reward_fn,
         )
-        packing_samples = getattr(self.args, "packing_samples", False)
+        self.packing_samples = getattr(self.args, "packing_samples", False)
         self.replay_buffer = NaiveReplayBuffer(
-            micro_train_batch_size, buffer_limit, buffer_cpu_offload, packing_samples
+            micro_train_batch_size, buffer_limit, buffer_cpu_offload, self.packing_samples
         )
 
         # wandb/tensorboard setting

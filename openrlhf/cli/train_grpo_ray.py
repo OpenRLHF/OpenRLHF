@@ -7,8 +7,7 @@ import torch
 from ray.util.placement_group import placement_group
 
 from openrlhf.trainer.ray import (
-    PPOActorModelRayActor,
-    CriticModelRayActor,
+    GRPOActorModelRayActor,
     PPORayActorGroup,
     ReferenceModelRayActor,
     RewardModelRayActor,
@@ -24,17 +23,10 @@ def reward_fn(rewards: List[torch.Tensor]):
 
 def _validate_args(args):
     actor_world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
-    critic_world_size = args.critic_num_nodes * args.critic_num_gpus_per_node
 
     assert (
         actor_world_size & (actor_world_size - 1)
     ) == 0, f"actor_world_size must be power of 2, got {actor_world_size}"
-    assert (
-        critic_world_size & (critic_world_size - 1)
-    ) == 0, f"critic_world_size must be power of 2, got {critic_world_size}"
-    assert (
-        actor_world_size % critic_world_size == 0
-    ), f"actor_world_size must be divisible by critic_world_size, got {actor_world_size} and {critic_world_size}"
 
     assert args.zero_stage != 3 or args.vllm_num_engines > 0, f"ZeRO-3 is only supported when vLLM enabled"
 
@@ -44,6 +36,9 @@ def train(args):
 
     # configure strategy
     strategy = get_strategy(args)
+
+    assert args.n_samples_per_prompt % args.micro_train_batch_size == 0, \
+        "Number of responses must be multiple of micro train batch size"
 
     # if colocated, create placement group for actor and ref model explicitly.
     pg = None
@@ -59,19 +54,10 @@ def train(args):
         pg = placement_group(bundles, strategy="STRICT_SPREAD")
         ray.get(pg.ready())
 
-    # NOTE(wuxibin): Why don't we allocate 0.5 gpu for each actor when colocate models?
-    # Say we have 1 node with 4 GPUs, and num_gpus_per_node for each model is 4.
-    # If we allocate 0.5 gpu for both actor and ref model, then gpu allocation is
-    #   |actor|actor|actor|actor|  ref | ref  | ref  | ref |
-    #   |GPU0 |GPU0 |GPU1 |GPU1 | GPU2 | GPU2 | GPU3 | GPU3 |
-    #
-    # So 0.75/0.25 gpu is a tricky to let Ray spread all models evenly on all gpus.
-    #   |actor| ref  |actor| ref  |actor| ref  |actor|ref  |
-    #   |GPU0 | GPU0 |GPU1 | GPU1 |GPU2 | GPU2 |GPU3 | GPU3 |
     actor_model = PPORayActorGroup(
         args.actor_num_nodes,
         args.actor_num_gpus_per_node,
-        PPOActorModelRayActor,
+        GRPOActorModelRayActor,
         pg=pg,
         num_gpus_per_actor=0.75 if pg else 1,
     )
@@ -84,29 +70,7 @@ def train(args):
         num_gpus_per_actor=0.25 if pg else 1,
     )
 
-    # if colocated, create placement group for critic and reward model explicitly.
     pg = None
-    if args.colocate_critic_reward:
-        assert (
-            args.critic_num_nodes == args.reward_num_nodes
-            and args.critic_num_gpus_per_node == args.reward_num_gpus_per_node
-        ), f"num_nodes and num_gpus_per_node must be the same when colocate critic and reward model."
-
-        bundles = [
-            {"GPU": args.critic_num_gpus_per_node, "CPU": args.critic_num_gpus_per_node}
-            for _ in range(args.critic_num_nodes)
-        ]
-        pg = placement_group(bundles, strategy="STRICT_SPREAD")
-        ray.get(pg.ready())
-
-    critic_model = PPORayActorGroup(
-        args.critic_num_nodes,
-        args.critic_num_gpus_per_node,
-        CriticModelRayActor,
-        pg=pg,
-        num_gpus_per_actor=0.75 if pg else 1,
-    )
-
     # multiple reward models
     if not args.remote_rm_url:
         reward_pretrains = args.reward_pretrain.split(",")
@@ -148,23 +112,14 @@ def train(args):
             max_len,
         )
 
-    # critic scheduler initialization depends on max_step, so we have to init critic after actor
-    # TODO: use first reward model as critic model
-    max_steps = ray.get(actor_model._actor_handlers[0].max_steps.remote())
-    refs.extend(critic_model.async_init_model_from_pretrained(strategy, args.critic_pretrain, max_steps))
-    ray.get(refs)
-
     # train actor and critic mdoel
     refs = actor_model.async_fit_actor_model(
-        critic_model, ref_model, reward_models, args.remote_rm_url, reward_fn=reward_fn, vllm_engines=vllm_engines
+        None, ref_model, reward_models, args.remote_rm_url, reward_fn=reward_fn, vllm_engines=vllm_engines
     )
     ray.get(refs)
 
     # save model
     ray.get(actor_model.async_save_model())
-
-    if args.save_value_network:
-        ray.get(critic_model.async_save_model())
 
 
 if __name__ == "__main__":
@@ -273,6 +228,7 @@ if __name__ == "__main__":
     parser.add_argument("--actor_learning_rate", type=float, default=1e-6)
     parser.add_argument("--critic_learning_rate", type=float, default=9e-6)
     parser.add_argument("--kl_target", type=float, default=None)
+    parser.add_argument("--numerical_stable", action="store_true", default=False)
     parser.add_argument("--init_kl_coef", type=float, default=0.01, help="KL penalty in PPO")
     parser.add_argument("--aux_loss_coef", type=float, default=0, help="MoE balancing loss")
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")

@@ -44,26 +44,34 @@ class Experience:
     advatanges: (B, A)
     attention_mask: (B, S)
     action_mask: (B, A)
+    base_log_probs: (B, A)
 
     "A" is the number of actions.
     """
 
     sequences: torch.Tensor
     action_log_probs: torch.Tensor
-    values: torch.Tensor
-    returns: torch.Tensor
-    advantages: torch.Tensor
-    attention_mask: Optional[torch.LongTensor]
-    action_mask: Optional[torch.BoolTensor]
-    info: Optional[dict]
+    values: Optional[torch.Tensor] = None
+    returns: Optional[torch.Tensor] = None
+    advantages: Optional[torch.Tensor] = None
+    attention_mask: Optional[torch.LongTensor] = None
+    action_mask: Optional[torch.BoolTensor] = None
+    base_log_probs: Optional[torch.Tensor] = None
+    prompts: Optional[List[str]] = None
+    info: Optional[dict] = None
 
     @torch.no_grad()
     def to_device(self, device: torch.device) -> None:
         self.sequences = to(self.sequences, device)
         self.action_log_probs = to(self.action_log_probs, device)
-        self.values = to(self.values, device)
-        self.returns = to(self.returns, device)
-        self.advantages = to(self.advantages, device)
+        if self.values is not None:
+            self.values = to(self.values, device)
+        if self.returns is not None:
+            self.returns = to(self.returns, device)
+        if self.advantages is not None:
+            self.advantages = to(self.advantages, device)
+        if self.base_log_probs is not None:
+            self.base_log_probs = to(self.base_log_probs, device)
         if self.attention_mask is not None:
             self.attention_mask = self.attention_mask.to(device)
         if self.action_mask is not None:
@@ -72,9 +80,12 @@ class Experience:
     def pin_memory(self):
         self.sequences = pin_memory(self.sequences)
         self.action_log_probs = pin_memory(self.action_log_probs)
-        self.values = pin_memory(self.values)
-        self.returns = pin_memory(self.returns)
-        self.advantages = pin_memory(self.advantages)
+        if self.values is not None:
+            self.values = pin_memory(self.values)
+        if self.returns is not None:
+            self.returns = pin_memory(self.returns)
+        if self.advantages is not None:
+            self.advantages = pin_memory(self.advantages)
         if self.attention_mask is not None:
             self.attention_mask = self.attention_mask.pin_memory()
         if self.action_mask is not None:
@@ -140,6 +151,35 @@ class NaiveExperienceMaker(ABC):
         if self.reward_model is not None:
             self.reward_model.eval()
 
+        experience = self.collect_base_experience(prompts, **generate_kwargs)
+
+        reward, kl = compute_reward(
+            experience.info["reward"],
+            self.kl_ctl.value,
+            experience.action_log_probs,
+            experience.base_log_probs,
+            action_mask=experience.action_mask,
+        )
+
+        advantage, returns = self.get_advantages_and_returns(
+            experience.values,
+            reward,
+            experience.action_mask,
+            generate_kwargs["gamma"],
+            generate_kwargs["lambd"],
+        )
+        experience.info["return"] = reward.sum(dim=-1)
+        experience.info["kl"] = masked_mean(kl, experience.action_mask, dim=-1)
+        experience.advantages = advantage
+        experience.returns = returns
+        # reset model state
+        self.actor.train()
+        self.critic.train()
+
+        return experience
+
+    @torch.no_grad()
+    def collect_base_experience(self, prompts: Union[str, List[str]], **generate_kwargs) -> Experience:
         # generate seq
         inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
         sequences, attention_mask, action_mask = self.actor.generate(**inputs, **generate_kwargs)
@@ -152,7 +192,10 @@ class NaiveExperienceMaker(ABC):
         base_action_log_probs = self.initial_model(sequences, num_actions, attention_mask)
 
         # values
-        value = self.critic(sequences, num_actions, attention_mask)
+        if self.critic is not None:
+            value = self.critic(sequences, action_mask, attention_mask)
+        else:
+            value = None
 
         # rewards
         if self.remote_rm_url is not None:
@@ -162,42 +205,20 @@ class NaiveExperienceMaker(ABC):
         else:
             # local RM
             r = self.reward_model(sequences, attention_mask)
-
-        reward, kl = compute_reward(
-            r,
-            self.kl_ctl.value,
-            action_log_probs,
-            base_action_log_probs,
-            action_mask=action_mask,
-        )
-        advantage, returns = self.get_advantages_and_returns(
-            value,
-            reward,
-            action_mask,
-            generate_kwargs["gamma"],
-            generate_kwargs["lambd"],
-        )
-
         info = {
-            "kl": masked_mean(kl, action_mask, dim=-1),
             "reward": r,
-            "return": reward.sum(dim=-1),
             "response_length": action_mask.float().sum(dim=-1),
             "total_length": attention_mask.float().sum(dim=-1),
         }
-        # reset model state
-        self.actor.train()
-        self.critic.train()
 
         return Experience(
             sequences,
             action_log_probs,
-            value,
-            returns,
-            advantage,
-            attention_mask,
-            action_mask,
-            info,
+            info=info,
+            values=value,
+            base_log_probs=base_action_log_probs,
+            attention_mask=attention_mask,
+            action_mask=action_mask,
         )
 
     @torch.no_grad()
@@ -258,6 +279,23 @@ class NaiveExperienceMaker(ABC):
         returns = advantages + values
         return advantages.detach(), returns
 
+class GRPOExperienceMaker(NaiveExperienceMaker):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @torch.no_grad()
+    def make_experience(self, prompts: Union[str, List[str]], **generate_kwargs) -> Experience:
+        self.actor.eval()
+        self.initial_model.eval()
+        if self.reward_model is not None:
+            self.reward_model.eval()
+
+        experience = self.collect_base_experience(prompts, **generate_kwargs)
+        experience.prompts = prompts if isinstance(prompts, list) else [prompts]
+        # reset model state
+        self.actor.train()
+        return experience
 
 class RemoteExperienceMaker(NaiveExperienceMaker):
     def __init__(self, *args, vllm_engines: List = None, packing_samples=False, **kwargs):
@@ -268,6 +306,59 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
     @torch.no_grad()
     def make_experience(self, prompts: Union[str, List[str]], **generate_kwargs) -> Experience:
         self.actor.eval()
+        device = torch.cuda.current_device()
+        experience, packed_seq_lens = self.collect_base_experience(prompts, **generate_kwargs)
+        num_actions = experience.action_mask.size(1)
+
+        reward, kl = compute_reward(
+            experience.info["reward"],
+            self.kl_ctl.value,
+            experience.action_log_probs,
+            experience.base_log_probs,
+            action_mask=experience.action_mask,
+            num_actions=num_actions
+        )
+
+        if not self.packing_samples:
+            kl = masked_mean(kl, experience.action_mask, dim=-1)
+            return_sums = reward.sum(dim=-1)
+        else:
+            # convert tensor into list of tensors so that it's easier to manipulate
+            # within dataset.
+            experience.sequences = unpacking_samples(experience.sequences, packed_seq_lens)
+            experience.attention_mask = None
+            experience.action_log_probs = unpacking_samples(experience.action_log_probs, num_actions)
+            experience.values = unpacking_samples(experience.values, num_actions)
+            experience.info["reward"] = unpacking_samples(reward, num_actions)
+
+            kl = unpacking_samples(kl, num_actions)
+            kl = torch.tensor([each_kl.mean() for each_kl in kl], device=device)
+            return_sums = torch.tensor([each_reward.sum() for each_reward in reward], device=device)
+
+        advantage, returns = self.get_advantages_and_returns(
+            experience.values,
+            reward,
+            experience.action_mask,
+            generate_kwargs["gamma"],
+            generate_kwargs["lambd"],
+        )
+
+        experience.info["return"] = return_sums
+        experience.info["kl"] = kl
+        experience.advantages = advantage
+        experience.returns = returns
+
+        # send experience to critic
+        experience_cpu = deepcopy(experience)
+        experience_cpu.to_device("cpu")
+        self._ref = self.critic.append.remote(experience_cpu)
+
+        self.actor.train()  # reset model state
+        return experience
+
+    @torch.no_grad()
+    def collect_base_experience(self, prompts: Union[str, List[str]], **generate_kwargs) -> Tuple[
+        Experience, Optional[List[int]]]:
         device = torch.cuda.current_device()
 
         # generate sequence
@@ -301,12 +392,14 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         )
 
         # values
-        value_ref = self.critic.forward.remote(
-            sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens
-        )
+        value_ref = None
+        if self.critic is not None:
+            value_ref = self.critic.forward.remote(
+                sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens
+            )
 
         # avoid CUDA OOM when colocate models
-        if self.strategy.args.colocate_critic_reward:
+        if self.strategy.args.colocate_critic_reward and self.critic is not None:
             ray.get([value_ref])
             ray.get([self.critic.empty_cache.remote()])
 
@@ -332,7 +425,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                     offset = 0
                     tokens_list = sequences_cpu.tolist()[0]
                     for length in packed_seq_lens:
-                        sequences_list.append(tokens_list[offset : offset + length])
+                        sequences_list.append(tokens_list[offset: offset + length])
                         offset += length
                     queries = self.tokenizer.batch_decode(sequences_list, skip_special_tokens=False)
                     r = remote_rm_fn_ray.remote(rm, queries=queries)
@@ -345,11 +438,17 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         # wait initial/critic/reward model done
         start = time.time()
-        ref_values = ray.get([base_action_log_probs_ref, value_ref] + r_refs)
-        wait_time = time.time() - start
-
-        base_action_log_probs, value, rewards = ref_values[0], ref_values[1], ref_values[2:]
-        base_action_log_probs, value = base_action_log_probs.to(device), value.to(device)
+        if self.critic is not None:
+            ref_values = ray.get([base_action_log_probs_ref, value_ref] + r_refs)
+            wait_time = time.time() - start
+            base_action_log_probs, value, rewards = ref_values[0], ref_values[1], ref_values[2:]
+            base_action_log_probs, value = base_action_log_probs.to(device), value.to(device)
+        else:
+            ref_values = ray.get([base_action_log_probs_ref] + r_refs)
+            wait_time = time.time() - start
+            base_action_log_probs, rewards = ref_values[0], ref_values[1:]
+            base_action_log_probs = base_action_log_probs.to(device)
+            value = None
         rewards = [r.to(device) for r in rewards]
         r = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
 
@@ -360,43 +459,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         if self.strategy.args.colocate_actor_ref:
             torch.cuda.empty_cache()
 
-        reward, kl = compute_reward(
-            r,
-            self.kl_ctl.value,
-            action_log_probs,
-            base_action_log_probs,
-            action_mask=action_mask,
-            num_actions=num_actions,
-        )
-
-        if not self.packing_samples:
-            kl = masked_mean(kl, action_mask, dim=-1)
-            return_sums = reward.sum(dim=-1)
-        else:
-            # convert tensor into list of tensors so that it's easier to manipulate
-            # within dataset.
-            sequences = unpacking_samples(sequences, packed_seq_lens)
-            attention_mask = None
-            action_log_probs = unpacking_samples(action_log_probs, num_actions)
-            value = unpacking_samples(value, num_actions)
-            reward = unpacking_samples(reward, num_actions)
-
-            kl = unpacking_samples(kl, num_actions)
-            kl = torch.tensor([each_kl.mean() for each_kl in kl], device=device)
-            return_sums = torch.tensor([each_reward.sum() for each_reward in reward], device=device)
-
-        advantage, returns = self.get_advantages_and_returns(
-            value,
-            reward,
-            action_mask,
-            generate_kwargs["gamma"],
-            generate_kwargs["lambd"],
-        )
-
         info = {
-            "kl": kl,
             "reward": r,
-            "return": return_sums,
             "response_length": response_length,
             "total_length": total_length,
         }
@@ -407,24 +471,15 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             info["actor_time"] = torch.full((batch_size,), actor_time, device=device)
             info["wait_time"] = torch.full((batch_size,), wait_time, device=device)
 
-        experience = Experience(
+        return Experience(
             sequences,
             action_log_probs,
-            value,
-            returns,
-            advantage,
-            attention_mask,
-            action_mask,
-            info,
-        )
-
-        # send experience to critic
-        experience_cpu = deepcopy(experience)
-        experience_cpu.to_device("cpu")
-        self._ref = self.critic.append.remote(experience_cpu)
-
-        self.actor.train()  # reset model state
-        return experience
+            info=info,
+            values=value,
+            base_log_probs=base_action_log_probs,
+            attention_mask=attention_mask,
+            action_mask=action_mask,
+        ), packed_seq_lens
 
     def _generate_local(self, prompts: List[str], **kwargs) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
@@ -513,3 +568,22 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         "Ensure all experience has been send to critic"
         ray.get(self._ref)
         self._ref = None
+
+class GRPORemoteExperienceMaker(RemoteExperienceMaker):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @torch.no_grad()
+    def make_experience(self, prompts: Union[str, List[str]], **generate_kwargs) -> Experience:
+        self.actor.eval()
+
+        experience, packed_seq_lens = self.collect_base_experience(prompts, **generate_kwargs)
+        num_actions = experience.action_mask.size(1)
+
+        if self.packing_samples:
+            experience.sequences = unpacking_samples(experience.sequences, packed_seq_lens)
+            experience.attention_mask = None
+            experience.action_log_probs = unpacking_samples(experience.action_log_probs, num_actions)
+
+        self.actor.train()  # reset model state
+        return experience

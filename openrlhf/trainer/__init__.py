@@ -5,3 +5,4 @@ from .ppo_trainer import PPOTrainer
 from .prm_trainer import ProcessRewardModelTrainer
 from .rm_trainer import RewardModelTrainer
 from .sft_trainer import SFTTrainer
+from .grpo_trainer import GRPOTrainer
