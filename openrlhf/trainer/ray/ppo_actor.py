@@ -4,6 +4,7 @@ import os
 import socket
 from copy import deepcopy
 from typing import Callable, Dict, List, Tuple
+from abc import ABC, abstractmethod
 
 import deepspeed
 import ray
@@ -183,7 +184,6 @@ class ActorPPOTrainer(PPOTrainer):
             ray.get(ref)
 
 
-@ray.remote(num_gpus=1)
 class ActorModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
         args = strategy.args
@@ -331,6 +331,7 @@ class ActorModelRayActor(BasePPORole):
         """Return the maximum number of steps."""
         return self._max_steps
 
+    @abstractmethod
     def fit(
         self,
         critic_model: ray.actor.ActorHandle,
@@ -342,6 +343,30 @@ class ActorModelRayActor(BasePPORole):
         critic_train_remote: bool = False,
     ):
         """Train actor model with prompt datasets."""
+        ...
+
+    def save_model(self):
+        args = self.strategy.args
+
+        # save model checkpoint after fitting on only rank0
+        self.strategy.save_model(
+            self.ema_model if args.enable_ema else self.actor,
+            self.tokenizer,
+            args.save_path,
+        )
+
+@ray.remote(num_gpus=1)
+class PPOActorModelRayActor(ActorModelRayActor):
+    def fit(
+        self,
+        critic_model: ray.actor.ActorHandle,
+        initial_model: ray.actor.ActorHandle,
+        reward_model: List[ray.actor.ActorHandle],
+        remote_rm_url: List[str] = None,
+        reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
+        vllm_engines: List[ray.actor.ActorHandle] = None,
+        critic_train_remote: bool = False,
+    ):
         strategy = self.strategy
         args = self.strategy.args
 
@@ -398,14 +423,4 @@ class ActorModelRayActor(BasePPORole):
             self.pretrain_dataloader,
             self.consumed_samples,
             self.num_update_steps_per_episodes,
-        )
-
-    def save_model(self):
-        args = self.strategy.args
-
-        # save model checkpoint after fitting on only rank0
-        self.strategy.save_model(
-            self.ema_model if args.enable_ema else self.actor,
-            self.tokenizer,
-            args.save_path,
         )
