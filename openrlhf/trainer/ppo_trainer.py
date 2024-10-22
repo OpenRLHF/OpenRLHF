@@ -216,10 +216,9 @@ class PPOTrainer(ABC):
             )
 
             for rand_prompts in self.prompts_dataloader:
-                rand_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in rand_prompts], [])
-                for i in range(0, len(rand_prompts), args.micro_rollout_batch_size):
-                    prompts = rand_prompts[i : i + args.micro_rollout_batch_size]
-                    experience = self.experience_maker.make_experience(prompts, **self.generate_kwargs)
+                for i, experience in enumerate(
+                    self.experience_maker.make_experience_list(rand_prompts, **self.generate_kwargs)
+                ):
                     if i == 0:
                         output = self.tokenizer.batch_decode(
                             experience.sequences[0].unsqueeze(0), skip_special_tokens=True

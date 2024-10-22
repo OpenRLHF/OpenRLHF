@@ -30,20 +30,17 @@ def compute_approx_kl(
 def compute_reward(
     r: Union[torch.Tensor, float],
     kl_coef: float,
-    log_probs: torch.Tensor,
-    log_probs_base: torch.Tensor,
+    kl: Union[torch.Tensor, list[torch.Tensor]],
     action_mask: Optional[torch.Tensor] = None,
     num_actions: Optional[Union[int, list[int]]] = None,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> Union[torch.Tensor, list[torch.Tensor]]:
     if kl_coef <= 0.0:
         kl_coef = 0.0
-
-    kl = compute_approx_kl(log_probs, log_probs_base, action_mask=action_mask)
-    kl_reward = -kl_coef * kl
 
     r = r.clamp(min=-10, max=10)
 
     if action_mask is not None:
+        kl_reward = -kl_coef * kl
         # The following code is equivalent to:
         #
         # last_reward = torch.zeros_like(kl)
@@ -55,18 +52,17 @@ def compute_reward(
         #
         eos_indices = action_mask.size(1) - 1 - action_mask.long().fliplr().argmax(dim=1, keepdim=True)
         last_reward = torch.zeros_like(kl).scatter_(dim=1, index=eos_indices, src=r.unsqueeze(1).to(kl.dtype))
-    else:
-        # The following code is equivalent to:
-        #
-        # TODO: write a more efficient version with cumsum
-        last_reward = torch.zeros_like(kl)
-        offset = 0
-        for i, action_len in enumerate(num_actions):
-            last_reward[0, offset + action_len - 1] = r[i]
-            offset += action_len
 
-    reward = last_reward + kl_reward
-    return reward, kl
+        reward = last_reward + kl_reward
+    else:
+        # TODO: write a more efficient version
+        reward = []
+        for i, (kl_seg, action_len) in enumerate(zip(kl, num_actions)):
+            kl_reward = -kl_coef * kl_seg
+            kl_reward[action_len - 1] += r[i]
+            reward.append(kl_reward)
+
+    return reward
 
 
 def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
