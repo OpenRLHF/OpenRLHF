@@ -274,7 +274,6 @@ class PRMLoss(nn.Module):
         labels = labels[placeholder_mask]
         if self.reward_token_ids is not None:
             logits = logits[..., self.reward_token_ids]
-            logits = logits.softmax(dim=-1)
             # this is bad....
             for i, token in enumerate(self.reward_token_ids):
                 labels = torch.where(labels == token, i, labels)
