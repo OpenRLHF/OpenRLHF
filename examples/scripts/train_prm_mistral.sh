@@ -1,5 +1,7 @@
+set -x
 
-deepspeed --module openrlhf.cli.train_prm \
+read -r -d '' training_commands <<EOF
+openrlhf.cli.train_prm \
    --save_path ./checkpoint/mistal-7b-prm \
    --save_steps 500 \
    --logging_steps 1 \
@@ -20,5 +22,13 @@ deepspeed --module openrlhf.cli.train_prm \
    --gradient_checkpointing \
    --packing_samples \
    --wandb_group prm \
-   --placeholder_token "ки" \
-   --reward_tokens "+" "-"
+   --placeholder_token ки \
+   --reward_tokens + -
+EOF
+     # --use_wandb [WANDB_TOKENS] or True (use wandb login command)
+     # --packing_samples
+
+
+if [[ ${1} != "slurm" ]]; then
+    deepspeed --module $training_commands
+fi
