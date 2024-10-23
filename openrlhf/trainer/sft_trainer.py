@@ -135,20 +135,8 @@ class SFTTrainer(ABC):
                     inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
                     attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
 
-                output = self.model(inputs, attention_mask=attention_mask, return_output=True)
-
-                # loss function
-                labels = torch.where(
-                    attention_mask.bool(),
-                    inputs,
-                    self.loss_fn.IGNORE_INDEX,
-                )
-                # mixtral
-                if self.aux_loss:
-                    aux_loss = output.aux_loss
-                else:
-                    aux_loss = 0
-
+                # create labels
+                labels = torch.where(attention_mask.bool(), inputs, self.loss_fn.IGNORE_INDEX)
                 if not self.pretrain_mode:
                     if self.packing_samples:
                         index = 0
@@ -158,8 +146,60 @@ class SFTTrainer(ABC):
                     else:
                         for label, source_len in zip(labels, prompts_id_lens):
                             label[:source_len] = self.loss_fn.IGNORE_INDEX
+                
+                if self.strategy.ring_attn_size == 1: # vanilla sft training
+                    output = self.model(inputs, attention_mask=attention_mask, return_output=True)
+                    gpt_loss = self.loss_fn(output.logits, labels)
+                
+                else: # ring attention
+                    assert self.packing_samples, "Ring attention only works with packing samples"
+                    
+                    local_logits = self.model(
+                        inputs,
+                        attention_mask=attention_mask,
+                        ring_attn_group=self.strategy.ring_attn_group,
+                        packed_seq_lens=prompts_id_lens, 
+                        return_output=True,
+                    )["logits"]
+                    
+                    total_seq_len = labels.numel()
+                    local_seq_len = total_seq_len // self.strategy.ring_attn_size
+                    
+                    ########################### loss computation ###########################
+                    # global labels                     [0,1,2,3,4,5]
+                    # global masks                      [0,0,0,0,1,1]  # only compute SFT loss on [4, 5]
+                    # shifted labels                    [1,2,3,4,5,0]
+                    # global masks (shifted)            [0,0,0,1,1,0]  # only compute SFT loss on [4, 5]
+                    # local labels (ring_attn_size=2)   [[1,2,3], [4,5,0]]
+                    # local masks  (ring_attn_size=2)   [[0,0,0], [1,1,0]]
+                    ########################### loss computation ###########################
+                    
+                    local_slice = slice(rank * local_seq_len + 1, (rank + 1) * local_seq_len + 1)
+                    labels.roll(shifts=-1, dims=1)  # shift the label to the left to avoid the bos token 
+                    labels[:, -1] = self.loss_fn.IGNORE_INDEX  # pad the last token with -100 to avoid the loss computation
+                    
+                    local_label = labels[:, local_slice]
+                    if rank == self.strategy.ring_attn_size - 1: # add a dummy label to the last logit
+                        local_label = F.pad(local_label, (0, 1), value=self.loss_fn.IGNORE_INDEX)
+                        
+                    # convert -100 in local_label into 0 for `torch.gather` operation
+                    local_label[local_label==self.loss_fn.IGNORE_INDEX] = 0
+                    per_token_logps = torch.gather(local_logits.log_softmax(-1), dim=2, index=local_label.unsqueeze(2)).squeeze(2)
+                    
+                    local_mask = (local_label == self.loss_fn.IGNORE_INDEX)  # Shape: (batch_size, seq_len)
+                    per_token_logps *= ~local_mask
+                    
+                    gathered_logps = all_gather(per_token_logps, self.strategy.ring_attn_group).reshape((1, -1))
+                    masked_logps_flat = gathered_logps.view(-1)
 
-                gpt_loss = self.loss_fn(output.logits, labels)
+                    gpt_loss = -torch.mean(masked_logps_flat)
+                
+                # mixtral
+                if self.aux_loss:
+                    aux_loss = output.aux_loss
+                else:
+                    aux_loss = 0
+                
                 loss = gpt_loss + aux_loss * self.args.aux_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
