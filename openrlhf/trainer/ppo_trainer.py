@@ -469,11 +469,16 @@ class PPOTrainer(ABC):
                         "global_step": global_step,
                     }.items()
                 }
+                if self.experience_maker.perf_stats is not None:
+                    logs.update({f"perf/experience_maker/{k}": v for k, v in self.experience_maker.perf_stats.items()})
                 self._wandb.log(logs)
             # TensorBoard
             elif self._tensorboard is not None and self.strategy.is_rank_0():
                 for k, v in logs_dict.items():
                     self._tensorboard.add_scalar(f"train/{k}", v, global_step)
+                if self.experience_maker.perf_stats is not None:
+                    for k, v in self.experience_maker.perf_stats.items():
+                        self._tensorboard.add_scalar(f"perf/experience_maker/{k}", v, global_step)
 
         # TODO: Add evaluation mechanism for PPO
         if global_step % args.eval_steps == 0:
