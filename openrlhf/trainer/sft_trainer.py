@@ -181,18 +181,15 @@ class SFTTrainer(ABC):
                     local_label = labels[:, local_slice]
                     if rank == self.strategy.ring_attn_size - 1: # add a dummy label to the last logit
                         local_label = F.pad(local_label, (0, 1), value=self.loss_fn.IGNORE_INDEX)
-                        
+                    local_mask = (local_label == self.loss_fn.IGNORE_INDEX)  # Shape: (batch_size, seq_len)
+
                     # convert -100 in local_label into 0 for `torch.gather` operation
                     local_label[local_label==self.loss_fn.IGNORE_INDEX] = 0
                     per_token_logps = torch.gather(local_logits.log_softmax(-1), dim=2, index=local_label.unsqueeze(2)).squeeze(2)
                     
-                    local_mask = (local_label == self.loss_fn.IGNORE_INDEX)  # Shape: (batch_size, seq_len)
                     per_token_logps *= ~local_mask
-                    
-                    gathered_logps = all_gather(per_token_logps, self.strategy.ring_attn_group).reshape((1, -1))
-                    masked_logps_flat = gathered_logps.view(-1)
-
-                    gpt_loss = -torch.mean(masked_logps_flat)
+                    per_chunk_loss = -torch.mean(per_token_logps)
+                    gpt_loss = all_reduce(per_chunk_loss, self.strategy.ring_attn_group)
                 
                 # mixtral
                 if self.aux_loss:
