@@ -127,7 +127,7 @@ class SFTTrainer(ABC):
             # train
             self.model.train()
             loss_mean = 0
-            for prompts_id_lens, inputs, attention_masks, infos in self.train_dataloader:
+            for prompts_id_lens, inputs, attention_masks, packed_seq_lens, infos in self.train_dataloader:
                 if self.packing_samples:
                     inputs = inputs.to(torch.cuda.current_device())
                     attention_mask = attention_masks.to(torch.cuda.current_device())
@@ -158,7 +158,7 @@ class SFTTrainer(ABC):
                         inputs,
                         attention_mask=attention_mask,
                         ring_attn_group=self.strategy.ring_attn_group,
-                        packed_seq_lens=prompts_id_lens, 
+                        packed_seq_lens=packed_seq_lens, 
                         return_output=True,
                     )["logits"]
                     
