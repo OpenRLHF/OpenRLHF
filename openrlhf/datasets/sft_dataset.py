@@ -1,17 +1,29 @@
 from typing import Callable
-
 import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
-
 from .utils import zero_pad_sequences
-
+from torch.nn import functional as F
 
 def preprocess_data(data, input_template=None, input_key="input", output_key=None, apply_chat_template=None):
     if apply_chat_template:
         if output_key:
-            prompt = apply_chat_template(data[input_key], tokenize=False, add_generation_prompt=True)
-            response = apply_chat_template(data[input_key] + data[output_key], tokenize=False)[len(prompt) :]
+            # print(data[input_key])
+            prompt = apply_chat_template(
+                conversation=[
+                    {'role': 'system', 'content': data[input_key]}, 
+                ],
+                tokenize=False, add_generation_prompt=True
+            )
+            # prompt = apply_chat_template(data[input_key], tokenize=False, add_generation_prompt=True)
+            response = apply_chat_template(
+                conversation=[
+                    {'role': 'system', 'content': data[input_key]}, 
+                    {'role': 'user', 'content': data[output_key]}
+                ],
+                tokenize=False, add_generation_prompt=True
+            )[len(prompt) :]
+            # response = apply_chat_template(data[input_key] + data[output_key], tokenize=False)[len(prompt) :]
         else:
             prompt = apply_chat_template(data[input_key][:-1], tokenize=False, add_generation_prompt=True)
             response = apply_chat_template(data[input_key], tokenize=False)[len(prompt) :]
@@ -43,12 +55,14 @@ class SFTDataset(Dataset):
         input_template=None,
         pretrain_mode=False,
         num_processors=8,  # Specify the number of processors you want to use
+        multiple_of=1,
     ) -> None:
         super().__init__()
         self.tokenizer = tokenizer
         self.strategy = strategy
         self.pretrain_mode = pretrain_mode
         self.max_length = max_length
+        self.multiple_of = multiple_of
 
         # chat template
         self.input_template = input_template
@@ -64,7 +78,10 @@ class SFTDataset(Dataset):
 
         # Parallel loading datasets
         processed_dataset = dataset.map(
-            self.process_data, remove_columns=dataset.column_names, num_proc=num_processors
+            self.process_data, 
+            remove_columns=dataset.column_names, 
+            num_proc=num_processors, 
+            keep_in_memory=False,
         )
         processed_dataset = processed_dataset.filter(lambda x: x["prompt"] is not None)
 
@@ -81,18 +98,18 @@ class SFTDataset(Dataset):
             self.output_key,
             apply_chat_template=None if self.pretrain_mode else self.apply_chat_template,
         )
+        
         if not self.pretrain_mode:
             prompt_token = self.tokenizer(
                 prompt,
                 max_length=self.max_length,
-                padding=False,
+                padding="max_length",
                 truncation=True,
                 return_tensors="pt",
                 add_special_tokens=False,
             )
             prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
-
-            # filter the sample whose length is greater than max_length (2 for answer length)
+            # print(prompt_ids_len)
             if not prompt or not response or prompt_ids_len >= self.max_length - 2:
                 prompt = None
         else:
@@ -124,14 +141,13 @@ class SFTDataset(Dataset):
             return_tensors="pt",
             add_special_tokens=False,
         )
-
         if not self.pretrain_mode:
             # to avoid EOS_token truncation
             input_token["input_ids"][0][-1] = self.tokenizer.eos_token_id
             input_token["attention_mask"][0][-1] = True
         info = {"input": prompt, "output": response, "input_length": input_token["attention_mask"].int().sum().item()}
-
         return prompt_ids_len, input_token["input_ids"], input_token["attention_mask"], info
+        
 
     def collate_fn(self, item_list):
         prompt_ids_lens = []
@@ -148,23 +164,29 @@ class SFTDataset(Dataset):
 
         input_ids = zero_pad_sequences(input_ids, "right", self.tokenizer.pad_token_id)
         attention_masks = zero_pad_sequences(attention_masks, "right")
-        return prompt_ids_lens, input_ids, attention_masks, infos
+        return prompt_ids_lens, input_ids, attention_masks, None, infos
+
 
     def packing_collate_fn(self, item_list):
-        packed_input_ids = []
-        packed_attention_masks = []
-        prompt_ids_lens = []
+        packed_input_ids, packed_attention_masks = [], []
+        prompt_ids_lens, packed_seq_lens = [], []
         infos = {"input_length": []}
-
         index = 1
+    
         for prompt_ids_len, input_id, attention_mask, info in item_list:
             packed_input_ids.append(input_id.flatten())
-            packed_attention_masks.append(torch.ones_like(input_id.flatten()) * index)
+            packed_seq_lens.append(len(input_id.flatten()))
+            packed_attention_masks.append(torch.full_like(input_id.flatten(), index))
             prompt_ids_lens.append(prompt_ids_len)
             infos["input_length"].append(info["input_length"])
             index += 1
 
         packed_input_ids = torch.cat(packed_input_ids, dim=0).unsqueeze(0)
         packed_attention_masks = torch.cat(packed_attention_masks, dim=0).unsqueeze(0)
+        
+        if self.multiple_of > 1 and packed_input_ids.numel() % self.multiple_of != 0:
+            padding_len = self.multiple_of - (packed_input_ids.numel() % self.multiple_of)
+            packed_input_ids = F.pad(packed_input_ids, (0, padding_len), value=self.tokenizer.pad_token_id)
+            packed_attention_masks = F.pad(packed_attention_masks, (0, padding_len), value=0)
 
-        return prompt_ids_lens, packed_input_ids, packed_attention_masks, infos
+        return prompt_ids_lens, packed_input_ids, packed_attention_masks, packed_seq_lens, infos
