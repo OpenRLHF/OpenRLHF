@@ -8,22 +8,8 @@ from torch.nn import functional as F
 def preprocess_data(data, input_template=None, input_key="input", output_key=None, apply_chat_template=None):
     if apply_chat_template:
         if output_key:
-            # print(data[input_key])
-            prompt = apply_chat_template(
-                conversation=[
-                    {'role': 'system', 'content': data[input_key]}, 
-                ],
-                tokenize=False, add_generation_prompt=True
-            )
-            # prompt = apply_chat_template(data[input_key], tokenize=False, add_generation_prompt=True)
-            response = apply_chat_template(
-                conversation=[
-                    {'role': 'system', 'content': data[input_key]}, 
-                    {'role': 'user', 'content': data[output_key]}
-                ],
-                tokenize=False, add_generation_prompt=True
-            )[len(prompt) :]
-            # response = apply_chat_template(data[input_key] + data[output_key], tokenize=False)[len(prompt) :]
+            prompt = apply_chat_template(data[input_key], tokenize=False, add_generation_prompt=True)
+            response = apply_chat_template(data[input_key] + data[output_key], tokenize=False)[len(prompt) :]
         else:
             prompt = apply_chat_template(data[input_key][:-1], tokenize=False, add_generation_prompt=True)
             response = apply_chat_template(data[input_key], tokenize=False)[len(prompt) :]
@@ -103,7 +89,7 @@ class SFTDataset(Dataset):
             prompt_token = self.tokenizer(
                 prompt,
                 max_length=self.max_length,
-                padding="max_length",
+                padding=False,
                 truncation=True,
                 return_tensors="pt",
                 add_special_tokens=False,
@@ -147,7 +133,7 @@ class SFTDataset(Dataset):
             input_token["attention_mask"][0][-1] = True
         info = {"input": prompt, "output": response, "input_length": input_token["attention_mask"].int().sum().item()}
         return prompt_ids_len, input_token["input_ids"], input_token["attention_mask"], info
-        
+
 
     def collate_fn(self, item_list):
         prompt_ids_lens = []

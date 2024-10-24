@@ -169,9 +169,7 @@ class SFTTrainer(ABC):
                     # global labels                     [0,1,2,3,4,5]
                     # global masks                      [0,0,0,0,1,1]  # only compute SFT loss on [4, 5]
                     # shifted labels                    [1,2,3,4,5,0]
-                    # global masks (shifted)            [0,0,0,1,1,0]  # only compute SFT loss on [4, 5]
                     # local labels (ring_attn_size=2)   [[1,2,3], [4,5,0]]
-                    # local masks  (ring_attn_size=2)   [[0,0,0], [1,1,0]]
                     ########################### loss computation ###########################
                     
                     local_slice = slice(rank * local_seq_len + 1, (rank + 1) * local_seq_len + 1)
