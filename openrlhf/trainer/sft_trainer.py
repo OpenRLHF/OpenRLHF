@@ -175,8 +175,6 @@ class SFTTrainer(ABC):
                     ########################### loss computation ###########################
                     
                     local_slice = slice(rank * local_seq_len + 1, (rank + 1) * local_seq_len + 1)
-                    labels.roll(shifts=-1, dims=1)  # shift the label to the left to avoid the bos token 
-                    labels[:, -1] = self.loss_fn.IGNORE_INDEX  # pad the last token with -100 to avoid the loss computation
                     
                     local_label = labels[:, local_slice]
                     if rank == self.strategy.ring_attn_size - 1: # add a dummy label to the last logit
@@ -184,12 +182,13 @@ class SFTTrainer(ABC):
                     local_mask = (local_label == self.loss_fn.IGNORE_INDEX)  # Shape: (batch_size, seq_len)
 
                     # convert -100 in local_label into 0 for `torch.gather` operation
-                    local_label[local_label==self.loss_fn.IGNORE_INDEX] = 0
+                    local_label[local_mask] = 0
                     per_token_logps = torch.gather(local_logits.log_softmax(-1), dim=2, index=local_label.unsqueeze(2)).squeeze(2)
-                    
-                    per_token_logps *= ~local_mask
-                    per_chunk_loss = -torch.mean(per_token_logps)
-                    gpt_loss = all_reduce(per_chunk_loss, self.strategy.ring_attn_group)
+
+                    per_token_logps = per_token_logps * (~local_mask)
+                    gathered_logps = all_gather(per_token_logps, self.strategy.ring_attn_group)
+
+                    gpt_loss = -torch.sum(gathered_logps) / num_calculate_tokens
                 
                 # mixtral
                 if self.aux_loss:
