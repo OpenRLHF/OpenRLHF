@@ -215,7 +215,12 @@ class NaiveExperienceMaker(ABC):
             # local RM
             r = self.reward_model(sequences, attention_mask)
 
-        kl = compute_approx_kl(action_log_probs, base_action_log_probs, action_mask=action_mask)
+        kl = compute_approx_kl(
+            action_log_probs,
+            base_action_log_probs,
+            action_mask=action_mask,
+            use_kl_estimator_k3=self.strategy.args.use_kl_estimator_k3,
+        )
 
         info = {
             "kl": masked_mean(kl, action_mask, dim=-1),
@@ -421,7 +426,12 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         if self.strategy.args.colocate_actor_ref:
             torch.cuda.empty_cache()
 
-        kl = compute_approx_kl(action_log_probs, base_action_log_probs, action_mask=action_mask)
+        kl = compute_approx_kl(
+            action_log_probs,
+            base_action_log_probs,
+            action_mask=action_mask,
+            use_kl_estimator_k3=self.strategy.args.use_kl_estimator_k3,
+        )
 
         if not self.packing_samples:
             kl_mean = masked_mean(kl, action_mask, dim=-1)
