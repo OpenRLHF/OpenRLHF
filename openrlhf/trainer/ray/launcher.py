@@ -269,7 +269,10 @@ class PPORayActorGroup:
             or reward_fn is not None
         ), "reward_fn must be specified if using multiple reward models"
 
-        critic_actors = critic_model_group._actor_handlers
+        if critic_model_group is not None:
+            critic_actors = critic_model_group._actor_handlers
+        else:
+            critic_actors = [None] * len(self._actor_handlers)
         initial_actors = initial_model_group._actor_handlers
 
         refs = []
@@ -294,7 +297,7 @@ class PPORayActorGroup:
                     reward_fn=reward_fn,
                     vllm_engines=vllm_engines,
                     # whether this actor should triger corresponding critic model training
-                    critic_train_remote=(i < len(critic_actors)),
+                    critic_train_remote=(critic_actor is not None) and (i < len(critic_actors)),
                 )
             )
 

@@ -84,9 +84,16 @@ def train(args):
         num_gpus_per_actor=0.25 if pg else 1,
     )
 
+    if args.rl_algo == "ppo":
+        use_critic = True
+    elif args.rl_algo == "reinforce":
+        use_critic = False
+    else:
+        raise NotImplementedError(f"RL algorithm {args.rl_algo} is not implemented.")
+
     # if colocated, create placement group for critic and reward model explicitly.
     pg = None
-    if args.colocate_critic_reward:
+    if use_critic and args.colocate_critic_reward:
         assert (
             args.critic_num_nodes == args.reward_num_nodes
             and args.critic_num_gpus_per_node == args.reward_num_gpus_per_node
@@ -99,13 +106,16 @@ def train(args):
         pg = placement_group(bundles, strategy="STRICT_SPREAD")
         ray.get(pg.ready())
 
-    critic_model = PPORayActorGroup(
-        args.critic_num_nodes,
-        args.critic_num_gpus_per_node,
-        CriticModelRayActor,
-        pg=pg,
-        num_gpus_per_actor=0.75 if pg else 1,
-    )
+    if use_critic:
+        critic_model = PPORayActorGroup(
+            args.critic_num_nodes,
+            args.critic_num_gpus_per_node,
+            CriticModelRayActor,
+            pg=pg,
+            num_gpus_per_actor=0.75 if pg else 1,
+        )
+    else:
+        critic_model = None
 
     # multiple reward models
     if not args.remote_rm_url:
@@ -148,11 +158,12 @@ def train(args):
             max_len,
         )
 
-    # critic scheduler initialization depends on max_step, so we have to init critic after actor
-    # TODO: use first reward model as critic model
-    max_steps = ray.get(actor_model._actor_handlers[0].max_steps.remote())
-    refs.extend(critic_model.async_init_model_from_pretrained(strategy, args.critic_pretrain, max_steps))
-    ray.get(refs)
+    if use_critic:
+        # critic scheduler initialization depends on max_step, so we have to init critic after actor
+        # TODO: use first reward model as critic model
+        max_steps = ray.get(actor_model._actor_handlers[0].max_steps.remote())
+        refs.extend(critic_model.async_init_model_from_pretrained(strategy, args.critic_pretrain, max_steps))
+        ray.get(refs)
 
     # train actor and critic mdoel
     refs = actor_model.async_fit_actor_model(
@@ -163,7 +174,7 @@ def train(args):
     # save model
     ray.get(actor_model.async_save_model())
 
-    if args.save_value_network:
+    if use_critic and args.save_value_network:
         ray.get(critic_model.async_save_model())
 
 
@@ -242,6 +253,14 @@ if __name__ == "__main__":
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")
     parser.add_argument("--lora_dropout", type=float, default=0)
+
+    parser.add_argument(
+        "--rl_algo",
+        type=str,
+        choices=["ppo", "reinforce"],
+        default="ppo",
+        help="RL algorithm to use, PPO or REINFORCE Leave one out (RLOO)",
+    )
 
     # PPO
     parser.add_argument("--save_path", type=str, default="./ckpt")
@@ -360,5 +379,9 @@ if __name__ == "__main__":
             args.flash_attn = True
         assert args.vllm_num_engines > 0, "Only support `--packing_samples` with vLLM."
         assert not args.pretrain_data, "`--pretrain_data` is not supported with `--packing_samples` yet."
+
+    if args.rl_algo == "reinforce":
+        if args.colocate_critic_reward:
+            args.colocate_critic_reward = False
 
     train(args)

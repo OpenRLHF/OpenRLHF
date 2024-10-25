@@ -36,7 +36,64 @@ def compute_approx_kl(
     return log_ratio
 
 
-def compute_reward(
+def ppo_get_advantages_and_returns(
+    values: torch.Tensor,
+    rewards: torch.Tensor,
+    action_mask: torch.Tensor,
+    gamma: float,
+    lambd: float,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Function that computes advantages and returns from rewards and values.
+    Calculated as in the original PPO paper: https://arxiv.org/abs/1707.06347
+    Note that rewards may include a KL divergence loss term.
+
+    Advantages looks like this:
+    Adv1 =  R1 + γ * λ * R2     + γ^2 * λ^2 * R3       + ...
+          - V1 + γ * (1 - λ) V2 + γ^2 * λ * (1 - λ) V3 + ...
+
+    Returns looks like this:
+    Ret1 =  R1 + γ * λ * R2     + γ^2 * λ^2 * R3       + ...
+                + γ * (1 - λ) V2 + γ^2 * λ * (1 - λ) V3 + ...
+
+    Input:
+    - values: Tensor of shape (batch_size, response_size)
+    - rewards: Tensor of shape (batch_size, response_size)
+
+    Output:
+    - advantages: Tensor of shape (batch_size, response_size)
+    - returns: Tensor of shape (batch_size, response_size)
+    """
+    if isinstance(values, list):
+        # packing samples
+        # TODO: this is slow...
+        advantages = []
+        returns = []
+        for v, r in zip(values, rewards):
+            adv, ret = ppo_get_advantages_and_returns(v.unsqueeze(0), r.unsqueeze(0), action_mask, gamma, lambd)
+            advantages.append(adv.squeeze(0))
+            returns.append(ret.squeeze(0))
+        return advantages, returns
+
+    lastgaelam = 0
+    advantages_reversed = []
+    response_length = rewards.size(1)
+
+    # Mask invalid responses
+    if action_mask is not None:
+        values = action_mask * values
+        rewards = action_mask * rewards
+
+    for t in reversed(range(response_length)):
+        nextvalues = values[:, t + 1] if t < response_length - 1 else 0.0
+        delta = rewards[:, t] + gamma * nextvalues - values[:, t]
+        lastgaelam = delta + gamma * lambd * lastgaelam
+        advantages_reversed.append(lastgaelam)
+    advantages = torch.stack(advantages_reversed[::-1], dim=1)
+    returns = advantages + values
+    return advantages.detach(), returns
+
+
+def ppo_compute_reward(
     r: Union[torch.Tensor, float],
     kl_coef: float,
     kl: Union[torch.Tensor, list[torch.Tensor]],
@@ -71,6 +128,24 @@ def compute_reward(
             kl_reward[action_len - 1] += r[i]
             reward.append(kl_reward)
 
+    return reward
+
+
+def reinforce_compute_reward(
+    r: Union[torch.Tensor, float],
+    kl_coef: float,
+    kl: Union[torch.Tensor, list[torch.Tensor]],
+    action_mask: Optional[torch.Tensor] = None,
+) -> Union[torch.Tensor, list[torch.Tensor]]:
+    if kl_coef <= 0.0:
+        kl_coef = 0.0
+
+    if action_mask is not None:
+        kl_reward = -kl_coef * (kl * action_mask).sum(dim=1)
+    else:
+        kl_reward = -kl_coef * torch.cat([kl_seg.sum(dim=0, keepdim=True) for kl_seg in kl])
+
+    reward = r + kl_reward
     return reward
 
 

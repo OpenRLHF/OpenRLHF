@@ -216,13 +216,20 @@ class NaiveReplayBuffer(ABC):
 
         items_vector = torch.cat(items).float().flatten()
 
-        if action_masks[0] is None:
-            # packing samples has no action mask
+        if strategy.args.rl_algo == "ppo":
+            if action_masks[0] is None:
+                # packing samples has no action mask
+                action_masks_vector = 1
+                num_actions = items_vector.numel()
+            else:
+                action_masks_vector = torch.cat(action_masks).flatten()
+                num_actions = action_masks_vector.sum()
+        elif strategy.args.rl_algo == "reinforce":
+            # reinforce
             action_masks_vector = 1
             num_actions = items_vector.numel()
         else:
-            action_masks_vector = torch.cat(action_masks).flatten()
-            num_actions = action_masks_vector.sum()
+            raise NotImplementedError(f"Unsupported RL algorithm: {strategy.args.rl_algo}")
 
         # for DP
         # mean

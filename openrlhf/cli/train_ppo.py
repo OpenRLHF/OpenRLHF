@@ -285,6 +285,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_ckpt_mem", type=int, default=1e8)
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
 
+    parser.add_argument("--rl_algo", type=str, choices=["ppo"], default="ppo")
+
     # PPO
     parser.add_argument("--num_episodes", type=int, default=1)
     parser.add_argument("--rollout_batch_size", type=int, default=512)

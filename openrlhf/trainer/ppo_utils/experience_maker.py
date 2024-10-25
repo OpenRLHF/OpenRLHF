@@ -11,7 +11,14 @@ import torch.nn as nn
 from tqdm import tqdm
 
 from openrlhf.models.actor import Actor
-from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean, unpacking_samples
+from openrlhf.models.utils import (
+    compute_approx_kl,
+    masked_mean,
+    ppo_compute_reward,
+    ppo_get_advantages_and_returns,
+    reinforce_compute_reward,
+    unpacking_samples,
+)
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn, remote_rm_fn_ray
 
@@ -51,7 +58,7 @@ class Experience:
 
     sequences: torch.Tensor
     action_log_probs: torch.Tensor
-    values: torch.Tensor
+    values: Optional[torch.Tensor]
     returns: Optional[torch.Tensor]
     advantages: Optional[torch.Tensor]
     attention_mask: Optional[torch.LongTensor]
@@ -63,9 +70,11 @@ class Experience:
     def to_device(self, device: torch.device) -> None:
         self.sequences = to(self.sequences, device)
         self.action_log_probs = to(self.action_log_probs, device)
-        self.values = to(self.values, device)
-        self.returns = to(self.returns, device)
         self.advantages = to(self.advantages, device)
+        if self.values is not None:
+            self.values = self.values.to(device)
+        if self.returns is not None:
+            self.returns = self.returns.to(device)
         if self.attention_mask is not None:
             self.attention_mask = self.attention_mask.to(device)
         if self.action_mask is not None:
@@ -74,9 +83,11 @@ class Experience:
     def pin_memory(self):
         self.sequences = pin_memory(self.sequences)
         self.action_log_probs = pin_memory(self.action_log_probs)
-        self.values = pin_memory(self.values)
-        self.returns = pin_memory(self.returns)
         self.advantages = pin_memory(self.advantages)
+        if self.values is not None:
+            self.values = pin_memory(self.values)
+        if self.returns is not None:
+            self.returns = pin_memory(self.returns)
         if self.attention_mask is not None:
             self.attention_mask = self.attention_mask.pin_memory()
         if self.action_mask is not None:
@@ -152,36 +163,11 @@ class NaiveExperienceMaker(ABC):
             prompts = all_prompts[i : i + args.micro_rollout_batch_size]
             experiences.append(self.make_experience(prompts, **generate_kwargs))
 
+        # register some filter or reward preprocessing here.
         experiences = self.process_experiences(experiences)
 
-        # calculate return and advantages
-        for experience in experiences:
-            num_actions = experience.info["num_actions"]
-            reward = compute_reward(
-                experience.info["reward"],
-                self.kl_ctl.value,
-                experience.kl,
-                action_mask=experience.action_mask,
-                num_actions=num_actions,
-            )
-            experience.advantages, experience.returns = self.get_advantages_and_returns(
-                experience.values,
-                reward,
-                experience.action_mask,
-                generate_kwargs["gamma"],
-                generate_kwargs["lambd"],
-            )
-            # calculate the return info.
-            if not self.packing_samples:
-                return_sums = reward.sum(dim=-1)
-            else:
-                return_sums = torch.tensor(
-                    [each_reward.sum() for each_reward in reward], device=torch.cuda.current_device()
-                )
-            experience.info["return"] = return_sums
-            # remove unnecessary info
-            experience.kl = None
-            del experience.info["num_actions"]
+        # calculate advantages (and returns if needed)
+        experiences = self.get_advantages_and_returns(experiences, **generate_kwargs)
         return experiences
 
     @torch.no_grad()
@@ -251,62 +237,69 @@ class NaiveExperienceMaker(ABC):
         return experiences
 
     @torch.no_grad()
-    def get_advantages_and_returns(
-        self,
-        values: torch.Tensor,
-        rewards: torch.Tensor,
-        action_mask: torch.Tensor,
-        gamma: float,
-        lambd: float,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Function that computes advantages and returns from rewards and values.
-        Calculated as in the original PPO paper: https://arxiv.org/abs/1707.06347
-        Note that rewards may include a KL divergence loss term.
+    def get_advantages_and_returns(self, experiences: List[Experience], **generate_kwargs) -> Experience:
+        if self.strategy.args.rl_algo == "ppo":
+            for experiences in experiences:
+                num_actions = experience.info["num_actions"]
+                reward = ppo_compute_reward(
+                    experience.info["reward"],
+                    self.kl_ctl.value,
+                    experience.kl,
+                    action_mask=experience.action_mask,
+                    num_actions=num_actions,
+                )
+                experience.advantages, experience.returns = ppo_get_advantages_and_returns(
+                    experience.values,
+                    reward,
+                    experience.action_mask,
+                    generate_kwargs["gamma"],
+                    generate_kwargs["lambd"],
+                )
+                # calculate the return info.
+                if not self.packing_samples:
+                    return_sums = reward.sum(dim=-1)
+                else:
+                    return_sums = torch.tensor(
+                        [each_reward.sum() for each_reward in reward], device=torch.cuda.current_device()
+                    )
+                experience.info["return"] = return_sums
+        elif self.strategy.args.rl_algo == "reinforce":
+            reward = []
+            for experience in experiences:
+                reward.append(
+                    reinforce_compute_reward(
+                        experience.info["reward"],
+                        self.kl_ctl.value,
+                        experience.kl,
+                        action_mask=experience.action_mask,
+                    )
+                )
+                experience.info["return"] = reward[-1]
+            reward = torch.cat(reward, dim=0)
 
-        Advantages looks like this:
-        Adv1 =  R1 + γ * λ * R2     + γ^2 * λ^2 * R3       + ...
-              - V1 + γ * (1 - λ) V2 + γ^2 * λ * (1 - λ) V3 + ...
+            # RLOO here
+            n_samples_per_prompt = self.strategy.args.n_samples_per_prompt
+            if n_samples_per_prompt > 1:
+                for i in range(0, len(reward), n_samples_per_prompt):
+                    sample_reward = reward[i : i + n_samples_per_prompt]
+                    sample_baseline = (sample_reward.sum() - sample_reward) / (n_samples_per_prompt - 1)
+                    reward[i : i + n_samples_per_prompt] = sample_reward - sample_baseline
 
-        Returns looks like this:
-        Ret1 =  R1 + γ * λ * R2     + γ^2 * λ^2 * R3       + ...
-                   + γ * (1 - λ) V2 + γ^2 * λ * (1 - λ) V3 + ...
+            num_samples_per_experience = len(reward) // len(experiences)
+            reward = reward.unsqueeze(-1)
+            for i, experience in enumerate(experiences):
+                start = i * num_samples_per_experience
+                end = (i + 1) * num_samples_per_experience
+                experience.advantages = reward[start:end]
+        else:
+            raise ValueError(f"Unsupported RL algorithm: {self.strategy.args.rl_algo}")
 
-        Input:
-        - values: Tensor of shape (batch_size, response_size)
-        - rewards: Tensor of shape (batch_size, response_size)
+        # remove unnecessary info
+        for experience in experiences:
+            experience.kl = None
+            del experience.info["num_actions"]
 
-        Output:
-        - advantages: Tensor of shape (batch_size, response_size)
-        - returns: Tensor of shape (batch_size, response_size)
-        """
-        if isinstance(values, list):
-            # packing samples
-            # TODO: this is slow...
-            advantages = []
-            returns = []
-            for v, r in zip(values, rewards):
-                adv, ret = self.get_advantages_and_returns(v.unsqueeze(0), r.unsqueeze(0), action_mask, gamma, lambd)
-                advantages.append(adv.squeeze(0))
-                returns.append(ret.squeeze(0))
-            return advantages, returns
-
-        lastgaelam = 0
-        advantages_reversed = []
-        response_length = rewards.size(1)
-
-        # Mask invalid responses
-        if action_mask is not None:
-            values = action_mask * values
-            rewards = action_mask * rewards
-
-        for t in reversed(range(response_length)):
-            nextvalues = values[:, t + 1] if t < response_length - 1 else 0.0
-            delta = rewards[:, t] + gamma * nextvalues - values[:, t]
-            lastgaelam = delta + gamma * lambd * lastgaelam
-            advantages_reversed.append(lastgaelam)
-        advantages = torch.stack(advantages_reversed[::-1], dim=1)
-        returns = advantages + values
-        return advantages.detach(), returns
+        return experiences
 
 
 class RemoteExperienceMaker(NaiveExperienceMaker):
@@ -324,11 +317,12 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 "wait_time": 0,
             }
         experiences = super().make_experience_list(all_prompts, **generate_kwargs)
-        for experience in experiences:
-            # send experience to critic
-            experience_cpu = deepcopy(experience)
-            experience_cpu.to_device("cpu")
-            self._ref = self.critic.append.remote(experience_cpu)
+        if self.critic is not None:
+            for experience in experiences:
+                # send experience to critic
+                experience_cpu = deepcopy(experience)
+                experience_cpu.to_device("cpu")
+                self._ref = self.critic.append.remote(experience_cpu)
         return experiences
 
     @torch.no_grad()
@@ -367,15 +361,16 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens
         )
 
-        # values
-        value_ref = self.critic.forward.remote(
-            sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens
-        )
+        if self.critic is not None:
+            # values
+            value_ref = self.critic.forward.remote(
+                sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens
+            )
 
-        # avoid CUDA OOM when colocate models
-        if self.strategy.args.colocate_critic_reward:
-            ray.get([value_ref])
-            ray.get([self.critic.empty_cache.remote()])
+            # avoid CUDA OOM when colocate models
+            if self.strategy.args.colocate_critic_reward:
+                ray.get([value_ref])
+                ray.get([self.critic.empty_cache.remote()])
 
         if self.strategy.args.colocate_actor_ref:
             ray.get([base_action_log_probs_ref])
@@ -411,13 +406,21 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         # wait initial/critic/reward model done
         start = time.time()
-        ref_values = ray.get([base_action_log_probs_ref, value_ref] + r_refs)
+        ref_values = ray.get([base_action_log_probs_ref] + r_refs)
         wait_time = time.time() - start
 
-        base_action_log_probs, value, rewards = ref_values[0], ref_values[1], ref_values[2:]
-        base_action_log_probs, value = base_action_log_probs.to(device), value.to(device)
+        base_action_log_probs, rewards = ref_values[0], ref_values[1:]
+        base_action_log_probs = base_action_log_probs.to(device)
         rewards = [r.to(device) for r in rewards]
         r = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
+
+        if self.critic is not None:
+            start = time.time()
+            value = ray.get(value_ref)
+            value = value.to(device)
+            wait_time += time.time() - start
+        else:
+            value = None
 
         # avoid CUDA OOM when colocate models
         if self.strategy.args.colocate_critic_reward and not self.remote_rm_url:
@@ -441,7 +444,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             sequences = unpacking_samples(sequences, packed_seq_lens)
             attention_mask = None
             action_log_probs = unpacking_samples(action_log_probs, num_actions)
-            value = unpacking_samples(value, num_actions)
+            if value is not None:
+                value = unpacking_samples(value, num_actions)
 
             kl = unpacking_samples(kl, num_actions)
             kl_mean = torch.tensor([each_kl.mean() for each_kl in kl], device=device)
@@ -559,5 +563,6 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
     def flush(self):
         "Ensure all experience has been send to critic"
-        ray.get(self._ref)
-        self._ref = None
+        if self.critic is not None:
+            ray.get(self._ref)
+            self._ref = None
