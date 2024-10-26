@@ -203,7 +203,6 @@ class SFTTrainer(ABC):
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 step_bar.update()
-                torch.cuda.empty_cache()  # manually release GPU cache memory to avoid OOM
 
                 loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item()
                 logs_dict = {
