@@ -142,7 +142,7 @@ class SFTTrainer(ABC):
                     if self.packing_samples:
                         index = 0
                         for input_length, source_len in zip(infos["input_length"], prompts_id_lens):
-                            labels[0][index : index + source_len] = self.loss_fn.IGNORE_INDEX
+                            labels[0][index: index + source_len] = self.loss_fn.IGNORE_INDEX
                             index += input_length
                     else:
                         for label, source_len in zip(labels, prompts_id_lens):
@@ -288,7 +288,7 @@ class SFTTrainer(ABC):
                     if self.packing_samples:
                         index = 0
                         for input_length, source_len in zip(infos["input_length"], prompts_id_lens):
-                            labels[0][index : index + source_len] = self.loss_fn.IGNORE_INDEX
+                            labels[0][index: index + source_len] = self.loss_fn.IGNORE_INDEX
                             index += input_length
                     else:
                         for label, source_len in zip(labels, prompts_id_lens):
