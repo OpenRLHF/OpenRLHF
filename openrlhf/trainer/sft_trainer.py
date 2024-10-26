@@ -202,8 +202,6 @@ class SFTTrainer(ABC):
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-                step_bar.update()
-
                 loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item()
                 logs_dict = {
                     "gpt_loss": gpt_loss.item(),
