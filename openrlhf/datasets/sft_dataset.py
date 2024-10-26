@@ -43,14 +43,12 @@ class SFTDataset(Dataset):
         input_template=None,
         pretrain_mode=False,
         num_processors=8,  # Specify the number of processors you want to use
-        multiple_of=1,
     ) -> None:
         super().__init__()
         self.tokenizer = tokenizer
         self.strategy = strategy
         self.pretrain_mode = pretrain_mode
         self.max_length = max_length
-        self.multiple_of = multiple_of
 
         # chat template
         self.input_template = input_template
@@ -126,11 +124,13 @@ class SFTDataset(Dataset):
             return_tensors="pt",
             add_special_tokens=False,
         )
+
         if not self.pretrain_mode:
             # to avoid EOS_token truncation
             input_token["input_ids"][0][-1] = self.tokenizer.eos_token_id
             input_token["attention_mask"][0][-1] = True
         info = {"input": prompt, "output": response, "input_length": input_token["attention_mask"].int().sum().item()}
+
         return prompt_ids_len, input_token["input_ids"], input_token["attention_mask"], info
 
     def collate_fn(self, item_list):

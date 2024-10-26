@@ -199,11 +199,11 @@ class SFTTrainer(ABC):
                     aux_loss = 0
 
                 loss = gpt_loss + aux_loss * self.args.aux_loss_coef
-                self.strategy.backward(loss, self.model, self.optimizer)  # gradient accumulation
+                self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 step_bar.update()
-                torch.cuda.empty_cache()  # we need to manually release memory to avoid OOM
+                torch.cuda.empty_cache()  # manually release GPU cache memory to avoid OOM
 
                 loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item()
                 logs_dict = {

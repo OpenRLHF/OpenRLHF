@@ -52,7 +52,6 @@ def train(args):
         max_count=args.max_samples,
         train_split=args.train_split,
         eval_split=args.eval_split,
-        train_batch_size=args.train_batch_size,
     )
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
     eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
@@ -211,7 +210,7 @@ if __name__ == "__main__":
         "It should be a divisor of the number of heads. "
         "A larger value may results in faster training but will consume more memory.",
     )
-    
+
     # wandb parameters
     parser.add_argument("--use_wandb", type=str, default=None)
     parser.add_argument("--wandb_org", type=str, default=None)
