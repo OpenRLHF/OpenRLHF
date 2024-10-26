@@ -113,6 +113,7 @@ class NaiveExperienceMaker(ABC):
         self.kl_ctl = kl_controller
         self.strategy = strategy
         self.reward_fn = reward_fn
+        self.perf_stats = None
 
     # tokenizer
     def tokenize_fn(self, texts, max_length, padding=True, device=None):
@@ -214,7 +215,12 @@ class NaiveExperienceMaker(ABC):
             # local RM
             r = self.reward_model(sequences, attention_mask)
 
-        kl = compute_approx_kl(action_log_probs, base_action_log_probs, action_mask=action_mask)
+        kl = compute_approx_kl(
+            action_log_probs,
+            base_action_log_probs,
+            action_mask=action_mask,
+            use_kl_estimator_k3=self.strategy.args.use_kl_estimator_k3,
+        )
 
         info = {
             "kl": masked_mean(kl, action_mask, dim=-1),
@@ -311,6 +317,12 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
     @torch.no_grad()
     def make_experience_list(self, all_prompts: Union[str, List[str]], **generate_kwargs) -> List[Experience]:
+        if self.strategy.args.perf:
+            self.perf_stats = {
+                "generate_time": 0,
+                "actor_value_rm_time": 0,
+                "wait_time": 0,
+            }
         experiences = super().make_experience_list(all_prompts, **generate_kwargs)
         for experience in experiences:
             # send experience to critic
@@ -344,6 +356,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             total_length = torch.tensor(packed_seq_lens, device=device, dtype=torch.float)
         generate_time = time.time() - start
 
+        start = time.time()
         sequences_cpu, attention_mask_cpu = (
             sequences.to("cpu"),
             attention_mask.to("cpu"),
@@ -393,9 +406,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                     r_refs.append(r)
 
         # log probs
-        start = time.time()
         action_log_probs = self.actor(sequences, num_actions, attention_mask, packed_seq_lens=packed_seq_lens)
-        actor_time = time.time() - start
+        actor_value_rm_time = time.time() - start
 
         # wait initial/critic/reward model done
         start = time.time()
@@ -414,7 +426,12 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         if self.strategy.args.colocate_actor_ref:
             torch.cuda.empty_cache()
 
-        kl = compute_approx_kl(action_log_probs, base_action_log_probs, action_mask=action_mask)
+        kl = compute_approx_kl(
+            action_log_probs,
+            base_action_log_probs,
+            action_mask=action_mask,
+            use_kl_estimator_k3=self.strategy.args.use_kl_estimator_k3,
+        )
 
         if not self.packing_samples:
             kl_mean = masked_mean(kl, action_mask, dim=-1)
@@ -438,10 +455,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         }
 
         if self.strategy.args.perf:
-            batch_size = 1 if isinstance(prompts, str) else len(prompts)
-            info["generate_time"] = torch.full((batch_size,), generate_time, device=device)
-            info["actor_time"] = torch.full((batch_size,), actor_time, device=device)
-            info["wait_time"] = torch.full((batch_size,), wait_time, device=device)
+            self.perf_stats["generate_time"] += generate_time
+            self.perf_stats["actor_value_rm_time"] += actor_value_rm_time
+            self.perf_stats["wait_time"] += wait_time
 
         experience = Experience(
             sequences,
