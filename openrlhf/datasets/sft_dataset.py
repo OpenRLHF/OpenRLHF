@@ -148,20 +148,18 @@ class SFTDataset(Dataset):
 
         input_ids = zero_pad_sequences(input_ids, "right", self.tokenizer.pad_token_id)
         attention_masks = zero_pad_sequences(attention_masks, "right")
-        return prompt_ids_lens, input_ids, attention_masks, None, infos
+        return prompt_ids_lens, input_ids, attention_masks, infos
 
     def packing_collate_fn(self, item_list):
         packed_input_ids = []
         packed_attention_masks = []
         prompt_ids_lens = []
-        packed_seq_lens = []
         infos = {"input_length": []}
 
         index = 1
         for prompt_ids_len, input_id, attention_mask, info in item_list:
             packed_input_ids.append(input_id.flatten())
-            packed_seq_lens.append(len(input_id.flatten()))
-            packed_attention_masks.append(torch.full_like(input_id.flatten(), index))
+            packed_attention_masks.append(torch.ones_like(input_id.flatten()) * index)
             prompt_ids_lens.append(prompt_ids_len)
             infos["input_length"].append(info["input_length"])
             index += 1
@@ -169,9 +167,4 @@ class SFTDataset(Dataset):
         packed_input_ids = torch.cat(packed_input_ids, dim=0).unsqueeze(0)
         packed_attention_masks = torch.cat(packed_attention_masks, dim=0).unsqueeze(0)
 
-        if self.multiple_of > 1 and packed_input_ids.numel() % self.multiple_of != 0:
-            padding_len = self.multiple_of - (packed_input_ids.numel() % self.multiple_of)
-            packed_input_ids = F.pad(packed_input_ids, (0, padding_len), value=self.tokenizer.pad_token_id)
-            packed_attention_masks = F.pad(packed_attention_masks, (0, padding_len), value=0)
-
-        return prompt_ids_lens, packed_input_ids, packed_attention_masks, packed_seq_lens, infos
+        return prompt_ids_lens, packed_input_ids, packed_attention_masks, infos
