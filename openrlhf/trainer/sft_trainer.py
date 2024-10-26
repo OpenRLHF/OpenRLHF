@@ -1,6 +1,6 @@
 import math
-from abc import ABC
 import os
+from abc import ABC
 
 import torch
 from torch import nn
@@ -29,18 +29,18 @@ class SFTTrainer(ABC):
     """
 
     def __init__(
-            self,
-            model,
-            strategy,
-            optim: Optimizer,
-            train_dataloader,
-            eval_dataloader,
-            scheduler,
-            max_norm: float = 1,
-            pretrain_mode: bool = False,
-            batch_size: int = 1,
-            max_epochs: int = 2,
-            tokenizer=None,
+        self,
+        model,
+        strategy,
+        optim: Optimizer,
+        train_dataloader,
+        eval_dataloader,
+        scheduler,
+        max_norm: float = 1,
+        pretrain_mode: bool = False,
+        batch_size: int = 1,
+        max_epochs: int = 2,
+        tokenizer=None,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -127,9 +127,6 @@ class SFTTrainer(ABC):
             # train
             self.model.train()
             loss_mean = 0
-            accumulated_loss = 0
-            accumulated_gpt_loss = 0
-            accumulated_aux_loss = 0
 
             for prompts_id_lens, inputs, attention_masks, packed_seq_lens, infos in self.train_dataloader:
                 if self.packing_samples:
@@ -139,58 +136,60 @@ class SFTTrainer(ABC):
                     inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
                     attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
 
-                # create labels
-                labels = torch.where(attention_mask.bool(), inputs, self.loss_fn.IGNORE_INDEX)
+                labels = torch.where(attention_mask.bool(), inputs, self.loss_fn.IGNORE_INDEX)  # create labels
+
                 if not self.pretrain_mode:
                     if self.packing_samples:
                         index = 0
                         for input_length, source_len in zip(infos["input_length"], prompts_id_lens):
-                            labels[0][index: index + source_len] = self.loss_fn.IGNORE_INDEX
+                            labels[0][index : index + source_len] = self.loss_fn.IGNORE_INDEX
                             index += input_length
                     else:
                         for label, source_len in zip(labels, prompts_id_lens):
                             label[:source_len] = self.loss_fn.IGNORE_INDEX
-                
-                if self.strategy.ring_attn_size == 1: # vanilla sft training
+
+                if self.strategy.ring_attn_size == 1:  # vanilla attention
                     output = self.model(inputs, attention_mask=attention_mask, return_output=True)
                     gpt_loss = self.loss_fn(output.logits, labels)
-                
-                else: # ring attention
+
+                else:  # ring attention
                     assert self.packing_samples, "Ring attention only works with packing samples"
-                    
+                    num_calculate_tokens = labels.ne(self.loss_fn.IGNORE_INDEX).sum().item()
+
                     local_logits = self.model(
                         inputs,
                         attention_mask=attention_mask,
                         ring_attn_group=self.strategy.ring_attn_group,
-                        packed_seq_lens=packed_seq_lens, 
+                        packed_seq_lens=packed_seq_lens,
                         return_output=True,
-                    )["logits"]
-                    
+                    ).logits
+
                     total_seq_len = labels.numel()
                     local_seq_len = total_seq_len // self.strategy.ring_attn_size
-                    
+
                     ########################### loss computation ###########################
                     # global labels                     [0,1,2,3,4,5]
                     # global masks                      [0,0,0,0,1,1]  # only compute SFT loss on [4, 5]
                     # shifted labels                    [1,2,3,4,5,0]
                     # local labels (ring_attn_size=2)   [[1,2,3], [4,5,0]]
                     ########################### loss computation ###########################
-                    
-                    local_slice = slice(rank * local_seq_len + 1, (rank + 1) * local_seq_len + 1)
-                    
-                    local_label = labels[:, local_slice]
-                    if rank == self.strategy.ring_attn_size - 1: # add a dummy label to the last logit
-                        local_label = F.pad(local_label, (0, 1), value=self.loss_fn.IGNORE_INDEX)
-                    local_mask = (local_label == self.loss_fn.IGNORE_INDEX)  # Shape: (batch_size, seq_len)
 
-                    # convert -100 in local_label into 0 for `torch.gather` operation
-                    local_label[local_mask] = 0
-                    per_token_logps = torch.gather(local_logits.log_softmax(-1), dim=2, index=local_label.unsqueeze(2)).squeeze(2)
+                    local_slice = slice(rank * local_seq_len + 1, (rank + 1) * local_seq_len + 1)
+
+                    local_label = labels[:, local_slice]
+                    if rank == self.strategy.ring_attn_size - 1:  # add a dummy label to the last logit
+                        local_label = F.pad(local_label, (0, 1), value=self.loss_fn.IGNORE_INDEX)
+                    local_mask = local_label == self.loss_fn.IGNORE_INDEX
+
+                    local_label[local_mask] = 0  # convert -100 in local_label into 0 for `torch.gather` operation
+                    per_token_logps = torch.gather(
+                        local_logits.log_softmax(-1), dim=2, index=local_label.unsqueeze(2)
+                    ).squeeze(2)
 
                     per_token_logps = per_token_logps * (~local_mask)
                     gathered_logps = all_gather(per_token_logps, self.strategy.ring_attn_group)
 
-                    gpt_loss = -torch.sum(gathered_logps) / num_calculate_tokens # compute loss on non-masked tokens
+                    gpt_loss = -torch.sum(gathered_logps) / num_calculate_tokens  # compute loss on non-masked tokens
                     gpt_loss = gpt_loss / self.strategy.accumulated_gradient
 
                 # mixtral
@@ -198,36 +197,30 @@ class SFTTrainer(ABC):
                     aux_loss = output.aux_loss
                 else:
                     aux_loss = 0
-                
-                accumulated_loss += gpt_loss
-                accumulated_gpt_loss += gpt_loss.item()
-                if self.aux_loss:
-                    accumulated_aux_loss += aux_loss.item()
-                
+
                 loss = gpt_loss + aux_loss * self.args.aux_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)  # gradient accumulation
+                self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 step_bar.update()
                 torch.cuda.empty_cache()  # we need to manually release memory to avoid OOM
 
+                loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item()
+                logs_dict = {
+                    "gpt_loss": gpt_loss.item(),
+                    "loss_mean": loss_mean,
+                    "lr": self.scheduler.get_last_lr()[0],
+                }
+                if self.aux_loss:
+                    logs_dict["aux_loss"] = aux_loss.item()
+                # step bar
+                logs_dict = self.strategy.all_reduce(logs_dict)
+                step_bar.set_postfix(logs_dict)
+                step_bar.update()
+
                 # logs/checkpoints/evaluation
                 if step % self.strategy.accumulated_gradient == 0:
                     global_step = step // self.strategy.accumulated_gradient
-                    loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item()
-                    logs_dict = {
-                        "gpt_loss": gpt_loss.item(),
-                        "loss_mean": loss_mean,
-                        "lr": self.scheduler.get_last_lr()[0],
-                    }
-                    if self.aux_loss:
-                        logs_dict["aux_loss"] = accumulated_aux_loss
-                    logs_dict = self.strategy.all_reduce(logs_dict)
-                    step_bar.set_postfix(logs_dict)
-
-                    self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler) # update model parameters
-                    self.optimizer.zero_grad() # clear gradients
-                    self.scheduler.step() # update learning rate
-
                     client_states = {"consumed_samples": global_step * args.train_batch_size}
                     self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
 
@@ -295,7 +288,7 @@ class SFTTrainer(ABC):
                     if self.packing_samples:
                         index = 0
                         for input_length, source_len in zip(infos["input_length"], prompts_id_lens):
-                            labels[0][index: index + source_len] = self.loss_fn.IGNORE_INDEX
+                            labels[0][index : index + source_len] = self.loss_fn.IGNORE_INDEX
                             index += input_length
                     else:
                         for label, source_len in zip(labels, prompts_id_lens):

@@ -1,9 +1,11 @@
 from typing import Callable
+
 import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
+
 from .utils import zero_pad_sequences
-from torch.nn import functional as F
+
 
 def preprocess_data(data, input_template=None, input_key="input", output_key=None, apply_chat_template=None):
     if apply_chat_template:
@@ -64,10 +66,7 @@ class SFTDataset(Dataset):
 
         # Parallel loading datasets
         processed_dataset = dataset.map(
-            self.process_data, 
-            remove_columns=dataset.column_names, 
-            num_proc=num_processors, 
-            keep_in_memory=False,
+            self.process_data, remove_columns=dataset.column_names, num_proc=num_processors
         )
         processed_dataset = processed_dataset.filter(lambda x: x["prompt"] is not None)
 
@@ -84,7 +83,6 @@ class SFTDataset(Dataset):
             self.output_key,
             apply_chat_template=None if self.pretrain_mode else self.apply_chat_template,
         )
-        
         if not self.pretrain_mode:
             prompt_token = self.tokenizer(
                 prompt,
@@ -95,7 +93,8 @@ class SFTDataset(Dataset):
                 add_special_tokens=False,
             )
             prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
-            # print(prompt_ids_len)
+
+            # filter the sample whose length is greater than max_length (2 for answer length)
             if not prompt or not response or prompt_ids_len >= self.max_length - 2:
                 prompt = None
         else:
@@ -134,7 +133,6 @@ class SFTDataset(Dataset):
         info = {"input": prompt, "output": response, "input_length": input_token["attention_mask"].int().sum().item()}
         return prompt_ids_len, input_token["input_ids"], input_token["attention_mask"], info
 
-
     def collate_fn(self, item_list):
         prompt_ids_lens = []
         input_ids = []
@@ -152,13 +150,14 @@ class SFTDataset(Dataset):
         attention_masks = zero_pad_sequences(attention_masks, "right")
         return prompt_ids_lens, input_ids, attention_masks, None, infos
 
-
     def packing_collate_fn(self, item_list):
-        packed_input_ids, packed_attention_masks = [], []
-        prompt_ids_lens, packed_seq_lens = [], []
+        packed_input_ids = []
+        packed_attention_masks = []
+        prompt_ids_lens = []
+        packed_seq_lens = []
         infos = {"input_length": []}
+
         index = 1
-    
         for prompt_ids_len, input_id, attention_mask, info in item_list:
             packed_input_ids.append(input_id.flatten())
             packed_seq_lens.append(len(input_id.flatten()))
@@ -169,7 +168,7 @@ class SFTDataset(Dataset):
 
         packed_input_ids = torch.cat(packed_input_ids, dim=0).unsqueeze(0)
         packed_attention_masks = torch.cat(packed_attention_masks, dim=0).unsqueeze(0)
-        
+
         if self.multiple_of > 1 and packed_input_ids.numel() % self.multiple_of != 0:
             padding_len = self.multiple_of - (packed_input_ids.numel() % self.multiple_of)
             packed_input_ids = F.pad(packed_input_ids, (0, padding_len), value=self.tokenizer.pad_token_id)
