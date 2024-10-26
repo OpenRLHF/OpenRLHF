@@ -127,6 +127,10 @@ class SFTTrainer(ABC):
             # train
             self.model.train()
             loss_mean = 0
+            accumulated_loss = 0
+            accumulated_gpt_loss = 0
+            accumulated_aux_loss = 0
+
             for prompts_id_lens, inputs, attention_masks, packed_seq_lens, infos in self.train_dataloader:
                 if self.packing_samples:
                     inputs = inputs.to(torch.cuda.current_device())
@@ -186,34 +190,44 @@ class SFTTrainer(ABC):
                     per_token_logps = per_token_logps * (~local_mask)
                     gathered_logps = all_gather(per_token_logps, self.strategy.ring_attn_group)
 
-                    gpt_loss = -torch.sum(gathered_logps) / num_calculate_tokens
-                
+                    gpt_loss = -torch.sum(gathered_logps) / num_calculate_tokens # compute loss on non-masked tokens
+                    gpt_loss = gpt_loss / self.strategy.accumulated_gradient
+
                 # mixtral
                 if self.aux_loss:
                     aux_loss = output.aux_loss
                 else:
                     aux_loss = 0
                 
-                loss = gpt_loss + aux_loss * self.args.aux_loss_coef
-                self.strategy.backward(loss, self.model, self.optimizer)
-                self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
-
-                loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item()
-                logs_dict = {
-                    "gpt_loss": gpt_loss.item(),
-                    "loss_mean": loss_mean,
-                    "lr": self.scheduler.get_last_lr()[0],
-                }
+                accumulated_loss += gpt_loss
+                accumulated_gpt_loss += gpt_loss.item()
                 if self.aux_loss:
-                    logs_dict["aux_loss"] = aux_loss.item()
-                # step bar
-                logs_dict = self.strategy.all_reduce(logs_dict)
-                step_bar.set_postfix(logs_dict)
+                    accumulated_aux_loss += aux_loss.item()
+                
+                loss = gpt_loss + aux_loss * self.args.aux_loss_coef
+                self.strategy.backward(loss, self.model, self.optimizer)  # gradient accumulation
+
                 step_bar.update()
+                torch.cuda.empty_cache()  # we need to manually release memory to avoid OOM
 
                 # logs/checkpoints/evaluation
                 if step % self.strategy.accumulated_gradient == 0:
                     global_step = step // self.strategy.accumulated_gradient
+                    loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item()
+                    logs_dict = {
+                        "gpt_loss": gpt_loss.item(),
+                        "loss_mean": loss_mean,
+                        "lr": self.scheduler.get_last_lr()[0],
+                    }
+                    if self.aux_loss:
+                        logs_dict["aux_loss"] = accumulated_aux_loss
+                    logs_dict = self.strategy.all_reduce(logs_dict)
+                    step_bar.set_postfix(logs_dict)
+
+                    self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler) # update model parameters
+                    self.optimizer.zero_grad() # clear gradients
+                    self.scheduler.step() # update learning rate
+
                     client_states = {"consumed_samples": global_step * args.train_batch_size}
                     self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
 

@@ -4,9 +4,7 @@ import os
 from collections import OrderedDict
 from copy import deepcopy
 from datetime import datetime
-
 from transformers.trainer import get_scheduler
-
 from openrlhf.datasets import RewardDataset
 from openrlhf.models import Actor
 from openrlhf.trainer import DPOTrainer
