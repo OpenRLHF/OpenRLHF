@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
-from openrlhf.models.utils import masked_mean
+from openrlhf.models.utils import masked_mean, compute_approx_kl
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 from .ppo_utils import AdaptiveKLController, Experience, FixedKLController, NaiveExperienceMaker, NaiveReplayBuffer
@@ -45,6 +45,7 @@ class PPOTrainer(ABC):
         callbacks (List[Callback], defaults to []): the callbacks to call during training process
         generate_kwargs (dict, optional): the kwargs to use while model generating
         remote_rm_url (str, optional): function for reward model api
+        activate_grpo (bool, defaults to False): activate GRPO training
     """
 
     def __init__(
@@ -78,6 +79,7 @@ class PPOTrainer(ABC):
         dataloader_pin_memory: bool = True,
         remote_rm_url: str = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
+        activate_grpo: bool = None,
         **generate_kwargs,
     ) -> None:
         assert (
@@ -126,6 +128,8 @@ class PPOTrainer(ABC):
         else:
             self.kl_ctl = FixedKLController(init_kl_coef)
 
+        self.activate_grpo = activate_grpo
+
         self.experience_maker = NaiveExperienceMaker(
             actor,
             critic,
@@ -137,6 +141,7 @@ class PPOTrainer(ABC):
             strategy,
             remote_rm_url,
             reward_fn,
+            activate_grpo
         )
         packing_samples = getattr(self.args, "packing_samples", False)
         self.replay_buffer = NaiveReplayBuffer(
@@ -285,12 +290,13 @@ class PPOTrainer(ABC):
                     short_status = {
                         "pg": status["policy_loss"],
                         "rm": status["reward"],
-                        "ret": status["return"],
                         "glen": status["response_length"],
                         "tlen": status["total_length"],
                         "kl": status["kl"],
                         "act_lr": status["actor_lr"],
                     }
+                if "return" in status:
+                    short_status["ret"] = status["return"]
 
                 if "critic_loss" in status:
                     short_status["cri"] = status["critic_loss"]
@@ -316,7 +322,8 @@ class PPOTrainer(ABC):
         status = {}
         if global_steps > self.freezing_actor_steps:
             status = self.training_step_actor(experience)
-        status.update(self.training_step_critic(experience))
+        if not self.activate_grpo:
+            status.update(self.training_step_critic(experience))
         return status
 
     def training_step_actor(self, experience: Experience) -> Dict[str, float]:
@@ -327,11 +334,13 @@ class PPOTrainer(ABC):
             sequences = torch.cat(experience.sequences, dim=0).unsqueeze(0)
             old_action_log_probs = torch.cat(experience.action_log_probs, dim=0).unsqueeze(0)
             advantages = torch.cat(experience.advantages, dim=0).unsqueeze(0)
-            num_actions = [v.numel() for v in experience.values]
+            num_actions = [v.numel() for v in experience.action_log_probs]
             packed_seq_lens = [s.numel() for s in experience.sequences]
             attention_mask = torch.cat(
                 [torch.full_like(s, i + 1) for i, s in enumerate(experience.sequences)], dim=0
             ).unsqueeze(0)
+            if self.activate_grpo:
+                base_log_probs = torch.cat(experience.base_log_probs, dim=0).unsqueeze(0)
         else:
             sequences = experience.sequences
             old_action_log_probs = experience.action_log_probs
@@ -339,6 +348,7 @@ class PPOTrainer(ABC):
             num_actions = experience.action_mask.size(1)
             packed_seq_lens = None
             attention_mask = experience.attention_mask
+            base_log_probs = experience.base_log_probs
 
         # actor loss
         action_log_probs, output = self.actor(
@@ -356,12 +366,26 @@ class PPOTrainer(ABC):
             advantages,
             action_mask=experience.action_mask,
         )
+
+        if self.activate_grpo:
+            kl = compute_approx_kl(
+                action_log_probs,
+                base_log_probs,
+                action_mask=experience.action_mask,
+                use_kl_estimator_k3=self.strategy.args.use_kl_estimator_k3,
+            )
+            kl = masked_mean(kl, experience.action_mask, dim=-1)
+            kl_loss = kl.mean()
+            experience.info["kl"] = kl.to("cpu")
+        else:
+            kl_loss = 0
+
         # mixtral
         if self.aux_loss:
             aux_loss = output.aux_loss
         else:
             aux_loss = 0
-        loss = actor_loss + aux_loss * self.args.aux_loss_coef
+        loss = actor_loss + self.kl_ctl.value * kl_loss + aux_loss * self.args.aux_loss_coef
         self.strategy.backward(loss, self.actor, self.actor_optim)
 
         # ptx loss
@@ -499,6 +523,7 @@ class PPOTrainer(ABC):
             args.max_ckpt_mem,
             client_states,
         )
-        self.strategy.save_ckpt(
-            self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
-        )
+        if not self.activate_grpo:
+            self.strategy.save_ckpt(
+                self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
+            )

@@ -35,6 +35,7 @@ class BufferItem:
     attention_mask: Optional[torch.LongTensor]
     action_mask: Optional[torch.BoolTensor]
     info: Optional[dict]
+    base_log_probs: Optional[torch.Tensor] = None
 
 
 def split_experience_batch(experience: Experience) -> List[BufferItem]:
@@ -48,6 +49,7 @@ def split_experience_batch(experience: Experience) -> List[BufferItem]:
         "advantages",
         "attention_mask",
         "action_mask",
+        "base_log_probs",
     )
     for key in keys:
         value = getattr(experience, key)
@@ -98,11 +100,12 @@ def make_experience_batch(items: List[BufferItem], packing_samples=False) -> Exp
         "advantages",
         "attention_mask",
         "action_mask",
+        "base_log_probs",
     )
     for key in keys:
         vals = [getattr(item, key) for item in items]
         if not packing_samples:
-            batch_data = zero_pad_sequences(vals, "left")
+            batch_data = zero_pad_sequences(vals, "left") if vals[0] is not None else None
         else:
             batch_data = vals if vals[0] is not None else None
         kwargs[key] = batch_data
@@ -116,7 +119,7 @@ def make_experience_batch(items: List[BufferItem], packing_samples=False) -> Exp
 
 def remove_padding_in_sequences(items):
     for item in items:
-        seq, act_log_prob, value, ret, adv, att_mask, act_mask = (
+        seq, act_log_prob, value, ret, adv, att_mask, act_mask, base_log_prob = (
             item.sequences,
             item.action_log_probs,
             item.values,
@@ -124,6 +127,7 @@ def remove_padding_in_sequences(items):
             item.advantages,
             item.attention_mask,
             item.action_mask,
+            item.base_log_probs,
         )
         right_pad = (1 - act_mask.long()).sum()
         right_pad = None if right_pad == 0 else -right_pad
@@ -138,14 +142,16 @@ def remove_padding_in_sequences(items):
             item.advantages,
             item.attention_mask,
             item.action_mask,
+            item.base_log_probs,
         ) = (
             seq[left_pad:right_pad],
             act_log_prob[:right_pad],
-            value[:right_pad],
-            ret[:right_pad],
+            value[:right_pad] if value is not None else value,
+            ret[:right_pad] if ret is not None else ret,
             adv[:right_pad],
             att_mask[left_pad:right_pad],
             act_mask[:right_pad],
+            base_log_prob[:right_pad] if base_log_prob is not None else base_log_prob,
         )
     return items
 

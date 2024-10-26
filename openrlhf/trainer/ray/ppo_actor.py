@@ -3,7 +3,7 @@ import math
 import os
 import socket
 from copy import deepcopy
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple, Optional
 
 import deepspeed
 import ray
@@ -52,6 +52,7 @@ class ActorPPOTrainer(PPOTrainer):
             self.strategy,
             self.remote_rm_url,
             self.reward_fn,
+            self.activate_grpo,
             vllm_engines=self.vllm_engines,
             packing_samples=self.strategy.args.packing_samples,
         )
@@ -116,11 +117,12 @@ class ActorPPOTrainer(PPOTrainer):
 
     def ppo_train(self, global_steps):
         # 1. ensure all experience makers done
-        self.experience_maker.flush()
+        if not self.activate_grpo:
+            self.experience_maker.flush()
         torch.distributed.barrier()
 
         # 2. triger remote critic model training
-        if self.critic_train_remote:
+        if self.critic_train_remote and not self.activate_grpo:
             critic_status_ref = self.critic.fit.remote()
 
         # 3. actor model training
@@ -135,7 +137,7 @@ class ActorPPOTrainer(PPOTrainer):
             status = {}
 
         # 5. wait remote critic model training done
-        if self.critic_train_remote:
+        if self.critic_train_remote and not self.activate_grpo:
             status.update(ray.get(critic_status_ref))
         torch.distributed.barrier()
 
@@ -333,13 +335,14 @@ class ActorModelRayActor(BasePPORole):
 
     def fit(
         self,
-        critic_model: ray.actor.ActorHandle,
+        critic_model: Optional[ray.actor.ActorHandle],
         initial_model: ray.actor.ActorHandle,
         reward_model: List[ray.actor.ActorHandle],
         remote_rm_url: List[str] = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
         vllm_engines: List[ray.actor.ActorHandle] = None,
         critic_train_remote: bool = False,
+        activate_grpo: bool = False,
     ):
         """Train actor model with prompt datasets."""
         strategy = self.strategy
@@ -376,6 +379,7 @@ class ActorModelRayActor(BasePPORole):
             ema_beta=0.992,
             ptx_coef=args.ptx_coef,
             max_norm=args.max_norm,
+            activate_grpo=activate_grpo,
             # fro GPT generation
             do_sample=True,
             max_new_tokens=args.generate_max_len,
