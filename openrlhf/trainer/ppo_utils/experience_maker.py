@@ -172,7 +172,7 @@ class NaiveExperienceMaker(ABC):
                 generate_kwargs["lambd"],
             )
             # calculate the return info.
-            if not self.packing_samples:
+            if not getattr(self, "packing_samples", False):
                 return_sums = reward.sum(dim=-1)
             else:
                 return_sums = torch.tensor(
