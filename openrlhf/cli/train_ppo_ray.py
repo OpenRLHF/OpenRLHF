@@ -347,8 +347,9 @@ if __name__ == "__main__":
     if args.remote_rm_url:
         args.remote_rm_url = args.remote_rm_url.split(",")
 
-    if args.vllm_num_engines >= 1 and args.n_samples_per_prompt > 1 and not args.enable_prefix_caching:
-        print("[Warning] Please --enable_prefix_caching to accelerate when --n_samples_per_prompt > 1.")
+    if args.vllm_num_engines >= 1 and args.enable_prefix_caching:
+        args.enable_prefix_caching = False
+        print("[Warning] Disable prefix cache because vLLM updates weights without updating the old KV Cache.")
 
     if args.input_template and not "{}" in args.input_template:
         print("[Warning] {} not in args.input_template, set to None")
