@@ -163,6 +163,7 @@ class NaiveExperienceMaker(ABC):
                 experience.kl,
                 action_mask=experience.action_mask,
                 num_actions=num_actions,
+                reward_clip_range=args.reward_clip_range,
             )
             experience.advantages, experience.returns = self.get_advantages_and_returns(
                 experience.values,

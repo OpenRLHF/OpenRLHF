@@ -290,6 +290,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--aux_loss_coef", type=float, default=0, help="MoE balancing loss")
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
+    parser.add_argument("--reward_clip_range", type=float, nargs=2, default=(-10, 10), help="Reward clip range")
 
     #  Models
     parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")

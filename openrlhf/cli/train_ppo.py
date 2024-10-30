@@ -325,6 +325,7 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
+    parser.add_argument("--reward_clip_range", type=float, nargs=2, default=(-10, 10), help="Reward clip range")
 
     # DeepSpeed
     parser.add_argument("--seed", type=int, default=42)

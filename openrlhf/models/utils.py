@@ -42,11 +42,13 @@ def compute_reward(
     kl: Union[torch.Tensor, list[torch.Tensor]],
     action_mask: Optional[torch.Tensor] = None,
     num_actions: Optional[Union[int, list[int]]] = None,
+    reward_clip_range: Tuple[float, float] = None,
 ) -> Union[torch.Tensor, list[torch.Tensor]]:
     if kl_coef <= 0.0:
         kl_coef = 0.0
 
-    r = r.clamp(min=-10, max=10)
+    if reward_clip_range:
+        r = r.clamp(min=reward_clip_range[0], max=reward_clip_range[1])
 
     if action_mask is not None:
         kl_reward = -kl_coef * kl

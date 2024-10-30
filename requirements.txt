@@ -1,7 +1,7 @@
 accelerate
 bitsandbytes
 datasets
-deepspeed==0.15.0
+deepspeed==0.15.3
 einops
 flash-attn==2.6.1
 isort
@@ -11,11 +11,11 @@ optimum
 packaging
 peft
 ray[default]==2.12.0
+tensorboard
 torch
 torchmetrics
 tqdm
-transformers==4.44.2
+transformers==4.46.1
 transformers_stream_generator
 wandb
-tensorboard
 wheel
