@@ -19,6 +19,14 @@ def train(args):
     strategy = get_strategy(args)
     strategy.setup_distributed()
 
+    if args.advantage_estimator == "gae":
+        use_critic = True
+    elif args.advantage_estimator == "group_norm":
+        use_critic = False
+        assert args.n_samples_per_prompt > 1, "The number of samples under each prompt must be greater than 1"
+    else:
+        raise NotImplementedError(f"Advantage estimator {args.advantage_estimator} is not implemented.")
+
     # configure model
     # load huggingface model
     actor = Actor(
@@ -36,7 +44,7 @@ def train(args):
     if args.actor_init_on_gpu:
         actor = actor.to(torch.cuda.current_device())
 
-    if not args.activate_grpo:
+    if use_critic:
         critic = get_llm_for_sequence_regression(
             args.critic_pretrain,
             "critic",
@@ -53,7 +61,7 @@ def train(args):
             init_value_head=strategy.args.pretrain == strategy.args.critic_pretrain,
         )
     else:
-        critic = None
+        critic, critic_optim, critic_scheduler = None, None, None
 
     if not args.remote_rm_url:
         reward_model = get_llm_for_sequence_regression(
@@ -71,13 +79,13 @@ def train(args):
         reward_model = None
 
     strategy.print("reward normalization status: {}".format(args.normalize_reward))
-    if not args.activate_grpo:
+    if use_critic:
         strategy.print("mean: {}, std {}".format(critic.mean, critic.std))
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, actor.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
     strategy.print(actor)
-    if not args.activate_grpo:
+    if use_critic:
         get_tokenizer(args.critic_pretrain, critic, "left", strategy, use_fast=not args.disable_fast_tokenizer)
         strategy.print(critic)
 
@@ -107,7 +115,7 @@ def train(args):
         actor.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
         )
-        if not args.activate_grpo:
+        if use_critic:
             critic.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
@@ -116,7 +124,7 @@ def train(args):
     actor_optim = strategy.create_optimizer(
         actor, lr=args.actor_learning_rate, betas=args.adam_betas, weight_decay=args.l2
     )
-    if not args.activate_grpo:
+    if use_critic:
         critic_optim = strategy.create_optimizer(
             critic, lr=args.critic_learning_rate, betas=args.adam_betas, weight_decay=args.l2
         )
@@ -189,7 +197,7 @@ def train(args):
         scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
     )
 
-    if not args.activate_grpo:
+    if use_critic:
         critic_scheduler = get_scheduler(
             "cosine_with_min_lr",
             critic_optim,
@@ -222,7 +230,7 @@ def train(args):
     consumed_samples = 0
     if args.load_checkpoint and os.path.exists(os.path.join(args.ckpt_path, "_actor")):
         _, states = strategy.load_ckpt(actor.model, os.path.join(args.ckpt_path, "_actor"))
-        if not args.activate_grpo:
+        if use_critic:
             strategy.load_ckpt(critic, os.path.join(args.ckpt_path, "_critic"))
         consumed_samples = states["consumed_samples"]
         strategy.print(f"Loaded the checkpoint: {args.ckpt_path}, consumed_samples: {consumed_samples}")
@@ -241,6 +249,7 @@ def train(args):
         critic_optim,
         actor_scheduler,
         critic_scheduler,
+        args.advantage_estimator,
         max_epochs=args.max_epochs,
         micro_train_batch_size=args.micro_train_batch_size,
         micro_rollout_batch_size=args.micro_rollout_batch_size,
@@ -266,8 +275,6 @@ def train(args):
         eos_token_id=tokenizer.eos_token_id,
         # remote reward model
         remote_rm_url=args.remote_rm_url,
-        # for grpo training
-        activate_grpo=args.activate_grpo
     )
 
     trainer.fit(args, prompts_dataloader, pretrain_dataloader, consumed_samples, num_update_steps_per_episodes)
@@ -324,7 +331,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--n_samples_per_prompt", type=int, default=1, help="number of responses for each prompt in generation"
     )
-    parser.add_argument("--activate_grpo", action="store_true", default=False, help="Activate GRPO training")
+    parser.add_argument('--advantage_estimator',
+                        type=str,
+                        choices=['gae', 'group_norm'],
+                        default='gae',
+                        help='Choose advantage estimation method: gae, group_norm')
     parser.add_argument("--save_value_network", action="store_true", default=False, help="Save critic model")
     parser.add_argument("--actor_learning_rate", type=float, default=1e-6)
     parser.add_argument("--critic_learning_rate", type=float, default=9e-6)

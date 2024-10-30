@@ -246,10 +246,10 @@ class PPORayActorGroup:
         critic_model_group: "PPORayActorGroup",
         initial_model_group: "PPORayActorGroup",
         reward_model_groups: List["PPORayActorGroup"],
+        advantage_estimator: str,
         remote_rm_urls: List[str] = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
         vllm_engines: List = None,
-        activate_grpo: bool = False,
     ):
         """Train actor model.
 
@@ -257,10 +257,10 @@ class PPORayActorGroup:
             critic_model_group (PPORayActorGroup): critic model group.
             initial_model_group (PPORayActorGroup): reference model group.
             reward_model_groups (PPORayActorGroup): reward model groups.
+            advantage_estimator: choose an advantage calculation method.
             remote_rm_urls: remote RM APIs.
             reward_fn: reward calculate function, must be specified if using multiple reward models.
             vllm_engines: vllm engines for text generation, if not specified, generate text by actor model directly.
-            activate_grpo: if activate GPRO training, do not load critic model group.
 
         Returns:
             List: list of remote object refs.
@@ -271,14 +271,14 @@ class PPORayActorGroup:
             or reward_fn is not None
         ), "reward_fn must be specified if using multiple reward models"
 
-        critic_actors = critic_model_group._actor_handlers if not activate_grpo else None
+        critic_actors = critic_model_group._actor_handlers if advantage_estimator == "gae" else None
         initial_actors = initial_model_group._actor_handlers
 
         refs = []
         # TODO(wuxibin): actor model choose critic/reward/initial model in a
         # round robin fashion, implement more efficient dispatching strategy.
         for i, actor in enumerate(self._actor_handlers):
-            critic_actor = critic_actors[i % len(critic_actors)] if not activate_grpo else None
+            critic_actor = critic_actors[i % len(critic_actors)] if advantage_estimator == "gae" else None
             initial_actor = initial_actors[i % len(initial_actors)]
 
             reward_actors = []
@@ -292,12 +292,12 @@ class PPORayActorGroup:
                     critic_model=critic_actor,
                     initial_model=initial_actor,
                     reward_model=reward_actors,
+                    advantage_estimator=advantage_estimator,
                     remote_rm_url=remote_rm_urls,
                     reward_fn=reward_fn,
                     vllm_engines=vllm_engines,
                     # whether this actor should triger corresponding critic model training
-                    critic_train_remote=(i < len(critic_actors)) if not activate_grpo else False,
-                    activate_grpo=activate_grpo,
+                    critic_train_remote=(i < len(critic_actors)) if advantage_estimator == "gae" else False,
                 )
             )
 

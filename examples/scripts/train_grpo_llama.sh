@@ -8,7 +8,7 @@ openrlhf.cli.train_ppo \
    --save_steps -1 \
    --logging_steps 1 \
    --eval_steps -1 \
-   --activate_grpo \
+   --advantage_estimator group_norm \
    --use_kl_estimator_k3 \
    --n_samples_per_prompt 16 \
    --micro_train_batch_size 4 \

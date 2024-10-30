@@ -17,6 +17,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --pretrain meta-llama/Meta-Llama-3-70B-Instruct \
     --reward_pretrain meta-llama/Meta-Llama-3-70B-Instruct \
     --save_path /openrlhf/examples/checkpoint/llama-3-70b-rlhf \
+    --advantage_estimator gae \
     --micro_train_batch_size 1 \
     --train_batch_size 128 \
     --micro_rollout_batch_size 2 \

@@ -73,6 +73,11 @@ def compute_reward(
 
     return reward
 
+def compute_group_reward(rewards: torch.Tensor, n_samples_per_prompt: int) -> list[torch.Tensor]:
+    all_rewards = torch.concat([reward for reward in rewards])
+
+    for i in range(0, all_rewards.size(0), n_samples_per_prompt):
+        rewards = all_rewards[i: i + n_samples_per_prompt]
 
 def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     log_probs = F.log_softmax(logits, dim=-1)

@@ -137,6 +137,7 @@ class CriticModelRayActor(BasePPORole):
             critic_optim=self.critic_optim,
             actor_scheduler=None,
             critic_scheduler=self.critic_scheduler,
+            advantage_estimator=args.advantage_estimator,
             max_epochs=args.max_epochs,
             micro_train_batch_size=args.micro_train_batch_size,
             micro_rollout_batch_size=args.micro_rollout_batch_size,

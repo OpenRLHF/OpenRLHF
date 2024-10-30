@@ -47,12 +47,12 @@ class ActorPPOTrainer(PPOTrainer):
             self.reward_model,
             self.initial_model,
             self.tokenizer,
+            self.advantage_estimator,
             self.prompt_max_len,
             self.kl_ctl,
             self.strategy,
             self.remote_rm_url,
             self.reward_fn,
-            self.activate_grpo,
             vllm_engines=self.vllm_engines,
             packing_samples=self.strategy.args.packing_samples,
         )
@@ -117,12 +117,12 @@ class ActorPPOTrainer(PPOTrainer):
 
     def ppo_train(self, global_steps):
         # 1. ensure all experience makers done
-        if not self.activate_grpo:
+        if self.advantage_estimator == "gae":
             self.experience_maker.flush()
         torch.distributed.barrier()
 
         # 2. triger remote critic model training
-        if self.critic_train_remote and not self.activate_grpo:
+        if self.critic_train_remote and self.advantage_estimator == "gae":
             critic_status_ref = self.critic.fit.remote()
 
         # 3. actor model training
@@ -137,7 +137,7 @@ class ActorPPOTrainer(PPOTrainer):
             status = {}
 
         # 5. wait remote critic model training done
-        if self.critic_train_remote and not self.activate_grpo:
+        if self.critic_train_remote and self.advantage_estimator == "gae":
             status.update(ray.get(critic_status_ref))
         torch.distributed.barrier()
 
@@ -338,11 +338,11 @@ class ActorModelRayActor(BasePPORole):
         critic_model: Optional[ray.actor.ActorHandle],
         initial_model: ray.actor.ActorHandle,
         reward_model: List[ray.actor.ActorHandle],
+        advantage_estimator: str,
         remote_rm_url: List[str] = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
         vllm_engines: List[ray.actor.ActorHandle] = None,
         critic_train_remote: bool = False,
-        activate_grpo: bool = False,
     ):
         """Train actor model with prompt datasets."""
         strategy = self.strategy
@@ -355,6 +355,7 @@ class ActorModelRayActor(BasePPORole):
             critic_model,
             reward_model,
             initial_model,
+            advantage_estimator=advantage_estimator,
             ema_model=self.ema_model,
             actor_optim=None,
             critic_optim=None,
@@ -379,7 +380,6 @@ class ActorModelRayActor(BasePPORole):
             ema_beta=0.992,
             ptx_coef=args.ptx_coef,
             max_norm=args.max_norm,
-            activate_grpo=activate_grpo,
             # fro GPT generation
             do_sample=True,
             max_new_tokens=args.generate_max_len,

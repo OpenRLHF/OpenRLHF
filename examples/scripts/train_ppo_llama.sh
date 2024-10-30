@@ -8,6 +8,7 @@ openrlhf.cli.train_ppo \
    --save_steps -1 \
    --logging_steps 1 \
    --eval_steps -1 \
+   --advantage_estimator gae \
    --micro_train_batch_size 2 \
    --train_batch_size 128 \
    --micro_rollout_batch_size 4 \

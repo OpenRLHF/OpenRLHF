@@ -26,6 +26,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
    --remote_rm_url http://localhost:5000/get_reward \
    --save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
+   --advantage_estimator gae \
    --micro_train_batch_size 8 \
    --train_batch_size 128 \
    --micro_rollout_batch_size 16 \

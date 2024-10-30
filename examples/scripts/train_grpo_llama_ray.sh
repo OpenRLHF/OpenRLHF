@@ -13,7 +13,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_tensor_parallel_size 2 \
    --colocate_critic_reward \
    --colocate_actor_ref \
-   --activate_grpo \
+   --advantage_estimator group_norm \
    --use_kl_estimator_k3 \
    --n_samples_per_prompt 16 \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \

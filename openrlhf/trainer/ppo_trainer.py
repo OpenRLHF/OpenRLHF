@@ -31,6 +31,7 @@ class PPOTrainer(ABC):
         initial_model (Actor): the initial model in rlhf algorithm to generate reference logits to limit the update of actor
         actor_optim (Optimizer): the optimizer to use for actor model
         critic_optim (Optimizer): the optimizer to use for critic model
+        advantage_estimator (str): the estimator to calculate advantage
         kl_coef (float, defaults to 0.1): the coefficient of kl divergence loss
         train_batch_size (int, defaults to 8): the batch size to use for training
         buffer_limit (int, defaults to 0): the max_size limitaiton of replay buffer
@@ -45,7 +46,6 @@ class PPOTrainer(ABC):
         callbacks (List[Callback], defaults to []): the callbacks to call during training process
         generate_kwargs (dict, optional): the kwargs to use while model generating
         remote_rm_url (str, optional): function for reward model api
-        activate_grpo (bool, defaults to False): activate GRPO training
     """
 
     def __init__(
@@ -60,6 +60,7 @@ class PPOTrainer(ABC):
         critic_optim: Optimizer,
         actor_scheduler,
         critic_scheduler,
+        advantage_estimator,
         ema_beta: float = 0.992,
         init_kl_coef: float = 0.001,
         kl_target: float = None,
@@ -79,7 +80,6 @@ class PPOTrainer(ABC):
         dataloader_pin_memory: bool = True,
         remote_rm_url: str = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
-        activate_grpo: bool = None,
         **generate_kwargs,
     ) -> None:
         assert (
@@ -128,7 +128,7 @@ class PPOTrainer(ABC):
         else:
             self.kl_ctl = FixedKLController(init_kl_coef)
 
-        self.activate_grpo = activate_grpo
+        self.advantage_estimator = advantage_estimator
 
         self.experience_maker = NaiveExperienceMaker(
             actor,
@@ -136,12 +136,12 @@ class PPOTrainer(ABC):
             reward_model,
             initial_model,
             tokenizer,
+            advantage_estimator,
             prompt_max_len,
             self.kl_ctl,
             strategy,
             remote_rm_url,
             reward_fn,
-            activate_grpo
         )
         packing_samples = getattr(self.args, "packing_samples", False)
         self.replay_buffer = NaiveReplayBuffer(
@@ -322,7 +322,7 @@ class PPOTrainer(ABC):
         status = {}
         if global_steps > self.freezing_actor_steps:
             status = self.training_step_actor(experience)
-        if not self.activate_grpo:
+        if self.critic is not None:
             status.update(self.training_step_critic(experience))
         return status
 
@@ -339,7 +339,7 @@ class PPOTrainer(ABC):
             attention_mask = torch.cat(
                 [torch.full_like(s, i + 1) for i, s in enumerate(experience.sequences)], dim=0
             ).unsqueeze(0)
-            if self.activate_grpo:
+            if self.advantage_estimator == "group_norm":
                 base_log_probs = torch.cat(experience.base_log_probs, dim=0).unsqueeze(0)
         else:
             sequences = experience.sequences
@@ -367,7 +367,7 @@ class PPOTrainer(ABC):
             action_mask=experience.action_mask,
         )
 
-        if self.activate_grpo:
+        if self.advantage_estimator == "group_norm":
             kl = compute_approx_kl(
                 action_log_probs,
                 base_log_probs,
@@ -523,7 +523,7 @@ class PPOTrainer(ABC):
             args.max_ckpt_mem,
             client_states,
         )
-        if not self.activate_grpo:
+        if self.critic is not None:
             self.strategy.save_ckpt(
                 self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
             )
