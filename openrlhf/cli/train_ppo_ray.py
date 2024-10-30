@@ -35,8 +35,12 @@ def _validate_args(args):
     assert (
         actor_world_size % critic_world_size == 0
     ), f"actor_world_size must be divisible by critic_world_size, got {actor_world_size} and {critic_world_size}"
-
     assert args.zero_stage != 3 or args.vllm_num_engines > 0, f"ZeRO-3 is only supported when vLLM enabled"
+
+    if args.vllm_num_engines > 0:
+        assert (
+            actor_world_size > args.vllm_num_engines
+        ), f"actor_world_size must be greater than vllm_num_engines, got {actor_world_size} and {args.vllm_num_engines}"
 
 
 def train(args):
