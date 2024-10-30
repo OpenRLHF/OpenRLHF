@@ -20,7 +20,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
    --micro_train_batch_size 8 \
    --train_batch_size 128 \
-   --micro_rollout_batch_size 16 \
+   --micro_rollout_batch_size 32 \
    --rollout_batch_size 1024 \
    --max_samples 100000 \
    --max_epochs 1 \
@@ -35,6 +35,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --input_key context_messages \
    --apply_chat_template \
    --normalize_reward \
+   --packing_samples \
+   --use_kl_estimator_k3 \
    --adam_offload \
    --flash_attn \
    --gradient_checkpointing \
@@ -43,3 +45,4 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 # --runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}' [Install deps]
 # --ref_reward_offload [Offload to CPU]
+# --remote_rm_url http://localhost:5000/get_reward
