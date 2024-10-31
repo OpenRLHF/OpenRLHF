@@ -36,7 +36,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --apply_chat_template \
    --normalize_reward \
    --packing_samples \
-   --use_kl_estimator_k3 \
    --adam_offload \
    --flash_attn \
    --gradient_checkpointing \
