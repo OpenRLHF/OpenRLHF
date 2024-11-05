@@ -261,18 +261,33 @@ class PRMLoss(nn.Module):
     Process Reward Model Loss
     """
 
-    def __init__(self, placeholder_token_id: int, reward_token_ids: Optional[list[int]] = None):
+    def __init__(
+        self,
+        placeholder_token_id: int,
+        reward_token_ids: Optional[list[int]] = None,
+        positive_token_id: Optional[int] = None,
+        negative_token_id: Optional[int] = None,
+    ):
         super().__init__()
         self.IGNORE_INDEX = -100
         self.loss = nn.CrossEntropyLoss(ignore_index=self.IGNORE_INDEX)
         self.placeholder_token_id = placeholder_token_id
         self.reward_token_ids = reward_token_ids
+        self.positive_token_id = positive_token_id
+        self.negative_token_id = negative_token_id
 
     def forward(self, inputs: torch.Tensor, logits: torch.Tensor, labels: torch.Tensor, *, return_acc: bool = False):
         placeholder_mask = inputs == self.placeholder_token_id
         logits = logits[placeholder_mask]
         labels = labels[placeholder_mask]
-        if self.reward_token_ids is not None:
+
+        if labels.dtype == torch.float:
+            logits = logits[..., [self.positive_token_id, self.negative_token_id]]
+            positive_labels = labels.to(logits.dtype)
+            negative_labels = 1 - positive_labels
+            negative_labels[positive_labels != -100] = 1 - positive_labels[positive_labels != -100]
+            labels = torch.stack([positive_labels, negative_labels], dim=-1)
+        elif self.reward_token_ids is not None:
             logits = logits[..., self.reward_token_ids]
             # this is bad....
             for i, token in enumerate(self.reward_token_ids):
@@ -282,5 +297,7 @@ class PRMLoss(nn.Module):
         if not return_acc:
             return loss
 
+        if labels.dtype == logits.dtype:
+            labels = labels.argmax(dim=-1)
         acc = (logits.argmax(dim=-1) == labels).float().mean()
         return loss, acc

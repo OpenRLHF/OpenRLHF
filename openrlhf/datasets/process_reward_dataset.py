@@ -1,3 +1,4 @@
+import numbers
 from typing import Callable
 
 import torch
@@ -5,6 +6,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
+from openrlhf.utils.utils import convert_token_to_id
 from .utils import zero_pad_sequences
 
 
@@ -35,6 +37,10 @@ class ProcessRewardDataset(Dataset):
         # chat_template
         self.input_key = getattr(self.strategy.args, "input_key", None)
         self.label_key = getattr(self.strategy.args, "label_key", None)
+        self.placeholder_token = getattr(self.strategy.args, "placeholder_token", None)
+        self.reward_tokens = getattr(self.strategy.args, "reward_tokens", None)
+
+        self.placeholder_token_id = convert_token_to_id(self.placeholder_token, self.tokenizer)
 
         # Store the processed data in class attributes
         self.inputs = dataset[self.input_key]
@@ -54,22 +60,28 @@ class ProcessRewardDataset(Dataset):
             add_special_tokens=False,
         )
 
-        label_token = self.tokenizer(
-            self.labels[idx],
-            max_length=self.max_length,
-            padding=False,
-            truncation=True,
-            return_tensors="pt",
-            add_special_tokens=False,
-            return_attention_mask=False,
-        )
+        input_ids = input_token["input_ids"]
+        label_values = self.labels[idx]
+        assert isinstance(label_values, list), "labels should be a list of strings or numbers"
+        if isinstance(label_values[0], str):
+            label_tokens = []
+            for label in label_values:
+                assert (
+                    label in self.reward_tokens
+                ), f"label should be in reward tokens {self.reward_tokens}, got {label}"
+                label_tokens.append(convert_token_to_id(label, self.tokenizer))
 
-        assert input_token["input_ids"].numel() == label_token["input_ids"].numel()
+            labels = torch.full_like(input_ids, -100)
+            labels[input_ids == self.placeholder_token_id] = torch.tensor(label_tokens, dtype=input_ids.dtype)
+        else:
+            assert isinstance(label_values[0], numbers.Number), "labels should be a list of strings or numbers"
+            labels = torch.full_like(input_ids, -100, dtype=torch.float)
+            labels[input_ids == self.placeholder_token_id] = torch.tensor(label_values, dtype=torch.float)
 
         return (
-            input_token["input_ids"],
+            input_ids,
             input_token["attention_mask"],
-            label_token["input_ids"],
+            labels,
         )
 
     def collate_fn(self, item_list):
