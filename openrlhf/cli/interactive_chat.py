@@ -72,8 +72,10 @@ def generate(args):
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
-        output = tokenizer.batch_decode(outputs[0], skip_special_tokens=True)
-        response = output[0][user_prompt_len:].replace(r"\n", "\n")
+        output = tokenizer.batch_decode(outputs[0])
+        response = output[0][user_prompt_len:]
+        for token in tokenizer.all_special_tokens:
+             response = response.replace(token, '')
         if args.apply_chat_template:
             conversations.append({"role": "assistant", "content": response})
         else:
