@@ -67,7 +67,7 @@ class ProcessRewardDataset(Dataset):
             label_tokens = []
             for label in label_values:
                 assert (
-                    label in self.reward_tokens
+                    self.reward_tokens is None or label in self.reward_tokens
                 ), f"label should be in reward tokens {self.reward_tokens}, got {label}"
                 label_tokens.append(convert_token_to_id(label, self.tokenizer))
 
