@@ -94,7 +94,6 @@ if __name__ == "__main__":
     # Sampling
     parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--max_len", type=int, default=4096)
-    parser.add_argument("--greedy_sampling", action="store_true", default=False)
     parser.add_argument("--greedy_sampling", action="store_true", default=False, help="Use Greedy sampling")
     parser.add_argument("--top_p", type=float, default=0.9, help="top_p for Sampling")
     parser.add_argument("--temperature", type=float, default=0.2, help="temperature for Sampling")
