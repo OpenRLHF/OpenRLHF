@@ -14,9 +14,9 @@ openrlhf.cli.train_prm \
    --max_len 8192 \
    --zero_stage 3 \
    --learning_rate 1e-6 \
-   --dataset peiyi9979/Math-Shepherd \
+   --dataset zhuzilin/Math-Shepherd \
    --input_key input \
-   --label_key label \
+   --label_key value \
    --flash_attn \
    --load_checkpoint \
    --gradient_checkpointing \
