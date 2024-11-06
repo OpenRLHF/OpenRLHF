@@ -272,9 +272,19 @@ class PRMLoss(nn.Module):
         placeholder_mask = inputs == self.placeholder_token_id
         logits = logits[placeholder_mask]
         labels = labels[placeholder_mask]
-        if self.reward_token_ids is not None:
+
+        if labels.dtype == torch.float:
+            # soft label
+            assert len(self.reward_token_ids) == 2, "reward_token_ids should have 2 tokens for soft labels"
             logits = logits[..., self.reward_token_ids]
-            # this is bad....
+            positive_labels = labels.to(logits.dtype)
+            negative_labels = 1 - positive_labels
+            negative_labels[positive_labels != -100] = 1 - positive_labels[positive_labels != -100]
+            labels = torch.stack([positive_labels, negative_labels], dim=-1)
+        elif self.reward_token_ids is not None:
+            # hard label with reward_token_ids set. (otherwise the whole vocab will be trained together.)
+            logits = logits[..., self.reward_token_ids]
+            # this is slow....
             for i, token in enumerate(self.reward_token_ids):
                 labels = torch.where(labels == token, i, labels)
 
@@ -282,5 +292,7 @@ class PRMLoss(nn.Module):
         if not return_acc:
             return loss
 
+        if labels.dtype == logits.dtype:
+            labels = labels.argmax(dim=-1)
         acc = (logits.argmax(dim=-1) == labels).float().mean()
         return loss, acc

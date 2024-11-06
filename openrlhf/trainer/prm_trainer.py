@@ -56,9 +56,7 @@ class ProcessRewardModelTrainer(ABC):
         self.placeholder_token_id = convert_token_to_id(strategy.args.placeholder_token, self.tokenizer)
         self.reward_token_ids = self.args.reward_tokens
         if self.reward_token_ids is not None:
-            self.reward_token_ids = sorted(
-                [convert_token_to_id(token, self.tokenizer) for token in self.reward_token_ids]
-            )
+            self.reward_token_ids = [convert_token_to_id(token, self.tokenizer) for token in self.reward_token_ids]
 
         self.ignore_index = -100
         self.loss_fn = PRMLoss(self.placeholder_token_id, self.reward_token_ids)

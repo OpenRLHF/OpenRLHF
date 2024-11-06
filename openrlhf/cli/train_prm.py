@@ -192,4 +192,12 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # Add positive token and negative token to reward_tokens and remove duplicates
+    if args.reward_tokens is not None:
+        print(
+            "If you are running with soft labels (float values), "
+            f"the first token in reward_tokens ({args.reward_tokens[0]}) should be the positive token "
+            "and the second token should be the negative token."
+        )
+
     train(args)
