@@ -79,7 +79,7 @@ def generate(args):
         if args.apply_chat_template:
             conversations.append({"role": "assistant", "content": response})
         else:
-            user_prompt = output
+            user_prompt = tokenizer.batch_decode(outputs[0], skip_special_tokens=True)[0]
 
         print(response)
 
