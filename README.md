@@ -179,6 +179,7 @@ deepspeed --module openrlhf.cli.train_sft \
    --eval_steps -1 \
    --zero_stage 2 \
    --max_epochs 1 \
+   --packing_samples \
    --bf16 \
    --flash_attn \
    --learning_rate 5e-6 \
@@ -189,9 +190,6 @@ deepspeed --module openrlhf.cli.train_sft \
 # --apply_chat_template 
 # --input_key {JSON Key}
 # --tokenizer_chat_template {HF Chat Template}
-
-# Support samples packing
-# --packing_samples
 
 # Can also be used for continued pre-training
 # --pretrain_mode
@@ -221,11 +219,10 @@ deepspeed --module openrlhf.cli.train_rm \
    --chosen_key chosen \
    --rejected_key rejected \
    --flash_attn \
+   --packing_samples \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
 
-# Support samples packing
-# --packing_samples
 ```
 
 ### PPO without Ray
@@ -310,13 +307,11 @@ ray job submit --address="http://127.0.0.1:8265" \
   --input_key context_messages \
   --apply_chat_template \
   --normalize_reward \
+  --packing_samples \
   --adam_offload \
   --flash_attn \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
-
-# Support samples packing
-# --packing_samples (Recommended)
 
 # Support remote reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward

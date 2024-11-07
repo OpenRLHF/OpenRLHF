@@ -320,9 +320,6 @@ ray job submit --address="http://127.0.0.1:8265" \
   --load_checkpoint \
   --use_wandb {wandb_token}
 
-# 支持样本 packing (推荐使用)
-# --packing_samples
-
 # 支持远程 reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
 ```
