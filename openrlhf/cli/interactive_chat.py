@@ -72,12 +72,15 @@ def generate(args):
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
-        output = tokenizer.batch_decode(outputs[0], skip_special_tokens=True)
-        response = output[0][user_prompt_len:].replace(r"\n", "\n")
+
         if args.apply_chat_template:
+            generated_ids = outputs[0][:, input_ids.shape[1]:]
+            response = tokenizer.batch_decode(
+            generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
+            )[0]
             conversations.append({"role": "assistant", "content": response})
         else:
-            user_prompt = output[0]
+            user_prompt = tokenizer.batch_decode(outputs[0], skip_special_tokens=True)[0]
 
         print(response)
 
@@ -94,7 +97,6 @@ if __name__ == "__main__":
     # Sampling
     parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--max_len", type=int, default=4096)
-    parser.add_argument("--greedy_sampling", action="store_true", default=False)
     parser.add_argument("--greedy_sampling", action="store_true", default=False, help="Use Greedy sampling")
     parser.add_argument("--top_p", type=float, default=0.9, help="top_p for Sampling")
     parser.add_argument("--temperature", type=float, default=0.2, help="temperature for Sampling")
