@@ -177,7 +177,11 @@ class NaiveExperienceMaker(ABC):
         """
         args = self.strategy.args
         experiences = []
-        for samples in self.generate_samples(all_prompts, **generate_kwargs):
+        for samples in tqdm(
+            self.generate_samples(all_prompts, **generate_kwargs),
+            desc="make_experience",
+            disable=not self.strategy.is_rank_0(),
+        ):
             experiences.append(self.make_experience(samples))
 
         experiences = self.process_experiences(experiences)
