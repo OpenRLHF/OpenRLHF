@@ -545,7 +545,13 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         # round-robin load balance
         rank = torch.distributed.get_rank()
-        llm = self.vllm_engines[rank % len(self.vllm_engines)]
+        world_size = torch.distributed.get_world_size()
+
+        if len(self.vllm_engines) <= world_size:
+            llms = [self.vllm_engines[rank % len(self.vllm_engines)]]
+        else:
+            llms = self.vllm_engines[rank::world_size]
+
         args = self.strategy.args
 
         sampling_params = SamplingParams(
@@ -559,8 +565,21 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
         # TODO: can't pass `max_length` to vLLM's tokenizer for input truncation, remove this once it is supported.
-        prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
-        all_outputs = ray.get(llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
+        all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
+
+        all_output_refs = []
+        num_req_per_engine = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
+        for i, llm in enumerate(llms):
+            prompt_token_ids = all_prompt_token_ids[i * num_req_per_engine : (i + 1) * num_req_per_engine]
+            if len(prompt_token_ids) == 0:
+                continue
+            all_output_refs.append(
+                llm.generate.remote(
+                    sampling_params=sampling_params,
+                    prompt_token_ids=prompt_token_ids,
+                )
+            )
+        all_outputs = sum(ray.get(all_output_refs), [])
 
         samples_list = []
         for i in range(0, len(all_outputs), args.micro_rollout_batch_size):
