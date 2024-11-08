@@ -31,6 +31,8 @@ def generate(args):
     if args.ta_prompt:
         with open(args.ta_prompt, "r") as f:
             user_prompt = f.read()
+    else:
+        user_prompt = ''
 
     if args.apply_chat_template:
         conversations = []
@@ -81,6 +83,7 @@ def generate(args):
             conversations.append({"role": "assistant", "content": response})
         else:
             user_prompt = tokenizer.batch_decode(outputs[0], skip_special_tokens=True)[0]
+            response = user_prompt[user_prompt_len:]
 
         print(response)
 
