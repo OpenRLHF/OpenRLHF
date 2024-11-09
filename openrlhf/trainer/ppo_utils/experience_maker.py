@@ -264,10 +264,11 @@ class NaiveExperienceMaker(ABC):
         Turn samples into experience by calculating logprobs, values, rewards, and kl divergence.
         """
         self.actor.eval()
-        self.critic.eval()
         self.initial_model.eval()
         if self.reward_model is not None:
             self.reward_model.eval()
+        if self.critic is not None:
+            self.critic.eval()
 
         # extract values from samples
         sequences = samples.sequences
@@ -282,7 +283,10 @@ class NaiveExperienceMaker(ABC):
         base_action_log_probs = self.initial_model(sequences, num_actions, attention_mask)
 
         # values
-        value = self.critic(sequences, num_actions, attention_mask)
+        if self.critic is not None:
+            value = self.critic(sequences, num_actions, attention_mask)
+        else:
+            value = None
 
         # rewards
         if self.remote_rm_url is not None:
@@ -309,7 +313,8 @@ class NaiveExperienceMaker(ABC):
         }
         # reset model state
         self.actor.train()
-        self.critic.train()
+        if self.critic is not None:
+            self.critic.train()
 
         return Experience(
             sequences,
@@ -493,14 +498,16 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         )
 
         # values
-        value_ref = self.critic.forward.remote(
-            sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens
-        )
-
-        # avoid CUDA OOM when colocate models
-        if self.strategy.args.colocate_critic_reward:
-            ray.get([value_ref])
-            ray.get([self.critic.empty_cache.remote()])
+        if self.critic is not None:
+            value_ref = self.critic.forward.remote(
+                sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens
+            )
+            # avoid CUDA OOM when colocate models
+            if self.strategy.args.colocate_critic_reward:
+                ray.get([value_ref])
+                ray.get([self.critic.empty_cache.remote()])
+        else:
+            value_ref = None
 
         if self.strategy.args.colocate_actor_ref:
             ray.get([base_action_log_probs_ref])
@@ -566,7 +573,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             sequences = unpacking_samples(sequences, packed_seq_lens)
             attention_mask = None
             action_log_probs = unpacking_samples(action_log_probs, num_actions)
-            value = unpacking_samples(value, num_actions)
+            if value is not None:
+                value = unpacking_samples(value, num_actions)
 
             kl = unpacking_samples(kl, num_actions)
             kl_mean = torch.tensor([each_kl.mean() for each_kl in kl], device=device)
