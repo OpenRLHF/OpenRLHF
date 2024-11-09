@@ -66,7 +66,6 @@ def train(args):
             ds_config=strategy.get_ds_train_config(is_actor=False),
             value_head_prefix=args.value_head_prefix,
         )
-        get_tokenizer(args.reward_pretrain, reward_model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
     else:
         reward_model = None
 
@@ -74,13 +73,11 @@ def train(args):
     if reward_model:
         strategy.print("mean: {}, std {}".format(reward_model.mean, reward_model.std))
 
-    # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, actor.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
-    if args.critic_pretrain:
-        get_tokenizer(args.critic_pretrain, critic, "left", strategy, use_fast=not args.disable_fast_tokenizer)
-
     strategy.print(actor)
     strategy.print(critic)
+
+    # configure tokenizer
+    tokenizer = get_tokenizer(args.pretrain, actor.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
 
     # load weights for reference actor
     initial_model = Actor(
@@ -90,7 +87,6 @@ def train(args):
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=False),
     )
-    get_tokenizer(args.pretrain, initial_model.model, "left", strategy)
 
     if args.enable_ema:
         ema_model = Actor(
@@ -108,9 +104,10 @@ def train(args):
         actor.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
         )
-        critic.gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
-        )
+        if critic is not None:
+            critic.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
+            )
 
     # configure optimizer
     actor_optim = strategy.create_optimizer(
