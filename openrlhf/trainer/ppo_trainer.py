@@ -508,6 +508,7 @@ class PPOTrainer(ABC):
             args.max_ckpt_mem,
             client_states,
         )
-        self.strategy.save_ckpt(
-            self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
-        )
+        if self.critic:
+            self.strategy.save_ckpt(
+                self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
+            )

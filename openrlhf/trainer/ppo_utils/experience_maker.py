@@ -74,9 +74,10 @@ class Experience:
     def pin_memory(self):
         self.sequences = pin_memory(self.sequences)
         self.action_log_probs = pin_memory(self.action_log_probs)
-        self.values = pin_memory(self.values)
         self.returns = pin_memory(self.returns)
         self.advantages = pin_memory(self.advantages)
+        if self.values is not None:
+            self.values = pin_memory(self.values)
         if self.attention_mask is not None:
             self.attention_mask = self.attention_mask.pin_memory()
         if self.action_mask is not None:
@@ -145,6 +146,7 @@ class NaiveExperienceMaker(ABC):
         self.strategy = strategy
         self.reward_fn = reward_fn
         self.perf_stats = None
+        self.advantage_estimator = strategy.args.advantage_estimator
 
     # tokenizer
     def tokenize_fn(self, texts, max_length, padding=True, device=None):
@@ -197,13 +199,24 @@ class NaiveExperienceMaker(ABC):
                 num_actions=num_actions,
                 reward_clip_range=args.reward_clip_range,
             )
-            experience.advantages, experience.returns = self.get_advantages_and_returns(
-                experience.values,
-                reward,
-                experience.action_mask,
-                generate_kwargs["gamma"],
-                generate_kwargs["lambd"],
-            )
+
+            if self.advantage_estimator == "gae":
+                experience.advantages, experience.returns = self.get_advantages_and_returns(
+                    experience.values,
+                    reward,
+                    experience.action_mask,
+                    generate_kwargs["gamma"],
+                    generate_kwargs["lambd"],
+                )
+            elif self.advantage_estimator == "reinforce":
+                experience.returns = self.get_cumulative_returns(
+                    reward,
+                    experience.action_mask,
+                    generate_kwargs["gamma"],
+                )
+            else:
+                raise Exception(f"Unkown advantage_estimator {self.advantage_estimator}")
+
             # calculate the return info.
             if not getattr(self, "packing_samples", False):
                 return_sums = reward.sum(dim=-1)
@@ -371,6 +384,50 @@ class NaiveExperienceMaker(ABC):
         advantages = torch.stack(advantages_reversed[::-1], dim=1)
         returns = advantages + values
         return advantages.detach(), returns
+
+    @torch.no_grad()
+    def get_cumulative_returns(
+        self,
+        rewards: torch.Tensor,
+        action_mask: torch.Tensor,
+        gamma: float,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Function that computes advantages and returns from rewards using REINFORCE.
+        REINFORCE uses cumulative returns without the GAE (Generalized Advantage Estimation).
+
+        Input:
+        - rewards: Tensor of shape (batch_size, response_size)
+        - action_mask: Tensor of shape (batch_size, response_size), binary mask
+        - gamma: discount factor
+
+        Output:
+        - returns: Tensor of shape (batch_size, response_size)
+        """
+
+        if isinstance(rewards, list):
+            # packing samples
+            # TODO: this is slow...
+            returns = []
+            for r in rewards:
+                ret = self.get_cumulative_returns(r.unsqueeze(0), action_mask, gamma)
+                returns.append(ret.squeeze(0))
+            return returns
+
+        response_length = rewards.size(1)
+        returns = torch.zeros_like(rewards)
+        cumulative_return = torch.zeros(rewards.size(0))
+
+        # Mask invalid responses if action_mask is provided
+        if action_mask is not None:
+            rewards = action_mask * rewards
+
+        # Calculate returns by accumulating discounted rewards
+        for t in reversed(range(response_length)):
+            cumulative_return = rewards[:, t] + gamma * cumulative_return
+            returns[:, t] = cumulative_return
+
+        return returns
 
 
 class RemoteExperienceMaker(NaiveExperienceMaker):
@@ -574,8 +631,10 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         for i, llm in enumerate(llms):
             prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
             if prompt_token_ids:
-                all_output_refs.append(llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
-        
+                all_output_refs.append(
+                    llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
+                )
+
         # Retrieve and combine results from all outputs
         all_outputs = sum(ray.get(all_output_refs), [])
 

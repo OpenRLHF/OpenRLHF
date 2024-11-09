@@ -36,21 +36,24 @@ def train(args):
     if args.actor_init_on_gpu:
         actor = actor.to(torch.cuda.current_device())
 
-    critic = get_llm_for_sequence_regression(
-        args.critic_pretrain,
-        "critic",
-        normalize_reward=args.normalize_reward,
-        use_flash_attention_2=args.flash_attn,
-        bf16=args.bf16,
-        load_in_4bit=args.load_in_4bit,
-        lora_rank=args.lora_rank,
-        lora_alpha=args.lora_alpha,
-        target_modules=args.target_modules,
-        lora_dropout=args.lora_dropout,
-        ds_config=strategy.get_ds_train_config(is_actor=False),
-        value_head_prefix=args.value_head_prefix,
-        init_value_head=strategy.args.pretrain == strategy.args.critic_pretrain,
-    )
+    if args.critic_pretrain:
+        critic = get_llm_for_sequence_regression(
+            args.critic_pretrain,
+            "critic",
+            normalize_reward=args.normalize_reward,
+            use_flash_attention_2=args.flash_attn,
+            bf16=args.bf16,
+            load_in_4bit=args.load_in_4bit,
+            lora_rank=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+            target_modules=args.target_modules,
+            lora_dropout=args.lora_dropout,
+            ds_config=strategy.get_ds_train_config(is_actor=False),
+            value_head_prefix=args.value_head_prefix,
+            init_value_head=strategy.args.pretrain == strategy.args.critic_pretrain,
+        )
+    else:
+        critic = None
 
     if not args.remote_rm_url:
         reward_model = get_llm_for_sequence_regression(
@@ -68,11 +71,13 @@ def train(args):
         reward_model = None
 
     strategy.print("reward normalization status: {}".format(args.normalize_reward))
-    strategy.print("mean: {}, std {}".format(critic.mean, critic.std))
+    if args.reward_model:
+        strategy.print("mean: {}, std {}".format(reward_model.mean, reward_model.std))
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, actor.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
-    get_tokenizer(args.critic_pretrain, critic, "left", strategy, use_fast=not args.disable_fast_tokenizer)
+    if args.critic_pretrain:
+        get_tokenizer(args.critic_pretrain, critic, "left", strategy, use_fast=not args.disable_fast_tokenizer)
 
     strategy.print(actor)
     strategy.print(critic)
@@ -111,9 +116,12 @@ def train(args):
     actor_optim = strategy.create_optimizer(
         actor, lr=args.actor_learning_rate, betas=args.adam_betas, weight_decay=args.l2
     )
-    critic_optim = strategy.create_optimizer(
-        critic, lr=args.critic_learning_rate, betas=args.adam_betas, weight_decay=args.l2
-    )
+    if args.critic_pretrain:
+        critic_optim = strategy.create_optimizer(
+            critic, lr=args.critic_learning_rate, betas=args.adam_betas, weight_decay=args.l2
+        )
+    else:
+        critic_optim = None
 
     # prepare datasets
     prompts_data = blending_datasets(
@@ -181,13 +189,16 @@ def train(args):
         scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
     )
 
-    critic_scheduler = get_scheduler(
-        "cosine_with_min_lr",
-        critic_optim,
-        num_warmup_steps=math.ceil(max_steps * 0.03),
-        num_training_steps=max_steps,
-        scheduler_specific_kwargs={"min_lr": args.critic_learning_rate * 0.1},
-    )
+    if args.critic_pretrain:
+        critic_scheduler = get_scheduler(
+            "cosine_with_min_lr",
+            critic_optim,
+            num_warmup_steps=math.ceil(max_steps * 0.03),
+            num_training_steps=max_steps,
+            scheduler_specific_kwargs={"min_lr": args.critic_learning_rate * 0.1},
+        )
+    else:
+        critic_scheduler = None
 
     # prepare models/optimizers...
     (
@@ -344,6 +355,15 @@ if __name__ == "__main__":
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
 
+    # Reinforce
+    parser.add_argument(
+        "--advantage_estimator",
+        type=str,
+        choices=["gae", "reinforce"],
+        default="gae",
+        help="Choose advantage estimation method: gae, reinforce",
+    )
+
     # LoRA
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
     parser.add_argument("--lora_rank", type=int, default=0)
@@ -397,7 +417,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if args.critic_pretrain is None:
+    if args.advantage_estimator != "gae":
+        args.critic_pretrain = None
+    elif args.critic_pretrain is None:
         if not args.remote_rm_url:
             args.critic_pretrain = args.reward_pretrain
         else:
