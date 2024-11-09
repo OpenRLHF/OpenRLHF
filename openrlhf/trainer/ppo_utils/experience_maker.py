@@ -452,11 +452,12 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 "wait_time": 0,
             }
         experiences = super().make_experience_list(all_prompts, **generate_kwargs)
-        for experience in experiences:
-            # send experience to critic
-            experience_cpu = deepcopy(experience)
-            experience_cpu.to_device("cpu")
-            self._ref = self.critic.append.remote(experience_cpu)
+        if self.critic:
+            for experience in experiences:
+                # send experience to critic
+                experience_cpu = deepcopy(experience)
+                experience_cpu.to_device("cpu")
+                self._ref = self.critic.append.remote(experience_cpu)
         return experiences
 
     @torch.no_grad()
