@@ -507,7 +507,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 ray.get([value_ref])
                 ray.get([self.critic.empty_cache.remote()])
         else:
-            value_ref = None
+            value_ref = ray.put(None)
 
         if self.strategy.args.colocate_actor_ref:
             ray.get([base_action_log_probs_ref])
