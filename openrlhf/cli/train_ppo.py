@@ -276,7 +276,7 @@ def train(args):
         args.save_path,
     )
 
-    if args.save_value_network:
+    if args.critic_pretrain and args.save_value_network:
         strategy.save_model(
             critic,
             tokenizer,
