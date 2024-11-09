@@ -325,7 +325,8 @@ class PPOTrainer(ABC):
         status = {}
         if global_steps > self.freezing_actor_steps:
             status = self.training_step_actor(experience)
-        status.update(self.training_step_critic(experience))
+        if self.critic:
+            status.update(self.training_step_critic(experience))
         return status
 
     def training_step_actor(self, experience: Experience) -> Dict[str, float]:
