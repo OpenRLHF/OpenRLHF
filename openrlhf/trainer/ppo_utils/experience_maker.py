@@ -63,9 +63,10 @@ class Experience:
     def to_device(self, device: torch.device) -> None:
         self.sequences = to(self.sequences, device)
         self.action_log_probs = to(self.action_log_probs, device)
-        self.values = to(self.values, device)
         self.returns = to(self.returns, device)
         self.advantages = to(self.advantages, device)
+        if self.values is not None:
+            self.values = to(self.values, device)
         if self.attention_mask is not None:
             self.attention_mask = self.attention_mask.to(device)
         if self.action_mask is not None:
