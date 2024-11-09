@@ -237,7 +237,7 @@ class NaiveExperienceMaker(ABC):
         """
         Generate samples and return in batches.
         """
-        assert self.packing_samples is False
+        assert not getattr(self, "packing_samples", False)
         args = self.strategy.args
         self.actor.eval()
         # sample multiple response
