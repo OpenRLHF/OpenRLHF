@@ -23,6 +23,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --prompt_max_len 1024 \
    --max_samples 100000 \
    --generate_max_len 1024 \
+   --advantage_estimator reinforce \
    --zero_stage 3 \
    --bf16 \
    --actor_learning_rate 5e-7 \
