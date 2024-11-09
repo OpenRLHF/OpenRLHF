@@ -71,7 +71,7 @@ def train(args):
         reward_model = None
 
     strategy.print("reward normalization status: {}".format(args.normalize_reward))
-    if args.reward_model:
+    if reward_model:
         strategy.print("mean: {}, std {}".format(reward_model.mean, reward_model.std))
 
     # configure tokenizer
