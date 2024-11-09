@@ -15,17 +15,20 @@ from openrlhf.utils.distributed_sampler import DistributedSampler
 
 class KDTrainer(ABC):
     """
-        Trainer to use while training reward model.
+    Trainer for Knowledge Distillation.
 
     Args:
-        model (torch.nn.Module): the model to train
-        strategy (Strategy): the strategy to use for training
-        optim(Optimizer): the optimizer to use for training
-        train_dataset (RewardDataset): the dataset to use for training
-        eval_dataset (RewardDataset): the dataset to use for evaluation
-        batch_size (int, defaults to 1): the batch size while training
-        max_epochs (int, defaults to 2): the number of epochs to train
-        optim_kwargs (dict, defaults to {'lr':1e-4}): the kwargs to use while initializing optimizer
+        model (torch.nn.Module): The model to be trained.
+        strategy (Strategy): The training strategy to be applied.
+        optim (Optimizer): The optimizer for model training.
+        train_dataloader (DataLoader): The dataloader for the training dataset.
+        eval_dataloader (DataLoader): The dataloader for the evaluation dataset.
+        scheduler (Scheduler): The learning rate scheduler to adjust training rates.
+        max_norm (float, defaults to 1): Maximum gradient norm for clipping to prevent exploding gradients.
+        pretrain_mode (bool, defaults to False): Flag to indicate if the trainer is in pre-training mode.
+        batch_size (int, defaults to 1): Batch size for training.
+        max_epochs (int, defaults to 2): The maximum number of training epochs.
+        tokenizer (Tokenizer, optional): The tokenizer for processing input data.
     """
 
     def __init__(

@@ -15,17 +15,19 @@ from openrlhf.utils.distributed_sampler import DistributedSampler
 
 class RewardModelTrainer(ABC):
     """
-        Trainer to use while training reward model.
+    Trainer for training a reward model.
 
     Args:
-        model (torch.nn.Module): the model to train
-        strategy (Strategy): the strategy to use for training
-        optim(Optimizer): the optimizer to use for training
-        train_dataset (RewardDataset): the dataset to use for training
-        eval_dataset (RewardDataset): the dataset to use for evaluation
-        batch_size (int, defaults to 1): the batch size while training
-        max_epochs (int, defaults to 2): the number of epochs to train
-        optim_kwargs (dict, defaults to {'lr':1e-4}): the kwargs to use while initializing optimizer
+        model (torch.nn.Module): The model to be trained.
+        strategy (Strategy): The training strategy to apply.
+        optim (Optimizer): The optimizer to use during training.
+        train_dataloader (DataLoader): The dataloader for the training dataset.
+        eval_dataloader (DataLoader): The dataloader for the evaluation dataset.
+        scheduler (Scheduler): The learning rate scheduler for dynamic adjustments during training.
+        tokenizer (Tokenizer): The tokenizer for processing input text data.
+        max_norm (float, defaults to 0.5): Maximum gradient norm for gradient clipping.
+        max_epochs (int, defaults to 2): Maximum number of training epochs.
+        loss (str, defaults to "sigmoid"): The loss function to use during training, e.g., "sigmoid".
     """
 
     def __init__(

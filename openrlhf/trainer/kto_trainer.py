@@ -1,7 +1,7 @@
+import os
 from abc import ABC
 
 import torch
-import os
 import torch.distributed as dist
 from torch.optim import Optimizer
 from tqdm import tqdm
@@ -12,18 +12,20 @@ from openrlhf.utils.distributed_sampler import DistributedSampler
 
 class KTOTrainer(ABC):
     """
-        Trainer for KTO algorithms
+    Trainer for KTO training.
 
     Args:
-        model (torch.nn.Module): the model to train
-        ref_model (torch.nn.Module): the reference model to provide reference logits
-        strategy (Strategy): the strategy to use for training
-        optim(Optimizer): the optimizer to use for training
-        train_dataset (RewardDataset): the dataset to use for training
-        eval_dataset (RewardDataset): the dataset to use for evaluation
-        batch_size (int, defaults to 1): the batch size while training
-        max_epochs (int, defaults to 2): the number of epochs to train
-        optim_kwargs (dict, defaults to {'lr':1e-4}): the kwargs to use while initializing optimizer
+        model (torch.nn.Module): The primary model to be trained.
+        ref_model (torch.nn.Module): The reference model for comparing and guiding preference.
+        strategy (Strategy): The strategy to use for training.
+        tokenizer (Tokenizer): The tokenizer for processing input data.
+        optim (Optimizer): The optimizer for training the model.
+        train_dataloader (DataLoader): The dataloader for the training dataset.
+        eval_dataloader (DataLoader): The dataloader for the evaluation dataset.
+        scheduler (Scheduler): The learning rate scheduler to control learning rate during training.
+        max_norm (float, defaults to 0.5): Maximum gradient norm for gradient clipping.
+        beta (float, defaults to 0.01): Coefficient for regularizing the preference loss.
+        max_epochs (int, defaults to 2): Maximum number of training epochs.
     """
 
     def __init__(
