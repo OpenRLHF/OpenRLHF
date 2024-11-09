@@ -545,7 +545,14 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         # round-robin load balance
         rank = torch.distributed.get_rank()
-        llm = self.vllm_engines[rank % len(self.vllm_engines)]
+        world_size = torch.distributed.get_world_size()
+
+        # Select LLM engines: assign each rank an engine, or cycle through engines if world_size < engine_count
+        if len(self.vllm_engines) <= world_size:
+            llms = [self.vllm_engines[rank % len(self.vllm_engines)]]
+        else:
+            llms = self.vllm_engines[rank::world_size]
+
         args = self.strategy.args
 
         sampling_params = SamplingParams(
@@ -557,10 +564,20 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             skip_special_tokens=kwargs.get("skip_special_tokens", False),
         )
 
+        # Expand prompt list based on the number of samples per prompt
         all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
-        # TODO: can't pass `max_length` to vLLM's tokenizer for input truncation, remove this once it is supported.
-        prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
-        all_outputs = ray.get(llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
+        all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
+
+        # Distribute requests to engines and collect responses to outputs
+        all_output_refs = []
+        batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
+        for i, llm in enumerate(llms):
+            prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
+            if prompt_token_ids:
+                all_output_refs.append(llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
+        
+        # Retrieve and combine results from all outputs
+        all_outputs = sum(ray.get(all_output_refs), [])
 
         samples_list = []
         for i in range(0, len(all_outputs), args.micro_rollout_batch_size):
