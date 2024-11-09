@@ -417,7 +417,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if args.advantage_estimator != "gae":
+    if args.advantage_estimator not in ["gae"]:
         args.critic_pretrain = None
     elif args.critic_pretrain is None:
         if not args.remote_rm_url:
