@@ -325,7 +325,7 @@ class PPOTrainer(ABC):
         status = {}
         if global_steps > self.freezing_actor_steps:
             status = self.training_step_actor(experience)
-        if self.critic:
+        if self.critic is not None:
             status.update(self.training_step_critic(experience))
         return status
 
@@ -509,7 +509,7 @@ class PPOTrainer(ABC):
             args.max_ckpt_mem,
             client_states,
         )
-        if self.critic:
+        if self.critic is not None:
             self.strategy.save_ckpt(
                 self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
             )

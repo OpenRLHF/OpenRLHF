@@ -452,7 +452,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 "wait_time": 0,
             }
         experiences = super().make_experience_list(all_prompts, **generate_kwargs)
-        if self.critic:
+        if self.critic is not None:
             for experience in experiences:
                 # send experience to critic
                 experience_cpu = deepcopy(experience)
@@ -742,6 +742,6 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
     def flush(self):
         "Ensure all experience has been send to critic"
-        if self.critic:
+        if self.critic is not None:
             ray.get(self._ref)
             self._ref = None
