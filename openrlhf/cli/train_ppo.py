@@ -219,7 +219,8 @@ def train(args):
     consumed_samples = 0
     if args.load_checkpoint and os.path.exists(os.path.join(args.ckpt_path, "_actor")):
         _, states = strategy.load_ckpt(actor.model, os.path.join(args.ckpt_path, "_actor"))
-        strategy.load_ckpt(critic, os.path.join(args.ckpt_path, "_critic"))
+        if args.critic_pretrain:
+            strategy.load_ckpt(critic, os.path.join(args.ckpt_path, "_critic"))
         consumed_samples = states["consumed_samples"]
         strategy.print(f"Loaded the checkpoint: {args.ckpt_path}, consumed_samples: {consumed_samples}")
 
