@@ -269,7 +269,7 @@ class PPORayActorGroup:
             or reward_fn is not None
         ), "reward_fn must be specified if using multiple reward models"
 
-        critic_actors = critic_model_group._actor_handlers
+        critic_actors = critic_model_group._actor_handlers if critic_model_group else None
         initial_actors = initial_model_group._actor_handlers
 
         refs = []
