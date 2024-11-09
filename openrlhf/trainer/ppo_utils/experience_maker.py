@@ -422,7 +422,7 @@ class NaiveExperienceMaker(ABC):
 
         response_length = rewards.size(1)
         returns = torch.zeros_like(rewards)
-        cumulative_return = torch.zeros(rewards.size(0))
+        cumulative_return = torch.zeros(rewards.size(0), device=rewards.device)
 
         # Mask invalid responses if action_mask is provided
         if action_mask is not None:
