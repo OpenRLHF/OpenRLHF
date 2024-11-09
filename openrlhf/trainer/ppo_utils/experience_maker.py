@@ -740,5 +740,6 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
     def flush(self):
         "Ensure all experience has been send to critic"
-        ray.get(self._ref)
-        self._ref = None
+        if self.critic:
+            ray.get(self._ref)
+            self._ref = None
