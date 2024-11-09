@@ -276,7 +276,7 @@ class PPORayActorGroup:
         # TODO(wuxibin): actor model choose critic/reward/initial model in a
         # round robin fashion, implement more efficient dispatching strategy.
         for i, actor in enumerate(self._actor_handlers):
-            critic_actor = critic_actors[i % len(critic_actors)] if critic_model_group else None
+            critic_actor = critic_actors[i % len(critic_actors)] if critic_actors else None
             initial_actor = initial_actors[i % len(initial_actors)]
 
             reward_actors = []
@@ -294,7 +294,7 @@ class PPORayActorGroup:
                     reward_fn=reward_fn,
                     vllm_engines=vllm_engines,
                     # whether this actor should triger corresponding critic model training
-                    critic_train_remote=(i < len(critic_actors)) if critic_model_group else None,
+                    critic_train_remote=(i < len(critic_actors)) if critic_actor else None,
                 )
             )
 
