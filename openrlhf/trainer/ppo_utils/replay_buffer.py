@@ -141,7 +141,7 @@ def remove_padding_in_sequences(items):
         ) = (
             seq[left_pad:right_pad],
             act_log_prob[:right_pad],
-            value[:right_pad],
+            value[:right_pad] if item.values is not None else None,
             ret[:right_pad],
             adv[:right_pad],
             att_mask[left_pad:right_pad],
