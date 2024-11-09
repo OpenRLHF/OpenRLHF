@@ -214,7 +214,7 @@ class NaiveExperienceMaker(ABC):
                     experience.action_mask,
                     generate_kwargs["gamma"],
                 )
-                experience.advantages = experience.returns.clone()
+                experience.advantages = deepcopy(experience.returns)
             else:
                 raise Exception(f"Unkown advantage_estimator {self.advantage_estimator}")
 
