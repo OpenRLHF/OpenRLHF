@@ -29,8 +29,12 @@ def pin_memory(tensor: Union[torch.Tensor, list[torch.Tensor]]):
     return tensor.pin_memory()
 
 
-def conditional_cat(attr1, attr2, op=lambda x, y: torch.cat((x, y), dim=0)):
+def conditional_cat(attr1, attr2):
     if attr1 is not None and attr2 is not None:
+        if isinstance(attr1, torch.Tensor):
+            op = lambda x, y: torch.cat((x, y), dim=0)
+        else:
+            op = lambda x, y: x + y
         return op(attr1, attr2)
     return None
 
@@ -94,6 +98,10 @@ class Experience:
         if not isinstance(other, Experience):
             return NotImplemented
 
+        info = {}
+        for k in self.info.keys():
+            info[k] = conditional_cat(self.info[k], other.info[k])
+
         return Experience(
             sequences=conditional_cat(self.sequences, other.sequences),
             action_log_probs=conditional_cat(self.action_log_probs, other.action_log_probs),
@@ -102,7 +110,7 @@ class Experience:
             advantages=conditional_cat(self.advantages, other.advantages),
             attention_mask=conditional_cat(self.attention_mask, other.attention_mask),
             action_mask=conditional_cat(self.action_mask, other.action_mask),
-            info={**self.info, **other.info} if self.info and other.info else None,
+            info=info,
             kl=conditional_cat(self.kl, other.kl),
         )
 
