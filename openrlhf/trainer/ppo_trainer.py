@@ -233,7 +233,7 @@ class PPOTrainer(ABC):
                     self.replay_buffer.append(experience)
 
                 torch.cuda.empty_cache()
-                if self.args.advantage_estimator not in ["group_norm"]:
+                if self.args.advantage_estimator not in ["rloo"]:
                     self.replay_buffer.normalize("advantages", self.strategy)
                 status = self.ppo_train(steps)
                 self.replay_buffer.clear()

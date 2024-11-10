@@ -244,13 +244,14 @@ class NaiveExperienceMaker(ABC):
                     generate_kwargs["gamma"],
                     generate_kwargs["lambd"],
                 )
-            elif self.advantage_estimator in ["reinforce", "group_norm"]:
-                if self.advantage_estimator == "group_norm":
-                    assert self.args.n_samples_per_prompt > 1, "group_norm requires n_samples_per_prompt > 1"
-                    response_length = rewards.size(1)
-                    rewards = rewards.reshape(-1, self.args.n_samples_per_prompt, response_length)
-                    rewards = (rewards - rewards.mean(dim=1, keepdim=True)) / (rewards.std(dim=1, keepdim=True) + 1e-8)
-                    rewards = rewards.reshape(-1, response_length)
+            elif self.advantage_estimator in ["reinforce", "rloo"]:
+                if self.advantage_estimator == "rloo":
+                    assert self.args.n_samples_per_prompt > 1, "rloo requires n_samples_per_prompt > 1"
+                    rewards_length = rewards.size(1)
+                    rewards = rewards.reshape(-1, self.args.n_samples_per_prompt, rewards_length)
+                    baseline = (rewards.sum(1, keepdim=True) - rewards) / (args.n_samples_per_prompt - 1)
+                    rewards = rewards - baseline
+                    rewards = rewards.reshape(-1, rewards_length)
 
                 experience.returns = self.get_cumulative_returns(
                     reward,
@@ -374,7 +375,7 @@ class NaiveExperienceMaker(ABC):
     @torch.no_grad()
     def process_experiences(self, experiences: List[Experience]) -> List[Experience]:
         # TODO: add more methods to process experiences
-        if self.advantage_estimator == "group_norm":
+        if self.advantage_estimator == "rloo":
             return [sum(experiences)]
         else:
             return experiences
