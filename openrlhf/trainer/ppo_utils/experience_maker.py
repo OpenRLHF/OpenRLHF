@@ -375,7 +375,7 @@ class NaiveExperienceMaker(ABC):
     @torch.no_grad()
     def process_experiences(self, experiences: List[Experience]) -> List[Experience]:
         # TODO: add more methods to process experiences
-        if self.advantage_estimator == "group_norm":
+        if self.advantage_estimator in ["group_norm"]:
             return [sum(experiences)]
         else:
             return experiences
