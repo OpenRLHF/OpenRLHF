@@ -256,7 +256,7 @@ class NaiveExperienceMaker(ABC):
                     assert generate_kwargs["gamma"] == 1, "group_norm requires gamma = 1"
                     returns_length = returns.size(1)
                     returns = experience.returns.reshape(-1, self.args.n_samples_per_prompt * returns_length)
-                    returns = (returns - returns.mean(1, keepdim=True)) / returns.std(1, keepdim=True)
+                    returns = (returns - returns.mean(1, keepdim=True)) / (returns.std(1, keepdim=True) + 1e-8)
                     experience.returns = returns.reshape(-1, returns_length)
 
                 experience.advantages = deepcopy(experience.returns)
