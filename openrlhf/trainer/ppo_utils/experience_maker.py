@@ -227,8 +227,17 @@ class NaiveExperienceMaker(ABC):
         # calculate return and advantages
         for experience in experiences:
             num_actions = experience.info["num_actions"]
+            reward = experience.info["reward"]
+
+            if self.advantage_estimator == "group_norm":
+                assert self.args.n_samples_per_prompt > 1, "group_norm requires n_samples_per_prompt > 1"
+                reward_length = reward.size(1)
+                reward = reward.reshape(-1, self.args.n_samples_per_prompt * reward_length)
+                reward = (reward - reward.mean(1, keepdim=True)) / (reward.std(1, keepdim=True) + 1e-8)
+                reward = reward.reshape(-1, reward_length)
+
             reward = compute_reward(
-                experience.info["reward"],
+                reward,
                 self.kl_ctl.value,
                 experience.kl,
                 action_mask=experience.action_mask,
@@ -250,15 +259,6 @@ class NaiveExperienceMaker(ABC):
                     experience.action_mask,
                     generate_kwargs["gamma"],
                 )
-
-                if self.advantage_estimator == "group_norm":
-                    assert self.args.n_samples_per_prompt > 1, "group_norm requires n_samples_per_prompt > 1"
-                    assert generate_kwargs["gamma"] == 1, "group_norm requires gamma = 1"
-                    returns_length = experience.returns.size(1)
-                    returns = experience.returns.reshape(-1, self.args.n_samples_per_prompt * returns_length)
-                    returns = (returns - returns.mean(1, keepdim=True)) / (returns.std(1, keepdim=True) + 1e-8)
-                    experience.returns = returns.reshape(-1, returns_length)
-
                 experience.advantages = deepcopy(experience.returns)
             else:
                 raise Exception(f"Unkown advantage_estimator {self.advantage_estimator}")
