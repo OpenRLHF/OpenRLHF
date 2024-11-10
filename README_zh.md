@@ -339,6 +339,10 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 # 支持远程 reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
+
+# 支持 Reinforce 和 Group Reward Normalization 
+# --advantage_estimator reinforce | group_norm \
+# --n_samples_per_prompt 4 \
 ```
 
 > [!NOTE]

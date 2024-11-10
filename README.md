@@ -332,6 +332,10 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 # Support remote reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
+
+# Support Reinforce and Group Reward Normalization 
+# --advantage_estimator reinforce | group_norm \
+# --n_samples_per_prompt 4 \
 ```
 > [!NOTE]
 > Do not set `--vllm_num_engines` means not using the vLLM engine.
