@@ -39,7 +39,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --save_steps -1 \
    --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf
 
- # Notes:
- # Use group reward normalization 
+ # Support group reward normalization 
  # --advantage_estimator group_norm \
  # --n_samples_per_prompt 4 \
