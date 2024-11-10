@@ -325,7 +325,8 @@ class PPOTrainer(ABC):
         status = {}
         if global_steps > self.freezing_actor_steps:
             status = self.training_step_actor(experience)
-        status.update(self.training_step_critic(experience))
+        if self.critic is not None:
+            status.update(self.training_step_critic(experience))
         return status
 
     def training_step_actor(self, experience: Experience) -> Dict[str, float]:
@@ -336,7 +337,7 @@ class PPOTrainer(ABC):
             sequences = torch.cat(experience.sequences, dim=0).unsqueeze(0)
             old_action_log_probs = torch.cat(experience.action_log_probs, dim=0).unsqueeze(0)
             advantages = torch.cat(experience.advantages, dim=0).unsqueeze(0)
-            num_actions = [v.numel() for v in experience.values]
+            num_actions = [v.numel() for v in experience.advantages]
             packed_seq_lens = [s.numel() for s in experience.sequences]
             attention_mask = torch.cat(
                 [torch.full_like(s, i + 1) for i, s in enumerate(experience.sequences)], dim=0
@@ -422,7 +423,7 @@ class PPOTrainer(ABC):
             sequences = torch.cat(experience.sequences, dim=0).unsqueeze(0)
             old_values = torch.cat(experience.values, dim=0).unsqueeze(0)
             returns = torch.cat(experience.returns, dim=0).unsqueeze(0)
-            num_actions = [v.numel() for v in experience.values]
+            num_actions = [v.numel() for v in experience.advantages]
             packed_seq_lens = [s.numel() for s in experience.sequences]
             attention_mask = torch.cat(
                 [torch.full_like(s, i + 1) for i, s in enumerate(experience.sequences)], dim=0
@@ -508,6 +509,7 @@ class PPOTrainer(ABC):
             args.max_ckpt_mem,
             client_states,
         )
-        self.strategy.save_ckpt(
-            self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
-        )
+        if self.critic is not None:
+            self.strategy.save_ckpt(
+                self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
+            )

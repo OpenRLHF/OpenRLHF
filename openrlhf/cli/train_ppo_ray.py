@@ -24,17 +24,20 @@ def reward_fn(rewards: List[torch.Tensor]):
 
 def _validate_args(args):
     actor_world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
-    critic_world_size = args.critic_num_nodes * args.critic_num_gpus_per_node
 
     assert (
         actor_world_size & (actor_world_size - 1)
     ) == 0, f"actor_world_size must be power of 2, got {actor_world_size}"
-    assert (
-        critic_world_size & (critic_world_size - 1)
-    ) == 0, f"critic_world_size must be power of 2, got {critic_world_size}"
-    assert (
-        actor_world_size % critic_world_size == 0
-    ), f"actor_world_size must be divisible by critic_world_size, got {actor_world_size} and {critic_world_size}"
+
+    if args.critic_pretrain:
+        critic_world_size = args.critic_num_nodes * args.critic_num_gpus_per_node
+        assert (
+            critic_world_size & (critic_world_size - 1)
+        ) == 0, f"critic_world_size must be power of 2, got {critic_world_size}"
+        assert (
+            actor_world_size % critic_world_size == 0
+        ), f"actor_world_size must be divisible by critic_world_size, got {actor_world_size} and {critic_world_size}"
+
     assert args.zero_stage != 3 or args.vllm_num_engines > 0, f"ZeRO-3 is only supported when vLLM enabled"
 
 
@@ -85,7 +88,7 @@ def train(args):
 
     # if colocated, create placement group for critic and reward model explicitly.
     pg = None
-    if args.colocate_critic_reward:
+    if args.critic_pretrain and args.colocate_critic_reward:
         assert (
             args.critic_num_nodes == args.reward_num_nodes
             and args.critic_num_gpus_per_node == args.reward_num_gpus_per_node
@@ -98,13 +101,16 @@ def train(args):
         pg = placement_group(bundles, strategy="STRICT_SPREAD")
         ray.get(pg.ready())
 
-    critic_model = PPORayActorGroup(
-        args.critic_num_nodes,
-        args.critic_num_gpus_per_node,
-        CriticModelRayActor,
-        pg=pg,
-        num_gpus_per_actor=0.75 if pg else 1,
-    )
+    if args.critic_pretrain:
+        critic_model = PPORayActorGroup(
+            args.critic_num_nodes,
+            args.critic_num_gpus_per_node,
+            CriticModelRayActor,
+            pg=pg,
+            num_gpus_per_actor=0.75 if pg else 1,
+        )
+    else:
+        critic_model = None
 
     # multiple reward models
     if not args.remote_rm_url:
@@ -147,11 +153,12 @@ def train(args):
             max_len,
         )
 
-    # critic scheduler initialization depends on max_step, so we have to init critic after actor
-    # TODO: use first reward model as critic model
-    max_steps = ray.get(actor_model._actor_handlers[0].max_steps.remote())
-    refs.extend(critic_model.async_init_model_from_pretrained(strategy, args.critic_pretrain, max_steps))
-    ray.get(refs)
+    if args.critic_pretrain:
+        # critic scheduler initialization depends on max_step, so we have to init critic after actor
+        # TODO: use first reward model as critic model
+        max_steps = ray.get(actor_model._actor_handlers[0].max_steps.remote())
+        refs.extend(critic_model.async_init_model_from_pretrained(strategy, args.critic_pretrain, max_steps))
+        ray.get(refs)
 
     # train actor and critic mdoel
     refs = actor_model.async_fit_actor_model(
@@ -162,7 +169,7 @@ def train(args):
     # save model
     ray.get(actor_model.async_save_model())
 
-    if args.save_value_network:
+    if args.critic_pretrain and args.save_value_network:
         ray.get(critic_model.async_save_model())
 
 
@@ -287,6 +294,15 @@ if __name__ == "__main__":
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
     parser.add_argument("--reward_clip_range", type=float, nargs=2, default=(-10, 10), help="Reward clip range")
 
+    # Reinforce
+    parser.add_argument(
+        "--advantage_estimator",
+        type=str,
+        choices=["gae", "reinforce"],
+        default="gae",
+        help="Choose advantage estimation method: gae, reinforce",
+    )
+
     #  Models
     parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--reward_pretrain", type=str, default=None, help="HF model name or path")
@@ -338,7 +354,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if args.critic_pretrain is None:
+    if args.advantage_estimator not in ["gae"]:
+        args.critic_pretrain = None
+    elif args.critic_pretrain is None:
         if not args.remote_rm_url:
             args.critic_pretrain = args.reward_pretrain.split(",")[0]
         else:

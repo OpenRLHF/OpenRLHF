@@ -190,7 +190,10 @@ class DeepspeedStrategy(ABC):
         for arg in models_or_model_optim_pairs:
             if isinstance(arg, tuple):
                 assert len(arg) == 3, f'Expect (model, optimizer, scheduler) pair, got a tuple with size "{len(arg)}"'
-                ret.append(self._ds_init_train_model(*arg))
+                if arg[0] is not None:
+                    ret.append(self._ds_init_train_model(*arg))
+                else:
+                    ret.append((None, None, None))
             else:
                 ret.append(self._ds_init_eval_model(arg))
 

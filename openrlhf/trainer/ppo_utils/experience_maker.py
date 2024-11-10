@@ -63,9 +63,10 @@ class Experience:
     def to_device(self, device: torch.device) -> None:
         self.sequences = to(self.sequences, device)
         self.action_log_probs = to(self.action_log_probs, device)
-        self.values = to(self.values, device)
         self.returns = to(self.returns, device)
         self.advantages = to(self.advantages, device)
+        if self.values is not None:
+            self.values = to(self.values, device)
         if self.attention_mask is not None:
             self.attention_mask = self.attention_mask.to(device)
         if self.action_mask is not None:
@@ -74,9 +75,10 @@ class Experience:
     def pin_memory(self):
         self.sequences = pin_memory(self.sequences)
         self.action_log_probs = pin_memory(self.action_log_probs)
-        self.values = pin_memory(self.values)
         self.returns = pin_memory(self.returns)
         self.advantages = pin_memory(self.advantages)
+        if self.values is not None:
+            self.values = pin_memory(self.values)
         if self.attention_mask is not None:
             self.attention_mask = self.attention_mask.pin_memory()
         if self.action_mask is not None:
@@ -145,6 +147,7 @@ class NaiveExperienceMaker(ABC):
         self.strategy = strategy
         self.reward_fn = reward_fn
         self.perf_stats = None
+        self.advantage_estimator = strategy.args.advantage_estimator
 
     # tokenizer
     def tokenize_fn(self, texts, max_length, padding=True, device=None):
@@ -197,13 +200,25 @@ class NaiveExperienceMaker(ABC):
                 num_actions=num_actions,
                 reward_clip_range=args.reward_clip_range,
             )
-            experience.advantages, experience.returns = self.get_advantages_and_returns(
-                experience.values,
-                reward,
-                experience.action_mask,
-                generate_kwargs["gamma"],
-                generate_kwargs["lambd"],
-            )
+
+            if self.advantage_estimator == "gae":
+                experience.advantages, experience.returns = self.get_advantages_and_returns(
+                    experience.values,
+                    reward,
+                    experience.action_mask,
+                    generate_kwargs["gamma"],
+                    generate_kwargs["lambd"],
+                )
+            elif self.advantage_estimator == "reinforce":
+                experience.returns = self.get_cumulative_returns(
+                    reward,
+                    experience.action_mask,
+                    generate_kwargs["gamma"],
+                )
+                experience.advantages = deepcopy(experience.returns)
+            else:
+                raise Exception(f"Unkown advantage_estimator {self.advantage_estimator}")
+
             # calculate the return info.
             if not getattr(self, "packing_samples", False):
                 return_sums = reward.sum(dim=-1)
@@ -222,7 +237,7 @@ class NaiveExperienceMaker(ABC):
         """
         Generate samples and return in batches.
         """
-        assert self.packing_samples is False
+        assert not getattr(self, "packing_samples", False)
         args = self.strategy.args
         self.actor.eval()
         # sample multiple response
@@ -250,10 +265,11 @@ class NaiveExperienceMaker(ABC):
         Turn samples into experience by calculating logprobs, values, rewards, and kl divergence.
         """
         self.actor.eval()
-        self.critic.eval()
         self.initial_model.eval()
         if self.reward_model is not None:
             self.reward_model.eval()
+        if self.critic is not None:
+            self.critic.eval()
 
         # extract values from samples
         sequences = samples.sequences
@@ -268,7 +284,10 @@ class NaiveExperienceMaker(ABC):
         base_action_log_probs = self.initial_model(sequences, num_actions, attention_mask)
 
         # values
-        value = self.critic(sequences, num_actions, attention_mask)
+        if self.critic is not None:
+            value = self.critic(sequences, num_actions, attention_mask)
+        else:
+            value = None
 
         # rewards
         if self.remote_rm_url is not None:
@@ -295,7 +314,8 @@ class NaiveExperienceMaker(ABC):
         }
         # reset model state
         self.actor.train()
-        self.critic.train()
+        if self.critic is not None:
+            self.critic.train()
 
         return Experience(
             sequences,
@@ -372,6 +392,50 @@ class NaiveExperienceMaker(ABC):
         returns = advantages + values
         return advantages.detach(), returns
 
+    @torch.no_grad()
+    def get_cumulative_returns(
+        self,
+        rewards: torch.Tensor,
+        action_mask: torch.Tensor,
+        gamma: float,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Function that computes advantages and returns from rewards using REINFORCE.
+        REINFORCE uses cumulative returns without the GAE (Generalized Advantage Estimation).
+
+        Input:
+        - rewards: Tensor of shape (batch_size, response_size)
+        - action_mask: Tensor of shape (batch_size, response_size), binary mask
+        - gamma: discount factor
+
+        Output:
+        - returns: Tensor of shape (batch_size, response_size)
+        """
+
+        if isinstance(rewards, list):
+            # packing samples
+            # TODO: this is slow...
+            returns = []
+            for r in rewards:
+                ret = self.get_cumulative_returns(r.unsqueeze(0), action_mask, gamma)
+                returns.append(ret.squeeze(0))
+            return returns
+
+        response_length = rewards.size(1)
+        returns = torch.zeros_like(rewards)
+        cumulative_return = torch.zeros(rewards.size(0), device=rewards.device)
+
+        # Mask invalid responses if action_mask is provided
+        if action_mask is not None:
+            rewards = action_mask * rewards
+
+        # Calculate returns by accumulating discounted rewards
+        for t in reversed(range(response_length)):
+            cumulative_return = rewards[:, t] + gamma * cumulative_return
+            returns[:, t] = cumulative_return
+
+        return returns
+
 
 class RemoteExperienceMaker(NaiveExperienceMaker):
     def __init__(self, *args, vllm_engines: List = None, packing_samples=False, **kwargs):
@@ -388,11 +452,12 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 "wait_time": 0,
             }
         experiences = super().make_experience_list(all_prompts, **generate_kwargs)
-        for experience in experiences:
-            # send experience to critic
-            experience_cpu = deepcopy(experience)
-            experience_cpu.to_device("cpu")
-            self._ref = self.critic.append.remote(experience_cpu)
+        if self.critic is not None:
+            for experience in experiences:
+                # send experience to critic
+                experience_cpu = deepcopy(experience)
+                experience_cpu.to_device("cpu")
+                self._ref = self.critic.append.remote(experience_cpu)
         return experiences
 
     @torch.no_grad()
@@ -435,14 +500,16 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         )
 
         # values
-        value_ref = self.critic.forward.remote(
-            sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens
-        )
-
-        # avoid CUDA OOM when colocate models
-        if self.strategy.args.colocate_critic_reward:
-            ray.get([value_ref])
-            ray.get([self.critic.empty_cache.remote()])
+        if self.critic is not None:
+            value_ref = self.critic.forward.remote(
+                sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens
+            )
+            # avoid CUDA OOM when colocate models
+            if self.strategy.args.colocate_critic_reward:
+                ray.get([value_ref])
+                ray.get([self.critic.empty_cache.remote()])
+        else:
+            value_ref = ray.put(None)
 
         if self.strategy.args.colocate_actor_ref:
             ray.get([base_action_log_probs_ref])
@@ -482,7 +549,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         wait_time = time.time() - start
 
         base_action_log_probs, value, rewards = ref_values[0], ref_values[1], ref_values[2:]
-        base_action_log_probs, value = base_action_log_probs.to(device), value.to(device)
+        base_action_log_probs = base_action_log_probs.to(device)
+        if value is not None:
+            value = value.to(device)
         rewards = [r.to(device) for r in rewards]
         r = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
 
@@ -508,7 +577,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             sequences = unpacking_samples(sequences, packed_seq_lens)
             attention_mask = None
             action_log_probs = unpacking_samples(action_log_probs, num_actions)
-            value = unpacking_samples(value, num_actions)
+            if value is not None:
+                value = unpacking_samples(value, num_actions)
 
             kl = unpacking_samples(kl, num_actions)
             kl_mean = torch.tensor([each_kl.mean() for each_kl in kl], device=device)
@@ -574,8 +644,10 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         for i, llm in enumerate(llms):
             prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
             if prompt_token_ids:
-                all_output_refs.append(llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
-        
+                all_output_refs.append(
+                    llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
+                )
+
         # Retrieve and combine results from all outputs
         all_outputs = sum(ray.get(all_output_refs), [])
 
@@ -670,5 +742,6 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
     def flush(self):
         "Ensure all experience has been send to critic"
-        ray.get(self._ref)
-        self._ref = None
+        if self.critic is not None:
+            ray.get(self._ref)
+            self._ref = None
