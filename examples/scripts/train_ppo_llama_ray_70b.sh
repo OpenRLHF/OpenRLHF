@@ -5,21 +5,23 @@ ray job submit --address="http://127.0.0.1:8265" \
     --no-wait \
     -- python3 -m openrlhf.cli.train_ppo_ray \
     --ref_num_nodes 1 \
-    --ref_num_gpus_per_node 2 \
+    --ref_num_gpus_per_node 8 \
     --reward_num_nodes 1 \
-    --reward_num_gpus_per_node 2 \
+    --reward_num_gpus_per_node 8 \
     --critic_num_nodes 1 \
-    --critic_num_gpus_per_node 4 \
+    --critic_num_gpus_per_node 8 \
     --actor_num_nodes 1 \
-    --actor_num_gpus_per_node 4 \
-    --vllm_num_engines 2 \
+    --actor_num_gpus_per_node 8 \
+    --vllm_num_engines 8 \
     --vllm_tensor_parallel_size 2 \
+    --colocate_critic_reward \
+    --colocate_actor_ref \
     --pretrain meta-llama/Meta-Llama-3-70B-Instruct \
     --reward_pretrain meta-llama/Meta-Llama-3-70B-Instruct \
     --save_path /openrlhf/examples/checkpoint/llama-3-70b-rlhf \
-    --micro_train_batch_size 1 \
+    --micro_train_batch_size 2 \
     --train_batch_size 128 \
-    --micro_rollout_batch_size 2 \
+    --micro_rollout_batch_size 4 \
     --rollout_batch_size 1024 \
     --max_epochs 1 \
     --prompt_max_len 1024 \
@@ -32,9 +34,9 @@ ray job submit --address="http://127.0.0.1:8265" \
     --prompt_data OpenRLHF/prompt-collection-v0.1 \
     --input_key context_messages \
     --apply_chat_template \
-    --max_samples 10000 \
+    --max_samples 100000 \
+    --packing_samples \
     --normalize_reward \
     --adam_offload \
     --flash_attn \
     --gradient_checkpointing
-

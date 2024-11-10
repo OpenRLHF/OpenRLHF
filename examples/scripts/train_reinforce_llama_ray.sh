@@ -8,8 +8,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --reward_num_nodes 1 \
    --reward_num_gpus_per_node 1 \
    --actor_num_nodes 1 \
-   --actor_num_gpus_per_node 2 \
-   --vllm_num_engines 4 \
+   --actor_num_gpus_per_node 4 \
+   --vllm_num_engines 2 \
    --vllm_tensor_parallel_size 1 \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
    --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \

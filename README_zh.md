@@ -42,7 +42,7 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 
 ## 特性
 
-- 基于 Ray 的分布式 [PPO/Reinforce based on Ray](./examples/scripts/train_ppo_llama_ray.sh). 
+- 基于 Ray 的分布式 [PPO](./examples/scripts/train_ppo_llama_ray.sh)/[Reinforce](./examples/scripts/train_reinforce_llama_ray.sh) based on Ray. 
 - 支持使用 [超过 70 亿参数的模型进行全面 RLHF 微调](./examples/scripts/train_ppo_llama_ray_70b.sh).
 - 支持 vLLM 生成加速在 RLHF 中 (--vllm_num_engines).
 - 支持 多个奖励模型 (--reward_pretrain model1,model2...) 及 远程奖励模型 (--remote_rm_url).

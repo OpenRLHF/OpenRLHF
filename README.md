@@ -39,7 +39,7 @@ More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csof
 
 ## Features
 
-- Distributed [PPO/Reinforce based on Ray](./examples/scripts/train_ppo_llama_ray.sh). 
+- Distributed [PPO](./examples/scripts/train_ppo_llama_ray.sh)/[Reinforce](./examples/scripts/train_reinforce_llama_ray.sh) based on Ray. 
 - Support full RLHF fine-tuning of models with [over 70 billion parameters](./examples/scripts/train_ppo_llama_ray_70b.sh).
 - Support vLLM generation acceleration in RLHF (--vllm_num_engines).
 - Support multiple reward models (--reward_pretrain model1,model2...) and remote reward model(--remote_rm_url).
