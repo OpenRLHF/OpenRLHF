@@ -244,20 +244,22 @@ class NaiveExperienceMaker(ABC):
                     generate_kwargs["gamma"],
                     generate_kwargs["lambd"],
                 )
-            elif self.advantage_estimator in ["reinforce", "rloo"]:
-                if self.advantage_estimator == "rloo":
-                    assert self.args.n_samples_per_prompt > 1, "rloo requires n_samples_per_prompt > 1"
-                    rewards_length = rewards.size(1)
-                    rewards = rewards.reshape(-1, self.args.n_samples_per_prompt, rewards_length)
-                    baseline = (rewards.sum(1, keepdim=True) - rewards) / (args.n_samples_per_prompt - 1)
-                    rewards = rewards - baseline
-                    rewards = rewards.reshape(-1, rewards_length)
-
+            elif self.advantage_estimator in ["reinforce", "group_norm"]:
                 experience.returns = self.get_cumulative_returns(
                     reward,
                     experience.action_mask,
                     generate_kwargs["gamma"],
                 )
+
+                if self.advantage_estimator == "group_norm":
+                    assert self.args.n_samples_per_prompt > 1, "group_norm requires n_samples_per_prompt > 1"
+                    assert generate_kwargs["gamma"] == 1, "group_norm requires gamma = 1"
+                    returns_length = returns.size(1)
+                    returns = experience.returns.reshape(-1, self.args.n_samples_per_prompt, returns_length)
+                    baseline = (returns.sum(1, keepdim=True) - returns) / (args.n_samples_per_prompt - returns_length)
+                    returns = returns - baseline
+                    experience.returns = returns.reshape(-1, returns_length)
+
                 experience.advantages = deepcopy(experience.returns)
             else:
                 raise Exception(f"Unkown advantage_estimator {self.advantage_estimator}")
@@ -375,7 +377,7 @@ class NaiveExperienceMaker(ABC):
     @torch.no_grad()
     def process_experiences(self, experiences: List[Experience]) -> List[Experience]:
         # TODO: add more methods to process experiences
-        if self.advantage_estimator == "rloo":
+        if self.advantage_estimator == "group_norm":
             return [sum(experiences)]
         else:
             return experiences
