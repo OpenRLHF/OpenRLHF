@@ -369,9 +369,13 @@ if __name__ == "__main__":
         args.enable_prefix_caching = False
         print("[Warning] Disable prefix cache because vLLM updates weights without updating the old KV Cache.")
 
-    if args.input_template and not "{}" in args.input_template:
+    if args.input_template and "{}" not in args.input_template:
         print("[Warning] {} not in args.input_template, set to None")
         args.input_template = None
+
+    if args.input_template and '\\n' in args.input_template:
+        print("[Warning] input_template contains \\n chracters instead of newline. "
+              "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell.")
 
     if args.packing_samples:
         if not args.flash_attn:

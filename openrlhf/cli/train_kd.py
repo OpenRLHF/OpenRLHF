@@ -217,4 +217,13 @@ if __name__ == "__main__":
     parser.add_argument("--use_tensorboard", type=str, default=None, help="TensorBoard logging path")
 
     args = parser.parse_args()
+
+    if args.input_template and "{}" not in args.input_template:
+        print("[Warning] {} not in args.input_template, set to None")
+        args.input_template = None
+
+    if args.input_template and '\\n' in args.input_template:
+        print("[Warning] input_template contains \\n chracters instead of newline. "
+              "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell.")
+
     train(args)
