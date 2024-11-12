@@ -168,7 +168,7 @@ deepspeed --module openrlhf.cli.train_sft \
    --dataset Open-Orca/OpenOrca \
    --input_key question \
    --output_key response \
-   --input_template 'User: {}\nAssistant: ' \
+   --input_template $'User: {}\nAssistant: ' \
    --train_batch_size 256 \
    --micro_train_batch_size 2 \
    --max_samples 500000 \
