@@ -17,10 +17,10 @@ def strip_sequence(text, pad_token, eos_token):
     pad_token_escaped = re.escape(pad_token)
     eos_token_escaped = re.escape(eos_token)
 
-    pattern = f"({eos_token_escaped}|{pad_token_escaped})+$"
+    pattern = f"^({eos_token_escaped}|{pad_token_escaped})+"
     text = re.sub(pattern, "", text)
 
-    pattern = f"^({eos_token_escaped}|{pad_token_escaped})+"
+    pattern = f"({eos_token_escaped}|{pad_token_escaped})+$"
     text = re.sub(pattern, "", text)
     return text
 
