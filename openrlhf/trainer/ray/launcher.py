@@ -9,11 +9,11 @@ from ray.util.placement_group import PlacementGroup, placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
-from openrlhf.utils import DeepspeedStrategy, get_tokenizer
+from openrlhf.utils import DeepspeedStrategy, ray_noset_visible_devices
 
 
 class DistributedTorchRayActor:
-    def __init__(self, world_size, rank, local_rank, master_addr, master_port):
+    def __init__(self, world_size, rank, master_addr, master_port):
         logging.basicConfig(
             format="%(asctime)s %(levelname)-8s %(message)s",
             level=logging.INFO,
@@ -21,17 +21,17 @@ class DistributedTorchRayActor:
         )
         self._world_size = world_size
         self._rank = rank
-        self._local_rank = local_rank
         self._master_addr = master_addr if master_addr else self._get_current_node_ip()
         self._master_port = master_port if master_port else self._get_free_port()
         os.environ["MASTER_ADDR"] = self._master_addr
         os.environ["MASTER_PORT"] = str(self._master_port)
         os.environ["WORLD_SIZE"] = str(self._world_size)
         os.environ["RANK"] = str(self._rank)
-        # NOTE: Ray will automatically set the CUDA_VISIBLE_DEVICES
-        # environment variable for each actor, so always set device to 0
-        # os.environ["LOCAL_RANK"] = str(self._local_rank)
-        os.environ["LOCAL_RANK"] = "0"
+        # NOTE: Ray will automatically set the *_VISIBLE_DEVICES
+        # environment variable for each actor, unless
+        # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES is set, so
+        # set local rank to 0 when the flag is not applicable.
+        os.environ["LOCAL_RANK"] = str(ray.get_gpu_ids()[0]) if ray_noset_visible_devices() else "0"
 
     @staticmethod
     def _get_current_node_ip():
@@ -197,20 +197,19 @@ class PPORayActorGroup:
                 scheduling_strategy=PlacementGroupSchedulingStrategy(
                     placement_group=pg, placement_group_bundle_index=0
                 ),
-            ).remote(world_size, 0, 0, None, None)
+            ).remote(world_size, 0, None, None)
         else:
             master_actor = self.ray_actor_type.options(
                 num_cpus=num_gpus_per_actor,
                 num_gpus=num_gpus_per_actor,
                 resources=self._resources,
-            ).remote(world_size, 0, 0, None, None)
+            ).remote(world_size, 0, None, None)
         self._actor_handlers = [master_actor]
 
         # Create worker actors
         if world_size > 1:
             master_addr, master_port = ray.get(master_actor.get_master_addr_port.remote())
             for rank in range(1, world_size):
-                local_rank = rank % self._num_gpus_per_node
                 if pg:
                     worker_actor = self.ray_actor_type.options(
                         num_cpus=num_gpus_per_actor,
@@ -220,13 +219,13 @@ class PPORayActorGroup:
                             placement_group=pg,
                             placement_group_bundle_index=rank // self._num_gpus_per_node,
                         ),
-                    ).remote(world_size, rank, local_rank, master_addr, master_port)
+                    ).remote(world_size, rank, master_addr, master_port)
                 else:
                     worker_actor = self.ray_actor_type.options(
                         num_cpus=num_gpus_per_actor,
                         num_gpus=num_gpus_per_actor,
                         resources=self._resources,
-                    ).remote(world_size, rank, local_rank, master_addr, master_port)
+                    ).remote(world_size, rank, master_addr, master_port)
                 self._actor_handlers.append(worker_actor)
 
     def async_init_model_from_pretrained(
