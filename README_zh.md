@@ -350,15 +350,17 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 ## 使用 OpenRLHF 的公司和组织
 
+- Google
 - ByteDance
-- NexusFlow
-- Baidu
-- Jülich Supercomputing Centre (JSC)
-- Berkeley Starling Team
 - Tencent
 - Alibaba
-- Google
+- Baidu
 - China Telecom
+- Allen AI
+- NexusFlow
+- Jülich Supercomputing Centre (JSC)
+- Berkeley Starling Team
+- M-A-P
 - ...
 
 

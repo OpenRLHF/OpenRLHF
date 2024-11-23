@@ -342,15 +342,17 @@ To achieve optimal performance, we recommend allocating more nodes to the vLLM E
 
 ## Companies and Organizations using OpenRLHF
 
+- Google
 - ByteDance
-- NexusFlow
-- Baidu
-- Jülich Supercomputing Centre (JSC)
-- Berkeley Starling Team
 - Tencent
 - Alibaba
-- Google
+- Baidu
 - China Telecom
+- Allen AI
+- NexusFlow
+- Jülich Supercomputing Centre (JSC)
+- Berkeley Starling Team
+- M-A-P
 - ...
 
 ## Join Us
