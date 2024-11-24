@@ -407,7 +407,7 @@ Our project would also like to thank [ColossalChat](https://github.com/hpcaitech
 ```
 @article{hu2024openrlhf,
   title={OpenRLHF: An Easy-to-use, Scalable and High-performance RLHF Framework},
-  author={Jian Hu and Xibin Wu and Weixun Wang and Xianyu and Dehao Zhang and Yu Cao},
+  author={Jian Hu and Xibin Wu and Zilin Zhu and Weixun Wang and Xianyu and Dehao Zhang and Yu Cao},
   journal={arXiv preprint arXiv:2405.11143},
   year={2024}
 }
