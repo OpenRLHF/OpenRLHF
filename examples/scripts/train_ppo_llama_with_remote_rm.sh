@@ -41,6 +41,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --input_key context_messages \
    --apply_chat_template \
    --normalize_reward \
+   --packing_samples \
    --adam_offload \
    --flash_attn \
    --gradient_checkpointing \
