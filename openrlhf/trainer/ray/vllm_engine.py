@@ -5,15 +5,17 @@ import ray
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from openrlhf.utils import ray_noset_visible_devices
+from openrlhf.trainer.ray.utils import ray_noset_visible_devices
 
 from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
 
+
 @ray.remote
 def get_all_env_variables():
     return os.environ
+
 
 @ray.remote
 class LLMRayActor:

@@ -9,7 +9,8 @@ from ray.util.placement_group import PlacementGroup, placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
-from openrlhf.utils import DeepspeedStrategy, ray_noset_visible_devices
+from openrlhf.trainer.ray.utils import ray_noset_visible_devices
+from openrlhf.utils import DeepspeedStrategy
 
 
 class DistributedTorchRayActor:
