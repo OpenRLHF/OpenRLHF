@@ -1,12 +1,10 @@
-import math
 from abc import ABC
 
 import torch
-from torch import nn
 from torch.optim import Optimizer
 from tqdm import tqdm
 
-from openrlhf.models import PRMLoss
+from openrlhf.models.loss import PRMLoss
 from openrlhf.utils.distributed_sampler import DistributedSampler
 from openrlhf.utils.utils import convert_token_to_id
 

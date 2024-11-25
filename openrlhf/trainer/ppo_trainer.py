@@ -1,22 +1,22 @@
-import math
 import os
 import os.path
 from abc import ABC
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional
 
-import ray
 import torch
 import torch.nn as nn
-from torch import Tensor
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
+from openrlhf.models.actor import Actor
+from openrlhf.models.loss import GPTLMLoss, PolicyLoss, ValueLoss
 from openrlhf.models.utils import masked_mean
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
-from .ppo_utils import AdaptiveKLController, Experience, FixedKLController, NaiveExperienceMaker, NaiveReplayBuffer
+from .ppo_utils.kl_controller import AdaptiveKLController, FixedKLController
+from .ppo_utils.experience_maker import Experience, NaiveExperienceMaker
+from .ppo_utils.replay_buffer import NaiveReplayBuffer
 
 
 class PPOTrainer(ABC):

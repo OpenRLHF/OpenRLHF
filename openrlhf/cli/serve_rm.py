@@ -6,8 +6,8 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from openrlhf.models import get_llm_for_sequence_regression
-from openrlhf.utils import get_tokenizer
+from openrlhf.models.model import get_llm_for_sequence_regression
+from openrlhf.utils.utils import get_tokenizer
 from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)

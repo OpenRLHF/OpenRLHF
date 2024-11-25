@@ -8,8 +8,9 @@ import torch
 from ray.util.placement_group import PlacementGroup, placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from openrlhf.models import Actor, get_llm_for_sequence_regression
-from openrlhf.utils import DeepspeedStrategy, get_tokenizer
+from openrlhf.models.actor import Actor
+from openrlhf.models.model import get_llm_for_sequence_regression
+from openrlhf.utils.deepspeed import DeepspeedStrategy
 
 
 class DistributedTorchRayActor:

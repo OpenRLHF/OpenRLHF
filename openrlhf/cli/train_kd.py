@@ -5,10 +5,10 @@ from datetime import datetime
 
 from transformers.trainer import get_scheduler
 
-from openrlhf.datasets import SFTDataset
-from openrlhf.models import Actor
-from openrlhf.trainer import KDTrainer
-from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
+from openrlhf.datasets.sft_dataset import SFTDataset
+from openrlhf.models.actor import Actor
+from openrlhf.trainer.kd_trainer import KDTrainer
+from openrlhf.utils.utils import blending_datasets, get_strategy, get_tokenizer
 
 
 def train(args):

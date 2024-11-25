@@ -6,15 +6,15 @@ import ray
 import torch
 from ray.util.placement_group import placement_group
 
-from openrlhf.trainer.ray import (
-    ActorModelRayActor,
-    CriticModelRayActor,
+from openrlhf.trainer.ray.launcher import (
     PPORayActorGroup,
     ReferenceModelRayActor,
     RewardModelRayActor,
-    create_vllm_engines,
 )
-from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
+from openrlhf.trainer.ray.ppo_actor import ActorModelRayActor
+from openrlhf.trainer.ray.ppo_critic import CriticModelRayActor
+from openrlhf.trainer.ray.vllm_engine import create_vllm_engines
+from openrlhf.utils.utils import get_strategy
 
 
 # NOTE: reward function for multiple reward models, replace this with your own function!

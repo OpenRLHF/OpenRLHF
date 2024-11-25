@@ -2,16 +2,17 @@ import argparse
 import itertools
 import math
 import os
-from copy import deepcopy
 from datetime import datetime
 
 import torch
 from transformers.trainer import get_scheduler
 
-from openrlhf.datasets import PromptDataset, SFTDataset
-from openrlhf.models import Actor, get_llm_for_sequence_regression
-from openrlhf.trainer import PPOTrainer
-from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
+from openrlhf.datasets.prompts_dataset import PromptDataset
+from openrlhf.datasets.sft_dataset import SFTDataset
+from openrlhf.models.actor import Actor
+from openrlhf.models.model import get_llm_for_sequence_regression
+from openrlhf.trainer.ppo_trainer import PPOTrainer
+from openrlhf.utils.utils import blending_datasets, get_strategy, get_tokenizer
 
 
 def train(args):

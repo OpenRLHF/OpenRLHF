@@ -1,16 +1,14 @@
 import argparse
 import math
 import os
-from collections import OrderedDict
-from copy import deepcopy
 from datetime import datetime
 
 from transformers.trainer import get_scheduler
 
-from openrlhf.datasets import RewardDataset
-from openrlhf.models import Actor
-from openrlhf.trainer import DPOTrainer
-from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
+from openrlhf.datasets.reward_dataset import RewardDataset
+from openrlhf.models.actor import Actor
+from openrlhf.trainer.dpo_trainer import DPOTrainer
+from openrlhf.utils.utils import blending_datasets, get_strategy, get_tokenizer
 
 
 def train(args):

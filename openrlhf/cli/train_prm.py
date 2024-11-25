@@ -5,10 +5,10 @@ from datetime import datetime
 
 from transformers.trainer import get_scheduler
 
-from openrlhf.datasets import ProcessRewardDataset
-from openrlhf.models import Actor
-from openrlhf.trainer import ProcessRewardModelTrainer
-from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
+from openrlhf.datasets.process_reward_dataset import ProcessRewardDataset
+from openrlhf.models.actor import Actor
+from openrlhf.trainer.prm_trainer import ProcessRewardModelTrainer
+from openrlhf.utils.utils import blending_datasets, get_strategy, get_tokenizer
 
 
 def train(args):

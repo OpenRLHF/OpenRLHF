@@ -1,10 +1,9 @@
 import os
-from pathlib import Path
 
-from datasets import Dataset, interleave_datasets, load_dataset, load_from_disk
+from datasets import interleave_datasets, load_dataset, load_from_disk
 from transformers import AutoTokenizer
 
-from openrlhf.utils import DeepspeedStrategy
+from openrlhf.utils.deepspeed import DeepspeedStrategy
 
 DEFAULT_PAD_TOKEN = "[PAD]"
 DEFAULT_EOS_TOKEN = "</s>"

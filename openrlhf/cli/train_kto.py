@@ -1,16 +1,14 @@
 import argparse
 import math
 import os
-from collections import OrderedDict
 from datetime import datetime
 
-import torch.distributed as dist
 from transformers.trainer import get_scheduler
 
-from openrlhf.datasets import UnpairedPreferenceDataset
-from openrlhf.models import Actor
-from openrlhf.trainer import KTOTrainer
-from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
+from openrlhf.datasets.unpaired_preference_dataset import UnpairedPreferenceDataset
+from openrlhf.models.actor import Actor
+from openrlhf.trainer.kto_trainer import KTOTrainer
+from openrlhf.utils.utils import blending_datasets, get_strategy, get_tokenizer
 
 
 def train(args):

@@ -8,7 +8,6 @@ from torch.distributed.distributed_c10d import (
     PrefixStore,
     Store,
     _new_process_group_helper,
-    _store_based_barrier,
     _world,
     default_pg_timeout,
     rendezvous,

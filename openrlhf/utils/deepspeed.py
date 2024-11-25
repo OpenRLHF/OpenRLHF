@@ -17,7 +17,7 @@ from torch import distributed as dist
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
-from openrlhf.models import Actor
+from openrlhf.models.actor import Actor
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 from ..models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group

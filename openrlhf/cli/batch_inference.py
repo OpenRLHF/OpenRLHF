@@ -8,9 +8,12 @@ from torch import distributed as dist
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from openrlhf.datasets import PromptDataset, SFTDataset
-from openrlhf.models import Actor, get_llm_for_sequence_regression
-from openrlhf.utils import blending_datasets, get_processor, get_strategy, get_tokenizer
+from openrlhf.datasets.prompts_dataset import PromptDataset
+from openrlhf.datasets.sft_dataset import SFTDataset
+from openrlhf.models.actor import Actor
+from openrlhf.models.model import get_llm_for_sequence_regression
+from openrlhf.utils.processor import get_processor
+from openrlhf.utils.utils import blending_datasets, get_strategy, get_tokenizer
 
 
 def batch_generate_vllm(args):

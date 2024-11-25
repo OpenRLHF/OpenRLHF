@@ -1,7 +1,7 @@
 import argparse
 import torch
-from openrlhf.models import Actor
-from openrlhf.utils import get_tokenizer
+from openrlhf.models.actor import Actor
+from openrlhf.utils.utils import get_tokenizer
 
 
 def generate(args):
