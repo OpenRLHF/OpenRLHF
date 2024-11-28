@@ -1,14 +1,10 @@
-import math
 import os
 from abc import ABC
 
 import torch
-from torch import nn
 from torch.optim import Optimizer
 from tqdm import tqdm
-from transformers.trainer import get_scheduler
 
-from openrlhf.datasets import SFTDataset
 from openrlhf.models import GPTLMLoss
 from openrlhf.utils.distributed_sampler import DistributedSampler
 

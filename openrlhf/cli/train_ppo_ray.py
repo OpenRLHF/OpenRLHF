@@ -14,7 +14,7 @@ from openrlhf.trainer.ray import (
     RewardModelRayActor,
     create_vllm_engines,
 )
-from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
+from openrlhf.utils import get_strategy
 
 
 # NOTE: reward function for multiple reward models, replace this with your own function!
@@ -373,9 +373,11 @@ if __name__ == "__main__":
         print("[Warning] {} not in args.input_template, set to None")
         args.input_template = None
 
-    if args.input_template and '\\n' in args.input_template:
-        print("[Warning] input_template contains \\n chracters instead of newline. "
-              "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell.")
+    if args.input_template and "\\n" in args.input_template:
+        print(
+            "[Warning] input_template contains \\n chracters instead of newline. "
+            "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
+        )
 
     if args.packing_samples:
         if not args.flash_attn:

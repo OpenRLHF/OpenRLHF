@@ -4,14 +4,15 @@ from typing import Dict, Optional, Union
 
 import ray
 import torch
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
-from openrlhf.models import Actor, get_llm_for_sequence_regression
+from openrlhf.models import get_llm_for_sequence_regression
 from openrlhf.trainer import PPOTrainer
 from openrlhf.trainer.ppo_utils import Experience
-from openrlhf.utils import DeepspeedStrategy, blending_datasets, get_tokenizer
+from openrlhf.utils import get_tokenizer
+from openrlhf.utils.deepspeed import DeepspeedStrategy
 
 from .launcher import BasePPORole
 

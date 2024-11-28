@@ -1,6 +1,5 @@
 import os
 import sys
-import subprocess
 import platform
 
 from datetime import datetime
