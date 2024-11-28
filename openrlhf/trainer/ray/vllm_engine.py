@@ -2,9 +2,17 @@ import ray
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
+from openrlhf.trainer.ray.utils import ray_noset_visible_devices
+
 from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
+
+
+@ray.remote
+def get_all_env_variables():
+    import os
+    return os.environ
 
 
 @ray.remote
@@ -15,7 +23,8 @@ class LLMRayActor:
         self.__version__ = vllm.__version__
         assert self.__version__ >= "0.4.1", "OpenRLHF only supports vLLM >= 0.4.1"
 
-        self.use_gpu_executor = kwargs["tensor_parallel_size"] == 1
+        noset_visible_devices = kwargs.pop("noset_visible_devices", False)
+        self.use_gpu_executor = kwargs["tensor_parallel_size"] == 1 and not noset_visible_devices
 
         # See https://github.com/vllm-project/vllm/blob/main/vllm/executor/gpu_executor.py
         if self.use_gpu_executor:
@@ -84,12 +93,17 @@ def create_vllm_engines(
     max_model_len: int,
 ):
     vllm_engines = []
+    # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES will always be set in current context,
+    # So we need to get env variables from ray process to check if it is set.
+    noset_visible_devices = ray_noset_visible_devices(ray.get(get_all_env_variables.remote()))
     for i in range(num_engines):
-        # When tensor_parallel_size=1, vLLM init model in LLMEngine directly, assign 1 GPU for it.
-        num_gpus = int(tensor_parallel_size == 1)
+        # When tensor_parallel_size=1 and RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES is not set
+        # (vLLM mp backend will work smoothly only when *_VISIBLE_DEVICES is modified),
+        # vLLM init model in LLMEngine directly, assign 1 GPU for it.
+        num_gpus = int(tensor_parallel_size == 1 and not noset_visible_devices)
         scheduling_strategy = None
 
-        if tensor_parallel_size > 1:
+        if tensor_parallel_size > 1 or noset_visible_devices:
             bundles = [{"GPU": 1, "CPU": 1}] * tensor_parallel_size
             pg = placement_group(bundles)
             ray.get(pg.ready())
@@ -105,6 +119,7 @@ def create_vllm_engines(
                 scheduling_strategy=scheduling_strategy,
             ).remote(
                 pretrain,
+                noset_visible_devices=noset_visible_devices,
                 trust_remote_code=True,
                 tensor_parallel_size=tensor_parallel_size,
                 dtype="bfloat16",
