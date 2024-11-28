@@ -106,7 +106,7 @@ pip install -e .
 ```
 
 > [!NOTE]
->We recommend using vLLM 0.6.4+ (Only supports NCCL weight synchronization with multi-nodes) or vLLM 0.4.2, and other versions currently require synchronizing weights via Gloo (`--vllm_sync_backend gloo`).
+>We recommend using vLLM 0.6.4+ (Only multi-nodes support NCCL weight synchronization) or vLLM 0.4.2 (`--vllm_sync_backend nccl`), as other versions currently require synchronizing weights via Gloo (`--vllm_sync_backend gloo`).
 >We also provided the [Dockerfiles for vLLM](./dockerfile/) and [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh).
 
 ### Prepare Datasets
@@ -312,6 +312,8 @@ ray job submit --address="http://127.0.0.1:8265" \
   --flash_attn \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
+
+# --vllm_sync_backend nccl (Only for multi-nodes with vLLM 0.6.4+ or vLLM 0.4.2)
 
 # Support remote reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward

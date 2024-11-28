@@ -109,7 +109,7 @@ pip install -e .
 ```
 
 > [!NOTE]
->我们推荐使用 vLLM 0.6.4+ (仅支持多节点时 NCCL 权重同步) 或者 vLLM 0.4.2，其他版本目前需要通过 Gloo 进行权重同步（`--vllm_sync_backend gloo`）。
+>我们推荐使用 vLLM 0.6.4+ (仅支持多节点时 NCCL 权重同步) 或者 vLLM 0.4.2 (`--vllm_sync_backend nccl`)，其他版本目前需要通过 Gloo 进行权重同步（`--vllm_sync_backend gloo`）。
 >我们也提供了 [Dockerfiles for vLLM](./dockerfile/) 和 [Nvidia-Docker 一键安装脚本](./examples/scripts/nvidia_docker_install.sh)。
 
 ### 准备数据集
@@ -319,6 +319,8 @@ ray job submit --address="http://127.0.0.1:8265" \
   --gradient_checkpointing \
   --load_checkpoint \
   --use_wandb {wandb_token}
+
+# --vllm_sync_backend nccl (Only for multi-nodes with vLLM 0.6.4+ or vLLM 0.4.2)
 
 # 支持远程 reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
