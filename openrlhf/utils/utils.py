@@ -3,6 +3,7 @@ import os
 from datasets import interleave_datasets, load_dataset, load_from_disk
 from transformers import AutoTokenizer
 
+from openrlhf.utils import DeepspeedStrategy
 
 DEFAULT_PAD_TOKEN = "[PAD]"
 DEFAULT_EOS_TOKEN = "</s>"
@@ -24,8 +25,6 @@ def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=
 
 
 def get_strategy(args):
-    from openrlhf.utils.deepspeed import DeepspeedStrategy
-
     strategy = DeepspeedStrategy(
         seed=getattr(args, "seed", 42),
         max_norm=getattr(args, "max_norm", 1.0),

@@ -11,8 +11,7 @@ from transformers.trainer import get_scheduler
 from openrlhf.models import get_llm_for_sequence_regression
 from openrlhf.trainer import PPOTrainer
 from openrlhf.trainer.ppo_utils import Experience
-from openrlhf.utils import get_tokenizer
-from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils import DeepspeedStrategy, get_tokenizer
 
 from .launcher import BasePPORole
 
