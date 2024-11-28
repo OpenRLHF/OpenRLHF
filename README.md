@@ -85,15 +85,15 @@ To use OpenRLHF, first launch the docker container (**Recommended**) and `pip in
 
 ```bash
 # Launch the docker container
-docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:24.02-py3 bash
+docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:24.07-py3 bash
 sudo pip uninstall xgboost transformer_engine flash_attn -y
 
 # pip install
 pip install openrlhf
 
-# If you want to use vLLM acceleration (To install vLLM 0.4.2)
+# If you want to use vLLM acceleration (Install vLLM 0.6.4.post1)
 pip install openrlhf[vllm]
-# latest vLLM is also supported (Please use `--vllm_sync_backend gloo` or `export NCCL_P2P_DISABLE=1`)
+# latest vLLM is also supported
 pip install openrlhf[vllm_latest]
 
 # pip install the latest version
@@ -106,7 +106,7 @@ pip install -e .
 ```
 
 > [!NOTE]
->We recommend using vLLM 0.4.2, as the 0.4.3+ versions currently require synchronizing weights via Gloo (`--vllm_sync_backend gloo`) or disabling P2P communication (`export NCCL_P2P_DISABLE=1`).
+>We recommend using vLLM 0.6.4+ or vLLM 0.4.2, as other versions currently require synchronizing weights via Gloo (`--vllm_sync_backend gloo`).
 >We also provided the [Dockerfiles for vLLM](./dockerfile/) and [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh).
 
 ### Prepare Datasets
