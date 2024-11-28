@@ -321,12 +321,10 @@ ray job submit --address="http://127.0.0.1:8265" \
 > You can also use ``setup_commands`` to let Ray automatically deploy the environment, such as `--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`.
 
 > [!NOTE]
-> If you want to run on AMD GPUs, or for whatever reason you encounter an error related to index out of range when deepspeed sets up the GPU devices, you can try to set the environment variable [`RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES`](openrlhf/trainer/ray/utils.py) as a workaround.
+> If you you encounter an error related to index out of range when deepspeed sets up the GPU devices, you can try to set the environment variable [`RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES`](openrlhf/trainer/ray/utils.py) as a workaround.
 >   ```bash
 >   # For NVIDIA GPUs:
 >   export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
->   # For AMD GPUs:
->   export RAY_EXPERIMENTAL_NOSET_ROCR_VISIBLE_DEVICES=1
 >   ```
 
 The launch scripts and documents for supported algorithms are in [example/scripts](./examples/scripts/) and [Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)
@@ -357,6 +355,7 @@ To achieve optimal performance, we recommend allocating more nodes to the vLLM E
 - Alibaba
 - Baidu
 - China Telecom
+- Vivo
 - Allen AI
 - NexusFlow
 - Jülich Supercomputing Centre (JSC)

@@ -329,12 +329,10 @@ ray job submit --address="http://127.0.0.1:8265" \
 > 您也可以通过 ``setup_commands`` 让 Ray 自动初始化环境, 比如 `--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`
 
 > [!NOTE]
-> 如果您想在 AMD 显卡上运行，或者由于某种原因，在 deepspeed 设置显卡设备时遇到与索引超出范围相关的错误，您可以尝试设置环境变量 [`RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES`](openrlhf/trainer/ray/utils.py)。
+> 如果您由于某种原因，在 deepspeed 设置显卡设备时遇到与索引超出范围相关的错误，您可以尝试设置环境变量 [`RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES`](openrlhf/trainer/ray/utils.py)。
 > ```bash
 > # 对于 NVIDIA 显卡:
 > export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
-> # 对于 AMD 显卡:
-> export RAY_EXPERIMENTAL_NOSET_ROCR_VISIBLE_DEVICES=1
 > ```
 
 所有支持算法的启动脚本和文档在 [example/scripts](./examples/scripts/) 和 [Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)
@@ -366,6 +364,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 - Baidu
 - China Telecom
 - Allen AI
+- Vivo
 - NexusFlow
 - Jülich Supercomputing Centre (JSC)
 - Berkeley Starling Team

@@ -12,6 +12,7 @@ logger = init_logger(__name__)
 @ray.remote
 def get_all_env_variables():
     import os
+
     return os.environ
 
 
@@ -21,7 +22,7 @@ class LLMRayActor:
         import vllm
 
         self.__version__ = vllm.__version__
-        assert self.__version__ >= "0.4.1", "OpenRLHF only supports vLLM >= 0.4.1"
+        assert self.__version__ >= "0.4.2", "OpenRLHF only supports vLLM >= 0.4.2"
 
         noset_visible_devices = kwargs.pop("noset_visible_devices", False)
         self.use_gpu_executor = kwargs["tensor_parallel_size"] == 1 and not noset_visible_devices
@@ -40,10 +41,7 @@ class LLMRayActor:
                 # https://github.com/vllm-project/vllm/pull/10555
                 kwargs["worker_cls"] = "openrlhf.trainer.ray.vllm_worker_wrap.WorkerWrap"
             else:
-                if vllm.__version__ > "0.4.1":
-                    RayWorkerWrapperPath = vllm.executor.ray_utils
-                else:
-                    RayWorkerWrapperPath = vllm.engine.ray_utils
+                RayWorkerWrapperPath = vllm.executor.ray_utils
 
                 class RayWorkerWrapper(RayWorkerWrapperPath.RayWorkerWrapper):
                     def __init__(self, *args, **kwargs) -> None:
