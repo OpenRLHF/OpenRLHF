@@ -13,7 +13,8 @@ from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.models import Actor
 from openrlhf.trainer import PPOTrainer
 from openrlhf.trainer.ppo_utils import Experience, RemoteExperienceMaker
-from openrlhf.utils import DeepspeedStrategy, blending_datasets, get_tokenizer
+from openrlhf.utils import blending_datasets, get_tokenizer
+from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.distributed_util import init_process_group
 
 from .launcher import BasePPORole

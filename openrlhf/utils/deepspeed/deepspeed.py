@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader
 from openrlhf.models import Actor
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
-from ..models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
+from ...models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
 from .deepspeed_utils import (
     _z3_params_to_fetch,
     get_eval_ds_config,
