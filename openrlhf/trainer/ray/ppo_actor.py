@@ -84,10 +84,10 @@ class ActorPPOTrainer(PPOTrainer):
             # https://github.com/OpenRLHF/OpenRLHF/issues/313
             import vllm
 
-            if vllm.__version__ > "0.4.2" and os.getenv("NCCL_P2P_DISABLE", "0") == "0":
+            if not vllm.__version__ == "0.4.2" and not vllm.__version__ >= "0.6.4":
                 backend = "gloo"
                 print(
-                    "Warning: using --vllm_sync_backend=gloo for vLLM version > 0.4.2 (or export NCCL_P2P_DISABLE=1)"
+                    "Warning: using --vllm_sync_backend=gloo for `not vLLM version == 0.4.2 and not vllm.__version__ >= 0.6.4`"
                 )
 
             refs = [

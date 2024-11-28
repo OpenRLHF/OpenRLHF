@@ -14,7 +14,7 @@
 # project settings
 OPENRLHF_PATH=<OPENRLHF_ROOT_PATH>
 MOUNT="$OPENRLHF_PATH:/openrlhf,$HOME/.cache:/root/.cache"
-IMAGE_NAME="nvcr.io/nvidia/pytorch:24.02-py3"
+IMAGE_NAME="nvcr.io/nvidia/pytorch:24.07-py3"
 RAY_VERSION=2.12.0
 
 JOBLOG="$(realpath .)/train_ppo_llama_ray-$SLURM_JOB_ID.log"
@@ -90,6 +90,7 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --normalize_reward \
     --adam_offload \
     --flash_attn \
+    --vllm_sync_backend nccl \
     --gradient_checkpointing \
     --use_wandb {wandb_token}" &>> ${JOBLOG}
 

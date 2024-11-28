@@ -88,15 +88,15 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 
 ```bash
 # 启动 docker container
-docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:24.02-py3 bash
+docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:24.07-py3 bash
 sudo pip uninstall xgboost transformer_engine flash_attn -y
 
 # pip install
 pip install openrlhf
 
-# 如果你需要使用 vLLM 加速 (安装 vLLM 0.4.2)
+# 如果你需要使用 vLLM 加速 (安装 vLLM 0.6.4.post1)
 pip install openrlhf[vllm]
-# 最新的 vLLM 也是支持的 (请使用 `--vllm_sync_backend gloo` 或者 `export NCCL_P2P_DISABLE=1`)
+# 最新的 vLLM 也是支持的
 pip install openrlhf[vllm_latest]
 
 # pip install GitHub 上的最新版
@@ -109,7 +109,7 @@ pip install -e .
 ```
 
 > [!NOTE]
->我们推荐使用 vLLM 0.4.2，因为 0.4.3+ 版本目前需要通过 Gloo 进行权重同步（`--vllm_sync_backend gloo`）或者关闭 P2P 通信 `export NCCL_P2P_DISABLE=1`。
+>我们推荐使用 vLLM 0.6.4+ (仅支持多节点时 NCCL 权重同步) 或者 vLLM 0.4.2 (`--vllm_sync_backend nccl`)，其他版本目前需要通过 Gloo 进行权重同步（`--vllm_sync_backend gloo`）。
 >我们也提供了 [Dockerfiles for vLLM](./dockerfile/) 和 [Nvidia-Docker 一键安装脚本](./examples/scripts/nvidia_docker_install.sh)。
 
 ### 准备数据集
@@ -319,6 +319,8 @@ ray job submit --address="http://127.0.0.1:8265" \
   --gradient_checkpointing \
   --load_checkpoint \
   --use_wandb {wandb_token}
+
+# --vllm_sync_backend nccl (Only for multi-nodes with vLLM 0.6.4+ or vLLM 0.4.2)
 
 # 支持远程 reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
