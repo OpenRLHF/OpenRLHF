@@ -1,6 +1,7 @@
 import argparse
 import math
 import os
+from collections import OrderedDict
 from datetime import datetime
 
 from transformers.trainer import get_scheduler
@@ -239,11 +240,9 @@ if __name__ == "__main__":
         print("[Warning] {} not in args.input_template, set to None")
         args.input_template = None
 
-    if args.input_template and "\\n" in args.input_template:
-        print(
-            "[Warning] input_template contains \\n chracters instead of newline. "
-            "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
-        )
+    if args.input_template and '\\n' in args.input_template:
+        print("[Warning] input_template contains \\n chracters instead of newline. "
+              "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell.")
 
     if args.packing_samples and not args.flash_attn:
         print("[Warning] Please --flash_attn to accelerate when --packing_samples is enabled.")

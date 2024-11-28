@@ -1,3 +1,6 @@
+import importlib
+import inspect
+
 import torch
 from vllm.worker.worker import Worker
 

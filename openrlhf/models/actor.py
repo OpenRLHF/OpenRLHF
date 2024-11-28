@@ -1,11 +1,13 @@
 from typing import Optional, Tuple, Union
 
+import deepspeed
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+import torch.nn.functional as F
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedModel
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from .ring_attn_utils import convert_ring_attn_params

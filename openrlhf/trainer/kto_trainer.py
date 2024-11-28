@@ -2,6 +2,7 @@ import os
 from abc import ABC
 
 import torch
+import torch.distributed as dist
 from torch.optim import Optimizer
 from tqdm import tqdm
 

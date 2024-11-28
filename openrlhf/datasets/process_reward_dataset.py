@@ -4,6 +4,7 @@ from typing import Callable
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
+from tqdm import tqdm
 
 from openrlhf.utils.utils import convert_token_to_id
 from .utils import zero_pad_sequences

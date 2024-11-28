@@ -16,11 +16,7 @@ repos:
       - id: check-added-large-files
         args: ['--maxkb=1000']
       - id: requirements-txt-fixer
-  - repo: https://github.com/PyCQA/autoflake
-    rev: v2.0.2
-    hooks:
-      - id: autoflake
-        args: [--remove-all-unused-imports, --in-place]
+
   - repo: https://github.com/PyCQA/isort
     rev: 5.13.2
     hooks:
