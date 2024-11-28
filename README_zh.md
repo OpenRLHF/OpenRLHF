@@ -355,7 +355,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 > 数据已经过时; 请参考后面的调优指南重新测试
 
 ## 调优指南
-为了获得最佳的性能，我们建议您分配更多的节点给 vLLM Engine。例如，对于 70B 模型以及 32 张 A100，建议分配 16 张以上 A100 给 vLLM Engine，8 张给 Actor 模型，以及最后 8 张给 Critic 模型，同时开启 `--colocate_critic_reward`, `--colocate_actor_ref` 或者 `--ref_reward_offload (可选)` 选项合并部分节点。最后您应该尽可能增大 `--rollout_micro_batch_size` ，以及减小 vLLM 的 TP 切分数量。训练阶段的 `micro_train_batch_size` 也是越大越好，请同时使用 `--packing_samples` 。为 vLLM 开启 `enable_prefix_caching` 当 `n_samples_per_prompt > 1`. 当GPU数量足够多的时候请关闭 `--adam_offload`.
+为了获得最佳的性能，我们建议您分配更多的节点给 vLLM Engine。例如，对于 70B 模型以及 32 张 A100，建议分配 16 张以上 A100 给 vLLM Engine，8 张给 Actor 模型，以及最后 8 张给 Critic 模型，同时开启 `--colocate_critic_reward`, `--colocate_actor_ref` 或者 `--ref_reward_offload (可选)` 选项合并部分节点。最后您应该尽可能增大 `--rollout_micro_batch_size` ，以及减小 vLLM 的 TP 切分数量。训练阶段的 `micro_train_batch_size` 也是越大越好，请同时使用 `--packing_samples` 。当 GPU 数量足够时请关闭 `--adam_offload`. 对于多节点 RLHF, 请使用 `--vllm_sync_backend nccl` with vLLM 0.6.4+.
 
 ## 使用 OpenRLHF 的公司和组织
 

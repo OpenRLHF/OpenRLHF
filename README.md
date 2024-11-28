@@ -347,7 +347,7 @@ We optimized DSChat's performance to the greatest extent possible by employing t
 
 ### Performance Tuning Guide
 
-To achieve optimal performance, we recommend allocating more nodes to the vLLM Engine. For example, for a 70B model with 32 A100 GPUs, it is advised to allocate more than 16 A100 GPUs to the vLLM Engine, 8 GPUs to the Actor model, and the remaining 8 GPUs to the Critic model. Additionally, enable the `--colocate_critic_reward`, `--colocate_actor_ref` options to merge nodes. Finally, you should increase the `rollout_micro_batch_size` (and minimize the TP size of vLLM engine) as much as possible. During the training phase, a larger `--micro_train_batch_size` is better and enable `--packing_samples`. Enable `enable_prefix_caching` in vLLM generation when `n_samples_per_prompt > 1`. When there are enough GPUs, please disable --adam_offload.
+To achieve optimal performance, we recommend allocating more nodes to the vLLM Engine. For example, for a 70B model with 32 A100 GPUs, it is advised to allocate 16 A100 GPUs to the vLLM Engine, 8 GPUs to the Actor model, and the remaining 8 GPUs to the Critic model. Additionally, enable the `--colocate_critic_reward`, `--colocate_actor_ref` options to merge nodes. Finally, you should increase the `rollout_micro_batch_size` (and minimize the TP size of vLLM engine) as much as possible. During the training phase, a larger `--micro_train_batch_size` is better and enable `--packing_samples`. When there are enough GPUs, please disable `--adam_offload`. For multi-nodes RLHF, please use `--vllm_sync_backend nccl` with vLLM 0.6.4+.
 
 ## Companies and Organizations using OpenRLHF
 
