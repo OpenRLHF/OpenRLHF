@@ -2,7 +2,6 @@ from typing import Callable
 
 import torch
 from torch.utils.data import Dataset
-from tqdm import tqdm
 
 from .utils import zero_pad_sequences
 

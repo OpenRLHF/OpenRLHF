@@ -32,7 +32,7 @@ def generate(args):
         with open(args.ta_prompt, "r") as f:
             user_prompt = f.read()
     else:
-        user_prompt = ''
+        user_prompt = ""
 
     if args.apply_chat_template:
         conversations = []
@@ -76,9 +76,9 @@ def generate(args):
         )
 
         if args.apply_chat_template:
-            generated_ids = outputs[0][:, input_ids.shape[1]:]
+            generated_ids = outputs[0][:, input_ids.shape[1] :]
             response = tokenizer.batch_decode(
-            generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
+                generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
             )[0]
             conversations.append({"role": "assistant", "content": response})
         else:
@@ -118,9 +118,11 @@ if __name__ == "__main__":
         print("[Warning] {} not in args.input_template, set to None")
         args.input_template = None
 
-    if args.input_template and '\\n' in args.input_template:
-        print("[Warning] input_template contains \\n chracters instead of newline. "
-              "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell.")
+    if args.input_template and "\\n" in args.input_template:
+        print(
+            "[Warning] input_template contains \\n chracters instead of newline. "
+            "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
+        )
 
     print(args)
     generate(args)

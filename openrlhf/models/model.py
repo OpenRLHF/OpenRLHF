@@ -2,7 +2,6 @@ from typing import Optional, Union
 
 import deepspeed
 import torch
-import torch.distributed as dist
 import torch.nn as nn
 from flash_attn.utils.distributed import all_gather
 from peft import LoraConfig, get_peft_model

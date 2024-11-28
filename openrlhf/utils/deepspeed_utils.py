@@ -2,11 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # DeepSpeed Team
-import os
 
-import deepspeed
-import numpy as np
-import torch
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
 
 
