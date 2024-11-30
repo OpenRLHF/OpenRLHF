@@ -60,6 +60,10 @@ def get_llm_for_sequence_regression(
     config.normalize_reward = normalize_reward
     config._attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
 
+    # Prioritize using the value_head_prefix in the model configuration.
+    value_head_prefix = getattr(config, "value_head_prefix", value_head_prefix)
+    logger.info(f"set value_head_prefix to `{value_head_prefix}`")
+
     base_class = AutoModel._model_mapping[type(config)]
     base_pretrained_class = base_class.__base__
     if model_type == "reward":

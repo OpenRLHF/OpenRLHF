@@ -134,6 +134,11 @@ def train(args):
 
     trainer.fit(args, consumed_samples, num_update_steps_per_epoch)
 
+    # Save value_head_prefix
+    strategy.print("Save value_head_prefix in config")
+    unwrap_model = strategy._unwrap_model(model)
+    unwrap_model.config.value_head_prefix = args.value_head_prefix
+
     # save model checkpoint after fitting on only rank0
     strategy.save_model(model, tokenizer, args.save_path)
 
