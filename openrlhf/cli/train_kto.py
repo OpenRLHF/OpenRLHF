@@ -174,6 +174,10 @@ if __name__ == "__main__":
     parser.add_argument("--l2", type=float, default=0.0, help="weight decay loss")
     parser.add_argument("--aux_loss_coef", type=float, default=0, help="MoE balancing loss")
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
+    parser.add_argument("--desirable_loss_weight", type=float, default=1.0, help="Loss weight for desirable samples")
+    parser.add_argument(
+        "--undesirable_loss_weight", type=float, default=1.0, help="Loss weight for undesirable samples"
+    )
 
     # Custom dataset
     parser.add_argument("--dataset", type=str, default="Dahoas/full-hh-rlhf")

@@ -55,7 +55,13 @@ class KTOTrainer(ABC):
         self.args = strategy.args
 
         self.beta = beta
-        self.loss_fn = KTOLoss(self.beta, 1.0, 1.0, self.strategy.world_size, torch.cuda.current_device())
+        self.loss_fn = KTOLoss(
+            self.beta,
+            self.args.desirable_loss_weight,
+            self.args.undesirable_loss_weight,
+            self.strategy.world_size,
+            torch.cuda.current_device(),
+        )
 
         # Mixtral 8*7b
         self.aux_loss = self.args.aux_loss_coef > 1e-8
