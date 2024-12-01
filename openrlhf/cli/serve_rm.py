@@ -88,7 +88,7 @@ if __name__ == "__main__":
     # Reward Model
     parser.add_argument("--reward_pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--normalize_reward", action="store_true", default=False, help="Enable Reward Normazation")
-    parser.add_argument("--value_head_prefix", type=str, default="value_head")
+    parser.add_argument("--value_head_prefix", type=str, default="score")
     parser.add_argument("--max_len", type=int, default="2048")
 
     parser.add_argument("--port", type=int, default=5000, help="Port number for the server")

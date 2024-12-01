@@ -373,7 +373,7 @@ if __name__ == "__main__":
     parser.add_argument("--reward_pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--remote_rm_url", type=str, default=None, help="remote RM API")
     parser.add_argument("--critic_pretrain", type=str, default=None, help="HF model name or path")
-    parser.add_argument("--value_head_prefix", type=str, default="value_head")
+    parser.add_argument("--value_head_prefix", type=str, default="score")
 
     # Custom dataset
     parser.add_argument("--prompt_data", type=str, default=None, help="HF dataset name or path")

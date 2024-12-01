@@ -173,7 +173,7 @@ if __name__ == "__main__":
 
     # Models
     parser.add_argument("--pretrain", type=str, default=None)
-    parser.add_argument("--value_head_prefix", type=str, default="value_head")
+    parser.add_argument("--value_head_prefix", type=str, default="score")
 
     # Context Parallel
     parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")

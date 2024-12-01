@@ -230,6 +230,21 @@ deepspeed --module openrlhf.cli.train_rm \
 
 ```
 
+推荐设置 Reward Model 的 `--value_prefix_head` 选项为 `score`, 这样使得我们可以用 `AutoModelForSequenceClassification` 加载模型:
+
+```python
+reward_model = AutoModelForSequenceClassification.from_pretrained(
+              reward_model_path,
+              num_labels=1,
+              torch_dtype=torch.bfloat16,
+              attn_implementation="flash_attention_2",
+              use_cache=False,
+          )
+reward_model.config.pad_token_id = None
+inputs = xxxx (Left Padding Input Tokens)
+reward = reward_model.model(*inputs)
+```
+
 ### 不使用 Ray 的 PPO
 
 ```bash
