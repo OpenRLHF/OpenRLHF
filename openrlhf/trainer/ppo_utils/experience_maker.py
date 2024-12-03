@@ -232,8 +232,7 @@ class NaiveExperienceMaker(ABC):
             if self.advantage_estimator == "group_norm":
                 assert self.args.n_samples_per_prompt > 1, "group_norm requires n_samples_per_prompt > 1"
                 reward = reward.reshape(-1, self.args.n_samples_per_prompt)
-                reward = (reward - reward.mean(1, keepdim=True)) / (reward.std(1, keepdim=True) + 1e-8)
-                reward = reward.reshape(-1)
+                reward = reward - reward.mean(1, keepdim=True)
 
             reward = compute_reward(
                 reward,
