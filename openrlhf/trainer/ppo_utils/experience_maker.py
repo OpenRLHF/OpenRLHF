@@ -233,6 +233,7 @@ class NaiveExperienceMaker(ABC):
                 assert self.args.n_samples_per_prompt > 1, "group_norm requires n_samples_per_prompt > 1"
                 reward = reward.reshape(-1, self.args.n_samples_per_prompt)
                 reward = reward - reward.mean(1, keepdim=True)
+                reward = reward.reshape(-1)
 
             reward = compute_reward(
                 reward,
