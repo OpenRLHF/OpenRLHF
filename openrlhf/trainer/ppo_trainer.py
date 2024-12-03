@@ -331,6 +331,7 @@ class PPOTrainer(ABC):
 
         # TODO: this is a bad indicator to say that data is packed...
         if isinstance(experience.sequences, list):
+            assert self.strategy.args.advantage_estimator != "trl_rloo", "Currently, RLOO does not support data packing."
             sequences = torch.cat(experience.sequences, dim=0).unsqueeze(0)
             old_action_log_probs = torch.cat(experience.action_log_probs, dim=0).unsqueeze(0)
             advantages = torch.cat(experience.advantages, dim=0).unsqueeze(0)
@@ -357,12 +358,20 @@ class PPOTrainer(ABC):
         )
 
         # loss function
-        actor_loss = self.actor_loss_fn(
-            action_log_probs,
-            old_action_log_probs,
-            advantages,
-            action_mask=experience.action_mask,
-        )
+        if self.strategy.args.advantage_estimator == "trl_rloo":
+            actor_loss = self.actor_loss_fn(
+                action_log_probs.sum(-1, keepdim=True),
+                old_action_log_probs.sum(-1, keepdim=True),
+                advantages,
+                action_mask=None,
+            )
+        else:
+            actor_loss = self.actor_loss_fn(
+                action_log_probs,
+                old_action_log_probs,
+                advantages,
+                action_mask=experience.action_mask,
+            )
         # mixtral
         if self.aux_loss:
             aux_loss = output.aux_loss

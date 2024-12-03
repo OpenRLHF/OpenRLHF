@@ -215,7 +215,8 @@ class NaiveReplayBuffer(ABC):
 
         items_vector = torch.cat(items).float().flatten()
 
-        if action_masks[0] is None:
+        if action_masks[0] is None or strategy.args.advantage_estimator == "trl_rloo":
+            # samples of RLOO treat the entire sequence as a single action;
             # packing samples has no action mask
             action_masks_vector = 1
             num_actions = items_vector.numel()

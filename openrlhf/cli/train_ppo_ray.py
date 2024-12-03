@@ -298,9 +298,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--advantage_estimator",
         type=str,
-        choices=["gae", "reinforce"],
+        choices=["gae", "reinforce", "trl_rloo"],
         default="gae",
-        help="Choose advantage estimation method: gae, reinforce",
+        help="Choose advantage estimation method: gae, reinforce, trl_rloo",
     )
 
     #  Models
@@ -361,6 +361,9 @@ if __name__ == "__main__":
             args.critic_pretrain = args.reward_pretrain.split(",")[0]
         else:
             args.critic_pretrain = args.pretrain
+
+    if args.advantage_estimator == "trl_rloo":
+        assert args.n_samples_per_prompt > 1, "RLOO requires n_samples_per_prompt > 1"
 
     if args.remote_rm_url:
         args.remote_rm_url = args.remote_rm_url.split(",")

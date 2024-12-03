@@ -10,7 +10,7 @@ import torch.nn as nn
 from tqdm import tqdm
 
 from openrlhf.models.actor import Actor
-from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean, unpacking_samples
+from openrlhf.models.utils import compute_approx_kl, compute_reward, compute_rloo_reward, masked_mean, unpacking_samples
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn, remote_rm_fn_ray
 
@@ -191,14 +191,25 @@ class NaiveExperienceMaker(ABC):
         # calculate return and advantages
         for experience in experiences:
             num_actions = experience.info["num_actions"]
-            reward = compute_reward(
-                experience.info["reward"],
-                self.kl_ctl.value,
-                experience.kl,
-                action_mask=experience.action_mask,
-                num_actions=num_actions,
-                reward_clip_range=args.reward_clip_range,
-            )
+            if self.advantage_estimator in ["gae", "reinforce"]:
+                reward = compute_reward(
+                    experience.info["reward"],
+                    self.kl_ctl.value,
+                    experience.kl,
+                    action_mask=experience.action_mask,
+                    num_actions=num_actions,
+                    reward_clip_range=args.reward_clip_range,
+                )
+            elif self.advantage_estimator in ["trl_rloo"]:
+                reward = compute_rloo_reward(
+                    experience.info["reward"],
+                    self.kl_ctl.value,
+                    experience.kl,
+                    action_mask=experience.action_mask,
+                    reward_clip_range=args.reward_clip_range,
+                )
+            else:
+                raise Exception(f"Unkown advantage_estimator {self.advantage_estimator}")
 
             if self.advantage_estimator == "gae":
                 experience.advantages, experience.returns = self.get_advantages_and_returns(
@@ -215,6 +226,11 @@ class NaiveExperienceMaker(ABC):
                     generate_kwargs["gamma"],
                 )
                 experience.advantages = deepcopy(experience.returns)
+            elif self.advantage_estimator == "trl_rloo":
+                experience.advantages = self.get_rloo_advantages(
+                    reward,
+                )
+                experience.returns = deepcopy(experience.advantages)
             else:
                 raise Exception(f"Unkown advantage_estimator {self.advantage_estimator}")
 
@@ -434,6 +450,39 @@ class NaiveExperienceMaker(ABC):
             returns[:, t] = cumulative_return
 
         return returns
+
+    @torch.no_grad()
+    def get_rloo_advantages(
+        self,
+        rewards: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Function that computes advantages from rewards using RLOO (REINFORCE Leave-One-Out).
+        RLOO uses rewards in the same prompt group as baselines without the GAE (Generalized Advantage Estimation).
+
+        Input:
+        - rewards: Tensor of shape (batch_size, 1)
+
+        Output:
+        - returns: Tensor of shape (batch_size, 1)
+        """
+
+        if isinstance(rewards, list):
+            # packing samples
+            # TODO: this is slow...
+            advantages = []
+            for r in rewards:
+                ret = self.get_rloo_advantages(r.unsqueeze(0))
+                advantages.append(ret.squeeze(0))
+            return advantages
+
+        args = self.strategy.args
+        rewards = rewards.reshape(-1, args.n_samples_per_prompt)
+        baseline = (rewards.sum(-1, keepdim=True) - rewards) / (args.n_samples_per_prompt - 1)
+        advantages = rewards - baseline
+        advantages = advantages.reshape(-1, 1)
+
+        return advantages
 
 
 class RemoteExperienceMaker(NaiveExperienceMaker):
