@@ -1,3 +1,5 @@
+import math
+
 from typing import Optional, Tuple
 
 import torch
@@ -23,6 +25,35 @@ class GPTLMLoss(nn.Module):
         shift_labels = labels[..., 1:].contiguous()
         # Flatten the tokens
         return self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+
+
+class RLOOLoss(nn.Module):
+    """
+    Policy Loss for RLOO
+    """
+
+    def __init__(self, clip_eps: float = 0.2) -> None:
+        super().__init__()
+        self.clip_eps = clip_eps
+        self.max_logprob_diff = math.log(1 + self.clip_eps)
+
+    def forward(
+        self,
+        log_probs: torch.Tensor,
+        old_log_probs: torch.Tensor,
+        advantages: torch.Tensor,
+        action_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        log_prob = log_probs.float().sum(-1, keepdim=True)
+        old_log_prob = old_log_probs.float().sum(-1, keepdim=True)
+        log_prob_diff = (log_prob - old_log_prob).clamp(None, self.max_logprob_diff)
+        ratio = log_prob_diff.exp()
+
+        surr1 = ratio * advantages
+        surr2 = ratio.clamp(1 - self.clip_eps, 1 + self.clip_eps) * advantages
+        loss = -torch.min(surr1, surr2)
+        loss = masked_mean(loss, None, dim=-1).mean()
+        return loss
 
 
 class PolicyLoss(nn.Module):

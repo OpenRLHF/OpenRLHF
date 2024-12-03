@@ -9,7 +9,7 @@ from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
+from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss, RLOOLoss
 from openrlhf.models.utils import masked_mean
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
@@ -118,7 +118,7 @@ class PPOTrainer(ABC):
         self.actor_scheduler = actor_scheduler
         self.critic_scheduler = critic_scheduler
 
-        self.actor_loss_fn = PolicyLoss(eps_clip)
+        self.actor_loss_fn = PolicyLoss(eps_clip) if self.args.advantage_estimator != "trl_rloo" else RLOOLoss(eps_clip)
         self.critic_loss_fn = ValueLoss(value_clip)
         self.ptx_loss_fn = GPTLMLoss()
 
@@ -358,20 +358,12 @@ class PPOTrainer(ABC):
         )
 
         # loss function
-        if self.strategy.args.advantage_estimator == "trl_rloo":
-            actor_loss = self.actor_loss_fn(
-                action_log_probs.sum(-1, keepdim=True),
-                old_action_log_probs.sum(-1, keepdim=True),
-                advantages,
-                action_mask=None,
-            )
-        else:
-            actor_loss = self.actor_loss_fn(
-                action_log_probs,
-                old_action_log_probs,
-                advantages,
-                action_mask=experience.action_mask,
-            )
+        actor_loss = self.actor_loss_fn(
+            action_log_probs,
+            old_action_log_probs,
+            advantages,
+            action_mask=experience.action_mask,
+        )
         # mixtral
         if self.aux_loss:
             aux_loss = output.aux_loss
