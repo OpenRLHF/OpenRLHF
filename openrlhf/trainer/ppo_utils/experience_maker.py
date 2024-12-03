@@ -482,7 +482,7 @@ class NaiveExperienceMaker(ABC):
         advantages = rewards - baseline
         advantages = advantages.reshape(-1, 1)
 
-        return advantages
+        return advantages.detach()
 
 
 class RemoteExperienceMaker(NaiveExperienceMaker):
