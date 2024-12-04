@@ -229,6 +229,7 @@ class NaiveExperienceMaker(ABC):
             elif self.advantage_estimator == "trl_rloo":
                 experience.advantages = self.get_rloo_advantages(
                     reward,
+                    experience.action_mask,
                 )
                 experience.returns = deepcopy(experience.advantages)
             else:
@@ -455,16 +456,18 @@ class NaiveExperienceMaker(ABC):
     def get_rloo_advantages(
         self,
         rewards: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        action_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor]:
         """
         Function that computes advantages from rewards using RLOO (REINFORCE Leave-One-Out).
         RLOO uses rewards in the same prompt group as baselines without the GAE (Generalized Advantage Estimation).
 
         Input:
         - rewards: Tensor of shape (batch_size, 1)
+        - action_mask: Tensor of shape (batch_size, response_size), binary mask
 
         Output:
-        - returns: Tensor of shape (batch_size, 1)
+        - advantages: Tensor of shape (batch_size, response_size)
         """
 
         if isinstance(rewards, list):
@@ -477,10 +480,14 @@ class NaiveExperienceMaker(ABC):
             return advantages
 
         args = self.strategy.args
-        rewards = rewards.reshape(-1, args.n_samples_per_prompt)
+        rewards = rewards.reshape(-1, args.n_samples_per_prompt)  # (n_prompt, n_samples_per_prompt)
         baseline = (rewards.sum(-1, keepdim=True) - rewards) / (args.n_samples_per_prompt - 1)
-        advantages = rewards - baseline
-        advantages = advantages.reshape(-1, 1)
+        advantages = (rewards - baseline).reshape(-1, 1)  # (batch_size, 1)
+        # We don't have to normalize the advantages again, as the rewards are already normalized.
+
+        # Keep the shape of the advantages consistent with that in other methods.
+        eos_indices = action_mask.size(1) - 1 - action_mask.long().fliplr().argmax(dim=1, keepdim=True)
+        advantages = torch.zeros_like(action_mask, dtype=advantages.dtype).scatter_(dim=1, index=eos_indices, src=advantages)
 
         return advantages.detach()
 

@@ -141,8 +141,8 @@ def remove_padding_in_sequences(items):
             seq[left_pad:right_pad],
             act_log_prob[:right_pad],
             value[:right_pad] if item.values is not None else None,
-            ret[:right_pad] if right_pad is not None and ret.size(0) + right_pad > 0 else ret,
-            adv[:right_pad] if right_pad is not None and adv.size(0) + right_pad > 0 else adv,
+            ret[:right_pad],
+            adv[:right_pad],
             att_mask[left_pad:right_pad],
             act_mask[:right_pad],
         )
@@ -215,8 +215,7 @@ class NaiveReplayBuffer(ABC):
 
         items_vector = torch.cat(items).float().flatten()
 
-        if action_masks[0] is None or strategy.args.advantage_estimator == "trl_rloo":
-            # samples of RLOO treat the entire sequence as a single action;
+        if action_masks[0] is None:
             # packing samples has no action mask
             action_masks_vector = 1
             num_actions = items_vector.numel()

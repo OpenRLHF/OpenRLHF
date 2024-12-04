@@ -29,7 +29,7 @@ class GPTLMLoss(nn.Module):
 
 class RLOOLoss(nn.Module):
     """
-    Policy Loss for RLOO
+    Policy Loss for TRL's RLOO
     """
 
     def __init__(self, clip_eps: float = 0.2) -> None:
@@ -48,6 +48,8 @@ class RLOOLoss(nn.Module):
         old_log_prob = old_log_probs.float().sum(-1, keepdim=True)
         log_prob_diff = (log_prob - old_log_prob).clamp(None, self.max_logprob_diff)
         ratio = log_prob_diff.exp()
+
+        advantages = advantages.sum(-1, keepdim=True)
 
         surr1 = ratio * advantages
         surr2 = ratio.clamp(1 - self.clip_eps, 1 + self.clip_eps) * advantages

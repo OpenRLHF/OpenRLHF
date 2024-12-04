@@ -233,7 +233,9 @@ class PPOTrainer(ABC):
                     self.replay_buffer.append(experience)
 
                 torch.cuda.empty_cache()
-                self.replay_buffer.normalize("advantages", self.strategy)
+                if self.args.advantage_estimator not in ["trl_rloo"]:
+                    # TRL's RLOO does not normalize across the prompt batch; normalization has been done during the computation of advantages in the response batch.
+                    self.replay_buffer.normalize("advantages", self.strategy)
                 status = self.ppo_train(steps)
                 self.replay_buffer.clear()
                 torch.cuda.empty_cache()
@@ -331,7 +333,6 @@ class PPOTrainer(ABC):
 
         # TODO: this is a bad indicator to say that data is packed...
         if isinstance(experience.sequences, list):
-            assert self.strategy.args.advantage_estimator != "trl_rloo", "Currently, RLOO does not support data packing."
             sequences = torch.cat(experience.sequences, dim=0).unsqueeze(0)
             old_action_log_probs = torch.cat(experience.action_log_probs, dim=0).unsqueeze(0)
             advantages = torch.cat(experience.advantages, dim=0).unsqueeze(0)
