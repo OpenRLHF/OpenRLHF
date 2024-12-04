@@ -126,13 +126,20 @@ class ProcessRewardModelTrainer(ABC):
                     inputs = inputs.to(torch.cuda.current_device())
                     attention_mask = attention_masks.to(torch.cuda.current_device())
                     labels = labels.to(torch.cuda.current_device())
+                    packed_seq_lens = None
                 else:
                     inputs, attention_masks, packed_seq_lens, labels = data
                     inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
                     attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
                     labels = labels.to(torch.cuda.current_device()).squeeze(1)
 
-                output = self.model(inputs, attention_mask=attention_mask, return_output=True)
+                output = self.model(
+                    inputs,
+                    attention_mask=attention_mask,
+                    return_output=True,
+                    ring_attn_group=self.strategy.ring_attn_group,
+                    packed_seq_lens=packed_seq_lens,
+                )
 
                 # mixtral
                 if self.aux_loss:
@@ -206,6 +213,7 @@ class ProcessRewardModelTrainer(ABC):
                     inputs = inputs.to(torch.cuda.current_device())
                     attention_mask = attention_masks.to(torch.cuda.current_device())
                     labels = labels.to(torch.cuda.current_device())
+                    packed_seq_lens = None
                 else:
                     inputs, attention_masks, packed_seq_lens, labels = data
                     inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
