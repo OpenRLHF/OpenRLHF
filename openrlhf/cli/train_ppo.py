@@ -180,7 +180,7 @@ def train(args):
     actor_scheduler = get_scheduler(
         "cosine_with_min_lr",
         actor_optim,
-        num_warmup_steps=math.ceil(max_steps * 0.03),
+        num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
         num_training_steps=max_steps,
         scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
     )
@@ -189,7 +189,7 @@ def train(args):
         critic_scheduler = get_scheduler(
             "cosine_with_min_lr",
             critic_optim,
-            num_warmup_steps=math.ceil(max_steps * 0.03),
+            num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
             num_training_steps=max_steps,
             scheduler_specific_kwargs={"min_lr": args.critic_learning_rate * 0.1},
         )
@@ -321,6 +321,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_value_network", action="store_true", default=False, help="Save critic model")
     parser.add_argument("--actor_learning_rate", type=float, default=1e-6)
     parser.add_argument("--critic_learning_rate", type=float, default=9e-6)
+    parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
     parser.add_argument("--kl_target", type=float, default=None)
     parser.add_argument("--init_kl_coef", type=float, default=0.01, help="KL penalty in PPO")
     parser.add_argument(
