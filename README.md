@@ -60,6 +60,7 @@ More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csof
 - Compatibility with HuggingFace's `tokenizer.apply_chat_template` for datasets (`--apply_chat_template` and `--input_key`).  
 - Logging support with Wandb (`--use_wandb`) and TensorBoard (`--use_tensorboard`).  
 - Checkpoint recovery functionality (`--load_checkpoint` and `--save_steps`).  
+- Provided multi-node training scripts, such as [DPO](./examples/scripts/train_llama_slurm.sh) and [Ray PPO](./examples/scripts/train_ppo_llama_ray_slurm.sh).
 
 
 ### PPO Support Matrix

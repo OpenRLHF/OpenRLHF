@@ -12,8 +12,8 @@
 #SBATCH --overcommit               # needed for pytorch
 #SBATCH --output=out.log
 
-# should be modified to train_sft_llama.sh, train_rm_llama.sh, train_ppo_llama, etc.
-readonly training_script="train_ppo_llama.sh" 
+# should be modified to train_sft_llama.sh, train_rm_llama.sh, train_dpo_llama, etc.
+readonly training_script="train_dpo_llama.sh" 
 readonly GPUS_PER_NODE=8
 
 readonly PROJECT_PATH=$(cd ../../; pwd)
