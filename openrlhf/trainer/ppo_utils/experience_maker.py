@@ -338,6 +338,7 @@ class NaiveExperienceMaker(ABC):
         - rewards: List of rewards
         """
         args = self.strategy.args
+        # reward shaping for RLOO
         if args.advantage_estimator == "rloo":
             rewards = torch.cat([experience.info["reward"] for experience in experiences])
             rewards = rewards.reshape(-1, args.n_samples_per_prompt)
@@ -345,6 +346,7 @@ class NaiveExperienceMaker(ABC):
             rewards = rewards - baseline
             rewards = rewards.flatten().chunk(len(experiences))
             return experiences, rewards
+        # default rewards
         return experiences, [experience.info["reward"] for experience in experiences]
 
     @torch.no_grad()
