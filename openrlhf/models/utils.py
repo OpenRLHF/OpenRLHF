@@ -34,6 +34,47 @@ def compute_approx_kl(
     return log_ratio
 
 
+def compute_rloo_reward(
+    r: Union[torch.Tensor, float],
+    kl_coef: float,
+    kl: Union[torch.Tensor, list[torch.Tensor]],
+    action_mask: Optional[torch.Tensor] = None,
+    reward_clip_range: Tuple[float, float] = None,
+) -> Union[torch.Tensor, list[torch.Tensor]]:
+    if kl_coef <= 0.0:
+        kl_coef = 0.0
+
+    if isinstance(r, torch.Tensor):
+        assert r.dim() == 1, "Expected 'r' to be a 1-dimensional tensor, but got a tensor with dimension: {}".format(r.dim())
+
+    if reward_clip_range:
+        r = r.clamp(min=reward_clip_range[0], max=reward_clip_range[1])
+
+    if action_mask is not None:
+        assert kl.dim() == 2, "Expected 'kl' to be a 2-dimensional tensor, but got a tensor with dimension: {}".format(kl.dim())
+        # Because RLOO treats the entire response as a single step, 
+        # we sum up the KL divergence and rewards of all tokens 
+        # to represent the reward for this one step.
+
+        # The following code is equivalent to:
+        #
+        # kl_reward = (-kl_coef * kl).sum(1, keepdim=True)
+        # eos_indices = action_mask.size(1) - 1 - action_mask.long().fliplr().argmax(dim=1, keepdim=True)
+        # last_reward = torch.zeros_like(kl).scatter_(dim=1, index=eos_indices, src=r.unsqueeze(1).to(kl.dtype)).sum(1, keepdim=True)
+        # reward = last_reward + kl_reward
+        kl_reward = (-kl_coef * kl).sum(1)
+        reward = (r + kl_reward).unsqueeze(1)
+    else:
+        # TODO: write a more efficient version
+        reward = []
+        for i, kl_seg in enumerate(kl):
+            assert kl_seg.dim() == 2, "Expected 'kl' to be a 2-dimensional tensor, but got a tensor with dimension: {}".format(kl_seg.dim())
+            kl_reward = (-kl_coef * kl_seg).sum(1)
+            reward.append((kl_reward + r[i]).unsqueeze(1))
+
+    return reward
+
+
 def compute_reward(
     r: Union[torch.Tensor, float],
     kl_coef: float,

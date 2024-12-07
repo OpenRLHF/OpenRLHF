@@ -9,7 +9,7 @@ from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
+from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss, RLOOLoss
 from openrlhf.models.utils import masked_mean
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
@@ -118,7 +118,7 @@ class PPOTrainer(ABC):
         self.actor_scheduler = actor_scheduler
         self.critic_scheduler = critic_scheduler
 
-        self.actor_loss_fn = PolicyLoss(eps_clip)
+        self.actor_loss_fn = PolicyLoss(eps_clip) if self.args.advantage_estimator != "trl_rloo" else RLOOLoss(eps_clip)
         self.critic_loss_fn = ValueLoss(value_clip)
         self.ptx_loss_fn = GPTLMLoss()
 
@@ -233,7 +233,9 @@ class PPOTrainer(ABC):
                     self.replay_buffer.append(experience)
 
                 torch.cuda.empty_cache()
-                self.replay_buffer.normalize("advantages", self.strategy)
+                if self.args.advantage_estimator not in ["trl_rloo"]:
+                    # TRL's RLOO does not normalize across the prompt batch; normalization has been done during the computation of advantages in the response batch.
+                    self.replay_buffer.normalize("advantages", self.strategy)
                 status = self.ppo_train(steps)
                 self.replay_buffer.clear()
                 torch.cuda.empty_cache()
