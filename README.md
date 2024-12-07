@@ -42,7 +42,7 @@ More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csof
 
 ## Features
 
-- Distributed [PPO](./examples/scripts/train_ppo_llama_ray.sh) and [REINFORCE](./examples/scripts/train_reinforce_llama_ray.sh) implementations based on Ray.  
+- Distributed [PPO](./examples/scripts/train_ppo_llama_ray.sh) and [REINFORCE/RLOO](./examples/scripts/train_reinforce_llama_ray.sh) implementations based on Ray.  
 - Full RLHF fine-tuning support for models with [over 70 billion parameters](./examples/scripts/train_ppo_llama_ray_70b.sh).  
 - Integration with vLLM for accelerated generation in RLHF tasks (`--vllm_num_engines`).  
 - Support for multiple reward models (`--reward_pretrain model1,model2...`) and remote reward models (`--remote_rm_url`).  
@@ -336,8 +336,9 @@ ray job submit --address="http://127.0.0.1:8265" \
 # Support remote reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
 
-# Support REINFORCE
-# --advantage_estimator reinforce
+# Support REINFORCE | RLOO
+# --advantage_estimator reinforce | rloo
+
 # Support N samples
 # --n_samples_per_prompt 4
 ```
