@@ -40,28 +40,31 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 更多细节请参考 [PPT](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [技术报告](https://arxiv.org/abs/2405.11143) | [使用文档](https://openrlhf.readthedocs.io/)
 
 
-## 特性
+## 新闻  
 
-- 基于 Ray 的分布式 [PPO](./examples/scripts/train_ppo_llama_ray.sh)/[Reinforce](./examples/scripts/train_reinforce_llama_ray.sh) based on Ray. 
-- 支持使用 [超过 70 亿参数的模型进行全面 RLHF 微调](./examples/scripts/train_ppo_llama_ray_70b.sh).
-- 支持 vLLM 生成加速在 RLHF 中 (--vllm_num_engines).
-- 支持 多个奖励模型 (--reward_pretrain model1,model2...) 及 远程奖励模型 (--remote_rm_url).
-- 支持 [DPO (直接偏好优化)/IPO/cDPO](./examples/scripts/train_dpo_llama.sh).
-- 支持 [Kahneman-Tversky 优化 (KTO)](./examples/scripts/train_kto_llama.sh).
-- 支持 [拒绝采样](./examples/scripts/train_rejection_sampling_llama.sh).
-- 支持 [Iterative DPO](./examples/scripts/train_iterative_dpo_llama.sh) (https://github.com/RLHFlow/Online-RLHF).
-- 支持 [条件 SFT](./examples/scripts/train_conditional_llama.sh) (https://arxiv.org/abs/2308.12050).
-- 支持 [知识蒸馏](./examples/scripts/train_knowledge_distillation.sh) (https://github.com/microsoft/LMOps/tree/main/minillm).
-- 支持 [过程 Reward Model (PRM)](./examples/scripts/train_prm_mistral.sh).
-- 支持 SFT/DPO/RM/PRM/PPO 训练样本打包 (--packing_samples).
-- 支持 [RingAttention](./examples/scripts/train_dpo_ring_llama.sh) (--ring_attn_size, --ring_head_stride)
-- 支持 [MoE](./examples/test_scripts/train_sft_mixtral_lora.sh) (--aux_loss_coef)
-- 支持 FlashAttention2 (--flash_attn).
-- 支持 QLoRA (--load_in_4bit), [LoRA (--lora_rank, --target_modules)]((./examples/scripts/train_sft_mixtral_lora.sh)).
-- 支持 HuggingFace `tokenizer.apply_chat_template` 用于数据集处理 (--apply_chat_template 和 --input_key).
-- 支持 Wandb 日志 (--use_wandb) 和 tensorboard (--use_tensorboard).
-- 支持 checkpoint 断点训练 (--load_checkpoint 和 --save_steps).
-- 多节点 [训练脚本](./examples/scripts/train_llama_slurm.sh) 适用于 Slurm.
+- [2024/12] 在 [Notion Blog](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05) 中，我们对 PPO、REINFORCE、GRPO 和 RLOO 进行了分析。  
+
+## 特性  
+
+- 基于 Ray 的分布式 [PPO](./examples/scripts/train_ppo_llama_ray.sh) 和 [REINFORCE/RLOO](./examples/scripts/train_reinforce_llama_ray.sh) 实现。  
+- 支持对 [超过 700 亿参数的模型](./examples/scripts/train_ppo_llama_ray_70b.sh) 进行完整的 RLHF 微调。  
+- 集成 vLLM，加速 RLHF 任务中的样本生成（`--vllm_num_engines`）。  
+- 支持多个奖励模型（`--reward_pretrain model1,model2...`）和远程奖励模型（`--remote_rm_url`）。  
+- 实现 [DPO（直接偏好优化）/IPO/cDPO](./examples/scripts/train_dpo_llama.sh) 和 [Kahneman-Tversky Optimization（KTO）](./examples/scripts/train_kto_llama.sh)。  
+- 支持 [迭代 DPO](./examples/scripts/train_iterative_dpo_llama.sh)（[GitHub: Online-RLHF](https://github.com/RLHFlow/Online-RLHF)）。  
+- 支持 [拒绝采样](./examples/scripts/train_rejection_sampling_llama.sh)。  
+- 实现 [条件 SFT](./examples/scripts/train_conditional_llama.sh)（[arXiv:2308.12050](https://arxiv.org/abs/2308.12050)）。  
+- 支持 [知识蒸馏](./examples/scripts/train_knowledge_distillation.sh)（[Microsoft: minillm](https://github.com/microsoft/LMOps/tree/main/minillm)）。  
+- 集成 [过程奖励模型（PRM）](./examples/scripts/train_prm_mistral.sh)。  
+- 支持 SFT、DPO、RM、PRM 和 PPO 的训练样本打包（`--packing_samples`）。  
+- 实现 [RingAttention](./examples/scripts/train_dpo_ring_llama.sh)（`--ring_attn_size`，`--ring_head_stride`）。  
+- 支持 [专家混合模型（MoE）](./examples/test_scripts/train_sft_mixtral_lora.sh)（`--aux_loss_coef`）。  
+- 集成 FlashAttention2（`--flash_attn`）。  
+- 支持 QLoRA（`--load_in_4bit`）和 [LoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--lora_rank`，`--target_modules`）。  
+- 兼容 HuggingFace 的 `tokenizer.apply_chat_template` 数据集格式（`--apply_chat_template` 和 `--input_key`）。  
+- 支持使用 Wandb（`--use_wandb`）和 TensorBoard（`--use_tensorboard`）进行日志记录。  
+- 支持从检查点恢复训练（`--load_checkpoint` 和 `--save_steps`）。  
+- 提供了多节点训练脚本, 比如 [DPO](./examples/scripts/train_llama_slurm.sh) 和 [RLHF](./examples/scripts/train_ppo_llama_ray_slurm.sh)
 
 
 ### PPO 支持矩阵
@@ -339,6 +342,12 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 # 支持远程 reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
+
+# 支持 REINFORCE | RLOO 
+# --advantage_estimator reinforce | rloo
+
+# 支持 N 倍采样
+# --n_samples_per_prompt 4
 ```
 
 > [!NOTE]

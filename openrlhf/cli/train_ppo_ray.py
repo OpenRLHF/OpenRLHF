@@ -279,6 +279,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_value_network", action="store_true", default=False, help="Save critic model")
     parser.add_argument("--actor_learning_rate", type=float, default=1e-6)
     parser.add_argument("--critic_learning_rate", type=float, default=9e-6)
+    parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
     parser.add_argument("--kl_target", type=float, default=None)
     parser.add_argument("--init_kl_coef", type=float, default=0.01, help="KL penalty in PPO")
     parser.add_argument(
@@ -298,9 +299,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--advantage_estimator",
         type=str,
-        choices=["gae", "reinforce"],
+        choices=["gae", "reinforce", "rloo"],
         default="gae",
-        help="Choose advantage estimation method: gae, reinforce",
+        help="Choose advantage estimation method: gae, reinforce, rloo",
     )
 
     #  Models
@@ -361,6 +362,9 @@ if __name__ == "__main__":
             args.critic_pretrain = args.reward_pretrain.split(",")[0]
         else:
             args.critic_pretrain = args.pretrain
+
+    if args.advantage_estimator == "rloo":
+        assert args.n_samples_per_prompt > 1, "RLOO requires n_samples_per_prompt > 1"
 
     if args.remote_rm_url:
         args.remote_rm_url = args.remote_rm_url.split(",")

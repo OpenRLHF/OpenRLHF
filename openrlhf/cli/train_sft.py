@@ -95,7 +95,7 @@ def train(args):
     scheduler = get_scheduler(
         args.lr_scheduler,
         optim,
-        num_warmup_steps=math.ceil(max_steps * 0.03),
+        num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
         num_training_steps=max_steps,
         scheduler_specific_kwargs={"min_lr": args.learning_rate * 0.1},
     )
@@ -167,6 +167,7 @@ if __name__ == "__main__":
     parser.add_argument("--aux_loss_coef", type=float, default=0, help="MoE balancing loss")
     parser.add_argument("--pretrain", type=str, default=None)
     parser.add_argument("--learning_rate", type=float, default=5e-6)
+    parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
     parser.add_argument("--pretrain_mode", action="store_true", default=False, help="Use pretrain loss")
     parser.add_argument("--lr_scheduler", type=str, default="cosine_with_min_lr")
     parser.add_argument("--l2", type=float, default=0, help="weight decay loss")

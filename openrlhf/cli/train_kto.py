@@ -93,7 +93,7 @@ def train(args):
     scheduler = get_scheduler(
         "cosine_with_min_lr",
         optim,
-        num_warmup_steps=math.ceil(max_steps * 0.03),
+        num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
         num_training_steps=max_steps,
         scheduler_specific_kwargs={"min_lr": args.learning_rate * 0.1},
     )
@@ -152,7 +152,6 @@ if __name__ == "__main__":
     parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
     parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
     parser.add_argument("--ref_offload", action="store_true", default=False)
-    parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
@@ -171,6 +170,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_epochs", type=int, default=1)
     parser.add_argument("--beta", type=float, default=0.01)
     parser.add_argument("--pretrain", type=str, default="bigscience/bloomz-1b7")
+    parser.add_argument("--learning_rate", type=float, default=1e-5)
+    parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
     parser.add_argument("--l2", type=float, default=0.0, help="weight decay loss")
     parser.add_argument("--aux_loss_coef", type=float, default=0, help="MoE balancing loss")
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")

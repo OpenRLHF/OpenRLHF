@@ -186,13 +186,13 @@ class NaiveExperienceMaker(ABC):
         ):
             experiences.append(self.make_experience(samples))
 
-        experiences = self.process_experiences(experiences)
+        experiences, rewards = self.process_experiences(experiences)
 
         # calculate return and advantages
-        for experience in experiences:
+        for experience, reward in zip(experiences, rewards):
             num_actions = experience.info["num_actions"]
             reward = compute_reward(
-                experience.info["reward"],
+                reward,
                 self.kl_ctl.value,
                 experience.kl,
                 action_mask=experience.action_mask,
@@ -208,7 +208,7 @@ class NaiveExperienceMaker(ABC):
                     generate_kwargs["gamma"],
                     generate_kwargs["lambd"],
                 )
-            elif self.advantage_estimator == "reinforce":
+            elif self.advantage_estimator in ["reinforce", "rloo"]:
                 experience.returns = self.get_cumulative_returns(
                     reward,
                     experience.action_mask,
@@ -329,9 +329,25 @@ class NaiveExperienceMaker(ABC):
         )
 
     @torch.no_grad()
-    def process_experiences(self, experiences: List[Experience]) -> List[Experience]:
-        # TODO: add more methods to process experiences
-        return experiences
+    def process_experiences(self, experiences: List[Experience]) -> Tuple[List[Experience], List[torch.Tensor]]:
+        """
+        Process experiences, this can be used to filter out some experiences or do some processing on the rewards.
+
+        Output:
+        - experiences: List of Experience
+        - rewards: List of rewards
+        """
+        args = self.strategy.args
+        # reward shaping for RLOO
+        if args.advantage_estimator == "rloo":
+            rewards = torch.cat([experience.info["reward"] for experience in experiences])
+            rewards = rewards.reshape(-1, args.n_samples_per_prompt)
+            baseline = (rewards.sum(-1, keepdim=True) - rewards) / (args.n_samples_per_prompt - 1)
+            rewards = rewards - baseline
+            rewards = rewards.flatten().chunk(len(experiences))
+            return experiences, rewards
+        # default rewards
+        return experiences, [experience.info["reward"] for experience in experiences]
 
     @torch.no_grad()
     def get_advantages_and_returns(

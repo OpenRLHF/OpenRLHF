@@ -38,3 +38,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    --packing_samples \
    --save_steps -1 \
    --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf
+
+# also supports --advantage_estimator rloo
