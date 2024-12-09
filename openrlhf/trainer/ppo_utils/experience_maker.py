@@ -40,7 +40,7 @@ class Experience:
     action_log_probs: (B, A)
     values: (B, A)
     returns: (B, A)
-    advatanges: (B, A)
+    advantages: (B, A)
     attention_mask: (B, S)
     action_mask: (B, A)
     kl: (B, A)
