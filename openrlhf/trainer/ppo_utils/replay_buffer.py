@@ -19,7 +19,7 @@ class BufferItem:
     action_log_probs: (A)
     values: (1)
     returns: (1)
-    advatanges: (1)
+    advantages: (1)
     attention_mask: (S)
     action_mask: (A)
 
