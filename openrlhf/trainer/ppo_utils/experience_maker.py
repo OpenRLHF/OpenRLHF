@@ -538,21 +538,20 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 r_refs.append(rm.forward.remote(sequences_cpu, attention_mask_cpu, packed_seq_lens=packed_seq_lens))
         else:
             # remote RM
+            if not self.packing_samples:
+                queries = self.tokenizer.batch_decode(sequences_cpu, skip_special_tokens=False)
+            else:
+                sequences_list = []
+                offset = 0
+                tokens_list = sequences_cpu.tolist()[0]
+                for length in packed_seq_lens:
+                    sequences_list.append(tokens_list[offset : offset + length])
+                    offset += length
+                queries = self.tokenizer.batch_decode(sequences_list, skip_special_tokens=False)
+
             for rm in self.remote_rm_url:
-                if not self.packing_samples:
-                    queries = self.tokenizer.batch_decode(sequences_cpu, skip_special_tokens=False)
-                    r = remote_rm_fn_ray.remote(rm, queries=queries)
-                    r_refs.append(r)
-                else:
-                    sequences_list = []
-                    offset = 0
-                    tokens_list = sequences_cpu.tolist()[0]
-                    for length in packed_seq_lens:
-                        sequences_list.append(tokens_list[offset : offset + length])
-                        offset += length
-                    queries = self.tokenizer.batch_decode(sequences_list, skip_special_tokens=False)
-                    r = remote_rm_fn_ray.remote(rm, queries=queries)
-                    r_refs.append(r)
+                r = remote_rm_fn_ray.remote(rm, queries=queries)
+                r_refs.append(r)
 
         # log probs
         action_log_probs = self.actor(sequences, num_actions, attention_mask, packed_seq_lens=packed_seq_lens)
