@@ -2,7 +2,10 @@ import os
 from abc import ABC
 
 import torch
+import torch.distributed as dist
+from flash_attn.utils.distributed import all_gather
 from torch.optim import Optimizer
+from torch.nn import functional as F
 from tqdm import tqdm
 
 from openrlhf.models import GPTLMLoss
@@ -134,7 +137,16 @@ class SFTTrainer(ABC):
                     inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
                     attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
 
-                output = self.model(inputs, attention_mask=attention_mask, return_output=True)
+                if self.strategy.ring_attn_group is None:
+                    output = self.model(inputs, attention_mask=attention_mask, return_output=True)
+                else:
+                    output = self.model(
+                        inputs, 
+                        attention_mask=attention_mask, 
+                        return_output=True,
+                        ring_attn_group=self.strategy.ring_attn_group,
+                        packed_seq_lens=infos["input_length"],
+                    )
 
                 # loss function
                 labels = torch.where(
@@ -158,7 +170,13 @@ class SFTTrainer(ABC):
                         for label, source_len in zip(labels, prompts_id_lens):
                             label[:source_len] = self.loss_fn.IGNORE_INDEX
 
-                gpt_loss = self.loss_fn(output.logits, labels)
+                logits = output.logits                
+                if self.strategy.ring_attn_group is not None:
+                    total_seq_len = labels.numel()
+                    logits = all_gather(logits, self.strategy.ring_attn_group)
+                    logits = logits.reshape(output.logits.shape[0], total_seq_len, -1)
+
+                gpt_loss = self.loss_fn(logits, labels)
                 loss = gpt_loss + aux_loss * self.args.aux_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)

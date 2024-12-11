@@ -263,6 +263,7 @@ class DPOTrainer(ABC):
                             self.ref_model, chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens
                         )
                 else:
+                    # [info] packed_seq_lens: chosen + rejected
                     packed_input_ids, packed_attention_masks, packed_seq_lens, prompt_id_lens = data
                     packed_input_ids, packed_attention_masks = packed_input_ids.to(
                         torch.cuda.current_device()
