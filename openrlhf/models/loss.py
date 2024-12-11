@@ -18,6 +18,7 @@ class GPTLMLoss(nn.Module):
         self.IGNORE_INDEX = -100
         self.loss = nn.CrossEntropyLoss(ignore_index=self.IGNORE_INDEX)
         self.process_group = process_group
+    
     def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         if self.process_group is not None:
             rank = dist.get_rank(self.process_group)
