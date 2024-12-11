@@ -84,7 +84,7 @@ class DeepspeedStrategy(ABC):
         self.setup_ring_attn()
         self.world_size = dist.get_world_size()
         self.accumulated_gradient = (
-            self.train_batch_size // self.micro_train_batch_size // self.world_size * self.ring_attn_size
+            self.train_batch_size * self.ring_attn_size // self.micro_train_batch_size // self.world_size
         )
 
     def setup_ring_attn(self):
