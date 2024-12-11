@@ -58,7 +58,7 @@ class SFTTrainer(ABC):
         self.optimizer = optim
         self.args = strategy.args
 
-        self.loss_fn = GPTLMLoss(process_group=self.strategy.ring_attn_group)
+        self.loss_fn = GPTLMLoss(ring_attn_group=self.strategy.ring_attn_group)
 
         # Mixtral 8*7b
         self.aux_loss = self.args.aux_loss_coef > 1e-8
