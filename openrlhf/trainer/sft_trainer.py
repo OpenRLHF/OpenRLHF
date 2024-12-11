@@ -281,7 +281,13 @@ class SFTTrainer(ABC):
                         for label, source_len in zip(labels, prompt_id_lens):
                             label[:source_len] = self.loss_fn.IGNORE_INDEX
 
-                loss = self.loss_fn(output.logits, labels)
+                logits = output.logits                
+                if self.strategy.ring_attn_group is not None:
+                    total_seq_len = labels.numel()
+                    logits = all_gather(logits, self.strategy.ring_attn_group)
+                    logits = logits.reshape(output.logits.shape[0], total_seq_len, -1)
+
+                loss = self.loss_fn(logits, labels)
 
                 times += 1
                 loss_sum += loss.item()
