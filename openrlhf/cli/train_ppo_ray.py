@@ -137,8 +137,6 @@ def train(args):
         for reward_model, reward_pretrain in zip(reward_models, reward_pretrains):
             refs.extend(reward_model.async_init_model_from_pretrained(strategy, reward_pretrain))
 
-    ray.get(refs)
-
     # init vLLM engine for text generation
     vllm_engines = None
     if args.vllm_num_engines is not None and args.vllm_num_engines > 0:
@@ -152,6 +150,8 @@ def train(args):
             args.enforce_eager,
             max_len,
         )
+
+    ray.get(refs)
 
     if args.critic_pretrain:
         # critic scheduler initialization depends on max_step, so we have to init critic after actor
