@@ -22,7 +22,7 @@ openrlhf.cli.train_sft \
    --load_checkpoint \
    --gradient_checkpointing
 EOF
-    # --use_wandb [WANDB_TOKENS]
+    # --wandb [WANDB_TOKENS]
     # --packing_samples
 
 if [[ ${1} != "slurm" ]]; then
