@@ -58,7 +58,7 @@ class SFTTrainer(ABC):
         self.optimizer = optim
         self.args = strategy.args
 
-        self.loss_fn = GPTLMLoss()
+        self.loss_fn = GPTLMLoss(process_group=self.strategy.ring_attn_group)
 
         # Mixtral 8*7b
         self.aux_loss = self.args.aux_loss_coef > 1e-8
@@ -170,13 +170,7 @@ class SFTTrainer(ABC):
                         for label, source_len in zip(labels, prompt_id_lens):
                             label[:source_len] = self.loss_fn.IGNORE_INDEX
 
-                logits = output.logits                
-                if self.strategy.ring_attn_group is not None:
-                    total_seq_len = labels.numel()
-                    logits = all_gather(logits, self.strategy.ring_attn_group)
-                    logits = logits.reshape(output.logits.shape[0], total_seq_len, -1)
-
-                gpt_loss = self.loss_fn(logits, labels)
+                gpt_loss = self.loss_fn(output.logits, labels)
                 loss = gpt_loss + aux_loss * self.args.aux_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
@@ -304,3 +298,4 @@ class SFTTrainer(ABC):
                     for k, v in logs.items():
                         self._tensorboard.add_scalar(f"eval/{k}", v, steps)
         self.model.train()  # reset model state
+        
