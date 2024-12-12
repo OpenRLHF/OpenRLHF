@@ -1,7 +1,6 @@
 import time
 import ray
 import requests
-import torch
 
 from openrlhf.utils.logging_utils import init_logger
 
@@ -37,7 +36,7 @@ def remote_rm_fn(api_url, queries, score_key="rewards"):
     score_key: RM score key
     """
     scores = request_api_wrapper(api_url, {"query": queries}, score_key)
-    return torch.tensor(scores)
+    return scores
 
 
 @ray.remote

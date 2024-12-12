@@ -1,6 +1,6 @@
 import argparse
 from datetime import datetime
-from typing import List
+from typing import Union
 
 import ray
 import torch
@@ -18,8 +18,36 @@ from openrlhf.utils import get_strategy
 
 
 # NOTE: reward function for multiple reward models, replace this with your own function!
-def reward_fn(rewards: List[torch.Tensor]):
-    return torch.stack(rewards).sum(dim=0)
+def reward_fn(rewards: list[Union[torch.Tensor, list[torch.Tensor]]]) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Returns:
+        Union[torch.Tensor, list[torch.Tensor]]: the reward used for ppo training
+        torch.Tensor: the reward used for logging
+    """
+    orm_rewards = [reward for reward in rewards if not isinstance(reward, list)]
+    prm_rewards = [reward for reward in rewards if isinstance(reward, list)]
+    assert len(prm_rewards) <= 1, "Only support one PRM reward model at the moment."
+
+    if len(prm_rewards) == 1:
+        prm_reward = prm_rewards[0]
+        last_prm_reward = torch.tensor([p[-1] for p in prm_reward], device=orm_reward.device)
+
+    # no orm, return the prm
+    if len(orm_rewards) == 0:
+        return prm_reward, last_prm_reward
+
+    orm_reward = torch.stack(orm_rewards).sum(dim=0)
+
+    # no prm, return the sum of the orm
+    if len(prm_rewards) == 0:
+        return orm_reward, orm_reward
+
+    # otherwise, add the orm to the last postion of prm
+    for p, o in zip(prm_reward, orm_reward):
+        p[-1] += o
+
+    orm_reward += last_prm_reward
+    return prm_reward, orm_reward
 
 
 def _validate_args(args):
@@ -304,6 +332,9 @@ if __name__ == "__main__":
         help="Choose advantage estimation method: gae, reinforce, rloo",
     )
 
+    # PRM
+    parser.add_argument("--prm_step_separator", type=str, default=None, help="PRM step separator")
+
     #  Models
     parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--reward_pretrain", type=str, default=None, help="HF model name or path")
@@ -389,5 +420,9 @@ if __name__ == "__main__":
             args.flash_attn = True
         assert args.vllm_num_engines > 0, "Only support `--packing_samples` with vLLM."
         assert not args.pretrain_data, "`--pretrain_data` is not supported with `--packing_samples` yet."
+
+    if args.prm_step_separator is not None:
+        assert args.packing_samples, "PRM requires packing samples at the moment."
+        assert args.advantage_estimator != "rloo", "PRM does not support RLOO yet."
 
     train(args)

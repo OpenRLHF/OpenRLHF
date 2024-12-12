@@ -57,6 +57,7 @@ class Experience:
     action_mask: Optional[torch.BoolTensor]
     info: Optional[dict]
     kl: Optional[torch.Tensor] = None
+    reward: Optional[torch.Tensor] = None
 
     @torch.no_grad()
     def to_device(self, device: torch.device) -> None:
@@ -114,6 +115,7 @@ class Samples:
     packed_seq_lens: Optional[torch.Tensor]
     response_length: torch.Tensor
     total_length: torch.Tensor
+    step_positions: Optional[list[list[int]]] = None
 
 
 class NaiveExperienceMaker(ABC):
@@ -184,6 +186,8 @@ class NaiveExperienceMaker(ABC):
             desc="make_experience",
             disable=not self.strategy.is_rank_0(),
         ):
+            if args.prm_step_separator is not None:
+                samples = self.generate_stepped_samples(samples, args.prm_step_separator)
             experiences.append(self.make_experience(samples))
 
         experiences, rewards = self.process_experiences(experiences)
@@ -228,6 +232,7 @@ class NaiveExperienceMaker(ABC):
             experience.info["return"] = return_sums
             # remove unnecessary info
             experience.kl = None
+            experience.reward = None
             del experience.info["num_actions"]
         return experiences
 
@@ -257,6 +262,80 @@ class NaiveExperienceMaker(ABC):
             )
             samples_list.append(samples)
         return samples_list
+
+    @torch.no_grad()
+    def generate_stepped_samples(self, samples: Samples, step_separator: str) -> Samples:
+        """
+        This method will split the response into steps based on the step_separator and reconstruct the samples.
+
+        This is not optimal performance-wise, but it's an easy starting point.
+        """
+        if self.pack_samples:
+            prompts = []
+            responses = []
+            offset = 0
+            for total_len, response_len in zip(samples.total_length, samples.response_length):
+                prompts.append(samples.sequences[0, offset : offset + total_len - response_len])
+                responses.append(samples.sequences[0, offset + total_len - response_len : offset + total_len])
+
+            responses = self.tokenizer.batch_decode(responses, skip_special_tokens=False)
+            num_steps = []
+            all_steps = []
+            for response in responses:
+                steps = response.split(step_separator)
+                steps = [(step + step_separator) if i < len(steps) - 1 else step for i, step in enumerate(steps)]
+                all_steps.extend(steps)
+                num_steps.append(len(steps))
+            all_steps = self.tokenizer(all_steps, add_special_tokens=False)["input_ids"]
+
+            offset = 0
+            sequences = []
+            packed_seq_lens = []
+            attention_mask = []
+            num_actions = []
+            response_length = []
+            step_positions = []
+            for i, num_step in enumerate(num_steps):
+                prompt = prompts[i].tolist()
+                sequence = [prompt] + all_steps[offset : offset + num_step]
+                step_lens = [len(step) for step in sequence]
+                total_len = sum(step_lens)
+                response_len = step_lens[1:]
+                # this is prompt
+                step_position = [step_lens[0]]
+                for j in range(num_step):
+                    step_position.append(step_position[-1] + step_lens[j + 1])
+                step_position = step_position[1:]
+
+                sequences.extend(sequence)
+                packed_seq_lens.append(total_len)
+                attention_mask.extend([i + 1] * total_len)
+                response_length.append(response_len)
+                num_actions.append(max(1, len(response_len)))
+                step_positions.append(step_position)
+
+                offset += num_step
+
+            sequences = torch.cat(sum(sequences, []), device="cuda").unsqueeze(0)
+            attention_mask = torch.tensor(attention_mask, device="cuda").unsqueeze(0)
+            action_mask = None
+            response_length = torch.tensor(num_actions, device="cuda", dtype=torch.float)
+            total_length = torch.tensor(packed_seq_lens, device="cuda", dtype=torch.float)
+
+            samples = Samples(
+                sequences=sequences,
+                attention_mask=attention_mask,
+                action_mask=action_mask,
+                num_actions=num_actions,
+                packed_seq_lens=packed_seq_lens,
+                response_length=response_length,
+                total_length=total_length,
+                step_positions=step_positions,
+            )
+        else:
+            raise NotImplementedError("Step separator is only supported for packed samples at the moment.")
+
+        return samples
 
     @torch.no_grad()
     def make_experience(self, samples: Samples) -> Experience:
@@ -292,7 +371,7 @@ class NaiveExperienceMaker(ABC):
         if self.remote_rm_url is not None:
             # remote RM
             queries = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=False)
-            r = remote_rm_fn(self.remote_rm_url, queries=queries).to(device=action_log_probs.device)
+            r = torch.tensor(remote_rm_fn(self.remote_rm_url, queries=queries), device=action_log_probs.device)
         else:
             # local RM
             r = self.reward_model(sequences, attention_mask)
@@ -326,6 +405,7 @@ class NaiveExperienceMaker(ABC):
             action_mask,
             info,
             kl,
+            r,
         )
 
     @torch.no_grad()
@@ -340,14 +420,14 @@ class NaiveExperienceMaker(ABC):
         args = self.strategy.args
         # reward shaping for RLOO
         if args.advantage_estimator == "rloo":
-            rewards = torch.cat([experience.info["reward"] for experience in experiences])
+            rewards = torch.cat([experience.reward for experience in experiences])
             rewards = rewards.reshape(-1, args.n_samples_per_prompt)
             baseline = (rewards.sum(-1, keepdim=True) - rewards) / (args.n_samples_per_prompt - 1)
             rewards = rewards - baseline
             rewards = rewards.flatten().chunk(len(experiences))
             return experiences, rewards
         # default rewards
-        return experiences, [experience.info["reward"] for experience in experiences]
+        return experiences, [experience.reward for experience in experiences]
 
     @torch.no_grad()
     def get_advantages_and_returns(
@@ -566,8 +646,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         base_action_log_probs = base_action_log_probs.to(device)
         if value is not None:
             value = value.to(device)
-        rewards = [r.to(device) for r in rewards]
-        r = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
+
+        rewards = self._convert_rewards(rewards, samples, device)
+        r, logged_r = self.reward_fn(rewards)
 
         # avoid CUDA OOM when colocate models
         if self.strategy.args.colocate_critic_reward and not self.remote_rm_url:
@@ -599,7 +680,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         info = {
             "kl": kl_mean,
-            "reward": r,
+            "reward": logged_r,
             "response_length": samples.response_length,
             "total_length": samples.total_length,
             "num_actions": num_actions,
@@ -619,10 +700,34 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             action_mask,
             info,
             kl,
+            r,
         )
 
         self.actor.train()  # reset model state
         return experience
+
+    def _convert_rewards(self, rewards, samples, device):
+        if not self.remote_rm_url:
+            return rewards
+
+        converted_rewards = []
+        for reward in rewards:
+            if isinstance(reward, list):
+                # prm
+                for step_reward, step_positions, response_length in zip(
+                    reward, samples.step_positions, samples.response_length
+                ):
+                    converted_reward = torch.zeros(response_length, dtype=torch.float32, device=device)
+                    assert len(step_reward) == len(
+                        step_positions
+                    ), "step_reward and step_positions should have same length"
+                    for step_reward, step_position in zip(step_reward, step_positions):
+                        converted_reward[step_position - 1] = step_reward
+                    converted_rewards.append(converted_reward)
+            else:
+                # orm
+                converted_rewards.append(torch.tensor(reward, device=device))
+        return converted_rewards
 
     def _generate_vllm(self, all_prompts: List[str], **kwargs) -> List[Samples]:
         from vllm import SamplingParams

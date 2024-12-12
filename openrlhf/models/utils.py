@@ -35,7 +35,7 @@ def compute_approx_kl(
 
 
 def compute_reward(
-    r: Union[torch.Tensor, float],
+    r: Union[torch.Tensor, list[torch.Tensor]],
     kl_coef: float,
     kl: Union[torch.Tensor, list[torch.Tensor]],
     action_mask: Optional[torch.Tensor] = None,
@@ -46,7 +46,10 @@ def compute_reward(
         kl_coef = 0.0
 
     if reward_clip_range:
-        r = r.clamp(min=reward_clip_range[0], max=reward_clip_range[1])
+        if isinstance(r, torch.Tensor):
+            r = r.clamp(min=reward_clip_range[0], max=reward_clip_range[1])
+        else:
+            r = [r_.clamp(min=reward_clip_range[0], max=reward_clip_range[1]) for r_ in r]
 
     if action_mask is not None:
         kl_reward = -kl_coef * kl
@@ -63,13 +66,15 @@ def compute_reward(
         last_reward = torch.zeros_like(kl).scatter_(dim=1, index=eos_indices, src=r.unsqueeze(1).to(kl.dtype))
 
         reward = last_reward + kl_reward
-    else:
+    elif isinstance(r, torch.Tensor):
         # TODO: write a more efficient version
         reward = []
         for i, (kl_seg, action_len) in enumerate(zip(kl, num_actions)):
             kl_reward = -kl_coef * kl_seg
             kl_reward[action_len - 1] += r[i]
             reward.append(kl_reward)
+    else:
+        reward = [r_ - kl_coef * kl_seg for kl_seg, r_ in zip(kl, r)]
 
     return reward
 
