@@ -24,7 +24,7 @@ class GPTLMLoss(nn.Module):
             rank = dist.get_rank(self.ring_attn_group)
             world_size = dist.get_world_size(self.ring_attn_group)
             total_seq_len = labels.size(-1)
-            seq_len_per_process = (total_seq_len - 1) // world_size + 1
+            seq_len_per_process = total_seq_len // world_size
             
             start_idx = rank * seq_len_per_process
             end_idx = min(start_idx + seq_len_per_process, total_seq_len)
