@@ -2,7 +2,10 @@ import os
 from abc import ABC
 
 import torch
+import torch.distributed as dist
+from flash_attn.utils.distributed import all_gather
 from torch.optim import Optimizer
+from torch.nn import functional as F
 from tqdm import tqdm
 
 from openrlhf.models import GPTLMLoss
@@ -55,7 +58,7 @@ class SFTTrainer(ABC):
         self.optimizer = optim
         self.args = strategy.args
 
-        self.loss_fn = GPTLMLoss()
+        self.loss_fn = GPTLMLoss(ring_attn_group=self.strategy.ring_attn_group)
 
         # Mixtral 8*7b
         self.aux_loss = self.args.aux_loss_coef > 1e-8
@@ -126,7 +129,7 @@ class SFTTrainer(ABC):
             # train
             self.model.train()
             loss_mean = 0
-            for prompts_id_lens, inputs, attention_masks, infos in self.train_dataloader:
+            for prompt_id_lens, inputs, attention_masks, infos in self.train_dataloader:
                 if self.packing_samples:
                     inputs = inputs.to(torch.cuda.current_device())
                     attention_mask = attention_masks.to(torch.cuda.current_device())
@@ -134,7 +137,16 @@ class SFTTrainer(ABC):
                     inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
                     attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
 
-                output = self.model(inputs, attention_mask=attention_mask, return_output=True)
+                if self.strategy.ring_attn_group is None:
+                    output = self.model(inputs, attention_mask=attention_mask, return_output=True)
+                else:
+                    output = self.model(
+                        inputs, 
+                        attention_mask=attention_mask, 
+                        return_output=True,
+                        ring_attn_group=self.strategy.ring_attn_group,
+                        packed_seq_lens=infos["input_length"],
+                    )
 
                 # loss function
                 labels = torch.where(
@@ -151,11 +163,11 @@ class SFTTrainer(ABC):
                 if not self.pretrain_mode:
                     if self.packing_samples:
                         index = 0
-                        for input_length, source_len in zip(infos["input_length"], prompts_id_lens):
+                        for input_length, source_len in zip(infos["input_length"], prompt_id_lens):
                             labels[0][index : index + source_len] = self.loss_fn.IGNORE_INDEX
                             index += input_length
                     else:
-                        for label, source_len in zip(labels, prompts_id_lens):
+                        for label, source_len in zip(labels, prompt_id_lens):
                             label[:source_len] = self.loss_fn.IGNORE_INDEX
 
                 gpt_loss = self.loss_fn(output.logits, labels)
@@ -227,7 +239,7 @@ class SFTTrainer(ABC):
                 disable=not self.strategy.is_rank_0(),
             )
 
-            for prompts_id_lens, inputs, attention_masks, infos in eval_dataloader:
+            for prompt_id_lens, inputs, attention_masks, infos in eval_dataloader:
                 if self.packing_samples:
                     inputs = inputs.to(torch.cuda.current_device())
                     attention_mask = attention_masks.to(torch.cuda.current_device())
@@ -235,8 +247,17 @@ class SFTTrainer(ABC):
                     inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
                     attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
 
-                output = self.model(inputs, attention_mask=attention_mask, return_output=True)
-
+                if self.strategy.ring_attn_group is None:
+                    output = self.model(inputs, attention_mask=attention_mask, return_output=True)
+                else:
+                    output = self.model(
+                        inputs, 
+                        attention_mask=attention_mask, 
+                        return_output=True,
+                        ring_attn_group=self.strategy.ring_attn_group,
+                        packed_seq_lens=infos["input_length"],
+                    )
+                    
                 # loss function
                 labels = torch.where(
                     attention_mask.bool(),
@@ -247,11 +268,11 @@ class SFTTrainer(ABC):
                 if not self.pretrain_mode:
                     if self.packing_samples:
                         index = 0
-                        for input_length, source_len in zip(infos["input_length"], prompts_id_lens):
+                        for input_length, source_len in zip(infos["input_length"], prompt_id_lens):
                             labels[0][index : index + source_len] = self.loss_fn.IGNORE_INDEX
                             index += input_length
                     else:
-                        for label, source_len in zip(labels, prompts_id_lens):
+                        for label, source_len in zip(labels, prompt_id_lens):
                             label[:source_len] = self.loss_fn.IGNORE_INDEX
 
                 loss = self.loss_fn(output.logits, labels)
@@ -271,3 +292,4 @@ class SFTTrainer(ABC):
                     for k, v in logs.items():
                         self._tensorboard.add_scalar(f"eval/{k}", v, steps)
         self.model.train()  # reset model state
+        

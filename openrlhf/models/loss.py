@@ -13,17 +13,32 @@ class GPTLMLoss(nn.Module):
     GPT Language Model Loss
     """
 
-    def __init__(self):
+    def __init__(self, ring_attn_group=None):
         super().__init__()
         self.IGNORE_INDEX = -100
         self.loss = nn.CrossEntropyLoss(ignore_index=self.IGNORE_INDEX)
-
+        self.ring_attn_group = ring_attn_group
+    
     def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        if self.ring_attn_group is not None:
+            rank = dist.get_rank(self.ring_attn_group)
+            world_size = dist.get_world_size(self.ring_attn_group)
+            total_seq_len = labels.size(-1)
+            seq_len_per_process = total_seq_len // world_size
+            
+            start_idx = rank * seq_len_per_process
+            end_idx = min(start_idx + seq_len_per_process, total_seq_len)
+            labels = labels[..., start_idx:end_idx]
+
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
-        # Flatten the tokens
-        return self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-
+        loss = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+        
+        if self.ring_attn_group is not None:
+            dist.all_reduce(loss, op=dist.ReduceOp.SUM, group=self.ring_attn_group)
+            loss = loss / world_size
+            
+        return loss
 
 class PolicyLoss(nn.Module):
     """
