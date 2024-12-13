@@ -61,12 +61,16 @@ class SFTDataset(Dataset):
             if tokenizer_chat_template:
                 self.tokenizer.chat_template = tokenizer_chat_template
 
+        pre_processing_ds_len = len(dataset)
+        
         # Parallel loading datasets
         processed_dataset = dataset.map(
             self.process_data, remove_columns=dataset.column_names, num_proc=num_processors
         )
         processed_dataset = processed_dataset.filter(lambda x: x["prompt"] is not None)
 
+        assert len(processed_dataset) > 0, f"processed dataset is empty. Pre processing was {pre_processing_ds_len}"
+        
         # Store the processed data in class attributes
         self.prompts = processed_dataset["prompt"]
         self.responses = processed_dataset["response"]
