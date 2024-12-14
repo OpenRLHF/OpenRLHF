@@ -37,7 +37,8 @@ class GPTLMLoss(nn.Module):
 
             # if labels are all IGNORE_INDEX, then nn.CrossEntropyLoss will be nan
             if torch.all(shift_labels == self.IGNORE_INDEX):
-                loss = torch.zeros(1, device=logits.device)
+                # Use mean of logits multiplied by 0 to maintain gradient flow
+                loss = shift_logits.mean() * 0
             else:
                 loss = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
 
