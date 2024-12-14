@@ -17,33 +17,40 @@ class GPTLMLoss(nn.Module):
         super().__init__()
         self.IGNORE_INDEX = -100
         self.loss = nn.CrossEntropyLoss(ignore_index=self.IGNORE_INDEX)
+
         self.ring_attn_group = ring_attn_group
-    
+        if self.ring_attn_group:
+            self.ring_attn_rank = dist.get_rank(self.ring_attn_group)
+            self.ring_attn_world_size = dist.get_world_size(self.ring_attn_group)
+
     def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        # RingAttention
         if self.ring_attn_group is not None:
-            rank = dist.get_rank(self.ring_attn_group)
-            world_size = dist.get_world_size(self.ring_attn_group)
             total_seq_len = labels.size(-1)
-            seq_len_per_process = total_seq_len // world_size
-            
-            start_idx = rank * seq_len_per_process
+            seq_len_per_process = total_seq_len // self.ring_attn_world_size
+            start_idx = self.ring_attn_rank * seq_len_per_process
             end_idx = min(start_idx + seq_len_per_process, total_seq_len)
             labels = labels[..., start_idx:end_idx]
 
-        shift_logits = logits[..., :-1, :].contiguous()
-        shift_labels = labels[..., 1:].contiguous()
-        
-        if torch.all(shift_labels == self.IGNORE_INDEX): # if labels are all IGNORE_INDEX, then nn.CrossEntropyLoss will be nan
-            shift_logits = torch.cat([shift_logits, shift_logits.new_zeros(shift_logits.size(0), 1, shift_logits.size(-1))], dim=1)
-            shift_labels = torch.cat([shift_labels, shift_labels.new_zeros(shift_labels.size(0), 1)], dim=1)
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
 
-        loss = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-        
-        if self.ring_attn_group is not None:
+            # if labels are all IGNORE_INDEX, then nn.CrossEntropyLoss will be nan
+            if torch.all(shift_labels == self.IGNORE_INDEX):
+                loss = torch.zeros(1, device=logits.device)
+            else:
+                loss = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+
             dist.all_reduce(loss, op=dist.ReduceOp.SUM, group=self.ring_attn_group)
-            loss = loss / world_size
-            
+            loss = loss / self.ring_attn_world_size
+        else:
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+
+            loss = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+
         return loss
+
 
 class PolicyLoss(nn.Module):
     """
