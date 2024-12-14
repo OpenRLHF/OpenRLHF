@@ -32,6 +32,11 @@ class GPTLMLoss(nn.Module):
 
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
+        
+        if torch.all(shift_labels == self.IGNORE_INDEX): # if labels are all IGNORE_INDEX, then nn.CrossEntropyLoss will be nan
+            shift_logits = torch.cat([shift_logits, shift_logits.new_zeros(shift_logits.size(0), 1, shift_logits.size(-1))], dim=1)
+            shift_labels = torch.cat([shift_labels, shift_labels.new_zeros(shift_labels.size(0), 1)], dim=1)
+
         loss = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
         
         if self.ring_attn_group is not None:
