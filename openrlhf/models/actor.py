@@ -183,15 +183,17 @@ class Actor(nn.Module):
         if not self.packing_samples:
             # https://github.com/OpenRLHF/OpenRLHF/issues/217
             position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
         else:
+            # convert attention_mask to position_ids
             if ring_attn_group is not None:
                 sequences, attention_mask, position_ids = convert_ring_attn_params(
                     sequences, attention_mask, packed_seq_lens, ring_attn_group
                 )
             else:
-                # reset the positions for packed samples
                 position_ids = reset_position_ids(attention_mask)
-        position_ids.masked_fill_(attention_mask == 0, 1)
+            # explicitly ignore attention_mask for packing_samples
+            attention_mask = None
 
         output = self.model(sequences, attention_mask=attention_mask, position_ids=position_ids)
 
