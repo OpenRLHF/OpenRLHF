@@ -14,12 +14,22 @@ from .utils import log_probs_from_logits, reset_position_ids
 
 class Actor(nn.Module):
     """
-    Actor model base class.
+    Base class for Actor models in reinforcement learning.
+
+    This class serves as a foundation for implementing various actor models, which are responsible for selecting actions based on the policy learned from the environment.
 
     Args:
-        model (nn.Module): Actor Model.
-        lora_rank (int): LoRA rank.
-        lora_train_bias (str): LoRA bias training mode.
+        pretrain_or_model (nn.Module): A pretrained model or a new model instance to be used as the actor.
+        use_flash_attention_2 (bool, optional): Whether to utilize Flash Attention 2.0 for improved performance. Defaults to False.
+        bf16 (bool, optional): Enable bfloat16 precision for model computations. Defaults to True.
+        load_in_4bit (bool, optional): Load the model in 4-bit precision. Defaults to False.
+        lora_rank (int, optional): Rank for LoRA adaptation. Defaults to 0.
+        lora_alpha (int, optional): Alpha parameter for LoRA. Defaults to 16.
+        lora_dropout (float, optional): Dropout rate for LoRA layers. Defaults to 0.
+        target_modules (list, optional): List of target modules for applying LoRA. Defaults to None.
+        ds_config (dict, optional): Configuration for DeepSpeed, enabling model partitioning across multiple GPUs. Defaults to None.
+        device_map (dict, optional): Device mapping for loading the model onto specific devices. Defaults to None.
+        packing_samples (bool, optional): Whether to pack samples during training. Defaults to False.
     """
 
     def __init__(

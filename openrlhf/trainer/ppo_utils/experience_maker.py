@@ -691,9 +691,6 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                     output_len = len(output.outputs[0].token_ids)
                     output_ids = list(output.outputs[0].token_ids) + [pad_token_id] * (max_output_len - output_len)
 
-                    if output_ids[output_len - 1] != eos_token_id:
-                        output_ids[min(output_len, len(output_ids) - 1)] = eos_token_id
-
                     # concat input and output
                     sequences.append(input_ids + output_ids)
 
