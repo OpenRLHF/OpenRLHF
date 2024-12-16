@@ -30,7 +30,6 @@ def get_train_ds_config(
         "stage3_param_persistence_threshold": "auto",
         "stage3_prefetch_bucket_size": "auto",
         "reduce_bucket_size": "auto",
-        "overlap_comm": True,
         "contiguous_gradients": True,
         # ZeRO++
         "zero_hpz_partition_size": zpg,
