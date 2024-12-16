@@ -262,7 +262,7 @@ class DeepspeedStrategy(ABC):
         # DS Config
         ds_config = get_eval_ds_config(offload=offload, stage=self.stage if self.stage == 3 else 0, bf16=self.bf16)
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
-        ds_config["train_batch_size"] = self.train_batch_size
+        ds_config["train_batch_size"] = self.train_batch_size * self.ring_attn_size
 
         return ds_config
 
