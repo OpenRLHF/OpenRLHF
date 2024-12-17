@@ -58,7 +58,7 @@ class DeepspeedStrategy(ABC):
         self.max_norm = max_norm
         self.adam_offload = getattr(args, "adam_offload", False)
         self.zpg = getattr(args, "zpg", 1)
-        self.grad_accum_dtype = getattr(args, "grad_accum_dtype", "fp32")
+        self.grad_accum_dtype = getattr(args, "grad_accum_dtype", None)
         # disable_trace_cache
         self.disable_trace_cache = getattr(args, "disable_trace_cache", False)
 

@@ -49,7 +49,7 @@ def get_train_ds_config(
         "gradient_clipping": max_norm,
         "prescale_gradients": False,
         "wall_clock_breakdown": False,
-        "data_types": {"grad_accum_dtype": grad_accum_dtype if grad_accum_dtype else "fp32"},
+        "data_types": {"grad_accum_dtype": grad_accum_dtype},
     }
 
 
