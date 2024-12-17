@@ -26,18 +26,26 @@ class WorkerWrap(Worker):
             f"rank={rank}, world_size={world_size}, group_name={group_name}",
         )
 
-    def update_weight(self, name, dtype, shape, empty_cache=False):
+    def update_weight(self, param_chunk_list):
         """Broadcast weight to all vllm workers from source rank 0 (actor model)"""
-        if torch.distributed.get_rank() == 0:
-            print(f"update weight: {name}, dtype: {dtype}, shape: {shape}")
+        for param_chunk in param_chunk_list:
+            handles = []
+            weights = []
+            for name, dtype, shape in param_chunk:
+                if torch.distributed.get_rank() == 0:
+                    print(f"update weight: {name}, dtype: {dtype}, shape: {shape}")
 
-        assert dtype == self.model_config.dtype, f"mismatch dtype: src {dtype}, dst {self.model_config.dtype}"
-        weight = torch.empty(shape, dtype=dtype, device="cuda")
-        torch.distributed.broadcast(weight, 0, group=self._model_update_group)
+                weight = torch.empty(shape, dtype=dtype, device="cuda")
+                handle = torch.distributed.broadcast(weight, 0, group=self._model_update_group, async_op=True)
+                handles.append(handle)
+                weights.append((name, weight))
 
-        self.model_runner.model.load_weights(weights=[(name, weight)])
+            for handle in handles:
+                handle.wait()
 
-        del weight
+            self.model_runner.model.load_weights(weights=weights)
+            del weights
+
         # TODO: should we empty cache if all weights have updated?
         # if empty_cache:
         #     torch.cuda.empty_cache()
