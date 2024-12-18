@@ -2,6 +2,7 @@ import argparse
 import torch
 from openrlhf.models import Actor
 from openrlhf.utils import get_tokenizer
+from openrlhf.utils.device import device_module
 
 
 def generate(args):
@@ -60,7 +61,7 @@ def generate(args):
             user_prompt += args.csft_prompt.strip() + " "
 
         user_prompt_len = len(user_prompt)
-        input_ids = tokenizer.encode(user_prompt, return_tensors="pt").to(torch.cuda.current_device())
+        input_ids = tokenizer.encode(user_prompt, return_tensors="pt").to(device_module.current_device())
         outputs = model.generate(
             input_ids=input_ids,
             use_cache=True,

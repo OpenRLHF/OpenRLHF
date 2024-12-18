@@ -10,7 +10,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.utils.deepspeed import DeepspeedStrategy
-
+from openrlhf.utils.device import device_module
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
 
 class DistributedTorchRayActor:
@@ -88,7 +88,7 @@ class ReferenceModelRayActor(BasePPORole):
         return_output=False,
         packed_seq_lens: Optional[list[int]] = None,
     ) -> torch.Tensor:
-        device = torch.cuda.current_device()
+        device = device_module.current_device()
         with torch.no_grad():
             log_probs = self.model(
                 sequences.to(device),
@@ -100,7 +100,7 @@ class ReferenceModelRayActor(BasePPORole):
         return log_probs.to("cpu")
 
     def empty_cache(self) -> None:
-        torch.cuda.empty_cache()
+        device_module.empty_cache()
 
 
 @ray.remote(num_gpus=1)
@@ -131,13 +131,13 @@ class RewardModelRayActor(BasePPORole):
     def forward(
         self, sequences: torch.LongTensor, attention_mask: Optional[torch.Tensor] = None, packed_seq_lens=None
     ) -> torch.Tensor:
-        device = torch.cuda.current_device()
+        device = device_module.current_device()
         with torch.no_grad():
             reward = self.model(sequences.to(device), attention_mask.to(device), packed_seq_lens=packed_seq_lens)
         return reward.to("cpu")
 
     def empty_cache(self) -> None:
-        torch.cuda.empty_cache()
+        device_module.empty_cache()
 
 
 class PPORayActorGroup:

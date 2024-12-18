@@ -16,6 +16,7 @@ from openrlhf.trainer.ppo_utils import Experience, RemoteExperienceMaker
 from openrlhf.utils import blending_datasets, get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.distributed_util import init_process_group
+from openrlhf.utils.device import device_module
 
 from .launcher import BasePPORole
 
@@ -145,7 +146,7 @@ class ActorPPOTrainer(PPOTrainer):
 
     def _broadcast_to_vllm(self):
         # avoid OOM
-        torch.cuda.empty_cache()
+        device_module.empty_cache()
         model = self.actor.model.module
         count, num_params = 0, len(list(model.named_parameters()))
         for name, param in model.named_parameters():

@@ -13,6 +13,7 @@ from openrlhf.models.actor import Actor
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean, unpacking_samples
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn, remote_rm_fn_ray
+from openrlhf.utils.device import device_module
 
 logger = init_logger(__name__)
 
@@ -223,7 +224,7 @@ class NaiveExperienceMaker(ABC):
                 return_sums = reward.sum(dim=-1)
             else:
                 return_sums = torch.tensor(
-                    [each_reward.sum() for each_reward in reward], device=torch.cuda.current_device()
+                    [each_reward.sum() for each_reward in reward], device=device_module.current_device()
                 )
             experience.info["return"] = return_sums
             # remove unnecessary info
@@ -494,7 +495,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         Turn samples into experience by calculating logprobs, values, rewards, and kl divergence.
         """
         self.actor.eval()
-        device = torch.cuda.current_device()
+        device = device_module.current_device()
 
         # extract values from samples
         sequences = samples.sequences
@@ -574,7 +575,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             ray.get([self.reward_model[0].empty_cache.remote()])
 
         if self.strategy.args.colocate_actor_ref:
-            torch.cuda.empty_cache()
+            device_module.empty_cache()
 
         kl = compute_approx_kl(
             action_log_probs,
