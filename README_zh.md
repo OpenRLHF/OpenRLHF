@@ -97,7 +97,7 @@ sudo pip uninstall xgboost transformer_engine flash_attn -y
 # pip install
 pip install openrlhf
 
-# 如果你需要使用 vLLM 加速 (安装 vLLM 0.6.4.post1)
+# 如果你需要使用 vLLM 加速 (安装 vLLM 0.6.5)
 pip install openrlhf[vllm]
 # 最新的 vLLM 也是支持的
 pip install openrlhf[vllm_latest]
@@ -112,7 +112,7 @@ pip install -e .
 ```
 
 > [!NOTE]
->我们推荐使用 vLLM 0.6.4+ (仅支持多节点时 NCCL 权重同步) 或者 vLLM 0.4.2 (`--vllm_sync_backend nccl`)，其他版本目前需要通过 Gloo 进行权重同步（`--vllm_sync_backend gloo`）。
+>我们推荐使用 vLLM 0.6.4+，其他版本 (vLLM >= 0.4.2) 可能需要通过 Gloo 进行权重同步（`--vllm_sync_backend gloo`）。
 >我们也提供了 [Dockerfiles for vLLM](./dockerfile/) 和 [Nvidia-Docker 一键安装脚本](./examples/scripts/nvidia_docker_install.sh)。
 
 ### 准备数据集
@@ -342,8 +342,6 @@ ray job submit --address="http://127.0.0.1:8265" \
   --gradient_checkpointing \
   --load_checkpoint \
   --use_wandb {wandb_token}
-
-# --vllm_sync_backend nccl (Only for multi-nodes with vLLM 0.6.4+ or vLLM 0.4.2)
 
 # 支持远程 reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
