@@ -73,8 +73,8 @@ setup(
     long_description_content_type="text/markdown",
     install_requires=_fetch_requirements("requirements.txt"),
     extras_require={
-        "vllm": ["vllm==0.6.4.post1"],
-        "vllm_latest": ["vllm>0.6.4.post1"],
+        "vllm": ["vllm==0.6.5"],
+        "vllm_latest": ["vllm>0.6.5"],
     },
     python_requires=">=3.10",
     classifiers=[

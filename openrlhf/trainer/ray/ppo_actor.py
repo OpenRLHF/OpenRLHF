@@ -81,14 +81,10 @@ class ActorPPOTrainer(PPOTrainer):
             world_size = vllm_num_engines * vllm_tensor_parallel_size + 1
 
             backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
-            # https://github.com/OpenRLHF/OpenRLHF/issues/313
-            import vllm
-
-            if not vllm.__version__ == "0.4.2" and not vllm.__version__ >= "0.6.4":
-                backend = "gloo"
-                print(
-                    "Warning: using --vllm_sync_backend=gloo for `not vLLM version == 0.4.2 and not vllm.__version__ >= 0.6.4`"
-                )
+            if backend == "nccl":
+                # To prevent hanging during NCCL synchronization of weights between DeepSpeed and vLLM.
+                # see https://github.com/vllm-project/vllm/blob/c6b0a7d3ba03ca414be1174e9bd86a97191b7090/vllm/worker/worker_base.py#L445
+                os.environ["NCCL_CUMEM_ENABLE"] = "0"
 
             refs = [
                 engine.init_process_group.remote(

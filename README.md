@@ -94,7 +94,7 @@ sudo pip uninstall xgboost transformer_engine flash_attn -y
 # pip install
 pip install openrlhf
 
-# If you want to use vLLM acceleration (Install vLLM 0.6.4.post1)
+# If you want to use vLLM acceleration (Install vLLM 0.6.5)
 pip install openrlhf[vllm]
 # latest vLLM is also supported
 pip install openrlhf[vllm_latest]
@@ -109,7 +109,7 @@ pip install -e .
 ```
 
 > [!NOTE]
->We recommend using vLLM 0.6.4+ (Only multi-nodes support NCCL weight synchronization) or vLLM 0.4.2 (`--vllm_sync_backend nccl`), as other versions currently require synchronizing weights via Gloo (`--vllm_sync_backend gloo`).
+>We recommend using vLLM 0.6.4 or higher. Other versions (vLLM >= 0.4.2) may require weight synchronization via Gloo (`--vllm_sync_backend gloo`).
 >We also provided the [Dockerfiles for vLLM](./dockerfile/) and [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh).
 
 ### Prepare Datasets
@@ -335,8 +335,6 @@ ray job submit --address="http://127.0.0.1:8265" \
   --flash_attn \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
-
-# --vllm_sync_backend nccl (Only for multi-nodes with vLLM 0.6.4+ or vLLM 0.4.2)
 
 # Support remote reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
