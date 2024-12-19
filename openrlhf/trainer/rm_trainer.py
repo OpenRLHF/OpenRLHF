@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 from openrlhf.models import LogExpLoss, PairWiseLoss
 from openrlhf.utils.distributed_sampler import DistributedSampler
+from openrlhf.utils.device import device_module
 
 
 class RewardModelTrainer(ABC):
@@ -130,10 +131,10 @@ class RewardModelTrainer(ABC):
             for data in self.train_dataloader:
                 if not self.packing_samples:
                     chosen_ids, c_mask, reject_ids, r_mask, margin = data
-                    chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
-                    c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
-                    reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
-                    r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
+                    chosen_ids = chosen_ids.squeeze(1).to(device_module.current_device())
+                    c_mask = c_mask.squeeze(1).to(device_module.current_device())
+                    reject_ids = reject_ids.squeeze(1).to(device_module.current_device())
+                    r_mask = r_mask.squeeze(1).to(device_module.current_device())
 
                     chosen_reward, reject_reward, aux_loss = self.concatenated_forward(
                         self.model, chosen_ids, c_mask, reject_ids, r_mask
@@ -141,15 +142,15 @@ class RewardModelTrainer(ABC):
                 else:
                     packed_input_ids, packed_attention_masks, packed_seq_lens, margin = data
                     packed_input_ids, packed_attention_masks = packed_input_ids.to(
-                        torch.cuda.current_device()
-                    ), packed_attention_masks.to(torch.cuda.current_device())
+                        device_module.current_device()
+                    ), packed_attention_masks.to(device_module.current_device())
 
                     chosen_reward, reject_reward, aux_loss = self.packed_samples_forward(
                         self.model, packed_input_ids, packed_attention_masks, packed_seq_lens
                     )
 
                 if self.margin_loss:
-                    margin = torch.tensor(margin).to(torch.cuda.current_device())
+                    margin = torch.tensor(margin).to(device_module.current_device())
                 else:
                     margin = None
 
@@ -241,10 +242,10 @@ class RewardModelTrainer(ABC):
             for data in eval_dataloader:
                 if not self.packing_samples:
                     chosen_ids, c_mask, reject_ids, r_mask, margin = data
-                    chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
-                    c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
-                    reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
-                    r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
+                    chosen_ids = chosen_ids.squeeze(1).to(device_module.current_device())
+                    c_mask = c_mask.squeeze(1).to(device_module.current_device())
+                    reject_ids = reject_ids.squeeze(1).to(device_module.current_device())
+                    r_mask = r_mask.squeeze(1).to(device_module.current_device())
 
                     chosen_reward, reject_reward, _ = self.concatenated_forward(
                         self.model, chosen_ids, c_mask, reject_ids, r_mask
@@ -252,15 +253,15 @@ class RewardModelTrainer(ABC):
                 else:
                     packed_input_ids, packed_attention_masks, packed_seq_lens, margin = data
                     packed_input_ids, packed_attention_masks = packed_input_ids.to(
-                        torch.cuda.current_device()
-                    ), packed_attention_masks.to(torch.cuda.current_device())
+                        device_module.current_device()
+                    ), packed_attention_masks.to(device_module.current_device())
 
                     chosen_reward, reject_reward, _ = self.packed_samples_forward(
                         self.model, packed_input_ids, packed_attention_masks, packed_seq_lens
                     )
 
                 if self.margin_loss:
-                    margin = torch.tensor(margin).to(torch.cuda.current_device())
+                    margin = torch.tensor(margin).to(device_module.current_device())
                 else:
                     margin = None
 

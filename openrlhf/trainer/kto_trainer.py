@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 from openrlhf.models import KTOLoss
 from openrlhf.utils.distributed_sampler import DistributedSampler
+from openrlhf.utils.device import device_module
 
 
 class KTOTrainer(ABC):
@@ -60,7 +61,7 @@ class KTOTrainer(ABC):
             self.args.desirable_loss_weight,
             self.args.undesirable_loss_weight,
             self.strategy.world_size,
-            torch.cuda.current_device(),
+            device_module.current_device(),
         )
 
         # Mixtral 8*7b
@@ -128,8 +129,8 @@ class KTOTrainer(ABC):
 
             # train
             for input_ids, attention_mask, labels, prompt_ids_lens in self.train_dataloader:
-                input_ids = input_ids.squeeze(1).to(torch.cuda.current_device())
-                attention_mask = attention_mask.squeeze(1).to(torch.cuda.current_device())
+                input_ids = input_ids.squeeze(1).to(device_module.current_device())
+                attention_mask = attention_mask.squeeze(1).to(device_module.current_device())
 
                 # make sure local batch size >= 2 (to pack unmatched examples)
                 policy_returns = self.compute_model_logps_with_KL(
@@ -225,8 +226,8 @@ class KTOTrainer(ABC):
             loss_sum = 0
             chosen_reward, reject_reward = 0, 0
             for input_ids, attention_mask, labels, prompt_ids_lens in self.eval_dataloader:
-                input_ids = input_ids.squeeze(1).to(torch.cuda.current_device())
-                attention_mask = attention_mask.squeeze(1).to(torch.cuda.current_device())
+                input_ids = input_ids.squeeze(1).to(device_module.current_device())
+                attention_mask = attention_mask.squeeze(1).to(device_module.current_device())
 
                 # make sure local batch size >= 2 (to pack unmatched examples)
                 policy_returns = self.compute_model_logps_with_KL(

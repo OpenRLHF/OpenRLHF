@@ -6,7 +6,7 @@ from typing import List, Optional
 import torch
 import torch.nn.functional as F
 
-
+from openrlhf.utils.device import device_module
 from .experience_maker import Experience
 
 
@@ -167,7 +167,7 @@ class NaiveReplayBuffer(ABC):
         self.limit = limit
         self.cpu_offload = cpu_offload
         self.packing_samples = packing_samples
-        self.target_device = torch.device(f"cuda:{torch.cuda.current_device()}")
+        self.target_device = torch.device(device_module.current_device())
         self.items: List[BufferItem] = []
 
     @torch.no_grad()
