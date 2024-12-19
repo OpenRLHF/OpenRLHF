@@ -59,8 +59,8 @@ class DeepspeedStrategy(ABC):
         self.adam_offload = getattr(args, "adam_offload", False)
         self.zpg = getattr(args, "zpg", 1)
         self.grad_accum_dtype = getattr(args, "grad_accum_dtype", None)
-        # disable_trace_cache
-        self.disable_trace_cache = getattr(args, "disable_trace_cache", False)
+        # overlap_comm
+        self.overlap_comm = getattr(args, "overlap_comm", False)
 
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
@@ -228,7 +228,7 @@ class DeepspeedStrategy(ABC):
             max_norm=self.max_norm,
             zpg=self.zpg,
             grad_accum_dtype=self.grad_accum_dtype,
-            disable_trace_cache=self.disable_trace_cache,
+            overlap_comm=self.overlap_comm,
         )
 
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
