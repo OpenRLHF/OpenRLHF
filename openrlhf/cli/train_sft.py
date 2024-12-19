@@ -63,6 +63,7 @@ def train(args):
         pretrain_mode=args.pretrain_mode,
         input_template=args.input_template,
         multiple_of=args.ring_attn_size,
+        multiturn=args.multiturn,
     )
     eval_dataset = SFTDataset(
         eval_data,
@@ -72,6 +73,7 @@ def train(args):
         pretrain_mode=args.pretrain_mode,
         input_template=args.input_template,
         multiple_of=args.ring_attn_size,
+        multiturn=args.multiturn,
     )
 
     # prepare dataloader
@@ -201,6 +203,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_probs", type=str, default="1.0", help="sampling probs for datasets")
     parser.add_argument("--train_split", type=str, default="train", help="train split of the HF dataset")
     parser.add_argument("--eval_split", type=str, default="test", help="test split of the dataset")
+    parser.add_argument("--multiturn", action="store_true", default=False, help="Use compacted multiturn dataset")
 
     parser.add_argument("--input_key", type=str, default="input", help="JSON dataset key")
     parser.add_argument("--output_key", type=str, default=None, help="JSON dataset key")
@@ -228,6 +231,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    if args.multiturn:
+        assert args.apply_chat_template, "apply_chat_template must be enabled when using multiturn format"
+
     if args.input_template and "{}" not in args.input_template:
         print("[Warning] {} not in args.input_template, set to None")
         args.input_template = None
@@ -242,7 +248,6 @@ if __name__ == "__main__":
         print("[Warning] Please --flash_attn to accelerate when --packing_samples is enabled.")
         args.flash_attn = True
 
-    # TODO: [packing samples]
     if args.ring_attn_size > 1:
         assert args.packing_samples, "packing_samples must be enabled when using ring attention"
 
