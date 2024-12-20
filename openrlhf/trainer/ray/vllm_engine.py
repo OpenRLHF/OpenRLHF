@@ -51,7 +51,48 @@ class LLMRayActor:
 
                 RayWorkerWrapperPath.RayWorkerWrapper = RayWorkerWrapper
 
+        # Number of actors that will send prompt to this engine
+        self.num_actors = kwargs.pop("num_actors")
+        self.actor_counter = 0
+
         self.llm = vllm.LLM(*args, **kwargs)
+        self.requests = {}
+        self.responses = {}
+
+    def add_requests(self, actor_rank, *, sampling_params, prompt_token_ids):
+        """
+        Save the requests from actors and generate responses when all actors have sent their requests
+        """
+        self.requests[actor_rank] = prompt_token_ids
+        self.actor_counter += 1
+        if self.actor_counter == self.num_actors:
+            assert len(self.requests) == self.num_actors
+            num_requests = []
+            requests = []
+            for actor_rank, request in self.requests.items():
+                num_requests.append((actor_rank, len(request)))
+                requests.extend(request)
+
+            if len(requests) > 0:
+                # For now we assume that all requests have the same sampling params
+                responses = self.llm.generate(sampling_params=sampling_params, prompt_token_ids=requests)
+            else:
+                responses = []
+
+            offset = 0
+            self.responses = {}
+            for actor_rank, num in num_requests:
+                self.responses[actor_rank] = responses[offset : offset + num]
+                offset += num
+
+            self.actor_counter = 0
+            self.requests = {}
+
+    def get_responses(self, actor_rank):
+        """
+        Return the responses for the actor with the given rank
+        """
+        return self.responses.pop(actor_rank)
 
     def generate(self, *args, **kwargs):
         return self.llm.generate(*args, **kwargs)
@@ -89,6 +130,7 @@ def create_vllm_engines(
     enable_prefix_caching: bool,
     enforce_eager: bool,
     max_model_len: int,
+    num_total_actors: int,
 ):
     vllm_engines = []
     # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES will always be set in current context,
@@ -110,6 +152,11 @@ def create_vllm_engines(
                 placement_group=pg, placement_group_capture_child_tasks=True, placement_group_bundle_index=0
             )
 
+        if num_engines >= num_total_actors:
+            num_actors = 1
+        else:
+            num_actors = num_total_actors // num_engines + int(i < num_total_actors % num_engines)
+
         vllm_engines.append(
             LLMRayActor.options(
                 num_cpus=1,
@@ -125,6 +172,7 @@ def create_vllm_engines(
                 enable_prefix_caching=enable_prefix_caching,
                 enforce_eager=enforce_eager,
                 max_model_len=max_model_len,
+                num_actors=num_actors,
             )
         )
 
