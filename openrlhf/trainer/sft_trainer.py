@@ -3,13 +3,14 @@ from abc import ABC
 
 import torch
 import torch.distributed as dist
-from flash_attn.utils.distributed import all_gather
+from openrlhf.utils.distributed_util import all_gather
 from torch.optim import Optimizer
 from torch.nn import functional as F
 from tqdm import tqdm
 
 from openrlhf.models import GPTLMLoss
 from openrlhf.utils.distributed_sampler import DistributedSampler
+from openrlhf.utils.device import device_module
 
 
 class SFTTrainer(ABC):
@@ -131,11 +132,11 @@ class SFTTrainer(ABC):
             loss_mean = 0
             for prompt_id_lens, inputs, attention_masks, infos in self.train_dataloader:
                 if self.packing_samples:
-                    inputs = inputs.to(torch.cuda.current_device())
-                    attention_mask = attention_masks.to(torch.cuda.current_device())
+                    inputs = inputs.to(device_module.current_device())
+                    attention_mask = attention_masks.to(device_module.current_device())
                 else:
-                    inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
-                    attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
+                    inputs = inputs.to(device_module.current_device()).squeeze(1)
+                    attention_mask = attention_masks.to(device_module.current_device()).squeeze(1)
 
                 if self.strategy.ring_attn_group is None:
                     output = self.model(inputs, attention_mask=attention_mask, return_output=True)
@@ -241,11 +242,11 @@ class SFTTrainer(ABC):
 
             for prompt_id_lens, inputs, attention_masks, infos in eval_dataloader:
                 if self.packing_samples:
-                    inputs = inputs.to(torch.cuda.current_device())
-                    attention_mask = attention_masks.to(torch.cuda.current_device())
+                    inputs = inputs.to(device_module.current_device())
+                    attention_mask = attention_masks.to(device_module.current_device())
                 else:
-                    inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
-                    attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
+                    inputs = inputs.to(device_module.current_device()).squeeze(1)
+                    attention_mask = attention_masks.to(device_module.current_device()).squeeze(1)
 
                 if self.strategy.ring_attn_group is None:
                     output = self.model(inputs, attention_mask=attention_mask, return_output=True)

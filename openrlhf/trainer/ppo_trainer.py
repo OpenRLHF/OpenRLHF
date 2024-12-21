@@ -12,6 +12,7 @@ from tqdm import tqdm
 from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
 from openrlhf.models.utils import masked_mean
 from openrlhf.utils.distributed_sampler import DistributedSampler
+from openrlhf.utils.device import device_module
 
 from .ppo_utils import AdaptiveKLController, Experience, FixedKLController, NaiveExperienceMaker, NaiveReplayBuffer
 
@@ -232,11 +233,11 @@ class PPOTrainer(ABC):
                         self.strategy.print(output)
                     self.replay_buffer.append(experience)
 
-                torch.cuda.empty_cache()
+                device_module.empty_cache()
                 self.replay_buffer.normalize("advantages", self.strategy)
                 status = self.ppo_train(steps)
                 self.replay_buffer.clear()
-                torch.cuda.empty_cache()
+                device_module.empty_cache()
 
                 if "kl" in status:
                     self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
@@ -264,7 +265,7 @@ class PPOTrainer(ABC):
             pin_memory=self.dataloader_pin_memory,
             collate_fn=self.replay_buffer.collate_fn,
         )
-        device = torch.cuda.current_device()
+        device = device_module.current_device()
 
         status_list = []
         status_mean = {}
@@ -374,8 +375,8 @@ class PPOTrainer(ABC):
         # ptx loss
         if self.pretrain_dataloader is not None:
             data = next(self.pretrain_dataloader)
-            inputs = data[1].squeeze(1).to(torch.cuda.current_device())
-            attention_mask = data[2].squeeze(1).to(torch.cuda.current_device())
+            inputs = data[1].squeeze(1).to(device_module.current_device())
+            attention_mask = data[2].squeeze(1).to(device_module.current_device())
             label = torch.where(
                 attention_mask.bool(),
                 inputs,

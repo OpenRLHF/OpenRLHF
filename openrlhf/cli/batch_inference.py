@@ -11,6 +11,7 @@ from transformers import AutoTokenizer
 from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.utils import blending_datasets, get_processor, get_strategy, get_tokenizer
+from openrlhf.utils.device import device_module
 
 
 def batch_generate_vllm(args):
@@ -117,7 +118,7 @@ def batch_generate(args):
             padding=True,
             truncation=True,
         )
-        return {k: v.to(torch.cuda.current_device()) for k, v in batch.items()}
+        return {k: v.to(device_module.current_device()) for k, v in batch.items()}
 
     prompts_data = blending_datasets(
         args.dataset,
@@ -249,8 +250,8 @@ def batch_rm_inference(args):
     output_dataset = []
     with torch.no_grad():
         for _, input_ids, attention_masks, info in pbar:
-            input_ids = input_ids.squeeze(1).to(torch.cuda.current_device())
-            attention_masks = attention_masks.squeeze(1).to(torch.cuda.current_device())
+            input_ids = input_ids.squeeze(1).to(device_module.current_device())
+            attention_masks = attention_masks.squeeze(1).to(device_module.current_device())
             rewards = model(input_ids, attention_masks)
             for prompt, output, reward in zip(info["input"], info["output"], rewards):
                 output_dataset.append({"input": prompt, "output": output, "reward": reward.item()})
@@ -335,7 +336,7 @@ if __name__ == "__main__":
         help="set to rs (Rejection Sampling), csft (Conditional SFT), iter_dpo (Iterative DPO) or None",
     )
     # For vllm
-    parser.add_argument("--tp_size", type=int, default=torch.cuda.device_count())
+    parser.add_argument("--tp_size", type=int, default=device_module.device_count())
     parser.add_argument("--max_num_seqs", type=int, default=256)
     parser.add_argument("--enable_prefix_caching", action="store_true", default=False)
 
