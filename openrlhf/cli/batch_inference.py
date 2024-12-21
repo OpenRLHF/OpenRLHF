@@ -42,7 +42,6 @@ def batch_generate_vllm(args):
     sampling_params = SamplingParams(
         max_tokens=args.max_new_tokens,
         top_p=args.top_p,
-        use_beam_search=False,
         temperature=args.temperature,
         repetition_penalty=args.repetition_penalty,
         skip_special_tokens=False,
