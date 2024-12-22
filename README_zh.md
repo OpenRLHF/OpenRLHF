@@ -249,7 +249,7 @@ reward_model = AutoModelForSequenceClassification.from_pretrained(
               use_cache=False,
           )
 inputs = xxxx (Left Padding Input Tokens)
-reward = reward_model.model(*inputs)
+reward = reward_model.model(*inputs).last_hidden_state
 reward = reward_model.score(reward)[:, -1]
 ```
 
