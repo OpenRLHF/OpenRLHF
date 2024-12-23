@@ -183,7 +183,7 @@ class NaiveExperienceMaker(ABC):
             desc="make_experience",
             disable=not self.strategy.is_rank_0(),
         ):
-            experiences.append(self.make_experience(samples))
+            experiences.append(self.make_experience(samples).to_device("cpu"))
 
         experiences, rewards = self.process_experiences(experiences)
 

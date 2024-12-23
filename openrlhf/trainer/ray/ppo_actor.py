@@ -68,44 +68,45 @@ class ActorPPOTrainer(PPOTrainer):
         # For ZeRO-3:
         #   1. AllGather paramters to rank 0
         #   2. Broadcast parameters from rank 0 to all vllm engines
-        if self.vllm_engines is not None and torch.distributed.get_rank() == 0:
-            master_address = ray._private.services.get_node_ip_address()
-            with socket.socket() as sock:
-                sock.bind(("", 0))
-                master_port = sock.getsockname()[1]
-
-            vllm_num_engines, vllm_tensor_parallel_size = (
-                self.strategy.args.vllm_num_engines,
-                self.strategy.args.vllm_tensor_parallel_size,
-            )
-            world_size = vllm_num_engines * vllm_tensor_parallel_size + 1
-
+        if self.vllm_engines is not None:
             backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
             if backend == "nccl":
                 # To prevent hanging during NCCL synchronization of weights between DeepSpeed and vLLM.
                 # see https://github.com/vllm-project/vllm/blob/c6b0a7d3ba03ca414be1174e9bd86a97191b7090/vllm/worker/worker_base.py#L445
                 os.environ["NCCL_CUMEM_ENABLE"] = "0"
 
-            refs = [
-                engine.init_process_group.remote(
-                    master_address,
-                    master_port,
-                    i * vllm_tensor_parallel_size + 1,
-                    world_size,
-                    "openrlhf",
-                    backend=backend,
-                )
-                for i, engine in enumerate(self.vllm_engines)
-            ]
-            self._model_update_group = init_process_group(
-                backend=backend,
-                init_method=f"tcp://{master_address}:{master_port}",
-                world_size=world_size,
-                rank=0,
-                group_name="openrlhf",
-            )
+            if torch.distributed.get_rank() == 0:
+                master_address = ray._private.services.get_node_ip_address()
+                with socket.socket() as sock:
+                    sock.bind(("", 0))
+                    master_port = sock.getsockname()[1]
 
-            ray.get(refs)
+                vllm_num_engines, vllm_tensor_parallel_size = (
+                    self.strategy.args.vllm_num_engines,
+                    self.strategy.args.vllm_tensor_parallel_size,
+                )
+                world_size = vllm_num_engines * vllm_tensor_parallel_size + 1
+
+                refs = [
+                    engine.init_process_group.remote(
+                        master_address,
+                        master_port,
+                        i * vllm_tensor_parallel_size + 1,
+                        world_size,
+                        "openrlhf",
+                        backend=backend,
+                    )
+                    for i, engine in enumerate(self.vllm_engines)
+                ]
+                self._model_update_group = init_process_group(
+                    backend=backend,
+                    init_method=f"tcp://{master_address}:{master_port}",
+                    world_size=world_size,
+                    rank=0,
+                    group_name="openrlhf",
+                )
+
+                ray.get(refs)
 
         torch.distributed.barrier()
 
