@@ -67,6 +67,7 @@ class Experience:
         self.values = to(self.values, device)
         self.attention_mask = to(self.attention_mask, device)
         self.action_mask = to(self.action_mask, device)
+        return self
 
     def pin_memory(self):
         self.sequences = pin_memory(self.sequences)
