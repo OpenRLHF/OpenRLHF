@@ -364,6 +364,17 @@ ray job submit --address="http://127.0.0.1:8265" \
 > export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
 > ```
 
+### 使用 LoRA
+
+如果您使用了 `LoRA (Low-Rank Adaptation)`，默认保存下来的文件**并非**完整模型权重，而是 `LoRA Adapter`，若想按完整权重的方式进行后续任务，您需要将 `Adapter` 与训练前的模型权重进行合并
+
+```bash
+python -m openrlhf.utils.lora_combiner \
+    --model_path meta-llama/Meta-Llama-3-8B \
+    --lora_path ./checkpoint/llama-3-8b-sft \
+    --output_path ./checkpoint/llama-3-8b-sft-combined
+```
+
 所有支持算法的启动脚本和文档在 [example/scripts](./examples/scripts/) 和 [Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)
 
 
