@@ -1,13 +1,13 @@
 import torch
 from peft import PeftModel
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModel
 import argparse
 
-def apply_lora(model_name_or_path, output_path, lora_path):
+def apply_lora(model_name_or_path, output_path, lora_path, bf16):
     print(f"Loading the base model from {model_name_or_path}")
-    base = AutoModelForCausalLM.from_pretrained(
+    base = AutoModel.from_pretrained(
         model_name_or_path, 
-        torch_dtype=torch.float16, 
+        torch_dtype=torch.bfloat16 if bf16 else "auto",
         low_cpu_mem_usage=True
     )
     base_tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
@@ -17,7 +17,7 @@ def apply_lora(model_name_or_path, output_path, lora_path):
     lora_model = PeftModel.from_pretrained(
         base,
         lora_path,
-        torch_dtype=torch.float16,
+        torch_dtype=torch.bfloat16 if bf16 else "auto",
     )
 
     print("Applying the LoRA")
@@ -47,6 +47,13 @@ if __name__ == "__main__":
         required=True,
         help="Path to save the combined model."
     )
+    parser.add_argument(
+        "--bf16",
+        action="store_true", 
+        default=False, 
+        help="Enable bfloat16"
+    )
+    
     args = parser.parse_args()
 
-    apply_lora(args.model_path, args.output_path, args.lora_path)
+    apply_lora(args.model_path, args.output_path, args.lora_path, args.bf16)
