@@ -20,13 +20,13 @@ logger = init_logger(__name__)
 def to(tensor: Union[torch.Tensor, list[torch.Tensor]], device):
     if isinstance(tensor, list):
         return [to(t, device) for t in tensor]
-    return tensor.to(device)
+    return tensor.to(device) if tensor is not None else None
 
 
 def pin_memory(tensor: Union[torch.Tensor, list[torch.Tensor]]):
     if isinstance(tensor, list):
         return [pin_memory(t) for t in tensor]
-    return tensor.pin_memory()
+    return tensor.pin_memory() if tensor is not None else None
 
 
 @dataclass
@@ -64,24 +64,18 @@ class Experience:
         self.action_log_probs = to(self.action_log_probs, device)
         self.returns = to(self.returns, device)
         self.advantages = to(self.advantages, device)
-        if self.values is not None:
-            self.values = to(self.values, device)
-        if self.attention_mask is not None:
-            self.attention_mask = self.attention_mask.to(device)
-        if self.action_mask is not None:
-            self.action_mask = self.action_mask.to(device)
+        self.values = to(self.values, device)
+        self.attention_mask = to(self.attention_mask, device)
+        self.action_mask = to(self.action_mask, device)
 
     def pin_memory(self):
         self.sequences = pin_memory(self.sequences)
         self.action_log_probs = pin_memory(self.action_log_probs)
         self.returns = pin_memory(self.returns)
         self.advantages = pin_memory(self.advantages)
-        if self.values is not None:
-            self.values = pin_memory(self.values)
-        if self.attention_mask is not None:
-            self.attention_mask = self.attention_mask.pin_memory()
-        if self.action_mask is not None:
-            self.action_mask = self.action_mask.pin_memory()
+        self.values = pin_memory(self.values)
+        self.attention_mask = pin_memory(self.attention_mask)
+        self.action_mask = pin_memory(self.action_mask)
         return self
 
 
