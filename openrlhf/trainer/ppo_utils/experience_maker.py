@@ -20,13 +20,13 @@ logger = init_logger(__name__)
 def to(tensor: Union[torch.Tensor, list[torch.Tensor]], device):
     if isinstance(tensor, list):
         return [to(t, device) for t in tensor]
-    return tensor.to(device) if tensor is not None else None
+    return tensor.to(device) if isinstance(tensor, torch.Tensor) else tensor
 
 
 def pin_memory(tensor: Union[torch.Tensor, list[torch.Tensor]]):
     if isinstance(tensor, list):
         return [pin_memory(t) for t in tensor]
-    return tensor.pin_memory() if tensor is not None else None
+    return tensor.pin_memory() if isinstance(tensor, torch.Tensor) else tensor
 
 
 @dataclass
@@ -67,6 +67,8 @@ class Experience:
         self.values = to(self.values, device)
         self.attention_mask = to(self.attention_mask, device)
         self.action_mask = to(self.action_mask, device)
+        self.kl = to(self.kl, device)
+        self.info = {key: to(value, device) for key, value in self.info.items()}
         return self
 
     def pin_memory(self):
@@ -77,6 +79,8 @@ class Experience:
         self.values = pin_memory(self.values)
         self.attention_mask = pin_memory(self.attention_mask)
         self.action_mask = pin_memory(self.action_mask)
+        self.kl = pin_memory(self.kl)
+        self.info = {key: pin_memory(value) for key, value in self.info.items()}
         return self
 
 
