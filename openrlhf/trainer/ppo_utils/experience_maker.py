@@ -68,6 +68,7 @@ class Experience:
         self.attention_mask = to(self.attention_mask, device)
         self.action_mask = to(self.action_mask, device)
         self.kl = to(self.kl, device)
+        self.info = {key: to(value, device) for key, value in self.info.items()}
         return self
 
     def pin_memory(self):
@@ -79,6 +80,7 @@ class Experience:
         self.attention_mask = pin_memory(self.attention_mask)
         self.action_mask = pin_memory(self.action_mask)
         self.kl = pin_memory(self.kl)
+        self.info = {key: pin_memory(value) for key, value in self.info.items()}
         return self
 
 
@@ -181,7 +183,7 @@ class NaiveExperienceMaker(ABC):
             desc="make_experience",
             disable=not self.strategy.is_rank_0(),
         ):
-            experiences.append(self.make_experience(samples))
+            experiences.append(self.make_experience(samples).to_device("cpu"))
 
         experiences, rewards = self.process_experiences(experiences)
 
