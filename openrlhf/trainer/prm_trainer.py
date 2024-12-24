@@ -7,6 +7,7 @@ from tqdm import tqdm
 from openrlhf.models import PRMLoss
 from openrlhf.utils.distributed_sampler import DistributedSampler
 from openrlhf.utils.utils import convert_token_to_id
+from openrlhf.utils.device import device_module
 
 
 class ProcessRewardModelTrainer(ABC):
@@ -123,15 +124,15 @@ class ProcessRewardModelTrainer(ABC):
             for data in self.train_dataloader:
                 if not self.packing_samples:
                     inputs, attention_masks, labels = data
-                    inputs = inputs.to(torch.cuda.current_device())
-                    attention_mask = attention_masks.to(torch.cuda.current_device())
-                    labels = labels.to(torch.cuda.current_device())
+                    inputs = inputs.to(device_module.current_device())
+                    attention_mask = attention_masks.to(device_module.current_device())
+                    labels = labels.to(device_module.current_device())
                     packed_seq_lens = None
                 else:
                     inputs, attention_masks, packed_seq_lens, labels = data
-                    inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
-                    attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
-                    labels = labels.to(torch.cuda.current_device()).squeeze(1)
+                    inputs = inputs.to(device_module.current_device()).squeeze(1)
+                    attention_mask = attention_masks.to(device_module.current_device()).squeeze(1)
+                    labels = labels.to(device_module.current_device()).squeeze(1)
 
                 output = self.model(
                     inputs,
@@ -210,15 +211,15 @@ class ProcessRewardModelTrainer(ABC):
             for data in eval_dataloader:
                 if not self.packing_samples:
                     inputs, attention_masks, labels = data
-                    inputs = inputs.to(torch.cuda.current_device())
-                    attention_mask = attention_masks.to(torch.cuda.current_device())
-                    labels = labels.to(torch.cuda.current_device())
+                    inputs = inputs.to(device_module.current_device())
+                    attention_mask = attention_masks.to(device_module.current_device())
+                    labels = labels.to(device_module.current_device())
                     packed_seq_lens = None
                 else:
                     inputs, attention_masks, packed_seq_lens, labels = data
-                    inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
-                    attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
-                    labels = labels.to(torch.cuda.current_device()).squeeze(1)
+                    inputs = inputs.to(device_module.current_device()).squeeze(1)
+                    attention_mask = attention_masks.to(device_module.current_device()).squeeze(1)
+                    labels = labels.to(device_module.current_device()).squeeze(1)
 
                 output = self.model(
                     inputs,

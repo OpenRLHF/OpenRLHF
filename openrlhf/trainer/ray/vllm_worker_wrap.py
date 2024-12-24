@@ -3,6 +3,7 @@ from vllm.worker.worker import Worker
 
 from openrlhf.utils.distributed_util import init_process_group
 from openrlhf.utils.logging_utils import init_logger
+from openrlhf.utils.device import device_module
 
 logger = init_logger(__name__)
 
@@ -40,4 +41,4 @@ class WorkerWrap(Worker):
         del weight
         # TODO: should we empty cache if all weights have updated?
         # if empty_cache:
-        #     torch.cuda.empty_cache()
+        #     device_module.empty_cache()
