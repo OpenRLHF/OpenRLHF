@@ -68,6 +68,7 @@ class Experience:
         self.attention_mask = to(self.attention_mask, device)
         self.action_mask = to(self.action_mask, device)
         self.kl = to(self.kl, device)
+        self.info = {key: to(value, device) for key, value in self.info.items()}
         return self
 
     def pin_memory(self):
@@ -79,6 +80,7 @@ class Experience:
         self.attention_mask = pin_memory(self.attention_mask)
         self.action_mask = pin_memory(self.action_mask)
         self.kl = pin_memory(self.kl)
+        self.info = {key: pin_memory(value) for key, value in self.info.items()}
         return self
 
 
@@ -175,13 +177,17 @@ class NaiveExperienceMaker(ABC):
         After that, we will calculate the advantages and returns for each experience.
         """
         args = self.strategy.args
+        # generate responses
+        samples_list = self.generate_samples(all_prompts, **generate_kwargs)
+        torch.distributed.barrier()
+
         experiences = []
         for samples in tqdm(
-            self.generate_samples(all_prompts, **generate_kwargs),
+            samples_list,
             desc="make_experience",
             disable=not self.strategy.is_rank_0(),
         ):
-            experiences.append(self.make_experience(samples))
+            experiences.append(self.make_experience(samples).to_device("cpu"))
 
         experiences, rewards = self.process_experiences(experiences)
 
@@ -338,13 +344,13 @@ class NaiveExperienceMaker(ABC):
         # reward shaping for RLOO
         if args.advantage_estimator == "rloo":
             rewards = torch.cat([experience.info["reward"] for experience in experiences])
-            rewards = rewards.reshape(-1, args.n_samples_per_prompt)
+            rewards = rewards.reshape(-1, args.n_samples_per_prompt).float()
             baseline = (rewards.sum(-1, keepdim=True) - rewards) / (args.n_samples_per_prompt - 1)
             rewards = rewards - baseline
             rewards = rewards.flatten().chunk(len(experiences))
             return experiences, rewards
         # default rewards
-        return experiences, [experience.info["reward"] for experience in experiences]
+        return experiences, [experience.info["reward"].float() for experience in experiences]
 
     @torch.no_grad()
     def get_advantages_and_returns(

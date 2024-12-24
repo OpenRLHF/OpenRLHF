@@ -71,7 +71,7 @@ class DeepspeedStrategy(ABC):
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
-    def setup_distributed(self, timeout=timedelta(minutes=30)) -> None:
+    def setup_distributed(self, timeout=timedelta(minutes=60)) -> None:
         self.set_seed(self.seed)
 
         if self.args.local_rank == -1 and "LOCAL_RANK" in os.environ:  # for slurm

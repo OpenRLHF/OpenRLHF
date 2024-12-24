@@ -20,7 +20,7 @@ def compute_approx_kl(
         action_mask: Mask for actions.
     """
 
-    log_ratio = log_probs - log_probs_base
+    log_ratio = log_probs.float() - log_probs_base.float()
     if action_mask is not None:
         log_ratio = log_ratio * action_mask
 
