@@ -177,9 +177,13 @@ class NaiveExperienceMaker(ABC):
         After that, we will calculate the advantages and returns for each experience.
         """
         args = self.strategy.args
+        # generate responses
+        samples_list = self.generate_samples(all_prompts, **generate_kwargs)
+        torch.distributed.barrier()
+
         experiences = []
         for samples in tqdm(
-            self.generate_samples(all_prompts, **generate_kwargs),
+            samples_list,
             desc="make_experience",
             disable=not self.strategy.is_rank_0(),
         ):
