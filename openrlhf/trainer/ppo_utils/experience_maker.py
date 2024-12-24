@@ -340,13 +340,13 @@ class NaiveExperienceMaker(ABC):
         # reward shaping for RLOO
         if args.advantage_estimator == "rloo":
             rewards = torch.cat([experience.info["reward"] for experience in experiences])
-            rewards = rewards.reshape(-1, args.n_samples_per_prompt)
+            rewards = rewards.reshape(-1, args.n_samples_per_prompt).float()
             baseline = (rewards.sum(-1, keepdim=True) - rewards) / (args.n_samples_per_prompt - 1)
             rewards = rewards - baseline
             rewards = rewards.flatten().chunk(len(experiences))
             return experiences, rewards
         # default rewards
-        return experiences, [experience.info["reward"] for experience in experiences]
+        return experiences, [experience.info["reward"].float() for experience in experiences]
 
     @torch.no_grad()
     def get_advantages_and_returns(
