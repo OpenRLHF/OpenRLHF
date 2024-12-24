@@ -10,8 +10,12 @@ from .utils import zero_pad_sequences
 def preprocess_data(data, input_template=None, input_key="input", output_key=None, apply_chat_template=None):
     if apply_chat_template:
         if output_key:
-            prompt_message = [{"role": "user", "content": data[input_key]}] if isinstance(data[input_key], str) else data[input_key]
-            response_message = [{"role": "assistant", "content": data[output_key]}] if isinstance(data[output_key], str) else data[output_key]
+            prompt_message = data[input_key]
+            response_message = data[output_key]
+
+            if isinstance(prompt_message, str) and isinstance(response_message, str):
+                prompt_message = [{"role": "user", "content": prompt_message}]
+                response_message = [{"role": "assistant", "content": response_message}]
 
             prompt = apply_chat_template(prompt_message, tokenize=False, add_generation_prompt=True)
             response = apply_chat_template(prompt_message + response_message, tokenize=False)[len(prompt) :]
@@ -171,8 +175,10 @@ class SFTDataset(Dataset):
 
         packed_input_ids = torch.cat(packed_input_ids, dim=0).unsqueeze(0)
         packed_attention_masks = torch.cat(packed_attention_masks, dim=0).unsqueeze(0)
-        
-        if self.multiple_of > 1 and packed_input_ids.numel() % self.multiple_of != 0: # not divisible by multiple_of; here we align for grouping
+
+        if (
+            self.multiple_of > 1 and packed_input_ids.numel() % self.multiple_of != 0
+        ):  # not divisible by multiple_of; here we align for grouping
             padding_len = self.multiple_of - (packed_input_ids.numel() % self.multiple_of)
             packed_input_ids = F.pad(packed_input_ids, (0, padding_len), value=self.tokenizer.pad_token_id)
             packed_attention_masks = F.pad(packed_attention_masks, (0, padding_len), value=0)
