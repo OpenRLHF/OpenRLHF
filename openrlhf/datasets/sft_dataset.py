@@ -10,8 +10,11 @@ from .utils import zero_pad_sequences
 def preprocess_data(data, input_template=None, input_key="input", output_key=None, apply_chat_template=None):
     if apply_chat_template:
         if output_key:
-            prompt = apply_chat_template(data[input_key], tokenize=False, add_generation_prompt=True)
-            response = apply_chat_template(data[input_key] + data[output_key], tokenize=False)[len(prompt) :]
+            prompt_message = [{"role": "user", "content": data[input_key]}] if isinstance(data[input_key], str) else data[input_key]
+            response_message = [{"role": "assistant", "content": data[output_key]}] if isinstance(data[output_key], str) else data[output_key]
+
+            prompt = apply_chat_template(prompt_message, tokenize=False, add_generation_prompt=True)
+            response = apply_chat_template(prompt_message + response_message, tokenize=False)[len(prompt) :]
         else:
             prompt = apply_chat_template(data[input_key][:-1], tokenize=False, add_generation_prompt=True)
             response = apply_chat_template(data[input_key], tokenize=False)[len(prompt) :]
