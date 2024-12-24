@@ -59,7 +59,7 @@ class Experience:
     kl: Optional[torch.Tensor] = None
 
     @torch.no_grad()
-    def to_device(self, device: torch.device) -> None:
+    def to_device(self, device: torch.device):
         self.sequences = to(self.sequences, device)
         self.action_log_probs = to(self.action_log_probs, device)
         self.returns = to(self.returns, device)
@@ -68,7 +68,6 @@ class Experience:
         self.attention_mask = to(self.attention_mask, device)
         self.action_mask = to(self.action_mask, device)
         self.kl = to(self.kl, device)
-        self.info = {key: to(value, device) for key, value in self.info.items()}
         return self
 
     def pin_memory(self):
@@ -80,7 +79,6 @@ class Experience:
         self.attention_mask = pin_memory(self.attention_mask)
         self.action_mask = pin_memory(self.action_mask)
         self.kl = pin_memory(self.kl)
-        self.info = {key: pin_memory(value) for key, value in self.info.items()}
         return self
 
 
