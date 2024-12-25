@@ -119,7 +119,10 @@ Such as in the [Prompt Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/o
 ```python
 def preprocess_data(data, input_template=None, input_key="input", apply_chat_template=None) -> str:
     if apply_chat_template:
-        prompt = apply_chat_template(data[input_key], tokenize=False, add_generation_prompt=True)
+        chat = data[input_key]
+        if isinstance(chat, str):
+            chat = [{"role": "user", "content": chat}]
+        prompt = apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
     else:
         prompt = data[input_key]
         if input_template:
@@ -191,7 +194,6 @@ deepspeed --module openrlhf.cli.train_sft \
 
 # Support HF tokenizer.apply_chat_template
 # --apply_chat_template 
-# --input_key {JSON Key}
 # --tokenizer_chat_template {HF Chat Template}
 
 # Support RingAttention
