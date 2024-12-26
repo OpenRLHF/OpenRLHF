@@ -41,12 +41,12 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 
 
 ## 新闻  
-
-- [2024/12] 在 [Notion Blog](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05) 中，我们对 PPO、REINFORCE、GRPO 和 RLOO 进行了分析。  
+- [2024/12] 我们提出了 😊 [REINFORCE++ 对齐算法](https://hijkzzz.notion.site/reinforce-plus-plus).
+- [2024/12] 在 [Notion Blog](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05) 中，我们对 PPO、REINFORCE++、GRPO 和 RLOO 进行了分析。  
 
 ## 特性  
 
-- 基于 Ray 的分布式 [PPO](./examples/scripts/train_ppo_llama_ray.sh) 和 [REINFORCE/RLOO](./examples/scripts/train_reinforce_llama_ray.sh) 实现。  
+- 基于 Ray 的分布式 [PPO](./examples/scripts/train_ppo_llama_ray.sh) 和 [REINFORCE++/RLOO](./examples/scripts/train_reinforce_llama_ray.sh) 实现。  
 - 支持对 [超过 700 亿参数的模型](./examples/scripts/train_ppo_llama_ray_70b.sh) 进行完整的 RLHF 微调。  
 - 集成 vLLM，加速 RLHF 任务中的样本生成（`--vllm_num_engines`）。  
 - 支持多个奖励模型（`--reward_pretrain model1,model2...`）和远程奖励模型（`--remote_rm_url`）。  
