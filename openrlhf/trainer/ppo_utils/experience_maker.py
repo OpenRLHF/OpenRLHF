@@ -652,6 +652,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             max_tokens=kwargs.get("max_new_tokens", 1024),
             min_tokens=kwargs.get("min_new_tokens", 1),
             skip_special_tokens=kwargs.get("skip_special_tokens", False),
+            include_stop_str_in_output=True,
         )
 
         # Expand prompt list based on the number of samples per prompt
