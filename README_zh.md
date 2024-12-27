@@ -348,7 +348,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 # 支持远程 reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
 
-# 支持 REINFORCE | RLOO 
+# 支持 REINFORCE++  | RLOO 
 # --advantage_estimator reinforce | rloo
 
 # 支持 N 倍采样

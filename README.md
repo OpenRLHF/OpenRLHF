@@ -342,7 +342,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 # Support remote reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
 
-# Support REINFORCE | RLOO
+# Support REINFORCE++  | RLOO
 # --advantage_estimator reinforce | rloo
 
 # Support N samples
