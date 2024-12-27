@@ -37,7 +37,7 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [Technical Report](https://arxiv.org/abs/2405.11143) | [Documents](https://openrlhf.readthedocs.io/)
 
 ## News
-- [2024/12] We proposed 😊 the [REINFORCE++: A Simple and Efficient Approach for Aligning Large Language Models](https://hijkzzz.notion.site/reinforce-plus-plus).
+- [2024/12] We "proposed" 😊 the [REINFORCE++: A Simple and Efficient Approach for Aligning Large Language Models](https://github.com/hijkzzz/Awesome-LLM-Strawberry/blob/main/resources/REINFORCE%2B%2B.pdf).
 - [2024/12] We analyzed the PPO, REINFORCE++, GRPO and RLOO in the [Notion Blogpost](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05).
 
 
@@ -342,7 +342,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 # Support remote reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
 
-# Support REINFORCE | RLOO
+# Support REINFORCE++  | RLOO
 # --advantage_estimator reinforce | rloo
 
 # Support N samples

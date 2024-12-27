@@ -41,7 +41,7 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 
 
 ## 新闻  
-- [2024/12] 我们提出了 😊 [REINFORCE++ 对齐算法](https://hijkzzz.notion.site/reinforce-plus-plus).
+- [2024/12] 我们"提出"了 😊 [REINFORCE++ 对齐算法](https://github.com/hijkzzz/Awesome-LLM-Strawberry/blob/main/resources/REINFORCE%2B%2B.pdf).
 - [2024/12] 在 [Notion Blog](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05) 中，我们对 PPO、REINFORCE++、GRPO 和 RLOO 进行了分析。  
 
 ## 特性  
@@ -348,7 +348,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 # 支持远程 reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
 
-# 支持 REINFORCE | RLOO 
+# 支持 REINFORCE++  | RLOO 
 # --advantage_estimator reinforce | rloo
 
 # 支持 N 倍采样
