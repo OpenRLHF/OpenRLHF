@@ -1,9 +1,11 @@
+import time
+
 import ray
+import torch
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
-
 from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
@@ -150,6 +152,10 @@ def create_inference_engines(
     backend: str = "vllm",
 ):
     print(f"backend: {backend}")
+
+    torch.cuda.synchronize()
+    start = time.time()
+
     inference_engines = []
     # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES will always be set in current context,
     # So we need to get env variables from ray process to check if it is set.
@@ -189,6 +195,9 @@ def create_inference_engines(
             )
         )
 
+    torch.cuda.synchronize()
+    end = time.time()
+    print(f"Create inference engines takes: {end - start}s for {backend}")
     return inference_engines
 
 
