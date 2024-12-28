@@ -206,12 +206,14 @@ class Actor(nn.Module):
             attention_mask = None
 
         output = self.model(sequences, attention_mask=attention_mask, position_ids=position_ids)
+        # https://github.com/OpenRLHF/OpenRLHF/pull/634
+        output["logits"] = output["logits"].to(torch.float32)
 
         if num_actions is None:
             assert return_output
             return output
 
-        log_probs = log_probs_from_logits(output["logits"][:, :-1, :].to(torch.float32), sequences[:, 1:])
+        log_probs = log_probs_from_logits(output["logits"][:, :-1, :], sequences[:, 1:])
 
         if not self.packing_samples:
             action_log_probs = log_probs[:, -num_actions:]
