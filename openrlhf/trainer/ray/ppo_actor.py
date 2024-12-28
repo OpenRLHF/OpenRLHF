@@ -2,6 +2,7 @@ import itertools
 import math
 import os
 import socket
+import time
 from typing import Callable, Dict, List
 
 import deepspeed
@@ -81,6 +82,10 @@ class ActorPPOTrainer(PPOTrainer):
             world_size = vllm_num_engines * vllm_tensor_parallel_size + 1
 
             backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
+
+            torch.cuda.synchronize()
+            start = time.time()
+
             refs = [
                 engine.init_process_group.remote(
                     master_address,
@@ -103,6 +108,9 @@ class ActorPPOTrainer(PPOTrainer):
             ray.get(refs)
 
         torch.distributed.barrier()
+        torch.cuda.synchronize()
+        end = time.time()
+        print(f"Init process group takes: {end - start}s")
 
     def ppo_train(self, global_steps):
         # 1. ensure all experience makers done
@@ -120,7 +128,12 @@ class ActorPPOTrainer(PPOTrainer):
             # 4. broadcast weights to vllm engines
             if self.inference_engines is not None:
                 torch.distributed.barrier()
+                torch.cuda.synchronize()
+                start = time.time()
                 self._broadcast_to_vllm()
+                torch.cuda.synchronize()
+                end = time.time()
+                print(f"Broadcast weights to engines takes: {end - start}s")
         else:
             status = {}
 

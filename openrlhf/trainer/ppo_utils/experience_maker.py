@@ -665,6 +665,10 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # Distribute requests to engines and collect responses to outputs
         all_output_refs = []
         batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
+
+        torch.cuda.synchronize()
+        start = time.time()
+
         for i, llm in enumerate(llms):
             prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
             if prompt_token_ids:
@@ -673,6 +677,10 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                         sampling_params=sampling_params, prompt_token_ids=prompt_token_ids, all_prompts=all_prompts
                     )
                 )
+
+        torch.cuda.synchronize()
+        end = time.time()
+        print(f"Generate samples takes: {end - start}s for {backend}")
 
         # Retrieve and combine results from all outputs
         all_outputs = sum(ray.get(all_output_refs), [])
@@ -684,6 +692,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             input_token_id_list = []
             output_token_id_list = []
 
+            torch.cuda.synchronize()
+            start = time.time()
+
             if backend == "vllm":
                 for output, prompt in zip(outputs, all_prompts):
                     input_token_id_list.append(list(output.prompt_token_ids))
@@ -692,6 +703,11 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 for output, prompt in zip(outputs, all_prompts):
                     input_token_id_list.append(list(self.tokenizer(prompt)["input_ids"]))
                     output_token_id_list.append(list(self.tokenizer(output["text"])["input_ids"]))
+
+            torch.cuda.synchronize()
+            end = time.time()
+            print(f"Tokenize input and output takes: {end - start}s for {backend}")
+
             if not self.packing_samples:
                 # NOTE: concat all outputs to following format:
                 #
