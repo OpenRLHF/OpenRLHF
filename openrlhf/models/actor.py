@@ -206,6 +206,8 @@ class Actor(nn.Module):
             attention_mask = None
 
         output = self.model(sequences, attention_mask=attention_mask, position_ids=position_ids)
+        # https://github.com/OpenRLHF/OpenRLHF/pull/634
+        output["logits"] = output["logits"].to(torch.float32)
 
         if num_actions is None:
             assert return_output
