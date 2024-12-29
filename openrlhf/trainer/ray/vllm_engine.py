@@ -23,7 +23,8 @@ class LLMRayActor:
     def __init__(self, *args, **kwargs):
         #! TODO chenyang check engine params
         self.backend = kwargs["backend"]
-
+        torch.cuda.synchronize()
+        start = time.time()
         print(f"kwargs: {kwargs}")
         print(f"using backend: {self.backend}")
         noset_visible_devices = kwargs.pop("noset_visible_devices", False)
@@ -76,8 +77,13 @@ class LLMRayActor:
                 "disable_cuda_graph": not kwargs.get("enforce_eager", False),
                 "disable_cuda_graph_padding": not kwargs.get("enable_prefix_caching", False),
                 "context_length": kwargs.get("max_model_len", None),
+                "log_level": "info",
             }
             self.llm = sglang.Engine(**sglang_params)
+
+        torch.cuda.synchronize()
+        end = time.time()
+        print(f"Create inference engines takes: {end - start}s for {self.backend}")
 
     def get_backend(self):
         return self.backend
@@ -152,10 +158,6 @@ def create_inference_engines(
     backend: str = "vllm",
 ):
     print(f"backend: {backend}")
-
-    torch.cuda.synchronize()
-    start = time.time()
-
     inference_engines = []
     # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES will always be set in current context,
     # So we need to get env variables from ray process to check if it is set.
@@ -195,9 +197,6 @@ def create_inference_engines(
             )
         )
 
-    torch.cuda.synchronize()
-    end = time.time()
-    print(f"Create inference engines takes: {end - start}s for {backend}")
     return inference_engines
 
 
