@@ -666,9 +666,6 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         all_output_refs = []
         batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
 
-        torch.cuda.synchronize()
-        start = time.time()
-
         for i, llm in enumerate(llms):
             prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
             if prompt_token_ids:
@@ -677,10 +674,6 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                         sampling_params=sampling_params, prompt_token_ids=prompt_token_ids, all_prompts=all_prompts
                     )
                 )
-
-        torch.cuda.synchronize()
-        end = time.time()
-        print(f"Generate samples takes: {end - start}s for {backend}")
 
         # Retrieve and combine results from all outputs
         all_outputs = sum(ray.get(all_output_refs), [])

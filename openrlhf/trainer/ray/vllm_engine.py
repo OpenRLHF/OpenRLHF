@@ -90,9 +90,11 @@ class LLMRayActor:
         return self.backend
 
     def generate(self, *args, **kwargs):
-        print("start generate")
+        torch.cuda.synchronize()
+        start = time.time()
+        print("Start generate")
         if self.backend == "vllm":
-            return self.llm.generate(
+            outputs = self.llm.generate(
                 sampling_params=kwargs["sampling_params"], prompt_token_ids=kwargs["prompt_token_ids"]
             )
         elif self.backend == "sglang":
@@ -110,7 +112,12 @@ class LLMRayActor:
                 repetition_penalty=sampling_params.repetition_penalty,
                 skip_special_tokens=sampling_params.skip_special_tokens,
             )
-            return self.llm.generate(all_prompts, sampling_params)
+            outputs = self.llm.generate(all_prompts, sampling_params)
+
+        torch.cuda.synchronize()
+        end = time.time()
+        print(f"Generate samples takes: {end - start}s for {self.backend}")
+        return outputs
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
         if self.backend == "vllm":
