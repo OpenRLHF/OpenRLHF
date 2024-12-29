@@ -78,7 +78,6 @@ class LLMRayActor:
                 "disable_cuda_graph_padding": not kwargs.get("enable_prefix_caching", False),
                 "context_length": kwargs.get("max_model_len", None),
                 "log_level": "info",
-                "mem_fraction_static": 0.75,
             }
             self.llm = sglang.Engine(**sglang_params)
 
