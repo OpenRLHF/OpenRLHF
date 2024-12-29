@@ -288,6 +288,9 @@ class NaiveExperienceMaker(ABC):
         # init log probs
         base_action_log_probs = self.initial_model(sequences, num_actions, attention_mask)
 
+        # TODO ring gather
+        if self.strategy.ring_attn_group is not None:
+            pass
         # values
         if self.critic is not None:
             value = self.critic(sequences, num_actions, attention_mask)

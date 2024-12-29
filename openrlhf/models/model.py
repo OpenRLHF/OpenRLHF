@@ -258,6 +258,7 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             num_actions: Optional[Union[int, list[int]]] = None,
             attention_mask: Optional[torch.Tensor] = None,
             return_output=False,
+            ring_attn_group=None,
             packed_seq_lens=None,
         ) -> torch.Tensor:
             if not self.packing_samples:
@@ -266,7 +267,12 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 position_ids.masked_fill_(attention_mask == 0, 1)
             else:
                 # convert attention_mask to position_ids
-                position_ids = reset_position_ids(attention_mask)
+                if ring_attn_group is not None:
+                    input_ids, attention_mask, position_ids = convert_ring_attn_params(
+                        input_ids, attention_mask, packed_seq_lens, ring_attn_group
+                    )
+                else:
+                    position_ids = reset_position_ids(attention_mask)
                 # explicitly ignore attention_mask for packing_samples
                 attention_mask = None
 
@@ -287,6 +293,9 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             if not self.packing_samples:
                 action_values = values[:, -num_actions:]
             else:
+                # TODO
+                if ring_attn_group is not None:
+                    pass
                 assert isinstance(num_actions, list) and len(num_actions) == len(packed_seq_lens)
                 action_values = []
                 offset = 0

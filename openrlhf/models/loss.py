@@ -58,9 +58,13 @@ class PolicyLoss(nn.Module):
     Policy Loss for PPO
     """
 
-    def __init__(self, clip_eps: float = 0.2) -> None:
+    def __init__(self, clip_eps: float = 0.2, ring_attn_group=None) -> None:
         super().__init__()
         self.clip_eps = clip_eps
+        self.ring_attn_group = ring_attn_group
+        if self.ring_attn_group:
+            self.ring_attn_rank = dist.get_rank(self.ring_attn_group)
+            self.ring_attn_world_size = dist.get_world_size(self.ring_attn_group)
 
     def forward(
         self,
@@ -69,6 +73,8 @@ class PolicyLoss(nn.Module):
         advantages: torch.Tensor,
         action_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        if self.ring_attn_group is not None:
+            pass
         ratio = (log_probs - old_log_probs).exp()
         surr1 = ratio * advantages
         surr2 = ratio.clamp(1 - self.clip_eps, 1 + self.clip_eps) * advantages
@@ -82,9 +88,13 @@ class ValueLoss(nn.Module):
     Value Loss for PPO
     """
 
-    def __init__(self, clip_eps: float = None) -> None:
+    def __init__(self, clip_eps: float = None, ring_attn_group=None) -> None:
         super().__init__()
         self.clip_eps = clip_eps
+        self.ring_attn_group = ring_attn_group
+        if self.ring_attn_group:
+            self.ring_attn_rank = dist.get_rank(self.ring_attn_group)
+            self.ring_attn_world_size = dist.get_world_size(self.ring_attn_group)
 
     def forward(
         self,
@@ -93,6 +103,8 @@ class ValueLoss(nn.Module):
         returns: torch.Tensor,
         action_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        if self.ring_attn_group is not None:
+                pass
         if self.clip_eps is not None:
             values_clipped = old_values + (values - old_values).clamp(-self.clip_eps, self.clip_eps)
             surr1 = (values_clipped - returns) ** 2
