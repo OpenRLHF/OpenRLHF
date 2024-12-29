@@ -682,20 +682,18 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         samples_list = []
         for i in range(0, len(all_outputs), args.micro_rollout_batch_size):
             outputs = all_outputs[i : i + self.strategy.args.micro_rollout_batch_size]
-            input_token_id_list = []
-            output_token_id_list = []
 
             torch.cuda.synchronize()
             start = time.time()
 
+            input_token_id_list = None
+            output_token_id_list = None
             if backend == "vllm":
-                for output, prompt in zip(outputs, all_prompts):
-                    input_token_id_list.append(list(output.prompt_token_ids))
-                    output_token_id_list.append(list(output.outputs[0].token_ids))
+                input_token_id_list = [list(output.prompt_token_ids) for output in outputs]
+                output_token_id_list = [list(output.outputs[0].token_ids) for output in outputs]
             else:
-                for output, prompt in zip(outputs, all_prompts):
-                    input_token_id_list.append(list(self.tokenizer(prompt)["input_ids"]))
-                    output_token_id_list.append(list(self.tokenizer(output["text"])["input_ids"]))
+                input_token_id_list = [list(output["input_ids"]) for output in outputs]
+                output_token_id_list = [list(output["output_ids"]) for output in outputs]
 
             torch.cuda.synchronize()
             end = time.time()
