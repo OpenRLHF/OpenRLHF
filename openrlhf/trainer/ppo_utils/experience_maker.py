@@ -697,7 +697,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
             torch.cuda.synchronize()
             end = time.time()
-            print(f"Tokenize input and output takes: {end - start}s for {backend}")
+            print(f"Tokenize input and output takes: {end - start}s for {backend} in step {i}")
 
             if not self.packing_samples:
                 # NOTE: concat all outputs to following format:
@@ -706,8 +706,6 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 # | token token token token token | token token [EOS] [PAD] |
                 # | [PAD] [PAD] [PAD] token token | token token token [EOS] |
                 # |<---------- prompt ----------->|<-------- answer ------->|
-
-                #! TODO: Add SGLang support for tokens
 
                 max_input_len = max(len(input_id) for input_id in input_token_id_list)
                 max_output_len = max(len(output_id) for output_id in output_token_id_list)
