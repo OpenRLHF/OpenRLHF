@@ -689,6 +689,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             input_token_id_list = None
             output_token_id_list = None
             if backend == "vllm":
+                # TODO: should  all_prompt_token_ids and input token ids in engine outputs be a great difference?
                 input_token_id_list = [list(output.prompt_token_ids) for output in outputs]
                 output_token_id_list = [list(output.outputs[0].token_ids) for output in outputs]
             else:
@@ -713,6 +714,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
                 sequences = []
                 for input_token_id, output_token_id in zip(input_token_id_list, output_token_id_list):
+                    print(f"{backend} in step {i}")
                     # left padding input
                     input_len = len(input_token_id)
                     input_ids = [pad_token_id] * (max_input_len - input_len) + input_token_id
@@ -754,21 +756,34 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 num_actions = []
 
                 for i, (input_token_id, output_token_id) in enumerate(zip(input_token_id_list, output_token_id_list)):
+                    print(f"{backend} in step {i}")
+                    print(f"length of input_token_id: {len(input_token_id)}")
+                    print(f"length of output_token_id: {len(output_token_id)}")
+                    print(f"start of input_token_id: {input_token_id[:min(10, len(input_token_id))]}")
+                    print(f"start of output_token_id: {output_token_id[:min(10, len(output_token_id))]}")
+                    print(f"end of input_token_id: {input_token_id[max(0, len(input_token_id)-10):]}")
+                    print(f"end of output_token_id: {output_token_id[max(0, len(output_token_id)-10):]}")
                     input_len = len(input_token_id)
                     output_len = len(output_token_id)
                     packed_seq_lens.append(input_len + output_len)
+                    print(f"size of packed_seq_lens: {len(packed_seq_lens)}")
                     sequences.extend(input_token_id + output_token_id)
                     attention_mask.extend([i + 1] * (input_len + output_len))
+                    print(f"size of attention_mask: {len(attention_mask)}")
 
                     # current_action_mask = [0] * (input_len - 1) + [1] * output_len + [0]
                     # num_actions.append(max(1, sum(current_action_mask)))
                     num_actions.append(max(1, output_len))
 
                 sequences = torch.tensor(sequences, device="cuda").unsqueeze(0)
+                print(f"size of sequences: {sequences.size()}")
                 attention_mask = torch.tensor(attention_mask, device="cuda").unsqueeze(0)
+                print(f"size of attention_mask: {attention_mask.size()}")
                 action_mask = None
                 response_length = torch.tensor(num_actions, device="cuda", dtype=torch.float)
+                print(f"size of response_length: {response_length.size()}")
                 total_length = torch.tensor(packed_seq_lens, device="cuda", dtype=torch.float)
+                print(f"size of total_length: {total_length.size()}")
                 samples_list.append(
                     Samples(
                         sequences=sequences,
