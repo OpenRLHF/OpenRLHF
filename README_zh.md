@@ -28,7 +28,7 @@
 
 <hr>
 
-<span>[ <a href="README.md">English</a> | 中文 ]</span>
+<span>[ <a href="README.md">English</a> | 中文 | <a href="README_ja.md">日本語</a> ]</span>
 
 OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 RLHF 框架：
 
