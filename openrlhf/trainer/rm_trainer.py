@@ -109,6 +109,10 @@ class RewardModelTrainer(ABC):
         step = consumed_samples // args.train_batch_size * self.strategy.accumulated_gradient + 1
         start_epoch = consumed_samples // args.train_batch_size // num_update_steps_per_epoch
         consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train_batch_size)
+        
+        # Initialize loss_mean and acc_mean as None
+        acc_mean = None
+        loss_mean = None
 
         epoch_bar = tqdm(range(start_epoch, self.epochs), desc="Train epoch", disable=not self.strategy.is_rank_0())
         for epoch in range(start_epoch, self.epochs):
@@ -117,7 +121,7 @@ class RewardModelTrainer(ABC):
                     epoch, consumed_samples=0 if epoch > start_epoch else consumed_samples
                 )
 
-            #  train
+            # train
             step_bar = tqdm(
                 range(self.train_dataloader.__len__()),
                 desc="Train step of epoch %d" % epoch,
@@ -125,8 +129,6 @@ class RewardModelTrainer(ABC):
             )
 
             self.model.train()
-            acc_mean = 0
-            loss_mean = 0
             for data in self.train_dataloader:
                 if not self.packing_samples:
                     chosen_ids, c_mask, reject_ids, r_mask, margin = data
@@ -168,8 +170,9 @@ class RewardModelTrainer(ABC):
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 acc = (chosen_reward > reject_reward).float().mean().item()
-                acc_mean = acc_mean * 0.9 + 0.1 * acc
-                loss_mean = loss_mean * 0.9 + 0.1 * preference_loss.item()
+                acc_mean = (acc_mean * 0.9 + 0.1 * acc) if acc_mean else acc
+                loss_mean = (loss_mean * 0.9 + 0.1 * preference_loss.item()) if loss_mean else preference_loss.item()
+
                 # optional rm info
                 logs_dict = {
                     "loss": preference_loss.item(),

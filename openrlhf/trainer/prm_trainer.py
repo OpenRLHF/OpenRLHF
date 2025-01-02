@@ -100,6 +100,9 @@ class ProcessRewardModelTrainer(ABC):
         start_epoch = consumed_samples // args.train_batch_size // num_update_steps_per_epoch
         consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train_batch_size)
 
+        # Initialize loss_mean as None
+        loss_mean = None
+
         epoch_bar = tqdm(
             range(start_epoch, self.epochs),
             desc="Train epoch",
@@ -119,7 +122,6 @@ class ProcessRewardModelTrainer(ABC):
 
             # train
             self.model.train()
-            loss_mean = 0
             for data in self.train_dataloader:
                 if not self.packing_samples:
                     inputs, attention_masks, labels = data
@@ -152,7 +154,8 @@ class ProcessRewardModelTrainer(ABC):
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-                loss_mean = loss_mean * 0.9 + 0.1 * loss.item()
+                loss_mean = loss_mean * 0.9 + 0.1 * loss.item() if loss_mean else loss.item()
+
                 logs_dict = {
                     "prm_loss": prm_loss.item(),
                     "loss_mean": loss_mean,

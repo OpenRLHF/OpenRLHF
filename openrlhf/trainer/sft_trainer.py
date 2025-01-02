@@ -108,6 +108,9 @@ class SFTTrainer(ABC):
         step = consumed_samples // args.train_batch_size * self.strategy.accumulated_gradient + 1
         start_epoch = consumed_samples // args.train_batch_size // num_update_steps_per_epoch
         consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train_batch_size)
+        
+        # Initialize loss_mean as None
+        loss_mean = None
 
         epoch_bar = tqdm(
             range(start_epoch, self.epochs),
@@ -128,7 +131,6 @@ class SFTTrainer(ABC):
 
             # train
             self.model.train()
-            loss_mean = 0
             for prompt_id_lens, inputs, attention_masks, infos in self.train_dataloader:
                 if self.packing_samples:
                     inputs = inputs.to(torch.cuda.current_device())
@@ -175,7 +177,8 @@ class SFTTrainer(ABC):
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-                loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item()
+                loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item() if loss_mean else gpt_loss.item()
+
                 logs_dict = {
                     "gpt_loss": gpt_loss.item(),
                     "loss_mean": loss_mean,

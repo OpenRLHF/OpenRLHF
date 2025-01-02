@@ -111,6 +111,10 @@ class DPOTrainer(ABC):
         start_epoch = consumed_samples // args.train_batch_size // num_update_steps_per_epoch
         consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train_batch_size)
 
+        # Initialize loss_mean and acc_mean as None
+        acc_mean = None
+        loss_mean = None
+
         epoch_bar = tqdm(
             range(start_epoch, self.epochs),
             desc="Train epoch",
@@ -130,8 +134,6 @@ class DPOTrainer(ABC):
 
             self.model.train()
             self.ref_model.eval()
-            acc_mean = 0
-            loss_mean = 0
             # train
             for data in self.train_dataloader:
                 if not self.packing_samples:
@@ -177,8 +179,9 @@ class DPOTrainer(ABC):
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 acc = (chosen_reward > reject_reward).float().mean().item()
-                acc_mean = acc_mean * 0.9 + 0.1 * acc
-                loss_mean = loss_mean * 0.9 + 0.1 * preference_loss.item()
+                acc_mean = (acc_mean * 0.9 + 0.1 * acc) if acc_mean else acc
+                loss_mean = (loss_mean * 0.9 + 0.1 * preference_loss.item()) if loss_mean else preference_loss.item()
+
                 # dpo logs
                 logs_dict = {
                     "loss": preference_loss.item(),

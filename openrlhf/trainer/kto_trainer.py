@@ -109,6 +109,9 @@ class KTOTrainer(ABC):
         start_epoch = consumed_samples // args.train_batch_size // num_update_steps_per_epoch
         consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train_batch_size)
 
+        # Initialize loss_mean as None
+        loss_mean = None
+
         epoch_bar = tqdm(range(start_epoch, self.epochs), desc="Train epoch", disable=not self.strategy.is_rank_0())
         for epoch in range(start_epoch, self.epochs):
             if isinstance(self.train_dataloader.sampler, DistributedSampler):
@@ -124,7 +127,6 @@ class KTOTrainer(ABC):
 
             self.model.train()
             self.ref_model.eval()
-            loss_mean = 0
 
             # train
             for input_ids, attention_mask, labels, prompt_ids_lens in self.train_dataloader:
@@ -159,7 +161,7 @@ class KTOTrainer(ABC):
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-                loss_mean = loss_mean * 0.9 + 0.1 * loss.item()
+                loss_mean = loss_mean * 0.9 + 0.1 * loss.item() if loss_mean else loss.item()
 
                 logs_dict = {
                     "kto_loss": loss.item(),

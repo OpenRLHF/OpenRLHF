@@ -103,6 +103,9 @@ class KDTrainer(ABC):
         start_epoch = consumed_samples // args.train_batch_size // num_update_steps_per_epoch
         consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train_batch_size)
 
+        # Initialize loss_mean as None
+        loss_mean = None
+
         epoch_bar = tqdm(
             range(start_epoch, self.epochs),
             desc="Train epoch",
@@ -123,7 +126,6 @@ class KDTrainer(ABC):
             # train
             self.model.train()
             self.teacher_model.eval()
-            loss_mean = 0
             for prompts_id_len, inputs, attention_masks, _ in self.train_dataloader:
                 inputs = inputs.squeeze(1).to(torch.cuda.current_device())
                 attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
@@ -152,7 +154,8 @@ class KDTrainer(ABC):
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-                loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item()
+                loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item() if loss_mean else gpt_loss.item()
+
                 logs_dict = {
                     "gpt_loss": gpt_loss.item(),
                     "distil_loss": distil_loss.item(),
