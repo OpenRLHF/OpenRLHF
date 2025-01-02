@@ -3,13 +3,13 @@ from abc import ABC
 
 import torch
 import torch.distributed as dist
-from flash_attn.utils.distributed import all_gather
 from torch.optim import Optimizer
 from torch.nn import functional as F
 from tqdm import tqdm
 
 from openrlhf.models import GPTLMLoss
 from openrlhf.utils.distributed_sampler import DistributedSampler
+from openrlhf.utils.distributed_util import all_gather
 
 
 class SFTTrainer(ABC):
