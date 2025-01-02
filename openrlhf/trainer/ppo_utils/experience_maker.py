@@ -7,6 +7,7 @@ from typing import List, Optional, Tuple, Union
 import ray
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 from tqdm import tqdm
 
 from openrlhf.models.actor import Actor
@@ -178,7 +179,14 @@ class NaiveExperienceMaker(ABC):
         """
         args = self.strategy.args
         # generate responses
-        samples_list = self.generate_samples(all_prompts, **generate_kwargs)
+        if self.strategy.ring_attn_group is not None:
+            if self.strategy.ring_attn_rank == 0:
+                samples_list = self.generate_samples(all_prompts, **generate_kwargs)
+                dist.broadcast(samples_list)
+            else:
+                dist.broadcast(samples_list)
+        else:
+            samples_list = self.generate_samples(all_prompts, **generate_kwargs)
         torch.distributed.barrier()
 
         experiences = []

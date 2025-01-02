@@ -114,6 +114,10 @@ class DeepspeedStrategy(ABC):
     def ring_attn_group(self):
         return get_ring_attn_group()
 
+    @property
+    def ring_attn_rank(self):
+        return get_ring_attn_rank()
+
     def create_optimizer(self, model, **kwargs) -> Optimizer:
         if isinstance(model, Actor):
             model = model.model

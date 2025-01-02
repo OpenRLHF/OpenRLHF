@@ -280,8 +280,11 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 input_ids, attention_mask=attention_mask, position_ids=position_ids
             )
             last_hidden_states = outputs["last_hidden_state"]
-            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)[:, :-1]
-
+            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
+            if ring_attn_group is not None:
+                values = all_gather(values, ring_attn_group).reshape(values.shape[0], -1)[:, :-1]
+            else:
+                values = values[:, :-1]
             # normalize reward
             if self.normalize_reward:
                 values = (values - self.mean) / self.std
@@ -293,9 +296,6 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             if not self.packing_samples:
                 action_values = values[:, -num_actions:]
             else:
-                # TODO
-                if ring_attn_group is not None:
-                    pass
                 assert isinstance(num_actions, list) and len(num_actions) == len(packed_seq_lens)
                 action_values = []
                 offset = 0

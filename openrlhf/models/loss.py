@@ -103,8 +103,6 @@ class ValueLoss(nn.Module):
         returns: torch.Tensor,
         action_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        if self.ring_attn_group is not None:
-                pass
         if self.clip_eps is not None:
             values_clipped = old_values + (values - old_values).clamp(-self.clip_eps, self.clip_eps)
             surr1 = (values_clipped - returns) ** 2
