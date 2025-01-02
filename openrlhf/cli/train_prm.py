@@ -32,6 +32,22 @@ def train(args):
     )
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
+    if args.specialize_reward_tokens:
+        additional_special_tokens = [
+            args.placeholder_token,
+            *args.reward_tokens,
+        ]
+        tokenizer.add_special_tokens({"additional_special_tokens": additional_special_tokens})
+        strategy.print((
+            f"placeholder token {repr(args.placeholder_token)} "
+            f"and reward tokens {repr(args.reward_tokens)} "
+            "are added to tokenizer as additional_special_tokens"
+        ))
+        for token in additional_special_tokens:
+            strategy.print((
+                f"{repr(token)} -> {tokenizer(token)['input_ids']}, "
+                f"{repr(' '+ token)} -> {tokenizer(' ' + token)['input_ids']}"
+            ))
     strategy.print(model)
 
     # gradient_checkpointing
@@ -165,6 +181,7 @@ if __name__ == "__main__":
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
     parser.add_argument("--placeholder_token", type=str, default=None)
     parser.add_argument("--reward_tokens", type=str, nargs="*", default=None)
+    parser.add_argument("--specialize_reward_tokens", action="store_true", default=False)
 
     # packing samples using Flash Attention2
     parser.add_argument("--packing_samples", action="store_true", default=False)
