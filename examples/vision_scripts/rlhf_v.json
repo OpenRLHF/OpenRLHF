@@ -1,0 +1,9 @@
+{
+    "ranking": true,
+    "columns": {
+        "messages": "conversations",
+        "chosen": "chosen",
+        "rejected": "rejected",
+        "images": "images"
+    }
+}

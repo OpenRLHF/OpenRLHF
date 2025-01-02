@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 from openrlhf.models import DPOLoss
 from openrlhf.utils.distributed_sampler import DistributedSampler
-
+from openrlhf.utils.vision_utils import IGNORE_INDEX
 
 class DPOTrainer(ABC):
     """
@@ -476,3 +476,236 @@ class DPOTrainer(ABC):
             index = index + seq_len
 
         return torch.stack(logprobs_sums), torch.stack(logprobs_means)
+
+
+class VLDPOTrainer(DPOTrainer):
+    """
+    Trainer for Direct Preference Optimization (DPO) training.
+
+    Args:
+        model (torch.nn.Module): The primary model to be trained.
+        ref_model (torch.nn.Module): The reference model for comparing and guiding preference.
+        strategy (Strategy): The strategy to use for training.
+        tokenizer (Tokenizer): The tokenizer for processing input data.
+        optim (Optimizer): The optimizer for training the model.
+        train_dataloader (DataLoader): The dataloader for the training dataset.
+        eval_dataloader (DataLoader): The dataloader for the evaluation dataset.
+        scheduler (Scheduler): The learning rate scheduler to control learning rate during training.
+        max_norm (float, defaults to 0.5): Maximum gradient norm for gradient clipping.
+        beta (float, defaults to 0.01): Coefficient for regularizing the preference loss.
+        max_epochs (int, defaults to 2): Maximum number of training epochs.
+    """
+    def data_to_device(self, input_data):
+        for key, value in input_data.items():
+            input_data[key] = value.to(torch.cuda.current_device())
+        return input_data
+
+    def concatenated_forward(self, model, input_ids, attn_masks, labels, pixel_values, image_grid_thw):
+        """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
+
+        We do this to avoid doing two forward passes, because it's faster for FSDP.
+        """
+    
+        output = model(input_ids,
+                       attention_mask=attn_masks,
+                       return_output=True,
+                       pixel_values=pixel_values,
+                       image_grid_thw=image_grid_thw)
+
+        all_logits = output["logits"]
+        all_logps_sum, all_logps_mean = self._get_batch_logps(
+            all_logits, labels, attn_masks, None, average_log_prob=False
+        )
+        assert input_ids.shape[0] % 2 == 0
+        batch_size = input_ids.shape[0] // 2
+        chosen_logps = all_logps_sum[: batch_size]
+        rejected_logps = all_logps_sum[batch_size :]
+        aux_loss = output.aux_loss if "aux_loss" in output else []
+        return chosen_logps, rejected_logps, aux_loss, -all_logps_mean[: batch_size].mean()
+
+    def _get_batch_logps(
+        self,
+        logits: torch.FloatTensor,
+        labels: torch.LongTensor,
+        attention_mask,
+        prompt_id_lens,
+        average_log_prob: bool = False,
+    ) -> torch.FloatTensor:
+        """Compute the log probabilities of the given labels under the given logits.
+
+        Args:
+            logits: Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
+            labels: Labels for which to compute the log probabilities. Label tokens with a value of -100 are ignored. Shape: (batch_size, sequence_length)
+            average_log_prob: If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the log probabilities of the (non-masked) tokens.
+
+        Returns:
+            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the given logits.
+        """
+        assert average_log_prob == False
+        assert logits.shape[:-1] == labels.shape
+
+        labels = labels[:, 1:].clone()
+        logits = logits[:, :-1, :]
+        loss_masks = (labels != IGNORE_INDEX)
+
+        # dummy token; we'll ignore the losses on these tokens later
+        labels[labels == IGNORE_INDEX] = 0
+        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+
+        logprobs_sums = (per_token_logps * loss_masks).sum(-1)
+        logprobs_means = (per_token_logps * loss_masks).sum(-1) / loss_masks.sum(-1)
+        return logprobs_sums, logprobs_means
+
+    def fit(self, args, consumed_samples=0, num_update_steps_per_epoch=None):
+        # get eval and save steps
+        if args.eval_steps == -1:
+            args.eval_steps = num_update_steps_per_epoch  # Evaluate once per epoch
+        if args.save_steps == -1:
+            args.save_steps = float("inf")  # do not save ckpt
+
+        # Restore step and start_epoch
+        step = consumed_samples // args.train_batch_size * self.strategy.accumulated_gradient + 1
+        start_epoch = consumed_samples // args.train_batch_size // num_update_steps_per_epoch
+        consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train_batch_size)
+
+        epoch_bar = tqdm(
+            range(start_epoch, self.epochs),
+            desc="Train epoch",
+            disable=not self.strategy.is_rank_0(),
+        )
+        for epoch in range(start_epoch, self.epochs):
+            if isinstance(self.train_dataloader.sampler, DistributedSampler):
+                self.train_dataloader.sampler.set_epoch(
+                    epoch, consumed_samples=0 if epoch > start_epoch else consumed_samples
+                )
+
+            step_bar = tqdm(
+                range(self.train_dataloader.__len__()),
+                desc="Train step of epoch %d" % epoch,
+                disable=not self.strategy.is_rank_0(),
+            )
+
+            self.model.train()
+            self.ref_model.eval()
+            acc_mean = 0
+            loss_mean = 0
+
+            #TODO: support ring attention on vision model training
+            assert self.strategy.ring_attn_group is None, f"Right attention is not supported on vision models currently"
+
+            # train
+            for input_data in self.train_dataloader:
+                data = self.data_to_device(input_data)
+
+                chosen_logps, rejected_logps, aux_loss, nll_loss = self.concatenated_forward(
+                    self.model, data["input_ids"], data["attention_mask"],
+                    data["labels"], data["pixel_values"], data["image_grid_thw"],
+                )
+                with torch.no_grad():
+                    reference_chosen_logps, reference_rejected_logps, _, _ = self.concatenated_forward(
+                        self.ref_model, data["input_ids"], data["attention_mask"],
+                        data["labels"], data["pixel_values"], data["image_grid_thw"],
+                    )
+
+                # loss function
+                preference_loss, chosen_reward, reject_reward = self.loss_fn(
+                    chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
+                )
+                # mixtral
+                if not self.aux_loss:
+                    aux_loss = 0
+                # nll loss
+                if not self.nll_loss:
+                    nll_loss = 0
+
+                loss = preference_loss + aux_loss * self.args.aux_loss_coef + nll_loss * self.args.nll_loss_coef
+                self.strategy.backward(loss, self.model, self.optimizer)
+                self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
+
+                acc = (chosen_reward > reject_reward).float().mean().item()
+                acc_mean = acc_mean * 0.9 + 0.1 * acc
+                loss_mean = loss_mean * 0.9 + 0.1 * preference_loss.item()
+                # dpo logs
+                logs_dict = {
+                    "loss": preference_loss.item(),
+                    "acc": acc,
+                    "chosen_reward": chosen_reward.mean().item(),
+                    "reject_reward": reject_reward.mean().item(),
+                    "loss_mean": loss_mean,
+                    "acc_mean": acc_mean,
+                    "lr": self.scheduler.get_last_lr()[0],
+                }
+                grad_norm = self.model.model.get_global_grad_norm()
+                if grad_norm is not None:
+                    logs_dict.update({
+                        "grad_norm": grad_norm.detach().item() if isinstance(grad_norm, torch.Tensor) else grad_norm})
+
+                if self.nll_loss:
+                    logs_dict["nll_loss"] = nll_loss.item()
+                # step bar
+                logs_dict = self.strategy.all_reduce(logs_dict)
+                step_bar.set_postfix(logs_dict)
+                step_bar.update()
+
+                # logs/checkpoints/evaluation
+                if step % self.strategy.accumulated_gradient == 0:
+                    global_step = step // self.strategy.accumulated_gradient
+                    client_states = {"consumed_samples": global_step * args.train_batch_size}
+                    self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
+
+                step += 1
+            epoch_bar.update()
+
+        if self._wandb is not None and self.strategy.is_rank_0():
+            self._wandb.finish()
+        if self._tensorboard is not None and self.strategy.is_rank_0():
+            self._tensorboard.close()
+
+    def evaluate(self, eval_dataloader, steps=0):
+        self.model.eval()
+        with torch.no_grad():
+            step_bar = tqdm(
+                range(eval_dataloader.__len__()),
+                desc="Eval stage of global_step %d" % steps,
+                disable=not self.strategy.is_rank_0(),
+            )
+            acc_sum = 0
+            loss_sum = 0
+            times = 0
+            for input_data in eval_dataloader:
+                data = self.data_to_device(input_data)
+
+                chosen_logps, rejected_logps, aux_loss, _ = self.concatenated_forward(
+                    self.model, data["input_ids"], data["attention_mask"],
+                    data["labels"], data["pixel_values"], data["image_grid_thw"],
+                )
+                with torch.no_grad():
+                    reference_chosen_logps, reference_rejected_logps, _, _ = self.concatenated_forward(
+                        self.ref_model, data["input_ids"], data["attention_mask"],
+                        data["labels"], data["pixel_values"], data["image_grid_thw"],
+                    )
+
+                loss, chosen_reward, reject_reward = self.loss_fn(
+                    chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
+                )
+                acc_sum += (chosen_reward > reject_reward).float().mean().item()
+                loss_sum += loss.item()
+                times += 1
+                step_bar.update()
+
+            logs = {
+                "eval_loss": loss_sum / times,
+                "acc_mean": acc_sum / times,
+            }
+            logs = self.strategy.all_reduce(logs)
+            step_bar.set_postfix(logs)
+
+            if self.strategy.is_rank_0():
+                if self._wandb is not None:
+                    logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": steps}.items()}
+                    self._wandb.log(logs)
+                elif self._tensorboard is not None:
+                    for k, v in logs.items():
+                        self._tensorboard.add_scalar(f"eval/{k}", v, steps)
+        self.model.train()  # reset model state
+
