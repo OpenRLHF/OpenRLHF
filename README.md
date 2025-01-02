@@ -287,7 +287,7 @@ deepspeed --module openrlhf.cli.train_ppo \
 # --remote_rm_url http://localhost:5000/get_reward
 ```
 
-### PPO with Ray and vLLM
+### PPO/REINFORCE++ with Ray and vLLM
 
 To improve RLHF training speed or support 70B models, we can use the PPO with Ray and vLLM acceleration
 
@@ -339,11 +339,11 @@ ray job submit --address="http://127.0.0.1:8265" \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
 
-# Support remote reward model (HTTP)
-# --remote_rm_url http://localhost:5000/get_reward
-
 # Support REINFORCE++  | RLOO
 # --advantage_estimator reinforce | rloo
+
+# Support remote reward model (HTTP)
+# --remote_rm_url http://localhost:5000/get_reward
 
 # Support N samples
 # --n_samples_per_prompt 4

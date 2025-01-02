@@ -283,7 +283,7 @@ deepspeed --module openrlhf.cli.train_ppo \
 # --remote_rm_url http://localhost:5000/get_reward
 ```
 
-### RayとvLLMを使用したPPO
+### RayとvLLMを使用したPPO/REINFORCE++
 
 RLHFトレーニング速度を向上させるか、70Bモデルをサポートするために、RayとvLLM加速を使用したPPOを使用できます
 
@@ -335,11 +335,12 @@ ray job submit --address="http://127.0.0.1:8265" \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
 
+# REINFORCE++ | RLOOのサポート
+# --advantage_estimator reinforce | rloo
+
 # リモート報酬モデルのサポート（HTTP）
 # --remote_rm_url http://localhost:5000/get_reward
 
-# REINFORCE++ | RLOOのサポート
-# --advantage_estimator reinforce | rloo
 
 # Nサンプルのサポート
 # --n_samples_per_prompt 4

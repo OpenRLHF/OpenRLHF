@@ -292,7 +292,7 @@ deepspeed --module openrlhf.cli.train_ppo \
 # --remote_rm_url http://localhost:5000/get_reward
 ```
 
-### 使用 Ray 和 vLLM 的 PPO
+### 使用 Ray 和 vLLM 的 PPO/REINFORCE++
 
 为了提高 RLHF 训练速度或支持 70B 模型，我们可以使用 Ray 和 vLLM 加速的 PPO
 
@@ -345,11 +345,11 @@ ray job submit --address="http://127.0.0.1:8265" \
   --load_checkpoint \
   --use_wandb {wandb_token}
 
-# 支持远程 reward model (HTTP)
-# --remote_rm_url http://localhost:5000/get_reward
-
 # 支持 REINFORCE++  | RLOO 
 # --advantage_estimator reinforce | rloo
+
+# 支持远程 reward model (HTTP)
+# --remote_rm_url http://localhost:5000/get_reward
 
 # 支持 N 倍采样
 # --n_samples_per_prompt 4
