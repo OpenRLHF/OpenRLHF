@@ -151,6 +151,7 @@ def train(args):
             args.enable_prefix_caching,
             args.enforce_eager,
             max_len,
+            args.actor_num_nodes * args.actor_num_gpus_per_node,
         )
 
     ray.get(refs)

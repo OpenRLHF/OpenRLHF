@@ -6,6 +6,7 @@ from typing import List, Optional, Tuple, Union
 
 import ray
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 from tqdm import tqdm
 
@@ -634,8 +635,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         from vllm import SamplingParams
 
         # round-robin load balance
-        rank = torch.distributed.get_rank()
-        world_size = torch.distributed.get_world_size()
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
 
         # Select LLM engines: assign each rank an engine, or cycle through engines if world_size < engine_count
         if len(self.vllm_engines) <= world_size:
@@ -660,14 +661,21 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
 
         # Distribute requests to engines and collect responses to outputs
-        all_output_refs = []
+        refs = []
         batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
         for i, llm in enumerate(llms):
             prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
-            if prompt_token_ids:
-                all_output_refs.append(
-                    llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
-                )
+            refs.append(
+                llm.add_requests.remote(rank, sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
+            )
+        ray.get(refs)
+
+        # Make sure all requests are sent.
+        dist.barrier()
+
+        all_output_refs = []
+        for i, llm in enumerate(llms):
+            all_output_refs.append(llm.get_responses.remote(rank))
 
         # Retrieve and combine results from all outputs
         all_outputs = sum(ray.get(all_output_refs), [])
