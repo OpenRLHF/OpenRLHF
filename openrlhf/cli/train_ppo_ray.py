@@ -12,7 +12,7 @@ from openrlhf.trainer.ray import (
     PPORayActorGroup,
     ReferenceModelRayActor,
     RewardModelRayActor,
-    create_vllm_engines,
+    create_inference_engines,
 )
 from openrlhf.utils import get_strategy
 
@@ -140,10 +140,11 @@ def train(args):
             refs.extend(reward_model.async_init_model_from_pretrained(strategy, reward_pretrain))
 
     # init vLLM engine for text generation
-    vllm_engines = None
+    inference_engines = None
     if args.vllm_num_engines is not None and args.vllm_num_engines > 0:
         max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
-        vllm_engines = create_vllm_engines(
+        print(f"using backend: {args.backend}")
+        inference_engines = create_inference_engines(
             args.vllm_num_engines,
             args.vllm_tensor_parallel_size,
             args.pretrain,
@@ -151,6 +152,7 @@ def train(args):
             args.enable_prefix_caching,
             args.enforce_eager,
             max_len,
+            backend=args.backend,
         )
 
     ray.get(refs)
@@ -164,7 +166,12 @@ def train(args):
 
     # train actor and critic mdoel
     refs = actor_model.async_fit_actor_model(
-        critic_model, ref_model, reward_models, args.remote_rm_url, reward_fn=reward_fn, vllm_engines=vllm_engines
+        critic_model,
+        ref_model,
+        reward_models,
+        args.remote_rm_url,
+        reward_fn=reward_fn,
+        inference_engines=inference_engines,
     )
     ray.get(refs)
 
@@ -178,6 +185,7 @@ def train(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # Ray and vLLM
+    parser.add_argument("--backend", type=str, default="vllm", help="backend for inference")
     parser.add_argument("--ref_num_nodes", type=int, default=1, help="number of nodes for reference")
     parser.add_argument("--ref_num_gpus_per_node", type=int, default=8, help="number of gpus per node for reference")
     parser.add_argument("--reward_num_nodes", type=int, default=1, help="number of nodes for reward model")

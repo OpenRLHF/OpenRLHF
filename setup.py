@@ -75,6 +75,7 @@ setup(
     extras_require={
         "vllm": ["vllm==0.6.5"],
         "vllm_latest": ["vllm>0.6.5"],
+        "sglang": ["sglang"],
     },
     python_requires=">=3.10",
     classifiers=[
