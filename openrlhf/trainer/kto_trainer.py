@@ -110,6 +110,7 @@ class KTOTrainer(ABC):
         consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train_batch_size)
 
         epoch_bar = tqdm(range(start_epoch, self.epochs), desc="Train epoch", disable=not self.strategy.is_rank_0())
+        loss_sum = 0
         for epoch in range(start_epoch, self.epochs):
             if isinstance(self.train_dataloader.sampler, DistributedSampler):
                 self.train_dataloader.sampler.set_epoch(
@@ -124,7 +125,6 @@ class KTOTrainer(ABC):
 
             self.model.train()
             self.ref_model.eval()
-            loss_sum = 0
 
             # train
             for input_ids, attention_mask, labels, prompt_ids_lens in self.train_dataloader:

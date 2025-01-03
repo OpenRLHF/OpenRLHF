@@ -116,6 +116,8 @@ class DPOTrainer(ABC):
             desc="Train epoch",
             disable=not self.strategy.is_rank_0(),
         )
+        acc_sum = 0
+        loss_sum = 0
         for epoch in range(start_epoch, self.epochs):
             if isinstance(self.train_dataloader.sampler, DistributedSampler):
                 self.train_dataloader.sampler.set_epoch(
@@ -130,8 +132,6 @@ class DPOTrainer(ABC):
 
             self.model.train()
             self.ref_model.eval()
-            acc_sum = 0
-            loss_sum = 0
             # train
             for data in self.train_dataloader:
                 if not self.packing_samples:

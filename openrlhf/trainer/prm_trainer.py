@@ -105,6 +105,8 @@ class ProcessRewardModelTrainer(ABC):
             desc="Train epoch",
             disable=not self.strategy.is_rank_0(),
         )
+        loss_sum = 0
+        acc_sum = 0
         for epoch in range(start_epoch, self.epochs):
             if isinstance(self.train_dataloader.sampler, DistributedSampler):
                 self.train_dataloader.sampler.set_epoch(
@@ -119,8 +121,6 @@ class ProcessRewardModelTrainer(ABC):
 
             # train
             self.model.train()
-            loss_sum = 0
-            acc_sum = 0
             for data in self.train_dataloader:
                 if not self.packing_samples:
                     inputs, attention_masks, labels = data

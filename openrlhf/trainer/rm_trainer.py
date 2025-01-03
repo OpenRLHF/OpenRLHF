@@ -111,6 +111,8 @@ class RewardModelTrainer(ABC):
         consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train_batch_size)
 
         epoch_bar = tqdm(range(start_epoch, self.epochs), desc="Train epoch", disable=not self.strategy.is_rank_0())
+        acc_sum = 0
+        loss_sum = 0
         for epoch in range(start_epoch, self.epochs):
             if isinstance(self.train_dataloader.sampler, DistributedSampler):
                 self.train_dataloader.sampler.set_epoch(
@@ -125,8 +127,6 @@ class RewardModelTrainer(ABC):
             )
 
             self.model.train()
-            acc_sum = 0
-            loss_sum = 0
             for data in self.train_dataloader:
                 if not self.packing_samples:
                     chosen_ids, c_mask, reject_ids, r_mask, margin = data
