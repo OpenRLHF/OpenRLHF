@@ -23,7 +23,8 @@ openrlhf.cli.train_prm \
    --packing_samples \
    --wandb_group prm \
    --placeholder_token ки \
-   --reward_tokens + -
+   --reward_tokens + - \
+   --specialize_reward_tokens
 EOF
      # --use_wandb [WANDB_TOKENS] or True (use wandb login command)
      # --packing_samples
