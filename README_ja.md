@@ -349,6 +349,9 @@ ray job submit --address="http://127.0.0.1:8265" \
 > `--vllm_num_engines`を設定しない場合は、vLLMエンジンを使用しないことを意味します。
 > `setup_commands`を使用してRayが自動的に環境をデプロイすることもできます。例えば、`--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`。
 
+[!NOTE]
+OPENRLHFのRLOOは、REINFORCE++を基に改良されたものであり、オリジナル版とは異なります。
+
 > [!NOTE]
 > deepspeedがGPUデバイスを設定する際にインデックスが範囲外に関連するエラーが発生した場合、環境変数[`RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES`](openrlhf/trainer/ray/utils.py)を設定して回避策を試すことができます。
 >   ```bash

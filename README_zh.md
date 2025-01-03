@@ -360,6 +360,9 @@ ray job submit --address="http://127.0.0.1:8265" \
 > 您也可以通过 ``setup_commands`` 让 Ray 自动初始化环境, 比如 `--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`
 
 > [!NOTE]
+> OPENRLHF's RLOO 基于 REINFORCE++ 修改而来, 和原版的实现不同.
+
+> [!NOTE]
 > 如果您由于某种原因，在 deepspeed 设置显卡设备时遇到与索引超出范围相关的错误，您可以尝试设置环境变量 [`RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES`](openrlhf/trainer/ray/utils.py)。
 > ```bash
 > # 对于 NVIDIA 显卡:
