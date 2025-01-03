@@ -359,6 +359,19 @@ ray job submit --address="http://127.0.0.1:8265" \
 >   export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
 >   ```
 
+### LoRA
+
+If you use `LoRA (Low-Rank Adaptation)`, `OpenRLHF` will not save the full weights by default instead of `LoRA Adapter`. To continue in your task normally, you should combine the `Adapter` with weights of your base model
+
+```bash
+python -m openrlhf.cli.lora_combiner \
+    --model_path meta-llama/Meta-Llama-3-8B \
+    --lora_path ./checkpoint/llama3-8b-rm \
+    --output_path ./checkpoint/llama-3-8b-rm-combined \
+    --is_rm \
+    --bf16
+```
+
 The launch scripts and documents for supported algorithms are in [example/scripts](./examples/scripts/) and [Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)
 
 ## Performance
