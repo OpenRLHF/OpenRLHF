@@ -125,8 +125,8 @@ class RewardModelTrainer(ABC):
             )
 
             self.model.train()
-            acc_mean = 0
-            loss_mean = 0
+            acc_sum = 0
+            loss_sum = 0
             for data in self.train_dataloader:
                 if not self.packing_samples:
                     chosen_ids, c_mask, reject_ids, r_mask, margin = data
@@ -168,16 +168,14 @@ class RewardModelTrainer(ABC):
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 acc = (chosen_reward > reject_reward).float().mean().item()
-                acc_mean = acc_mean * 0.9 + 0.1 * acc
-                loss_mean = loss_mean * 0.9 + 0.1 * preference_loss.item()
+                acc_sum += acc
+                loss_sum += preference_loss.item()
                 # optional rm info
                 logs_dict = {
                     "loss": preference_loss.item(),
                     "acc": acc,
                     "chosen_reward": chosen_reward.mean().item(),
                     "reject_reward": reject_reward.mean().item(),
-                    "loss_mean": loss_mean,
-                    "acc_mean": acc_mean,
                     "lr": self.scheduler.get_last_lr()[0],
                 }
                 if self.aux_loss:
@@ -190,6 +188,10 @@ class RewardModelTrainer(ABC):
 
                 # logs/checkpoints/evaluation
                 if step % self.strategy.accumulated_gradient == 0:
+                    logs_dict["loss_mean"] = loss_sum / self.strategy.accumulated_gradient
+                    logs_dict["acc_mean"] = acc_sum / self.strategy.accumulated_gradient
+                    loss_sum = 0
+                    acc_sum = 0
                     global_step = step // self.strategy.accumulated_gradient
                     client_states = {"consumed_samples": global_step * args.train_batch_size}
                     self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)

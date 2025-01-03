@@ -2,10 +2,7 @@ import os
 from abc import ABC
 
 import torch
-import torch.distributed as dist
-from flash_attn.utils.distributed import all_gather
 from torch.optim import Optimizer
-from torch.nn import functional as F
 from tqdm import tqdm
 
 from openrlhf.models import GPTLMLoss
@@ -128,7 +125,7 @@ class SFTTrainer(ABC):
 
             # train
             self.model.train()
-            loss_mean = 0
+            loss_sum = 0
             for prompt_id_lens, inputs, attention_masks, infos in self.train_dataloader:
                 if self.packing_samples:
                     inputs = inputs.to(torch.cuda.current_device())
@@ -141,8 +138,8 @@ class SFTTrainer(ABC):
                     output = self.model(inputs, attention_mask=attention_mask, return_output=True)
                 else:
                     output = self.model(
-                        inputs, 
-                        attention_mask=attention_mask, 
+                        inputs,
+                        attention_mask=attention_mask,
                         return_output=True,
                         ring_attn_group=self.strategy.ring_attn_group,
                         packed_seq_lens=infos["input_length"],
@@ -175,10 +172,9 @@ class SFTTrainer(ABC):
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-                loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item()
+                loss_sum += gpt_loss.item()
                 logs_dict = {
                     "gpt_loss": gpt_loss.item(),
-                    "loss_mean": loss_mean,
                     "lr": self.scheduler.get_last_lr()[0],
                 }
                 if self.aux_loss:
@@ -190,6 +186,8 @@ class SFTTrainer(ABC):
 
                 # logs/checkpoints/evaluation
                 if step % self.strategy.accumulated_gradient == 0:
+                    logs_dict["loss_mean"] = loss_sum / self.strategy.accumulated_gradient
+                    loss_sum = 0
                     global_step = step // self.strategy.accumulated_gradient
                     client_states = {"consumed_samples": global_step * args.train_batch_size}
                     self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
@@ -251,13 +249,13 @@ class SFTTrainer(ABC):
                     output = self.model(inputs, attention_mask=attention_mask, return_output=True)
                 else:
                     output = self.model(
-                        inputs, 
-                        attention_mask=attention_mask, 
+                        inputs,
+                        attention_mask=attention_mask,
                         return_output=True,
                         ring_attn_group=self.strategy.ring_attn_group,
                         packed_seq_lens=infos["input_length"],
                     )
-                    
+
                 # loss function
                 labels = torch.where(
                     attention_mask.bool(),
@@ -292,4 +290,3 @@ class SFTTrainer(ABC):
                     for k, v in logs.items():
                         self._tensorboard.add_scalar(f"eval/{k}", v, steps)
         self.model.train()  # reset model state
-        

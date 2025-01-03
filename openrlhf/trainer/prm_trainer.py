@@ -119,7 +119,8 @@ class ProcessRewardModelTrainer(ABC):
 
             # train
             self.model.train()
-            loss_mean = 0
+            loss_sum = 0
+            acc_sum = 0
             for data in self.train_dataloader:
                 if not self.packing_samples:
                     inputs, attention_masks, labels = data
@@ -152,10 +153,10 @@ class ProcessRewardModelTrainer(ABC):
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-                loss_mean = loss_mean * 0.9 + 0.1 * loss.item()
+                loss_sum += loss.item()
+                acc_sum += acc.item()
                 logs_dict = {
                     "prm_loss": prm_loss.item(),
-                    "loss_mean": loss_mean,
                     "acc": acc.item(),
                     "lr": self.scheduler.get_last_lr()[0],
                 }
@@ -168,6 +169,10 @@ class ProcessRewardModelTrainer(ABC):
 
                 # logs/checkpoints/evaluation
                 if step % self.strategy.accumulated_gradient == 0:
+                    logs_dict["loss_mean"] = loss_sum / self.strategy.accumulated_gradient
+                    logs_dict["acc_mean"] = acc_sum / self.strategy.accumulated_gradient
+                    loss_sum = 0
+                    acc_sum = 0
                     global_step = step // self.strategy.accumulated_gradient
                     client_states = {"consumed_samples": global_step * args.train_batch_size}
                     self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
