@@ -1,5 +1,7 @@
 set -x
 
+# reinforce++
+
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{"working_dir": "/openrlhf"}' \
    -- python3 -m openrlhf.cli.train_ppo_ray \

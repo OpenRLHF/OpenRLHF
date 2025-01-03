@@ -353,6 +353,9 @@ ray job submit --address="http://127.0.0.1:8265" \
 > You can also use ``setup_commands`` to let Ray automatically deploy the environment, such as `--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`.
 
 > [!NOTE]
+> RLOO in OPENRLHF is a modification based on REINFORCE++, differing from the original version.
+
+> [!NOTE]
 > If you you encounter an error related to index out of range when deepspeed sets up the GPU devices, you can try to set the environment variable [`RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES`](openrlhf/trainer/ray/utils.py) as a workaround.
 >   ```bash
 >   # For NVIDIA GPUs:
