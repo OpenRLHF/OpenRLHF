@@ -70,12 +70,23 @@ class ProcessRewardDataset(Dataset):
                 ), f"label should be in reward tokens {self.reward_tokens}, got {label}"
                 label_tokens.append(convert_token_to_id(label, self.tokenizer))
 
-            labels = torch.full_like(input_ids, -100)
-            labels[input_ids == self.placeholder_token_id] = torch.tensor(label_tokens, dtype=input_ids.dtype)
+            # label_tokens is list of token id (for '+', '-', etc)
+            label_tensor = torch.tensor(label_tokens, dtype=input_ids.dtype)
         else:
-            assert isinstance(label_values[0], numbers.Number), "labels should be a list of strings or numbers"
-            labels = torch.full_like(input_ids, -100, dtype=torch.float)
-            labels[input_ids == self.placeholder_token_id] = torch.tensor(label_values, dtype=torch.float)
+            # label_values is list of float numbers (for reward values)
+            label_tensor = torch.tensor(label_values, dtype=torch.float)
+        # Motivation: inputs_ids maybe truncated to self.max_length, where placeholder_tokens at the end may be removed.
+        # We should also truncate the labels to match the length of input_ids
+        # Step 1: Create a mask for placeholder token positions
+        mask = input_ids == self.placeholder_token_id
+        # Step 2: Ensure that label_tensor is truncated along the last dimension
+        # Find the length of the last dimension of the mask
+        num_placeholders = mask.sum(dim=-1)
+        # Truncate label_tensor along the last dimension to match num_placeholders
+        truncated_labels = label_tensor[..., :num_placeholders.max()]
+        # Step 3: Update labels at placeholder token positions
+        labels = torch.full_like(input_ids, -100)
+        labels[mask] = truncated_labels
 
         return (
             input_ids,
