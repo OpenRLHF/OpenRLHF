@@ -372,6 +372,18 @@ ray job submit --address="http://127.0.0.1:8265" \
 所有支持算法的启动脚本和文档在 [example/scripts](./examples/scripts/) 和 [Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)
 
 
+### 使用 LoRA
+如果您使用了 `LoRA (Low-Rank Adaptation)`，默认保存下来的文件**并非**完整模型权重，而是 `LoRA Adapter`，若想按完整权重的方式进行后续任务，您需要将 `Adapter` 与训练前的模型权重进行合并
+
+```bash
+python -m openrlhf.cli.lora_combiner \
+    --model_path meta-llama/Meta-Llama-3-8B \
+    --lora_path ./checkpoint/llama3-8b-rm \
+    --output_path ./checkpoint/llama-3-8b-rm-combined \
+    --is_rm \
+    --bf16
+```
+
 ## 性能
 我们通过启用Adam卸载、奖励模型(RM)和参考模型(Ref)卸载等技术,尽可能优化了DSChat的性能,从而在推理阶段增加小批量大小并避免内存不足问题。我们甚至修复了DSChat中的一些bug,以启用LLaMA2的混合引擎(HE)。使用优化后的DSChat和OpenRLHF训练1024个提示需要1个PPO轮次的平均时间(秒)如下:
 
