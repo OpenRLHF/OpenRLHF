@@ -37,7 +37,15 @@ def train(args):
             args.placeholder_token,
             *args.reward_tokens,
         ]
+        old_vocab_size = len(tokenizer)
         tokenizer.add_special_tokens({"additional_special_tokens": additional_special_tokens})
+        new_vocab_size = len(tokenizer)
+        if new_vocab_size > old_vocab_size:
+            ds_config = strategy.get_ds_train_config(is_actor=True)
+            if ds_config is not None and ds_config["zero_optimization"]["stage"] == 3:
+                from transformers.integrations.deepspeed import HfDeepSpeedConfig
+                dschf = HfDeepSpeedConfig(ds_config)
+            model.model.resize_token_embeddings(new_vocab_size)
         strategy.print((
             f"placeholder token {repr(args.placeholder_token)} "
             f"and reward tokens {repr(args.reward_tokens)} "
