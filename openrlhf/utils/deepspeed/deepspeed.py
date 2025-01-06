@@ -342,7 +342,9 @@ class DeepspeedStrategy(ABC):
                         get_peft_model_state_dict(model_to_save, output_state_dict),
                         os.path.join(output_dir, "adapter_model.bin"),
                     )
-                    os.remove(os.path.join(output_dir, "adapter_model.safetensors"))
+                    filename = os.path.join(output_dir, "adapter_model.safetensors")
+                    if os.path.exists(filename):
+                        os.remove(filename)
             else:
                 # save model
                 model_to_save.save_pretrained(output_dir, state_dict=output_state_dict, **kwargs)
