@@ -99,6 +99,7 @@ class SFTDataset(Dataset):
                 return_tensors="pt",
                 add_special_tokens=False,
             )
+            prompt_token = {k: v.squeeze(0) for k, v in prompt_token.items()}
             prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
 
             # filter the sample whose length is greater than max_length (2 for answer length)
@@ -133,11 +134,12 @@ class SFTDataset(Dataset):
             return_tensors="pt",
             add_special_tokens=False,
         )
+        input_token = {k: v.squeeze(0) for k, v in input_token.items()}
 
         if not self.pretrain_mode:
             # to avoid EOS_token truncation
-            input_token["input_ids"][0][-1] = self.tokenizer.eos_token_id
-            input_token["attention_mask"][0][-1] = True
+            input_token["input_ids"][-1] = self.tokenizer.eos_token_id
+            input_token["attention_mask"][-1] = True
         info = {"input": prompt, "output": response, "input_length": input_token["attention_mask"].int().sum().item()}
 
         return prompt_ids_len, input_token["input_ids"], input_token["attention_mask"], info
