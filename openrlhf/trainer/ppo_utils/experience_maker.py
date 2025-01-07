@@ -1,3 +1,5 @@
+import os
+import json
 import time
 from abc import ABC
 from copy import deepcopy
@@ -57,6 +59,8 @@ class Experience:
     action_mask: Optional[torch.BoolTensor]
     info: Optional[dict]
     kl: Optional[torch.Tensor] = None
+    ref_action_logprobs: Optional[torch.Tensor] = None
+    token_rewards: Optional[torch.Tensor] = None
 
     @torch.no_grad()
     def to_device(self, device: torch.device):
@@ -69,6 +73,8 @@ class Experience:
         self.action_mask = to(self.action_mask, device)
         self.kl = to(self.kl, device)
         self.info = {key: to(value, device) for key, value in self.info.items()}
+        self.ref_action_logprobs = to(self.ref_action_logprobs, device)
+        self.token_rewards = to(self.token_rewards, device)
         return self
 
     def pin_memory(self):
@@ -81,6 +87,8 @@ class Experience:
         self.action_mask = pin_memory(self.action_mask)
         self.kl = pin_memory(self.kl)
         self.info = {key: pin_memory(value) for key, value in self.info.items()}
+        self.ref_action_logprobs = pin_memory(self.ref_action_logprobs)
+        self.token_rewards = pin_memory(self.token_rewards)
         return self
 
 
@@ -166,9 +174,45 @@ class NaiveExperienceMaker(ABC):
             truncation=True,
         )
         return {k: v.to(device) for k, v in batch.items()}
+    
+    @torch.no_grad()
+    def save_rollout_data_for_rl_logging_board(self, experience: Experience, args, cur_step: int):
+        """
+        Saving current log in replay buffer for rl logging board.
+        """
+        if args.use_rl_logging_board:
+
+            if not os.path.exists(args.use_rl_logging_board):
+                os.makedirs(args.use_rl_logging_board)
+
+            with open(os.path.join(args.use_rl_logging_board, f"data_rank{torch.distributed.get_rank()}.jsonl"), 'a') as f:
+                for sequence, action_log_prob, value, ref_action_logprob, token_reward, rm_reward in zip(
+                    experience.sequences,
+                    experience.action_log_probs,
+                    experience.values,
+                    experience.ref_action_logprobs,
+                    experience.token_rewards,
+                    experience.info['reward'],
+                ):
+                    prompt_ids = sequence[:-len(action_log_prob)]
+                    prompt = self.tokenizer.decode(prompt_ids)
+                    response = self.tokenizer.decode(sequence[-len(action_log_prob):])
+                    response_tokens = [self.tokenizer.decode(_id) for _id in sequence[-len(action_log_prob):]]
+                    sample = {
+                        "prompt": prompt,
+                        "response": response,
+                        "response_tokens": response_tokens,
+                        "logprobs": action_log_prob.tolist(),
+                        "ref_logprobs": ref_action_logprob.tolist(),
+                        "values": value.tolist(),
+                        "token_rewards": token_reward.tolist(),
+                        "reward": float(rm_reward),
+                        "step": cur_step
+                    }
+                    f.write(f"{json.dumps(sample, ensure_ascii=False)}\n")
 
     @torch.no_grad()
-    def make_experience_list(self, all_prompts: Union[str, List[str]], **generate_kwargs) -> List[Experience]:
+    def make_experience_list(self, all_prompts: Union[str, List[str]], cur_step: int = 0, **generate_kwargs) -> List[Experience]:
         """
         Make a list of experience with the micro_rollout_batch_size.
 
@@ -205,6 +249,8 @@ class NaiveExperienceMaker(ABC):
                 reward_clip_range=args.reward_clip_range,
             )
 
+            experience.token_rewards = reward
+
             if self.advantage_estimator == "gae":
                 experience.advantages, experience.returns = self.get_advantages_and_returns(
                     experience.values,
@@ -231,6 +277,10 @@ class NaiveExperienceMaker(ABC):
                     [each_reward.sum() for each_reward in reward], device=torch.cuda.current_device()
                 )
             experience.info["return"] = return_sums
+            
+            # save data for rl logging board if set `--use_rl_logging_board SAVE_PATH`
+            self.save_rollout_data_for_rl_logging_board(experience, args, cur_step)
+
             # remove unnecessary info
             experience.kl = None
             del experience.info["num_actions"]
@@ -332,6 +382,7 @@ class NaiveExperienceMaker(ABC):
             action_mask,
             info,
             kl,
+            base_action_log_probs
         )
 
     @torch.no_grad()
@@ -465,14 +516,14 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         self.packing_samples = packing_samples
 
     @torch.no_grad()
-    def make_experience_list(self, all_prompts: Union[str, List[str]], **generate_kwargs) -> List[Experience]:
+    def make_experience_list(self, all_prompts: Union[str, List[str]], cur_step: int = 0, **generate_kwargs) -> List[Experience]:
         if self.strategy.args.perf:
             self.perf_stats = {
                 "generate_time": 0,
                 "actor_value_rm_time": 0,
                 "wait_time": 0,
             }
-        experiences = super().make_experience_list(all_prompts, **generate_kwargs)
+        experiences = super().make_experience_list(all_prompts, cur_step, **generate_kwargs)
         if self.critic is not None:
             for experience in experiences:
                 # send experience to critic
@@ -597,6 +648,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             sequences = unpacking_samples(sequences, packed_seq_lens)
             attention_mask = None
             action_log_probs = unpacking_samples(action_log_probs, num_actions)
+            base_action_log_probs = unpacking_samples(base_action_log_probs, num_actions)
             if value is not None:
                 value = unpacking_samples(value, num_actions)
 
@@ -625,6 +677,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             action_mask,
             info,
             kl,
+            base_action_log_probs
         )
 
         self.actor.train()  # reset model state

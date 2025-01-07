@@ -352,6 +352,9 @@ if __name__ == "__main__":
     # TensorBoard parameters
     parser.add_argument("--use_tensorboard", type=str, default=None, help="TensorBoard logging path")
 
+    # RL Logging Board parameters
+    parser.add_argument("--use_rl_logging_board", type=str, default=None, help="Rollout data saved path for RL Logging Board")
+
     # performance tuning
     parser.add_argument("--perf", action="store_true", default=False)
 
