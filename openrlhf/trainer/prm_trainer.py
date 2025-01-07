@@ -52,8 +52,8 @@ class ProcessRewardModelTrainer(ABC):
         self.args = strategy.args
 
         # set placeholder token
-        self.placeholder_token_id = convert_token_to_id(strategy.args.placeholder_token, self.tokenizer)
-        self.reward_token_ids = self.args.reward_tokens
+        self.placeholder_token_id = convert_token_to_id(self.args.placeholder_token_in_tokenizer, self.tokenizer)
+        self.reward_token_ids = self.args.reward_tokens_in_tokenizer
         if self.reward_token_ids is not None:
             self.reward_token_ids = [convert_token_to_id(token, self.tokenizer) for token in self.reward_token_ids]
 

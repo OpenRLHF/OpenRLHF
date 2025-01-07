@@ -36,8 +36,8 @@ class ProcessRewardDataset(Dataset):
         # chat_template
         self.input_key = getattr(self.strategy.args, "input_key", None)
         self.label_key = getattr(self.strategy.args, "label_key", None)
-        self.placeholder_token = getattr(self.strategy.args, "placeholder_token", None)
-        self.reward_tokens = getattr(self.strategy.args, "reward_tokens", None)
+        self.placeholder_token = getattr(self.strategy.args, "placeholder_token_in_tokenizer", None)
+        self.reward_tokens = getattr(self.strategy.args, "reward_tokens_in_tokenizer", None)
 
         self.placeholder_token_id = convert_token_to_id(self.placeholder_token, self.tokenizer)
 
