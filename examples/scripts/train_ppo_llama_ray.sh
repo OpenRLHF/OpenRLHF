@@ -1,7 +1,7 @@
 set -x 
 
 ray job submit --address="http://127.0.0.1:8265" \
-   --runtime-env-json='{"working_dir": "/cpfs/user/bupo/OpenRLHF/"}' \
+   --runtime-env-json='{"working_dir": "/openrlhf"}' \
    -- python3 -m openrlhf.cli.train_ppo_ray \
    --ref_num_nodes 1 \
    --ref_num_gpus_per_node 2 \
@@ -17,7 +17,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --colocate_actor_ref \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
    --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
-   --save_path /cpfs/user/bupo/OpenRLHF/examples/checkpoint/llama3-8b-rlhf \
+   --save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
    --micro_train_batch_size 8 \
    --train_batch_size 128 \
    --micro_rollout_batch_size 32 \
@@ -40,8 +40,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --flash_attn \
    --gradient_checkpointing \
    --load_checkpoint \
-   --use_tensorboard /cpfs/user/bupo/OpenRLHF/logs/tensorboard/llama3-8b-rlhf \
-   --use_rl_logging_board /cpfs/user/bupo/OpenRLHF/logs/rl_logging_board/llama3-8b-rlhf
+   --use_tensorboard /openrlhf/logs/tensorboard/llama3-8b-rlhf \
+   --use_rl_logging_board /openrlhf/logs/rl_logging_board/llama3-8b-rlhf
 
 # --runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}' [Install deps]
 # --ref_reward_offload [Offload to CPU]
