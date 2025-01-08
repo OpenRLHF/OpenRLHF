@@ -59,6 +59,7 @@ class bdist_wheel(_bdist_wheel):
 
 # Setup configuration
 setup(
+    author="OpenRLHF Team",
     name=_fetch_package_name(),
     version=_fetch_version(),
     packages=find_packages(

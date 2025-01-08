@@ -455,4 +455,4 @@ AIおよびNLP分野への貢献に対して、以下のプロジェクトおよ
 
 ______________________________________________________________________
 
-*OpenRLHF © 2024 OpenRLHF. All Rights Reserved.*
+*OpenRLHF © 2025 OpenRLHF. All Rights Reserved.*
