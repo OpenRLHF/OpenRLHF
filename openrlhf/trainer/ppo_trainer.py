@@ -195,26 +195,31 @@ class PPOTrainer(ABC):
             // args.rollout_batch_size
             // args.n_samples_per_prompt
         )
-
+        print("num_rollouts_per_episodes", num_rollouts_per_episodes)
         # get eval and save steps
         if args.eval_steps == -1:
             args.eval_steps = num_rollouts_per_episodes  # Evaluate once per epoch
         if args.save_steps == -1:
             args.save_steps = float("inf")  # do not save ckpt
-
+        print("args.save_steps", args.save_steps)
         self.prompts_dataloader = prompts_dataloader
         self.pretrain_dataloader = pretrain_dataloader
-
+        print("prompts_dataloader", prompts_dataloader)
         # Restore step and start_epoch
         steps = consumed_samples // args.rollout_batch_size + 1
+        print("steps", steps)
         start_episode = consumed_samples // args.rollout_batch_size // num_rollouts_per_episodes
+        print("start_episode", start_episode)
         consumed_samples = consumed_samples % (num_rollouts_per_episodes * args.rollout_batch_size)
+        print("consumed_samples", consumed_samples)
 
         for episode in range(start_episode, args.num_episodes):
+            print("episode", episode)
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
                 self.prompts_dataloader.sampler.set_epoch(
                     episode, consumed_samples=0 if episode > start_episode else consumed_samples
                 )
+            print("self.prompts_dataloader.__len__()", self.prompts_dataloader.__len__())
             pbar = tqdm(
                 range(self.prompts_dataloader.__len__()),
                 desc=f"Episode [{episode + 1}/{args.num_episodes}]",
@@ -222,40 +227,59 @@ class PPOTrainer(ABC):
             )
 
             for rand_prompts in self.prompts_dataloader:
+                print("rand_prompts")
                 for i, experience in enumerate(
                     self.experience_maker.make_experience_list(rand_prompts, **self.generate_kwargs)
                 ):
+                    print("experience")
                     if i == 0:
+                        print("experience.sequences")
                         output = self.tokenizer.batch_decode(
                             experience.sequences[0].unsqueeze(0), skip_special_tokens=True
                         )
                         self.strategy.print(output)
+                        print("experience.sequences[0]")
                     self.replay_buffer.append(experience)
+                    print("self.replay_buffer.append(experience)")
 
                 torch.cuda.empty_cache()
+                print("torch.cuda.empty_cache()")
                 self.replay_buffer.normalize("advantages", self.strategy)
+                print("self.replay_buffer.normalize('advantages', self.strategy)")
                 status = self.ppo_train(steps)
+                print("self.ppo_train(steps)")
                 self.replay_buffer.clear()
+                print("self.replay_buffer.clear()")
                 torch.cuda.empty_cache()
+                print("torch.cuda.empty_cache()")
 
                 if "kl" in status:
                     self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
+                print("self.kl_ctl.update(status['kl'], args.rollout_batch_size * args.n_samples_per_prompt)")
                 pbar.set_postfix(status)
+                print("pbar.set_postfix(status)")
 
                 # logs/checkpoints
                 client_states = {"consumed_samples": steps * args.rollout_batch_size}
+                print("client_states", client_states)
                 self.save_logs_and_checkpoints(args, steps, pbar, status, client_states)
+                print("self.save_logs_and_checkpoints(args, steps, pbar, status, client_states)")
 
                 pbar.update()
+                print("pbar.update()")
                 steps = steps + 1
+                print("steps = steps + 1")
 
         if self._wandb is not None and self.strategy.is_rank_0():
             self._wandb.finish()
+            print("self._wandb.finish()")
         if self._tensorboard is not None and self.strategy.is_rank_0():
             self._tensorboard.close()
+            print("self._tensorboard.close()")
 
     def ppo_train(self, global_steps=0):
         # replay buffer may be empty at first, we should rebuild at each training
+        print("self.replay_buffer", self.replay_buffer)
         dataloader = DataLoader(
             self.replay_buffer,
             batch_size=self.replay_buffer.sample_batch_size,
@@ -264,26 +288,33 @@ class PPOTrainer(ABC):
             pin_memory=self.dataloader_pin_memory,
             collate_fn=self.replay_buffer.collate_fn,
         )
+        print("dataloader", dataloader)
         device = torch.cuda.current_device()
+        print("device", device)
 
         status_list = []
         status_mean = {}
         for epoch in range(self.max_epochs):
+            print("epoch", epoch)
             pbar = tqdm(
                 dataloader,
                 desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
+            print("pbar", pbar)
             for experience in pbar:
                 experience.to_device(device)
                 status = self.training_step(experience, global_steps)
-
+                print("status", status)
                 # for DP
                 # weighted mean for kl
                 if "kl" in status:
                     status["kl"] *= status["response_length"]
+                    print("status['kl'] *= status['response_length']")
                     status = self.strategy.all_reduce(status)
+                    print("status = self.strategy.all_reduce(status)")
                     status["kl"] /= status["response_length"]
+                    print("status['kl'] /= status['response_length']")
 
                 short_status = {}
 
@@ -297,55 +328,79 @@ class PPOTrainer(ABC):
                         "kl": status["kl"],
                         "act_lr": status["actor_lr"],
                     }
-
+                    print("short_status", short_status)
                 if "critic_loss" in status:
                     short_status["cri"] = status["critic_loss"]
                     short_status["vals"] = status["values"]
                     short_status["cri_lr"] = status["critic_lr"]
+                    print("short_status", short_status)
 
                 if "ptx_loss" in status:
                     short_status["ptx"] = status["ptx_loss"]
-
+                    print("short_status", short_status)
                 status_list.append(status)
+                print("status_list", status_list)
                 pbar.set_postfix(short_status)
+                print("pbar.set_postfix(short_status)")
 
         if status_list:
             status_mean = status_list[0]
+            print("status_mean", status_mean)
             for m in status_list[1:]:
                 for k, v in m.items():
                     status_mean[k] += v
+                    print("status_mean[k] += v")
             for k in status_mean.keys():
                 status_mean[k] /= len(status_list)
+                print("status_mean[k] /= len(status_list)")
         return status_mean
 
     def training_step(self, experience: Experience, global_steps) -> Dict[str, float]:
         status = {}
+        print("global_steps", global_steps)
+        print("self.freezing_actor_steps", self.freezing_actor_steps)
         if global_steps > self.freezing_actor_steps:
+            print("self.training_step_actor(experience)")
             status = self.training_step_actor(experience)
         if self.critic is not None:
+            print("self.training_step_critic(experience)")
             status.update(self.training_step_critic(experience))
+        print("status", status)
         return status
 
     def training_step_actor(self, experience: Experience) -> Dict[str, float]:
         self.actor.train()
-
+        print("actor train")
         # TODO: this is a bad indicator to say that data is packed...
         if isinstance(experience.sequences, list):
+            print("experience.sequences", experience.sequences)
             sequences = torch.cat(experience.sequences, dim=0).unsqueeze(0)
+            print("sequences", sequences)
             old_action_log_probs = torch.cat(experience.action_log_probs, dim=0).unsqueeze(0)
+            print("old_action_log_probs", old_action_log_probs)
             advantages = torch.cat(experience.advantages, dim=0).unsqueeze(0)
+            print("advantages", advantages)
             num_actions = [v.numel() for v in experience.advantages]
+            print("num_actions", num_actions)
             packed_seq_lens = [s.numel() for s in experience.sequences]
+            print("packed_seq_lens", packed_seq_lens)
             attention_mask = torch.cat(
                 [torch.full_like(s, i + 1) for i, s in enumerate(experience.sequences)], dim=0
             ).unsqueeze(0)
+            print("attention_mask", attention_mask)
         else:
             sequences = experience.sequences
+            print("sequences", sequences)
             old_action_log_probs = experience.action_log_probs
+            print("old_action_log_probs", old_action_log_probs)
             advantages = experience.advantages
+            print("advantages", advantages)
             num_actions = experience.action_mask.size(1)
+            print("num_actions", num_actions)
             packed_seq_lens = None
+            print("packed_seq_lens", packed_seq_lens)
             attention_mask = experience.attention_mask
+            print("attention_mask", attention_mask)
 
         # actor loss
         action_log_probs, output = self.actor(
@@ -355,6 +410,7 @@ class PPOTrainer(ABC):
             return_output=True,
             packed_seq_lens=packed_seq_lens,
         )
+        print("action_log_probs", action_log_probs)
 
         # loss function
         actor_loss = self.actor_loss_fn(
@@ -363,46 +419,64 @@ class PPOTrainer(ABC):
             advantages,
             action_mask=experience.action_mask,
         )
+        print("actor_loss", actor_loss)
         # mixtral
         if self.aux_loss:
             aux_loss = output.aux_loss
+            print("aux_loss", aux_loss)
         else:
             aux_loss = 0
+        print("aux_loss", aux_loss)
         loss = actor_loss + aux_loss * self.args.aux_loss_coef
+        print("loss", loss)
         self.strategy.backward(loss, self.actor, self.actor_optim)
+        print("backward done")
 
         # ptx loss
         if self.pretrain_dataloader is not None:
             data = next(self.pretrain_dataloader)
+            print("data", data)
             inputs = data[1].squeeze(1).to(torch.cuda.current_device())
+            print("inputs", inputs)
             attention_mask = data[2].squeeze(1).to(torch.cuda.current_device())
+            print("attention_mask", attention_mask)
             label = torch.where(
                 attention_mask.bool(),
                 inputs,
                 self.ptx_loss_fn.IGNORE_INDEX,
             )
-
+            print("label", label)
             output = self.actor(inputs, attention_mask=attention_mask, return_output=True)
+            print("output", output)
             ptx_log_probs = output["logits"]
+            print("ptx_log_probs", ptx_log_probs)
 
             # loss function
             ptx_loss = self.ptx_loss_fn(ptx_log_probs, label)
+            print("ptx_loss", ptx_loss)
             # mixtral
             if self.aux_loss:
                 aux_loss = output.aux_loss
+                print("aux_loss", aux_loss)
             else:
                 aux_loss = 0
+            print("aux_loss", aux_loss)
             loss = ptx_loss + aux_loss * self.args.aux_loss_coef
+            print("loss", loss)
             self.strategy.backward(self.ptx_coef * loss, self.actor, self.actor_optim)
-
+            print("backward done")
         self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
+        print("optimizer_step done")
         if self.ema_model:
             self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cpu")
+        print("moving_average done")
 
         # status
         status = {"policy_loss": actor_loss.item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}
+        print("status", status)
         if self.pretrain_dataloader is not None:
             status["ptx_loss"] = ptx_loss.item()
+        print("status", status)
         for k, v in experience.info.items():
             if k == "kl":
                 status[k] = (
@@ -410,28 +484,42 @@ class PPOTrainer(ABC):
                 ).item()
             else:
                 status[k] = v.mean().item()
+        print("status", status)
         return status
 
     def training_step_critic(self, experience: Experience) -> Dict[str, float]:
         self.critic.train()
-
+        print("critic train")
         # TODO: this is a bad indicator to say that data is packed...
         if isinstance(experience.sequences, list):
+            print("experience.sequences", experience.sequences)
             sequences = torch.cat(experience.sequences, dim=0).unsqueeze(0)
+            print("sequences", sequences)
             old_values = torch.cat(experience.values, dim=0).unsqueeze(0)
+            print("old_values", old_values)
             returns = torch.cat(experience.returns, dim=0).unsqueeze(0)
+            print("returns", returns)
             num_actions = [v.numel() for v in experience.advantages]
+            print("num_actions", num_actions)
             packed_seq_lens = [s.numel() for s in experience.sequences]
+            print("packed_seq_lens", packed_seq_lens)
             attention_mask = torch.cat(
                 [torch.full_like(s, i + 1) for i, s in enumerate(experience.sequences)], dim=0
             ).unsqueeze(0)
+            print("attention_mask", attention_mask)
         else:
             sequences = experience.sequences
+            print("sequences", sequences)
             old_values = experience.values
+            print("old_values", old_values)
             returns = experience.returns
+            print("returns", returns)
             num_actions = experience.action_mask.size(1)
+            print("num_actions", num_actions)
             packed_seq_lens = None
+            print("packed_seq_lens", packed_seq_lens)
             attention_mask = experience.attention_mask
+            print("attention_mask", attention_mask)
 
         # critic loss
         values, output = self.critic(
@@ -441,6 +529,7 @@ class PPOTrainer(ABC):
             return_output=True,
             packed_seq_lens=packed_seq_lens,
         )
+        print("values", values)
         # loss function
         critic_loss = self.critic_loss_fn(
             values,
@@ -448,14 +537,19 @@ class PPOTrainer(ABC):
             returns,
             action_mask=experience.action_mask,
         )
+        print("critic_loss", critic_loss)
         # mixtral
         if self.aux_loss:
             aux_loss = output.aux_loss
         else:
             aux_loss = 0
+        print("aux_loss", aux_loss)
         loss = critic_loss + aux_loss * self.args.aux_loss_coef
+        print("loss", loss)
         self.strategy.backward(loss, self.critic, self.critic_optim)
+        print("backward done")
         self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
+        print("optimizer_step done")
 
         # status
         status = {
@@ -463,6 +557,7 @@ class PPOTrainer(ABC):
             "values": masked_mean(values, experience.action_mask).item(),
             "critic_lr": self.critic_scheduler.get_last_lr()[0],
         }
+        print("status", status)
         return status
 
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):

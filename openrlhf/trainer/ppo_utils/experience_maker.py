@@ -459,9 +459,9 @@ class NaiveExperienceMaker(ABC):
 
 
 class RemoteExperienceMaker(NaiveExperienceMaker):
-    def __init__(self, *args, vllm_engines: List = None, packing_samples=False, **kwargs):
+    def __init__(self, *args, inference_engines: List = None, packing_samples=False, **kwargs):
         super().__init__(*args, **kwargs)
-        self.vllm_engines = vllm_engines
+        self.inference_engines = inference_engines
         self.packing_samples = packing_samples
 
     @torch.no_grad()
@@ -489,10 +489,10 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         When not using vllm, we will fallback to the default implementation,
         in which actor will be used to generate samples.
         """
-        if self.vllm_engines is None:
+        if self.inference_engines is None:
             return super().generate_samples(all_prompts, **generate_kwargs)
 
-        return self._generate_vllm(all_prompts, **generate_kwargs)
+        return self._generate_inference_engine(all_prompts, **generate_kwargs)
 
     @torch.no_grad()
     def make_experience(self, samples: Samples) -> Experience:
@@ -630,30 +630,31 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         self.actor.train()  # reset model state
         return experience
 
-    def _generate_vllm(self, all_prompts: List[str], **kwargs) -> List[Samples]:
-        from vllm import SamplingParams
+    def _generate_inference_engine(self, all_prompts: List[str], **kwargs) -> List[Samples]:
 
         # round-robin load balance
         rank = torch.distributed.get_rank()
         world_size = torch.distributed.get_world_size()
 
         # Select LLM engines: assign each rank an engine, or cycle through engines if world_size < engine_count
-        if len(self.vllm_engines) <= world_size:
-            llms = [self.vllm_engines[rank % len(self.vllm_engines)]]
+        if len(self.inference_engines) <= world_size:
+            llms = [self.inference_engines[rank % len(self.inference_engines)]]
         else:
-            llms = self.vllm_engines[rank::world_size]
+            llms = self.inference_engines[rank::world_size]
+
+        backend = ray.get(llms[0].get_backend.remote())
 
         args = self.strategy.args
 
-        sampling_params = SamplingParams(
-            temperature=kwargs.get("temperature", 1.0),
-            top_p=kwargs.get("top_p", 1.0),
-            top_k=kwargs.get("top_k", -1),
-            max_tokens=kwargs.get("max_new_tokens", 1024),
-            min_tokens=kwargs.get("min_new_tokens", 1),
-            skip_special_tokens=kwargs.get("skip_special_tokens", False),
-            include_stop_str_in_output=True,
-        )
+        sampling_params = {
+            "temperature": kwargs.get("temperature", 1.0),
+            "top_p": kwargs.get("top_p", 1.0),
+            "top_k": kwargs.get("top_k", -1),
+            "max_tokens": kwargs.get("max_new_tokens", 1024),
+            "min_tokens": kwargs.get("min_new_tokens", 1),
+            "skip_special_tokens": kwargs.get("skip_special_tokens", False),
+            "include_stop_str_in_output": True,
+        }
 
         # Expand prompt list based on the number of samples per prompt
         all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
@@ -662,19 +663,50 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # Distribute requests to engines and collect responses to outputs
         all_output_refs = []
         batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
+
         for i, llm in enumerate(llms):
             prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
             if prompt_token_ids:
                 all_output_refs.append(
-                    llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
+                    llm.generate.remote(
+                        sampling_params=sampling_params, prompt_token_ids=prompt_token_ids, all_prompts=all_prompts
+                    )
                 )
 
         # Retrieve and combine results from all outputs
         all_outputs = sum(ray.get(all_output_refs), [])
+        assert len(all_outputs) == len(all_prompts)
 
         samples_list = []
         for i in range(0, len(all_outputs), args.micro_rollout_batch_size):
             outputs = all_outputs[i : i + self.strategy.args.micro_rollout_batch_size]
+
+            torch.cuda.synchronize()
+            start = time.time()
+
+            input_token_id_list = None
+            output_token_id_list = None
+            pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
+
+            if backend == "vllm":
+                # TODO: should  all_prompt_token_ids and input token ids in engine outputs be a great difference?
+                input_token_id_list = [list(output.prompt_token_ids) for output in outputs]
+                output_token_id_list = [list(output.outputs[0].token_ids) for output in outputs]
+            else:
+                input_token_id_list = [list(output["input_ids"]) for output in outputs]
+                output_token_id_list = [
+                    (
+                        list(output["output_ids"]) + [eos_token_id]
+                        if list(output["output_ids"])[-1] != eos_token_id
+                        else list(output["output_ids"])
+                    )
+                    for output in outputs
+                ]
+
+            torch.cuda.synchronize()
+            end = time.time()
+            print(f"Tokenize input and output takes: {end - start}s for {backend} in step {i}")
+
             if not self.packing_samples:
                 # NOTE: concat all outputs to following format:
                 #
@@ -682,21 +714,20 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 # | token token token token token | token token [EOS] [PAD] |
                 # | [PAD] [PAD] [PAD] token token | token token token [EOS] |
                 # |<---------- prompt ----------->|<-------- answer ------->|
-                max_input_len, max_output_len = 0, 0
-                for output in outputs:
-                    max_input_len = max(max_input_len, len(output.prompt_token_ids))
-                    max_output_len = max(max_output_len, len(output.outputs[0].token_ids))
 
-                pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
+                max_input_len = max(len(input_id) for input_id in input_token_id_list)
+                max_output_len = max(len(output_id) for output_id in output_token_id_list)
+
                 sequences = []
-                for output in outputs:
+                for input_token_id, output_token_id in zip(input_token_id_list, output_token_id_list):
+                    print(f"{backend} in step {i}")
                     # left padding input
-                    input_len = len(output.prompt_token_ids)
-                    input_ids = [pad_token_id] * (max_input_len - input_len) + list(output.prompt_token_ids)
+                    input_len = len(input_token_id)
+                    input_ids = [pad_token_id] * (max_input_len - input_len) + input_token_id
 
                     # right padding output
-                    output_len = len(output.outputs[0].token_ids)
-                    output_ids = list(output.outputs[0].token_ids) + [pad_token_id] * (max_output_len - output_len)
+                    output_len = len(output_token_id)
+                    output_ids = output_token_id + [pad_token_id] * (max_output_len - output_len)
 
                     # concat input and output
                     sequences.append(input_ids + output_ids)
@@ -729,22 +760,36 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 packed_seq_lens = []
                 attention_mask = []
                 num_actions = []
-                for i, output in enumerate(outputs):
-                    input_len = len(output.prompt_token_ids)
-                    output_len = len(output.outputs[0].token_ids)
+
+                for i, (input_token_id, output_token_id) in enumerate(zip(input_token_id_list, output_token_id_list)):
+                    print(f"{backend} in step {i}")
+                    print(f"length of input_token_id: {len(input_token_id)}")
+                    print(f"length of output_token_id: {len(output_token_id)}")
+                    print(f"start of input_token_id: {input_token_id[:min(10, len(input_token_id))]}")
+                    print(f"start of output_token_id: {output_token_id[:min(10, len(output_token_id))]}")
+                    print(f"end of input_token_id: {input_token_id[max(0, len(input_token_id)-10):]}")
+                    print(f"end of output_token_id: {output_token_id[max(0, len(output_token_id)-10):]}")
+                    input_len = len(input_token_id)
+                    output_len = len(output_token_id)
                     packed_seq_lens.append(input_len + output_len)
-                    sequences.extend(output.prompt_token_ids + list(output.outputs[0].token_ids))
+                    print(f"size of packed_seq_lens: {len(packed_seq_lens)}")
+                    sequences.extend(input_token_id + output_token_id)
                     attention_mask.extend([i + 1] * (input_len + output_len))
+                    print(f"size of attention_mask: {len(attention_mask)}")
 
                     # current_action_mask = [0] * (input_len - 1) + [1] * output_len + [0]
                     # num_actions.append(max(1, sum(current_action_mask)))
                     num_actions.append(max(1, output_len))
 
                 sequences = torch.tensor(sequences, device="cuda").unsqueeze(0)
+                print(f"size of sequences: {sequences.size()}")
                 attention_mask = torch.tensor(attention_mask, device="cuda").unsqueeze(0)
+                print(f"size of attention_mask: {attention_mask.size()}")
                 action_mask = None
                 response_length = torch.tensor(num_actions, device="cuda", dtype=torch.float)
+                print(f"size of response_length: {response_length.size()}")
                 total_length = torch.tensor(packed_seq_lens, device="cuda", dtype=torch.float)
+                print(f"size of total_length: {total_length.size()}")
                 samples_list.append(
                     Samples(
                         sequences=sequences,

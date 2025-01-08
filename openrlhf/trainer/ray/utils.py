@@ -19,4 +19,5 @@ def ray_noset_visible_devices(env_vars=os.environ):
         "RAY_EXPERIMENTAL_NOSET_TPU_VISIBLE_CHIPS",
         "RAY_EXPERIMENTAL_NOSET_ONEAPI_DEVICE_SELECTOR",
     ]
+    print("NOSET_VISIBLE_DEVICES_ENV_VARS_LIST", NOSET_VISIBLE_DEVICES_ENV_VARS_LIST)
     return any(env_vars.get(env_var) for env_var in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST)
