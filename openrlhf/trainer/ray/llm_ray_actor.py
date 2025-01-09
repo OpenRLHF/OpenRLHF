@@ -109,20 +109,15 @@ class SGLangLLMRayActor:
         # min_tokens, include_stop_str_in_output is not used in sglang
 
         sampling_params = dict(
-            max_new_tokens=sampling_params.max_tokens,
-            top_p=sampling_params.top_p,
-            top_k=sampling_params.top_k,
-            temperature=sampling_params.temperature,
-            repetition_penalty=sampling_params.repetition_penalty,
-            skip_special_tokens=sampling_params.skip_special_tokens,
+            max_new_tokens=sampling_params.get("max_tokens", 1024),
+            top_p=sampling_params.get("top_p", 1),
+            top_k=sampling_params.get("top_k", 50),
+            temperature=sampling_params.get("temperature", 1),
+            repetition_penalty=sampling_params.get("repetition_penalty", 1),
+            skip_special_tokens=sampling_params.get("skip_special_tokens", False),
         )
 
         outputs = self.llm.generate(all_prompts, sampling_params)
-        # SGLang strictly follows OpenAI API and do not have include_stop_str_in_output parameter
-        # So we need to add eos_token_id to the end of the output_ids
-        outputs = [
-            output["output_ids"].append(eos_token_id) for output in outputs if output["output_ids"][-1] != eos_token_id
-        ]
         return outputs
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):

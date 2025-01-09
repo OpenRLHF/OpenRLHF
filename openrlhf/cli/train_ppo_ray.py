@@ -143,7 +143,6 @@ def train(args):
     inference_engines = None
     if args.vllm_num_engines is not None and args.vllm_num_engines > 0:
         max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
-        print(f"using backend: {args.backend}")
         inference_engines = create_llm_ray_actor(
             args.vllm_num_engines,
             args.vllm_tensor_parallel_size,

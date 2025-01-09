@@ -674,16 +674,32 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # Retrieve and combine results from all outputs
         all_outputs = sum(ray.get(all_output_refs), [])
         assert len(all_outputs) == len(all_prompts)
+        pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
+        try:
+            # sglang
+            all_input_token_id_list = [list(output["input_ids"]) for output in all_outputs]
+            all_output_token_id_list = [
+                (
+                    list(output["output_ids"]) + [eos_token_id]
+                    if list(output["output_ids"])[-1] != eos_token_id
+                    else list(output["output_ids"])
+                )
+                for output in all_outputs
+            ]
+        except:
+            # vllm
+            all_input_token_id_list = [list(output.prompt_token_ids) for output in all_outputs]
+            all_output_token_id_list = [list(output.outputs[0].token_ids) for output in all_outputs]
 
         samples_list = []
-        for i in range(0, len(all_outputs), args.micro_rollout_batch_size):
-            outputs = all_outputs[i : i + self.strategy.args.micro_rollout_batch_size]
 
-            input_token_id_list = None
-            output_token_id_list = None
-            pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
-            input_token_id_list = [list(output.prompt_token_ids) for output in outputs]
-            output_token_id_list = [list(output.outputs[0].token_ids) for output in outputs]
+        for i in range(0, len(all_outputs), args.micro_rollout_batch_size):
+            input_token_id_list = all_input_token_id_list[i : i + self.strategy.args.micro_rollout_batch_size]
+            output_token_id_list = all_output_token_id_list[i : i + self.strategy.args.micro_rollout_batch_size]
+            output_token_id_list = [
+                output_token_id if output_token_id[-1] == eos_token_id else output_token_id + [eos_token_id]
+                for output_token_id in output_token_id_list
+            ]
             assert all(output_token_id[-1] == eos_token_id for output_token_id in output_token_id_list)
 
             if not self.packing_samples:
@@ -733,7 +749,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 #
                 # | token token token | token token [EOS] | token token token token token | token token [EOS] | token token | token token token [EOS] |
                 # |<---  prompt ----->|<---- answer ----->|<---------- prompt ----------->|<----- answer ---->|<- prompt -->|<-------- answer ------->|
-                pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
+
                 sequences = []
                 packed_seq_lens = []
                 attention_mask = []
@@ -752,9 +768,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
                 sequences = torch.tensor(sequences, device="cuda").unsqueeze(0)
                 attention_mask = torch.tensor(attention_mask, device="cuda").unsqueeze(0)
+                action_mask = None
                 response_length = torch.tensor(num_actions, device="cuda", dtype=torch.float)
                 total_length = torch.tensor(packed_seq_lens, device="cuda", dtype=torch.float)
-                action_mask = None
                 samples_list.append(
                     Samples(
                         sequences=sequences,
