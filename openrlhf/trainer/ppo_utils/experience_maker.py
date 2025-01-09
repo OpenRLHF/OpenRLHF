@@ -492,7 +492,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         if self.inference_engines is None:
             return super().generate_samples(all_prompts, **generate_kwargs)
 
-        return self._generate_inference_engine(all_prompts, **generate_kwargs)
+        return self.sampling(all_prompts, **generate_kwargs)
 
     @torch.no_grad()
     def make_experience(self, samples: Samples) -> Experience:
@@ -630,7 +630,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         self.actor.train()  # reset model state
         return experience
 
-    def _generate_inference_engine(self, all_prompts: List[str], **kwargs) -> List[Samples]:
+    def sampling(self, all_prompts: List[str], **kwargs) -> List[Samples]:
 
         # round-robin load balance
         rank = torch.distributed.get_rank()
@@ -641,8 +641,6 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             llms = [self.inference_engines[rank % len(self.inference_engines)]]
         else:
             llms = self.inference_engines[rank::world_size]
-
-        backend = ray.get(llms[0].get_backend.remote())
 
         args = self.strategy.args
 
@@ -681,31 +679,12 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         for i in range(0, len(all_outputs), args.micro_rollout_batch_size):
             outputs = all_outputs[i : i + self.strategy.args.micro_rollout_batch_size]
 
-            torch.cuda.synchronize()
-            start = time.time()
-
             input_token_id_list = None
             output_token_id_list = None
             pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
-
-            if backend == "vllm":
-                # TODO: should  all_prompt_token_ids and input token ids in engine outputs be a great difference?
-                input_token_id_list = [list(output.prompt_token_ids) for output in outputs]
-                output_token_id_list = [list(output.outputs[0].token_ids) for output in outputs]
-            else:
-                input_token_id_list = [list(output["input_ids"]) for output in outputs]
-                output_token_id_list = [
-                    (
-                        list(output["output_ids"]) + [eos_token_id]
-                        if list(output["output_ids"])[-1] != eos_token_id
-                        else list(output["output_ids"])
-                    )
-                    for output in outputs
-                ]
-
-            torch.cuda.synchronize()
-            end = time.time()
-            print(f"Tokenize input and output takes: {end - start}s for {backend} in step {i}")
+            input_token_id_list = [list(output.prompt_token_ids) for output in outputs]
+            output_token_id_list = [list(output.outputs[0].token_ids) for output in outputs]
+            assert all(output_token_id[-1] == eos_token_id for output_token_id in output_token_id_list)
 
             if not self.packing_samples:
                 # NOTE: concat all outputs to following format:
@@ -720,7 +699,6 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
                 sequences = []
                 for input_token_id, output_token_id in zip(input_token_id_list, output_token_id_list):
-                    print(f"{backend} in step {i}")
                     # left padding input
                     input_len = len(input_token_id)
                     input_ids = [pad_token_id] * (max_input_len - input_len) + input_token_id
@@ -762,34 +740,21 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 num_actions = []
 
                 for i, (input_token_id, output_token_id) in enumerate(zip(input_token_id_list, output_token_id_list)):
-                    print(f"{backend} in step {i}")
-                    print(f"length of input_token_id: {len(input_token_id)}")
-                    print(f"length of output_token_id: {len(output_token_id)}")
-                    print(f"start of input_token_id: {input_token_id[:min(10, len(input_token_id))]}")
-                    print(f"start of output_token_id: {output_token_id[:min(10, len(output_token_id))]}")
-                    print(f"end of input_token_id: {input_token_id[max(0, len(input_token_id)-10):]}")
-                    print(f"end of output_token_id: {output_token_id[max(0, len(output_token_id)-10):]}")
                     input_len = len(input_token_id)
                     output_len = len(output_token_id)
                     packed_seq_lens.append(input_len + output_len)
-                    print(f"size of packed_seq_lens: {len(packed_seq_lens)}")
                     sequences.extend(input_token_id + output_token_id)
                     attention_mask.extend([i + 1] * (input_len + output_len))
-                    print(f"size of attention_mask: {len(attention_mask)}")
 
                     # current_action_mask = [0] * (input_len - 1) + [1] * output_len + [0]
                     # num_actions.append(max(1, sum(current_action_mask)))
                     num_actions.append(max(1, output_len))
 
                 sequences = torch.tensor(sequences, device="cuda").unsqueeze(0)
-                print(f"size of sequences: {sequences.size()}")
                 attention_mask = torch.tensor(attention_mask, device="cuda").unsqueeze(0)
-                print(f"size of attention_mask: {attention_mask.size()}")
-                action_mask = None
                 response_length = torch.tensor(num_actions, device="cuda", dtype=torch.float)
-                print(f"size of response_length: {response_length.size()}")
                 total_length = torch.tensor(packed_seq_lens, device="cuda", dtype=torch.float)
-                print(f"size of total_length: {total_length.size()}")
+                action_mask = None
                 samples_list.append(
                     Samples(
                         sequences=sequences,
