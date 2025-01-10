@@ -45,7 +45,7 @@ class Actor(nn.Module):
         ds_config=None,
         device_map=None,
         packing_samples=False,
-        create_vison_model=False,
+        is_visual_model=False,
         freeze_vision_tower=True,
         **kwargs,
     ) -> None:
@@ -71,8 +71,9 @@ class Actor(nn.Module):
                 )
             else:
                 nf4_config = None
+            self.is_visual_model = is_visual_model
             model_class = None
-            if create_vison_model:
+            if is_visual_model:
                 model_class = AutoModelForVision2Seq
             else:
                 model_class = AutoModelForCausalLM
@@ -85,7 +86,7 @@ class Actor(nn.Module):
                 device_map=device_map,
             )
             self.model_type = getattr(self.model.config, "model_type", None)
-            if create_vison_model:
+            if is_visual_model:
                 self.prepare_model(self.model, freeze_vision_tower)
 
             # LoRA
@@ -200,18 +201,21 @@ class Actor(nn.Module):
         **kwargs
     ) -> torch.Tensor:
         """Returns action log probs"""
-        if self.model_type == "qwen2_vl":
-            # Before Transformers version 4.47, when using the Qwen2VL model,
-            # the position IDs needed to be externally provided in a specific mrope format
-            # during the forward pass. Therefore, it was decided to consistently pass them
-            # externally through the model.
-            position_ids, rope_deltas = self.model.get_rope_index(
-                input_ids=sequences,
-                image_grid_thw=kwargs.get("image_grid_thw", None),
-                video_grid_thw=kwargs.get("video_grid_thw", None),
-                attention_mask=attention_mask,
-            )
-            kwargs["rope_deltas"] = rope_deltas
+        if self.is_visual_model:
+            if self.model_type == "qwen2_vl":
+                # Before Transformers version 4.47, when using the Qwen2VL model,
+                # the position IDs needed to be externally provided in a specific mrope format
+                # during the forward pass. Therefore, it was decided to consistently pass them
+                # externally through the model.
+                position_ids, rope_deltas = self.model.get_rope_index(
+                    input_ids=sequences,
+                    image_grid_thw=kwargs.get("image_grid_thw", None),
+                    video_grid_thw=kwargs.get("video_grid_thw", None),
+                    attention_mask=attention_mask,
+                )
+                kwargs["rope_deltas"] = rope_deltas
+            else:
+                raise NotImplementedError(f"model_type {self.model_type} not supported yet")
         elif not self.packing_samples:
             # https://github.com/OpenRLHF/OpenRLHF/issues/217
             position_ids = attention_mask.long().cumsum(-1) - 1
@@ -266,14 +270,15 @@ class Actor(nn.Module):
 
     def prepare_model(self, model, freeze_vision_tower):
         freeze_modules = set()
-        if self.model_type == "qwen2_vl":
-            if freeze_vision_tower:
+        # Different visual models may have varying names for their vision towers.
+        if freeze_vision_tower and self.model_type is not None:
+            if self.model_type == "qwen2_vl":
                 freeze_modules.add("visual")
-        elif self.model_type == None:
-            pass
-        else:
-            raise NotImplementedError("TODO: Implement prepare_model for model_type: {}".format(self.model_type))
-        
+            else:
+                #TODO: support mre visual model
+                raise NotImplementedError("TODO: Implement prepare_model for model_type: {}".format(
+                    self.model_type))
+
         for name, param in model.named_parameters():
             if not any(freeze_mod in name for freeze_mod in freeze_modules):
                 pass

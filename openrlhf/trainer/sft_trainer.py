@@ -133,49 +133,17 @@ class SFTTrainer(ABC):
 
             # train
             self.model.train()
-            for prompt_id_lens, inputs, attention_masks, infos in self.train_dataloader:
-                if self.packing_samples:
-                    inputs = inputs.to(torch.cuda.current_device())
-                    attention_mask = attention_masks.to(torch.cuda.current_device())
-                else:
-                    inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
-                    attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
+            for data in self.train_dataloader:
+                output, labels = self.model_forward(data)
 
-                if self.strategy.ring_attn_group is None:
-                    output = self.model(inputs, attention_mask=attention_mask, return_output=True)
-                else:
-                    output = self.model(
-                        inputs,
-                        attention_mask=attention_mask,
-                        return_output=True,
-                        ring_attn_group=self.strategy.ring_attn_group,
-                        packed_seq_lens=infos["input_length"],
-                    )
-
-                # loss function
-                labels = torch.where(
-                    attention_mask.bool(),
-                    inputs,
-                    self.loss_fn.IGNORE_INDEX,
-                )
                 # mixtral
                 if self.aux_loss:
                     aux_loss = output.aux_loss
                 else:
                     aux_loss = 0
-
-                if not self.pretrain_mode:
-                    if self.packing_samples:
-                        index = 0
-                        for input_length, source_len in zip(infos["input_length"], prompt_id_lens):
-                            labels[0][index : index + source_len] = self.loss_fn.IGNORE_INDEX
-                            index += input_length
-                    else:
-                        for label, source_len in zip(labels, prompt_id_lens):
-                            label[:source_len] = self.loss_fn.IGNORE_INDEX
-
                 gpt_loss = self.loss_fn(output.logits, labels)
                 loss = gpt_loss + aux_loss * self.args.aux_loss_coef
+
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
@@ -184,6 +152,14 @@ class SFTTrainer(ABC):
                     "gpt_loss": gpt_loss.item(),
                     "lr": self.scheduler.get_last_lr()[0],
                 }
+                grad_norm = self.model.model.get_global_grad_norm()
+                if grad_norm is not None:
+                    logs_dict.update({
+                        "grad_norm":
+                        grad_norm.detach().item()
+                        if isinstance(grad_norm, torch.Tensor) else grad_norm
+                    })
+
                 if self.aux_loss:
                     logs_dict["aux_loss"] = aux_loss.item()
                 # step bar
@@ -207,6 +183,45 @@ class SFTTrainer(ABC):
             self._wandb.finish()
         if self._tensorboard is not None and self.strategy.is_rank_0():
             self._tensorboard.close()
+
+    def model_forward(self, inputs):
+        prompt_id_lens, inputs, attention_masks, infos = inputs
+        if self.packing_samples:
+            inputs = inputs.to(torch.cuda.current_device())
+            attention_mask = attention_masks.to(torch.cuda.current_device())
+        else:
+            inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
+            attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
+
+        if self.strategy.ring_attn_group is None:
+            output = self.model(inputs, attention_mask=attention_mask, return_output=True)
+        else:
+            output = self.model(
+                inputs,
+                attention_mask=attention_mask,
+                return_output=True,
+                ring_attn_group=self.strategy.ring_attn_group,
+                packed_seq_lens=infos["input_length"],
+            )
+
+        # loss function
+        labels = torch.where(
+            attention_mask.bool(),
+            inputs,
+            self.loss_fn.IGNORE_INDEX,
+        )
+
+        if not self.pretrain_mode:
+            if self.packing_samples:
+                index = 0
+                for input_length, source_len in zip(infos["input_length"], prompt_id_lens):
+                    labels[0][index:index + source_len] = self.loss_fn.IGNORE_INDEX
+                    index += input_length
+            else:
+                for label, source_len in zip(labels, prompt_id_lens):
+                    label[:source_len] = self.loss_fn.IGNORE_INDEX
+
+        return output, labels
 
     # logs/checkpoints/evaluation
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
@@ -249,41 +264,8 @@ class SFTTrainer(ABC):
                 disable=not self.strategy.is_rank_0(),
             )
 
-            for prompt_id_lens, inputs, attention_masks, infos in eval_dataloader:
-                if self.packing_samples:
-                    inputs = inputs.to(torch.cuda.current_device())
-                    attention_mask = attention_masks.to(torch.cuda.current_device())
-                else:
-                    inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
-                    attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
-
-                if self.strategy.ring_attn_group is None:
-                    output = self.model(inputs, attention_mask=attention_mask, return_output=True)
-                else:
-                    output = self.model(
-                        inputs,
-                        attention_mask=attention_mask,
-                        return_output=True,
-                        ring_attn_group=self.strategy.ring_attn_group,
-                        packed_seq_lens=infos["input_length"],
-                    )
-
-                # loss function
-                labels = torch.where(
-                    attention_mask.bool(),
-                    inputs,
-                    self.loss_fn.IGNORE_INDEX,
-                )
-
-                if not self.pretrain_mode:
-                    if self.packing_samples:
-                        index = 0
-                        for input_length, source_len in zip(infos["input_length"], prompt_id_lens):
-                            labels[0][index : index + source_len] = self.loss_fn.IGNORE_INDEX
-                            index += input_length
-                    else:
-                        for label, source_len in zip(labels, prompt_id_lens):
-                            label[:source_len] = self.loss_fn.IGNORE_INDEX
+            for data in eval_dataloader:
+                output, labels = self.model_forward(data)
 
                 loss = self.loss_fn(output.logits, labels)
 
@@ -304,142 +286,25 @@ class SFTTrainer(ABC):
         self.model.train()  # reset model state
 
 class VLSFTTrainer(SFTTrainer):
+    """
+    Trainer for visual fintune training.
+    """
     def data_to_device(self, input_data):
         for key, value in input_data.items():
             input_data[key] = value.to(torch.cuda.current_device())
         return input_data
 
     @override
-    def fit(self, args, consumed_samples=0, num_update_steps_per_epoch=None):
-        # get eval and save steps
-        if args.eval_steps == -1:
-            args.eval_steps = num_update_steps_per_epoch  # Evaluate once per epoch
-        if args.save_steps == -1:
-            args.save_steps = float("inf")  # do not save ckpt
+    def model_forward(self, inputs):
+        data = self.data_to_device(inputs)
 
-        # Restore step and start_epoch
-        step = consumed_samples // args.train_batch_size * self.strategy.accumulated_gradient + 1
-        start_epoch = consumed_samples // args.train_batch_size // num_update_steps_per_epoch
-        consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train_batch_size)
+        labels = data["labels"]
 
-        epoch_bar = tqdm(
-            range(start_epoch, self.epochs),
-            desc="Train epoch",
-            disable=not self.strategy.is_rank_0(),
+        output = self.model(
+            data["input_ids"],
+            attention_mask=data["attention_mask"],
+            return_output=True,
+            pixel_values=data["pixel_values"],
+            image_grid_thw=data["image_grid_thw"],
         )
-
-        for epoch in range(start_epoch, self.epochs):
-            if isinstance(self.train_dataloader.sampler, DistributedSampler):
-                self.train_dataloader.sampler.set_epoch(
-                    epoch, consumed_samples=0 if epoch > start_epoch else consumed_samples
-                )
-
-            step_bar = tqdm(
-                range(self.train_dataloader.__len__()),
-                desc="Train step of epoch %d" % epoch,
-                disable=not self.strategy.is_rank_0(),
-            )
-
-            # train
-            self.model.train()
-            loss_mean = 0
-
-            #TODO: support ring attention on vision model training
-            assert self.strategy.ring_attn_group is None, f"Right attention is not supported on vision models currently"
-
-            for input_data in self.train_dataloader:
-                data = self.data_to_device(input_data)
-                labels = data["labels"]
-
-                output = self.model(
-                    data["input_ids"],
-                    attention_mask=data["attention_mask"],
-                    return_output=True,
-                    pixel_values=data["pixel_values"],
-                    image_grid_thw=data["image_grid_thw"],
-                )
-
-                # mixtral
-                if self.aux_loss:
-                    aux_loss = output.aux_loss
-                else:
-                    aux_loss = 0
-
-                gpt_loss = self.loss_fn(output.logits, labels)
-                loss = gpt_loss + aux_loss * self.args.aux_loss_coef
-                self.strategy.backward(loss, self.model, self.optimizer)
-                self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
-
-                loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item()
-                logs_dict = {
-                    "gpt_loss": gpt_loss.item(),
-                    "loss_mean": loss_mean,
-                    "lr": self.scheduler.get_last_lr()[0],
-                }
-                grad_norm = self.model.model.get_global_grad_norm()
-                if grad_norm is not None:
-                    logs_dict.update({
-                        "grad_norm": grad_norm.detach().item() if isinstance(grad_norm, torch.Tensor) else grad_norm})
-
-                if self.aux_loss:
-                    logs_dict["aux_loss"] = aux_loss.item()
-                # step bar
-                logs_dict = self.strategy.all_reduce(logs_dict)
-                step_bar.set_postfix(logs_dict)
-                step_bar.update()
-
-                # logs/checkpoints/evaluation
-                if step % self.strategy.accumulated_gradient == 0:
-                    global_step = step // self.strategy.accumulated_gradient
-                    client_states = {"consumed_samples": global_step * args.train_batch_size}
-                    self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
-
-                step += 1
-
-            epoch_bar.update()
-
-        if self._wandb is not None and self.strategy.is_rank_0():
-            self._wandb.finish()
-        if self._tensorboard is not None and self.strategy.is_rank_0():
-            self._tensorboard.close()
-
-    def evaluate(self, eval_dataloader, steps=0):
-        times = 0
-        self.model.eval()
-        with torch.no_grad():
-            loss_sum = 0
-            step_bar = tqdm(
-                range(eval_dataloader.__len__()),
-                desc="Eval stage of steps %d" % steps,
-                disable=not self.strategy.is_rank_0(),
-            )
-
-            for input_data in eval_dataloader:
-                data = self.data_to_device(input_data)
-                labels = data["labels"]
-
-                output = self.model(
-                    data["input_ids"],
-                    attention_mask=data["attention_mask"],
-                    return_output=True,
-                    pixel_values=data["pixel_values"],
-                    image_grid_thw=data["image_grid_thw"],
-                )
-
-                loss = self.loss_fn(output.logits, labels)
-
-                times += 1
-                loss_sum += loss.item()
-                bar_dict = {"eval gpt_loss": loss_sum / times}
-                step_bar.update()
-                logs = self.strategy.all_reduce(bar_dict)
-                step_bar.set_postfix(logs)
-
-            if self.strategy.is_rank_0():
-                if self._wandb is not None:
-                    logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": steps}.items()}
-                    self._wandb.log(logs)
-                elif self._tensorboard is not None:
-                    for k, v in logs.items():
-                        self._tensorboard.add_scalar(f"eval/{k}", v, steps)
-        self.model.train()  # reset model state
+        return output, labels

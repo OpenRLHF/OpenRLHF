@@ -6,16 +6,17 @@ from datetime import datetime
 import torch
 from transformers.trainer import get_scheduler
 
-from openrlhf.datasets import build_train_and_valid_datasets, build_data_collator
 from openrlhf.models import Actor
 from openrlhf.trainer import VLDPOTrainer
 from openrlhf.utils import (
     get_strategy,
     get_tokenizer,
-    get_vision_processor,
-    get_qwen2_vl_utils,
+    blending_datasets,
     add_vision_args,
+    add_extra_dataset_args,
+    get_vision_processor,
 )
+from openrlhf.datasets.vl_reward_dataset import VLRewardDataset
 
 
 def train(args):
@@ -38,7 +39,7 @@ def train(args):
         target_modules=args.target_modules,
         ds_config=strategy.get_ds_train_config(is_actor=True),
         packing_samples=args.packing_samples,
-        create_vison_model=args.model_arch in ['qwen2_vl'],
+        is_visual_model=args.is_visual_model,
     )
 
     # configure tokenizer
@@ -46,11 +47,15 @@ def train(args):
     strategy.print(model)
 
     # configure processor
-    vision_processor = get_vision_processor(args, args.pretrain, tokenizer)
-    if args.model_arch == "qwen2_vl":
-        encoder_utils = get_qwen2_vl_utils(args)
-    else:
-        raise NotImplementedError(f"no support model arch {args.model_arch=}")
+    vision_processor = get_vision_processor(args.pretrain, args.min_pixels, args.max_pixels)
+    #TODO: support more model_arch
+    # Other multimodal models are still undergoing adaptation. For the time being,
+    # we are using this switch to impose restrictions and prevent any unforeseen issues.
+    assert args.model_arch in ["qwen2_vl"
+                               ], f"model arch {args.model_arch} is not supported currently"
+
+    #TODO: support ring attention on vision model training
+    assert strategy.ring_attn_group is None, f"Ring attention is not supported on vision models currently"
 
     # load weights for ref model
     ref_model = Actor(
@@ -60,11 +65,10 @@ def train(args):
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
         packing_samples=args.packing_samples,
-        create_vison_model=args.model_arch in ['qwen2_vl'],
+        is_visual_model=args.is_visual_model,
     )
     if args.ref_offload:
         ref_model._offload = True
-    get_tokenizer(args.pretrain, ref_model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
 
     # gradient_checkpointing
     if args.gradient_checkpointing:
@@ -77,26 +81,58 @@ def train(args):
 
     # repace datasets
     assert args.task_type == "dpo", f"the script is used for DPO training"
-    train_dataset, eval_dataset = build_train_and_valid_datasets(
-        args, tokenizer, processor=vision_processor, encoder_utils=encoder_utils, strategy=strategy)
 
-    data_collator = build_data_collator(args, tokenizer, encoder_utils, vision_processor)
+    #TODO: support ring attn and packing_samples
+    assert not args.packing_samples, f"packing_samples is not supported currently"
+
+    train_data, eval_data = blending_datasets(
+        args.dataset,
+        args.dataset_probs,
+        strategy,
+        args.seed,
+        max_count=args.max_samples,
+        train_split=args.train_split,
+        eval_split=args.eval_split,
+    )
+    train_data = train_data.select(range(min(args.max_samples, len(train_data))))
+    eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
+
+    train_dataset = VLRewardDataset(
+        train_data,
+        tokenizer,
+        args.max_len,
+        strategy,
+        is_dpo=True,
+        num_processors=args.processing_num_workers,
+        processor=vision_processor,
+        args=args,
+    )
+    eval_dataset = VLRewardDataset(
+        eval_data,
+        tokenizer,
+        args.max_len,
+        strategy,
+        is_dpo=True,
+        num_processors=args.processing_num_workers,
+        processor=vision_processor,
+        args=args,
+    )
 
     # prepare dataloader
     train_dataloader = strategy.setup_dataloader(
         train_dataset,
         args.micro_train_batch_size,
         True,
-        True,
-        collate_fn=data_collator,
+        shuffle=True,
+        collate_fn=train_dataset.collate_fn,
     )
 
     eval_dataloader = strategy.setup_dataloader(
         eval_dataset,
         args.micro_train_batch_size,
         True,
-        False,
-        collate_fn=data_collator,
+        shuffle=False,
+        collate_fn=eval_dataset.collate_fn,
     )
 
     # scheduler
@@ -228,6 +264,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--max_samples", type=int, default=1e8, help="Max number of samples")
     parser.add_argument("--max_len", type=int, default=512)
+    parser.add_argument("--min_pixels", type=int, default=3136, help="min width*height for image")
+    parser.add_argument("--max_pixels", type=int, default=12845056, help="max width*height for image")
 
     # wandb parameters
     parser.add_argument("--use_wandb", type=str, default=None)
@@ -244,8 +282,8 @@ if __name__ == "__main__":
     parser.add_argument("--use_tensorboard", type=str, default=None, help="TensorBoard logging path")
 
     parser = add_vision_args(parser)
+    parser = add_extra_dataset_args(parser)
     args = parser.parse_args()
-    print(args)
 
     if args.ref_pretrain is None or args.ref_pretrain == "":
         args.ref_pretrain = args.pretrain
