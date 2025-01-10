@@ -2,13 +2,13 @@ import os
 from abc import ABC
 
 import torch
-from flash_attn.utils.distributed import all_gather
 from torch.nn import functional as F
 from torch.optim import Optimizer
 from tqdm import tqdm
 
 from openrlhf.models import DPOLoss
 from openrlhf.utils.distributed_sampler import DistributedSampler
+from openrlhf.utils.distributed_util import all_gather
 
 
 class DPOTrainer(ABC):
@@ -440,7 +440,7 @@ class DPOTrainer(ABC):
                 logits.log_softmax(-1), dim=2, index=local_label.unsqueeze(2)
             ).squeeze(2)
             # we may not need to all_gather the entire tensor, but it's easier to implement.
-            # use the flash_attn all_gather so that the all_gather has correct backward.
+            # use the all_gather copied from flash_attn so that the all_gather has correct backward.
             per_token_logps = all_gather(local_per_token_logps, self.strategy.ring_attn_group).reshape((1, -1))
             per_token_logps = per_token_logps[:, :-1]
 
