@@ -4,6 +4,7 @@ read -r -d '' training_commands <<EOF
 openrlhf.cli.train_dpo \
    --save_path ./checkpoint/llama3-8b-dpo \
    --save_steps -1 \
+   --save_by_epoch \
    --logging_steps 1 \
    --eval_steps -1 \
    --train_batch_size 256 \

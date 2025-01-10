@@ -50,6 +50,7 @@ class PPOTrainer(ABC):
         dataloader_pin_memory (bool, defaults to True): If True, pins memory in the data loader.
         remote_rm_url (str, optional): URL for remote reward model API.
         reward_fn (Callable, optional): Custom reward function for computing rewards.
+        save_by_epoch (bool): Whether to save model by epoch.
         **generate_kwargs: Additional arguments for model generation.
     """
 
@@ -84,6 +85,7 @@ class PPOTrainer(ABC):
         dataloader_pin_memory: bool = True,
         remote_rm_url: str = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
+        save_by_epoch: bool = False,
         **generate_kwargs,
     ) -> None:
         assert (
@@ -93,6 +95,7 @@ class PPOTrainer(ABC):
         super().__init__()
         self.strategy = strategy
         self.args = strategy.args
+        self.save_by_epoch = save_by_epoch
         self.micro_rollout_batch_size = micro_rollout_batch_size
         self.max_epochs = max_epochs
         self.tokenizer = tokenizer
@@ -244,10 +247,11 @@ class PPOTrainer(ABC):
 
                 # logs/checkpoints
                 client_states = {"consumed_samples": steps * args.rollout_batch_size}
-                self.save_logs_and_checkpoints(args, steps, pbar, status, client_states)
+                self.save_logs_and_checkpoints(args, steps, pbar, status, client_states, epoch=None)
 
                 pbar.update()
                 steps = steps + 1
+            self.save_logs_and_checkpoints(args, steps, pbar, status, client_states, epoch=episode)
 
         if self._wandb is not None and self.strategy.is_rank_0():
             self._wandb.finish()
@@ -465,7 +469,7 @@ class PPOTrainer(ABC):
         }
         return status
 
-    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
+    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}, epoch=None):
         if global_step % args.logging_steps == 0:
             # wandb
             if self._wandb is not None and self.strategy.is_rank_0():
@@ -487,6 +491,13 @@ class PPOTrainer(ABC):
                     for k, v in self.experience_maker.perf_stats.items():
                         self._tensorboard.add_scalar(f"perf/experience_maker/{k}", v, global_step)
 
+        if self.save_by_epoch and epoch != None:
+            save_path = args.save_path
+            if save_path.endswith("/"):
+                save_path = save_path[:-1]
+            save_path = f'{save_path}_e{epoch}'
+            self.strategy.save_model(self.model, self.tokenizer, save_path)
+            
         # TODO: Add evaluation mechanism for PPO
         if global_step % args.eval_steps == 0:
             # self.evaluate(self.eval_dataloader, global_step)

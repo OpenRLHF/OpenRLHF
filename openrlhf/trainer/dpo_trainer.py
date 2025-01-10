@@ -27,6 +27,7 @@ class DPOTrainer(ABC):
         max_norm (float, defaults to 0.5): Maximum gradient norm for gradient clipping.
         beta (float, defaults to 0.01): Coefficient for regularizing the preference loss.
         max_epochs (int, defaults to 2): Maximum number of training epochs.
+        save_by_epoch (bool): Whether to save model by epoch.
     """
 
     def __init__(
@@ -42,6 +43,7 @@ class DPOTrainer(ABC):
         max_norm=0.5,
         beta=0.01,
         max_epochs: int = 2,
+        save_by_epoch=False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -55,6 +57,7 @@ class DPOTrainer(ABC):
         self.optimizer = optim
         self.tokenizer = tokenizer
         self.args = strategy.args
+        self.save_by_epoch = save_by_epoch
 
         self.beta = beta
         self.loss_fn = DPOLoss(self.beta, self.args.label_smoothing, self.args.ipo)
@@ -202,9 +205,11 @@ class DPOTrainer(ABC):
                     acc_sum = 0
                     global_step = step // self.strategy.accumulated_gradient
                     client_states = {"consumed_samples": global_step * args.train_batch_size}
-                    self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
+                    self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states, epoch=None)
 
                 step += 1
+                
+            self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states, epoch=epoch)                
             epoch_bar.update()
 
         if self._wandb is not None and self.strategy.is_rank_0():
@@ -213,7 +218,7 @@ class DPOTrainer(ABC):
             self._tensorboard.close()
 
     # logs/checkpoints/evaluate
-    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
+    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}, epoch=None):
         # logs
         if global_step % args.logging_steps == 0:
             # wandb
@@ -230,6 +235,14 @@ class DPOTrainer(ABC):
             # do eval when len(dataloader) > 0, avoid zero division in eval.
             if len(self.eval_dataloader) > 0:
                 self.evaluate(self.eval_dataloader, global_step)
+
+        if self.save_by_epoch and epoch != None:
+            save_path = args.save_path
+            if save_path.endswith("/"):
+                save_path = save_path[:-1]
+            save_path = f'{save_path}_e{epoch}'
+            self.strategy.save_model(self.model, self.tokenizer, save_path)
+
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
