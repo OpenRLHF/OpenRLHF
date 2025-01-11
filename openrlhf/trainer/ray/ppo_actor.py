@@ -270,13 +270,13 @@ class ActorModelRayActor(BasePPORole):
         args = self.strategy.args
 
         # prepare datasets
-        prompts_data = blending_datasets(
+        prompts_data, eval_data = blending_datasets(
             args.prompt_data,
             args.prompt_data_probs,
             strategy,
             args.seed,
             max_count=args.max_samples,
-            return_eval=False,
+            return_eval=True,
             train_split=args.prompt_split,
         )
         prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
@@ -286,7 +286,18 @@ class ActorModelRayActor(BasePPORole):
         self.prompts_dataloader = strategy.setup_dataloader(
             self.prompts_dataset, args.rollout_batch_size // strategy.world_size, True, True
         )
-
+        
+        self.eval_dataset = PromptDataset(
+            eval_data, self.tokenizer, strategy, input_template=args.input_template, _eval=True
+        )
+        # print("eval_data:", self.eval_dataset.__getitem__(0))
+        self.eval_dataloader = strategy.setup_dataloader(
+            self.eval_dataset, args.rollout_batch_size // strategy.world_size, True, True
+        )
+        # for prompts in self.eval_dataloader:
+            # print("eval dataloader:", prompts)
+            # break
+    
         if args.pretrain_data:
             pretrain_data = blending_datasets(
                 args.pretrain_data,
@@ -392,6 +403,7 @@ class ActorModelRayActor(BasePPORole):
         trainer.fit(
             args,
             self.prompts_dataloader,
+            self.eval_dataloader,
             self.pretrain_dataloader,
             self.consumed_samples,
             self.num_update_steps_per_episodes,

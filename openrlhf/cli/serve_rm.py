@@ -93,7 +93,7 @@ class RuleBasedRMProxy:
         
         dataset = load_from_disk(args.data_path)
         train_list = list(dataset["train"])
-        validation_list = list(dataset["validation"])
+        validation_list = list(dataset["test"])
         
         for line in train_list:
             self.prompt2answer[line['context'].strip()]=line['answer']

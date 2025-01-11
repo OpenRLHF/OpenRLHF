@@ -396,7 +396,7 @@ class DeepspeedStrategy(ABC):
             ret = [torch.zeros_like(data).to(torch.cuda.current_device()) for _ in range(self.world_size)]
             dist.all_gather(ret, data.to(torch.cuda.current_device()))
             return torch.cat(ret).cpu() if is_cpu_tensor else torch.cat(ret)
-
+    
     def print(self, *msg):
         if self.is_rank_0():
             print(*msg)

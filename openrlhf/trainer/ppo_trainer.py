@@ -1,5 +1,10 @@
 import os
 import os.path
+import re
+import numpy as np
+from openrlhf.utils.check.math_equal import math_equal
+import json
+import copy
 from abc import ABC
 from typing import Any, Callable, Dict, List, Optional
 
@@ -8,7 +13,6 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
 from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
 from openrlhf.models.utils import masked_mean
 from openrlhf.utils.distributed_sampler import DistributedSampler
@@ -180,10 +184,27 @@ class PPOTrainer(ABC):
             log_dir = os.path.join(self.strategy.args.use_tensorboard, strategy.args.wandb_run_name)
             self._tensorboard = SummaryWriter(log_dir=log_dir)
 
+    def get_prompt2answer(self):
+        self.prompt2answer={}
+        self.prompt2source={}
+        # for rand_prompts in self.eval_dataloader:
+        #     for prompt, answer, source in zip(rand_prompts['prompt'], rand_prompts['answer'], rand_prompts['source']):
+        #         self.prompt2answer[prompt.strip()]=(answer, answer)
+        # with open("./temp/test.json", 'w+', encoding='utf-8') as f:
+        #     json.dump(self.prompt2answer, f)
+        with open("/inspire/hdd/ws-c6f77a66-a5f5-45dc-a4ce-1e856fe7a7b4/project/liupengfei-24025/xfli/o1/data/original_data/test.json", 'r', encoding='utf-8') as f: 
+            data=json.load(f)
+        for line in data:
+            self.prompt2answer[line['prompt'].strip()]=line['answer']
+            self.prompt2source[line['prompt'].strip()]=line['source']
+        print("prompt2answer_length:", len(self.prompt2answer))
+        
+
     def fit(
         self,
         args,
         prompts_dataloader,
+        eval_dataloader,
         pretrain_dataloader,
         consumed_samples=0,
         num_update_steps_per_episodes=1,
@@ -204,6 +225,9 @@ class PPOTrainer(ABC):
 
         self.prompts_dataloader = prompts_dataloader
         self.pretrain_dataloader = pretrain_dataloader
+        self.eval_dataloader = eval_dataloader
+        # prompt2answer
+        self.get_prompt2answer()
 
         # Restore step and start_epoch
         steps = consumed_samples // args.rollout_batch_size + 1
@@ -489,13 +513,70 @@ class PPOTrainer(ABC):
 
         # TODO: Add evaluation mechanism for PPO
         if global_step % args.eval_steps == 0:
-            # self.evaluate(self.eval_dataloader, global_step)
-            pass
+            self.evaluate(self.eval_dataloader, global_step)
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity/others on whole dev dataset as metric
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
             self._save_checkpoint(args, tag, client_states)
+
+    def calculate_acc(self, all_queries):
+        acc={}
+        cnt={}
+        for query in all_queries:
+            # TODO: bat split
+            prompt=query.split("<|im_end|>\n<|im_start|>user\n")[-1].split("<|im_end|>\n<|im_start|>assistant\n")[0].strip()
+            matches = re.findall(r"\\boxed\{((?:[^{}]|\\{|\\}|(?:\{(?:[^{}]|\\{|\\}|(?:\{(?:[^{}]|\\{|\\}|(?:\{[^{}]*\}))*\}))*\}))*\})", query)
+            pred = "" if len(matches) == 0 else matches[-1][:-1]
+            answer=self.prompt2answer[prompt.strip()]
+            source=self.prompt2source[prompt.strip()]
+            if source not in acc: acc[source], cnt[source] = 0, 0
+            if math_equal(pred, answer): acc[source]+=1
+            cnt[source]+=1
+        for source in acc:
+            if cnt[source]==0: continue
+            acc[source]=acc[source]/cnt[source]
+        print(acc)
+        return acc                
+    
+
+    def evaluate(self, eval_dataloader, steps):
+        step_bar = tqdm(
+            range(eval_dataloader.__len__()),
+            desc="Eval stage of steps %d" % steps,
+            disable=not self.strategy.is_rank_0(),
+        )
+        all_queries=[]
+        response_lengths=[]
+        for rand_prompts in eval_dataloader:
+            prompts=rand_prompts['prompt']
+            sample_list=self.experience_maker._generate_vllm(prompts, n_samples_per_prompt=1, **self.generate_kwargs)
+            
+            response_lengths.extend([sample.response_length.cpu() for sample in sample_list])
+            # TODO: bad split
+            for sample in sample_list:
+                decoded_sequence=self.tokenizer.batch_decode(sample.sequences.cpu(), skip_special_tokens=False)[0]
+                all_queries.extend(decoded_sequence.split("<|im_end|><|im_start|>system"))
+
+        acc=self.calculate_acc(all_queries)
+        avg_response_lengths=np.mean(response_lengths)
+        bar_dict={
+            "response_length": avg_response_lengths,
+        }        
+        for source in acc: bar_dict[f"acc_{source}"]=acc[source]
+        
+        logs = self.strategy.all_reduce(bar_dict)
+        step_bar.set_postfix(logs)
+        
+        if self.strategy.is_rank_0():
+            if self._wandb is not None:
+                logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": steps}.items()}
+                self._wandb.log(logs)
+            elif self._tensorboard is not None:
+                for k, v in logs.items():
+                    self._tensorboard.add_scalar(f"eval/{k}", v, steps)
+        
+
 
     def _save_checkpoint(self, args, tag, client_states):
         self.strategy.save_ckpt(
