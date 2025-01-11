@@ -182,7 +182,6 @@ deepspeed --module openrlhf.cli.train_sft \
    --pretrain meta-llama/Meta-Llama-3-8B \
    --save_path ./checkpoint/llama3-8b-sft \
    --save_steps -1 \
-   --save_by_epoch \
    --logging_steps 1 \
    --eval_steps -1 \
    --zero_stage 2 \
@@ -262,7 +261,6 @@ deepspeed --module openrlhf.cli.train_ppo \
   --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
   --save_path ./checkpoint/llama-3-8b-rlhf \
   --save_steps -1 \
-  --save_by_epoch \
   --logging_steps 1 \
   --eval_steps -1 \
   --micro_train_batch_size 2 \
@@ -287,7 +285,7 @@ deepspeed --module openrlhf.cli.train_ppo \
   --gradient_checkpointing \
   --load_checkpoint \
   --use_wandb {wandb_token}
-  
+
 # Support remote reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
 ```

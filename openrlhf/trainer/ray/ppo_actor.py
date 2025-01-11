@@ -37,7 +37,7 @@ class ActorPPOTrainer(PPOTrainer):
             vllm_engines (List, optional): vllm engines for text generation, if not specified, generate text by actor model directly. Defaults to None.
             critic_train_remote (bool, optional): whether this actor should triger corresponding critic model training. Defaults to False.
             save_hf_ckpt (bool): Whether to save huggingface-format model weight.
-            disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight. (Deepspeed model weight is used for training recovery)            
+            disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight. (Deepspeed model weight is used for training recovery)
         """
         super().__init__(*args, **kwargs)
         self.remote_rm_url = remote_rm_url
@@ -181,7 +181,7 @@ class ActorPPOTrainer(PPOTrainer):
                 self.actor,
                 self.tokenizer,
                 save_path,
-            )            
+            )
         # wait
         if self.critic_train_remote:
             ray.get(ref)

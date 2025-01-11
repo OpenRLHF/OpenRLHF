@@ -211,7 +211,7 @@ class DPOTrainer(ABC):
                     self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
 
                 step += 1
-                
+
             epoch_bar.update()
 
         if self._wandb is not None and self.strategy.is_rank_0():

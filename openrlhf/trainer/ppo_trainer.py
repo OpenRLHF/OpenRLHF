@@ -492,7 +492,7 @@ class PPOTrainer(ABC):
                 if self.experience_maker.perf_stats is not None:
                     for k, v in self.experience_maker.perf_stats.items():
                         self._tensorboard.add_scalar(f"perf/experience_maker/{k}", v, global_step)
-            
+
         # TODO: Add evaluation mechanism for PPO
         if global_step % args.eval_steps == 0:
             # self.evaluate(self.eval_dataloader, global_step)
@@ -503,7 +503,7 @@ class PPOTrainer(ABC):
             tag = f"global_step{global_step}"
             self._save_checkpoint(args, tag, client_states)
 
-    def _save_checkpoint(self, args, tag, client_states): 
+    def _save_checkpoint(self, args, tag, client_states):
         if not self.disable_ds_ckpt:
             self.strategy.save_ckpt(
                 self.actor.model,
