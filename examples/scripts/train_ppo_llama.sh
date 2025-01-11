@@ -6,7 +6,6 @@ openrlhf.cli.train_ppo \
    --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
    --save_path ./checkpoint/llama-3-8b-rlhf \
    --save_steps -1 \
-   --save_by_epoch \
    --logging_steps 1 \
    --eval_steps -1 \
    --micro_train_batch_size 2 \

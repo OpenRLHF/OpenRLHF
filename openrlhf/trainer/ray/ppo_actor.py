@@ -27,6 +27,8 @@ class ActorPPOTrainer(PPOTrainer):
         vllm_engines: List = None,
         remote_rm_url: List[str] = None,
         critic_train_remote: bool = False,
+        save_hf_ckpt: bool = False,
+        disable_ds_ckpt: bool = False,
         **kwargs,
     ):
         """PPOTrainer for ray.
@@ -34,11 +36,15 @@ class ActorPPOTrainer(PPOTrainer):
         Args:
             vllm_engines (List, optional): vllm engines for text generation, if not specified, generate text by actor model directly. Defaults to None.
             critic_train_remote (bool, optional): whether this actor should triger corresponding critic model training. Defaults to False.
+            save_hf_ckpt (bool): Whether to save huggingface-format model weight.
+            disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight. (Deepspeed model weight is used for training recovery)            
         """
         super().__init__(*args, **kwargs)
         self.remote_rm_url = remote_rm_url
         self.vllm_engines = vllm_engines
         self.critic_train_remote = critic_train_remote
+        self.save_hf_ckpt = save_hf_ckpt
+        self.disable_ds_ckpt = disable_ds_ckpt
 
         self.experience_maker = RemoteExperienceMaker(
             self.actor,
@@ -160,14 +166,22 @@ class ActorPPOTrainer(PPOTrainer):
         # call remote critic
         if self.critic_train_remote:
             ref = self.critic.save_checkpoint.remote(tag)
-        self.strategy.save_ckpt(
-            self.actor.model,
-            os.path.join(args.ckpt_path, "_actor"),
-            tag,
-            args.max_ckpt_num,
-            args.max_ckpt_mem,
-            client_states,
-        )
+        if not self.disable_ds_ckpt:
+            self.strategy.save_ckpt(
+                self.actor.model,
+                os.path.join(args.ckpt_path, "_actor"),
+                tag,
+                args.max_ckpt_num,
+                args.max_ckpt_mem,
+                client_states,
+            )
+        save_path = os.path.join(args.save_path, f"actor_{tag}")
+        if self.save_hf_ckpt:
+            self.strategy.save_model(
+                self.actor,
+                self.tokenizer,
+                save_path,
+            )            
         # wait
         if self.critic_train_remote:
             ray.get(ref)

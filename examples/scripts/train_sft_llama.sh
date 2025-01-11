@@ -12,7 +12,6 @@ openrlhf.cli.train_sft \
    --pretrain meta-llama/Meta-Llama-3-8B \
    --save_path ./checkpoint/llama3-8b-sft \
    --save_steps -1 \
-   --save_by_epoch \
    --logging_steps 1 \
    --eval_steps -1 \
    --zero_stage 2 \

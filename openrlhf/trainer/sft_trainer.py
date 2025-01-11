@@ -25,7 +25,8 @@ class SFTTrainer(ABC):
         batch_size (int, defaults to 1): Batch size for training.
         max_epochs (int, defaults to 2): The maximum number of training epochs.
         tokenizer (Tokenizer, optional): The tokenizer for processing input data.
-        save_by_epoch (bool): Whether to save model by epoch.
+        save_hf_ckpt (bool): Whether to save huggingface-format model weight.
+        disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight. (Deepspeed model weight is used for training recovery)
     """
 
     def __init__(
@@ -41,7 +42,8 @@ class SFTTrainer(ABC):
         batch_size: int = 1,
         max_epochs: int = 2,
         tokenizer=None,
-        save_by_epoch=False,
+        save_hf_ckpt: bool = False,
+        disable_ds_ckpt: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -56,7 +58,8 @@ class SFTTrainer(ABC):
         self.tokenizer = tokenizer
         self.optimizer = optim
         self.args = strategy.args
-        self.save_by_epoch = save_by_epoch
+        self.save_hf_ckpt = save_hf_ckpt
+        self.disable_ds_ckpt = disable_ds_ckpt
 
         self.loss_fn = GPTLMLoss(ring_attn_group=self.strategy.ring_attn_group)
 
@@ -193,11 +196,10 @@ class SFTTrainer(ABC):
                     loss_sum = 0
                     global_step = step // self.strategy.accumulated_gradient
                     client_states = {"consumed_samples": global_step * args.train_batch_size}
-                    self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states, epoch=None)
+                    self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
 
                 step += 1
 
-            self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states, epoch=epoch)
             epoch_bar.update()
 
         if self._wandb is not None and self.strategy.is_rank_0():
@@ -206,7 +208,7 @@ class SFTTrainer(ABC):
             self._tensorboard.close()
 
     # logs/checkpoints/evaluation
-    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}, epoch=None):
+    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         if global_step % args.logging_steps == 0:
             # wandb
             if self._wandb is not None and self.strategy.is_rank_0():
@@ -223,20 +225,20 @@ class SFTTrainer(ABC):
             if len(self.eval_dataloader) > 0:
                 self.evaluate(self.eval_dataloader, global_step)
         
-        if self.save_by_epoch and epoch != None:
-            save_path = args.save_path
-            if save_path.endswith("/"):
-                save_path = save_path[:-1]
-            save_path = f'{save_path}_e{epoch}'
-            self.strategy.save_model(self.model, self.tokenizer, save_path)
-            
-        # save deepspeed format ckpt
+        # save ckpt
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
-            self.strategy.save_ckpt(
-                self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
-            )
+            if not self.disable_ds_ckpt:
+                self.strategy.save_ckpt(
+                    self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+                )
+            if self.save_hf_ckpt:
+                save_path = args.save_path
+                if save_path.endswith("/"):
+                    save_path = save_path[:-1]
+                save_path = f'{save_path}_hf_{tag}'
+                self.strategy.save_model(self.model, self.tokenizer, save_path)
 
     def evaluate(self, eval_dataloader, steps=0):
         times = 0
