@@ -3,10 +3,12 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+from torch.nn import functional as F
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
+from flash_attn.utils.distributed import all_gather
 
 from .ring_attn_utils import convert_ring_attn_params
 from .utils import log_probs_from_logits, reset_position_ids
@@ -187,6 +189,7 @@ class Actor(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         return_output=False,
         ring_attn_group: Optional[dist.ProcessGroup] = None,
+        logps_allgather=False,
         packed_seq_lens: Optional[list[int]] = None,
     ) -> torch.Tensor:
         """Returns action log probs"""
@@ -218,6 +221,14 @@ class Actor(nn.Module):
         if not self.packing_samples:
             action_log_probs = log_probs[:, -num_actions:]
         else:
+            if ring_attn_group is not None and logps_allgather:
+                # padding for every ring attn rank
+                local_labels = F.pad(sequences, (0, 1), value=0)
+                local_per_token_logps = log_probs_from_logits(output["logits"], local_labels[:, 1:])
+                per_token_logps = all_gather(local_per_token_logps, ring_attn_group).reshape((1, -1))
+                log_probs = per_token_logps[:, :-1]
+            else:
+                log_probs = log_probs_from_logits(output["logits"][:, :-1, :], sequences[:, 1:])
             assert isinstance(num_actions, list) and len(num_actions) == len(packed_seq_lens)
             action_log_probs = []
             offset = 0

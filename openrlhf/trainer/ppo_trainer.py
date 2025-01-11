@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -353,6 +354,8 @@ class PPOTrainer(ABC):
             num_actions,
             attention_mask=attention_mask,
             return_output=True,
+            ring_attn_group=self.strategy.ring_attn_group,
+            logps_allgather=True,
             packed_seq_lens=packed_seq_lens,
         )
 
@@ -439,6 +442,7 @@ class PPOTrainer(ABC):
             num_actions=num_actions,
             attention_mask=attention_mask,
             return_output=True,
+            ring_attn_group=self.strategy.ring_attn_group,
             packed_seq_lens=packed_seq_lens,
         )
         # loss function

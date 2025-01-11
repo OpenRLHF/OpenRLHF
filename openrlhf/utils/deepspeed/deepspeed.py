@@ -105,6 +105,7 @@ class DeepspeedStrategy(ABC):
             if dist.get_rank() in ring_attn_ranks:
                 set_ring_attn_group(group)
                 self.ring_attn_rank = dist.get_rank(group=group)
+                self.ring_attn_ranks = ring_attn_ranks
 
         from ring_flash_attn import substitute_hf_flash_attn
 
@@ -113,10 +114,6 @@ class DeepspeedStrategy(ABC):
     @property
     def ring_attn_group(self):
         return get_ring_attn_group()
-
-    @property
-    def ring_attn_rank(self):
-        return get_ring_attn_rank()
 
     def create_optimizer(self, model, **kwargs) -> Optimizer:
         if isinstance(model, Actor):

@@ -14,10 +14,6 @@ def set_ring_attn_group(group):
 def get_ring_attn_group():
     return RING_ATTN_GROUP
 
-def get_ring_attn_rank():
-    # TODO
-    return 0
-
 
 def reset_ring_attn_position_ids(start, end, packed_seq_lens):
     """
