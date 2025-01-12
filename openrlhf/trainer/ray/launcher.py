@@ -116,6 +116,7 @@ class ReferenceModelRayActor(BasePPORole):
     def empty_cache(self) -> None:
         torch.cuda.empty_cache()
 
+
 @ray.remote(num_gpus=1)
 class RewardModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):

@@ -20,8 +20,6 @@ class WorkerWrap(Worker):
             rank=rank,
             group_name=group_name,
         )
-        torch.distributed(group=self._model_update_group, device_ids=[rank])
-        print("torch.distributed(group=self._model_update_group, device_ids=[rank])")
         print(
             f"init_process_group: master_address={master_address}, master_port={master_port}, ",
             f"rank={rank}, world_size={world_size}, group_name={group_name}",
