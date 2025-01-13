@@ -7,6 +7,7 @@ from typing import Callable, Dict, List
 import deepspeed
 import ray
 import torch
+import torch.distributed
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import PromptDataset, SFTDataset
@@ -158,19 +159,29 @@ class ActorPPOTrainer(PPOTrainer):
 
     def _save_checkpoint(self, args, tag, client_states):
         # call remote critic
-        if self.critic_train_remote:
-            ref = self.critic.save_checkpoint.remote(tag)
-        self.strategy.save_ckpt(
-            self.actor.model,
-            os.path.join(args.ckpt_path, "_actor"),
-            tag,
-            args.max_ckpt_num,
-            args.max_ckpt_mem,
-            client_states,
-        )
+        if not self.disable_ds_ckpt:
+            if self.critic_train_remote:
+                ref = self.critic.save_checkpoint.remote(tag)
+            self.strategy.save_ckpt(
+                self.actor.model,
+                os.path.join(args.ckpt_path, "_actor"),
+                tag,
+                args.max_ckpt_num,
+                args.max_ckpt_mem,
+                client_states,
+            )
+        if self.save_hf_ckpt:
+            save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
+            self.strategy.save_model(
+                self.ema_model if args.enable_ema else self.actor,
+                self.tokenizer,
+                save_path,
+            )
         # wait
-        if self.critic_train_remote:
-            ray.get(ref)
+        if not self.disable_ds_ckpt:
+            if self.critic_train_remote:
+                ray.get(ref)
+        torch.distributed.barrier()
 
 
 @ray.remote(num_gpus=1)
@@ -381,6 +392,8 @@ class ActorModelRayActor(BasePPORole):
             top_p=args.top_p,
             pad_token_id=self.tokenizer.pad_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
+            save_hf_ckpt=args.save_hf_ckpt,
+            disable_ds_ckpt=args.disable_ds_ckpt,
         )
 
         # broadcast checkpoint
