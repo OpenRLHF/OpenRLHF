@@ -175,7 +175,7 @@ class ActorPPOTrainer(PPOTrainer):
                 args.max_ckpt_mem,
                 client_states,
             )
-        save_path = os.path.join(args.save_path, f"actor_{tag}")
+        save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
         if self.save_hf_ckpt:
             self.strategy.save_model(
                 self.actor,

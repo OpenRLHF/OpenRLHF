@@ -519,8 +519,5 @@ class PPOTrainer(ABC):
                 )
 
         if self.save_hf_ckpt:
-            save_path = args.save_path
-            if save_path.endswith("/"):
-                save_path = save_path[:-1]
-            save_path = f'{save_path}_hf_{tag}'
+            save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
             self.strategy.save_model(self.actor, self.tokenizer, save_path)
