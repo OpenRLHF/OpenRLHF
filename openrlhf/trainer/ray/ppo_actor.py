@@ -395,6 +395,8 @@ class ActorModelRayActor(BasePPORole):
             top_p=args.top_p,
             pad_token_id=self.tokenizer.pad_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
+            save_hf_ckpt=args.save_hf_ckpt,
+            disable_ds_ckpt=args.disable_ds_ckpt,
         )
 
         # broadcast checkpoint
