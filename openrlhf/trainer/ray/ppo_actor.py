@@ -139,23 +139,50 @@ class ActorPPOTrainer(PPOTrainer):
         # avoid OOM
         torch.cuda.empty_cache()
         model = self.actor.model.module
-        count, num_params = 0, len(list(model.named_parameters()))
+
+        param_chunk_list = []
+        current_chunk_size = 0
+        param_chunk = []
         for name, param in model.named_parameters():
-            count += 1  # empty_cache at last param
+            shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
+            size_in_bytes = shape.numel() * param.element_size()
 
-            # Fire all vllm engines for broadcast
-            if torch.distributed.get_rank() == 0:
-                shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
-                refs = [
-                    engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
-                    for engine in self.vllm_engines
-                ]
+            if current_chunk_size + size_in_bytes > self.strategy.args.vllm_broadcast_chunk_size:
+                param_chunk_list.append(param_chunk)
+                param_chunk = []
+                current_chunk_size = 0
+            param_chunk.append((name, param, shape))
+            current_chunk_size += size_in_bytes
+        if len(param_chunk) > 0:
+            param_chunk_list.append(param_chunk)
 
+        # Fire all vllm engines for broadcast
+        if torch.distributed.get_rank() == 0:
+            refs = [
+                engine.update_weight.remote(
+                    [
+                        [(name, param.dtype, shape) for name, param, shape in param_chunk]
+                        for param_chunk in param_chunk_list
+                    ]
+                )
+                for engine in self.vllm_engines
+            ]
+
+        for param_chunk in param_chunk_list:
             # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
-            with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
+            with deepspeed.zero.GatheredParameters(
+                [param for _, param, _ in param_chunk], enabled=self.strategy.args.zero_stage == 3
+            ):
                 if torch.distributed.get_rank() == 0:
-                    torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
-                    ray.get(refs)
+                    handles = [
+                        torch.distributed.broadcast(param.data, 0, group=self._model_update_group, async_op=True)
+                        for _, param, _ in param_chunk
+                    ]
+                    for handle in handles:
+                        handle.wait()
+
+        if torch.distributed.get_rank() == 0:
+            ray.get(refs)
 
     def _save_checkpoint(self, args, tag, client_states):
         # call remote critic

@@ -66,13 +66,13 @@ class LLMRayActor:
                 "init_process_group", master_address, master_port, rank_offset, world_size, group_name, backend
             )
 
-    def update_weight(self, name, dtype, shape, empty_cache=False):
+    def update_weight(self, param_chunk_list):
         self.stop_remote_worker_execution_loop()
 
         if self.use_gpu_executor:
-            return self.llm.llm_engine.model_executor.driver_worker.update_weight(name, dtype, shape, empty_cache)
+            return self.llm.llm_engine.model_executor.driver_worker.update_weight(param_chunk_list)
         else:
-            return self.llm.llm_engine.model_executor._run_workers("update_weight", name, dtype, shape, empty_cache)
+            return self.llm.llm_engine.model_executor._run_workers("update_weight", param_chunk_list)
 
     def stop_remote_worker_execution_loop(self):
         # Fix error for using 2 communication group
