@@ -7,6 +7,7 @@ from typing import Callable, Dict, List
 import deepspeed
 import ray
 import torch
+import torch.distributed
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import PromptDataset, SFTDataset
@@ -180,6 +181,7 @@ class ActorPPOTrainer(PPOTrainer):
         if not self.disable_ds_ckpt:
             if self.critic_train_remote:
                 ray.get(ref)
+        torch.distributed.barrier()
 
 
 @ray.remote(num_gpus=1)
