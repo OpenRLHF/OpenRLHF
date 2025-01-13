@@ -158,9 +158,9 @@ class ActorPPOTrainer(PPOTrainer):
 
     def _save_checkpoint(self, args, tag, client_states):
         # call remote critic
-        if self.critic_train_remote:
-            ref = self.critic.save_checkpoint.remote(tag)
         if not self.disable_ds_ckpt:
+            if self.critic_train_remote:
+                ref = self.critic.save_checkpoint.remote(tag)
             self.strategy.save_ckpt(
                 self.actor.model,
                 os.path.join(args.ckpt_path, "_actor"),
@@ -169,16 +169,17 @@ class ActorPPOTrainer(PPOTrainer):
                 args.max_ckpt_mem,
                 client_states,
             )
-        save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
         if self.save_hf_ckpt:
+            save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
             self.strategy.save_model(
                 self.ema_model if args.enable_ema else self.actor,
                 self.tokenizer,
                 save_path,
             )
         # wait
-        if self.critic_train_remote:
-            ray.get(ref)
+        if not self.disable_ds_ckpt:
+            if self.critic_train_remote:
+                ray.get(ref)
 
 
 @ray.remote(num_gpus=1)
