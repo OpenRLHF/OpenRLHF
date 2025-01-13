@@ -172,7 +172,7 @@ class ActorPPOTrainer(PPOTrainer):
         save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
         if self.save_hf_ckpt:
             self.strategy.save_model(
-                self.actor,
+                self.ema_model if args.enable_ema else self.actor,
                 self.tokenizer,
                 save_path,
             )
