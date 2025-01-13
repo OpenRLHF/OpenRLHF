@@ -27,8 +27,6 @@ class ActorPPOTrainer(PPOTrainer):
         vllm_engines: List = None,
         remote_rm_url: List[str] = None,
         critic_train_remote: bool = False,
-        save_hf_ckpt: bool = False,
-        disable_ds_ckpt: bool = False,
         **kwargs,
     ):
         """PPOTrainer for ray.
@@ -43,8 +41,6 @@ class ActorPPOTrainer(PPOTrainer):
         self.remote_rm_url = remote_rm_url
         self.vllm_engines = vllm_engines
         self.critic_train_remote = critic_train_remote
-        self.save_hf_ckpt = save_hf_ckpt
-        self.disable_ds_ckpt = disable_ds_ckpt
 
         self.experience_maker = RemoteExperienceMaker(
             self.actor,
