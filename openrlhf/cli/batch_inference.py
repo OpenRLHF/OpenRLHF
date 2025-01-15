@@ -13,20 +13,36 @@ from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.utils import blending_datasets, get_processor, get_strategy, get_tokenizer
 
 
+def setup_common_components(args):
+    """Setup tokenizer, strategy, and prompts common across engines."""
+    # Configure tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(args.pretrain, trust_remote_code=True)
+
+    # Configure strategy
+    class Empty:
+        pass
+    strategy = Empty()
+    strategy.print = print
+    strategy.is_rank_0 = lambda: True
+    strategy.args = args
+
+    # Load dataset
+    dataset = blending_datasets(
+        args.dataset,
+        args.dataset_probs,
+        strategy,
+        args.seed,
+        return_eval=False,
+        max_count=args.max_samples,
+        train_split=args.dataset_split,
+    )
+    return tokenizer, strategy, dataset
+
+
 def batch_generate_sglang(args):
     from sglang import Engine
 
-    # configure strategy
-    class Empty:
-        pass
-
-    dummy_strategy = Empty()
-    dummy_strategy.print = print
-    dummy_strategy.is_rank_0 = lambda: True
-    dummy_strategy.args = args
-
-    # configure tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.pretrain, trust_remote_code=True)
+    tokenizer, dummy_strategy, prompts_data = setup_common_components(args)
 
     # configure model
 
@@ -63,15 +79,7 @@ def batch_generate_sglang(args):
         skip_special_tokens=False,
     )
 
-    prompts_data = blending_datasets(
-        args.dataset,
-        args.dataset_probs,
-        dummy_strategy,
-        args.seed,
-        return_eval=False,
-        max_count=args.max_samples,
-        train_split=args.dataset_split,
-    )
+     
     if args.iter is None:
         prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
     else:
@@ -104,17 +112,7 @@ def batch_generate_sglang(args):
 def batch_generate_vllm(args):
     from vllm import LLM, SamplingParams
 
-    # configure strategy
-    class Empty:
-        pass
-
-    dummy_strategy = Empty()
-    dummy_strategy.print = print
-    dummy_strategy.is_rank_0 = lambda: True
-    dummy_strategy.args = args
-
-    # configure tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.pretrain, trust_remote_code=True)
+    tokenizer, dummy_strategy, prompts_data = setup_common_components(args)
 
     # configure model
     llm = LLM(
@@ -137,15 +135,6 @@ def batch_generate_vllm(args):
         include_stop_str_in_output=True,
     )
 
-    prompts_data = blending_datasets(
-        args.dataset,
-        args.dataset_probs,
-        dummy_strategy,
-        args.seed,
-        return_eval=False,
-        max_count=args.max_samples,
-        train_split=args.dataset_split,
-    )
     if args.iter is None:
         prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
     else:
@@ -175,128 +164,129 @@ def batch_generate_vllm(args):
     with jsonlines.open(args.output_path, mode="w") as writer:
         writer.write_all(output_dataset)
 
+# This function is not being used, so comment it out for now
 
-def batch_generate(args, engine_type="sglang"):
-    if engine_type == "sglang":
-        from sglang import Engine
-    elif engine_type == "vllm":
-        from vllm import LLM, SamplingParams
-    else:
-        raise ValueError("Invalid engine type. Choose 'sglang' or 'vllm'.")
+# def batch_generate(args, engine_type="sglang"):
+#     if engine_type == "sglang":
+#         from sglang import Engine
+#     elif engine_type == "vllm":
+#         from vllm import LLM, SamplingParams
+#     else:
+#         raise ValueError("Invalid engine type. Choose 'sglang' or 'vllm'.")
 
-    # configure strategy
-    class Empty:
-        pass
+#     # configure strategy
+#     class Empty:
+#         pass
 
-    dummy_strategy = Empty()
-    dummy_strategy.print = print
-    dummy_strategy.is_rank_0 = lambda: True
-    dummy_strategy.args = args
+#     dummy_strategy = Empty()
+#     dummy_strategy.print = print
+#     dummy_strategy.is_rank_0 = lambda: True
+#     dummy_strategy.args = args
 
-    # configure tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.pretrain, trust_remote_code=True)
+#     # configure tokenizer
+#     tokenizer = AutoTokenizer.from_pretrained(args.pretrain, trust_remote_code=True)
 
-    # configure model
-    if engine_type == "sglang":
+#     # configure model
+#     if engine_type == "sglang":
 
-        # Note that SGLang does not support max_num_seqs
-        # and the grammar backend of SGLang and vllm has
-        # unsolved version conflicts.
+#         # Note that SGLang does not support max_num_seqs
+#         # and the grammar backend of SGLang and vllm has
+#         # unsolved version conflicts.
 
-        llm = Engine(
-            model_path=args.pretrain,
-            tp_size=args.tp_size,
-            trust_remote_code=True,
-            random_seed=args.seed,
-            disable_radix_cache=not args.enable_prefix_caching,
-        )
-    else:  # vllm
-        llm = LLM(
-            model=args.pretrain,
-            tensor_parallel_size=args.tp_size,
-            trust_remote_code=True,
-            seed=args.seed,
-            max_num_seqs=args.max_num_seqs,
-            enable_prefix_caching=args.enable_prefix_caching,
-        )
+#         llm = Engine(
+#             model_path=args.pretrain,
+#             tp_size=args.tp_size,
+#             trust_remote_code=True,
+#             random_seed=args.seed,
+#             disable_radix_cache=not args.enable_prefix_caching,
+#         )
+#     else:  # vllm
+#         llm = LLM(
+#             model=args.pretrain,
+#             tensor_parallel_size=args.tp_size,
+#             trust_remote_code=True,
+#             seed=args.seed,
+#             max_num_seqs=args.max_num_seqs,
+#             enable_prefix_caching=args.enable_prefix_caching,
+#         )
 
-    # Create a sampling params object.
-    if engine_type == "sglang":
+#     # Create a sampling params object.
+#     if engine_type == "sglang":
 
-        # TODO: (Chenyang) Check include_stop_str_in_output
+#         # TODO: (Chenyang) Check include_stop_str_in_output
 
-        # SGLang strictly follows the sampling parameters of OpenAI.
-        # Therefore, there is no prompt_max_len and
-        # include_stop_str_in_output in sampling params.
+#         # SGLang strictly follows the sampling parameters of OpenAI.
+#         # Therefore, there is no prompt_max_len and
+#         # include_stop_str_in_output in sampling params.
 
-        # prompt_max_len is similar to context_length parameter in
-        # SGLang engine args. But SGLang engine raises an error when
-        # request length is larger than context_length, rather than
-        # truncate the prompt and only use the last tokens in vllm.
+#         # prompt_max_len is similar to context_length parameter in
+#         # SGLang engine args. But SGLang engine raises an error when
+#         # request length is larger than context_length, rather than
+#         # truncate the prompt and only use the last tokens in vllm.
 
-        sampling_params = dict(
-            max_new_tokens=args.max_new_tokens,
-            top_p=args.top_p,
-            temperature=args.temperature,
-            repetition_penalty=args.repetition_penalty,
-            skip_special_tokens=False,
-        )
-    else:  # vllm
-        sampling_params = SamplingParams(
-            max_tokens=args.max_new_tokens,
-            top_p=args.top_p,
-            temperature=args.temperature,
-            repetition_penalty=args.repetition_penalty,
-            skip_special_tokens=False,
-            truncate_prompt_tokens=args.prompt_max_len,
-            include_stop_str_in_output=True,
-        )
+#         sampling_params = dict(
+#             max_new_tokens=args.max_new_tokens,
+#             top_p=args.top_p,
+#             temperature=args.temperature,
+#             repetition_penalty=args.repetition_penalty,
+#             skip_special_tokens=False,
+#         )
+#     else:  # vllm
+#         sampling_params = SamplingParams(
+#             max_tokens=args.max_new_tokens,
+#             top_p=args.top_p,
+#             temperature=args.temperature,
+#             repetition_penalty=args.repetition_penalty,
+#             skip_special_tokens=False,
+#             truncate_prompt_tokens=args.prompt_max_len,
+#             include_stop_str_in_output=True,
+#         )
 
-    prompts_data = blending_datasets(
-        args.dataset,
-        args.dataset_probs,
-        dummy_strategy,
-        args.seed,
-        return_eval=False,
-        max_count=args.max_samples,
-        train_split=args.dataset_split,
-    )
-    if args.iter is None:
-        prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
-    else:
-        # for iterative generation
-        start_idx = args.iter * args.rollout_batch_size
-        end_idx = start_idx + args.rollout_batch_size
-        prompts_data = prompts_data.select(range(start_idx, min(end_idx, len(prompts_data))))
+#     prompts_data = blending_datasets(
+#         args.dataset,
+#         args.dataset_probs,
+#         dummy_strategy,
+#         args.seed,
+#         return_eval=False,
+#         max_count=args.max_samples,
+#         train_split=args.dataset_split,
+#     )
+#     if args.iter is None:
+#         prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
+#     else:
+#         # for iterative generation
+#         start_idx = args.iter * args.rollout_batch_size
+#         end_idx = start_idx + args.rollout_batch_size
+#         prompts_data = prompts_data.select(range(start_idx, min(end_idx, len(prompts_data))))
 
-    prompts_dataset = PromptDataset(prompts_data, tokenizer, dummy_strategy, input_template=args.input_template)
-    prompts = list(prompts_dataset)
+#     prompts_dataset = PromptDataset(prompts_data, tokenizer, dummy_strategy, input_template=args.input_template)
+#     prompts = list(prompts_dataset)
 
-    # Conditional SFT inference
-    if args.enable_csft:
-        for i in range(len(prompts)):
-            prompts[i] += args.csft_prompt.strip() + " "
+#     # Conditional SFT inference
+#     if args.enable_csft:
+#         for i in range(len(prompts)):
+#             prompts[i] += args.csft_prompt.strip() + " "
 
-    # best of n
-    N = args.best_of_n
-    output_dataset = []
+#     # best of n
+#     N = args.best_of_n
+#     output_dataset = []
 
-    outputs = llm.generate(prompts * N, sampling_params)
-    if engine_type == "sglang":
-        for prompt, output in zip(prompts * N, outputs):
-            output = output["text"]
-            output_dataset.append({"input": prompt, "output": output})
-    else:  # vllm
-        for output in outputs:
-            prompt = output.prompt
-            output = output.outputs[0].text
-            output_dataset.append({"input": prompt, "output": output})
+#     outputs = llm.generate(prompts * N, sampling_params)
+#     if engine_type == "sglang":
+#         for prompt, output in zip(prompts * N, outputs):
+#             output = output["text"]
+#             output_dataset.append({"input": prompt, "output": output})
+#     else:  # vllm
+#         for output in outputs:
+#             prompt = output.prompt
+#             output = output.outputs[0].text
+#             output_dataset.append({"input": prompt, "output": output})
 
-    with jsonlines.open(args.output_path, mode="w") as writer:
-        writer.write_all(output_dataset)
+#     with jsonlines.open(args.output_path, mode="w") as writer:
+#         writer.write_all(output_dataset)
 
 
-def batch_generate(args):
+def batch_generate_hf(args):
     # configure strategy
     strategy = get_strategy(args)
     strategy.setup_distributed(timeout=timedelta(minutes=720))
@@ -565,13 +555,16 @@ if __name__ == "__main__":
     parser.add_argument("--enable_csft", action="store_true", default=False)
     parser.add_argument("--csft_prompt", type=str, default="<rm_score>: 5.00", help="Conditional SFT prompt")
     args = parser.parse_args()
-    if args.eval_task and args.eval_task == "generate":
-        batch_generate(args)
-    if args.eval_task and args.eval_task == "generate_vllm":
-        batch_generate_vllm(args)
-    elif args.eval_task and args.eval_task == "generate_sglang":
-        batch_generate_sglang(args)
-    elif args.eval_task and args.eval_task == "rm":
-        batch_rm_inference(args)
+    
+    TASK_MAP = {
+        "generate": batch_generate_hf,
+        "generate_vllm": batch_generate_vllm,
+        "generate_sglang": batch_generate_sglang,
+        "rm": batch_rm_inference,
+    }
+
+    if args.eval_task in TASK_MAP:
+        TASK_MAP[args.eval_task](args)
     else:
         print("Invalid or missing '--eval_task' argument. Please specify either 'generate' or 'rm'.")
+
