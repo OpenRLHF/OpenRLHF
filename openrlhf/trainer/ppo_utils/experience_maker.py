@@ -15,8 +15,8 @@ from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn, remote_rm_fn_ray
 
-# from search_algorithm.beamsearch import search as beamsearch
 from search_algorithm.beamsearch_efficient import search as beamsearch
+from search_algorithm.litesearch import search as litesearch
 
 logger = init_logger(__name__)
 
@@ -172,7 +172,7 @@ class NaiveExperienceMaker(ABC):
         return {k: v.to(device) for k, v in batch.items()}
 
     @torch.no_grad()
-    def make_experience_list(self, all_prompts: Union[str, List[str]], **generate_kwargs) -> List[Experience]:
+    def make_experience_list(self, all_prompts: Union[str, List[str]], search_algo: str, **generate_kwargs) -> List[Experience]:
         """
         Make a list of experience with the micro_rollout_batch_size.
 
@@ -182,8 +182,10 @@ class NaiveExperienceMaker(ABC):
         """
         args = self.strategy.args
         # generate responses
-        samples_list = self.generate_samples(all_prompts, **generate_kwargs)
-        # samples_list = self.search_samples(all_prompts, **generate_kwargs)
+        if search_algo == "sampling":
+            samples_list = self.generate_samples(all_prompts, **generate_kwargs)
+        else:
+            samples_list = self.search_samples(all_prompts, search_algo, **generate_kwargs)
         torch.distributed.barrier()
         experiences = []
         for samples in tqdm(
@@ -271,7 +273,7 @@ class NaiveExperienceMaker(ABC):
         return samples_list
 
     @torch.no_grad()
-    def search_samples(self, all_prompts: List[str], **generate_kwargs) -> List[Samples]:
+    def search_samples(self, all_prompts: List[str], search_algo: str, **generate_kwargs) -> List[Samples]:
         """
         Search samples using tree search algorithms and return in batches.
         """
@@ -285,7 +287,10 @@ class NaiveExperienceMaker(ABC):
             sequences = []
             _all_prompts = all_prompts[i: i + args.micro_rollout_batch_size]
             for prompt in _all_prompts:
-                sequence = beamsearch(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
+                if search_algo == "beamsearch":
+                    sequence = beamsearch(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
+                elif search_algo == "litesearch":
+                    sequence = litesearch(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
                 sequences.append(sequence)
             trajs = [seq[len(prompt):] for prompt, seq in zip(_all_prompts, sequences)]
             prompt_ids = self.tokenize_fn(_all_prompts, self.prompt_max_len, device="cuda")
