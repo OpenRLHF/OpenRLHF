@@ -56,14 +56,14 @@ class LLMRayActor:
     def generate(self, *args, **kwargs):
         return self.llm.generate(*args, **kwargs)
 
-    def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
+    def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, timeout, backend):
         if self.use_gpu_executor:
             return self.llm.llm_engine.model_executor.driver_worker.init_process_group(
-                master_address, master_port, rank_offset, world_size, group_name, backend
+                master_address, master_port, rank_offset, world_size, group_name, timeout, backend
             )
         else:
             return self.llm.llm_engine.model_executor._run_workers(
-                "init_process_group", master_address, master_port, rank_offset, world_size, group_name, backend
+                "init_process_group", master_address, master_port, rank_offset, world_size, group_name, timeout, backend
             )
 
     def update_weight(self, name, dtype, shape, empty_cache=False):

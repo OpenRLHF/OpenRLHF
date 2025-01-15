@@ -2,6 +2,7 @@ import itertools
 import math
 import os
 import socket
+import datetime
 from typing import Callable, Dict, List
 
 import deepspeed
@@ -17,8 +18,11 @@ from openrlhf.trainer.ppo_utils import Experience, RemoteExperienceMaker
 from openrlhf.utils import blending_datasets, get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.distributed_util import init_process_group
+from openrlhf.utils.logging_utils import init_logger
 
 from .launcher import BasePPORole
+
+logger = init_logger(__name__)
 
 
 class ActorPPOTrainer(PPOTrainer):
@@ -70,10 +74,13 @@ class ActorPPOTrainer(PPOTrainer):
         #   1. AllGather paramters to rank 0
         #   2. Broadcast parameters from rank 0 to all vllm engines
         if self.vllm_engines is not None and torch.distributed.get_rank() == 0:
-            master_address = ray._private.services.get_node_ip_address()
+            master_address = os.environ.get("MASTER_ADDR", ray._private.services.get_node_ip_address())
+            logger.info(f"MASTER_ADDR is: {master_address}")
             with socket.socket() as sock:
                 sock.bind(("", 0))
                 master_port = sock.getsockname()[1]
+            master_port = int(os.environ.get("MASTER_PORT", master_port))
+            logger.info(f"MASTER_PORT is: {master_port}")
 
             vllm_num_engines, vllm_tensor_parallel_size = (
                 self.strategy.args.vllm_num_engines,
@@ -82,26 +89,43 @@ class ActorPPOTrainer(PPOTrainer):
             world_size = vllm_num_engines * vllm_tensor_parallel_size + 1
 
             backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
-            refs = [
-                engine.init_process_group.remote(
-                    master_address,
-                    master_port,
-                    i * vllm_tensor_parallel_size + 1,
-                    world_size,
-                    "openrlhf",
-                    backend=backend,
-                )
-                for i, engine in enumerate(self.vllm_engines)
-            ]
-            self._model_update_group = init_process_group(
-                backend=backend,
-                init_method=f"tcp://{master_address}:{master_port}",
-                world_size=world_size,
-                rank=0,
-                group_name="openrlhf",
-            )
+            # Add a retry to improve fault tolerance and facilitate timely error detection. TODO: better to set in args?
+            timeout_minutes = 30
+            try_max_times = 3
 
-            ray.get(refs)
+            for t in range(1, try_max_times + 1):
+                try:
+                    timeout = datetime.timedelta(minutes=timeout_minutes*t)
+                    logger.info(f"Attempt {t}/{try_max_times} to init_process_group in {timeout_minutes * t} mins...")
+                    refs = [
+                        engine.init_process_group.remote(
+                            master_address,
+                            master_port,
+                            i * vllm_tensor_parallel_size + 1,
+                            world_size,
+                            "openrlhf",
+                            timeout=timeout,
+                            backend=backend,
+                        )
+                        for i, engine in enumerate(self.vllm_engines)
+                    ]
+                    self._model_update_group = init_process_group(
+                        backend=backend,
+                        init_method=f"tcp://{master_address}:{master_port}",
+                        world_size=world_size,
+                        rank=0,
+                        timeout=timeout,
+                        group_name="openrlhf",
+                    )
+
+                    ray.get(refs)
+                    logger.info("init_process_group successfully")
+                    break 
+                except Exception as e:
+                    logger.error(f"init_process_group failed in {timeout_minutes * t} mins, please check/set your distributed settings, MASTER_ADDR/MASTER_PORT/network ... : {e}")
+                    if try_max_times == t:
+                        raise TimeoutError(f"init_process_group failed in max timeout {timeout_minutes * try_max_times} mins：{e}")
+
 
         torch.distributed.barrier()
 
