@@ -151,6 +151,7 @@ class ActorPPOTrainer(PPOTrainer):
                 if torch.distributed.get_rank() == 0:
                     torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
                     ray.get(refs)
+        torch.distributed.barrier()
 
     def _save_checkpoint(self, args, tag, client_states):
         # call remote critic
