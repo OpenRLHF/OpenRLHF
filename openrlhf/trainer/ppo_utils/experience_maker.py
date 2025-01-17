@@ -8,11 +8,15 @@ import ray
 import torch
 import torch.nn as nn
 from tqdm import tqdm
+import pdb
 
 from openrlhf.models.actor import Actor
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean, unpacking_samples
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn, remote_rm_fn_ray
+
+from search_algorithm.beamsearch_efficient import search as beamsearch
+from search_algorithm.litesearch import search as litesearch
 
 logger = init_logger(__name__)
 
@@ -168,7 +172,7 @@ class NaiveExperienceMaker(ABC):
         return {k: v.to(device) for k, v in batch.items()}
 
     @torch.no_grad()
-    def make_experience_list(self, all_prompts: Union[str, List[str]], **generate_kwargs) -> List[Experience]:
+    def make_experience_list(self, all_prompts: Union[str, List[str]], search_algo: str, **generate_kwargs) -> List[Experience]:
         """
         Make a list of experience with the micro_rollout_batch_size.
 
@@ -178,9 +182,11 @@ class NaiveExperienceMaker(ABC):
         """
         args = self.strategy.args
         # generate responses
-        samples_list = self.generate_samples(all_prompts, **generate_kwargs)
+        if search_algo == "sampling":
+            samples_list = self.generate_samples(all_prompts, **generate_kwargs)
+        else:
+            samples_list = self.search_samples(all_prompts, search_algo, **generate_kwargs)
         torch.distributed.barrier()
-
         experiences = []
         for samples in tqdm(
             samples_list,
@@ -248,10 +254,59 @@ class NaiveExperienceMaker(ABC):
         # sample multiple response
         all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
         samples_list = []
+
         for i in range(0, len(all_prompts), args.micro_rollout_batch_size):
             prompts = all_prompts[i : i + args.micro_rollout_batch_size]
             inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
             sequences, attention_mask, action_mask = self.actor.generate(**inputs, **generate_kwargs)
+            samples = Samples(
+                sequences=sequences,
+                attention_mask=attention_mask,
+                action_mask=action_mask,
+                num_actions=action_mask.size(1),
+                packed_seq_lens=None,
+                response_length=action_mask.float().sum(dim=-1),
+                total_length=attention_mask.float().sum(dim=-1),
+            )
+            # print(inputs["input_ids"].device, self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=True))
+            samples_list.append(samples)
+        return samples_list
+
+    @torch.no_grad()
+    def search_samples(self, all_prompts: List[str], search_algo: str, **generate_kwargs) -> List[Samples]:
+        """
+        Search samples using tree search algorithms and return in batches.
+        """
+        assert not getattr(self, "packing_samples", False)
+        args = self.strategy.args
+        self.actor.eval()
+        self.critic.eval()
+        samples_list = []
+        
+        for i in range(0, len(all_prompts), args.micro_rollout_batch_size):
+            sequences = []
+            _all_prompts = all_prompts[i: i + args.micro_rollout_batch_size]
+            for prompt in _all_prompts:
+                if search_algo == "beamsearch":
+                    sequence = beamsearch(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
+                elif search_algo == "litesearch":
+                    sequence = litesearch(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
+                sequences.append(sequence)
+            trajs = [seq[len(prompt):] for prompt, seq in zip(_all_prompts, sequences)]
+            prompt_ids = self.tokenize_fn(_all_prompts, self.prompt_max_len, device="cuda")
+            traj_ids = self.tokenizer(
+                        trajs,
+                        return_tensors="pt",
+                        add_special_tokens=False,
+                        max_length=generate_kwargs["max_length"],
+                        padding=True,
+                        truncation=True,
+                        padding_side="right"
+                    )
+            traj_ids = {k: v.to("cuda") for k, v in traj_ids.items()}
+            sequences = {k: torch.concatenate([v, traj_ids[k]], dim=-1) for k, v in prompt_ids.items()}
+            sequences = sequences["input_ids"]
+            sequences, attention_mask, action_mask = self.actor.process_sequences(sequences, prompt_ids["input_ids"].size(1), self.tokenizer.pad_token_id, self.tokenizer.eos_token_id)
             samples = Samples(
                 sequences=sequences,
                 attention_mask=attention_mask,
@@ -297,11 +352,16 @@ class NaiveExperienceMaker(ABC):
         # rewards
         if self.remote_rm_url is not None:
             # remote RM
-            queries = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=False)
+            queries = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=True)
             r = remote_rm_fn(self.remote_rm_url, queries=queries).to(device=action_log_probs.device)
+            r = torch.clamp(r, min=-1, max=1).to(torch.float)
         else:
             # local RM
             r = self.reward_model(sequences, attention_mask)
+
+        # DEBUG
+        # import random
+        # r = torch.tensor([random.choice([1, -1]) for _ in range(sequences.shape[0])]).to(torch.float)
 
         kl = compute_approx_kl(
             action_log_probs,
