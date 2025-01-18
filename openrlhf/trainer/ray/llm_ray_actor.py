@@ -53,9 +53,9 @@ class VllmLLMRayActor:
         kwargs.pop("backend")
         self.llm = vllm.LLM(*args, **kwargs)
 
-    def generate(self, *args, **kwargs):
-        sampling_params = vllm.SamplingParams(**kwargs["sampling_params"])
-        outputs = self.llm.generate(sampling_params=sampling_params, prompt_token_ids=kwargs["prompt_token_ids"])
+    def generate(self, sampling_params, prompt_token_ids, stop_token_ids):
+        sampling_params = vllm.SamplingParams(**sampling_params)
+        outputs = self.llm.generate(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
         return outputs
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
@@ -87,6 +87,7 @@ class VllmLLMRayActor:
 @ray.remote
 class SGLangLLMRayActor:
     def __init__(self, *args, **kwargs):
+        # Some of the parameters leads to error in token-in-token-out mode
         self.llm = sglang.Engine(
             model_path=args[0],
             trust_remote_code=kwargs.get("trust_remote_code", True),
@@ -94,17 +95,15 @@ class SGLangLLMRayActor:
             tp_size=kwargs.get("tensor_parallel_size", 1),
             device="cuda",
             random_seed=kwargs.get("seed", 42),
-            disable_radix_cache=not kwargs.get("enable_prefix_caching", False),
-            disable_cuda_graph=not kwargs.get("enforce_eager", False),
-            disable_cuda_graph_padding=not kwargs.get("enable_prefix_caching", False),
-            context_length=kwargs.get("max_model_len", None),
+            # disable_radix_cache=not kwargs.get("enable_prefix_caching", False),
+            # disable_cuda_graph=not kwargs.get("enforce_eager", False),
+            # disable_cuda_graph_padding=not kwargs.get("enable_prefix_caching", False),
+            # context_length=kwargs.get("max_model_len", None),
             log_level="info",
-            return_token_ids=True,
+            skip_tokenizer_init=True,
         )
 
-    def generate(self, *args, **kwargs):
-        sampling_params = kwargs["sampling_params"]
-        all_prompts = kwargs["all_prompts"]
+    def generate(self, sampling_params, prompt_token_ids, stop_token_ids):
 
         # min_tokens, include_stop_str_in_output is not used in sglang
 
@@ -115,9 +114,9 @@ class SGLangLLMRayActor:
             temperature=sampling_params.get("temperature", 1),
             repetition_penalty=sampling_params.get("repetition_penalty", 1),
             skip_special_tokens=sampling_params.get("skip_special_tokens", False),
+            stop_token_ids=stop_token_ids,
         )
-
-        outputs = self.llm.generate(all_prompts, sampling_params)
+        outputs = self.llm.generate(input_ids=prompt_token_ids, sampling_params=sampling_params)
         return outputs
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):

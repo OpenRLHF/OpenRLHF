@@ -656,39 +656,40 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         # Expand prompt list based on the number of samples per prompt
         all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
-        all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
+        all_input_token_id_list = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
 
         # Distribute requests to engines and collect responses to outputs
         all_output_refs = []
-        batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
+        batch_size = (len(all_input_token_id_list) + len(llms) - 1) // len(llms)
+        pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
 
         for i, llm in enumerate(llms):
-            prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
+            prompt_token_ids = all_input_token_id_list[i * batch_size : (i + 1) * batch_size]
             if prompt_token_ids:
                 all_output_refs.append(
                     llm.generate.remote(
-                        sampling_params=sampling_params, prompt_token_ids=prompt_token_ids, all_prompts=all_prompts
+                        sampling_params=sampling_params,
+                        prompt_token_ids=prompt_token_ids,
+                        stop_token_ids=[eos_token_id],
                     )
                 )
 
         # Retrieve and combine results from all outputs
         all_outputs = sum(ray.get(all_output_refs), [])
-        assert len(all_outputs) == len(all_prompts)
-        pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
+        assert len(all_outputs) == len(all_prompts) and len(all_outputs) == len(all_input_token_id_list)
+
         try:
             # sglang
-            all_input_token_id_list = [list(output["input_ids"]) for output in all_outputs]
             all_output_token_id_list = [
                 (
-                    list(output["output_ids"]) + [eos_token_id]
-                    if list(output["output_ids"])[-1] != eos_token_id
-                    else list(output["output_ids"])
+                    list(output["token_ids"]) + [eos_token_id]
+                    if list(output["token_ids"])[-1] != eos_token_id
+                    else list(output["token_ids"])
                 )
                 for output in all_outputs
             ]
         except:
             # vllm
-            all_input_token_id_list = [list(output.prompt_token_ids) for output in all_outputs]
             all_output_token_id_list = [list(output.outputs[0].token_ids) for output in all_outputs]
 
         samples_list = []

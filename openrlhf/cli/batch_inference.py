@@ -21,6 +21,7 @@ def setup_common_components(args):
     # Configure strategy
     class Empty:
         pass
+
     strategy = Empty()
     strategy.print = print
     strategy.is_rank_0 = lambda: True
@@ -80,7 +81,6 @@ def batch_generate_sglang(args):
         skip_special_tokens=False,
     )
 
-     
     if args.iter is None:
         prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
     else:
@@ -440,7 +440,7 @@ if __name__ == "__main__":
     parser.add_argument("--enable_csft", action="store_true", default=False)
     parser.add_argument("--csft_prompt", type=str, default="<rm_score>: 5.00", help="Conditional SFT prompt")
     args = parser.parse_args()
-    
+
     TASK_MAP = {
         "generate": batch_generate_hf,
         "generate_vllm": batch_generate_vllm,
@@ -452,4 +452,3 @@ if __name__ == "__main__":
         TASK_MAP[args.eval_task](args)
     else:
         print("Invalid or missing '--eval_task' argument. Please specify either 'generate' or 'rm'.")
-
