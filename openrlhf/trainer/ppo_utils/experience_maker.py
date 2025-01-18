@@ -762,6 +762,11 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                     num_actions.append(max(1, output_len))
                     if self.strategy.ring_attn_group is not None:
                         pad_len = (self.strategy.ring_attn_size - (input_len + output_len) % self.strategy.ring_attn_size) % self.strategy.ring_attn_size
+                        sequences += [pad_token_id] * pad_len
+                        output_len += pad_len
+                        packed_seq_lens[-1] += pad_len
+                        attention_mask += [i + 1] * pad_len
+                        num_actions[-1] += pad_len
 
                 sequences = torch.tensor(sequences, device="cuda").unsqueeze(0)
                 attention_mask = torch.tensor(attention_mask, device="cuda").unsqueeze(0)
