@@ -578,7 +578,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             sequences, 
             num_actions, 
             attention_mask, 
-            ring_attn_group=self.strategy.ring_attn_group
+            ring_attn_group=self.strategy.ring_attn_group,
             logps_allgather=True,
             packed_seq_lens=packed_seq_lens
         )
