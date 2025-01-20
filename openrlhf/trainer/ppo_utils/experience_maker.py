@@ -17,6 +17,7 @@ from openrlhf.utils.remote_rm_utils import remote_rm_fn, remote_rm_fn_ray
 
 from search_algorithm.beamsearch_efficient import search as beamsearch
 from search_algorithm.litesearch import search as litesearch
+from search_algorithm.bestofn import search as bestofn
 
 logger = init_logger(__name__)
 
@@ -268,7 +269,7 @@ class NaiveExperienceMaker(ABC):
                 response_length=action_mask.float().sum(dim=-1),
                 total_length=attention_mask.float().sum(dim=-1),
             )
-            # print(inputs["input_ids"].device, self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=True))
+            print(inputs["input_ids"].device, self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=True))
             samples_list.append(samples)
         return samples_list
 
@@ -284,16 +285,20 @@ class NaiveExperienceMaker(ABC):
         samples_list = []
         
         for i in range(0, len(all_prompts), args.micro_rollout_batch_size):
-            sequences = []
+            trajs, prompts = [], []
             _all_prompts = all_prompts[i: i + args.micro_rollout_batch_size]
             for prompt in _all_prompts:
                 if search_algo == "beamsearch":
-                    sequence = beamsearch(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
+                    sequences = beamsearch(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
                 elif search_algo == "litesearch":
-                    sequence = litesearch(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
-                sequences.append(sequence)
-            trajs = [seq[len(prompt):] for prompt, seq in zip(_all_prompts, sequences)]
-            prompt_ids = self.tokenize_fn(_all_prompts, self.prompt_max_len, device="cuda")
+                    sequences = litesearch(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
+                elif search_algo == "bestofn":
+                    sequences = bestofn(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
+                else:
+                    raise Exception(f"Unknown search algorithm {search_algo}")
+                trajs += [seq[len(prompt):] for seq in sequences]
+                prompts += [prompt] * len(sequences)
+            prompt_ids = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
             traj_ids = self.tokenizer(
                         trajs,
                         return_tensors="pt",
@@ -354,7 +359,7 @@ class NaiveExperienceMaker(ABC):
             # remote RM
             queries = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=True)
             r = remote_rm_fn(self.remote_rm_url, queries=queries).to(device=action_log_probs.device)
-            r = torch.clamp(r, min=-1, max=1).to(torch.float)
+            # r = torch.clamp(r, min=-1, max=1).to(torch.float)
         else:
             # local RM
             r = self.reward_model(sequences, attention_mask)

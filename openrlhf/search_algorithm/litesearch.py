@@ -3,7 +3,7 @@ import re
 import math
 
 # temporal hard code
-LIMIT=2
+LIMIT=64
 N=8
 EXCEPTED = 0.95
 TEMPERATURE=1
@@ -123,11 +123,11 @@ def search(query, tokenizer, actor, critic):
     terminal_nodes = [node for node in tree.all_nodes if node.is_leaf]
     if terminal_nodes:
         best_node = max(terminal_nodes, key=lambda x: x.value)
-        return best_node.print_path()
+        return [best_node.print_path()]
     else:
         # expand the most valuable node
         action = tree.select_next_node()
         traj = action.print_path()
         with torch.no_grad():
-            return get_full_traj(traj, tokenizer, actor)[0]
+            return [get_full_traj(traj, tokenizer, actor)[0]]
         # return None

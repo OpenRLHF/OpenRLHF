@@ -1,10 +1,12 @@
+# TODO: observe OOM, perhaps due to the traj is too long, we should stop some trajs when necessary
+
 import torch
 import re
 
 # temporal hard code
 LIMIT=32
-N=8
-BEAM=4
+N=4
+BEAM=2
 TEMPERATURE=1
 MAX_REPEAT=2
 END_OF_STEP=["\n\n", "\n", "<|endoftext|>"]
@@ -124,8 +126,8 @@ def search(query, tokenizer, actor, critic):
     terminal_nodes = [node for node in tree.all_nodes if node.is_leaf]
     if terminal_nodes:
         best_node = max(terminal_nodes, key=lambda x: x.value)
-        return best_node.print_path()
+        return [best_node.print_path()]
     else:
         with torch.no_grad():
-            return get_full_traj(query, tokenizer, actor)[0]
+            return [get_full_traj(query, tokenizer, actor)[0]]
         # return None

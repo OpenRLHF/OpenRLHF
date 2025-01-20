@@ -36,10 +36,10 @@ def extract_numbers(text):
         return "[INVALID]"
 
 def extract_answer(text, data_type):
-    if "he answer is" in text:
-        text_split = text.split("he answer is")
-    elif "he answer is:" in text:
+    if "he answer is:" in text:
         text_split = text.split("he answer is:")
+    elif "he answer is" in text:
+        text_split = text.split("he answer is")
     else:
         return "[INVALID]"
     
