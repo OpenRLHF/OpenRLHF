@@ -72,6 +72,7 @@ def get_reward(sequences):
             hyp = extract_answer(a, data_type)
             if hyp == "[INVALID]":
                 rewards.append(-1)
+                print((hyp, ref, rewards[-1]))
                 continue
             if grade_answer(hyp, ref):
                 rewards.append(1)

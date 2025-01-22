@@ -15,11 +15,8 @@ from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn, remote_rm_fn_ray
 
-from search_algorithm.beamsearch_efficient import search as beamsearch
-from search_algorithm.litesearch import search as litesearch
-from search_algorithm.bestofn import search as bestofn
-
-import random
+from beamsearch import search as beamsearch
+# from search_algorithm.litesearch import search as litesearch
 
 logger = init_logger(__name__)
 
@@ -175,7 +172,7 @@ class NaiveExperienceMaker(ABC):
         return {k: v.to(device) for k, v in batch.items()}
 
     @torch.no_grad()
-    def make_experience_list(self, all_prompts: Union[str, List[str]], search_algo: str, **generate_kwargs) -> List[Experience]:
+    def make_experience_list(self, all_prompts: Union[str, List[str]], **generate_kwargs) -> List[Experience]:
         """
         Make a list of experience with the micro_rollout_batch_size.
 
@@ -185,10 +182,7 @@ class NaiveExperienceMaker(ABC):
         """
         args = self.strategy.args
         # generate responses
-        if search_algo == "sampling":
-            samples_list = self.generate_samples(all_prompts, **generate_kwargs)
-        else:
-            samples_list = self.search_samples(all_prompts, search_algo, **generate_kwargs)
+        samples_list = self.generate_samples(all_prompts, **generate_kwargs)
         torch.distributed.barrier()
         experiences = []
         for samples in tqdm(
@@ -271,65 +265,7 @@ class NaiveExperienceMaker(ABC):
                 response_length=action_mask.float().sum(dim=-1),
                 total_length=attention_mask.float().sum(dim=-1),
             )
-            print(inputs["input_ids"].device, self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=True))
-            samples_list.append(samples)
-        return samples_list
-
-    @torch.no_grad()
-    def search_samples(self, all_prompts: List[str], search_algo: str, **generate_kwargs) -> List[Samples]:
-        """
-        Search samples using tree search algorithms and return in batches.
-        """
-        assert not getattr(self, "packing_samples", False)
-        args = self.strategy.args
-        self.actor.eval()
-        self.critic.eval()
-        samples_list = []
-        
-        _all_trajs = []
-        _all_prompts = []
-        for prompt in all_prompts:
-            if search_algo == "beamsearch":
-                sequences = beamsearch(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
-            elif search_algo == "litesearch":
-                sequences = litesearch(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
-            elif search_algo == "bestofn":
-                sequences = bestofn(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
-            else:
-                raise Exception(f"Unknown search algorithm {search_algo}")
-            _all_trajs += [seq[len(prompt):] for seq in sequences]
-            _all_prompts += [prompt] * len(sequences)
-        # shuffle prompt and traj
-        shuffle_indices = list(range(len(_all_prompts)))
-        random.shuffle(shuffle_indices)
-        _all_prompts = [_all_prompts[i] for i in shuffle_indices]
-        _all_trajs = [_all_trajs[i] for i in shuffle_indices]
-        for i in range(0, min(args.rollout_batch_size, len(_all_prompts)), args.micro_rollout_batch_size):
-            prompts = _all_prompts[i: i + args.micro_rollout_batch_size]
-            trajs = _all_trajs[i: i + args.micro_rollout_batch_size]
-            prompt_ids = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
-            traj_ids = self.tokenizer(
-                        trajs,
-                        return_tensors="pt",
-                        add_special_tokens=False,
-                        max_length=generate_kwargs["max_length"],
-                        padding=True,
-                        truncation=True,
-                        padding_side="right"
-                    )
-            traj_ids = {k: v.to("cuda") for k, v in traj_ids.items()}
-            sequences = {k: torch.concatenate([v, traj_ids[k]], dim=-1) for k, v in prompt_ids.items()}
-            sequences = sequences["input_ids"]
-            sequences, attention_mask, action_mask = self.actor.process_sequences(sequences, prompt_ids["input_ids"].size(1), self.tokenizer.pad_token_id, self.tokenizer.eos_token_id)
-            samples = Samples(
-                sequences=sequences,
-                attention_mask=attention_mask,
-                action_mask=action_mask,
-                num_actions=action_mask.size(1),
-                packed_seq_lens=None,
-                response_length=action_mask.float().sum(dim=-1),
-                total_length=attention_mask.float().sum(dim=-1),
-            )
+            # print(inputs["input_ids"].device, self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=True))
             samples_list.append(samples)
         return samples_list
 
@@ -619,7 +555,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         else:
             # remote RM
             if not self.packing_samples:
-                queries = self.tokenizer.batch_decode(sequences_cpu, skip_special_tokens=False)
+                queries = self.tokenizer.batch_decode(sequences_cpu, skip_special_tokens=True)
             else:
                 sequences_list = []
                 offset = 0
@@ -627,7 +563,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 for length in packed_seq_lens:
                     sequences_list.append(tokens_list[offset : offset + length])
                     offset += length
-                queries = self.tokenizer.batch_decode(sequences_list, skip_special_tokens=False)
+                queries = self.tokenizer.batch_decode(sequences_list, skip_special_tokens=True)
 
             for rm in self.remote_rm_url:
                 r = remote_rm_fn_ray.remote(rm, queries=queries)
@@ -719,32 +655,54 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         args = self.strategy.args
 
-        sampling_params = SamplingParams(
-            temperature=kwargs.get("temperature", 1.0),
-            top_p=kwargs.get("top_p", 1.0),
-            top_k=kwargs.get("top_k", -1),
-            max_tokens=kwargs.get("max_new_tokens", 1024),
-            min_tokens=kwargs.get("min_new_tokens", 1),
-            skip_special_tokens=kwargs.get("skip_special_tokens", False),
-            include_stop_str_in_output=True,
-        )
+        if args.search_algo == "sampling":
+            sampling_params = SamplingParams(
+                temperature=kwargs.get("temperature", 1.0),
+                top_p=kwargs.get("top_p", 1.0),
+                top_k=kwargs.get("top_k", -1),
+                max_tokens=kwargs.get("max_new_tokens", 1024),
+                min_tokens=kwargs.get("min_new_tokens", 1),
+                skip_special_tokens=kwargs.get("skip_special_tokens", False),
+                include_stop_str_in_output=True,
+            )
 
-        # Expand prompt list based on the number of samples per prompt
-        all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
-        all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
+            # Expand prompt list based on the number of samples per prompt
+            all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
+            all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
 
-        # Distribute requests to engines and collect responses to outputs
-        all_output_refs = []
-        batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
-        for i, llm in enumerate(llms):
-            prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
-            if prompt_token_ids:
-                all_output_refs.append(
-                    llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
-                )
+            # Distribute requests to engines and collect responses to outputs
+            all_output_refs = []
+            batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
+            for i, llm in enumerate(llms):
+                prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
+                if prompt_token_ids:
+                    all_output_refs.append(
+                        llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
+                    )
 
-        # Retrieve and combine results from all outputs
-        all_outputs = sum(ray.get(all_output_refs), [])
+            # Retrieve and combine results from all outputs
+            all_outputs = sum(ray.get(all_output_refs), [])
+        else:
+            # search
+            trajs = []
+            for prompt in all_prompts:
+                traj = beamsearch(prompt, tokenizer = self.tokenizer, actor = llms, critic = self.critic)
+                trajs.append(traj)
+            all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
+            all_traj_token_ids = self.tokenize_fn(trajs, 1024, padding=False)["input_ids"] # openrlhf does not pass generate_max_len, wired
+
+            class DummyOutObj:
+                def __init__(self, token_ids):
+                    self.token_ids = token_ids
+
+            class DummyObj:
+                def __init__(self, prompt_token_ids, token_ids):
+                    self.prompt_token_ids = prompt_token_ids
+                    self.outputs = [DummyOutObj(token_ids)]
+            
+            all_outputs = [DummyObj(prompt_token_ids, token_ids) for prompt_token_ids, token_ids in zip(all_prompt_token_ids, all_traj_token_ids)]
+        
+        print("!!! RANK", rank)
 
         samples_list = []
         for i in range(0, len(all_outputs), args.micro_rollout_batch_size):
