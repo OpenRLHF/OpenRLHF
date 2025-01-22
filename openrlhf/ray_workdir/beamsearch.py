@@ -1,19 +1,21 @@
 # TODO: observe OOM, perhaps due to the traj is too long, we should stop some trajs when necessary
+from vllm import SamplingParams
+import ray
 
+import random
 import torch
 import re
 
 # temporal hard code
 LIMIT=32
-N=2
-BEAM=1
+N=4
+BEAM=2
 TEMPERATURE=1
 MAX_REPEAT=2
 END_OF_STEP=["\n\n", "\n", "<|endoftext|>"]
 MAX_CHAR_PER_STEP = 512
 MAX_CHAR_PER_PATH = 2048
 MAX_NEW_TOKENS=256
-ADD_GREEDY = False
 
 #### Search Tree ####
 class Node:
@@ -76,33 +78,83 @@ class Tree:
 def clean_pad_token(text, pad_token):
     return re.sub(pad_token, "", text)
 
-def get_full_traj(traj, tokenizer, actor, greedy=False):
-    input_ids = tokenizer(traj, return_tensors="pt")
-    input_ids = {k: v.to(actor.model.device) for k, v in input_ids.items()}
-    outputs = actor.model.generate(**input_ids, do_sample=not greedy, max_new_tokens=1024,
-                             temperature=TEMPERATURE, tokenizer=tokenizer, 
-                             pad_token_id=tokenizer.pad_token_id, eos_token_id=tokenizer.eos_token_id)
-    sequences = tokenizer.batch_decode(outputs, keep_special_tokens=True)
-    sequences = [clean_pad_token(seq, tokenizer.pad_token) for seq in sequences]
-    return sequences[0]
+def get_full_traj(traj, tokenizer, actor):
+    llms = actor
+    trajs = [traj]
+    sampling_params = SamplingParams(
+        temperature=TEMPERATURE,
+        top_p=1,
+        top_k=-1,
+        max_tokens=1024,
+        min_tokens=1,
+        skip_special_tokens=False,
+        include_stop_str_in_output=True,
+    )
+
+    # Expand prompt list based on the number of samples per prompt
+    # all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in trajs], [])
+    all_prompts = trajs
+    all_prompt_token_ids = tokenizer(all_prompts, add_special_tokens=False, max_length=1024, truncation=True,)["input_ids"]
+
+    # Distribute requests to engines and collect responses to outputs
+    all_output_refs = []
+    batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
+    for i, llm in enumerate(llms):
+        prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
+        if prompt_token_ids:
+            all_output_refs.append(
+                llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
+            )
+
+    # Retrieve and combine results from all outputs
+    all_outputs = sum(ray.get(all_output_refs), [])
+    sequences = [output.outputs[0].text for output in all_outputs]
+    return sequences
 
 def get_next_steps(trajs, tokenizer, actor):
-    input_ids = tokenizer(trajs, padding=True, return_tensors="pt")
-    input_ids = {k: v.to(actor.model.device) for k, v in input_ids.items()}
-    outputs = actor.model.generate(**input_ids, do_sample=True, stop_strings=END_OF_STEP, max_new_tokens=MAX_NEW_TOKENS,
-                             temperature=TEMPERATURE, tokenizer=tokenizer, pad_token_id=tokenizer.pad_token_id)
-    input_len = input_ids["input_ids"].shape[1]
-    sequences = tokenizer.batch_decode(outputs[:, input_len:], keep_special_tokens=True)
-    sequences = [clean_pad_token(seq, tokenizer.pad_token) for seq in sequences]
+    llms = actor
+    sampling_params = SamplingParams(
+        temperature=TEMPERATURE,
+        top_p=1,
+        top_k=-1,
+        max_tokens=1024,
+        min_tokens=1,
+        stop=END_OF_STEP,
+        skip_special_tokens=False,
+        include_stop_str_in_output=True,
+    )
+
+    # Expand prompt list based on the number of samples per prompt
+    # all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in trajs], [])
+    all_prompts = trajs
+    all_prompt_token_ids = tokenizer(all_prompts, add_special_tokens=False, max_length=1024, truncation=True,)["input_ids"]
+
+    # Distribute requests to engines and collect responses to outputs
+    all_output_refs = []
+    batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
+    for i, llm in enumerate(llms):
+        prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
+        if prompt_token_ids:
+            all_output_refs.append(
+                llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
+            )
+
+    # Retrieve and combine results from all outputs
+    all_outputs = sum(ray.get(all_output_refs), [])
+    sequences = [output.outputs[0].text for output in all_outputs]
     return sequences
 
 def get_step_scores(trajs, tokenizer, critic):
+    # return [random.randint(0, 1) for _ in range(len(trajs))] # debug
     input_ids = tokenizer(trajs, return_tensors="pt", padding=True, truncation=True)
-    input_ids = {k: v.to(critic.device) for k, v in input_ids.items()}
-    outputs = critic.compute_value(**input_ids, return_dict=False)
-    return (torch.clamp(outputs[0].squeeze(), min=-1, max=1) + 1) / 2
+    # outputs = critic.compute_value.remote(**input_ids)
+    outputs = critic.forward.remote(**input_ids)
+    outputs = ray.get(outputs)
+    # return [value.item() for value in (torch.clamp(outputs.squeeze(), min=-1, max=1) + 1) / 2]
+    return [random.randint(0, 1) for _ in range(len(trajs))] # debug
 
 def search(query, tokenizer, actor, critic):
+    rank = torch.distributed.get_rank()
     tree = Tree(query)
     query = tree.question
     for search_iter in range(LIMIT):
@@ -116,27 +168,19 @@ def search(query, tokenizer, actor, critic):
                 next_steps = get_next_steps(trajs, tokenizer, actor)
                 next_values = get_step_scores([traj + next_step for traj, next_step in zip(trajs, next_steps)], tokenizer, critic)
             for anchor, traj, next_step, next_value in zip(anchors, trajs, next_steps, next_values):
-                state = tree.add_node(next_step, next_value.item(), anchor, next_step.endswith(tokenizer.eos_token))
+                state = tree.add_node(next_step, next_value, anchor, next_step.endswith(tokenizer.eos_token))
                 if len(next_step) == 0 or len(next_step) > MAX_CHAR_PER_STEP or len(traj + next_step) > MAX_CHAR_PER_PATH:
                     state.value = -1
-                # print((search_iter, traj, next_step, next_value))
+                print((rank, search_iter, traj, next_step, next_value))
         else:
             break
     
     # return the best traj
     terminal_nodes = [node for node in tree.all_nodes if node.is_leaf]
-    final_traj = None
     if terminal_nodes:
         best_node = max(terminal_nodes, key=lambda x: x.value)
-        final_traj = best_node.print_path()
+        return best_node.print_path()
     else:
         with torch.no_grad():
-            final_traj = get_full_traj(query, tokenizer, actor)
+            return get_full_traj(query, tokenizer, actor)[0]
         # return None
-    
-    if ADD_GREEDY:
-        with torch.no_grad():
-            greedy_traj = get_full_traj(query, tokenizer, actor, greedy=True)
-        return [final_traj, greedy_traj]
-    else:
-        return [final_traj]
