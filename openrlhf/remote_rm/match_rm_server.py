@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import List
 import jsonlines
 import re
-from grader import grade_answer
+from .grader import grade_answer
 
 data_fpath_list = [
     "/apdcephfs_sh2/share_300000800/user/antewang/Qwen2.5-Math/evaluation/data/gsm8k/train.jsonl",

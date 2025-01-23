@@ -8,7 +8,7 @@ import sympy
 from pylatexenc import latex2text
 from sympy.parsing import sympy_parser
 
-import math_normalize
+from .math_normalize import normalize_answer
 
 
 # sympy might hang -- we don't care about trying to be lenient in these cases
@@ -241,8 +241,8 @@ def grade_answer(given_answer: str, ground_truth: str) -> bool:
     if given_answer is None:
         return False
 
-    ground_truth_normalized_mathd = math_normalize.normalize_answer(ground_truth)
-    given_answer_normalized_mathd = math_normalize.normalize_answer(given_answer)
+    ground_truth_normalized_mathd = normalize_answer(ground_truth)
+    given_answer_normalized_mathd = normalize_answer(given_answer)
 
     # be at least as lenient as mathd
     if ground_truth_normalized_mathd == given_answer_normalized_mathd:

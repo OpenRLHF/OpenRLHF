@@ -9,12 +9,13 @@ from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
+from openrlhf.models import GPTLMLoss, PolicyLoss, ValueLoss
 from openrlhf.models.utils import masked_mean
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
-from .ppo_utils import AdaptiveKLController, Experience, FixedKLController, NaiveExperienceMaker, NaiveReplayBuffer
-
+from openrlhf.trainer.ppo_utils import AdaptiveKLController, Experience, FixedKLController, NaiveReplayBuffer
+from openrlhf.trainer.ppo_utils.experience_maker import NaiveExperienceMaker
+from openrlhf.models.actor import Actor
 
 class PPOTrainer(ABC):
     """
@@ -84,6 +85,7 @@ class PPOTrainer(ABC):
         dataloader_pin_memory: bool = True,
         remote_rm_url: str = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
+        search_algo: str = "sampling",
         **generate_kwargs,
     ) -> None:
         assert (
@@ -91,6 +93,9 @@ class PPOTrainer(ABC):
         ), "reward_fn must be specified if using multiple reward models"
 
         super().__init__()
+
+        self.search_algo = search_algo
+
         self.strategy = strategy
         self.args = strategy.args
         self.micro_rollout_batch_size = micro_rollout_batch_size
@@ -223,7 +228,7 @@ class PPOTrainer(ABC):
 
             for rand_prompts in self.prompts_dataloader:
                 for i, experience in enumerate(
-                    self.experience_maker.make_experience_list(rand_prompts, **self.generate_kwargs)
+                    self.experience_maker.make_experience_list(rand_prompts, self.search_algo, **self.generate_kwargs)
                 ):
                     if i == 0:
                         output = self.tokenizer.batch_decode(
@@ -248,6 +253,14 @@ class PPOTrainer(ABC):
 
                 pbar.update()
                 steps = steps + 1
+
+            # always save every epoch
+            # print(f"Saving ckpt after epoch {episode + 1}")
+            self.strategy.save_model(
+                self.actor.model,
+                self.tokenizer,
+                os.path.join(self.args.save_path, f"episode-{episode + 1}"),
+            )
 
         if self._wandb is not None and self.strategy.is_rank_0():
             self._wandb.finish()

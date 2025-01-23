@@ -2,7 +2,7 @@ import re
 import torch
 import random
 import jsonlines
-from search_algorithm.grader import grade_answer
+from openrlhf.remote_rm.grader import grade_answer
 
 N = 8
 TEMPERATURE = 1
