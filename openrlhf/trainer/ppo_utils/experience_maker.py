@@ -304,7 +304,9 @@ class NaiveExperienceMaker(ABC):
         random.shuffle(shuffle_indices)
         _all_prompts = [_all_prompts[i] for i in shuffle_indices]
         _all_trajs = [_all_trajs[i] for i in shuffle_indices]
-        for i in range(0, min(args.rollout_batch_size, len(_all_prompts)), args.micro_rollout_batch_size):
+        # we should control the batch size, elif raise exception
+        # it is hard to control, an easy way is to get enough trajs and ensure the requirements can be met
+        for i in range(0, min(len(all_prompts), len(_all_prompts)), args.micro_rollout_batch_size):
             prompts = _all_prompts[i: i + args.micro_rollout_batch_size]
             trajs = _all_trajs[i: i + args.micro_rollout_batch_size]
             prompt_ids = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
