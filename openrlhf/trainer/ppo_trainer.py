@@ -88,6 +88,7 @@ class PPOTrainer(ABC):
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
         save_hf_ckpt: bool = False,
         disable_ds_ckpt: bool = False,
+        backend: str = "vllm",
         **generate_kwargs,
     ) -> None:
         assert (
@@ -95,6 +96,7 @@ class PPOTrainer(ABC):
         ), "reward_fn must be specified if using multiple reward models"
 
         super().__init__()
+        self.backend = backend
         self.strategy = strategy
         self.args = strategy.args
         self.save_hf_ckpt = save_hf_ckpt
@@ -226,7 +228,7 @@ class PPOTrainer(ABC):
 
             for rand_prompts in self.prompts_dataloader:
                 for i, experience in enumerate(
-                    self.experience_maker.make_experience_list(rand_prompts, **self.generate_kwargs)
+                    self.experience_maker.make_experience_list(rand_prompts, self.backend, **self.generate_kwargs)
                 ):
                     if i == 0:
                         output = self.tokenizer.batch_decode(
