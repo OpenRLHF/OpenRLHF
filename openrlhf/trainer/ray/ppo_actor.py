@@ -81,7 +81,7 @@ class ActorPPOTrainer(PPOTrainer):
             world_size = vllm_num_engines * vllm_tensor_parallel_size + 1
 
             backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
-            
+
             start = time.time()
             refs = [
                 engine.init_process_group.remote(
