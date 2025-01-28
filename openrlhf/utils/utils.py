@@ -2,7 +2,7 @@ import os
 
 from datasets import interleave_datasets, load_dataset, load_from_disk
 from transformers import AutoTokenizer
-
+from transformers import AutoProcessor
 
 def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=True):
     tokenizer = AutoTokenizer.from_pretrained(pretrain, trust_remote_code=True, use_fast=use_fast)
@@ -92,6 +92,7 @@ def blending_datasets(
             # train will contains eval? TODO
             else:
                 eval_data = train_data.select(range(min(max_count, int(len(train_data) * 0.03))))
+                # eval_data = train_data.select(range(min(max_count, int(len(train_data)))))
             eval_data_list.append(eval_data)
 
     # merge datasets
@@ -123,3 +124,16 @@ def convert_token_to_id(token, tokenizer):
         return token[0]
     else:
         raise ValueError("token should be int or str")
+
+
+def get_vision_processor(pretrain, min_pixels, max_pixels):
+    vision_processor = AutoProcessor.from_pretrained(
+        pretrain,
+        trust_remote_code=True,
+        cache_dir=None,
+        revision='main',
+        token=None,
+        min_pixels=min_pixels,
+        max_pixels=max_pixels,
+    )
+    return vision_processor

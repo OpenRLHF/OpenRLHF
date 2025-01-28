@@ -5,7 +5,7 @@ import torch.distributed as dist
 import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig, AutoModelForVision2Seq
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from .ring_attn_utils import convert_ring_attn_params
@@ -45,6 +45,8 @@ class Actor(nn.Module):
         ds_config=None,
         device_map=None,
         packing_samples=False,
+        is_visual_model=False,
+        freeze_vision_tower=True,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -69,8 +71,13 @@ class Actor(nn.Module):
                 )
             else:
                 nf4_config = None
-
-            self.model = AutoModelForCausalLM.from_pretrained(
+            self.is_visual_model = is_visual_model
+            model_class = None
+            if is_visual_model:
+                model_class = AutoModelForVision2Seq
+            else:
+                model_class = AutoModelForCausalLM
+            self.model = model_class.from_pretrained(
                 pretrain_or_model,
                 trust_remote_code=True,
                 attn_implementation=attn_implementation,
@@ -78,6 +85,9 @@ class Actor(nn.Module):
                 torch_dtype=torch.bfloat16 if bf16 else "auto",
                 device_map=device_map,
             )
+            self.model_type = getattr(self.model.config, "model_type", None)
+            if is_visual_model:
+                self.prepare_model(self.model, freeze_vision_tower)
 
             # LoRA
             if lora_rank > 0:
@@ -188,9 +198,25 @@ class Actor(nn.Module):
         return_output=False,
         ring_attn_group: Optional[dist.ProcessGroup] = None,
         packed_seq_lens: Optional[list[int]] = None,
+        **kwargs
     ) -> torch.Tensor:
         """Returns action log probs"""
-        if not self.packing_samples:
+        if self.is_visual_model:
+            if self.model_type == "qwen2_vl":
+                # Before Transformers version 4.47, when using the Qwen2VL model,
+                # the position IDs needed to be externally provided in a specific mrope format
+                # during the forward pass. Therefore, it was decided to consistently pass them
+                # externally through the model.
+                position_ids, rope_deltas = self.model.get_rope_index(
+                    input_ids=sequences,
+                    image_grid_thw=kwargs.get("image_grid_thw", None),
+                    video_grid_thw=kwargs.get("video_grid_thw", None),
+                    attention_mask=attention_mask,
+                )
+                kwargs["rope_deltas"] = rope_deltas
+            else:
+                raise NotImplementedError(f"model_type {self.model_type} not supported yet")
+        elif not self.packing_samples:
             # https://github.com/OpenRLHF/OpenRLHF/issues/217
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
@@ -205,7 +231,8 @@ class Actor(nn.Module):
             # explicitly ignore attention_mask for packing_samples
             attention_mask = None
 
-        output = self.model(sequences, attention_mask=attention_mask, position_ids=position_ids)
+        output = self.model(sequences, attention_mask=attention_mask, position_ids=position_ids,
+                            **kwargs)
         # https://github.com/OpenRLHF/OpenRLHF/pull/634
         output["logits"] = output["logits"].to(torch.float32)
 
@@ -240,3 +267,20 @@ class Actor(nn.Module):
 
     def print_trainable_parameters(self):
         self.model.print_trainable_parameters()
+
+    def prepare_model(self, model, freeze_vision_tower):
+        freeze_modules = set()
+        # Different visual models may have varying names for their vision towers.
+        if freeze_vision_tower and self.model_type is not None:
+            if self.model_type == "qwen2_vl":
+                freeze_modules.add("visual")
+            else:
+                #TODO: support mre visual model
+                raise NotImplementedError("TODO: Implement prepare_model for model_type: {}".format(
+                    self.model_type))
+
+        for name, param in model.named_parameters():
+            if not any(freeze_mod in name for freeze_mod in freeze_modules):
+                pass
+            else:
+                param.requires_grad_(False)

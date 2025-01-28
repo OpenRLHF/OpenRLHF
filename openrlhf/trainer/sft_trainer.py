@@ -4,6 +4,7 @@ from abc import ABC
 import torch
 from torch.optim import Optimizer
 from tqdm import tqdm
+from typing_extensions import override
 
 from openrlhf.models import GPTLMLoss
 from openrlhf.utils.distributed_sampler import DistributedSampler
@@ -132,49 +133,17 @@ class SFTTrainer(ABC):
 
             # train
             self.model.train()
-            for prompt_id_lens, inputs, attention_masks, infos in self.train_dataloader:
-                if self.packing_samples:
-                    inputs = inputs.to(torch.cuda.current_device())
-                    attention_mask = attention_masks.to(torch.cuda.current_device())
-                else:
-                    inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
-                    attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
+            for data in self.train_dataloader:
+                output, labels = self.model_forward(data)
 
-                if self.strategy.ring_attn_group is None:
-                    output = self.model(inputs, attention_mask=attention_mask, return_output=True)
-                else:
-                    output = self.model(
-                        inputs,
-                        attention_mask=attention_mask,
-                        return_output=True,
-                        ring_attn_group=self.strategy.ring_attn_group,
-                        packed_seq_lens=infos["input_length"],
-                    )
-
-                # loss function
-                labels = torch.where(
-                    attention_mask.bool(),
-                    inputs,
-                    self.loss_fn.IGNORE_INDEX,
-                )
                 # mixtral
                 if self.aux_loss:
                     aux_loss = output.aux_loss
                 else:
                     aux_loss = 0
-
-                if not self.pretrain_mode:
-                    if self.packing_samples:
-                        index = 0
-                        for input_length, source_len in zip(infos["input_length"], prompt_id_lens):
-                            labels[0][index : index + source_len] = self.loss_fn.IGNORE_INDEX
-                            index += input_length
-                    else:
-                        for label, source_len in zip(labels, prompt_id_lens):
-                            label[:source_len] = self.loss_fn.IGNORE_INDEX
-
                 gpt_loss = self.loss_fn(output.logits, labels)
                 loss = gpt_loss + aux_loss * self.args.aux_loss_coef
+
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
@@ -183,6 +152,14 @@ class SFTTrainer(ABC):
                     "gpt_loss": gpt_loss.item(),
                     "lr": self.scheduler.get_last_lr()[0],
                 }
+                grad_norm = self.model.model.get_global_grad_norm()
+                if grad_norm is not None:
+                    logs_dict.update({
+                        "grad_norm":
+                        grad_norm.detach().item()
+                        if isinstance(grad_norm, torch.Tensor) else grad_norm
+                    })
+
                 if self.aux_loss:
                     logs_dict["aux_loss"] = aux_loss.item()
                 # step bar
@@ -206,6 +183,45 @@ class SFTTrainer(ABC):
             self._wandb.finish()
         if self._tensorboard is not None and self.strategy.is_rank_0():
             self._tensorboard.close()
+
+    def model_forward(self, inputs):
+        prompt_id_lens, inputs, attention_masks, infos = inputs
+        if self.packing_samples:
+            inputs = inputs.to(torch.cuda.current_device())
+            attention_mask = attention_masks.to(torch.cuda.current_device())
+        else:
+            inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
+            attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
+
+        if self.strategy.ring_attn_group is None:
+            output = self.model(inputs, attention_mask=attention_mask, return_output=True)
+        else:
+            output = self.model(
+                inputs,
+                attention_mask=attention_mask,
+                return_output=True,
+                ring_attn_group=self.strategy.ring_attn_group,
+                packed_seq_lens=infos["input_length"],
+            )
+
+        # loss function
+        labels = torch.where(
+            attention_mask.bool(),
+            inputs,
+            self.loss_fn.IGNORE_INDEX,
+        )
+
+        if not self.pretrain_mode:
+            if self.packing_samples:
+                index = 0
+                for input_length, source_len in zip(infos["input_length"], prompt_id_lens):
+                    labels[0][index:index + source_len] = self.loss_fn.IGNORE_INDEX
+                    index += input_length
+            else:
+                for label, source_len in zip(labels, prompt_id_lens):
+                    label[:source_len] = self.loss_fn.IGNORE_INDEX
+
+        return output, labels
 
     # logs/checkpoints/evaluation
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
@@ -248,41 +264,8 @@ class SFTTrainer(ABC):
                 disable=not self.strategy.is_rank_0(),
             )
 
-            for prompt_id_lens, inputs, attention_masks, infos in eval_dataloader:
-                if self.packing_samples:
-                    inputs = inputs.to(torch.cuda.current_device())
-                    attention_mask = attention_masks.to(torch.cuda.current_device())
-                else:
-                    inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
-                    attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
-
-                if self.strategy.ring_attn_group is None:
-                    output = self.model(inputs, attention_mask=attention_mask, return_output=True)
-                else:
-                    output = self.model(
-                        inputs,
-                        attention_mask=attention_mask,
-                        return_output=True,
-                        ring_attn_group=self.strategy.ring_attn_group,
-                        packed_seq_lens=infos["input_length"],
-                    )
-
-                # loss function
-                labels = torch.where(
-                    attention_mask.bool(),
-                    inputs,
-                    self.loss_fn.IGNORE_INDEX,
-                )
-
-                if not self.pretrain_mode:
-                    if self.packing_samples:
-                        index = 0
-                        for input_length, source_len in zip(infos["input_length"], prompt_id_lens):
-                            labels[0][index : index + source_len] = self.loss_fn.IGNORE_INDEX
-                            index += input_length
-                    else:
-                        for label, source_len in zip(labels, prompt_id_lens):
-                            label[:source_len] = self.loss_fn.IGNORE_INDEX
+            for data in eval_dataloader:
+                output, labels = self.model_forward(data)
 
                 loss = self.loss_fn(output.logits, labels)
 
@@ -301,3 +284,27 @@ class SFTTrainer(ABC):
                     for k, v in logs.items():
                         self._tensorboard.add_scalar(f"eval/{k}", v, steps)
         self.model.train()  # reset model state
+
+class VLSFTTrainer(SFTTrainer):
+    """
+    Trainer for visual fintune training.
+    """
+    def data_to_device(self, input_data):
+        for key, value in input_data.items():
+            input_data[key] = value.to(torch.cuda.current_device())
+        return input_data
+
+    @override
+    def model_forward(self, inputs):
+        data = self.data_to_device(inputs)
+
+        labels = data["labels"]
+
+        output = self.model(
+            data["input_ids"],
+            attention_mask=data["attention_mask"],
+            return_output=True,
+            pixel_values=data["pixel_values"],
+            image_grid_thw=data["image_grid_thw"],
+        )
+        return output, labels
