@@ -264,6 +264,7 @@ def train(args):
         remote_rm_url=args.remote_rm_url,
         save_hf_ckpt=args.save_hf_ckpt,
         disable_ds_ckpt=args.disable_ds_ckpt,
+        backend=args.backend
     )
 
     trainer.fit(args, prompts_dataloader, pretrain_dataloader, consumed_samples, num_update_steps_per_episodes)
@@ -285,6 +286,10 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+
+    # Backend for inference
+    parser.add_argument("--backend", type=str, default="vllm", help="backend for inference")
+    
     # Checkpoint
     parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--save_steps", type=int, default=-1)

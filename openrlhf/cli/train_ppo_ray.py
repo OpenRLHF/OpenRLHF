@@ -12,7 +12,8 @@ from openrlhf.trainer.ray import (
     PPORayActorGroup,
     ReferenceModelRayActor,
     RewardModelRayActor,
-    create_llm_ray_actor,
+    create_llm_ray_actor_sglang,
+    create_llm_ray_actor_vllm,
 )
 from openrlhf.utils import get_strategy
 
@@ -143,16 +144,28 @@ def train(args):
     inference_engines = None
     if args.vllm_num_engines is not None and args.vllm_num_engines > 0:
         max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
-        inference_engines = create_llm_ray_actor(
-            args.vllm_num_engines,
-            args.vllm_tensor_parallel_size,
-            args.pretrain,
-            args.seed,
-            args.enable_prefix_caching,
-            args.enforce_eager,
-            max_len,
-            backend=args.backend,
-        )
+        if args.backend == "sglang":
+            inference_engines = create_llm_ray_actor_sglang(
+                args.vllm_num_engines,
+                args.vllm_tensor_parallel_size,
+                args.pretrain,
+                args.seed,
+                args.enable_prefix_caching,
+                args.enforce_eager,
+                max_len,
+            )
+        elif args.backend == "vllm":
+            inference_engines = create_llm_ray_actor_vllm(
+                args.vllm_num_engines,
+                args.vllm_tensor_parallel_size,
+                args.pretrain,
+                args.seed,
+                args.enable_prefix_caching,
+                args.enforce_eager,
+                max_len,
+            )
+        else:
+            raise ValueError(f"Unsupported backend: {args.backend}")
 
     ray.get(refs)
 
