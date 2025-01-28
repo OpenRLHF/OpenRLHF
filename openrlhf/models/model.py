@@ -33,24 +33,34 @@ def get_llm_for_sequence_regression(
     use_flash_attention_2=False,
     ds_config: dict = None,
     init_value_head: bool = False,
-    value_head_prefix="value_head",
+    value_head_prefix="score",
     device_map=None,
     packing_samples=False,
     **kwargs,
 ) -> nn.Module:
-    """Get transformer with a sequence classification head on top (linear layer).
+    """Retrieve a transformer model with a sequence regression head on top.
+
+    This function loads a pretrained transformer model and attaches a linear layer for sequence regression.
 
     Args:
-        model_name_or_path (str): Path to pretrained model.
-        model_type (str): Either "reward" or "critic.
-        bf16 (bool, optional): Whether enable bfloat16. Defaults to True.
-        normalize_reward (bool, optional): Whether normalize reward. Defaults to False.
-        use_flash_attention_2 (bool, optional): Whether use Flash Attention 2.0. Defaults to False.
-        ds_config (dict, optional): Deepspeed config, used to automatically splitting the model onto
-            multiple gpus during from_pretrained when ZeRO-3 enabled. Defaults to None.
+        model_name_or_path (str): Path to the pretrained model.
+        model_type (str): Type of the model, either "reward" or "critic".
+        bf16 (bool, optional): Enable bfloat16 precision. Defaults to True.
+        load_in_4bit (bool, optional): Load the model in 4-bit precision. Defaults to False.
+        lora_rank (int, optional): Rank for LoRA adaptation. Defaults to 0.
+        lora_alpha (int, optional): Alpha parameter for LoRA. Defaults to 16.
+        target_modules (list, optional): List of target modules for LoRA. Defaults to None.
+        lora_dropout (float, optional): Dropout rate for LoRA layers. Defaults to 0.
+        normalize_reward (bool, optional): Normalize reward values. Defaults to False.
+        use_flash_attention_2 (bool, optional): Use Flash Attention 2.0. Defaults to False.
+        ds_config (dict, optional): Deepspeed configuration for model partitioning across multiple GPUs when ZeRO-3 is enabled. Defaults to None.
+        init_value_head (bool, optional): Initialize the value head. Defaults to False.
+        value_head_prefix (str, optional): Prefix for the value head. Defaults to "score".
+        device_map (dict, optional): Map of devices for model loading. Defaults to None.
+        packing_samples (bool, optional): Whether to pack samples during training. Defaults to False.
 
     Returns:
-        nn.Module: pretrained transformer model.
+        nn.Module: A pretrained transformer model with a sequence regression head.
     """
     assert (
         model_type == "critic" or model_type == "reward"
@@ -146,7 +156,7 @@ def get_llm_for_sequence_regression(
     return model
 
 
-def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="value_head", packing_samples=False):
+def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="score", packing_samples=False):
     class RewardModel(base_pretrained_model):
         supports_gradient_checkpointing = True
 
@@ -180,15 +190,17 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             if not self.packing_samples:
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
                 position_ids = attention_mask.long().cumsum(-1) - 1
+                position_ids.masked_fill_(attention_mask == 0, 1)
             else:
+                # convert attention_mask to position_ids
                 if ring_attn_group is not None:
                     input_ids, attention_mask, position_ids = convert_ring_attn_params(
                         input_ids, attention_mask, packed_seq_lens, ring_attn_group
                     )
                 else:
-                    # reset the positions for packed samples
                     position_ids = reset_position_ids(attention_mask)
-            position_ids.masked_fill_(attention_mask == 0, 1)
+                # explicitly ignore attention_mask for packing_samples
+                attention_mask = None
 
             outputs = getattr(self, self.base_model_prefix)(
                 input_ids, attention_mask=attention_mask, position_ids=position_ids
@@ -217,7 +229,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
     return RewardModel
 
 
-def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="value_head", packing_samples=False):
+def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="score", packing_samples=False):
     class CriticModel(base_pretrained_model):
         supports_gradient_checkpointing = True
 
@@ -251,10 +263,12 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             if not self.packing_samples:
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
                 position_ids = attention_mask.long().cumsum(-1) - 1
+                position_ids.masked_fill_(attention_mask == 0, 1)
             else:
-                # reset the positions for packed samples
+                # convert attention_mask to position_ids
                 position_ids = reset_position_ids(attention_mask)
-            position_ids.masked_fill_(attention_mask == 0, 1)
+                # explicitly ignore attention_mask for packing_samples
+                attention_mask = None
 
             outputs = getattr(self, self.base_model_prefix)(
                 input_ids, attention_mask=attention_mask, position_ids=position_ids

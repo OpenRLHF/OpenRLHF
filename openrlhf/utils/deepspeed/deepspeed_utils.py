@@ -14,7 +14,7 @@ def get_train_ds_config(
     max_norm=1.0,
     zpg=8,
     grad_accum_dtype=None,
-    disable_trace_cache=False,
+    overlap_comm=False,
 ):
     device = "cpu" if offload else "none"
     zero_opt_dict = {
@@ -30,17 +30,14 @@ def get_train_ds_config(
         "stage3_param_persistence_threshold": "auto",
         "stage3_prefetch_bucket_size": "auto",
         "reduce_bucket_size": "auto",
-        "overlap_comm": True,
-        "contiguous_gradients": True,
         # ZeRO++
         "zero_hpz_partition_size": zpg,
         "zero_quantized_weights": False,
         "zero_quantized_gradients": False,
     }
-    if disable_trace_cache:
-        zero_opt_dict["stage3_prefetch_bucket_size"] = 0
-        zero_opt_dict["stage3_max_live_parameters"] = 0
-        zero_opt_dict["stage3_max_reuse_distance"] = 0
+    if overlap_comm:
+        zero_opt_dict["overlap_comm"] = True
+        zero_opt_dict["contiguous_gradients"] = True
 
     return {
         "steps_per_print": 100,
@@ -51,7 +48,7 @@ def get_train_ds_config(
         "gradient_clipping": max_norm,
         "prescale_gradients": False,
         "wall_clock_breakdown": False,
-        "data_types": {"grad_accum_dtype": grad_accum_dtype if grad_accum_dtype else "fp32"},
+        "data_types": {"grad_accum_dtype": grad_accum_dtype},
     }
 
 

@@ -10,8 +10,15 @@ from .utils import zero_pad_sequences
 def preprocess_data(data, input_template=None, input_key="input", output_key=None, apply_chat_template=None, multiturn=False):
     if apply_chat_template:
         if output_key:
-            prompt = apply_chat_template(data[input_key], tokenize=False, add_generation_prompt=True) # add_generation_prompt will append <|im_start|>\nassistant\n; response does not contain <|im_start|>\nassistant\n
-            response = apply_chat_template(data[input_key] + data[output_key], tokenize=False)[len(prompt) :]
+            prompt_message = data[input_key]
+            response_message = data[output_key]
+
+            if isinstance(prompt_message, str) and isinstance(response_message, str):
+                prompt_message = [{"role": "user", "content": prompt_message}]
+                response_message = [{"role": "assistant", "content": response_message}]
+
+            prompt = apply_chat_template(prompt_message, tokenize=False, add_generation_prompt=True)
+            response = apply_chat_template(prompt_message + response_message, tokenize=False)[len(prompt) :]
         else:
             prompt = apply_chat_template(data[input_key][:-1], tokenize=False, add_generation_prompt=True)
             response = apply_chat_template(data[input_key], tokenize=False)[len(prompt) :]
@@ -212,8 +219,10 @@ class SFTDataset(Dataset):
 
         packed_input_ids = torch.cat(packed_input_ids, dim=0).unsqueeze(0)
         packed_attention_masks = torch.cat(packed_attention_masks, dim=0).unsqueeze(0)
-        
-        if self.multiple_of > 1 and packed_input_ids.numel() % self.multiple_of != 0: # not divisible by multiple_of; here we align for grouping
+
+        if (
+            self.multiple_of > 1 and packed_input_ids.numel() % self.multiple_of != 0
+        ):  # not divisible by multiple_of; here we align for grouping
             padding_len = self.multiple_of - (packed_input_ids.numel() % self.multiple_of)
             packed_input_ids = F.pad(packed_input_ids, (0, padding_len), value=self.tokenizer.pad_token_id)
             packed_attention_masks = F.pad(packed_attention_masks, (0, padding_len), value=0)

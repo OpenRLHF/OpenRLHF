@@ -58,9 +58,9 @@ class DeepspeedStrategy(ABC):
         self.max_norm = max_norm
         self.adam_offload = getattr(args, "adam_offload", False)
         self.zpg = getattr(args, "zpg", 1)
-        self.grad_accum_dtype = getattr(args, "grad_accum_dtype", "fp32")
-        # disable_trace_cache
-        self.disable_trace_cache = getattr(args, "disable_trace_cache", False)
+        self.grad_accum_dtype = getattr(args, "grad_accum_dtype", None)
+        # overlap_comm
+        self.overlap_comm = getattr(args, "overlap_comm", False)
 
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
@@ -71,7 +71,7 @@ class DeepspeedStrategy(ABC):
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
-    def setup_distributed(self, timeout=timedelta(minutes=30)) -> None:
+    def setup_distributed(self, timeout=timedelta(minutes=60)) -> None:
         self.set_seed(self.seed)
 
         if self.args.local_rank == -1 and "LOCAL_RANK" in os.environ:  # for slurm
@@ -228,7 +228,7 @@ class DeepspeedStrategy(ABC):
             max_norm=self.max_norm,
             zpg=self.zpg,
             grad_accum_dtype=self.grad_accum_dtype,
-            disable_trace_cache=self.disable_trace_cache,
+            overlap_comm=self.overlap_comm,
         )
 
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
@@ -262,7 +262,7 @@ class DeepspeedStrategy(ABC):
         # DS Config
         ds_config = get_eval_ds_config(offload=offload, stage=self.stage if self.stage == 3 else 0, bf16=self.bf16)
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
-        ds_config["train_batch_size"] = self.train_batch_size
+        ds_config["train_batch_size"] = self.train_batch_size * self.ring_attn_size
 
         return ds_config
 
@@ -342,6 +342,9 @@ class DeepspeedStrategy(ABC):
                         get_peft_model_state_dict(model_to_save, output_state_dict),
                         os.path.join(output_dir, "adapter_model.bin"),
                     )
+                    filename = os.path.join(output_dir, "adapter_model.safetensors")
+                    if os.path.exists(filename):
+                        os.remove(filename)
             else:
                 # save model
                 model_to_save.save_pretrained(output_dir, state_dict=output_state_dict, **kwargs)

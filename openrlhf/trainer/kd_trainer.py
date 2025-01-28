@@ -108,6 +108,7 @@ class KDTrainer(ABC):
             desc="Train epoch",
             disable=not self.strategy.is_rank_0(),
         )
+        loss_sum = 0
         for epoch in range(start_epoch, self.epochs):
             if isinstance(self.train_dataloader.sampler, DistributedSampler):
                 self.train_dataloader.sampler.set_epoch(
@@ -123,7 +124,6 @@ class KDTrainer(ABC):
             # train
             self.model.train()
             self.teacher_model.eval()
-            loss_mean = 0
             for prompts_id_len, inputs, attention_masks, _ in self.train_dataloader:
                 inputs = inputs.squeeze(1).to(torch.cuda.current_device())
                 attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
@@ -152,11 +152,10 @@ class KDTrainer(ABC):
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-                loss_mean = loss_mean * 0.9 + 0.1 * gpt_loss.item()
+                loss_sum += gpt_loss.item()
                 logs_dict = {
                     "gpt_loss": gpt_loss.item(),
                     "distil_loss": distil_loss.item(),
-                    "loss_mean": loss_mean,
                     "lr": self.scheduler.get_last_lr()[0],
                 }
                 # step bar
@@ -166,6 +165,8 @@ class KDTrainer(ABC):
 
                 # logs/checkpoints/evaluation
                 if step % self.strategy.accumulated_gradient == 0:
+                    logs_dict["loss_mean"] = loss_sum / self.strategy.accumulated_gradient
+                    loss_sum = 0
                     global_step = step // self.strategy.accumulated_gradient
                     client_states = {"consumed_samples": global_step * args.train_batch_size}
                     self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
