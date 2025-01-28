@@ -203,18 +203,19 @@ class SFTDataset(Dataset):
         packed_input_ids = []
         packed_attention_masks = []
         prompt_ids_lens = []
-        infos = {"input_length": [], "response_ranges": []}
+        infos = {"input_length": [], "response_ranges": [] if self.multiturn else None}
         index = 1
         for prompt_ids_len, input_id, attention_mask, info in item_list:
             packed_input_ids.append(input_id.flatten())
             packed_attention_masks.append(torch.full_like(input_id.flatten(), index))
             prompt_ids_lens.append(prompt_ids_len)
             infos["input_length"].append(info["input_length"])
-            if len(infos["response_ranges"]) >= 1:
-                for i in range(len(info["response_ranges"])):
-                    info["response_ranges"][i][0] += infos["response_ranges"][-1][-1][1] # end_index of the last response of the last item
-                    info["response_ranges"][i][1] += infos["response_ranges"][-1][-1][1]
-            infos["response_ranges"].append(info["response_ranges"])
+            if self.multiturn:
+                if len(infos["response_ranges"]) >= 1:
+                    for i in range(len(info["response_ranges"])):
+                        info["response_ranges"][i][0] += infos["response_ranges"][-1][-1][1] # end_index of the last response of the last item
+                        info["response_ranges"][i][1] += infos["response_ranges"][-1][-1][1]
+                infos["response_ranges"].append(info["response_ranges"])
             index += 1
 
         packed_input_ids = torch.cat(packed_input_ids, dim=0).unsqueeze(0)
