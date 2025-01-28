@@ -38,7 +38,6 @@ class DistributedTorchRayActor:
         # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES is set, so
         # set local rank to 0 when the flag is not applicable.
         os.environ["LOCAL_RANK"] = str(ray.get_gpu_ids()[0]) if ray_noset_visible_devices() else "0"
-        print("os.environ['LOCAL_RANK']", os.environ["LOCAL_RANK"])
 
     @staticmethod
     def _get_current_node_ip():

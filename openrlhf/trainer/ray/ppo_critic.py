@@ -49,14 +49,14 @@ class CriticPPOTrainer(PPOTrainer):
                 pbar.set_postfix(status)
 
         if status_list:
-            torch.cuda.synchronize()
+            
             status_mean = status_list[0]
-            torch.cuda.synchronize()
+            
             for m in status_list[1:]:
-                torch.cuda.synchronize()
+                
                 for k, v in m.items():
                     status_mean[k] += v
-            torch.cuda.synchronize()
+            
             for k in status_mean.keys():
                 status_mean[k] /= len(status_list)
         return status_mean
