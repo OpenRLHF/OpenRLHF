@@ -204,7 +204,7 @@ deepspeed --module openrlhf.cli.train_sft \
 #   --ring_head_stride 2 \
 
 # Multi-turn fine-tuning loss
-# --multi_turn
+# --multiturn
 
 # Can also be used for continued pre-training
 # --pretrain_mode
