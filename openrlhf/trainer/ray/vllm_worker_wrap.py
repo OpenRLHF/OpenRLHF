@@ -12,7 +12,6 @@ class WorkerWrap(Worker):
         """Init torch process group for model weights update"""
         assert torch.distributed.is_initialized(), f"default torch process group must be initialized"
         assert group_name != "", f"group name must not be empty"
-
         rank = torch.distributed.get_rank() + rank_offset
         self._model_update_group = init_process_group(
             backend=backend,
@@ -30,11 +29,9 @@ class WorkerWrap(Worker):
         """Broadcast weight to all vllm workers from source rank 0 (actor model)"""
         if torch.distributed.get_rank() == 0:
             print(f"update weight: {name}, dtype: {dtype}, shape: {shape}")
-
         assert dtype == self.model_config.dtype, f"mismatch dtype: src {dtype}, dst {self.model_config.dtype}"
         weight = torch.empty(shape, dtype=dtype, device="cuda")
         torch.distributed.broadcast(weight, 0, group=self._model_update_group)
-
         self.model_runner.model.load_weights(weights=[(name, weight)])
 
         del weight

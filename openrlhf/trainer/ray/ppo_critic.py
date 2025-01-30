@@ -49,10 +49,14 @@ class CriticPPOTrainer(PPOTrainer):
                 pbar.set_postfix(status)
 
         if status_list:
+
             status_mean = status_list[0]
+
             for m in status_list[1:]:
+
                 for k, v in m.items():
                     status_mean[k] += v
+
             for k in status_mean.keys():
                 status_mean[k] /= len(status_list)
         return status_mean
@@ -65,7 +69,6 @@ class CriticPPOTrainer(PPOTrainer):
 class CriticModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps):
         args = strategy.args
-
         self._setup_distributed(strategy)
         critic = get_llm_for_sequence_regression(
             pretrain,
@@ -92,12 +95,10 @@ class CriticModelRayActor(BasePPORole):
             self.tokenizer = get_tokenizer(
                 pretrain, critic, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer
             )
-
         # configure optimizer
         critic_optim = strategy.create_optimizer(
             critic, lr=args.critic_learning_rate, betas=args.adam_betas, weight_decay=args.l2
         )
-
         # configure scheduler
         critic_scheduler = get_scheduler(
             "cosine_with_min_lr",
@@ -106,12 +107,10 @@ class CriticModelRayActor(BasePPORole):
             num_training_steps=max_steps,
             scheduler_specific_kwargs={"min_lr": args.critic_learning_rate * 0.1},
         )
-
         if args.gradient_checkpointing:
             critic.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
-
         # prepare models/optimizers...
         self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare(
             (critic, critic_optim, critic_scheduler),
@@ -123,7 +122,6 @@ class CriticModelRayActor(BasePPORole):
             ckpt_path = os.path.join(args.ckpt_path, "_critic")
             strategy.load_ckpt(self.critic, ckpt_path)
             strategy.print(f"Loaded the checkpoint: {ckpt_path}")
-
         # configure Trainer
         # only use wandb at actor model
         strategy.args.use_wandb = False

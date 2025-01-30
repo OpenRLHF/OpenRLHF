@@ -2,6 +2,7 @@ import itertools
 import math
 import os
 import socket
+import time
 from typing import Callable, Dict, List
 
 import deepspeed
@@ -25,7 +26,7 @@ class ActorPPOTrainer(PPOTrainer):
     def __init__(
         self,
         *args,
-        vllm_engines: List = None,
+        inference_engines: List = None,
         remote_rm_url: List[str] = None,
         critic_train_remote: bool = False,
         **kwargs,
@@ -33,12 +34,12 @@ class ActorPPOTrainer(PPOTrainer):
         """PPOTrainer for ray.
 
         Args:
-            vllm_engines (List, optional): vllm engines for text generation, if not specified, generate text by actor model directly. Defaults to None.
+            inference_engines (List, optional): vllm engines for text generation, if not specified, generate text by actor model directly. Defaults to None.
             critic_train_remote (bool, optional): whether this actor should triger corresponding critic model training. Defaults to False.
         """
         super().__init__(*args, **kwargs)
         self.remote_rm_url = remote_rm_url
-        self.vllm_engines = vllm_engines
+        self.inference_engines = inference_engines
         self.critic_train_remote = critic_train_remote
 
         self.experience_maker = RemoteExperienceMaker(
@@ -52,10 +53,9 @@ class ActorPPOTrainer(PPOTrainer):
             self.strategy,
             self.remote_rm_url,
             self.reward_fn,
-            vllm_engines=self.vllm_engines,
+            inference_engines=self.inference_engines,
             packing_samples=self.strategy.args.packing_samples,
         )
-
         # Create torch group with deepspeed rank 0 and all vllm ranks
         # to update vllm engine's weights after each training stage.
         #
@@ -69,12 +69,11 @@ class ActorPPOTrainer(PPOTrainer):
         # For ZeRO-3:
         #   1. AllGather paramters to rank 0
         #   2. Broadcast parameters from rank 0 to all vllm engines
-        if self.vllm_engines is not None and torch.distributed.get_rank() == 0:
+        if self.inference_engines is not None and torch.distributed.get_rank() == 0:
             master_address = ray._private.services.get_node_ip_address()
             with socket.socket() as sock:
                 sock.bind(("", 0))
                 master_port = sock.getsockname()[1]
-
             vllm_num_engines, vllm_tensor_parallel_size = (
                 self.strategy.args.vllm_num_engines,
                 self.strategy.args.vllm_tensor_parallel_size,
@@ -82,6 +81,8 @@ class ActorPPOTrainer(PPOTrainer):
             world_size = vllm_num_engines * vllm_tensor_parallel_size + 1
 
             backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
+
+            start = time.time()
             refs = [
                 engine.init_process_group.remote(
                     master_address,
@@ -89,39 +90,33 @@ class ActorPPOTrainer(PPOTrainer):
                     i * vllm_tensor_parallel_size + 1,
                     world_size,
                     "openrlhf",
-                    backend=backend,
+                    backend="nccl",
                 )
-                for i, engine in enumerate(self.vllm_engines)
+                for i, engine in enumerate(self.inference_engines)
             ]
             self._model_update_group = init_process_group(
-                backend=backend,
+                backend="nccl",
                 init_method=f"tcp://{master_address}:{master_port}",
                 world_size=world_size,
                 rank=0,
                 group_name="openrlhf",
             )
-
             ray.get(refs)
-
-        torch.distributed.barrier()
 
     def ppo_train(self, global_steps):
         # 1. ensure all experience makers done
         self.experience_maker.flush()
         torch.distributed.barrier()
-
         # 2. triger remote critic model training
         if self.critic_train_remote:
             critic_status_ref = self.critic.fit.remote()
-
         # 3. actor model training
         if global_steps > self.freezing_actor_steps:
             status = super().ppo_train(global_steps)
-
             # 4. broadcast weights to vllm engines
-            if self.vllm_engines is not None:
+            if self.inference_engines is not None:
                 torch.distributed.barrier()
-                self._broadcast_to_vllm()
+                self.broadcast_to_inference_engine()
         else:
             status = {}
 
@@ -135,7 +130,7 @@ class ActorPPOTrainer(PPOTrainer):
     def training_step(self, experience: Experience, global_steps) -> Dict[str, float]:
         return self.training_step_actor(experience)
 
-    def _broadcast_to_vllm(self):
+    def broadcast_to_inference_engine(self):
         # avoid OOM
         torch.cuda.empty_cache()
         model = self.actor.model.module
@@ -148,7 +143,7 @@ class ActorPPOTrainer(PPOTrainer):
                 shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
                 refs = [
                     engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
-                    for engine in self.vllm_engines
+                    for engine in self.inference_engines
                 ]
 
             # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
@@ -195,9 +190,7 @@ class ActorModelRayActor(BasePPORole):
             # see https://github.com/vllm-project/vllm/blob/c6b0a7d3ba03ca414be1174e9bd86a97191b7090/vllm/worker/worker_base.py#L445
             if getattr(args, "vllm_sync_backend", "nccl") == "nccl":
                 os.environ["NCCL_CUMEM_ENABLE"] = "0"
-
         self._setup_distributed(strategy)
-
         actor = Actor(
             pretrain,
             use_flash_attention_2=strategy.args.flash_attn,
@@ -216,7 +209,6 @@ class ActorModelRayActor(BasePPORole):
         self.tokenizer = get_tokenizer(
             pretrain, actor.model, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer
         )
-
         if args.enable_ema:
             ema_model = Actor(
                 pretrain,
@@ -251,7 +243,6 @@ class ActorModelRayActor(BasePPORole):
             num_training_steps=max_steps,
             scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
         )
-
         if args.gradient_checkpointing:
             actor.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
@@ -262,13 +253,11 @@ class ActorModelRayActor(BasePPORole):
             (actor, actor_optim, actor_scheduler),
             is_rlhf=True,
         )
-
         if ema_model:
             ema_model._offload = True
             self.ema_model = strategy.prepare(ema_model, is_rlhf=True)
         else:
             self.ema_model = None
-
         # load checkpoint
         self.consumed_samples = 0
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
@@ -292,14 +281,17 @@ class ActorModelRayActor(BasePPORole):
             train_split=args.prompt_split,
         )
         prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
+
         self.prompts_dataset = PromptDataset(
             prompts_data, self.tokenizer, strategy, input_template=args.input_template
         )
+
         self.prompts_dataloader = strategy.setup_dataloader(
             self.prompts_dataset, args.rollout_batch_size // strategy.world_size, True, True
         )
 
         if args.pretrain_data:
+
             pretrain_data = blending_datasets(
                 args.pretrain_data,
                 args.pretrain_data_probs,
@@ -308,6 +300,7 @@ class ActorModelRayActor(BasePPORole):
                 return_eval=False,
                 train_split=args.pretrain_split,
             )
+
             pretrain_max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
             pretrain_dataset = SFTDataset(
                 pretrain_data.select(
@@ -322,6 +315,7 @@ class ActorModelRayActor(BasePPORole):
                 strategy,
                 pretrain_mode=True,
             )
+
             self.pretrain_dataloader = itertools.cycle(
                 iter(
                     strategy.setup_dataloader(
@@ -347,10 +341,11 @@ class ActorModelRayActor(BasePPORole):
         reward_model: List[ray.actor.ActorHandle],
         remote_rm_url: List[str] = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
-        vllm_engines: List[ray.actor.ActorHandle] = None,
+        inference_engines: List[ray.actor.ActorHandle] = None,
         critic_train_remote: bool = False,
     ):
         """Train actor model with prompt datasets."""
+
         strategy = self.strategy
         args = self.strategy.args
 
@@ -368,7 +363,7 @@ class ActorModelRayActor(BasePPORole):
             critic_scheduler=None,
             remote_rm_url=remote_rm_url,
             reward_fn=reward_fn,
-            vllm_engines=vllm_engines,
+            inference_engines=inference_engines,
             max_epochs=args.max_epochs,
             micro_train_batch_size=args.micro_train_batch_size,
             micro_rollout_batch_size=args.micro_rollout_batch_size,
@@ -399,9 +394,9 @@ class ActorModelRayActor(BasePPORole):
 
         # broadcast checkpoint
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
-        if args.load_checkpoint and os.path.exists(ckpt_path) and not vllm_engines is None:
+        if args.load_checkpoint and os.path.exists(ckpt_path) and not inference_engines is None:
             torch.distributed.barrier()
-            trainer._broadcast_to_vllm()
+            trainer.broadcast_to_inference_engine()
 
         trainer.fit(
             args,

@@ -9,12 +9,13 @@ from ray.util.placement_group import PlacementGroup, placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
+from openrlhf.trainer.ray.utils import ray_noset_visible_devices
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 
-from openrlhf.trainer.ray.utils import ray_noset_visible_devices
 
 class DistributedTorchRayActor:
     def __init__(self, world_size, rank, master_addr, master_port):
+        print("DistributedTorchRayActor __init__")
         logging.basicConfig(
             format="%(asctime)s %(levelname)-8s %(message)s",
             level=logging.INFO,
@@ -28,6 +29,10 @@ class DistributedTorchRayActor:
         os.environ["MASTER_PORT"] = str(self._master_port)
         os.environ["WORLD_SIZE"] = str(self._world_size)
         os.environ["RANK"] = str(self._rank)
+        print("os.environ['MASTER_ADDR']", os.environ["MASTER_ADDR"])
+        print("os.environ['MASTER_PORT']", os.environ["MASTER_PORT"])
+        print("os.environ['WORLD_SIZE']", os.environ["WORLD_SIZE"])
+        print("os.environ['RANK']", os.environ["RANK"])
         # NOTE: Ray will automatically set the *_VISIBLE_DEVICES
         # environment variable for each actor, unless
         # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES is set, so
@@ -37,16 +42,20 @@ class DistributedTorchRayActor:
     @staticmethod
     def _get_current_node_ip():
         address = ray._private.services.get_node_ip_address()
+        print("address", address)
         # strip ipv6 address
         return address.strip("[]")
 
     @staticmethod
     def _get_free_port():
         with socket.socket() as sock:
+            print("socket.socket()")
             sock.bind(("", 0))
             return sock.getsockname()[1]
 
     def get_master_addr_port(self):
+        print("self._master_addr", self._master_addr)
+        print("self._master_port", self._master_port)
         return self._master_addr, self._master_port
 
 
@@ -54,6 +63,7 @@ class BasePPORole(DistributedTorchRayActor):
     def _setup_distributed(self, strategy: DeepspeedStrategy):
         # configure strategy
         self.strategy = strategy
+        print("self.strategy", self.strategy)
         strategy.setup_distributed()
 
     def init_model_from_pretrained(self, *args, **kwargs):
@@ -63,6 +73,7 @@ class BasePPORole(DistributedTorchRayActor):
 @ray.remote(num_gpus=1)
 class ReferenceModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+        print("ReferenceModelRayActor init_model_from_pretrained")
         self._setup_distributed(strategy)
         model = Actor(
             pretrain,
@@ -72,12 +83,14 @@ class ReferenceModelRayActor(BasePPORole):
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
             packing_samples=strategy.args.packing_samples,
         )
+        print("model", model)
         strategy.print(model)
 
         if strategy.args.ref_reward_offload:
             model._offload = True
-
+            print("model._offload", model._offload)
         self.model = self.strategy.prepare(model, is_rlhf=True)
+        print("self.model", self.model)
         self.model.eval()
 
     def forward(
@@ -248,7 +261,7 @@ class PPORayActorGroup:
         reward_model_groups: List["PPORayActorGroup"],
         remote_rm_urls: List[str] = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
-        vllm_engines: List = None,
+        inference_engines: List = None,
     ):
         """Train actor model.
 
@@ -258,7 +271,7 @@ class PPORayActorGroup:
             reward_model_groups (PPORayActorGroup): reward model groups.
             remote_rm_urls: remote RM APIs.
             reward_fn: reward calculate function, must be specified if using multiple reward models.
-            vllm_engines: vllm engines for text generation, if not specified, generate text by actor model directly.
+            inference_engines: vllm engines for text generation, if not specified, generate text by actor model directly.
 
         Returns:
             List: list of remote object refs.
@@ -268,7 +281,6 @@ class PPORayActorGroup:
             or (reward_model_groups and len(reward_model_groups) == 1)
             or reward_fn is not None
         ), "reward_fn must be specified if using multiple reward models"
-
         critic_actors = critic_model_group._actor_handlers if critic_model_group else None
         initial_actors = initial_model_group._actor_handlers
 
@@ -292,12 +304,11 @@ class PPORayActorGroup:
                     reward_model=reward_actors,
                     remote_rm_url=remote_rm_urls,
                     reward_fn=reward_fn,
-                    vllm_engines=vllm_engines,
+                    inference_engines=inference_engines,
                     # whether this actor should triger corresponding critic model training
                     critic_train_remote=(i < len(critic_actors)) if critic_actor else None,
                 )
             )
-
         return refs
 
     def async_save_model(self):
