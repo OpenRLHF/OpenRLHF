@@ -15,9 +15,9 @@ from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn, remote_rm_fn_ray
 
-from search_algorithm.beamsearch_efficient import search as beamsearch
-from search_algorithm.litesearch import search as litesearch
-from search_algorithm.bestofn import search as bestofn
+from openrlhf.search_algorithm.beamsearch_efficient import search as beamsearch
+from openrlhf.search_algorithm.litesearch import search as litesearch
+from openrlhf.search_algorithm.bestofn import search as bestofn
 
 import random
 
@@ -541,14 +541,14 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         self.packing_samples = packing_samples
 
     @torch.no_grad()
-    def make_experience_list(self, all_prompts: Union[str, List[str]], **generate_kwargs) -> List[Experience]:
+    def make_experience_list(self, all_prompts: Union[str, List[str]], search_algo: str, **generate_kwargs) -> List[Experience]:
         if self.strategy.args.perf:
             self.perf_stats = {
                 "generate_time": 0,
                 "actor_value_rm_time": 0,
                 "wait_time": 0,
             }
-        experiences = super().make_experience_list(all_prompts, **generate_kwargs)
+        experiences = super().make_experience_list(all_prompts, search_algo, **generate_kwargs)
         if self.critic is not None:
             for experience in experiences:
                 # send experience to critic
