@@ -177,6 +177,10 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    # custom
+    parser.add_argument("--search_algo", type=str, default="sampling",
+                        choices=['sampling', 'beamsearch', 'litesearch', 'bestofn'])
+
     # Ray and vLLM
     parser.add_argument("--ref_num_nodes", type=int, default=1, help="number of nodes for reference")
     parser.add_argument("--ref_num_gpus_per_node", type=int, default=8, help="number of gpus per node for reference")

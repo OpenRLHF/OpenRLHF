@@ -8,10 +8,11 @@ import torch
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import PromptDataset, SFTDataset
-from openrlhf.models import Actor, get_llm_for_sequence_regression
-from openrlhf.trainer import PPOTrainer
-from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
+from openrlhf.utils import blending_datasets, get_tokenizer, get_strategy
 
+from openrlhf.trainer.ppo_trainer import PPOTrainer
+from openrlhf.models.model import get_llm_for_sequence_regression
+from openrlhf.models.actor import Actor
 
 def train(args):
     # configure strategy
@@ -260,8 +261,11 @@ def train(args):
         top_p=args.top_p,
         pad_token_id=tokenizer.pad_token_id,
         eos_token_id=tokenizer.eos_token_id,
+        synced_gpus=True if args.zero_stage == 3 else False, # for ZeRO-3
         # remote reward model
         remote_rm_url=args.remote_rm_url,
+        # search
+        search_algo=args.search_algo,
     )
 
     trainer.fit(args, prompts_dataloader, pretrain_dataloader, consumed_samples, num_update_steps_per_episodes)

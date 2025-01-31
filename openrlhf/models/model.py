@@ -11,8 +11,8 @@ from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from openrlhf.utils.logging_utils import init_logger
 
-from .ring_attn_utils import convert_ring_attn_params
-from .utils import reset_position_ids
+from openrlhf.models.ring_attn_utils import convert_ring_attn_params
+from openrlhf.models.utils import reset_position_ids
 
 logger = init_logger(__name__)
 
@@ -251,6 +251,87 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             if hasattr(config, "mean"):
                 self.mean[0] = config.mean
                 self.std[0] = config.std
+
+        # copy from Qwen2ForSequenceClassification
+        def compute_value(self, input_ids, attention_mask=None, position_ids=None,
+            past_key_values=None, inputs_embeds=None, labels=None, use_cache=None,
+            output_attentions=None, output_hidden_states=None, return_dict=None,):
+            r"""
+            labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
+                Labels for computing the sequence classification/regression loss. Indices should be in `[0, ...,
+                config.num_labels - 1]`. If `config.num_labels == 1` a regression loss is computed (Mean-Square loss), If
+                `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
+            """
+            return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+            transformer_outputs = self.model(
+                input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+            hidden_states = transformer_outputs[0]
+            logits = self.score(hidden_states)
+
+            if input_ids is not None:
+                batch_size = input_ids.shape[0]
+            else:
+                batch_size = inputs_embeds.shape[0]
+
+            if self.config.pad_token_id is None and batch_size != 1:
+                raise ValueError("Cannot handle batch sizes > 1 if no padding token is defined.")
+            if self.config.pad_token_id is None:
+                sequence_lengths = -1
+            else:
+                if input_ids is not None:
+                    # if no pad token found, use modulo instead of reverse indexing for ONNX compatibility
+                    sequence_lengths = torch.eq(input_ids, self.config.pad_token_id).int().argmax(-1) - 1
+                    sequence_lengths = sequence_lengths % input_ids.shape[-1]
+                    sequence_lengths = sequence_lengths.to(logits.device)
+                else:
+                    sequence_lengths = -1
+
+            pooled_logits = logits[torch.arange(batch_size, device=logits.device), sequence_lengths]
+
+            loss = None
+            if labels is not None:
+                labels = labels.to(logits.device)
+                if self.config.problem_type is None:
+                    if self.num_labels == 1:
+                        self.config.problem_type = "regression"
+                    elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                        self.config.problem_type = "single_label_classification"
+                    else:
+                        self.config.problem_type = "multi_label_classification"
+
+                if self.config.problem_type == "regression":
+                    loss_fct = MSELoss()
+                    if self.num_labels == 1:
+                        loss = loss_fct(pooled_logits.squeeze(), labels.squeeze())
+                    else:
+                        loss = loss_fct(pooled_logits, labels)
+                elif self.config.problem_type == "single_label_classification":
+                    loss_fct = CrossEntropyLoss()
+                    loss = loss_fct(pooled_logits.view(-1, self.num_labels), labels.view(-1))
+                elif self.config.problem_type == "multi_label_classification":
+                    loss_fct = BCEWithLogitsLoss()
+                    loss = loss_fct(pooled_logits, labels)
+            if not return_dict:
+                output = (pooled_logits,) + transformer_outputs[1:]
+                return ((loss,) + output) if loss is not None else output
+
+            return SequenceClassifierOutputWithPast(
+                loss=loss,
+                logits=pooled_logits,
+                past_key_values=transformer_outputs.past_key_values,
+                hidden_states=transformer_outputs.hidden_states,
+                attentions=transformer_outputs.attentions,
+            )
 
         def forward(
             self,
