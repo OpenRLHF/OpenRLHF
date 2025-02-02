@@ -82,24 +82,37 @@ class ActorPPOTrainer(PPOTrainer):
             world_size = vllm_num_engines * vllm_tensor_parallel_size + 1
 
             backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
+            use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
+            group_name = "openrlhf"
             refs = [
                 engine.init_process_group.remote(
                     master_address,
                     master_port,
                     i * vllm_tensor_parallel_size + 1,
                     world_size,
-                    "openrlhf",
+                    group_name,
                     backend=backend,
+                    use_ray=use_ray,
                 )
                 for i, engine in enumerate(self.vllm_engines)
             ]
-            self._model_update_group = init_process_group(
-                backend=backend,
-                init_method=f"tcp://{master_address}:{master_port}",
-                world_size=world_size,
-                rank=0,
-                group_name="openrlhf",
-            )
+            if use_ray:
+                import ray.util.collective as collective
+                collective.init_collective_group(
+                    world_size=world_size,
+                    rank=0,
+                    backend=backend,
+                    group_name=group_name
+                )
+                self._model_update_group = group_name
+            else:
+                self._model_update_group = init_process_group(
+                    backend=backend,
+                    init_method=f"tcp://{master_address}:{master_port}",
+                    world_size=world_size,
+                    rank=0,
+                    group_name=group_name,
+                )
 
             ray.get(refs)
 
@@ -138,6 +151,7 @@ class ActorPPOTrainer(PPOTrainer):
     def _broadcast_to_vllm(self):
         # avoid OOM
         torch.cuda.empty_cache()
+        use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
         model = self.actor.model.module
         count, num_params = 0, len(list(model.named_parameters()))
         for name, param in model.named_parameters():
@@ -154,7 +168,11 @@ class ActorPPOTrainer(PPOTrainer):
             # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
             with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
                 if torch.distributed.get_rank() == 0:
-                    torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
+                    if use_ray:
+                        import ray.util.collective as collective
+                        collective.broadcast(param.data, 0, group_name=self._model_update_group)
+                    else:
+                        torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
                     ray.get(refs)
         torch.distributed.barrier()
 
