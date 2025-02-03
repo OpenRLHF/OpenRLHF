@@ -1,6 +1,8 @@
 POLICY=/apdcephfs/share_300000800/user/dyu/share/model/pretrain/llama-3/hf/Meta-Llama-3-8B/
-POLICY=/apdcephfs_sh2/share_300000800/user/antewang/ppo/OpenRLHF-0.5.6/Qwen2.5-Math-1.5B_sft_star
-OUTPUT=/apdcephfs/share_300000800/user/lfsong/exp.tencent_chat/OpenRLHF/outputs
+POLICY=/apdcephfs_sh2/share_300000800/user/antewang/Qwen2.5-Math-7B
+# POLICY=/apdcephfs_sh2/share_300000800/user/antewang/Qwen2.5-Math-1.5B
+# POLICY=/apdcephfs_sh2/share_300000800/user/antewang/ppo/OpenRLHF-0.5.6/Qwen2.5-Math-1.5B_sft_star_bf16
+OUTPUT=/apdcephfs/share_300000800/user/lfsong/exp.tencent_chat/OpenRLHF/outputs/r1_zero_qwen25_math_7b
 
 set -x 
 
@@ -18,38 +20,38 @@ ray job submit --address="http://127.0.0.1:8265" \
    --critic_num_gpus_per_node 2 \
    --actor_num_nodes 1 \
    --actor_num_gpus_per_node 2 \
-   --vllm_num_engines 1 \
-   --vllm_tensor_parallel_size 2 \
-   --colocate_actor_ref \
+   --vllm_num_engines 2 \
+   --vllm_tensor_parallel_size 1 \
    --pretrain ${POLICY} \
-   --remote_rm_url http://localhost:1234/predict \
+   --remote_rm_url http://localhost:1234/predict_r1_zero \
    --save_path ${OUTPUT} \
-   --load_checkpoint \
    --ckpt_path ${OUTPUT}  \
-   --micro_train_batch_size 2 \
+   --micro_train_batch_size 1 \
    --train_batch_size 128 \
-   --micro_rollout_batch_size 2 \
-   --rollout_batch_size 512 \
+   --micro_rollout_batch_size 1 \
+   --rollout_batch_size 128 \
    --temperature 0.6 \
    --n_samples_per_prompt 8 \
    --max_samples 100000 \
    --max_epochs 1 \
-   --num_episodes 20 \
-   --prompt_max_len 1024 \
-   --generate_max_len 2048 \
+   --num_episodes 500 \
+   --max_len 2048 \
    --zero_stage 3 \
    --bf16 \
    --actor_learning_rate 5e-7 \
    --critic_learning_rate 9e-6 \
    --init_kl_coef 0.01 \
-   --prompt_data /apdcephfs_sh2/share_300000800/user/antewang/ppo/OpenRLHF-0.5.6/OpenRLHF-0.5.6/custom/dataset/train_gsm8k_math.jsonl \
-    --input_key input \
+   --prompt_data /apdcephfs/share_300000800/user/lfsong/exp.tencent_chat/math/train_gsm8k_math_add_r1_zero.jsonl \
+   --input_key input_r1_zero \
    --normalize_reward \
    --flash_attn \
+   --adam_offload \
    --gradient_checkpointing \
-   --save_steps 4 
+   --save_steps 25 
 
-   # --adam_offload \  # this likely trigger a hidden bug, for more infor, search `adam_offload` in code
-   # --search_algo sampling
+   # --search_algo sampling \
+   # --load_checkpoint \
+   # --colocate_actor_ref \
+   # https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/OpenRLHF/develop-log.md
 
 python3 /jizhi/jizhi2/worker/trainer/occupy_heavy.py
