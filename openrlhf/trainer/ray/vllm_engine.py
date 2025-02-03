@@ -74,6 +74,14 @@ class LLMRayActor:
         else:
             return self.llm.llm_engine.model_executor._run_workers("update_weight", name, dtype, shape, empty_cache)
 
+    def reset_prefix_cache(self):
+        import vllm
+        if vllm.__version__ < "0.7.0":
+            # https://github.com/vllm-project/vllm/commit/7206ce4ce112ed117796a59045c968a6d353f691
+            logger.warning("Reset prefix cache API is available only from vLLM 0.7.0!")
+            return
+        self.llm.llm_engine.reset_prefix_cache()
+
     def stop_remote_worker_execution_loop(self):
         # Fix error for using 2 communication group
         # https://github.com/vllm-project/vllm/commit/eb6d3c264d0cd8e44dec16bca7947fbe96415ce9#diff-e1ad69e38e033accddfa5480ec808c4740eb39244d1ef51cc3407e20dde8cfd4

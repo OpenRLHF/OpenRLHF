@@ -136,6 +136,12 @@ class ActorPPOTrainer(PPOTrainer):
         return self.training_step_actor(experience)
 
     def _broadcast_to_vllm(self):
+        use_prefix_cache = getattr(self.strategy.args, "enable_prefix_caching", False)
+        cache_reset_refs = []
+        if use_prefix_cache and torch.distributed.get_rank() == 0:
+            # clear prefix cache
+            for engine in self.vllm_engines:
+                cache_reset_refs.append(engine.reset_prefix_cache.remote())
         # avoid OOM
         torch.cuda.empty_cache()
         model = self.actor.model.module
@@ -156,6 +162,8 @@ class ActorPPOTrainer(PPOTrainer):
                 if torch.distributed.get_rank() == 0:
                     torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
                     ray.get(refs)
+        if cache_reset_refs:
+            ray.get(cache_reset_refs)
         torch.distributed.barrier()
 
     def _save_checkpoint(self, args, tag, client_states):
