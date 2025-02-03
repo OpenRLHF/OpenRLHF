@@ -54,6 +54,40 @@ def extract_answer(text, data_type):
 
 answer_dict = {item["question"]: {"ref": item["answer"], "type": item["type"]} for item in dataset}
 
+def get_reward_r1_zero(sequences):
+    rewards = []
+    for sequence in sequences:
+        try:
+            q = sequence.split("\nUser: ", 1)[1]
+            q = q.split(" Show your work in great details.", 1)[0].strip()
+            answer_pattern = r'<answer>(.*?)</answer>'
+            match = re.search(answer_pattern, sequence)
+            if not match:
+                rewards.append(-1.0)
+                continue
+            a = match.group(1).strip()
+            v = answer_dict.get(q, None)
+            if v is None:
+                print(f"!!! Unmatched question: {q}")
+                rewards.append(-1.0)
+                continue
+            ref, data_type = v["ref"], v["type"]
+            hyp = extract_answer(a, data_type)
+            if hyp == "[INVALID]":
+                print(f"!!! Fail to extract answer from {a} for data_type {data_type}")
+                rewards.append(-1.0)
+                continue
+            if grade_answer(hyp, ref):
+                rewards.append(1.0)
+            else:
+                rewards.append(-0.1)
+            print((a, ref, rewards[-1]))
+        except Exception as e:
+            print(e)
+            rewards.append(-1.0)
+    return rewards
+
+
 def get_reward(sequences):
     """
     reward: 1 if the answer is correct, -1 if the answer is incorrect, -100 if the answer is invalid
@@ -95,3 +129,7 @@ class OutputPrediction(BaseModel):
 @app.post("/predict", response_model=OutputPrediction)
 async def predict(input_text: InputText):
     return {"rewards": get_reward(input_text.query)}
+
+@app.post("/predict_r1_zero", response_model=OutputPrediction)
+async def predict(input_text: InputText):
+    return {"rewards": get_reward_r1_zero(input_text.query)}
