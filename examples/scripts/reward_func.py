@@ -1,5 +1,6 @@
 import torch
 
 
-def reward_func(prompts):
-    return torch.randn(len(prompts))
+def reward_func(queries, prompts):
+    print(queries)
+    return torch.randn(len(queries))

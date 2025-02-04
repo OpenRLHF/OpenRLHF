@@ -104,6 +104,7 @@ class Samples:
     packed_seq_lens: None or (B,), the length of each sample in the packed samples.
     response_length: (B,), the number of tokens in the response.
     total_length: (B,), the total number of tokens in the sequences.
+    prompts: the prompts used to generate responses
     """
 
     sequences: torch.Tensor
@@ -113,6 +114,7 @@ class Samples:
     packed_seq_lens: Optional[torch.Tensor]
     response_length: torch.Tensor
     total_length: torch.Tensor
+    prompts: list[str]
 
 
 class NaiveExperienceMaker(ABC):
@@ -270,6 +272,7 @@ class NaiveExperienceMaker(ABC):
                 packed_seq_lens=None,
                 response_length=action_mask.float().sum(dim=-1),
                 total_length=attention_mask.float().sum(dim=-1),
+                prompts=prompts,
             )
             samples_list.append(samples)
         return samples_list
@@ -309,9 +312,11 @@ class NaiveExperienceMaker(ABC):
             # remote RM
             queries = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=False)
             if self.custom_reward_func:
-                r = self.custom_reward_func(queries).to(device=action_log_probs.device)
+                r = self.custom_reward_func(queries, samples.prompts).to(device=action_log_probs.device)
             else:
-                r = remote_rm_fn(self.remote_rm_url, queries=queries).to(device=action_log_probs.device)
+                r = remote_rm_fn(self.remote_rm_url, queries=queries, prompts=samples.prompts).to(
+                    device=action_log_probs.device
+                )
         else:
             # local RM
             r = self.reward_model(sequences, attention_mask)
@@ -572,11 +577,11 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 queries = self.tokenizer.batch_decode(sequences_list, skip_special_tokens=False)
 
             if self.custom_reward_func:
-                r = self.custom_reward_func.remote(queries)
+                r = self.custom_reward_func.remote(queries, samples.prompts)
                 r_refs.append(r)
             else:
                 for rm in self.remote_rm_url:
-                    r = remote_rm_fn_ray.remote(rm, queries=queries)
+                    r = remote_rm_fn_ray.remote(rm, queries=queries, prompts=samples.prompts)
                     r_refs.append(r)
 
         # log probs
@@ -737,6 +742,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                         packed_seq_lens=None,
                         response_length=action_mask.float().sum(dim=-1),
                         total_length=attention_mask.float().sum(dim=-1),
+                        prompts=all_prompts[i : i + self.strategy.args.micro_rollout_batch_size],
                     )
                 )
             else:
@@ -774,6 +780,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                         packed_seq_lens=packed_seq_lens,
                         response_length=response_length,
                         total_length=total_length,
+                        prompts=all_prompts[i : i + self.strategy.args.micro_rollout_batch_size],
                     )
                 )
         return samples_list
