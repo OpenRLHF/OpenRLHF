@@ -152,6 +152,7 @@ class NaiveExperienceMaker(ABC):
         # custom reward func for reinforced finetuning
         self.custom_reward_func = None
         if remote_rm_url and remote_rm_url[0].endswith(".py"):
+            print(f"Load custom `reward_func(queries, prompts)` from {remote_rm_url[0]}")
             import importlib.util
 
             spec = importlib.util.spec_from_file_location("reward_func", remote_rm_url[0])
