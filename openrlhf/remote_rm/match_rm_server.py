@@ -2,6 +2,7 @@ import os
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List
+from collections import defaultdict
 import jsonlines
 import re
 from openrlhf.remote_rm.grader import grade_answer
@@ -145,6 +146,10 @@ def get_reward_qwen_math(sequences):
             rewards.append(box_match)
         except:
             rewards.append(-1.0)
+    rewards_dict = defaultdict(int)
+    for r in rewards:
+        rewards_dict[r] += 1
+    print(f"!!! Reward Mean: {sum(rewards) / (len(rewards) + 1e-5)}, Distribution: {rewards_dict}")
     return rewards
 
 

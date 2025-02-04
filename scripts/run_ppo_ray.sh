@@ -24,7 +24,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_num_engines 2 \
    --vllm_tensor_parallel_size 1 \
    --pretrain ${POLICY} \
-   --remote_rm_url http://localhost:1234/predict_r1_zero \
+   --remote_rm_url http://localhost:1234/predict_qwen_math \
    --save_path ${OUTPUT} \
    --ckpt_path ${OUTPUT}  \
    --micro_train_batch_size 1 \
@@ -42,7 +42,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --actor_learning_rate 5e-7 \
    --critic_learning_rate 9e-6 \
    --init_kl_coef 0.01 \
-   --prompt_data /apdcephfs/share_300000800/user/lfsong/exp.tencent_chat/math/train_gsm8k_math.jsonl \
+   --prompt_data /apdcephfs/share_300000800/user/lfsong/exp.tencent_chat/math/train_gsm8k_math_add_r1_zero.jsonl \
    --apply_chat_template \
    --input_key input \
    --normalize_reward \
