@@ -45,7 +45,7 @@ class RewardModelProxy:
         self.max_length = args.max_len
         self.batch_size = args.batch_size
 
-    def get_reward(self, queries):
+    def get_reward(self, queries, prompts):
         if self.batch_size is None:
             batch_size = len(queries)
         else:
@@ -111,7 +111,8 @@ if __name__ == "__main__":
     async def get_reward(request: Request):
         data = await request.json()
         queries = data.get("query")
-        rewards = reward_model.get_reward(queries)
+        prompts = data.get("prompts")
+        rewards = reward_model.get_reward(queries, prompts)
         result = {"rewards": rewards}
         logger.info(f"Sent JSON: {result}")
         return JSONResponse(result)
