@@ -130,7 +130,7 @@ class NaiveExperienceMaker(ABC):
         prompt_max_len: int,
         kl_controller,
         strategy=None,
-        remote_rm_url: str = None,
+        remote_rm_url: list[str] = None,
         reward_fn=None,
     ) -> None:
         super().__init__()
@@ -146,6 +146,16 @@ class NaiveExperienceMaker(ABC):
         self.reward_fn = reward_fn
         self.perf_stats = None
         self.advantage_estimator = strategy.args.advantage_estimator
+
+        # custom reward func for reinforced finetuning
+        self.custom_reward_func = None
+        if remote_rm_url and remote_rm_url[0].endswith(".py"):
+            import importlib.util
+
+            spec = importlib.util.spec_from_file_location("reward_func", remote_rm_url[0])
+            reward_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(reward_module)
+            self.custom_reward_func = reward_module.reward_func
 
     # tokenizer
     def tokenize_fn(self, texts, max_length, padding=True, device=None):
@@ -298,7 +308,10 @@ class NaiveExperienceMaker(ABC):
         if self.remote_rm_url is not None:
             # remote RM
             queries = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=False)
-            r = remote_rm_fn(self.remote_rm_url, queries=queries).to(device=action_log_probs.device)
+            if self.custom_reward_func:
+                r = self.custom_reward_func(queries).to(device=action_log_probs.device)
+            else:
+                r = remote_rm_fn(self.remote_rm_url, queries=queries).to(device=action_log_probs.device)
         else:
             # local RM
             r = self.reward_model(sequences, attention_mask)
@@ -464,6 +477,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         self.vllm_engines = vllm_engines
         self.packing_samples = packing_samples
 
+        if self.custom_reward_func:
+            self.custom_reward_func = ray.remote(self.custom_reward_func)
+
     @torch.no_grad()
     def make_experience_list(self, all_prompts: Union[str, List[str]], **generate_kwargs) -> List[Experience]:
         if self.strategy.args.perf:
@@ -555,9 +571,13 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                     offset += length
                 queries = self.tokenizer.batch_decode(sequences_list, skip_special_tokens=False)
 
-            for rm in self.remote_rm_url:
-                r = remote_rm_fn_ray.remote(rm, queries=queries)
+            if self.custom_reward_func:
+                r = self.custom_reward_func.remote(queries)
                 r_refs.append(r)
+            else:
+                for rm in self.remote_rm_url:
+                    r = remote_rm_fn_ray.remote(rm, queries=queries)
+                    r_refs.append(r)
 
         # log probs
         action_log_probs = self.actor(sequences, num_actions, attention_mask, packed_seq_lens=packed_seq_lens)
