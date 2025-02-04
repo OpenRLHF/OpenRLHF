@@ -12,14 +12,15 @@ export PYTHONPATH=${MEGATRON_REPO}:$PYTHONPATH
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{"working_dir": "./ray_workdir"}' \
    -- python3 -m openrlhf.cli.train_ppo_ray \
+   --actor_num_nodes 1 \
+   --actor_num_gpus_per_node 4 \
    --ref_num_nodes 1 \
-   --ref_num_gpus_per_node 2 \
+   --ref_num_gpus_per_node 4 \
+   --colocate_actor_ref \
    --reward_num_nodes 0 \
    --reward_num_gpus_per_node 0 \
    --critic_num_nodes 1 \
    --critic_num_gpus_per_node 2 \
-   --actor_num_nodes 1 \
-   --actor_num_gpus_per_node 2 \
    --vllm_num_engines 2 \
    --vllm_tensor_parallel_size 1 \
    --pretrain ${POLICY} \
@@ -41,17 +42,18 @@ ray job submit --address="http://127.0.0.1:8265" \
    --actor_learning_rate 5e-7 \
    --critic_learning_rate 9e-6 \
    --init_kl_coef 0.01 \
-   --prompt_data /apdcephfs/share_300000800/user/lfsong/exp.tencent_chat/math/train_gsm8k_math_add_r1_zero.jsonl \
-   --input_key input_r1_zero \
+   --prompt_data /apdcephfs/share_300000800/user/lfsong/exp.tencent_chat/math/train_gsm8k_math.jsonl \
+   --apply_chat_template \
+   --input_key input \
    --normalize_reward \
    --flash_attn \
    --adam_offload \
    --gradient_checkpointing \
+   --gradient_checkpointing_use_reentrant \
    --save_steps 25 
 
    # --search_algo sampling \
    # --load_checkpoint \
-   # --colocate_actor_ref \
    # https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/OpenRLHF/develop-log.md
 
 python3 /jizhi/jizhi2/worker/trainer/occupy_heavy.py
