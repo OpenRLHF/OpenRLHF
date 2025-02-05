@@ -91,7 +91,7 @@ def blending_datasets(
                 eval_data = data[eval_split].select(range(min(max_count, len(data[eval_split]))))
             # train will contains eval? TODO
             else:
-                eval_data = train_data.select(range(min(max_count, int(len(train_data) * 0.03))))
+                eval_data = train_data.select(range(min(max_count, max(1, int(len(train_data) * 0.03)))))
             eval_data_list.append(eval_data)
 
     # merge datasets
@@ -123,3 +123,33 @@ def convert_token_to_id(token, tokenizer):
         return token[0]
     else:
         raise ValueError("token should be int or str")
+
+
+class MaxTimeManager:
+    def __init__(self, max_time: str):
+        """
+        Stops training after time interval has been reached.
+        Args:
+            max_time (str): The max time to run in HH:MM:SS format.
+        Raises:
+            ValueError: If the time interval format is invalid.
+        """
+        self.save_interval = self._parse_time_interval(max_time)
+        self.max_time_reached = False
+        self.start_time = time.time()
+
+    def _parse_time_interval(self, interval_str) -> int:
+        match = re.fullmatch(r"(\d+):([0-5]?\d):([0-5]?\d)", interval_str)
+        if not match:
+            raise ValueError(
+                f"Invalid time interval format: '{interval_str}'. Use HH:MM:SS format."
+            )
+        hours, minutes, seconds = map(int, match.groups())
+        return hours * 3600 + minutes * 60 + seconds
+
+    def check(self) -> bool:
+        current_time = time.time()
+        if (current_time - self.start_time) >= self.save_interval:
+            print(f"\n\n>>> Max time has been reached. Signalling to save a checkpoint.\n\n")
+            self.max_time_reached = True
+        return self.max_time_reached
