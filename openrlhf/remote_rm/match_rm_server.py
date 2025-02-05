@@ -125,24 +125,23 @@ def get_reward_qwen_math(sequences):
     rewards = []
     for sequence in sequences:
         try:
-            query, answer = sequence.split("<|im_start|>assistant")
+            query, model_output = sequence.split("<|im_end|>\n<|im_start|>assistant")
             question = query.split("<|im_start|>user")[1].strip()
-            answer = answer.strip()
+            model_output = model_output.strip()
 
             stop_words = ["</s>", "<|im_end|>", "<|endoftext|>"]
             for stop_word in stop_words:
-                if stop_word in answer:
-                    answer = answer.split(stop_word)[0].strip()
-            extract_answer = qwen_extract_answer(answer, data_name="math")
-
-            if qwen_math_equal_subprocess(prediction=extract_answer, reference=answer):
-                box_match = 1.0
-            else:
-                box_match = -0.5
-
-            if "boxed" not in answer:
+                if stop_word in model_output:
+                    model_output = model_output.split(stop_word)[0].strip()
+            if "boxed" not in model_output:
                 box_match = -1.0
-
+            else:
+                extract_answer = qwen_extract_answer(model_output, data_name="math")
+                answer = answer_dict.get(question, None)["ref"]
+                if qwen_math_equal_subprocess(prediction=extract_answer, reference=answer):
+                    box_match = 1.0
+                else:
+                    box_match = -0.5
             rewards.append(box_match)
         except:
             rewards.append(-1.0)
