@@ -1,4 +1,4 @@
-import os
+import traceback
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List
@@ -128,22 +128,29 @@ def get_reward_qwen_math(sequences):
             query, model_output = sequence.split("<|im_end|>\n<|im_start|>assistant")
             question = query.split("<|im_start|>user")[1].strip()
             model_output = model_output.strip()
+            if question not in answer_dict:
+                print(f"!!! Unmatched question: {question}")
+                rewards.append(-1.0)
+                continue
 
             stop_words = ["</s>", "<|im_end|>", "<|endoftext|>"]
             for stop_word in stop_words:
                 if stop_word in model_output:
                     model_output = model_output.split(stop_word)[0].strip()
+
             if "boxed" not in model_output:
+                print(f"!!! No 'boxed' found: {model_output}")
                 box_match = -1.0
             else:
                 extract_answer = qwen_extract_answer(model_output, data_name="math")
-                answer = answer_dict.get(question, None)["ref"]
+                answer = answer_dict[question]["ref"]
                 if qwen_math_equal_subprocess(prediction=extract_answer, reference=answer):
                     box_match = 1.0
                 else:
                     box_match = -0.5
             rewards.append(box_match)
-        except:
+        except Exception as e:
+            print(f"!!!Exception: {e}")
             rewards.append(-1.0)
     rewards_dict = defaultdict(int)
     for r in rewards:

@@ -44,7 +44,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --init_kl_coef 0.01 \
    --prompt_data /apdcephfs/share_300000800/user/lfsong/exp.tencent_chat/math/train_gsm8k_math_add_r1_zero.jsonl \
    --apply_chat_template \
-   --input_key input \
+   --input_key question \
    --normalize_reward \
    --flash_attn \
    --adam_offload \
