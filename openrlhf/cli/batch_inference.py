@@ -164,7 +164,7 @@ def batch_generate(args):
                 max_new_tokens=args.max_new_tokens,
                 do_sample=not args.greedy_sampling,
                 top_p=args.top_p,
-                early_stopping=True,
+                early_stopping=False,
                 num_beams=1,
                 temperature=args.temperature,
                 repetition_penalty=args.repetition_penalty,

@@ -67,7 +67,7 @@ def generate(args):
             max_length=args.max_len,
             do_sample=not args.greedy_sampling,
             top_p=args.top_p,
-            early_stopping=True,
+            early_stopping=False,
             num_beams=1,
             temperature=args.temperature,
             repetition_penalty=args.repetition_penalty,
