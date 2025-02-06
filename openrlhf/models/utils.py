@@ -82,8 +82,12 @@ def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor) -> torch.T
         )
         log_probs_labels = logits_labels - logsumexp_values  # log_softmax(x_i) = x_i - logsumexp(x)
     else:
-        log_probs = F.log_softmax(logits, dim=-1)
-        log_probs_labels = log_probs.gather(dim=-1, index=labels.unsqueeze(-1)).squeeze(-1)
+        log_probs_labels = []
+        for row_logits, row_labels in zip(logits, labels):  # loop to reduce peak mem consumption
+            row_log_probs = F.log_softmax(row_logits, dim=-1)
+            row_log_probs_labels = row_log_probs.gather(dim=-1, index=row_labels.unsqueeze(-1)).squeeze(-1)
+            log_probs_labels.append(row_log_probs_labels)
+        log_probs_labels = torch.stack(log_probs_labels)
     return log_probs_labels
 
 
