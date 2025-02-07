@@ -20,10 +20,10 @@ ray job submit --address="http://127.0.0.1:8265" \
    --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
    --save_hf_ckpt \
    --disable_ds_ckpt \
-   --micro_train_batch_size 16 \
+   --micro_train_batch_size 2 \
    --train_batch_size 128 \
-   --micro_rollout_batch_size 16 \
-   --rollout_batch_size 256 \
+   --micro_rollout_batch_size 4 \
+   --rollout_batch_size 1024 \
    --n_samples_per_prompt 1 \
    --max_epochs 1 \
    --prompt_max_len 1024 \
