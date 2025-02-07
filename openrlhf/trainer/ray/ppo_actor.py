@@ -145,11 +145,13 @@ class ActorPPOTrainer(PPOTrainer):
             # 4. broadcast weights to vllm engines
             if self.vllm_engines is not None:
                 # vLLM wakeup
-                if self.strategy.args.colocate_all_models and torch.distributed.get_rank() == 0:
-                    refs = []
-                    for engine in self.vllm_engines:
-                        refs.append(engine.wake_up.remote())
-                    ray.get(refs)
+                if self.strategy.args.colocate_all_models:
+                    torch.distributed.barrier()
+                    if torch.distributed.get_rank() == 0:
+                        refs = []
+                        for engine in self.vllm_engines:
+                            refs.append(engine.wake_up.remote())
+                        ray.get(refs)
                 torch.distributed.barrier()
                 self._broadcast_to_vllm()
 
