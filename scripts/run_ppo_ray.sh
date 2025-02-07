@@ -21,8 +21,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --reward_num_gpus_per_node 0 \
    --critic_num_nodes 1 \
    --critic_num_gpus_per_node 2 \
-   --vllm_num_engines 2 \
-   --vllm_tensor_parallel_size 1 \
+   --vllm_num_engines 1 \
+   --vllm_tensor_parallel_size 2 \
    --pretrain ${POLICY} \
    --remote_rm_url http://localhost:1234/predict_qwen_math \
    --save_path ${OUTPUT} \
