@@ -92,7 +92,7 @@ sudo pip uninstall xgboost transformer_engine flash_attn -y
 # pip install
 pip install openrlhf
 
-# vLLM加速を使用する場合（vLLM 0.6.5をインストール）
+# vLLM加速を使用する場合（vLLM 0.7.2をインストール）
 pip install openrlhf[vllm]
 # 最新のvLLMもサポートされています
 pip install openrlhf[vllm_latest]
