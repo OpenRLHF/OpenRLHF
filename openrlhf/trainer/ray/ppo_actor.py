@@ -120,14 +120,6 @@ class ActorPPOTrainer(PPOTrainer):
         torch.distributed.barrier()
         status = {}
 
-        # vLLM offload when colocate_all_models
-        if self.strategy.args.colocate_all_models and torch.distributed.get_rank() == 0:
-            refs = []
-            for engine in self.vllm_engines:
-                refs.append(engine.sleep.remote())
-            ray.get(refs)
-        torch.distributed.barrier()
-
         # 2. triger remote critic model training
         if self.critic_train_remote:
             critic_status_ref = self.critic.fit.remote()
@@ -145,7 +137,7 @@ class ActorPPOTrainer(PPOTrainer):
             # 4. broadcast weights to vllm engines
             if self.vllm_engines is not None:
                 # vLLM wakeup
-                if self.strategy.args.colocate_all_models:
+                if self.strategy.args.vllm_enable_sleep:
                     torch.distributed.barrier()
                     if torch.distributed.get_rank() == 0:
                         refs = []

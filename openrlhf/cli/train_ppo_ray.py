@@ -81,6 +81,7 @@ def train(args):
             args.actor_num_nodes * args.actor_num_gpus_per_node,
             pg if args.colocate_all_models else None,
             args.vllm_gpu_memory_utilization,
+            args.vllm_enable_sleep,
         )
 
     actor_model = PPORayActorGroup(
@@ -218,6 +219,12 @@ if __name__ == "__main__":
     parser.add_argument("--vllm_sync_with_ray", action="store_true", default=False)
     parser.add_argument("--enable_prefix_caching", action="store_true", default=False)
     parser.add_argument("--enforce_eager", action="store_true", default=False, help="Disable CUDA graph in vLLM")
+    parser.add_argument(
+        "--vllm_enable_sleep",
+        action="store_true",
+        default=False,
+        help="Enable sleep mode for vLLM when using --colocate_all_models",
+    )
     parser.add_argument(
         "--vllm_gpu_memory_utilization",
         type=float,
@@ -398,5 +405,9 @@ if __name__ == "__main__":
             args.flash_attn = True
         assert args.vllm_num_engines > 0, "Only support `--packing_samples` with vLLM."
         assert not args.pretrain_data, "`--pretrain_data` is not supported with `--packing_samples` yet."
+
+    if args.vllm_enable_sleep and not args.colocate_all_models:
+        print("Set args.vllm_enable_sleep to False when args.colocate_all_models is disabled.")
+        args.vllm_enable_sleep = False
 
     train(args)

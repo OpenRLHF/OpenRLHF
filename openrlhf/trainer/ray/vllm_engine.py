@@ -109,6 +109,7 @@ def create_vllm_engines(
     num_total_actors: int,
     shared_pg=None,
     gpu_memory_utilization=None,
+    vllm_enable_sleep=False,
 ):
     import vllm
 
@@ -161,7 +162,7 @@ def create_vllm_engines(
                 num_actors=num_actors,
                 gpu_memory_utilization=gpu_memory_utilization,
                 bundle_indices=bundle_indices if shared_pg else None,
-                enable_sleep_mode=shared_pg is not None,
+                enable_sleep_mode=vllm_enable_sleep,
             )
         )
 

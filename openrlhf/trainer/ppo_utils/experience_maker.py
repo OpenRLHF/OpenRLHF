@@ -514,7 +514,17 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         if self.vllm_engines is None:
             return super().generate_samples(all_prompts, **generate_kwargs)
 
-        return self._generate_vllm(all_prompts, **generate_kwargs)
+        # vLLM generation
+        samples = self._generate_vllm(all_prompts, **generate_kwargs)
+
+        # vLLM offload when colocate_all_models
+        if self.strategy.args.vllm_enable_sleep:
+            if torch.distributed.get_rank() == 0:
+                refs = []
+                for engine in self.vllm_engines:
+                    refs.append(engine.sleep.remote())
+                ray.get(refs)
+        return samples
 
     @torch.no_grad()
     def make_experience(self, samples: Samples) -> Experience:
