@@ -8,6 +8,7 @@ from torch.optim import Optimizer
 from tqdm import tqdm
 
 from openrlhf.models import DPOLoss
+from openrlhf.models.utils import log_probs_from_logits
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 
@@ -395,7 +396,7 @@ class DPOTrainer(ABC):
 
         # dummy token; we'll ignore the losses on these tokens later
         labels[loss_masks == False] = 0
-        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+        per_token_logps = log_probs_from_logits(logits, labels)
 
         logprobs_sums = (per_token_logps * loss_masks).sum(-1)
         logprobs_means = (per_token_logps * loss_masks).sum(-1) / loss_masks.sum(-1)
@@ -438,7 +439,7 @@ class DPOTrainer(ABC):
             assert logits.shape[:-1] == labels.shape
             labels = labels[:, 1:]
             logits = logits[:, :-1, :]
-            per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+            per_token_logps = log_probs_from_logits(logits, labels)
         else:
             rank = self.strategy.ring_attn_rank
             total_seq_len = labels.numel()
@@ -448,9 +449,8 @@ class DPOTrainer(ABC):
             if rank == self.strategy.ring_attn_size - 1:
                 # add a dummy label to the last logit
                 local_label = F.pad(local_label, (0, 1), value=0)
-            local_per_token_logps = torch.gather(
-                logits.log_softmax(-1), dim=2, index=local_label.unsqueeze(2)
-            ).squeeze(2)
+
+            local_per_token_logps = log_probs_from_logits(logits, local_label)
             # we may not need to all_gather the entire tensor, but it's easier to implement.
             # use the flash_attn all_gather so that the all_gather has correct backward.
             per_token_logps = all_gather(local_per_token_logps, self.strategy.ring_attn_group).reshape((1, -1))
