@@ -20,7 +20,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
    --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
    --save_hf_ckpt \
-   --disable_ds_ckpt \
    --micro_train_batch_size 4 \
    --train_batch_size 128 \
    --micro_rollout_batch_size 8 \
@@ -44,4 +43,4 @@ ray job submit --address="http://127.0.0.1:8265" \
    --packing_samples \
    --vllm_sync_backend gloo \
    --enforce_eager \
-   --vllm_enable_sleep \
+   --vllm_enable_sleep
