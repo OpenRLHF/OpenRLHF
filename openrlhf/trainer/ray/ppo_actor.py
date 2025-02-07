@@ -98,12 +98,8 @@ class ActorPPOTrainer(PPOTrainer):
             ]
             if use_ray:
                 import ray.util.collective as collective
-                collective.init_collective_group(
-                    world_size=world_size,
-                    rank=0,
-                    backend=backend,
-                    group_name=group_name
-                )
+
+                collective.init_collective_group(world_size=world_size, rank=0, backend=backend, group_name=group_name)
                 self._model_update_group = group_name
             else:
                 self._model_update_group = init_process_group(
@@ -122,24 +118,39 @@ class ActorPPOTrainer(PPOTrainer):
         # 1. ensure all experience makers done
         self.experience_maker.flush()
         torch.distributed.barrier()
+        status = {}
 
         # 2. triger remote critic model training
         if self.critic_train_remote:
             critic_status_ref = self.critic.fit.remote()
+            # sync for colocate_all_models
+            if self.strategy.args.colocate_all_models:
+                status.update(ray.get(critic_status_ref))
+
+        if self.strategy.args.colocate_all_models:
+            torch.distributed.barrier()
 
         # 3. actor model training
         if global_steps > self.freezing_actor_steps:
-            status = super().ppo_train(global_steps)
+            status.update(super().ppo_train(global_steps))
+            torch.cuda.empty_cache()
 
             # 4. broadcast weights to vllm engines
             if self.vllm_engines is not None:
+                # vLLM wakeup
+                if self.strategy.args.vllm_enable_sleep:
+                    torch.distributed.barrier()
+                    torch.cuda.synchronize()
+                    if torch.distributed.get_rank() == 0:
+                        refs = []
+                        for engine in self.vllm_engines:
+                            refs.append(engine.wake_up.remote())
+                        ray.get(refs)
                 torch.distributed.barrier()
                 self._broadcast_to_vllm()
-        else:
-            status = {}
 
         # 5. wait remote critic model training done
-        if self.critic_train_remote:
+        if self.critic_train_remote and not self.strategy.args.colocate_all_models:
             status.update(ray.get(critic_status_ref))
         torch.distributed.barrier()
 
@@ -155,6 +166,7 @@ class ActorPPOTrainer(PPOTrainer):
             # clear prefix cache
             for engine in self.vllm_engines:
                 cache_reset_refs.append(engine.reset_prefix_cache.remote())
+
         # avoid OOM
         torch.cuda.empty_cache()
         use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
@@ -176,6 +188,7 @@ class ActorPPOTrainer(PPOTrainer):
                 if torch.distributed.get_rank() == 0:
                     if use_ray:
                         import ray.util.collective as collective
+
                         collective.broadcast(param.data, 0, group_name=self._model_update_group)
                     else:
                         torch.distributed.broadcast(param.data, 0, group=self._model_update_group)

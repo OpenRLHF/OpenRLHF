@@ -514,13 +514,24 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         if self.vllm_engines is None:
             return super().generate_samples(all_prompts, **generate_kwargs)
 
-        return self._generate_vllm(all_prompts, **generate_kwargs)
+        # vLLM generation
+        samples = self._generate_vllm(all_prompts, **generate_kwargs)
+
+        # vLLM offload when colocate_all_models
+        if self.strategy.args.vllm_enable_sleep:
+            if torch.distributed.get_rank() == 0:
+                refs = []
+                for engine in self.vllm_engines:
+                    refs.append(engine.sleep.remote())
+                ray.get(refs)
+        return samples
 
     @torch.no_grad()
     def make_experience(self, samples: Samples) -> Experience:
         """
         Turn samples into experience by calculating logprobs, values, rewards, and kl divergence.
         """
+        args = self.strategy.args
         self.actor.eval()
         device = torch.cuda.current_device()
 
@@ -542,19 +553,23 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens
         )
 
+        if args.colocate_all_models:
+            ray.get([base_action_log_probs_ref])
+            ray.get([self.initial_model.empty_cache.remote()])
+
         # values
         if self.critic is not None:
             value_ref = self.critic.forward.remote(
                 sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens
             )
             # avoid CUDA OOM when colocate models
-            if self.strategy.args.colocate_critic_reward:
+            if args.colocate_critic_reward or args.colocate_all_models:
                 ray.get([value_ref])
                 ray.get([self.critic.empty_cache.remote()])
         else:
             value_ref = ray.put(None)
 
-        if self.strategy.args.colocate_actor_ref:
+        if args.colocate_actor_ref:
             ray.get([base_action_log_probs_ref])
             ray.get([self.initial_model.empty_cache.remote()])
 
@@ -585,6 +600,10 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                     r = remote_rm_fn_ray.remote(rm, queries=queries, prompts=samples.prompts)
                     r_refs.append(r)
 
+        if args.colocate_all_models and not self.remote_rm_url:
+            ray.get(r_refs)
+            ray.get([self.reward_model[0].empty_cache.remote()])
+
         # log probs
         action_log_probs = self.actor(sequences, num_actions, attention_mask, packed_seq_lens=packed_seq_lens)
         actor_value_rm_time = time.time() - start
@@ -602,17 +621,17 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         r = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
 
         # avoid CUDA OOM when colocate models
-        if self.strategy.args.colocate_critic_reward and not self.remote_rm_url:
+        if args.colocate_critic_reward and not self.remote_rm_url:
             ray.get([self.reward_model[0].empty_cache.remote()])
 
-        if self.strategy.args.colocate_actor_ref:
+        if args.colocate_actor_ref or args.colocate_all_models:
             torch.cuda.empty_cache()
 
         kl = compute_approx_kl(
             action_log_probs,
             base_action_log_probs,
             action_mask=action_mask,
-            use_kl_estimator_k3=self.strategy.args.use_kl_estimator_k3,
+            use_kl_estimator_k3=args.use_kl_estimator_k3,
         )
 
         if not self.packing_samples:
@@ -686,16 +705,22 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
 
         # Distribute requests to engines and collect responses to outputs
-        all_output_refs = []
+        refs = []
         batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
         for i, llm in enumerate(llms):
             prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
-            if prompt_token_ids:
-                all_output_refs.append(
-                    llm.generate.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
-                )
+            refs.append(
+                llm.add_requests.remote(rank, sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
+            )
+        ray.get(refs)
+
+        # Make sure all requests are sent.
+        torch.distributed.barrier()
 
         # Retrieve and combine results from all outputs
+        all_output_refs = []
+        for i, llm in enumerate(llms):
+            all_output_refs.append(llm.get_responses.remote(rank))
         all_outputs = sum(ray.get(all_output_refs), [])
 
         samples_list = []
