@@ -46,4 +46,3 @@ ray job submit --address="http://127.0.0.1:8265" \
 # --ref_reward_offload [Offload to CPU]
 # --remote_rm_url http://localhost:5000/get_reward
 
-# --vllm_sync_backend nccl (Only for multi-nodes with vLLM 0.6.4+ or vLLM 0.4.2)
