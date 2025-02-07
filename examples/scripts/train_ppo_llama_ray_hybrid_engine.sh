@@ -14,7 +14,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_num_engines 2 \
    --vllm_tensor_parallel_size 4 \
    --colocate_all_models \
-   --vllm_gpu_memory_utilization 0.3 \
+   --vllm_gpu_memory_utilization 0.4 \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
    --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \
    --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
@@ -43,4 +43,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    --gradient_checkpointing \
    --packing_samples \
    --vllm_sync_backend gloo \
-   --enforce_eager
+   --enforce_eager \
+   --vllm_enable_sleep \

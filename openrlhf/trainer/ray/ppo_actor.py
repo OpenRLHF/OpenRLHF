@@ -133,12 +133,14 @@ class ActorPPOTrainer(PPOTrainer):
         # 3. actor model training
         if global_steps > self.freezing_actor_steps:
             status.update(super().ppo_train(global_steps))
+            torch.cuda.empty_cache()
 
             # 4. broadcast weights to vllm engines
             if self.vllm_engines is not None:
                 # vLLM wakeup
                 if self.strategy.args.vllm_enable_sleep:
                     torch.distributed.barrier()
+                    torch.cuda.synchronize()
                     if torch.distributed.get_rank() == 0:
                         refs = []
                         for engine in self.vllm_engines:
