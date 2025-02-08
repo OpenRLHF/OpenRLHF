@@ -227,6 +227,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_ckpt_num", type=int, default=3)
     parser.add_argument("--max_ckpt_mem", type=int, default=1e8)
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
+    parser.add_argument("--max_time_per_run", type=str, default=None, help="Max time to run in DD:HH:MM:SS format.")
 
     # DeepSpeed
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
