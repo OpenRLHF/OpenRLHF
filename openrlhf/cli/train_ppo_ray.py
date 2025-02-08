@@ -271,6 +271,12 @@ if __name__ == "__main__":
     parser.add_argument("--overlap_comm", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
+    parser.add_argument(
+        "--deepspeed_enable_sleep",
+        action="store_true",
+        default=False,
+        help="Enable sleep mode for deepspeed when using --colocate_all_models",
+    )
 
     # packing samples using Flash Attention2
     parser.add_argument("--packing_samples", action="store_true", default=False)

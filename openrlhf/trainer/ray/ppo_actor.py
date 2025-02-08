@@ -344,6 +344,9 @@ class ActorModelRayActor(BasePPORole):
             is_rlhf=True,
         )
 
+        # hack for deepspeed offload
+        self.model = self.actor.model
+
         if ema_model:
             ema_model._offload = True
             self.ema_model = strategy.prepare(ema_model, is_rlhf=True)

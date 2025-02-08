@@ -59,6 +59,21 @@ class BasePPORole(DistributedTorchRayActor):
     def init_model_from_pretrained(self, *args, **kwargs):
         raise NotImplementedError()
 
+    def offload_states(self):
+        from deepspeed.runtime.zero.offload_config import OffloadStateTypeEnum
+
+        include = [
+            OffloadStateTypeEnum.optim_states,
+            OffloadStateTypeEnum.hp_params,
+            OffloadStateTypeEnum.lp_params,
+            OffloadStateTypeEnum.contiguous_grad_buffer,
+            OffloadStateTypeEnum.lp_grads,
+        ]
+        self.model.offload_states(include=include)
+
+    def reload_states(self):
+        self.model.reload_states()
+
 
 @ray.remote(num_gpus=1)
 class ReferenceModelRayActor(BasePPORole):
