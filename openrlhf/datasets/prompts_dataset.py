@@ -1,3 +1,5 @@
+import json
+
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
@@ -47,6 +49,11 @@ class PromptDataset(Dataset):
         self.prompts = []
         for data in tqdm(dataset, desc="Preprocessing data", disable=not self.strategy.is_rank_0()):
             prompt = preprocess_data(data, input_template, input_key, apply_chat_template)
+            prompt_dict = {"_prompt": prompt}
+            prompt_dict.update(data)
+            # we are encoding back to string since DeepSeek handles dict data
+            # natively in some strange way which we want to avoid
+            prompt = json.dumps(prompt_dict)
             self.prompts.append(prompt)
 
     def __len__(self):

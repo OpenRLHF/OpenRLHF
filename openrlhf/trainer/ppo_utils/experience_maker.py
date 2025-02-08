@@ -1,3 +1,4 @@
+import json
 import time
 from abc import ABC
 from copy import deepcopy
@@ -115,6 +116,7 @@ class Samples:
     response_length: torch.Tensor
     total_length: torch.Tensor
     prompts: list[str]
+    prompt_metadata: list[dict]
 
 
 class NaiveExperienceMaker(ABC):
@@ -263,7 +265,12 @@ class NaiveExperienceMaker(ABC):
         samples_list = []
         for i in range(0, len(all_prompts), args.micro_rollout_batch_size):
             prompts = all_prompts[i : i + args.micro_rollout_batch_size]
-            inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
+            decoded_prompt_dicts = [json.loads(prompt) for prompt in prompts]
+            prompt_strings = [prompt_dict["_prompt"] for prompt_dict in decoded_prompt_dicts]
+            prompt_metadata = [prompt_dict for prompt_dict in decoded_prompt_dicts]
+            for prompt_dict in prompt_metadata:
+                prompt_dict.pop("_prompt")
+            inputs = self.tokenize_fn(prompt_strings, self.prompt_max_len, device="cuda")
             sequences, attention_mask, action_mask = self.actor.generate(**inputs, **generate_kwargs)
             samples = Samples(
                 sequences=sequences,
@@ -273,7 +280,8 @@ class NaiveExperienceMaker(ABC):
                 packed_seq_lens=None,
                 response_length=action_mask.float().sum(dim=-1),
                 total_length=attention_mask.float().sum(dim=-1),
-                prompts=prompts,
+                prompts=prompt_strings,
+                prompt_metadata=prompt_metadata,
             )
             samples_list.append(samples)
         return samples_list
@@ -313,7 +321,7 @@ class NaiveExperienceMaker(ABC):
             # remote RM
             queries = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=False)
             if self.custom_reward_func:
-                r = self.custom_reward_func(queries, samples.prompts).to(device=action_log_probs.device)
+                r = self.custom_reward_func(queries, samples.prompts, samples.prompt_metadata).to(device=action_log_probs.device)
             else:
                 r = remote_rm_fn(self.remote_rm_url, queries=queries, prompts=samples.prompts).to(
                     device=action_log_probs.device
@@ -578,7 +586,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 queries = self.tokenizer.batch_decode(sequences_list, skip_special_tokens=False)
 
             if self.custom_reward_func:
-                r = self.custom_reward_func.remote(queries, samples.prompts)
+                r = self.custom_reward_func.remote(queries, samples.prompts, samples.prompt_metadata)
                 r_refs.append(r)
             else:
                 for rm in self.remote_rm_url:
@@ -683,7 +691,15 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         # Expand prompt list based on the number of samples per prompt
         all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
-        all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
+
+        decoded_prompt_dicts = [json.loads(prompt) for prompt in all_prompts]
+        prompt_strings = [prompt_dict["_prompt"] for prompt_dict in decoded_prompt_dicts]
+        prompt_metadata = [prompt_dict for prompt_dict in decoded_prompt_dicts]
+        for prompt_dict in prompt_metadata:
+            prompt_dict.pop("_prompt")
+
+
+        all_prompt_token_ids = self.tokenize_fn(prompt_strings, self.prompt_max_len, padding=False)["input_ids"]
 
         # Distribute requests to engines and collect responses to outputs
         all_output_refs = []
@@ -701,7 +717,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         samples_list = []
         for i in range(0, len(all_outputs), args.micro_rollout_batch_size):
             outputs = all_outputs[i : i + self.strategy.args.micro_rollout_batch_size]
-            prompts = all_prompts[i : i + self.strategy.args.micro_rollout_batch_size]
+            prompts = prompt_strings[i : i + self.strategy.args.micro_rollout_batch_size]
+            cur_metadata = prompt_metadata[i : i + self.strategy.args.micro_rollout_batch_size]
             if not self.packing_samples:
                 # NOTE: concat all outputs to following format:
                 #
@@ -745,6 +762,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                         response_length=action_mask.float().sum(dim=-1),
                         total_length=attention_mask.float().sum(dim=-1),
                         prompts=prompts,
+                        prompt_metadata=cur_metadata,
                     )
                 )
             else:
@@ -783,6 +801,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                         response_length=response_length,
                         total_length=total_length,
                         prompts=prompts,
+                        prompt_metadata=cur_metadata,
                     )
                 )
         return samples_list
