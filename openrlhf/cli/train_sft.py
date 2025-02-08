@@ -131,6 +131,7 @@ def train(args):
         tokenizer=tokenizer,
         save_hf_ckpt=args.save_hf_ckpt,
         disable_ds_ckpt=args.disable_ds_ckpt,
+        max_time_per_run=args.max_time_per_run,
     )
 
     trainer.fit(args, consumed_samples, num_update_steps_per_epoch)
@@ -152,6 +153,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_ckpt_num", type=int, default=3)
     parser.add_argument("--max_ckpt_mem", type=int, default=1e8)
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
+    parser.add_argument("--max_time_per_run", type=str, default=None, help="Max time per run in DD:HH:MM:SS format")
 
     # DeepSpeed
     parser.add_argument("--micro_train_batch_size", type=int, default=8, help="batch size per GPU")
