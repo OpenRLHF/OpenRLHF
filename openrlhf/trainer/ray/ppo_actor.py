@@ -17,6 +17,7 @@ from openrlhf.trainer.ppo_utils import Experience, RemoteExperienceMaker
 from openrlhf.utils import blending_datasets, get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.distributed_util import init_process_group
+from openrlhf.utils.max_time_manager import MaxTimeManager
 
 from .launcher import BasePPORole
 
@@ -28,6 +29,7 @@ class ActorPPOTrainer(PPOTrainer):
         vllm_engines: List = None,
         remote_rm_url: List[str] = None,
         critic_train_remote: bool = False,
+        max_time_per_run: str | None = None,
         **kwargs,
     ):
         """PPOTrainer for ray.
@@ -117,6 +119,28 @@ class ActorPPOTrainer(PPOTrainer):
             ray.get(refs)
 
         torch.distributed.barrier()
+
+        self.max_time_per_run = max_time_per_run
+
+        if self.max_time_per_run:
+            self.max_time_manager = MaxTimeManager(max_time_per_run)
+        else:
+            self.max_time_manager = None
+
+    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
+        if self.max_time_manager is not None and (check := self.max_time_manager.check()):
+            # We will force logging, evaluation and checkpointing to occur immediately
+            # by forcing the value of these step counter equal to global_step
+            args.logging_steps = global_step if args.logging_steps > 0 else args.logging_steps
+            args.eval_steps = global_step if args.eval_steps > 0 else args.eval_steps
+            args.save_steps = global_step if args.save_steps > 0 else args.save_steps
+
+            # Call super() to save the logs and checkpoints
+            super().save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
+            # Exit the program early
+            raise Exception(f"Max time has been reached. Signalling to save a checkpoint.")
+        else:
+            return super().save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
 
     def ppo_train(self, global_steps):
         # 1. ensure all experience makers done
@@ -421,6 +445,7 @@ class ActorModelRayActor(BasePPORole):
             eos_token_id=self.tokenizer.eos_token_id,
             save_hf_ckpt=args.save_hf_ckpt,
             disable_ds_ckpt=args.disable_ds_ckpt,
+            max_time_per_run=args.max_time_per_run,
         )
 
         # broadcast checkpoint
