@@ -152,6 +152,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_ckpt_num", type=int, default=3)
     parser.add_argument("--max_ckpt_mem", type=int, default=1e8)
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
+    parser.add_argument("--max_time_per_run", type=str, default=None, help="Max time per run in DD:HH:MM:SS format")
 
     # DeepSpeed
     parser.add_argument("--micro_train_batch_size", type=int, default=8, help="batch size per GPU")

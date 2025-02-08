@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 from openrlhf.models import GPTLMLoss
 from openrlhf.utils.distributed_sampler import DistributedSampler
+from openrlhf.utils.max_time_manager import MaxTimeManager
 
 
 class SFTTrainer(ABC):
@@ -44,6 +45,7 @@ class SFTTrainer(ABC):
         tokenizer=None,
         save_hf_ckpt: bool = False,
         disable_ds_ckpt: bool = False,
+        max_time_per_run: str | None = None,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -99,6 +101,13 @@ class SFTTrainer(ABC):
             os.makedirs(self.strategy.args.use_tensorboard, exist_ok=True)
             log_dir = os.path.join(self.strategy.args.use_tensorboard, strategy.args.wandb_run_name)
             self._tensorboard = SummaryWriter(log_dir=log_dir)
+
+        self.max_time_per_run = max_time_per_run
+
+        if self.max_time_per_run:
+            self.max_time_manager = MaxTimeManager(max_time_per_run)
+        else:
+            self.max_time_manager = None
 
     def fit(self, args, consumed_samples=0, num_update_steps_per_epoch=None):
         # get eval and save steps
@@ -217,6 +226,15 @@ class SFTTrainer(ABC):
 
     # logs/checkpoints/evaluation
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
+        if self.max_time_manager is not None and (check := self.max_time_manager.check()):
+            if check:
+                # We will force logging, evaluation and checkpointing to occur immediately
+                # by forcing the value of these step counter equal to global_step
+                args.logging_steps = global_step if args.logging_steps > 0 else args.logging_steps
+                args.eval_steps = global_step if args.eval_steps > 0 else args.eval_steps
+                args.save_steps = global_step if args.save_steps > 0 else args.save_steps
+
+
         if global_step % args.logging_steps == 0:
             # wandb
             if self._wandb is not None and self.strategy.is_rank_0():
@@ -244,6 +262,10 @@ class SFTTrainer(ABC):
             if self.save_hf_ckpt:
                 save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
                 self.strategy.save_model(self.model, self.tokenizer, save_path)
+
+        if self.max_time_manager and self.max_time_manager.check():
+            # Exit the program early
+            exit(0)
 
     def evaluate(self, eval_dataloader, steps=0):
         times = 0
