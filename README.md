@@ -46,7 +46,7 @@ More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csof
 
 - Distributed [PPO](./examples/scripts/train_ppo_llama_ray.sh) and [REINFORCE++/RLOO](./examples/scripts/train_reinforce_llama_ray.sh) implementations based on Ray.  
 - [Ray-based Reinforced Finetuning](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
-- Support [Ray-based PPO using Hybrid Engine](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh) | [Ray-based REINFORCE++ using Hybrid Engine](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh)  (`--colocate_all_models`, `--vllm_enable_sleep` and `--vllm_gpu_memory_utilization`)
+- Support Ray-based [PPO](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh) and [REINFORCE++/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh) using Hybrid Engine  (`--colocate_all_models`, `--vllm_enable_sleep` and `--vllm_gpu_memory_utilization 0.5`)
 - Full RLHF fine-tuning support for models with [over 70 billion parameters](./examples/scripts/train_ppo_llama_ray_70b.sh).  
 - Integration with vLLM for accelerated generation in RLHF tasks (`--vllm_num_engines`).  
 - Support for multiple reward models (`--reward_pretrain model1,model2...`) and remote reward models (`--remote_rm_url`).  
