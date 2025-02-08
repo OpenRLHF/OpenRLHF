@@ -27,12 +27,12 @@ class LLMRayActor:
             # stop ray from manipulating CUDA_VISIBLE_DEVICES
             # at the top-level when the distributed_executor_backend is ray.
             os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-            # every worker will use 0.2 GPU, so that we can schedule
-            # 2 instances on the same GPUs.
-            if bundle_indices is not None:
-                os.environ["VLLM_RAY_PER_WORKER_GPUS"] = "0.2"
-                os.environ["VLLM_RAY_BUNDLE_INDICES"] = ",".join(map(str, bundle_indices))
-                print(f"creating LLM with bundle_indices={bundle_indices}")
+        # every worker will use 0.2 GPU, so that we can schedule
+        # 2 instances on the same GPUs.
+        if bundle_indices is not None:
+            os.environ["VLLM_RAY_PER_WORKER_GPUS"] = "0.2"
+            os.environ["VLLM_RAY_BUNDLE_INDICES"] = ",".join(map(str, bundle_indices))
+            print(f"creating LLM with bundle_indices={bundle_indices}")
 
         # Number of actors that will send prompt to this engine
         self.num_actors = kwargs.pop("num_actors")
@@ -127,12 +127,9 @@ def create_vllm_engines(
         if shared_pg is not None:
             assert vllm.__version__ >= "0.7.2", "Only vllm >= 0.7.2 supports hybrid engine"
 
-            if tensor_parallel_size == 1:
-                num_gpus = 0.2
             scheduling_strategy = PlacementGroupSchedulingStrategy(
                 placement_group=shared_pg,
                 placement_group_capture_child_tasks=True,
-                placement_group_bundle_index=-1 if tensor_parallel_size > 1 else i,
             )
             bundle_indices = np.arange(i * tensor_parallel_size, (i + 1) * tensor_parallel_size).tolist()
         elif tensor_parallel_size > 1:
