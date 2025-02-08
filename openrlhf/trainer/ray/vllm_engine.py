@@ -26,7 +26,7 @@ class LLMRayActor:
             # a hack to make the script work.
             # stop ray from manipulating CUDA_VISIBLE_DEVICES
             # at the top-level when the distributed_executor_backend is ray.
-            del os.environ["CUDA_VISIBLE_DEVICES"]
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
             # every worker will use 0.2 GPU, so that we can schedule
             # 2 instances on the same GPUs.
             if bundle_indices is not None:
@@ -132,7 +132,7 @@ def create_vllm_engines(
             scheduling_strategy = PlacementGroupSchedulingStrategy(
                 placement_group=shared_pg,
                 placement_group_capture_child_tasks=True,
-                placement_group_bundle_index=-1 if tensor_parallel_size > 1 else i
+                placement_group_bundle_index=-1 if tensor_parallel_size > 1 else i,
             )
             bundle_indices = np.arange(i * tensor_parallel_size, (i + 1) * tensor_parallel_size).tolist()
         elif tensor_parallel_size > 1:
