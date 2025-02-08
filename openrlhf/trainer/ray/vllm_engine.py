@@ -22,10 +22,11 @@ def get_all_env_variables():
 class LLMRayActor:
 
     def __init__(self, *args, bundle_indices: list = None, **kwargs):
-        # a hack to make the script work.
-        # stop ray from manipulating CUDA_VISIBLE_DEVICES
-        # at the top-level
-        del os.environ["CUDA_VISIBLE_DEVICES"]
+        if kwargs.get("distributed_executor_backend") == "ray":
+            # a hack to make the script work.
+            # stop ray from manipulating CUDA_VISIBLE_DEVICES
+            # at the top-level when the distributed_executor_backend is ray.
+            del os.environ["CUDA_VISIBLE_DEVICES"]
         # every worker will use 0.2 GPU, so that we can schedule
         # 2 instances on the same GPUs.
         if bundle_indices is not None:
@@ -116,6 +117,8 @@ def create_vllm_engines(
     assert vllm.__version__ >= "0.7.0", "OpenRLHF only supports vllm >= 0.7.0"
 
     vllm_engines = []
+    num_gpus = int(tensor_parallel_size == 1)
+    distributed_executor_backend = "uni" if tensor_parallel_size == 1 else "ray"
     for i in range(num_engines):
         bundle_indices = None
         scheduling_strategy = None
@@ -129,7 +132,7 @@ def create_vllm_engines(
                 placement_group_capture_child_tasks=True,
             )
             bundle_indices = np.arange(i * tensor_parallel_size, (i + 1) * tensor_parallel_size).tolist()
-        else:
+        elif tensor_parallel_size > 1:
             bundles = [{"GPU": 1, "CPU": 1}] * tensor_parallel_size
             pg = placement_group(bundles)
             ray.get(pg.ready())
@@ -146,7 +149,7 @@ def create_vllm_engines(
         vllm_engines.append(
             LLMRayActor.options(
                 num_cpus=0,
-                num_gpus=0,
+                num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
             ).remote(
                 model=pretrain,
@@ -154,7 +157,7 @@ def create_vllm_engines(
                 worker_cls="openrlhf.trainer.ray.vllm_worker_wrap.WorkerWrap",
                 tensor_parallel_size=tensor_parallel_size,
                 seed=seed + i,
-                distributed_executor_backend="ray",
+                distributed_executor_backend=distributed_executor_backend,
                 max_model_len=max_model_len,
                 enable_prefix_caching=enable_prefix_caching,
                 dtype="bfloat16",
