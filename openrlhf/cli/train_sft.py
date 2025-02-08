@@ -131,6 +131,7 @@ def train(args):
         tokenizer=tokenizer,
         save_hf_ckpt=args.save_hf_ckpt,
         disable_ds_ckpt=args.disable_ds_ckpt,
+        max_time_per_run=args.max_time_per_run,
     )
 
     trainer.fit(args, consumed_samples, num_update_steps_per_epoch)
