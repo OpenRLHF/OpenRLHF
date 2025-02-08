@@ -549,6 +549,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         if self.vllm_engines is None:
             return super().generate_samples(all_prompts, all_labels, **generate_kwargs)
 
+        # DeepSpeed offload when colocate_all_models
+
         # vLLM generation
         samples = self._generate_vllm(all_prompts, all_labels, **generate_kwargs)
 
