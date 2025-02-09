@@ -56,6 +56,11 @@ class ActorPPOTrainer(PPOTrainer):
             packing_samples=self.strategy.args.packing_samples,
         )
 
+        backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
+        self.use_cuda_ipc = False
+        if backend == "nccl" and self.strategy.args.colocate_all_models:
+            self.use_cuda_ipc = True
+
         # Create torch group with deepspeed rank 0 and all vllm ranks
         # to update vllm engine's weights after each training stage.
         #
@@ -69,7 +74,7 @@ class ActorPPOTrainer(PPOTrainer):
         # For ZeRO-3:
         #   1. AllGather paramters to rank 0
         #   2. Broadcast parameters from rank 0 to all vllm engines
-        if self.vllm_engines is not None and torch.distributed.get_rank() == 0:
+        if self.vllm_engines is not None and not self.use_cuda_ipc and torch.distributed.get_rank() == 0:
             master_address = ray._private.services.get_node_ip_address()
             with socket.socket() as sock:
                 sock.bind(("", 0))
@@ -81,7 +86,6 @@ class ActorPPOTrainer(PPOTrainer):
             )
             world_size = vllm_num_engines * vllm_tensor_parallel_size + 1
 
-            backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
             use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
             group_name = "openrlhf"
             refs = [
@@ -167,34 +171,63 @@ class ActorPPOTrainer(PPOTrainer):
             for engine in self.vllm_engines:
                 cache_reset_refs.append(engine.reset_prefix_cache.remote())
 
-        # avoid OOM
         torch.cuda.empty_cache()
-        use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
         model = self.actor.model.module
         count, num_params = 0, len(list(model.named_parameters()))
         for name, param in model.named_parameters():
             count += 1  # empty_cache at last param
 
-            # Fire all vllm engines for broadcast
-            if torch.distributed.get_rank() == 0:
-                shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
-                refs = [
-                    engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
-                    for engine in self.vllm_engines
-                ]
-
-            # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
-            with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
+            # broadcast
+            if not self.use_cuda_ipc:
+                use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
+                # Fire all vllm engines for broadcast
                 if torch.distributed.get_rank() == 0:
-                    if use_ray:
-                        import ray.util.collective as collective
+                    shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
+                    refs = [
+                        engine.update_weight.remote(
+                            name, dtype=param.dtype, shape=shape, empty_cache=count == num_params
+                        )
+                        for engine in self.vllm_engines
+                    ]
 
-                        collective.broadcast(param.data, 0, group_name=self._model_update_group)
-                    else:
-                        torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
-                    ray.get(refs)
+                # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
+                with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
+                    if torch.distributed.get_rank() == 0:
+                        if use_ray:
+                            import ray.util.collective as collective
+
+                            collective.broadcast(param.data, 0, group_name=self._model_update_group)
+                        else:
+                            torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
+                        ray.get(refs)
+            # CUDA IPC
+            else:
+                from torch.multiprocessing.reductions import reduce_tensor
+
+                # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
+                with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
+                    weight = param.data
+                    ipc_handle = reduce_tensor(weight)
+
+                engine = self.vllm_engines[
+                    torch.distributed.get_rank() // self.strategy.args.vllm_tensor_parallel_size
+                ]
+                ipc_rank = torch.distributed.get_rank() % self.strategy.args.vllm_tensor_parallel_size
+
+                shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
+                refs = engine.update_weight_cuda_ipc.remote(
+                    name,
+                    dtype=param.dtype,
+                    shape=shape,
+                    ipc_handle=ipc_handle,
+                    ipc_rank=ipc_rank,
+                    empty_cache=count == num_params,
+                )
+                ray.get(refs)
+
         if cache_reset_refs:
             ray.get(cache_reset_refs)
+        torch.cuda.empty_cache()
         torch.distributed.barrier()
 
     def _save_checkpoint(self, args, tag, client_states):
