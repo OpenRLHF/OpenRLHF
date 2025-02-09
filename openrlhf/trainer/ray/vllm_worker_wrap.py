@@ -63,6 +63,12 @@ class WorkerWrap(Worker):
                 print(f"update weight: {name}, dtype: {dtype}, shape: {shape}")
 
             assert dtype == self.model_config.dtype, f"mismatch dtype: src {dtype}, dst {self.model_config.dtype}"
-            func = ipc_handle[0]
-            weight = func(*ipc_handle[1]).to(self.device)
-            self.model_runner.model.load_weights(weights=[(name, weight)])
+            device_id = self.device.index
+            func, args = ipc_handle
+            list_args = list(args)
+            # the key is to change device id to the current device id
+            # in case two processes have different CUDA_VISIBLE_DEVICES
+            list_args[6] = device_id
+            tensor = func(*list_args)
+            self.model_runner.model.load_weights(weights=tensor)
+            torch.cuda.synchronize()
