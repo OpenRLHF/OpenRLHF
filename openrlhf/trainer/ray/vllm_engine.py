@@ -89,6 +89,7 @@ def create_vllm_engines(
     enable_prefix_caching: bool,
     enforce_eager: bool,
     max_model_len: int,
+    gpu_memory_utilization: float = 0.8,
 ):
     vllm_engines = []
     # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES will always be set in current context,
@@ -115,6 +116,7 @@ def create_vllm_engines(
                 num_cpus=1,
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
+                gpu_memory_utilization=gpu_memory_utilization,
             ).remote(
                 pretrain,
                 noset_visible_devices=noset_visible_devices,
