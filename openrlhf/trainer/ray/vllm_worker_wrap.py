@@ -69,6 +69,6 @@ class WorkerWrap(Worker):
             # the key is to change device id to the current device id
             # in case two processes have different CUDA_VISIBLE_DEVICES
             list_args[6] = device_id
-            tensor = func(*list_args)
-            self.model_runner.model.load_weights(weights=tensor)
+            weight = func(*list_args)
+            self.model_runner.model.load_weights(weights=[(name, weight)])
             torch.cuda.synchronize()
