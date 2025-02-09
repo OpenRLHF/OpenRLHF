@@ -19,6 +19,7 @@ from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.distributed_util import init_process_group
 
 from .launcher import BasePPORole
+from .utils import get_physical_gpu_id
 
 
 class ActorPPOTrainer(PPOTrainer):
@@ -206,13 +207,13 @@ class ActorPPOTrainer(PPOTrainer):
 
                 # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
                 with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                    weight = param.data
+                    weight = param.data.clone()
                     ipc_handle = reduce_tensor(weight)
 
                 engine = self.vllm_engines[
                     torch.distributed.get_rank() // self.strategy.args.vllm_tensor_parallel_size
                 ]
-                ipc_rank = torch.distributed.get_rank() % self.strategy.args.vllm_tensor_parallel_size
+                ipc_gpu_id = get_physical_gpu_id()
 
                 shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
                 refs = engine.update_weight_cuda_ipc.remote(
@@ -220,14 +221,14 @@ class ActorPPOTrainer(PPOTrainer):
                     dtype=param.dtype,
                     shape=shape,
                     ipc_handle=ipc_handle,
-                    ipc_rank=ipc_rank,
+                    ipc_gpu_id=ipc_gpu_id,
                     empty_cache=count == num_params,
                 )
                 ray.get(refs)
+                del weight
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)
-        torch.cuda.empty_cache()
         torch.distributed.barrier()
 
     def _save_checkpoint(self, args, tag, client_states):

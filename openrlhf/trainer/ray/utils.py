@@ -20,3 +20,11 @@ def ray_noset_visible_devices(env_vars=os.environ):
         "RAY_EXPERIMENTAL_NOSET_ONEAPI_DEVICE_SELECTOR",
     ]
     return any(env_vars.get(env_var) for env_var in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST)
+
+
+def get_physical_gpu_id():
+    import torch
+
+    device = torch.cuda.current_device()
+    props = torch.cuda.get_device_properties(device)
+    return str(props.uuid)

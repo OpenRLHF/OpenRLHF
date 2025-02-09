@@ -51,9 +51,9 @@ class LLMRayActor:
     def update_weight(self, name, dtype, shape, empty_cache=False):
         return self.llm.collective_rpc("update_weight", args=(name, dtype, shape, empty_cache))
 
-    def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handle, ipc_rank, empty_cache=False):
+    def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handle, ipc_gpu_id, empty_cache=False):
         return self.llm.collective_rpc(
-            "update_weight_cuda_ipc", args=(name, dtype, shape, ipc_handle, ipc_rank, empty_cache)
+            "update_weight_cuda_ipc", args=(name, dtype, shape, ipc_handle, ipc_gpu_id, empty_cache)
         )
 
     def reset_prefix_cache(self):

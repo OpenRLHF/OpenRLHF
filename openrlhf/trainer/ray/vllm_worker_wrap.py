@@ -3,6 +3,7 @@ from vllm.worker.worker import Worker
 
 from openrlhf.utils.distributed_util import init_process_group
 from openrlhf.utils.logging_utils import init_logger
+from .utils import get_physical_gpu_id
 
 logger = init_logger(__name__)
 
@@ -56,8 +57,8 @@ class WorkerWrap(Worker):
         # if empty_cache:
         #     torch.cuda.empty_cache()
 
-    def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handle=None, ipc_rank=None, empty_cache=False):
-        if ipc_rank == torch.distributed.get_rank():
+    def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handle=None, ipc_gpu_id=None, empty_cache=False):
+        if ipc_gpu_id == get_physical_gpu_id():
             if torch.distributed.get_rank() == 0:
                 print(f"update weight: {name}, dtype: {dtype}, shape: {shape}")
 
