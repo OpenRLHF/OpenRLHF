@@ -132,6 +132,11 @@ def create_vllm_engines(
                 placement_group_capture_child_tasks=True,
             )
             bundle_indices = np.arange(i * tensor_parallel_size, (i + 1) * tensor_parallel_size).tolist()
+            # corner case for TP =1
+            if tensor_parallel_size == 1:
+                num_gpus = 0.2
+                bundle_indices = None
+        # Distributed RLHF
         elif tensor_parallel_size > 1:
             bundles = [{"GPU": 1, "CPU": 1}] * tensor_parallel_size
             pg = placement_group(bundles)
