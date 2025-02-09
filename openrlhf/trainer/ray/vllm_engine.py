@@ -127,15 +127,17 @@ def create_vllm_engines(
         if shared_pg is not None:
             assert vllm.__version__ >= "0.7.2", "Only vllm >= 0.7.2 supports hybrid engine"
 
-            scheduling_strategy = PlacementGroupSchedulingStrategy(
-                placement_group=shared_pg,
-                placement_group_capture_child_tasks=True,
-            )
-            bundle_indices = np.arange(i * tensor_parallel_size, (i + 1) * tensor_parallel_size).tolist()
-            # corner case for TP =1
-            if tensor_parallel_size == 1:
+            if tensor_parallel_size > 1:
+                scheduling_strategy = PlacementGroupSchedulingStrategy(
+                    placement_group=shared_pg,
+                    placement_group_capture_child_tasks=True,
+                )
+                bundle_indices = np.arange(i * tensor_parallel_size, (i + 1) * tensor_parallel_size).tolist()
+            else:
                 num_gpus = 0.2
-                bundle_indices = None
+                scheduling_strategy = PlacementGroupSchedulingStrategy(
+                    placement_group=shared_pg, placement_group_capture_child_tasks=True, placement_group_bundle_index=i
+                )
         # Distributed RLHF
         elif tensor_parallel_size > 1:
             bundles = [{"GPU": 1, "CPU": 1}] * tensor_parallel_size
