@@ -44,9 +44,9 @@ More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csof
 
 ## Features
 
-- Distributed [PPO](./examples/scripts/train_ppo_llama_ray.sh) and [REINFORCE++/RLOO](./examples/scripts/train_reinforce_llama_ray.sh) implementations based on Ray.  
+- Distributed [PPO](./examples/scripts/train_ppo_llama_ray.sh) and [REINFORCE++/RLOO/REINFORCE++-baseline](./examples/scripts/train_reinforce_llama_ray.sh) implementations based on Ray.  
 - [Ray-based Reinforced Finetuning](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
-- Support Ray-based [PPO](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh) and [REINFORCE++/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh) using Hybrid Engine  (`--colocate_all_models`, `--vllm_enable_sleep` and `--vllm_gpu_memory_utilization 0.5`)
+- Support Ray-based [PPO](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh) and [REINFORCE++/RLOO/REINFORCE++-baseline](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh) using Hybrid Engine  (`--colocate_all_models`, `--vllm_enable_sleep` and `--vllm_gpu_memory_utilization 0.5`)
 - Full RLHF fine-tuning support for models with [over 70 billion parameters](./examples/scripts/train_ppo_llama_ray_70b.sh).  
 - Integration with vLLM for accelerated generation in RLHF tasks (`--vllm_num_engines`).  
 - Support for multiple reward models (`--reward_pretrain model1,model2...`) and remote reward models (`--remote_rm_url`).  
@@ -345,8 +345,8 @@ ray job submit --address="http://127.0.0.1:8265" \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
 
-# Support REINFORCE++  | RLOO
-# --advantage_estimator reinforce | rloo
+# Support REINFORCE++  | RLOO | REINFORCE++-baseline
+# --advantage_estimator reinforce | rloo | reinforce_baseline
 
 # Support remote reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
@@ -359,7 +359,9 @@ ray job submit --address="http://127.0.0.1:8265" \
 > You can also use ``setup_commands`` to let Ray automatically deploy the environment, such as `--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`.
 
 > [!NOTE]
-> RLOO in OPENRLHF is a modification based on REINFORCE++, differing from the original version.
+> RLOO and REINFORCE++-baseline in OPENRLHF are a modification based on REINFORCE++.
+> 1. RLOO in OpenRLHF uses the `per-token KL reward` and the `PPO loss function`.
+> 2. REINFORCE++-baseline uses the mean reward of multiple samples from the same prompt as the baseline.
 
 > [!NOTE]
 > If you you encounter an error related to index out of range when deepspeed sets up the GPU devices, you can try to set the environment variable [`RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES`](openrlhf/trainer/ray/utils.py) as a workaround.
