@@ -234,6 +234,7 @@ class ActorPPOTrainer(PPOTrainer):
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)
+        torch.cuda.empty_cache()
         torch.distributed.barrier()
 
     def _save_checkpoint(self, args, tag, client_states):
