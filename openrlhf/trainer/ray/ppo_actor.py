@@ -231,6 +231,7 @@ class ActorPPOTrainer(PPOTrainer):
                             for engine in self.vllm_engines
                         ]
                         ray.get(refs)
+                    torch.distributed.barrier()
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)
