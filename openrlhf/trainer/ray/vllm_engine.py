@@ -131,6 +131,7 @@ def create_vllm_engines(
                 scheduling_strategy = PlacementGroupSchedulingStrategy(
                     placement_group=shared_pg,
                     placement_group_capture_child_tasks=True,
+                    placement_group_bundle_index=i * tensor_parallel_size
                 )
                 bundle_indices = np.arange(i * tensor_parallel_size, (i + 1) * tensor_parallel_size).tolist()
             else:
