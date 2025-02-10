@@ -232,6 +232,7 @@ class ActorPPOTrainer(PPOTrainer):
                         ]
                         ray.get(refs)
                     torch.distributed.barrier()
+                    torch.cuda.synchronize()
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)
