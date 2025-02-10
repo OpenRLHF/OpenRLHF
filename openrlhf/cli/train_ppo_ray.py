@@ -70,14 +70,14 @@ def train(args):
                 f"Set args.vllm_gpu_memory_utilization to {args.vllm_gpu_memory_utilization} for colocate_all_models!"
             )
 
-        assert (
-            args.actor_num_nodes * args.actor_num_gpus_per_node
-            >= args.vllm_num_engines * args.vllm_tensor_parallel_size
-        ), (
-            f"actor_num_nodes * actor_num_gpus_per_node must be greater than or equal to "
-            f"vllm_num_engines * vllm_tensor_parallel_size, got {args.actor_num_nodes * args.actor_num_gpus_per_node} "
-            f"and {args.vllm_num_engines * args.vllm_tensor_parallel_size}"
-        )
+            assert (
+                args.actor_num_nodes * args.actor_num_gpus_per_node
+                == args.vllm_num_engines * args.vllm_tensor_parallel_size
+            ), (
+                f"actor_num_nodes * actor_num_gpus_per_node must be equal to "
+                f"vllm_num_engines * vllm_tensor_parallel_size, got {args.actor_num_nodes * args.actor_num_gpus_per_node} "
+                f"and {args.vllm_num_engines * args.vllm_tensor_parallel_size}"
+            )
 
         vllm_engines = create_vllm_engines(
             args.vllm_num_engines,
