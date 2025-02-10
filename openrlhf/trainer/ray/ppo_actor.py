@@ -210,22 +210,27 @@ class ActorPPOTrainer(PPOTrainer):
                     weight = param.data.detach()
                     ipc_handle = reduce_tensor(weight)
 
-                    engine = self.vllm_engines[
-                        torch.distributed.get_rank() // self.strategy.args.vllm_tensor_parallel_size
-                    ]
-                    ipc_gpu_id = get_physical_gpu_id()
+                ipc_handle = {get_physical_gpu_id(): ipc_handle}
+                ipc_handle_list = [None] * torch.distributed.get_world_size()
+                torch.distributed.all_gather_object(ipc_handle_list, ipc_handle)
+
+                if torch.distributed.get_rank() == 0:
+                    ipc_handles = {}
+                    for d in ipc_handle_list:
+                        ipc_handles.update(d)
 
                     shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
-                    refs = engine.update_weight_cuda_ipc.remote(
-                        name,
-                        dtype=param.dtype,
-                        shape=shape,
-                        ipc_handle=ipc_handle,
-                        ipc_gpu_id=ipc_gpu_id,
-                        empty_cache=count == num_params,
-                    )
+                    refs = [
+                        engine.update_weight_cuda_ipc.remote(
+                            name,
+                            dtype=param.dtype,
+                            shape=shape,
+                            ipc_handle=ipc_handles,
+                            empty_cache=count == num_params,
+                        )
+                        for engine in self.vllm_engines
+                    ]
                     ray.get(refs)
-                    del weight
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)

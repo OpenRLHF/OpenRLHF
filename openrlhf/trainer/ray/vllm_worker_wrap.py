@@ -57,18 +57,19 @@ class WorkerWrap(Worker):
         # if empty_cache:
         #     torch.cuda.empty_cache()
 
-    def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handle=None, ipc_gpu_id=None, empty_cache=False):
-        if ipc_gpu_id == get_physical_gpu_id():
-            if torch.distributed.get_rank() == 0:
-                print(f"update weight: {name}, dtype: {dtype}, shape: {shape}")
+    def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handles=None, empty_cache=False):
+        if torch.distributed.get_rank() == 0:
+            print(f"update weight: {name}, dtype: {dtype}, shape: {shape}")
 
-            assert dtype == self.model_config.dtype, f"mismatch dtype: src {dtype}, dst {self.model_config.dtype}"
-            device_id = self.device.index
-            func, args = ipc_handle
-            list_args = list(args)
-            # the key is to change device id to the current device id
-            # in case two processes have different CUDA_VISIBLE_DEVICES
-            list_args[6] = device_id
-            weight = func(*list_args)
-            self.model_runner.model.load_weights(weights=[(name, weight)])
-            torch.cuda.synchronize()
+        assert dtype == self.model_config.dtype, f"mismatch dtype: src {dtype}, dst {self.model_config.dtype}"
+
+        handle = ipc_handles[get_physical_gpu_id()]
+        device_id = self.device.index
+        func, args = handle
+        list_args = list(args)
+        # the key is to change device id to the current device id
+        # in case two processes have different CUDA_VISIBLE_DEVICES
+        list_args[6] = device_id
+        weight = func(*list_args)
+        self.model_runner.model.load_weights(weights=[(name, weight)])
+        torch.cuda.synchronize()
