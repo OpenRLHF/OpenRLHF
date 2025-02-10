@@ -225,7 +225,7 @@ class ActorPPOTrainer(PPOTrainer):
                             name,
                             dtype=param.dtype,
                             shape=shape,
-                            ipc_handle=ipc_handles,
+                            ipc_handles=ipc_handles,
                             empty_cache=count == num_params,
                         )
                         for engine in self.vllm_engines
