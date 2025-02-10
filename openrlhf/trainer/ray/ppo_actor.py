@@ -207,30 +207,30 @@ class ActorPPOTrainer(PPOTrainer):
 
                 # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
                 with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                    weight = param.data.detach()
+                    weight = param.data.clone()
                     ipc_handle = reduce_tensor(weight)
 
-                ipc_handle = {get_physical_gpu_id(): ipc_handle}
-                ipc_handle_list = [None] * torch.distributed.get_world_size()
-                torch.distributed.all_gather_object(ipc_handle_list, ipc_handle)
+                    ipc_handle = {get_physical_gpu_id(): ipc_handle}
+                    ipc_handle_list = [None] * torch.distributed.get_world_size()
+                    torch.distributed.all_gather_object(ipc_handle_list, ipc_handle)
 
-                if torch.distributed.get_rank() == 0:
-                    ipc_handles = {}
-                    for d in ipc_handle_list:
-                        ipc_handles.update(d)
+                    if torch.distributed.get_rank() == 0:
+                        ipc_handles = {}
+                        for d in ipc_handle_list:
+                            ipc_handles.update(d)
 
-                    shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
-                    refs = [
-                        engine.update_weight_cuda_ipc.remote(
-                            name,
-                            dtype=param.dtype,
-                            shape=shape,
-                            ipc_handles=ipc_handles,
-                            empty_cache=count == num_params,
-                        )
-                        for engine in self.vllm_engines
-                    ]
-                    ray.get(refs)
+                        shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
+                        refs = [
+                            engine.update_weight_cuda_ipc.remote(
+                                name,
+                                dtype=param.dtype,
+                                shape=shape,
+                                ipc_handles=ipc_handles,
+                                empty_cache=count == num_params,
+                            )
+                            for engine in self.vllm_engines
+                        ]
+                        ray.get(refs)
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)
