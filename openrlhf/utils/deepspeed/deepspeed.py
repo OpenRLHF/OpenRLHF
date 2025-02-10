@@ -57,6 +57,7 @@ class DeepspeedStrategy(ABC):
         self.seed = seed
         self.max_norm = max_norm
         self.adam_offload = getattr(args, "adam_offload", False)
+        self.param_offload = getattr(args, "param_offload", False)
         self.zpg = getattr(args, "zpg", 1)
         self.grad_accum_dtype = getattr(args, "grad_accum_dtype", None)
         # overlap_comm
@@ -221,7 +222,7 @@ class DeepspeedStrategy(ABC):
     def get_ds_train_config(self, is_actor):
         # DS Config
         ds_config = get_train_ds_config(
-            offload=False,
+            offload=self.param_offload,
             adam_offload=self.adam_offload,
             stage=self.stage,
             bf16=self.bf16,

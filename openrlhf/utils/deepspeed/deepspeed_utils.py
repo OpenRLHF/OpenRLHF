@@ -16,10 +16,12 @@ def get_train_ds_config(
     grad_accum_dtype=None,
     overlap_comm=False,
 ):
-    device = "cpu" if offload else "none"
     zero_opt_dict = {
         "stage": stage,
-        "offload_param": {"device": device},
+        "offload_param": {
+            "device": "cpu" if offload else "none",
+            "pin_memory": True,
+        },
         "offload_optimizer": {
             "device": "cpu" if adam_offload else "none",
             "pin_memory": True,
