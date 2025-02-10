@@ -191,6 +191,9 @@ if __name__ == "__main__":
         default="prm_%s" % datetime.now().strftime("%m%dT%H:%M"),
     )
 
+    # ModelScope parameters
+    parser.add_argument("--use_ms", action="store_true", default=False)
+
     args = parser.parse_args()
 
     # Add positive token and negative token to reward_tokens and remove duplicates
@@ -200,5 +203,11 @@ if __name__ == "__main__":
             f"the first token in reward_tokens ({args.reward_tokens[0]}) should be the positive token "
             "and the second token should be the negative token."
         )
+
+    if args.use_ms:
+        from modelscope.utils.hf_util import patch_hub
+
+        # Patch hub to download models from modelscope to speed up.
+        patch_hub()
 
     train(args)
