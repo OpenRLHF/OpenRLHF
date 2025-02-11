@@ -299,14 +299,9 @@ class NaiveExperienceMaker(ABC):
                 raise Exception(f"Unknown search algorithm {search_algo}")
             _all_trajs += [seq[len(prompt):] for seq in sequences]
             _all_prompts += [prompt] * len(sequences)
-        # shuffle prompt and traj
-        shuffle_indices = list(range(len(_all_prompts)))
-        random.shuffle(shuffle_indices)
-        _all_prompts = [_all_prompts[i] for i in shuffle_indices]
-        _all_trajs = [_all_trajs[i] for i in shuffle_indices]
-        # we should control the batch size, elif raise exception
-        # it is hard to control, an easy way is to get enough trajs and ensure the requirements can be met
-        for i in range(0, min(len(all_prompts), len(_all_prompts)), args.micro_rollout_batch_size):
+        
+        # antewang: make sure len(_all_prompts) == k * len(all_prompts), k can be any integer > 0
+        for i in range(0, len(_all_prompts), args.micro_rollout_batch_size):
             prompts = _all_prompts[i: i + args.micro_rollout_batch_size]
             trajs = _all_trajs[i: i + args.micro_rollout_batch_size]
             prompt_ids = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
@@ -729,6 +724,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             min_tokens=kwargs.get("min_new_tokens", 1),
             skip_special_tokens=kwargs.get("skip_special_tokens", False),
             include_stop_str_in_output=True,
+            stop=kwargs.get("stop_strings", False),
+            logprobs=5,
         )
 
         # Expand prompt list based on the number of samples per prompt

@@ -108,10 +108,13 @@ def qwen_math_equal_subprocess(prediction, reference,  timeout_seconds=10):
     # 添加超时处理
     p.join(timeout=timeout_seconds)  # 等待进程完成，最多等待 timeout_seconds 秒
 
-    # 如果进程还在运行，则终止它并返回 False
     if p.is_alive():
-        p.terminate()
-        p.join()  # 确保进程被完全清理
+        p.terminate()  # 发送 SIGTERM
+        p.join(timeout=1)  # 等待1秒
+        if p.is_alive():
+            print("force kill")
+            p.kill()  # 发送 SIGKILL
+            p.join()
         return False
 
     # 如果进程正常完成，获取结果

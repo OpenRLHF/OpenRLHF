@@ -48,6 +48,8 @@ def train(args):
 
     # configure strategy
     strategy = get_strategy(args)
+    strategy.search_algo = args.search_algo
+    strategy.stop_strings = args.stop_strings
 
     # if colocated, create placement group for actor and ref model explicitly.
     pg = None
@@ -181,6 +183,9 @@ if __name__ == "__main__":
     # custom
     parser.add_argument("--search_algo", type=str, default="sampling",
                         choices=['sampling', 'beamsearch', 'litesearch', 'bestofn'])
+    def comma_separated_list(value):
+        return value.split(',')
+    parser.add_argument("--stop_strings", type=comma_separated_list, default=[])
 
     # Ray and vLLM
     parser.add_argument("--ref_num_nodes", type=int, default=1, help="number of nodes for reference")
