@@ -360,7 +360,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 > [!NOTE]
 > RLOO and REINFORCE++-baseline in OPENRLHF are a modification based on REINFORCE++.
-> 1. RLOO in OpenRLHF modifies the original version by incorporating the `per-token KL reward` and utilizing the `PPO Clip loss`..
+> 1. RLOO in OpenRLHF modifies the original version by incorporating the `per-token KL reward` and utilizing the `PPO-clip loss`.
 > 2. REINFORCE++-baseline uses the mean reward of multiple samples from the same prompt as the baseline.
 
 > [!NOTE]
