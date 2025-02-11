@@ -362,9 +362,11 @@ ray job submit --address="http://127.0.0.1:8265" \
 > 您也可以通过 ``setup_commands`` 让 Ray 自动初始化环境, 比如 `--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`
 
 > [!NOTE]
-> OpenRLHF 中的 RLOO 和 REINFORCE++-baseline 是基于 REINFORCE++ 的修改版本。  
-> 1. OpenRLHF 中的 RLOO 在原版的基础上采用了 **per token KL reward** 和 **PPO-clip loss**。  
-> 2. REINFORCE++-baseline 使用了相同 prompt 多次采样的 reward 均值作为 baseline。
+> OpenRLHF 中的 RLOO 和 REINFORCE++-baseline 是基于 REINFORCE++ 的修改版本:
+> - REINFORCE++ 在 REINFORCE 的基础上集成了 PPO 的关键优化技术，所以不依赖于 Value Network
+> - REINFORCE++-baseline 使用了相同 prompt 多次采样的 reward 均值作为 baseline
+> - OpenRLHF 中的 RLOO 在原版的基础上采用了 **per token KL reward** 和 **PPO-clip loss** 
+
 
 > [!NOTE]
 > 如果您由于某种原因，在 deepspeed 设置显卡设备时遇到与索引超出范围相关的错误，您可以尝试设置环境变量 [`RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES`](openrlhf/trainer/ray/utils.py)。

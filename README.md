@@ -359,9 +359,11 @@ ray job submit --address="http://127.0.0.1:8265" \
 > You can also use ``setup_commands`` to let Ray automatically deploy the environment, such as `--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`.
 
 > [!NOTE]
-> RLOO and REINFORCE++-baseline in OPENRLHF are a modification based on REINFORCE++.
-> 1. RLOO in OpenRLHF modifies the original version by incorporating the `per-token KL reward` and utilizing the `PPO-clip loss`.
-> 2. REINFORCE++-baseline uses the mean reward of multiple samples from the same prompt as the baseline.
+> RLOO and REINFORCE++-baseline in OPENRLHF are a modification based on REINFORCE++:
+> - REINFORCE++ integrates key optimization techniques from PPO while eliminating the need for a critic network.
+> - REINFORCE++-baseline uses the mean reward of multiple samples from the same prompt as the baseline.
+> - RLOO in OpenRLHF modifies the original version by incorporating the `per-token KL reward` and utilizing the `PPO-clip loss`.
+
 
 > [!NOTE]
 > If you you encounter an error related to index out of range when deepspeed sets up the GPU devices, you can try to set the environment variable [`RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES`](openrlhf/trainer/ray/utils.py) as a workaround.

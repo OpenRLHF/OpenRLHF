@@ -372,7 +372,7 @@ class NaiveExperienceMaker(ABC):
             rewards = rewards.flatten().to(device="cpu").chunk(len(experiences))
             return experiences, rewards
         elif args.advantage_estimator == "reinforce_baseline":
-            # This is a modified version of GRPO, with / std and K3 kl loss removed.
+            # REINFORCE++-baseline removed the / std and K3 kl loss in GRPO.
             # `/ std` is not needed in RL variance reduction theory, and `k3 KL` has a larger variance than `k1 KL` under a categorical distribution.
             rewards = torch.cat([experience.info["reward"] for experience in experiences])
             rewards = rewards.reshape(-1, args.n_samples_per_prompt).to(device="cuda")
