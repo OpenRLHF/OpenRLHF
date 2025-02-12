@@ -33,7 +33,7 @@ def _validate_args(args):
 
     if args.vllm_num_engines > 0:
         assert (
-            actor_world_size % args.vllm_num_engines == 0
+            actor_world_size % args.vllm_num_engines == 0 or args.vllm_num_engines % actor_world_size == 0
         ), f"actor_world_size must be divisible by vllm_num_engines, got {actor_world_size} and {args.vllm_num_engines}"
 
     if args.critic_pretrain:
