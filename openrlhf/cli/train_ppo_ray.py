@@ -101,12 +101,15 @@ def train(args):
         num_gpus_per_actor=0.2 if pg else 1,
     )
 
-    ref_model = PPORayActorGroup(
-        args.ref_num_nodes,
-        args.ref_num_gpus_per_node,
-        ReferenceModelRayActor,
-        pg=pg,
-        num_gpus_per_actor=0.2 if pg else 1,
+    if args.init_kl_coef == 0:
+        ref_model = None
+    else:
+        ref_model = PPORayActorGroup(
+            args.ref_num_nodes,
+            args.ref_num_gpus_per_node,
+            ReferenceModelRayActor,
+            pg=pg,
+            num_gpus_per_actor=0.2 if pg else 1,
     )
 
     if not args.colocate_all_models:
@@ -153,7 +156,8 @@ def train(args):
 
     # init reference/reward/actor model
     refs = []
-    refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.pretrain))
+    if ref_model is not None:
+        refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.pretrain))
     refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.pretrain))
     if not args.remote_rm_url:
         for reward_model, reward_pretrain in zip(reward_models, reward_pretrains):
