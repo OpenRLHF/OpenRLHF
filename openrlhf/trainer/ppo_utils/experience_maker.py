@@ -650,37 +650,22 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 action_mask=action_mask,
                 use_kl_estimator_k3=args.use_kl_estimator_k3,
             )
-
-            if not self.packing_samples:
-                kl_mean = masked_mean(kl, action_mask, dim=-1)
-            else:
-                # convert tensor into list of tensors so that it's easier to manipulate
-                # within dataset.
-                sequences = unpacking_samples(sequences, packed_seq_lens)
-                attention_mask = None
-                action_log_probs = unpacking_samples(action_log_probs, num_actions)
-
-                kl = unpacking_samples(kl, num_actions)
-                kl_mean = torch.tensor([each_kl.mean() for each_kl in kl], device=device)
-
         else:
-            if not self.packing_samples:
-                kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
-                kl_mean = torch.zeros(action_mask.shape[0], dtype=action_log_probs.dtype, device=device)
-            else:
-                # convert tensor into list of tensors so that it's easier to manipulate
-                # within dataset.
-                sequences = unpacking_samples(sequences, packed_seq_lens)
-                attention_mask = None
+            kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
 
-                kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
-                kl = unpacking_samples(kl, num_actions)
-                kl_mean = torch.zeros(len(num_actions), dtype=action_log_probs.dtype, device=device)
+        if not self.packing_samples:
+            kl_mean = masked_mean(kl, action_mask, dim=-1)
+        else:
+            # convert tensor into list of tensors so that it's easier to manipulate
+            # within dataset.
+            sequences = unpacking_samples(sequences, packed_seq_lens)
+            attention_mask = None
+            action_log_probs = unpacking_samples(action_log_probs, num_actions)
+            if value is not None:
+                value = unpacking_samples(value, num_actions)
 
-                action_log_probs = unpacking_samples(action_log_probs, num_actions)
-
-        if value is not None and self.packing_samples:
-            value = unpacking_samples(value, num_actions)
+            kl = unpacking_samples(kl, num_actions)
+            kl_mean = torch.tensor([each_kl.mean() for each_kl in kl], device=device)
 
         info = {
             "kl": kl_mean,
