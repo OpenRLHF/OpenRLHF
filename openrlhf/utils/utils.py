@@ -84,15 +84,16 @@ def blending_datasets(
             train_data = data[train_split].select(range(min(max_count, len(data[train_split]))))
         else:
             train_data = data.select(range(min(max_count, len(data))))
-        train_data_list.append(train_data)
 
         if return_eval:
             if eval_split and eval_split in data:
                 eval_data = data[eval_split].select(range(min(max_count, len(data[eval_split]))))
-            # train will contains eval? TODO
             else:
-                eval_data = train_data.select(range(min(max_count, int(len(train_data) * 0.03))))
+                train_data, eval_data = train_data.train_test_split(
+                    test_size=min(max_count, int(len(train_data) * 0.03))
+                ).values()
             eval_data_list.append(eval_data)
+        train_data_list.append(train_data)
 
     # merge datasets
     if strategy.is_rank_0():
