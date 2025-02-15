@@ -1,0 +1,10 @@
+[theme]
+base="dark"
+backgroundColor="#171719"
+secondaryBackgroundColor="#202025"
+primaryColor="#AAAAAD"
+font="serif"
+textColor="#ceced2"
+
+[server]
+websocket_ping_timeout = 300

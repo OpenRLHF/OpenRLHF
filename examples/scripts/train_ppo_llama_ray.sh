@@ -40,7 +40,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --flash_attn \
    --gradient_checkpointing \
    --load_checkpoint \
-   --use_wandb {wandb_token}
+   --use_tensorboard /openrlhf/logs/tensorboard/llama3-8b-rlhf \
+   --use_rl_logging_board /openrlhf/logs/rl_logging_board/llama3-8b-rlhf
 
 # --runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}' [Install deps]
 # --ref_reward_offload [Offload to CPU]
