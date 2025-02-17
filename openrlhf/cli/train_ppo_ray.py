@@ -32,9 +32,19 @@ def _validate_args(args):
     assert args.zero_stage != 3 or args.vllm_num_engines > 0, f"ZeRO-3 is only supported when vLLM enabled"
 
     if args.vllm_num_engines > 0:
-        assert (
-            actor_world_size % args.vllm_num_engines == 0 or args.vllm_num_engines % actor_world_size == 0
-        ), f"actor_world_size must be divisible by vllm_num_engines, got {actor_world_size} and {args.vllm_num_engines}"
+        if args.colocate_all_models:
+            assert (
+                args.actor_num_nodes * args.actor_num_gpus_per_node
+                == args.vllm_num_engines * args.vllm_tensor_parallel_size
+            ), (
+                f"actor_num_nodes * actor_num_gpus_per_node must be equal to "
+                f"vllm_num_engines * vllm_tensor_parallel_size, got {args.actor_num_nodes * args.actor_num_gpus_per_node} "
+                f"and {args.vllm_num_engines * args.vllm_tensor_parallel_size}"
+            )
+        else:
+            assert (
+                actor_world_size % args.vllm_num_engines == 0 or args.vllm_num_engines % actor_world_size == 0
+            ), f"actor_world_size must be divisible by vllm_num_engines, got {actor_world_size} and {args.vllm_num_engines}"
 
     if args.critic_pretrain:
         critic_world_size = args.critic_num_nodes * args.critic_num_gpus_per_node
@@ -64,20 +74,6 @@ def train(args):
     vllm_engines = None
     if args.vllm_num_engines is not None and args.vllm_num_engines > 0:
         max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
-        if args.colocate_all_models and args.vllm_gpu_memory_utilization >= 0.9:
-            args.vllm_gpu_memory_utilization = 0.4
-            print(
-                f"Set args.vllm_gpu_memory_utilization to {args.vllm_gpu_memory_utilization} for colocate_all_models!"
-            )
-
-            assert (
-                args.actor_num_nodes * args.actor_num_gpus_per_node
-                == args.vllm_num_engines * args.vllm_tensor_parallel_size
-            ), (
-                f"actor_num_nodes * actor_num_gpus_per_node must be equal to "
-                f"vllm_num_engines * vllm_tensor_parallel_size, got {args.actor_num_nodes * args.actor_num_gpus_per_node} "
-                f"and {args.vllm_num_engines * args.vllm_tensor_parallel_size}"
-            )
 
         vllm_engines = create_vllm_engines(
             args.vllm_num_engines,
