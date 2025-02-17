@@ -200,6 +200,7 @@ class Actor(nn.Module):
         else:
             # convert attention_mask to position_ids
             if ring_attn_group is not None:
+                labels = sequences
                 sequences, attention_mask, position_ids = convert_ring_attn_params(
                     sequences, attention_mask, packed_seq_lens, ring_attn_group
                 )
@@ -216,27 +217,29 @@ class Actor(nn.Module):
             assert return_output
             return output
 
-        log_probs = log_probs_from_logits(output["logits"][:, :-1, :], sequences[:, 1:])
-
         if not self.packing_samples:
             action_log_probs = log_probs[:, -num_actions:]
         else:
             if ring_attn_group is not None and logps_allgather:
-                # padding for every ring attn rank
+                # padding for each ring attn rank
                 local_labels = F.pad(sequences, (0, 1), value=0)
                 local_per_token_logps = log_probs_from_logits(output["logits"], local_labels[:, 1:])
+                rank = dist.get_rank(ring_attn_group)
+                ring_attn_size = dist.get_world_size(ring_attn_group)
+                total_seq_len = labels.numel()
+                local_seq_len = total_seq_len // ring_attn_size
+                local_slice = slice(rank * local_seq_len + 1, (rank + 1) * local_seq_len + 1)
+                local_label = labels[:, local_slice]
+                if rank == ring_attn_size - 1:
+                    # add a dummy label to the last logit
+                    local_label = F.pad(local_label, (0, 1), value=0)
+                local_per_token_logps = torch.gather(
+                    output["logits"].log_softmax(-1), dim=2, index=local_label.unsqueeze(2)
+                ).squeeze(2)
                 per_token_logps = all_gather(local_per_token_logps, ring_attn_group).reshape((1, -1))
                 log_probs = per_token_logps[:, :-1]
             else:
                 log_probs = log_probs_from_logits(output["logits"][:, :-1, :], sequences[:, 1:])
-            assert isinstance(num_actions, list) and len(num_actions) == len(packed_seq_lens)
-            action_log_probs = []
-            offset = 0
-            for num_action, seq_len in zip(num_actions, packed_seq_lens):
-                start, end = max(0, offset + seq_len - num_action - 1), offset + seq_len - 1
-                action_log_probs.append(log_probs[:, start:end])
-                offset += seq_len
-            action_log_probs = torch.cat(action_log_probs, dim=1)
 
         if return_output:
             return (action_log_probs, output)

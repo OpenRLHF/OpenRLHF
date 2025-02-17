@@ -185,7 +185,8 @@ class NaiveExperienceMaker(ABC):
                 samples_list = self.generate_samples(all_prompts, **generate_kwargs)
                 dist.broadcast_object_list(samples_list, src=dist.get_rank(), group=self.strategy.ring_attn_group)
             else:
-                samples_list = [None] * (args.rollout_batch_size // args.micro_rollout_batch_size // args.vllm_num_engines)
+                world_size = torch.distributed.get_world_size() // args.ring_attn_size
+                samples_list = [None] * (args.rollout_batch_size // world_size // args.micro_rollout_batch_size)
                 dist.broadcast_object_list(samples_list, src=self.strategy.ring_attn_ranks[0], group=self.strategy.ring_attn_group)
         else:
             samples_list = self.generate_samples(all_prompts, **generate_kwargs)
@@ -655,8 +656,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         from vllm import SamplingParams
 
         # round-robin load balance
-        rank = torch.distributed.get_rank()
-        world_size = torch.distributed.get_world_size()
+        rank = torch.distributed.get_rank() // self.strategy.ring_attn_size
+        world_size = torch.distributed.get_world_size() // self.strategy.ring_attn_size
 
         # Select LLM engines: assign each rank an engine, or cycle through engines if world_size < engine_count
         if len(self.vllm_engines) <= world_size:

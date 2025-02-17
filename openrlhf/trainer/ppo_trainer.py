@@ -260,7 +260,7 @@ class PPOTrainer(ABC):
         dataloader = DataLoader(
             self.replay_buffer,
             batch_size=self.replay_buffer.sample_batch_size,
-            shuffle=False,
+            shuffle=False if self.strategy.ring_attn_group is not None else True,
             drop_last=True,
             pin_memory=self.dataloader_pin_memory,
             collate_fn=self.replay_buffer.collate_fn,
@@ -340,6 +340,15 @@ class PPOTrainer(ABC):
             attention_mask = torch.cat(
                 [torch.full_like(s, i + 1) for i, s in enumerate(experience.sequences)], dim=0
             ).unsqueeze(0)
+            if self.strategy.ring_attn_group is not None:
+                pad_len = (self.strategy.ring_attn_size - sequences.shape[-1] % self.strategy.ring_attn_size) % self.strategy.ring_attn_size
+                padded = torch.tensor([1] * pad_len, device=sequences.device, dtype=sequences.dtype).unsqueeze(0)
+                sequences = torch.cat([sequences, padded], dim=1)
+                advantages = torch.cat([advantages, advantages[:, -1] * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=-1)
+                old_action_log_probs = torch.cat([old_action_log_probs, old_action_log_probs[:, -1] * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=1)
+                attention_mask = torch.cat([attention_mask, (len(sequences) + 1) * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=-1)
+                num_actions[-1] += pad_len
+                packed_seq_lens[-1] += pad_len
         else:
             sequences = experience.sequences
             old_action_log_probs = experience.action_log_probs
@@ -428,6 +437,16 @@ class PPOTrainer(ABC):
             attention_mask = torch.cat(
                 [torch.full_like(s, i + 1) for i, s in enumerate(experience.sequences)], dim=0
             ).unsqueeze(0)
+            if self.strategy.ring_attn_group is not None:
+                pad_len = (self.strategy.ring_attn_size - sequences.shape[-1] % self.strategy.ring_attn_size) % self.strategy.ring_attn_size
+                padded = torch.tensor([1] * pad_len, device=sequences.device, dtype=sequences.dtype).unsqueeze(0)
+                sequences = torch.cat([sequences, padded], dim=-1)
+                attention_mask = torch.cat([attention_mask, (len(sequences) + 1) * torch.ones(1, pad_len, device=attention_mask.device, dtype=attention_mask.dtype)], dim=-1)
+                old_values = torch.cat([old_values, old_values[:, -1] * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=-1)
+                returns = torch.cat([returns, returns[:, -1] * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=-1)
+                num_actions[-1] += pad_len
+                packed_seq_lens[-1] += pad_len
+
         else:
             sequences = experience.sequences
             old_values = experience.values
