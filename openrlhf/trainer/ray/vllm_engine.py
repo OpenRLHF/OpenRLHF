@@ -1,4 +1,5 @@
 import os
+from typing import Any, List
 
 import numpy as np
 import ray
@@ -131,7 +132,7 @@ def create_vllm_engines(
                 scheduling_strategy = PlacementGroupSchedulingStrategy(
                     placement_group=shared_pg,
                     placement_group_capture_child_tasks=True,
-                    placement_group_bundle_index=i * tensor_parallel_size
+                    placement_group_bundle_index=i * tensor_parallel_size,
                 )
                 bundle_indices = np.arange(i * tensor_parallel_size, (i + 1) * tensor_parallel_size).tolist()
             else:
@@ -178,3 +179,30 @@ def create_vllm_engines(
         )
 
     return vllm_engines
+
+
+def batch_vllm_engine_call(engines: List[Any], method_name: str, *args, rank_0_only: bool = True, **kwargs):
+    """
+    Batch call a method on multiple vLLM engines.
+
+    Args:
+        engines: List of vLLM engine instances
+        method_name: Name of the method to call
+        rank_0_only: Only execute on rank 0 if True
+        *args: Positional arguments to pass to the method
+        **kwargs: Keyword arguments to pass to the method
+
+    Returns:
+        List of results from ray.get() if on rank 0, None otherwise
+    """
+    import torch
+
+    if rank_0_only and torch.distributed.get_rank() != 0:
+        return None
+
+    refs = []
+    for engine in engines:
+        method = getattr(engine, method_name)
+        refs.append(method.remote(*args, **kwargs))
+
+    return ray.get(refs)

@@ -14,6 +14,7 @@ from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.models import Actor
 from openrlhf.trainer import PPOTrainer
 from openrlhf.trainer.ppo_utils import Experience, RemoteExperienceMaker
+from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils import blending_datasets, get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.distributed_util import init_process_group
@@ -146,11 +147,7 @@ class ActorPPOTrainer(PPOTrainer):
                 if self.strategy.args.vllm_enable_sleep:
                     torch.distributed.barrier()
                     torch.cuda.synchronize()
-                    if torch.distributed.get_rank() == 0:
-                        refs = []
-                        for engine in self.vllm_engines:
-                            refs.append(engine.wake_up.remote())
-                        ray.get(refs)
+                    batch_vllm_engine_call(self.vllm_engines, "wake_up")
                 torch.distributed.barrier()
                 self._broadcast_to_vllm()
 

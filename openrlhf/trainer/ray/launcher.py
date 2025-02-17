@@ -63,11 +63,11 @@ class BasePPORole(DistributedTorchRayActor):
         from deepspeed.runtime.zero.offload_config import OffloadStateTypeEnum
 
         include = [
-            OffloadStateTypeEnum.optim_states,
+            # OffloadStateTypeEnum.optim_states,
+            # OffloadStateTypeEnum.lp_grads,
             OffloadStateTypeEnum.hp_params,
             OffloadStateTypeEnum.lp_params,
             OffloadStateTypeEnum.contiguous_grad_buffer,
-            OffloadStateTypeEnum.lp_grads,
         ]
         self.model.offload_states(include=include)
 
