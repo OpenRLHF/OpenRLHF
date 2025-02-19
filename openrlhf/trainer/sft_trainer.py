@@ -41,6 +41,7 @@ class SFTTrainer(ABC):
         pretrain_mode: bool = False,
         batch_size: int = 1,
         max_epochs: int = 2,
+        max_time_per_run: str = None,
         tokenizer=None,
         save_hf_ckpt: bool = False,
         disable_ds_ckpt: bool = False,
@@ -60,6 +61,8 @@ class SFTTrainer(ABC):
         self.args = strategy.args
         self.save_hf_ckpt = save_hf_ckpt
         self.disable_ds_ckpt = disable_ds_ckpt
+        self.max_time_per_run = max_time_per_run
+        self.max_time_manager = MaxTimeManager(self.max_time_per_run) if self.max_time_per_run else None
 
         self.loss_fn = GPTLMLoss(ring_attn_group=self.strategy.ring_attn_group)
 
@@ -217,6 +220,14 @@ class SFTTrainer(ABC):
 
     # logs/checkpoints/evaluation
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
+        if self.max_time_manager and self.max_time_manager.check():
+            # We will force logging, evaluation and checkpointing to occur immediately
+            # by forcing the value of these step counter equal to global_step
+            # Since the job will end after this function, we don't need to worry about the original values
+            args.logging_steps = global_step if args.logging_steps > 0 else args.logging_steps
+            args.eval_steps = global_step if args.eval_steps > 0 else args.eval_steps
+            args.save_steps = global_step if args.save_steps > 0 else args.save_steps
+
         if global_step % args.logging_steps == 0:
             # wandb
             if self._wandb is not None and self.strategy.is_rank_0():
@@ -244,6 +255,10 @@ class SFTTrainer(ABC):
             if self.save_hf_ckpt:
                 save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
                 self.strategy.save_model(self.model, self.tokenizer, save_path)
+
+        if self.max_time_manager and self.max_time_manager.check():
+            # Exit the program early
+            exit(0)
 
     def evaluate(self, eval_dataloader, steps=0):
         times = 0
