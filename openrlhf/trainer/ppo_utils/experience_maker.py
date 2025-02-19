@@ -19,8 +19,6 @@ from openrlhf.search_algorithm.beamsearch_efficient import search as beamsearch
 from openrlhf.search_algorithm.litesearch import search as litesearch
 from openrlhf.search_algorithm.bestofn import search as bestofn
 
-from openrlhf.search_algorithm.bestofn_ray import search as bestofn_ray
-
 import random
 
 logger = init_logger(__name__)
@@ -292,11 +290,11 @@ class NaiveExperienceMaker(ABC):
         _all_prompts = []
         for prompt in all_prompts:
             if search_algo == "beamsearch":
-                sequences = beamsearch(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
+                sequences = beamsearch(prompt, self.tokenizer, self.actor, self.critic, **generate_kwargs)
             elif search_algo == "litesearch":
-                sequences = litesearch(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
+                sequences = litesearch(prompt, self.tokenizer, self.actor, self.critic, **generate_kwargs)
             elif search_algo == "bestofn":
-                sequences = bestofn(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
+                sequences = bestofn(prompt, self.tokenizer, self.actor, self.critic, **generate_kwargs)
             else:
                 raise Exception(f"Unknown search algorithm {search_algo}")
             _all_trajs += [seq[len(prompt):] for seq in sequences]

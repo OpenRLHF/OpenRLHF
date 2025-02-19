@@ -183,6 +183,7 @@ if __name__ == "__main__":
     # custom
     parser.add_argument("--search_algo", type=str, default="sampling",
                         choices=['sampling', 'beamsearch', 'litesearch', 'bestofn'])
+    parser.add_argument("--search_budget", type=int, default=8, help="number of nodes for reference")
     def comma_separated_list(value):
         return value.split(',')
     parser.add_argument("--stop_strings", type=comma_separated_list, default=[])
