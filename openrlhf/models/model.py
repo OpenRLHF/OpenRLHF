@@ -3,16 +3,19 @@ from typing import Optional, Union
 import deepspeed
 import torch
 import torch.nn as nn
-from flash_attn.utils.distributed import all_gather
 from peft import LoraConfig, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
+from transformers.utils import is_flash_attn_2_available
 
 from openrlhf.utils.logging_utils import init_logger
 
 from .ring_attn_utils import convert_ring_attn_params
 from .utils import reset_position_ids
+
+if is_flash_attn_2_available():
+    from flash_attn.utils.distributed import all_gather
 
 logger = init_logger(__name__)
 
