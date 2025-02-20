@@ -58,9 +58,13 @@ class PolicyLoss(nn.Module):
     Policy Loss for PPO
     """
 
-    def __init__(self, clip_eps: float = 0.2) -> None:
+    def __init__(self, clip_eps: float = 0.2, ring_attn_group=None) -> None:
         super().__init__()
         self.clip_eps = clip_eps
+        self.ring_attn_group = ring_attn_group
+        if self.ring_attn_group:
+            self.ring_attn_rank = dist.get_rank(self.ring_attn_group)
+            self.ring_attn_world_size = dist.get_world_size(self.ring_attn_group)
 
     def forward(
         self,
@@ -82,9 +86,10 @@ class ValueLoss(nn.Module):
     Value Loss for PPO
     """
 
-    def __init__(self, clip_eps: float = None) -> None:
+    def __init__(self, clip_eps: float = None, ring_attn_group=None) -> None:
         super().__init__()
         self.clip_eps = clip_eps
+        self.ring_attn_group = ring_attn_group
 
     def forward(
         self,
