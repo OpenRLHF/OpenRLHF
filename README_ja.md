@@ -58,7 +58,7 @@ OpenRLHFは、Ray、DeepSpeed、およびHF Transformersを基盤とした高性
 - FlashAttention2の統合（`--flash_attn`）。
 - QLoRA（`--load_in_4bit`）および[LoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--lora_rank`、`--target_modules`）のサポート。
 - HuggingFaceの`tokenizer.apply_chat_template`との互換性（`--apply_chat_template`および`--input_key`）。
-- Wandb（`--use_wandb`）およびTensorBoard（`--use_tensorboard`）によるログ記録のサポート。
+- Wandb（`--use_wandb`）, SwanLab（`--use_swanlab`）およびTensorBoard（`--use_tensorboard`）によるログ記録のサポート。
 - チェックポイントの回復機能（`--load_checkpoint`および`--save_steps`）。
 - [DPO](./examples/scripts/train_llama_slurm.sh)および[Ray PPO](./examples/scripts/train_ppo_llama_ray_slurm.sh)などのマルチノードトレーニングスクリプトを提供。
 
