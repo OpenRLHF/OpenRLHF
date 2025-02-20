@@ -164,7 +164,7 @@ def batch_generate(args):
                 max_new_tokens=args.max_new_tokens,
                 do_sample=not args.greedy_sampling,
                 top_p=args.top_p,
-                early_stopping=True,
+                early_stopping=False,
                 num_beams=1,
                 temperature=args.temperature,
                 repetition_penalty=args.repetition_penalty,
@@ -354,6 +354,9 @@ if __name__ == "__main__":
     parser.add_argument("--enable_csft", action="store_true", default=False)
     parser.add_argument("--csft_prompt", type=str, default="<rm_score>: 5.00", help="Conditional SFT prompt")
 
+    # ModelScope parameters
+    parser.add_argument("--use_ms", action="store_true", default=False)
+
     args = parser.parse_args()
     if args.eval_task and args.eval_task == "generate":
         batch_generate(args)
@@ -363,3 +366,9 @@ if __name__ == "__main__":
         batch_rm_inference(args)
     else:
         print("Invalid or missing '--eval_task' argument. Please specify either 'generate' or 'rm'.")
+
+    if args.use_ms:
+        from modelscope.utils.hf_util import patch_hub
+
+        # Patch hub to download models from modelscope to speed up.
+        patch_hub()

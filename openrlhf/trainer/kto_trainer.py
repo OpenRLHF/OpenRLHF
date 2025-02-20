@@ -6,6 +6,7 @@ from torch.optim import Optimizer
 from tqdm import tqdm
 
 from openrlhf.models import KTOLoss
+from openrlhf.models.utils import log_probs_from_logits
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 
@@ -110,6 +111,7 @@ class KTOTrainer(ABC):
         consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train_batch_size)
 
         epoch_bar = tqdm(range(start_epoch, self.epochs), desc="Train epoch", disable=not self.strategy.is_rank_0())
+        loss_sum = 0
         for epoch in range(start_epoch, self.epochs):
             if isinstance(self.train_dataloader.sampler, DistributedSampler):
                 self.train_dataloader.sampler.set_epoch(
@@ -124,7 +126,6 @@ class KTOTrainer(ABC):
 
             self.model.train()
             self.ref_model.eval()
-            loss_mean = 0
 
             # train
             for input_ids, attention_mask, labels, prompt_ids_lens in self.train_dataloader:
@@ -159,13 +160,11 @@ class KTOTrainer(ABC):
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-                loss_mean = loss_mean * 0.9 + 0.1 * loss.item()
-
+                loss_sum += loss.item()
                 logs_dict = {
                     "kto_loss": loss.item(),
                     "chosen_reward": chosen_rewards.mean().item() if len(chosen_rewards) != 0 else 0,
                     "reject_reward": rejected_rewards.mean().item() if len(rejected_rewards) != 0 else 0,
-                    "loss_mean": loss_mean,
                     "lr": self.scheduler.get_last_lr()[0],
                 }
                 logs_dict["kl"] = KL.item()
@@ -175,6 +174,8 @@ class KTOTrainer(ABC):
 
                 # logs/checkpoints/evaluation
                 if step % self.strategy.accumulated_gradient == 0:
+                    logs_dict["loss_mean"] = loss_sum / self.strategy.accumulated_gradient
+                    loss_sum = 0
                     global_step = step // self.strategy.accumulated_gradient
                     client_states = {"consumed_samples": global_step * args.train_batch_size}
                     self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
@@ -335,7 +336,7 @@ class KTOTrainer(ABC):
 
         # dummy token; we'll ignore the losses on these tokens later
         labels[~loss_masks] = 0
-        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+        per_token_logps = log_probs_from_logits(logits, labels)
 
         if average_log_prob:
             return (per_token_logps * loss_masks).sum(-1) / loss_masks.sum(-1)

@@ -63,6 +63,7 @@ def train(args):
         pretrain_mode=args.pretrain_mode,
         input_template=args.input_template,
         multiple_of=args.ring_attn_size,
+        multiturn=args.multiturn,
     )
     eval_dataset = SFTDataset(
         eval_data,
@@ -72,6 +73,7 @@ def train(args):
         pretrain_mode=args.pretrain_mode,
         input_template=args.input_template,
         multiple_of=args.ring_attn_size,
+        multiturn=args.multiturn,
     )
 
     # prepare dataloader
@@ -127,6 +129,8 @@ def train(args):
         batch_size=args.train_batch_size,
         max_epochs=args.max_epochs,
         tokenizer=tokenizer,
+        save_hf_ckpt=args.save_hf_ckpt,
+        disable_ds_ckpt=args.disable_ds_ckpt,
     )
 
     trainer.fit(args, consumed_samples, num_update_steps_per_epoch)
@@ -140,6 +144,8 @@ if __name__ == "__main__":
     # Checkpoint
     parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--save_steps", type=int, default=-1)
+    parser.add_argument("--save_hf_ckpt", action="store_true", default=False)
+    parser.add_argument("--disable_ds_ckpt", action="store_true", default=False)
     parser.add_argument("--logging_steps", type=int, default=1)
     parser.add_argument("--eval_steps", type=int, default=-1)
     parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_sft")
@@ -201,6 +207,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_probs", type=str, default="1.0", help="sampling probs for datasets")
     parser.add_argument("--train_split", type=str, default="train", help="train split of the HF dataset")
     parser.add_argument("--eval_split", type=str, default="test", help="test split of the dataset")
+    parser.add_argument("--multiturn", action="store_true", default=False, help="Use compacted multiturn dataset")
 
     parser.add_argument("--input_key", type=str, default="input", help="JSON dataset key")
     parser.add_argument("--output_key", type=str, default=None, help="JSON dataset key")
@@ -226,7 +233,13 @@ if __name__ == "__main__":
     # TensorBoard parameters
     parser.add_argument("--use_tensorboard", type=str, default=None, help="TensorBoard logging path")
 
+    # ModelScope parameters
+    parser.add_argument("--use_ms", action="store_true", default=False)
+
     args = parser.parse_args()
+
+    if args.multiturn:
+        assert args.apply_chat_template, "apply_chat_template must be enabled when using multiturn format"
 
     if args.input_template and "{}" not in args.input_template:
         print("[Warning] {} not in args.input_template, set to None")
@@ -242,8 +255,13 @@ if __name__ == "__main__":
         print("[Warning] Please --flash_attn to accelerate when --packing_samples is enabled.")
         args.flash_attn = True
 
-    # TODO: [packing samples]
     if args.ring_attn_size > 1:
         assert args.packing_samples, "packing_samples must be enabled when using ring attention"
+
+    if args.use_ms:
+        from modelscope.utils.hf_util import patch_hub
+
+        # Patch hub to download models from modelscope to speed up.
+        patch_hub()
 
     train(args)

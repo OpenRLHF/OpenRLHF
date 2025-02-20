@@ -213,6 +213,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # ModelScope parameters
+    parser.add_argument("--use_ms", action="store_true", default=False)
+
     if args.input_template and "{}" not in args.input_template:
         print("[Warning] {} not in args.input_template, set to None")
         args.input_template = None
@@ -222,5 +225,11 @@ if __name__ == "__main__":
             "[Warning] input_template contains \\n chracters instead of newline. "
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
+
+    if args.use_ms:
+        from modelscope.utils.hf_util import patch_hub
+
+        # Patch hub to download models from modelscope to speed up.
+        patch_hub()
 
     train(args)

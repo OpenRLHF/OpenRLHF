@@ -8,6 +8,7 @@ from torch.optim import Optimizer
 from tqdm import tqdm
 
 from openrlhf.models import DPOLoss
+from openrlhf.models.utils import log_probs_from_logits
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 
@@ -27,6 +28,8 @@ class DPOTrainer(ABC):
         max_norm (float, defaults to 0.5): Maximum gradient norm for gradient clipping.
         beta (float, defaults to 0.01): Coefficient for regularizing the preference loss.
         max_epochs (int, defaults to 2): Maximum number of training epochs.
+        save_hf_ckpt (bool): Whether to save huggingface-format model weight.
+        disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight. (Deepspeed model weight is used for training recovery)
     """
 
     def __init__(
@@ -42,6 +45,8 @@ class DPOTrainer(ABC):
         max_norm=0.5,
         beta=0.01,
         max_epochs: int = 2,
+        save_hf_ckpt: bool = False,
+        disable_ds_ckpt: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -55,6 +60,8 @@ class DPOTrainer(ABC):
         self.optimizer = optim
         self.tokenizer = tokenizer
         self.args = strategy.args
+        self.save_hf_ckpt = save_hf_ckpt
+        self.disable_ds_ckpt = disable_ds_ckpt
 
         self.beta = beta
         self.loss_fn = DPOLoss(self.beta, self.args.label_smoothing, self.args.ipo)
@@ -116,6 +123,8 @@ class DPOTrainer(ABC):
             desc="Train epoch",
             disable=not self.strategy.is_rank_0(),
         )
+        acc_sum = 0
+        loss_sum = 0
         for epoch in range(start_epoch, self.epochs):
             if isinstance(self.train_dataloader.sampler, DistributedSampler):
                 self.train_dataloader.sampler.set_epoch(
@@ -130,8 +139,6 @@ class DPOTrainer(ABC):
 
             self.model.train()
             self.ref_model.eval()
-            acc_mean = 0
-            loss_mean = 0
             # train
             for data in self.train_dataloader:
                 if not self.packing_samples:
@@ -177,16 +184,14 @@ class DPOTrainer(ABC):
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 acc = (chosen_reward > reject_reward).float().mean().item()
-                acc_mean = acc_mean * 0.9 + 0.1 * acc
-                loss_mean = loss_mean * 0.9 + 0.1 * preference_loss.item()
+                acc_sum += acc
+                loss_sum += preference_loss.item()
                 # dpo logs
                 logs_dict = {
                     "loss": preference_loss.item(),
                     "acc": acc,
                     "chosen_reward": chosen_reward.mean().item(),
                     "reject_reward": reject_reward.mean().item(),
-                    "loss_mean": loss_mean,
-                    "acc_mean": acc_mean,
                     "lr": self.scheduler.get_last_lr()[0],
                 }
                 if self.nll_loss:
@@ -198,11 +203,16 @@ class DPOTrainer(ABC):
 
                 # logs/checkpoints/evaluation
                 if step % self.strategy.accumulated_gradient == 0:
+                    logs_dict["loss_mean"] = loss_sum / self.strategy.accumulated_gradient
+                    logs_dict["acc_mean"] = acc_sum / self.strategy.accumulated_gradient
+                    loss_sum = 0
+                    acc_sum = 0
                     global_step = step // self.strategy.accumulated_gradient
                     client_states = {"consumed_samples": global_step * args.train_batch_size}
                     self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
 
                 step += 1
+
             epoch_bar.update()
 
         if self._wandb is not None and self.strategy.is_rank_0():
@@ -228,13 +238,18 @@ class DPOTrainer(ABC):
             # do eval when len(dataloader) > 0, avoid zero division in eval.
             if len(self.eval_dataloader) > 0:
                 self.evaluate(self.eval_dataloader, global_step)
+
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
-            self.strategy.save_ckpt(
-                self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
-            )
+            if not self.disable_ds_ckpt:
+                self.strategy.save_ckpt(
+                    self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+                )
+            if self.save_hf_ckpt:
+                save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
+                self.strategy.save_model(self.model, self.tokenizer, save_path)
 
     def evaluate(self, eval_dataloader, steps=0):
         self.model.eval()
@@ -381,7 +396,7 @@ class DPOTrainer(ABC):
 
         # dummy token; we'll ignore the losses on these tokens later
         labels[loss_masks == False] = 0
-        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+        per_token_logps = log_probs_from_logits(logits, labels)
 
         logprobs_sums = (per_token_logps * loss_masks).sum(-1)
         logprobs_means = (per_token_logps * loss_masks).sum(-1) / loss_masks.sum(-1)
@@ -424,7 +439,7 @@ class DPOTrainer(ABC):
             assert logits.shape[:-1] == labels.shape
             labels = labels[:, 1:]
             logits = logits[:, :-1, :]
-            per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+            per_token_logps = log_probs_from_logits(logits, labels)
         else:
             rank = self.strategy.ring_attn_rank
             total_seq_len = labels.numel()
@@ -434,9 +449,8 @@ class DPOTrainer(ABC):
             if rank == self.strategy.ring_attn_size - 1:
                 # add a dummy label to the last logit
                 local_label = F.pad(local_label, (0, 1), value=0)
-            local_per_token_logps = torch.gather(
-                logits.log_softmax(-1), dim=2, index=local_label.unsqueeze(2)
-            ).squeeze(2)
+
+            local_per_token_logps = log_probs_from_logits(logits, local_label)
             # we may not need to all_gather the entire tensor, but it's easier to implement.
             # use the flash_attn all_gather so that the all_gather has correct backward.
             per_token_logps = all_gather(local_per_token_logps, self.strategy.ring_attn_group).reshape((1, -1))

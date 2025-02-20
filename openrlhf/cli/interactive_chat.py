@@ -67,7 +67,7 @@ def generate(args):
             max_length=args.max_len,
             do_sample=not args.greedy_sampling,
             top_p=args.top_p,
-            early_stopping=True,
+            early_stopping=False,
             num_beams=1,
             temperature=args.temperature,
             repetition_penalty=args.repetition_penalty,
@@ -112,6 +112,10 @@ if __name__ == "__main__":
     parser.add_argument("--ta_prompt", type=str, default=None)
     parser.add_argument("--enable_csft", action="store_true", default=False)
     parser.add_argument("--csft_prompt", type=str, default="<rm_score>: 5.00", help="conditional SFT prompt")
+
+    # ModelScope parameters
+    parser.add_argument("--use_ms", action="store_true", default=False)
+
     args = parser.parse_args()
 
     if args.input_template and "{}" not in args.input_template:
@@ -123,6 +127,12 @@ if __name__ == "__main__":
             "[Warning] input_template contains \\n chracters instead of newline. "
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
+
+    if args.use_ms:
+        from modelscope.utils.hf_util import patch_hub
+
+        # Patch hub to download models from modelscope to speed up.
+        patch_hub()
 
     print(args)
     generate(args)

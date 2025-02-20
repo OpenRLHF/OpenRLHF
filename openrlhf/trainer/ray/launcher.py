@@ -10,9 +10,9 @@ from ray.util.placement_group import PlacementGroup, placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
+from openrlhf.trainer.ray.utils import ray_noset_visible_devices
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 
-from openrlhf.trainer.ray.utils import ray_noset_visible_devices
 
 class DistributedTorchRayActor:
     def __init__(self, world_size, rank, master_addr, master_port):
@@ -184,15 +184,13 @@ class PPORayActorGroup:
 
         # Use placement group to lock resources for models of same type
         if self._num_gpus_per_node > 1 and pg is None:
-            bundles = [
-                {"GPU": self._num_gpus_per_node, "CPU": self._num_gpus_per_node} for _ in range(self._num_nodes)
-            ]
+            bundles = [{"GPU": 1, "CPU": 1} for _ in range(self._num_nodes * self._num_gpus_per_node)]
             if self._resources:
                 resources_name = list(self._resources.keys())[0]
                 for i in range(len(bundles)):
                     bundles[i][resources_name] = self._num_resources_per_node
 
-            pg = placement_group(bundles, strategy="STRICT_SPREAD")
+            pg = placement_group(bundles, strategy="PACK")
             ray.get(pg.ready())
         if pg:
             master_actor = self.ray_actor_type.options(
@@ -222,7 +220,7 @@ class PPORayActorGroup:
                         resources=self._resources,
                         scheduling_strategy=PlacementGroupSchedulingStrategy(
                             placement_group=pg,
-                            placement_group_bundle_index=rank // self._num_gpus_per_node,
+                            placement_group_bundle_index=rank,
                         ),
                     ).remote(world_size, rank, master_addr, master_port)
                 else:
@@ -274,14 +272,14 @@ class PPORayActorGroup:
         ), "reward_fn must be specified if using multiple reward models"
 
         critic_actors = critic_model_group._actor_handlers if critic_model_group else None
-        initial_actors = initial_model_group._actor_handlers
+        initial_actors = initial_model_group._actor_handlers if initial_model_group else None
 
         refs = []
         # TODO(wuxibin): actor model choose critic/reward/initial model in a
         # round robin fashion, implement more efficient dispatching strategy.
         for i, actor in enumerate(self._actor_handlers):
             critic_actor = critic_actors[i % len(critic_actors)] if critic_actors else None
-            initial_actor = initial_actors[i % len(initial_actors)]
+            initial_actor = initial_actors[i % len(initial_actors)] if initial_actors else None
 
             reward_actors = []
             if not remote_rm_urls:

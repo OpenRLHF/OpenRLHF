@@ -5,23 +5,21 @@ ray job submit --address="http://127.0.0.1:8265" \
     --no-wait \
     -- python3 -m openrlhf.cli.train_ppo_ray \
     --ref_num_nodes 1 \
-    --ref_num_gpus_per_node 8 \
+    --ref_num_gpus_per_node 4 \
     --reward_num_nodes 1 \
-    --reward_num_gpus_per_node 8 \
+    --reward_num_gpus_per_node 4 \
     --critic_num_nodes 1 \
     --critic_num_gpus_per_node 8 \
     --actor_num_nodes 1 \
     --actor_num_gpus_per_node 8 \
-    --vllm_num_engines 8 \
+    --vllm_num_engines 4 \
     --vllm_tensor_parallel_size 2 \
-    --colocate_critic_reward \
-    --colocate_actor_ref \
     --pretrain meta-llama/Meta-Llama-3-70B-Instruct \
     --reward_pretrain meta-llama/Meta-Llama-3-70B-Instruct \
     --save_path /openrlhf/examples/checkpoint/llama-3-70b-rlhf \
-    --micro_train_batch_size 2 \
+    --micro_train_batch_size 1 \
     --train_batch_size 128 \
-    --micro_rollout_batch_size 4 \
+    --micro_rollout_batch_size 2 \
     --rollout_batch_size 1024 \
     --max_epochs 1 \
     --prompt_max_len 1024 \

@@ -1,8 +1,10 @@
+import os
+
+import numpy as np
 import ray
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-
-from openrlhf.trainer.ray.utils import ray_noset_visible_devices
+from vllm import LLM
 
 from openrlhf.utils.logging_utils import init_logger
 
@@ -18,67 +20,83 @@ def get_all_env_variables():
 
 @ray.remote
 class LLMRayActor:
-    def __init__(self, *args, **kwargs):
-        import vllm
 
-        self.__version__ = vllm.__version__
-        assert self.__version__ >= "0.4.2", "OpenRLHF only supports vLLM >= 0.4.2"
+    def __init__(self, *args, bundle_indices: list = None, **kwargs):
+        if kwargs.get("distributed_executor_backend") == "ray":
+            # a hack to make the script work.
+            # stop ray from manipulating CUDA_VISIBLE_DEVICES
+            # at the top-level when the distributed_executor_backend is ray.
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        # every worker will use 0.2 GPU, so that we can schedule
+        # 2 instances on the same GPUs.
+        if bundle_indices is not None:
+            os.environ["VLLM_RAY_PER_WORKER_GPUS"] = "0.2"
+            os.environ["VLLM_RAY_BUNDLE_INDICES"] = ",".join(map(str, bundle_indices))
+            print(f"creating LLM with bundle_indices={bundle_indices}")
 
-        noset_visible_devices = kwargs.pop("noset_visible_devices", False)
-        self.use_gpu_executor = kwargs["tensor_parallel_size"] == 1 and not noset_visible_devices
+        # Number of actors that will send prompt to this engine
+        self.num_actors = kwargs.pop("num_actors")
+        self.actor_counter = 0
+        self.requests = {}
+        self.responses = {}
 
-        # See https://github.com/vllm-project/vllm/blob/main/vllm/executor/gpu_executor.py
-        if self.use_gpu_executor:
-            from openrlhf.trainer.ray.vllm_worker_wrap import WorkerWrap
+        self.llm = LLM(*args, **kwargs)
 
-            vllm.worker.worker.Worker = WorkerWrap
-        else:
-            # RayGPUExecutor
-            # See the patch https://github.com/vllm-project/vllm/commit/479d69fad0538f04cb22bf13e76ff91cfeb8a4e5
-            kwargs["worker_use_ray"] = True
-
-            if vllm.__version__ > "0.6.4.post1":
-                # https://github.com/vllm-project/vllm/pull/10555
-                kwargs["worker_cls"] = "openrlhf.trainer.ray.vllm_worker_wrap.WorkerWrap"
-            else:
-                RayWorkerWrapperPath = vllm.executor.ray_utils
-
-                class RayWorkerWrapper(RayWorkerWrapperPath.RayWorkerWrapper):
-                    def __init__(self, *args, **kwargs) -> None:
-                        kwargs["worker_module_name"] = "openrlhf.trainer.ray.vllm_worker_wrap"
-                        kwargs["worker_class_name"] = "WorkerWrap"
-                        super().__init__(*args, **kwargs)
-
-                RayWorkerWrapperPath.RayWorkerWrapper = RayWorkerWrapper
-
-        self.llm = vllm.LLM(*args, **kwargs)
-
-    def generate(self, *args, **kwargs):
-        return self.llm.generate(*args, **kwargs)
-
-    def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
-        if self.use_gpu_executor:
-            return self.llm.llm_engine.model_executor.driver_worker.init_process_group(
-                master_address, master_port, rank_offset, world_size, group_name, backend
-            )
-        else:
-            return self.llm.llm_engine.model_executor._run_workers(
-                "init_process_group", master_address, master_port, rank_offset, world_size, group_name, backend
-            )
+    def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray):
+        return self.llm.collective_rpc(
+            "init_process_group",
+            args=(master_address, master_port, rank_offset, world_size, group_name, backend, use_ray),
+        )
 
     def update_weight(self, name, dtype, shape, empty_cache=False):
-        self.stop_remote_worker_execution_loop()
+        return self.llm.collective_rpc("update_weight", args=(name, dtype, shape, empty_cache))
 
-        if self.use_gpu_executor:
-            return self.llm.llm_engine.model_executor.driver_worker.update_weight(name, dtype, shape, empty_cache)
-        else:
-            return self.llm.llm_engine.model_executor._run_workers("update_weight", name, dtype, shape, empty_cache)
+    def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handles, empty_cache=False):
+        return self.llm.collective_rpc("update_weight_cuda_ipc", args=(name, dtype, shape, ipc_handles, empty_cache))
 
-    def stop_remote_worker_execution_loop(self):
-        # Fix error for using 2 communication group
-        # https://github.com/vllm-project/vllm/commit/eb6d3c264d0cd8e44dec16bca7947fbe96415ce9#diff-e1ad69e38e033accddfa5480ec808c4740eb39244d1ef51cc3407e20dde8cfd4
-        if self.__version__ > "0.4.2":
-            self.llm.llm_engine.model_executor.stop_remote_worker_execution_loop()
+    def reset_prefix_cache(self):
+        self.llm.llm_engine.reset_prefix_cache()
+
+    def sleep(self, level=1):
+        self.llm.sleep(level=level)
+
+    def wake_up(self):
+        self.llm.wake_up()
+
+    def add_requests(self, actor_rank, *, sampling_params, prompt_token_ids):
+        """
+        Save the requests from actors and generate responses when all actors have sent their requests
+        """
+        self.requests[actor_rank] = prompt_token_ids
+        self.actor_counter += 1
+        if self.actor_counter == self.num_actors:
+            assert len(self.requests) == self.num_actors
+            num_requests = []
+            requests = []
+            for actor_rank, request in self.requests.items():
+                num_requests.append((actor_rank, len(request)))
+                requests.extend(request)
+
+            if len(requests) > 0:
+                # For now we assume that all requests have the same sampling params
+                responses = self.llm.generate(sampling_params=sampling_params, prompt_token_ids=requests)
+            else:
+                responses = []
+
+            offset = 0
+            self.responses = {}
+            for actor_rank, num in num_requests:
+                self.responses[actor_rank] = responses[offset : offset + num]
+                offset += num
+
+            self.actor_counter = 0
+            self.requests = {}
+
+    def get_responses(self, actor_rank):
+        """
+        Return the responses for the actor with the given rank
+        """
+        return self.responses.pop(actor_rank)
 
 
 def create_vllm_engines(
@@ -89,19 +107,40 @@ def create_vllm_engines(
     enable_prefix_caching: bool,
     enforce_eager: bool,
     max_model_len: int,
+    num_total_actors: int,
+    shared_pg=None,
+    gpu_memory_utilization=None,
+    vllm_enable_sleep=False,
 ):
+    import vllm
+
+    assert vllm.__version__ >= "0.7.0", "OpenRLHF only supports vllm >= 0.7.0"
+
     vllm_engines = []
-    # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES will always be set in current context,
-    # So we need to get env variables from ray process to check if it is set.
-    noset_visible_devices = ray_noset_visible_devices(ray.get(get_all_env_variables.remote()))
+    num_gpus = int(tensor_parallel_size == 1)
+    distributed_executor_backend = "uni" if tensor_parallel_size == 1 else "ray"
     for i in range(num_engines):
-        # When tensor_parallel_size=1 and RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES is not set
-        # (vLLM mp backend will work smoothly only when *_VISIBLE_DEVICES is modified),
-        # vLLM init model in LLMEngine directly, assign 1 GPU for it.
-        num_gpus = int(tensor_parallel_size == 1 and not noset_visible_devices)
+        bundle_indices = None
         scheduling_strategy = None
 
-        if tensor_parallel_size > 1 or noset_visible_devices:
+        # Hybrid engine
+        if shared_pg is not None:
+            assert vllm.__version__ >= "0.7.2", "Only vllm >= 0.7.2 supports hybrid engine"
+
+            if tensor_parallel_size > 1:
+                scheduling_strategy = PlacementGroupSchedulingStrategy(
+                    placement_group=shared_pg,
+                    placement_group_capture_child_tasks=True,
+                    placement_group_bundle_index=i * tensor_parallel_size
+                )
+                bundle_indices = np.arange(i * tensor_parallel_size, (i + 1) * tensor_parallel_size).tolist()
+            else:
+                num_gpus = 0.2
+                scheduling_strategy = PlacementGroupSchedulingStrategy(
+                    placement_group=shared_pg, placement_group_capture_child_tasks=True, placement_group_bundle_index=i
+                )
+        # Distributed RLHF
+        elif tensor_parallel_size > 1:
             bundles = [{"GPU": 1, "CPU": 1}] * tensor_parallel_size
             pg = placement_group(bundles)
             ray.get(pg.ready())
@@ -110,28 +149,32 @@ def create_vllm_engines(
                 placement_group=pg, placement_group_capture_child_tasks=True, placement_group_bundle_index=0
             )
 
+        if num_engines >= num_total_actors:
+            num_actors = 1
+        else:
+            num_actors = num_total_actors // num_engines + int(i < num_total_actors % num_engines)
+
         vllm_engines.append(
             LLMRayActor.options(
-                num_cpus=1,
+                num_cpus=0,
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
             ).remote(
-                pretrain,
-                noset_visible_devices=noset_visible_devices,
-                trust_remote_code=True,
-                tensor_parallel_size=tensor_parallel_size,
-                dtype="bfloat16",
-                seed=seed + i,
-                enable_prefix_caching=enable_prefix_caching,
+                model=pretrain,
                 enforce_eager=enforce_eager,
+                worker_cls="openrlhf.trainer.ray.vllm_worker_wrap.WorkerWrap",
+                tensor_parallel_size=tensor_parallel_size,
+                seed=seed + i,
+                distributed_executor_backend=distributed_executor_backend,
                 max_model_len=max_model_len,
+                enable_prefix_caching=enable_prefix_caching,
+                dtype="bfloat16",
+                trust_remote_code=True,
+                num_actors=num_actors,
+                gpu_memory_utilization=gpu_memory_utilization,
+                bundle_indices=bundle_indices if shared_pg else None,
+                enable_sleep_mode=vllm_enable_sleep,
             )
         )
 
     return vllm_engines
-
-
-if __name__ == "__main__":
-    llm = LLMRayActor.remote("meta-llama/Llama-2-7b-chat-hf", tensor_parallel_size=4)
-    output = ray.get(llm.generate.remote("San Franciso is a"))
-    print(f"output: {output}")
