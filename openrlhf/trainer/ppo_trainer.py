@@ -477,7 +477,7 @@ class PPOTrainer(ABC):
             if pad_len > 0:
                 sequences = sequences[:, :-pad_len]
                 attention_mask = attention_mask[:, :-pad_len]
-                action_log_probs = action_log_probs[:, :-pad_len]
+                values = values[:, :-pad_len]
                 num_actions[-1] -= pad_len
                 packed_seq_lens[-1] -= pad_len
 
