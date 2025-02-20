@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
-from openrlhf.models.utils import masked_mean
+from openrlhf.models.utils import masked_mean, unpacking_samples, compute_approx_kl
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 from .ppo_utils import AdaptiveKLController, Experience, FixedKLController, NaiveExperienceMaker, NaiveReplayBuffer
@@ -238,7 +238,8 @@ class PPOTrainer(ABC):
                         self.strategy.print(output)
                     self.replay_buffer.append(experience)
 
-                self.replay_buffer.normalize("advantages", self.strategy)
+                if self.args.advantage_estimator != "group_norm":
+                    self.replay_buffer.normalize("advantages", self.strategy)
                 status = self.ppo_train(steps)
                 self.replay_buffer.clear()
 
@@ -345,6 +346,8 @@ class PPOTrainer(ABC):
             attention_mask = torch.cat(
                 [torch.full_like(s, i + 1) for i, s in enumerate(experience.sequences)], dim=0
             ).unsqueeze(0)
+            if self.args.use_kl_loss:
+                base_action_log_probs = torch.cat(experience.base_action_log_probs, dim=0).unsqueeze(0)
         else:
             sequences = experience.sequences
             old_action_log_probs = experience.action_log_probs
@@ -352,6 +355,8 @@ class PPOTrainer(ABC):
             num_actions = experience.action_mask.size(1)
             packed_seq_lens = None
             attention_mask = experience.attention_mask
+            if self.args.use_kl_loss:
+                base_action_log_probs = experience.base_action_log_probs
 
         # actor loss
         action_log_probs, output = self.actor(
@@ -369,12 +374,38 @@ class PPOTrainer(ABC):
             advantages,
             action_mask=experience.action_mask,
         )
+
+        if self.args.use_kl_loss:
+            if self.initial_model is not None:
+                kl = compute_approx_kl(
+                    action_log_probs,
+                    base_action_log_probs,
+                    experience.action_mask,
+                    use_kl_estimator_k3 = self.args.use_kl_estimator_k3,
+                )
+            else:
+                kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device = action_log_probs.device)
+
+            if not self.args.packing_samples:
+                kl_mean = masked_mean(kl, experience.action_mask, dim=-1)
+            else:
+                # convert tensor into list of tensors so that it's easier to manipulate
+                # within dataset.
+
+                kl = unpacking_samples(kl, num_actions)
+                kl_mean = torch.tensor([each_kl.mean() for each_kl in kl], device = action_log_probs.device)
+
+            kl_loss = kl_mean.mean()
+            experience.info["kl"] = kl_loss.item()
+        else:
+            kl_loss = 0
+
         # mixtral
         if self.aux_loss:
             aux_loss = output.aux_loss
         else:
             aux_loss = 0
-        loss = actor_loss + aux_loss * self.args.aux_loss_coef
+        loss = actor_loss + aux_loss * self.args.aux_loss_coef + kl_loss * self.kl_ctl.value
         self.strategy.backward(loss, self.actor, self.actor_optim)
 
         # ptx loss

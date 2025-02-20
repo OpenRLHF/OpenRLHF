@@ -364,10 +364,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--advantage_estimator",
         type=str,
-        choices=["gae", "reinforce", "rloo", "reinforce_baseline"],
+        choices=["gae", "reinforce", "rloo", "reinforce_baseline", "group_norm"],
         default="gae",
-        help="Choose advantage estimation method: gae, reinforce, rloo, reinforce_baseline",
+        help="Choose advantage estimation method: gae, reinforce, rloo, reinforce_baseline, group_norm",
     )
+
+    parser.add_argument("--use_kl_loss", action="store_true", default=False, help="whether to use KL loss from GRPO")
 
     # LoRA
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
@@ -433,8 +435,8 @@ if __name__ == "__main__":
         else:
             args.critic_pretrain = args.pretrain
 
-    if args.advantage_estimator in ["rloo", "reinforce_baseline"]:
-        assert args.n_samples_per_prompt > 1, "RLOO/REINFORCE++-baseline requires n_samples_per_prompt > 1"
+    if args.advantage_estimator in ["rloo", "reinforce_baseline", "group_norm"]:
+        assert args.n_samples_per_prompt > 1, f"{args.advantage_estimator} requires n_samples_per_prompt > 1"
 
     if args.input_template and "{}" not in args.input_template:
         print("[Warning] {} not in args.input_template, set to None")
