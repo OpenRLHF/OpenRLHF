@@ -283,10 +283,7 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    # custom
-    parser.add_argument("--search_algo", type=str, default="sampling",
-                        choices=['sampling', 'beamsearch', 'litesearch', 'bestofn'])
-
+    
     # Checkpoint
     parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--save_steps", type=int, default=-1)
