@@ -342,10 +342,8 @@ class PPOTrainer(ABC):
             ).unsqueeze(0)
             if self.strategy.ring_attn_group is not None:
                 pad_len = (self.strategy.ring_attn_size - sequences.shape[-1] % self.strategy.ring_attn_size) % self.strategy.ring_attn_size
-                padded = torch.tensor([1] * pad_len, device=sequences.device, dtype=sequences.dtype).unsqueeze(0)
+                padded = torch.tensor([0] * pad_len, device=sequences.device, dtype=sequences.dtype).unsqueeze(0)
                 sequences = torch.cat([sequences, padded], dim=1)
-                advantages = torch.cat([advantages, advantages[:, -1] * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=-1)
-                old_action_log_probs = torch.cat([old_action_log_probs, old_action_log_probs[:, -1] * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=1)
                 attention_mask = torch.cat([attention_mask, (len(sequences) + 1) * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=-1)
                 num_actions[-1] += pad_len
                 packed_seq_lens[-1] += pad_len
@@ -367,6 +365,16 @@ class PPOTrainer(ABC):
             logps_allgather=True,
             packed_seq_lens=packed_seq_lens,
         )
+
+        if self.strategy.ring_attn_group is not None:
+            # unpad the packing sequence
+            assert pad_len is not None
+            if pad_len > 0:
+                sequences = sequences[:, :-pad_len]
+                attention_mask = attention_mask[:, :-pad_len]
+                action_log_probs = action_log_probs[:, :-pad_len]
+                num_actions[-1] -= pad_len
+                packed_seq_lens[-1] -= pad_len
 
         # loss function
         actor_loss = self.actor_loss_fn(
@@ -439,11 +447,9 @@ class PPOTrainer(ABC):
             ).unsqueeze(0)
             if self.strategy.ring_attn_group is not None:
                 pad_len = (self.strategy.ring_attn_size - sequences.shape[-1] % self.strategy.ring_attn_size) % self.strategy.ring_attn_size
-                padded = torch.tensor([1] * pad_len, device=sequences.device, dtype=sequences.dtype).unsqueeze(0)
-                sequences = torch.cat([sequences, padded], dim=-1)
-                attention_mask = torch.cat([attention_mask, (len(sequences) + 1) * torch.ones(1, pad_len, device=attention_mask.device, dtype=attention_mask.dtype)], dim=-1)
-                old_values = torch.cat([old_values, old_values[:, -1] * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=-1)
-                returns = torch.cat([returns, returns[:, -1] * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=-1)
+                padded = torch.tensor([0] * pad_len, device=sequences.device, dtype=sequences.dtype).unsqueeze(0)
+                sequences = torch.cat([sequences, padded], dim=1)
+                attention_mask = torch.cat([attention_mask, (len(sequences) + 1) * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=-1)
                 num_actions[-1] += pad_len
                 packed_seq_lens[-1] += pad_len
 
@@ -464,6 +470,17 @@ class PPOTrainer(ABC):
             ring_attn_group=self.strategy.ring_attn_group,
             packed_seq_lens=packed_seq_lens,
         )
+
+        if self.strategy.ring_attn_group is not None:
+            # unpad the packing sequence
+            assert pad_len is not None
+            if pad_len > 0:
+                sequences = sequences[:, :-pad_len]
+                attention_mask = attention_mask[:, :-pad_len]
+                action_log_probs = action_log_probs[:, :-pad_len]
+                num_actions[-1] -= pad_len
+                packed_seq_lens[-1] -= pad_len
+
         # loss function
         critic_loss = self.critic_loss_fn(
             values,

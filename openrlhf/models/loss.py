@@ -73,8 +73,6 @@ class PolicyLoss(nn.Module):
         advantages: torch.Tensor,
         action_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        if self.ring_attn_group is not None:
-            pass
         ratio = (log_probs - old_log_probs).exp()
         surr1 = ratio * advantages
         surr2 = ratio.clamp(1 - self.clip_eps, 1 + self.clip_eps) * advantages
@@ -92,9 +90,6 @@ class ValueLoss(nn.Module):
         super().__init__()
         self.clip_eps = clip_eps
         self.ring_attn_group = ring_attn_group
-        if self.ring_attn_group:
-            self.ring_attn_rank = dist.get_rank(self.ring_attn_group)
-            self.ring_attn_world_size = dist.get_world_size(self.ring_attn_group)
 
     def forward(
         self,

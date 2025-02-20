@@ -209,13 +209,16 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
 
             if self.packing_samples:
+                packed_seq_lens = torch.tensor(packed_seq_lens, device=values.device)
                 if ring_attn_group is not None:
                     reward = all_gather(values, ring_attn_group).reshape(1, -1)
+                    ring_attn_size = torch.distributed.get_world_size(ring_attn_group)
+                    pad_len = (ring_attn_size - reward.shape[-1] % ring_attn_size) % ring_attn_size
+                    eos_indices = packed_seq_lens.cumsum(dim=0) - 1
+                    eos_indices[-1] -= pad_len + 1
                 else:
                     reward = values
-                # TODO: convert packed_seq_lens into torch tensor in advance
-                packed_seq_lens = torch.tensor(packed_seq_lens, device=values.device)
-                eos_indices = packed_seq_lens.cumsum(dim=0) - 1
+                    eos_indices = packed_seq_lens.cumsum(dim=0) - 1
                 reward = reward.squeeze(0).gather(dim=0, index=eos_indices)
             else:
                 eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)

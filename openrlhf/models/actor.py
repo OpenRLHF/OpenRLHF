@@ -221,9 +221,6 @@ class Actor(nn.Module):
             action_log_probs = log_probs[:, -num_actions:]
         else:
             if ring_attn_group is not None and logps_allgather:
-                # padding for each ring attn rank
-                local_labels = F.pad(sequences, (0, 1), value=0)
-                local_per_token_logps = log_probs_from_logits(output["logits"], local_labels[:, 1:])
                 rank = dist.get_rank(ring_attn_group)
                 ring_attn_size = dist.get_world_size(ring_attn_group)
                 total_seq_len = labels.numel()

@@ -614,6 +614,17 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         if not self.packing_samples:
             kl_mean = masked_mean(kl, action_mask, dim=-1)
         else:
+            if self.strategy.ring_attn_group is not None:
+                # unpad the sequence, probs, value, kl
+                pad_len = (self.strategy.ring_attn_size - len(sequences) % self.strategy.ring_attn_size) % self.strategy.ring_attn_size
+                if pad_len > 0:
+                    sequences = sequences[:, :-pad_len]
+                    action_log_probs = action_log_probs[:, :-pad_len]
+                    if value is not None:
+                        value = value[:, :-pad_len]
+                    kl = kl[:, :-pad_len]
+                    packed_seq_lens[-1] -= pad_len
+                    num_actions[-1] -= pad_len
             # convert tensor into list of tensors so that it's easier to manipulate
             # within dataset.
             sequences = unpacking_samples(sequences, packed_seq_lens)
@@ -761,13 +772,13 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                     # current_action_mask = [0] * (input_len - 1) + [1] * output_len + [0]
                     # num_actions.append(max(1, sum(current_action_mask)))
                     num_actions.append(max(1, output_len))
-                    if self.strategy.ring_attn_group is not None:
-                        pad_len = (self.strategy.ring_attn_size - (input_len + output_len) % self.strategy.ring_attn_size) % self.strategy.ring_attn_size
-                        sequences += [pad_token_id] * pad_len
-                        output_len += pad_len
-                        packed_seq_lens[-1] += pad_len
-                        attention_mask += [i + 1] * pad_len
-                        num_actions[-1] += pad_len
+                if self.strategy.ring_attn_group is not None:
+                    pad_len = (self.strategy.ring_attn_size - len(sequences) % self.strategy.ring_attn_size) % self.strategy.ring_attn_size
+                    sequences += [pad_token_id] * pad_len
+                    output_len += pad_len
+                    packed_seq_lens[-1] += pad_len
+                    attention_mask += [i + 1] * pad_len
+                    num_actions[-1] += pad_len
 
                 sequences = torch.tensor(sequences, device="cuda").unsqueeze(0)
                 attention_mask = torch.tensor(attention_mask, device="cuda").unsqueeze(0)
