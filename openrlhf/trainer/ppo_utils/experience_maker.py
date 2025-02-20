@@ -115,6 +115,7 @@ class Samples:
     response_length: torch.Tensor
     total_length: torch.Tensor
     prompts: list[str]
+    labels: list[str]
 
 
 class NaiveExperienceMaker(ABC):
@@ -152,7 +153,7 @@ class NaiveExperienceMaker(ABC):
         # custom reward func for reinforced finetuning
         self.custom_reward_func = None
         if remote_rm_url and remote_rm_url[0].endswith(".py"):
-            print(f"Loading custom `reward_func(queries, prompts)` from {remote_rm_url[0]}")
+            print(f"Loading custom `reward_func(queries, prompts, labels)` from {remote_rm_url[0]}")
             import importlib.util
 
             spec = importlib.util.spec_from_file_location("reward_func", remote_rm_url[0])
@@ -181,7 +182,9 @@ class NaiveExperienceMaker(ABC):
         return {k: v.to(device) for k, v in batch.items()}
 
     @torch.no_grad()
-    def make_experience_list(self, all_prompts: Union[str, List[str]], **generate_kwargs) -> List[Experience]:
+    def make_experience_list(
+        self, all_prompts: Union[str, List[str]], all_labels, **generate_kwargs
+    ) -> List[Experience]:
         """
         Make a list of experience with the micro_rollout_batch_size.
 
@@ -190,8 +193,7 @@ class NaiveExperienceMaker(ABC):
         After that, we will calculate the advantages and returns for each experience.
         """
         args = self.strategy.args
-        # generate responses
-        samples_list = self.generate_samples(all_prompts, **generate_kwargs)
+        samples_list = self.generate_samples(all_prompts, all_labels, **generate_kwargs)
         torch.distributed.barrier()
 
         experiences = []
@@ -251,7 +253,7 @@ class NaiveExperienceMaker(ABC):
         return experiences
 
     @torch.no_grad()
-    def generate_samples(self, all_prompts: List[str], **generate_kwargs) -> List[Samples]:
+    def generate_samples(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Samples]:
         """
         Generate samples and return in batches.
         """
@@ -260,9 +262,11 @@ class NaiveExperienceMaker(ABC):
         self.actor.eval()
         # sample multiple response
         all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
+        all_labels = sum([[label] * args.n_samples_per_prompt for label in all_labels], [])
         samples_list = []
         for i in range(0, len(all_prompts), args.micro_rollout_batch_size):
             prompts = all_prompts[i : i + args.micro_rollout_batch_size]
+            labels = all_labels[i : i + args.micro_rollout_batch_size]
             inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
             sequences, attention_mask, action_mask = self.actor.generate(**inputs, **generate_kwargs)
             samples = Samples(
@@ -274,6 +278,7 @@ class NaiveExperienceMaker(ABC):
                 response_length=action_mask.float().sum(dim=-1),
                 total_length=attention_mask.float().sum(dim=-1),
                 prompts=prompts,
+                labels=labels,
             )
             samples_list.append(samples)
         return samples_list
@@ -317,11 +322,13 @@ class NaiveExperienceMaker(ABC):
             # remote RM
             queries = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=False)
             if self.custom_reward_func:
-                r = self.custom_reward_func(queries, samples.prompts).to(device=action_log_probs.device)
-            else:
-                r = remote_rm_fn(self.remote_rm_url, queries=queries, prompts=samples.prompts).to(
+                r = self.custom_reward_func(queries, samples.prompts, samples.labels).to(
                     device=action_log_probs.device
                 )
+            else:
+                r = remote_rm_fn(
+                    self.remote_rm_url, queries=queries, prompts=samples.prompts, labels=samples.labels
+                ).to(device=action_log_probs.device)
         else:
             # local RM
             r = self.reward_model(sequences, attention_mask)
@@ -503,14 +510,16 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             self.custom_reward_func = ray.remote(self.custom_reward_func)
 
     @torch.no_grad()
-    def make_experience_list(self, all_prompts: Union[str, List[str]], **generate_kwargs) -> List[Experience]:
+    def make_experience_list(
+        self, all_prompts: Union[str, List[str]], all_labels, **generate_kwargs
+    ) -> List[Experience]:
         if self.strategy.args.perf:
             self.perf_stats = {
                 "generate_time": 0,
                 "actor_value_rm_time": 0,
                 "wait_time": 0,
             }
-        experiences = super().make_experience_list(all_prompts, **generate_kwargs)
+        experiences = super().make_experience_list(all_prompts, all_labels, **generate_kwargs)
         if self.critic is not None:
             for experience in experiences:
                 # send experience to critic
@@ -520,7 +529,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         return experiences
 
     @torch.no_grad()
-    def generate_samples(self, all_prompts: List[str], **generate_kwargs) -> List[Samples]:
+    def generate_samples(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Samples]:
         """
         Generate samples and return in batches.
 
@@ -528,10 +537,10 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         in which actor will be used to generate samples.
         """
         if self.vllm_engines is None:
-            return super().generate_samples(all_prompts, **generate_kwargs)
+            return super().generate_samples(all_prompts, all_labels, **generate_kwargs)
 
         # vLLM generation
-        samples = self._generate_vllm(all_prompts, **generate_kwargs)
+        samples = self._generate_vllm(all_prompts, all_labels, **generate_kwargs)
 
         # vLLM offload when colocate_all_models
         if self.strategy.args.vllm_enable_sleep:
@@ -608,11 +617,11 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 queries = self.tokenizer.batch_decode(sequences_list, skip_special_tokens=False)
 
             if self.custom_reward_func:
-                r = self.custom_reward_func.remote(queries, samples.prompts)
+                r = self.custom_reward_func.remote(queries, samples.prompts, samples.labels)
                 r_refs.append(r)
             else:
                 for rm in self.remote_rm_url:
-                    r = remote_rm_fn_ray.remote(rm, queries=queries, prompts=samples.prompts)
+                    r = remote_rm_fn_ray.remote(rm, queries=queries, prompts=samples.prompts, labels=samples.labels)
                     r_refs.append(r)
 
         if args.colocate_all_models and not self.remote_rm_url:
@@ -694,7 +703,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         self.actor.train()  # reset model state
         return experience
 
-    def _generate_vllm(self, all_prompts: List[str], **kwargs) -> List[Samples]:
+    def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> List[Samples]:
         from vllm import SamplingParams
 
         # round-robin load balance
@@ -721,6 +730,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         # Expand prompt list based on the number of samples per prompt
         all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
+        all_labels = sum([[label] * args.n_samples_per_prompt for label in all_labels], [])
         all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
 
         # Distribute requests to engines and collect responses to outputs
@@ -746,6 +756,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         for i in range(0, len(all_outputs), args.micro_rollout_batch_size):
             outputs = all_outputs[i : i + self.strategy.args.micro_rollout_batch_size]
             prompts = all_prompts[i : i + self.strategy.args.micro_rollout_batch_size]
+            labels = all_labels[i : i + self.strategy.args.micro_rollout_batch_size]
             if not self.packing_samples:
                 # NOTE: concat all outputs to following format:
                 #
@@ -789,6 +800,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                         response_length=action_mask.float().sum(dim=-1),
                         total_length=attention_mask.float().sum(dim=-1),
                         prompts=prompts,
+                        labels=labels,
                     )
                 )
             else:
@@ -827,6 +839,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                         response_length=response_length,
                         total_length=total_length,
                         prompts=prompts,
+                        labels=labels,
                     )
                 )
         return samples_list
