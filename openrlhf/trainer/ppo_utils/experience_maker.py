@@ -38,6 +38,7 @@ class Experience:
     Shapes of each tensor:
     sequences: (B, S)
     action_log_probs: (B, A)
+    base_action_log_probs: (B, A)
     values: (B, A)
     returns: (B, A)
     advantages: (B, A)
@@ -50,6 +51,7 @@ class Experience:
 
     sequences: torch.Tensor
     action_log_probs: torch.Tensor
+    base_action_log_probs: torch.Tensor
     values: torch.Tensor
     returns: Optional[torch.Tensor]
     advantages: Optional[torch.Tensor]
@@ -62,6 +64,7 @@ class Experience:
     def to_device(self, device: torch.device):
         self.sequences = to(self.sequences, device)
         self.action_log_probs = to(self.action_log_probs, device)
+        self.base_action_log_probs = to(self.base_action_log_probs, device)
         self.returns = to(self.returns, device)
         self.advantages = to(self.advantages, device)
         self.values = to(self.values, device)
@@ -74,6 +77,7 @@ class Experience:
     def pin_memory(self):
         self.sequences = pin_memory(self.sequences)
         self.action_log_probs = pin_memory(self.action_log_probs)
+        self.base_action_log_probs = pin_memory(self.base_action_log_probs)
         self.returns = pin_memory(self.returns)
         self.advantages = pin_memory(self.advantages)
         self.values = pin_memory(self.values)
@@ -228,7 +232,7 @@ class NaiveExperienceMaker(ABC):
                     generate_kwargs["gamma"],
                     generate_kwargs["lambd"],
                 )
-            elif self.advantage_estimator in ["reinforce", "rloo", "reinforce_baseline"]:
+            elif self.advantage_estimator in ["reinforce", "rloo", "reinforce_baseline", "group_norm"]:
                 experience.returns = self.get_cumulative_returns(
                     reward,
                     experience.action_mask,
@@ -333,7 +337,7 @@ class NaiveExperienceMaker(ABC):
             # local RM
             r = self.reward_model(sequences, attention_mask)
 
-        if self.initial_model is not None:
+        if (self.initial_model is not None) and (not args.use_kl_loss):
             kl = compute_approx_kl(
                 action_log_probs,
                 base_action_log_probs,
@@ -358,6 +362,7 @@ class NaiveExperienceMaker(ABC):
         return Experience(
             sequences,
             action_log_probs,
+            base_action_log_probs,
             value,
             None,
             None,
@@ -393,7 +398,12 @@ class NaiveExperienceMaker(ABC):
             rewards = rewards - rewards.mean(-1, keepdim=True)
             rewards = rewards.reshape(-1).to(device="cpu").chunk(len(experiences))
             return experiences, rewards
-
+        elif args.advantage_estimator == "group_norm":
+            rewards = torch.cat([experience.info["reward"] for experience in experiences])
+            rewards = rewards.reshape(-1, args.n_samples_per_prompt).to(device="cuda")
+            rewards = (rewards - rewards.mean(-1, keepdim=True)) / (rewards.std(-1, keepdim=True) + 1e-9)
+            rewards = rewards.reshape(-1).to(device="cpu").chunk(len(experiences))
+            return experiences, rewards
         # default rewards
         return experiences, [experience.info["reward"] for experience in experiences]
 
@@ -652,7 +662,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         if args.colocate_actor_ref or args.colocate_all_models:
             torch.cuda.empty_cache()
 
-        if self.initial_model is not None:
+        if (self.initial_model is not None) and (not args.use_kl_loss):
             kl = compute_approx_kl(
                 action_log_probs,
                 base_action_log_probs,
@@ -672,9 +682,14 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             action_log_probs = unpacking_samples(action_log_probs, num_actions)
             if value is not None:
                 value = unpacking_samples(value, num_actions)
+            if base_action_log_probs is not None:
+                base_action_log_probs = unpacking_samples(base_action_log_probs, num_actions)
 
             kl = unpacking_samples(kl, num_actions)
             kl_mean = torch.tensor([each_kl.mean() for each_kl in kl], device=device)
+        
+        if not args.use_kl_loss:
+            base_action_log_probs = None
 
         info = {
             "kl": kl_mean,
@@ -691,6 +706,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         experience = Experience(
             sequences,
             action_log_probs,
+            base_action_log_probs,
             value,
             None,
             None,
