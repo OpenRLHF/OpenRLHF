@@ -14,7 +14,7 @@ def preprocess_data(data, input_template=None, input_key="input", label_key=None
             prompt = input_template.format(prompt)
 
     # for Reinforced Fine-tuning
-    label = None if label_key is None else data[label_key]
+    label = "" if label_key is None else data[label_key]
     return prompt, label
 
 
