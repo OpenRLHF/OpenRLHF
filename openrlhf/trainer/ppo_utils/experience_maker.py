@@ -18,6 +18,7 @@ from openrlhf.utils.remote_rm_utils import remote_rm_fn, remote_rm_fn_ray
 from openrlhf.search_algorithm.beamsearch_efficient import search as beamsearch
 from openrlhf.search_algorithm.litesearch import search as litesearch
 from openrlhf.search_algorithm.bestofn import search as bestofn
+from openrlhf.search_algorithm.bestofn import search_vllm as bestofn_vllm
 
 import random
 
@@ -543,6 +544,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 "actor_value_rm_time": 0,
                 "wait_time": 0,
             }
+        generate_kwargs["has_vllm_engines"] = not (self.vllm_engines is None)
         experiences = super().make_experience_list(all_prompts, search_algo, **generate_kwargs)
         if self.critic is not None:
             for experience in experiences:
@@ -748,7 +750,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             # search, have not gone through testing!
             trajs = []
             for prompt in all_prompts:
-                traj = bestofn_ray(prompt, tokenizer = self.tokenizer, actor = llms)[0]
+                traj = bestofn_vllm(prompt, tokenizer = self.tokenizer, actor = llms)[0]
                 trajs.append(traj)
             all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
             all_traj_token_ids = self.tokenize_fn(trajs, 1024, padding=False)["input_ids"] # openrlhf does not pass generate_max_len, wired

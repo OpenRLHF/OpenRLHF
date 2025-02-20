@@ -21,10 +21,13 @@ def get_full_traj(traj, tokenizer, actor, **kwargs):
         tokenizer=tokenizer,
         num_return_sequences=kwargs.get("search_budget", DEFAULT_N),
         pad_token_id=tokenizer.pad_token_id,
-        eos_token_id=tokenizer.eos_token_id)
-    sequences = tokenizer.batch_decode(outputs, keep_special_tokens=True)
+        eos_token_id=tokenizer.eos_token_id,
+        return_dict_in_generate=True)
+    sequences = tokenizer.batch_decode(outputs.sequences, keep_special_tokens=True)
     sequences = [clean_pad_token(seq, tokenizer.pad_token) for seq in sequences]
-    return sequences
+    cumulative_logprobs = outputs.scores
+    custom_logprobs = None
+    return sequences, cumulative_logprobs, custom_logprobs
 
 def get_scores(trajs, tokenizer, critic):
     input_ids = tokenizer(trajs, return_tensors="pt", padding=True, truncation=True)
