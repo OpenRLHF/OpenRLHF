@@ -110,7 +110,7 @@ def train(args):
             ReferenceModelRayActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-    )
+        )
 
     if not args.colocate_all_models:
         pg = None
@@ -365,6 +365,7 @@ if __name__ == "__main__":
     parser.add_argument("--pretrain_split", type=str, default="train")
 
     parser.add_argument("--input_key", type=str, default="input", help="JSON dataset key")
+    parser.add_argument("--label_key", type=str, default=None, help="JSON dataset key")
     parser.add_argument("--input_template", type=str, default=None)
     parser.add_argument(
         "--apply_chat_template", action="store_true", default=False, help="Use HF tokenizer chat template"
