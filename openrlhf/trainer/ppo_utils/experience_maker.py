@@ -337,7 +337,7 @@ class NaiveExperienceMaker(ABC):
             # local RM
             r = self.reward_model(sequences, attention_mask)
 
-        if (self.initial_model is not None) and (not args.use_kl_loss):
+        if (self.initial_model is not None) and (not self.strategy.args.use_kl_loss):
             kl = compute_approx_kl(
                 action_log_probs,
                 base_action_log_probs,
@@ -687,7 +687,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
             kl = unpacking_samples(kl, num_actions)
             kl_mean = torch.tensor([each_kl.mean() for each_kl in kl], device=device)
-        
+
         if not args.use_kl_loss:
             base_action_log_probs = None
 
