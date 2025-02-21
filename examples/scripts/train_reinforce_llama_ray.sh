@@ -29,7 +29,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --zero_stage 3 \
    --bf16 \
    --actor_learning_rate 5e-7 \
-   --init_kl_coef 0.01 \
+   --init_kl_coef 1e-4 \
    --prompt_data OpenRLHF/prompt-collection-v0.1 \
    --input_key context_messages \
    --apply_chat_template \

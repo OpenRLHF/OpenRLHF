@@ -13,7 +13,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_tensor_parallel_size 4 \
    --colocate_all_models \
    --vllm_gpu_memory_utilization 0.6 \
-   --init_kl_coef 1e-6 \
+   --init_kl_coef 1e-3 \
    --gamma 1.0 \
    --use_kl_loss \
    --use_kl_estimator_k3 \
