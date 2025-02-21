@@ -61,10 +61,6 @@ class PolicyLoss(nn.Module):
     def __init__(self, clip_eps: float = 0.2, ring_attn_group=None) -> None:
         super().__init__()
         self.clip_eps = clip_eps
-        self.ring_attn_group = ring_attn_group
-        if self.ring_attn_group:
-            self.ring_attn_rank = dist.get_rank(self.ring_attn_group)
-            self.ring_attn_world_size = dist.get_world_size(self.ring_attn_group)
 
     def forward(
         self,

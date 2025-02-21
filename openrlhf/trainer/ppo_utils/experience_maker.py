@@ -202,14 +202,14 @@ class NaiveExperienceMaker(ABC):
         # generate responses
         if self.strategy.ring_attn_group is not None:
             if self.strategy.ring_attn_rank == 0:
-                samples_list = self.generate_samples(all_prompts, **generate_kwargs)
+                samples_list = self.generate_samples(all_prompts, all_labels, **generate_kwargs)
                 dist.broadcast_object_list(samples_list, src=dist.get_rank(), group=self.strategy.ring_attn_group)
             else:
                 world_size = torch.distributed.get_world_size() // args.ring_attn_size
                 samples_list = [None] * (args.rollout_batch_size // world_size // args.micro_rollout_batch_size)
                 dist.broadcast_object_list(samples_list, src=self.strategy.ring_attn_ranks[0], group=self.strategy.ring_attn_group)
         else:
-            samples_list = self.generate_samples(all_prompts, **generate_kwargs)
+            samples_list = self.generate_samples(all_prompts, all_labels, **generate_kwargs)
         torch.distributed.barrier()
 
         experiences = []
@@ -794,7 +794,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         ray.get(refs)
 
         # Make sure all requests are sent.
-        torch.distributed.barrier()
+        if self.strategy.ring_attn_group is None:
+            torch.distributed.barrier()
 
         # Retrieve and combine results from all outputs
         all_output_refs = []
