@@ -11,5 +11,5 @@ ACCELERATOR_TYPE = "GPU"
 if IS_NPU_AVAILABLE:
     ACCELERATOR_TYPE = "NPU"
 
-    import torch_npu
-    from torch_npu.contrib import transfer_to_npu
+    import torch_npu # noqa
+    from torch_npu.contrib import transfer_to_npu # noqa

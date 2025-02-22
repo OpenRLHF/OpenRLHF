@@ -7,7 +7,7 @@ from openrlhf import IS_NPU_AVAILABLE
 from .utils import get_physical_gpu_id
 
 if IS_NPU_AVAILABLE:
-    from vllm_ascend.worker import NPUWorker as Worker
+    from vllm_ascend.worker.worker import NPUWorker as Worker
 
 logger = init_logger(__name__)
 

@@ -33,10 +33,8 @@ class DistributedTorchRayActor:
         # environment variable for each actor, unless
         # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES is set, so
         # set local rank to 0 when the flag is not applicable.
-        if ACCELERATOR_TYPE == "GPU":
-            os.environ["LOCAL_RANK"] = str(ray.get_gpu_ids()[0]) if ray_noset_visible_devices() else "0"
-        elif ACCELERATOR_TYPE == "NPU":
-            os.environ["LOCAL_RANK"] = "0"
+        os.environ["LOCAL_RANK"] = str(ray.get_runtime_context().get_accelerator_ids()[ACCELERATOR_TYPE][0]) \
+            if ray_noset_visible_devices() else "0"
 
     @staticmethod
     def _get_current_node_ip():
