@@ -222,7 +222,7 @@ if __name__ == "__main__":
         help="tensor parallel size of vLLM Engine for multi-GPU inference",
     )
     parser.add_argument("--vllm_sync_backend", type=str, default="nccl", help="DeepSpeed -> vLLM weight sync backend")
-    parser.add_argument("--gpu_memory_utilization", type=float, default=0.8)
+    parser.add_argument("--gpu_memory_utilization", type=float, default=0.85)
     parser.add_argument("--enable_prefix_caching", action="store_true", default=False)
     parser.add_argument("--enforce_eager", action="store_true", default=False, help="Disable CUDA graph in vLLM")
 
