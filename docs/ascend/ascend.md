@@ -83,7 +83,7 @@ ray start --head --node-ip-address 0.0.0.0
 | Conditional SFT        | 即将开展                                                                                                       |        |                                                              |
 | Continue Pretrain      | 即将开展                                                                                                       |        |                                                              |
 
-> 补充说明：
->
-> 1. 由于不支持 flash_attn 第三方库，在脚本中需要删除 --flash_attn 参数。
-> 2. 当前使用 --adam_offload 参数可能存在卡死情况，待解决。
+**补充说明**：
+1. 已支持算法的配套版本参考上表测试结果提供的版本进行使用，可大于等于测试结果提供的版本。  
+2. 由于 `flash_attn` 第三方库不支持华为昇腾设备，在脚本中使用 `--flash_attn` 参数会使能 SDPA，通过 `torch_npu` 调用华为昇腾的 FA 算子，具体参考 [FlashAttentionScore](https://www.hiascend.com/document/detail/zh/Pytorch/600/ptmoddevg/trainingmigrguide/performance_tuning_0027.html)。  
+3. 使用 `--adam_offload` 参数可能存在长时间卡顿的情况，解决方法是删除 torch_extensions 的缓存文件，参考 [issue](https://github.com/deepspeedai/DeepSpeed/issues/2816#issuecomment-1450095538)。  
