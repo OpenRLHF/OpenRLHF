@@ -10,12 +10,13 @@ loralib
 optimum
 packaging
 peft
+pynvml>=12.0.0
 ray[default]==2.42.0
 tensorboard
 torch
 torchmetrics
 tqdm
-transformers==4.48.2
+transformers==4.48.3
 transformers_stream_generator
 wandb
 wheel

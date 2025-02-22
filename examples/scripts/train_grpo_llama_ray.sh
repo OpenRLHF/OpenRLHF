@@ -25,11 +25,14 @@ ray job submit --address="http://127.0.0.1:8265" \
    --prompt_max_len 1024 \
    --max_samples 100000 \
    --generate_max_len 1024 \
-   --advantage_estimator reinforce \
+   --init_kl_coef 1e-3 \
+   --gamma 1.0 \
+   --use_kl_loss \
+   --use_kl_estimator_k3 \
+   --advantage_estimator group_norm \
    --zero_stage 3 \
    --bf16 \
    --actor_learning_rate 5e-7 \
-   --init_kl_coef 1e-4 \
    --prompt_data OpenRLHF/prompt-collection-v0.1 \
    --input_key context_messages \
    --apply_chat_template \
@@ -39,9 +42,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    --packing_samples \
    --save_steps -1 \
    --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf
-
-# You could also try
-#   --use_kl_loss \
-#   --use_kl_estimator_k3 \
 
 # also supports --advantage_estimator rloo | reinforce_baseline

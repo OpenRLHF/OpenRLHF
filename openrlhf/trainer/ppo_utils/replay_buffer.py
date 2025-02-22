@@ -17,6 +17,7 @@ class BufferItem:
     Shapes of each tensor:
     sequences: (S)
     action_log_probs: (A)
+    base_action_log_probs: (A)
     values: (1)
     returns: (1)
     advantages: (1)
@@ -28,6 +29,7 @@ class BufferItem:
 
     sequences: torch.Tensor
     action_log_probs: torch.Tensor
+    base_action_log_probs: torch.Tensor
     values: torch.Tensor
     returns: torch.Tensor
     advantages: torch.Tensor
@@ -42,6 +44,7 @@ def split_experience_batch(experience: Experience) -> List[BufferItem]:
     keys = (
         "sequences",
         "action_log_probs",
+        "base_action_log_probs",
         "values",
         "returns",
         "advantages",
@@ -92,6 +95,7 @@ def make_experience_batch(items: List[BufferItem], packing_samples=False) -> Exp
     keys = (
         "sequences",
         "action_log_probs",
+        "base_action_log_probs",
         "values",
         "returns",
         "advantages",
@@ -115,9 +119,10 @@ def make_experience_batch(items: List[BufferItem], packing_samples=False) -> Exp
 
 def remove_padding_in_sequences(items):
     for item in items:
-        seq, act_log_prob, value, ret, adv, att_mask, act_mask = (
+        seq, act_log_prob, base_act_log_prob, value, ret, adv, att_mask, act_mask = (
             item.sequences,
             item.action_log_probs,
+            item.base_action_log_probs,
             item.values,
             item.returns,
             item.advantages,
@@ -132,6 +137,7 @@ def remove_padding_in_sequences(items):
         (
             item.sequences,
             item.action_log_probs,
+            item.base_action_log_probs,
             item.values,
             item.returns,
             item.advantages,
@@ -140,6 +146,7 @@ def remove_padding_in_sequences(items):
         ) = (
             seq[left_pad:right_pad],
             act_log_prob[:right_pad],
+            base_act_log_prob[:right_pad] if item.base_action_log_probs is not None else None,
             value[:right_pad] if item.values is not None else None,
             ret[:right_pad],
             adv[:right_pad],
