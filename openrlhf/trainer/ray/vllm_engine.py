@@ -33,19 +33,17 @@ class LLMRayActor:
             # stop ray from manipulating CUDA_VISIBLE_DEVICES
             # at the top-level when the distributed_executor_backend is ray.
             os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-<<<<<<< HEAD
+            os.environ.pop("ASCEND_RT_VISIBLE_DEVICES", None)
         elif noset_visible_devices:
             # We need to set CUDA_VISIBLE_DEVICES to the ray assigned GPU
             # when the distributed_executor_backend is not ray and
             # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES is set.
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(ray.get_gpu_ids()[0])
+            if ACCELERATOR_TYPE == "GPU":
+                os.environ["CUDA_VISIBLE_DEVICES"] = str(ray.get_gpu_ids()[0])
+            elif ACCELERATOR_TYPE == "NPU":
+                os.environ["ASCEND_RT_VISIBLE_DEVICES"] = str(ray.get_runtime_context().get_accelerator_ids()[ACCELERATOR_TYPE][0])
 
         num_gpus = kwargs.pop("num_gpus")
-=======
-            os.environ.pop("ASCEND_RT_VISIBLE_DEVICES", None)
-        # every worker will use 0.2 GPU, so that we can schedule
-        # 2 instances on the same GPUs.
->>>>>>> 767b21e (add Ascend NPU support)
         if bundle_indices is not None:
             os.environ["VLLM_RAY_PER_WORKER_GPUS"] = str(num_gpus)
             os.environ["VLLM_RAY_BUNDLE_INDICES"] = ",".join(map(str, bundle_indices))
@@ -144,7 +142,7 @@ def create_vllm_engines(
 
     if not use_hybrid_engine:
         # Create a big placement group to ensure that all engines are packed
-        bundles = [{"GPU": 1, "CPU": 1} for _ in range(num_engines * tensor_parallel_size)]
+        bundles = [{ACCELERATOR_TYPE: 1, "CPU": 1} for _ in range(num_engines * tensor_parallel_size)]
         shared_pg = placement_group(bundles, strategy="PACK")
         ray.get(shared_pg.ready())
 
@@ -153,39 +151,11 @@ def create_vllm_engines(
         if tensor_parallel_size > 1:
             bundle_indices = list(range(i * tensor_parallel_size, (i + 1) * tensor_parallel_size))
 
-<<<<<<< HEAD
         scheduling_strategy = PlacementGroupSchedulingStrategy(
             placement_group=shared_pg,
             placement_group_capture_child_tasks=True,
             placement_group_bundle_index=i * tensor_parallel_size,
         )
-=======
-        # Hybrid engine
-        if shared_pg is not None:
-            assert vllm.__version__ >= "0.7.2", "Only vllm >= 0.7.2 supports hybrid engine"
-
-            if tensor_parallel_size > 1:
-                scheduling_strategy = PlacementGroupSchedulingStrategy(
-                    placement_group=shared_pg,
-                    placement_group_capture_child_tasks=True,
-                    placement_group_bundle_index=i * tensor_parallel_size
-                )
-                bundle_indices = np.arange(i * tensor_parallel_size, (i + 1) * tensor_parallel_size).tolist()
-            else:
-                num_gpus = 0.2
-                scheduling_strategy = PlacementGroupSchedulingStrategy(
-                    placement_group=shared_pg, placement_group_capture_child_tasks=True, placement_group_bundle_index=i
-                )
-        # Distributed RLHF
-        elif tensor_parallel_size > 1:
-            bundles = [{ACCELERATOR_TYPE: 1, "CPU": 1}] * tensor_parallel_size
-            pg = placement_group(bundles)
-            ray.get(pg.ready())
-
-            scheduling_strategy = PlacementGroupSchedulingStrategy(
-                placement_group=pg, placement_group_capture_child_tasks=True, placement_group_bundle_index=0
-            )
->>>>>>> 767b21e (add Ascend NPU support)
 
         if num_engines >= num_total_actors:
             num_actors = 1
@@ -194,14 +164,9 @@ def create_vllm_engines(
 
         vllm_engines.append(
             LLMRayActor.options(
-<<<<<<< HEAD
                 num_cpus=num_gpus,
-                num_gpus=num_gpus,
-=======
-                num_cpus=0,
                 num_gpus=num_gpus if ACCELERATOR_TYPE == "GPU" else 0,
-                resources=None if ACCELERATOR_TYPE == "GPU" else {ACCELERATOR_TYPE: num_gpus},
->>>>>>> 767b21e (add Ascend NPU support)
+                resources=None if ACCELERATOR_TYPE =="GPU" else {ACCELERATOR_TYPE: num_gpus},
                 scheduling_strategy=scheduling_strategy,
             ).remote(
                 model=pretrain,
