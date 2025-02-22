@@ -3,6 +3,7 @@ import torch
 import random
 import ray
 import jsonlines
+import numpy as np
 from openrlhf.remote_rm.grader import grade_answer
 from openrlhf.search_algorithm.search_utils import DEFAULT_N, DEFAULT_TEMPERATURE, initialize_question_answer_map
 
@@ -106,7 +107,7 @@ def clean_eos(traj, eos_token):
 def search(query, tokenizer, actor, critic, **kwargs):
     trajs = get_full_traj(query, tokenizer, actor)
     scores = get_scores(trajs, tokenizer, critic)
-    strategy = kwargs["search_algo"]
+    strategy = kwargs["search_strategy"]
     if strategy == "bestofn":
         best_idx = torch.argmax(scores)
         return [trajs[best_idx]]
@@ -147,9 +148,13 @@ def search(query, tokenizer, actor, critic, **kwargs):
         else:
             return [random.choice(_sorted_trajs["trajs"]) for _sorted_trajs in sorted_trajs[:2]]
 
-def search_vllm(query, tokenizer, actor, critic, **kwargs):
+def search_vllm(query, tokenizer, actor, critic=None, **kwargs):
     trajs, cumulative_logprobs, custom_logprobs = get_full_trajs_vllm(query, tokenizer, actor)
-    strategy = kwargs["search_algo"]
+    best_idx = np.argmax(np.array(cumulative_logprobs))
+    return [trajs[best_idx]]
+    
+    # search_strategy尚未定义
+    strategy = kwargs["search_strategy"]
 
     if strategy == "best":
         best_idx = torch.argmax(cumulative_logprobs)

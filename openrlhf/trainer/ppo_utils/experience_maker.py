@@ -747,9 +747,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             trajs = []
             for prompt in all_prompts:
                 try:
-                    search_func = globals().get(search_algo + "_vllm")
+                    search_func = globals().get(args.search_algo + "_vllm")
                 except KeyError:
-                    raise ValueError(f"Search algorithm {search_algo} not supported (ray).")
+                    raise ValueError(f"Search algorithm {args.search_algo} not supported (ray).")
                 traj = search_func(prompt, tokenizer = self.tokenizer, actor = llms)[0]
                 trajs.append(traj)
             all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
