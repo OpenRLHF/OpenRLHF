@@ -260,8 +260,10 @@ def train(args):
         top_p=args.top_p,
         pad_token_id=tokenizer.pad_token_id,
         eos_token_id=tokenizer.eos_token_id,
+        stop_strings=args.stop_strings,
+        search_algo=args.search_algo,
         # remote reward model
-        remote_rm_url=args.remote_rm_url,
+        remote_rm_url=args.remote_rm_url
     )
 
     trainer.fit(args, prompts_dataloader, pretrain_dataloader, consumed_samples, num_update_steps_per_episodes)
@@ -283,10 +285,7 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    # custom
-    parser.add_argument("--search_algo", type=str, default="sampling",
-                        choices=['sampling', 'beamsearch', 'litesearch', 'bestofn'])
-
+    
     # Checkpoint
     parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--save_steps", type=int, default=-1)

@@ -48,8 +48,6 @@ def train(args):
 
     # configure strategy
     strategy = get_strategy(args)
-    strategy.search_algo = args.search_algo
-    strategy.stop_strings = args.stop_strings
 
     # if colocated, create placement group for actor and ref model explicitly.
     pg = None

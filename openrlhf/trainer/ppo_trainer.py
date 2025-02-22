@@ -85,7 +85,6 @@ class PPOTrainer(ABC):
         dataloader_pin_memory: bool = True,
         remote_rm_url: str = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
-        search_algo: str = "sampling",
         **generate_kwargs,
     ) -> None:
         assert (
@@ -93,8 +92,6 @@ class PPOTrainer(ABC):
         ), "reward_fn must be specified if using multiple reward models"
 
         super().__init__()
-
-        self.search_algo = search_algo
 
         self.strategy = strategy
         self.args = strategy.args
@@ -228,7 +225,7 @@ class PPOTrainer(ABC):
 
             for rand_prompts in self.prompts_dataloader:
                 for i, experience in enumerate(
-                    self.experience_maker.make_experience_list(rand_prompts, self.search_algo, **self.generate_kwargs)
+                    self.experience_maker.make_experience_list(rand_prompts, **self.generate_kwargs)
                 ):
                     if i == 0:
                         output = self.tokenizer.batch_decode(
