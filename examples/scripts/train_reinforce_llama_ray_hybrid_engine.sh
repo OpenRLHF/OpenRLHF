@@ -44,4 +44,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --enforce_eager \
    --vllm_enable_sleep
 
+# You could also try
+#   --use_kl_loss \
+#   --use_kl_estimator_k3 \
+
 # also supports --advantage_estimator rloo | reinforce_baseline

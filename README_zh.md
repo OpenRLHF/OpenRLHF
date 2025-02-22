@@ -42,7 +42,8 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 
 
 ## 新闻  
-- [2025/2] [LMM-R1](https://github.com/TideDra/lmm-r1) is a fork of OpenRLHF, aimed at providing high-performance RL infrastructure for reproduction of DeepSeek-R1 on multimodal tasks.
+- [2025/2] StepFunc 实现了 [OpenRLHF 的单控制器版本](https://github.com/Open-Reasoner-Zero/Open-Reasoner-Zero).
+- [2025/2] [LMM-R1](https://github.com/TideDra/lmm-r1) 是 OpenRLHF 的一个分支，旨在为多模态任务上复现 DeepSeek-R1 提供高性能的 RL 基础设施。
 - [2025/2] MIT & Microsoft 提出了 [On the Emergence of Thinking in LLMs I: Searching for the Right Intuition](https://arxiv.org/pdf/2502.06773) 基于 OpenRLHF
 - [2025/1] 港科大复现了 [DeepSeek-R1-Zero and DeepSeek-R1 training on small models 使用 OpenRLHF](https://github.com/hkust-nlp/simpleRL-reason)
 - [2024/12] 我们"提出"了 😊 [REINFORCE++ 对齐算法](https://www.researchgate.net/publication/387487679_REINFORCE_A_SIMPLE_AND_EFFICIENT_APPROACH_FOR_ALIGNING_LARGE_LANGUAGE_MODELS).
@@ -380,6 +381,32 @@ ray job submit --address="http://127.0.0.1:8265" \
 > ```
 
 所有支持算法的启动脚本和文档在 [example/scripts](./examples/scripts/) 和 [Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)
+
+## Reinforced Fine-tuning
+
+OpenRLHF 支持便捷高效的 Reinforced Fine-tuning。您只需要实现一个包含自定义 `reward_func` 函数的[文件](./examples/scripts/reward_func.py)并将其路径传递给 `remote_rm_url` 参数即可。例如：
+
+```python
+# reward_func.py
+import torch
+
+def reward_func(queries, prompts, labels):
+    # queries 是 prompts + responses
+    # labels 是 answers
+    print(queries)
+    return torch.randn(len(queries))
+```
+
+然后只需设置：
+
+```shell 
+ray job submit --address="http://127.0.0.1:8265" \
+  --runtime-env-json='{"working_dir": "/openrlhf"}' \
+  -- python3 -m openrlhf.cli.train_ppo_ray \
+  ...
+  --remote_rm_url /path/to/reward_func.py
+```
+
 
 
 ### 使用 LoRA
