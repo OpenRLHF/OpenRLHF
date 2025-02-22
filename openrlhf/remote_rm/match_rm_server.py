@@ -10,11 +10,15 @@ from openrlhf.remote_rm.qwen_math_eval_toolkit.grader import math_equal as qwen_
 from openrlhf.remote_rm.qwen_math_eval_toolkit.parser import extract_answer as qwen_extract_answer
 from multiprocessing import Process, Queue
 
+# data_fpath_list = [
+#     "/apdcephfs_sh2/share_300000800/user/antewang/Qwen2.5-Math/evaluation/data/gsm8k/train.jsonl",
+#     "/apdcephfs_sh2/share_300000800/user/antewang/Qwen2.5-Math/evaluation/data/math/train.jsonl",
+#     "/apdcephfs_sh2/share_300000800/user/antewang/Qwen2.5-Math/evaluation/data/gsm8k/test.jsonl",
+#     "/apdcephfs_sh2/share_300000800/user/antewang/Qwen2.5-Math/evaluation/data/math/test.jsonl"
+# ]
 data_fpath_list = [
-    "/apdcephfs_sh2/share_300000800/user/antewang/Qwen2.5-Math/evaluation/data/gsm8k/train.jsonl",
-    "/apdcephfs_sh2/share_300000800/user/antewang/Qwen2.5-Math/evaluation/data/math/train.jsonl",
-    "/apdcephfs_sh2/share_300000800/user/antewang/Qwen2.5-Math/evaluation/data/gsm8k/test.jsonl",
-    "/apdcephfs_sh2/share_300000800/user/antewang/Qwen2.5-Math/evaluation/data/math/test.jsonl"
+    "/app/qi/backup/data/gsm8k/train.json",
+    "/app/qi/backup/data/gsm8k/test.json",
 ]
 
 dataset = []

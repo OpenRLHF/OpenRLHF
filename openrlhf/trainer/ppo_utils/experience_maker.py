@@ -15,11 +15,11 @@ from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn, remote_rm_fn_ray
 
-from openrlhf.search_algorithm.beamsearch_efficient import search as beamsearch
-from openrlhf.search_algorithm.litesearch import search as litesearch
-from openrlhf.search_algorithm.bestofn import search as bestofn
+# from openrlhf.search_algorithm.beamsearch_efficient import search as beamsearch
+# from openrlhf.search_algorithm.litesearch import search as litesearch
+# from openrlhf.search_algorithm.bestofn import search as bestofn
 
-from openrlhf.search_algorithm.bestofn_ray import search as bestofn_ray
+# from openrlhf.search_algorithm.bestofn_ray import search as bestofn_ray
 
 import random
 

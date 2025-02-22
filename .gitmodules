@@ -1,0 +1,3 @@
+[submodule "openrlhf/remote_rm/ds_prover/lean/mathlib4"]
+	path = openrlhf/remote_rm/ds_prover/lean/mathlib4
+	url = https://github.com/leanprover-community/mathlib4.git
