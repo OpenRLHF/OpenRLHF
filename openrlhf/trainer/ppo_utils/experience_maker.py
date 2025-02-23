@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from openrlhf.models.actor import Actor
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean, unpacking_samples
+from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn, remote_rm_fn_ray
 
@@ -549,16 +550,14 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         if self.vllm_engines is None:
             return super().generate_samples(all_prompts, all_labels, **generate_kwargs)
 
+        # DeepSpeed offload when colocate_all_models
+
         # vLLM generation
         samples = self._generate_vllm(all_prompts, all_labels, **generate_kwargs)
 
         # vLLM offload when colocate_all_models
         if self.strategy.args.vllm_enable_sleep:
-            if torch.distributed.get_rank() == 0:
-                refs = []
-                for engine in self.vllm_engines:
-                    refs.append(engine.sleep.remote())
-                ray.get(refs)
+            batch_vllm_engine_call(self.vllm_engines, "sleep")
         return samples
 
     @torch.no_grad()
