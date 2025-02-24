@@ -27,8 +27,8 @@ def get_full_traj(traj, tokenizer, actor, **kwargs):
     sequences = tokenizer.batch_decode(outputs.sequences, keep_special_tokens=True)
     sequences = [clean_pad_token(seq, tokenizer.pad_token) for seq in sequences]
     cumulative_logprobs = outputs.scores
-    custom_logprobs = None
-    return sequences, cumulative_logprobs, custom_logprobs
+    avg_logprobs = None
+    return sequences, cumulative_logprobs, avg_logprobs
 
 def get_scores(trajs, tokenizer, critic):
     input_ids = tokenizer(trajs, return_tensors="pt", padding=True, truncation=True)
@@ -36,7 +36,7 @@ def get_scores(trajs, tokenizer, critic):
     outputs = critic.compute_value(**input_ids, return_dict=False)
     return (torch.clamp(outputs[0].squeeze(), min=-1, max=1) + 1) / 2
 
-def get_full_trajs_vllm(query, tokenizer, llms, **kwargs):
+def get_full_trajs_vllm(all_prompts, tokenizer, llms, **kwargs):
     from vllm import SamplingParams
     sampling_params = SamplingParams(
         temperature=kwargs.get("temperature", DEFAULT_TEMPERATURE),
@@ -48,9 +48,6 @@ def get_full_trajs_vllm(query, tokenizer, llms, **kwargs):
         include_stop_str_in_output=True,
         logprobs = 0,
     )
-
-    # Expand prompt list based on the number of samples per prompt
-    all_prompts = [query] * kwargs.get("search_budget", DEFAULT_N)
     all_prompt_token_ids = tokenizer(all_prompts, add_special_tokens=False, max_length=1024, truncation=True,)["input_ids"]
 
     # Distribute requests to engines and collect responses to outputs
@@ -67,9 +64,8 @@ def get_full_trajs_vllm(query, tokenizer, llms, **kwargs):
     all_outputs = sum(ray.get(all_output_refs), [])
     sequences = [output.outputs[0].text for output in all_outputs]
     cumulative_logprobs = [output.outputs[0].cumulative_logprob for output in all_outputs]
-    # custom logprobs, 目前这样写和上面cumulative_logprob一样
-    custom_logprobs = [sum(list(item.values())[0].logprob for item in output.outputs[0].logprobs) for output in all_outputs]
-    return sequences, cumulative_logprobs, custom_logprobs
+    avg_logprobs = [sum(list(item.values())[0].logprob for item in output.outputs[0].logprobs) / len(output.outputs[0].logprobs) for output in all_outputs] # if the same logprob, prefer longer sequence
+    return sequences, cumulative_logprobs, avg_logprobs
 
 def extract_numbers(text):
     ANS_RE = re.compile(r"(\-?[0-9\.\,]+)")
@@ -148,34 +144,40 @@ def search(query, tokenizer, actor, critic, **kwargs):
         else:
             return [random.choice(_sorted_trajs["trajs"]) for _sorted_trajs in sorted_trajs[:2]]
 
-def search_vllm(query, tokenizer, actor, critic=None, **kwargs):
-    trajs, cumulative_logprobs, custom_logprobs = get_full_trajs_vllm(query, tokenizer, actor)
-    best_idx = np.argmax(np.array(cumulative_logprobs))
-    return [trajs[best_idx]]
-    
-    # search_strategy尚未定义
-    strategy = kwargs["search_strategy"]
-
-    if strategy == "best":
-        best_idx = torch.argmax(cumulative_logprobs)
-        return [trajs[best_idx]]
-    elif strategy == "voting":
-        question = query[len("Question:"): -len("Answer: Let's think step by step\n")].strip()
-        predictions = {}
-        ref, data_type = v["ref"], v["type"]
-        has_gold = False
-        for traj, score in zip(trajs, cumulative_logprobs.tolist()):
-            hyp = extract_answer(clean_eos(traj, tokenizer.eos_token), data_type)
-            if hyp == "[INVALID]":
-                continue
-            flag = False
-            for k in predictions:
-                if grade_answer(k, hyp): # simple string match is also ok, this method would be better
-                    flag = True
-                    predictions[k]["score"] += score
-                    predictions[k]["trajs"].append(traj)
-                    break
-            if not flag:
-                predictions[hyp] = {"score": score, "trajs": [traj]}
-        sorted_trajs = sorted(predictions.values(), key=lambda x: x["score"] / len(x["trajs"]), reverse=True)
-        return [random.choice(sorted_trajs[0]["trajs"])]
+def search_vllm(queries, tokenizer, actor, critic=None, search_args=None):
+    if not isinstance(queries, list):
+        queries = [queries]
+    # Expand prompt list based on the number of samples per prompt
+    search_budget = search_args.get("search_budget", DEFAULT_N)
+    all_prompts = sum([[prompt] * search_budget for prompt in queries], [])
+    trajs, cumulative_logprobs, avg_logprobs = get_full_trajs_vllm(all_prompts, tokenizer, actor)
+    chosen_trajs = []
+    for i in range(0, len(all_prompts), search_budget):
+        if search_args["compute_reward_strategy"] == "cumulative":
+            _rewards = cumulative_logprobs[i:i+search_budget]
+        elif search_args["compute_reward_strategy"] == "average":
+            _rewards = avg_logprobs[i:i+search_budget]
+        else:
+            raise Exception("Invalid compute_reward_strategy")
+        _trajs = trajs[i:i+search_budget]
+        if search_args["voting"]:
+            predictions = {} # we do not remove [INVALID], as the model has to learn good format
+            for traj, reward in zip(_trajs, _rewards):
+                hyp = extract_answer(clean_eos(traj, tokenizer.eos_token), "math")
+                flag = False
+                for k in predictions:
+                    if grade_answer(k, hyp):
+                        flag = True
+                        predictions[k]["score"] += 1 # cannot use logprob here
+                        predictions[k]["trajs"].append({"text": traj, "reward": reward})
+                        break
+                if not flag:
+                    predictions[hyp] = {"score": 1, "trajs": [{"text": traj, "reward": reward}]}
+            sorted_trajs = sorted(predictions.values(), key=lambda x: x["score"], reverse=True)
+            best_trajs = sorted_trajs[0]["trajs"]
+            best_idx = np.argmax(np.array([_traj["reward"] for _traj in best_trajs]))
+            chosen_trajs.append(best_trajs[best_idx]["text"])
+        else:
+            best_idx = np.argmax(np.array(_rewards))
+            chosen_trajs.append(_trajs[best_idx])
+    return chosen_trajs

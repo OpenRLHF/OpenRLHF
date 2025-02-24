@@ -614,7 +614,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         else:
             # remote RM
             if not self.packing_samples:
-                queries = self.tokenizer.batch_decode(sequences_cpu, skip_special_tokens=False)
+                queries = self.tokenizer.batch_decode(sequences_cpu, skip_special_tokens=True)
             else:
                 sequences_list = []
                 offset = 0
@@ -713,7 +713,6 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             llms = self.vllm_engines[rank::world_size]
 
         args = self.strategy.args
-
         if args.search_algo == "sampling":
             sampling_params = SamplingParams(
                 temperature=kwargs.get("temperature", 1.0),
@@ -743,15 +742,21 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             # Retrieve and combine results from all outputs
             all_outputs = sum(ray.get(all_output_refs), [])
         else:
-            # search, have not gone through testing!
-            trajs = []
-            for prompt in all_prompts:
-                try:
-                    search_func = globals().get(args.search_algo + "_vllm")
-                except KeyError:
-                    raise ValueError(f"Search algorithm {args.search_algo} not supported (ray).")
-                traj = search_func(prompt, tokenizer = self.tokenizer, actor = llms)[0]
-                trajs.append(traj)
+            try:
+                search_func = globals().get(args.search_algo + "_vllm")
+            except KeyError:
+                raise ValueError(f"Search algorithm {args.search_algo} not supported (ray).")
+            trajs = search_func(all_prompts, tokenizer = self.tokenizer, actor = llms, search_args=args.search_args)
+            
+            # trajs = []
+            # for prompt in all_prompts:
+            #     try:
+            #         search_func = globals().get(args.search_algo + "_vllm")
+            #     except KeyError:
+            #         raise ValueError(f"Search algorithm {args.search_algo} not supported (ray).")
+            #     traj = search_func(prompt, tokenizer = self.tokenizer, actor = llms)[0]
+            #     trajs.append(traj)
+            
             all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
             all_traj_token_ids = self.tokenize_fn(trajs, self.prompt_max_len + kwargs.get("max_new_tokens", 1024), padding=False)["input_ids"]
 
