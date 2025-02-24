@@ -213,8 +213,8 @@ class SFTDataset(Dataset):
             if self.multiturn:
                 if len(infos["response_ranges"]) >= 1:
                     for i in range(len(info["response_ranges"])):
-                        info["response_ranges"][i][0] += infos["response_ranges"][-1][-1][1] # end_index of the last response of the last item
-                        info["response_ranges"][i][1] += infos["response_ranges"][-1][-1][1]
+                        info["response_ranges"][i][0] += sum(infos["input_length"][:-1])
+                        info["response_ranges"][i][1] += sum(infos["input_length"][:-1])
                 infos["response_ranges"].append(info["response_ranges"])
             index += 1
 
