@@ -32,7 +32,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --bf16 \
    --actor_learning_rate 5e-7 \
    --critic_learning_rate 9e-6 \
-   --init_kl_coef 0.01 \
+   --init_kl_coef 1e-4 \
    --prompt_data OpenRLHF/prompt-collection-v0.1 \
    --input_key context_messages \
    --apply_chat_template \
@@ -43,5 +43,9 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_sync_backend nccl \
    --enforce_eager \
    --vllm_enable_sleep
+
+# You could also try
+#   --use_kl_loss \
+#   --use_kl_estimator_k3 \
 
 # also supports --advantage_estimator rloo | reinforce_baseline

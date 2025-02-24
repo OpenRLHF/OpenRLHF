@@ -25,7 +25,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --prompt_max_len 1024 \
    --max_samples 100000 \
    --generate_max_len 1024 \
-   --init_kl_coef 1e-6 \
+   --init_kl_coef 1e-3 \
    --gamma 1.0 \
    --use_kl_loss \
    --use_kl_estimator_k3 \
