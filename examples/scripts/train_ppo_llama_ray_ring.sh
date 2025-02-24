@@ -1,7 +1,7 @@
 set -x 
 
 ray job submit --address="http://127.0.0.1:8265" \
-   --runtime-env-json='{"working_dir": "/home/user/OpenRLHF"}' \
+   --runtime-env-json='{"working_dir": "/openrlhf"}' \
    -- python3 -m openrlhf.cli.train_ppo_ray \
    --ref_num_nodes 1 \
    --ref_num_gpus_per_node 2 \
@@ -42,6 +42,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --load_checkpoint \
    --ring_attn_size 2 \
    --ring_head_stride 2 \
+   --use_wandb {wandb_token}
 
 # --runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}' [Install deps]
 # --ref_reward_offload [Offload to CPU]
