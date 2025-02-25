@@ -72,3 +72,27 @@ def convert_ring_attn_params(sequences, attention_mask, packed_seq_lens, ring_at
     position_ids = reset_ring_attn_position_ids(start, end, packed_seq_lens)
     update_ring_attn_params(packed_seq_lens, total_seq_len)
     return sequences, attention_mask, position_ids
+
+def pad_sequences(sequences, attention_mask, num_actions, packed_seq_lens, ring_attn_group):
+    ring_attn_size = dist.get_world_size(group=ring_attn_group)
+    pad_len = (ring_attn_size - sequences.shape[-1] % ring_attn_size) % ring_attn_size
+    padded = torch.tensor([0] * pad_len, device=sequences.device, dtype=sequences.dtype).unsqueeze(0)
+    sequences = torch.cat([sequences, padded], dim=1)
+    attention_mask = torch.cat([attention_mask, (len(sequences) + 1) * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=-1)
+    num_actions[-1] += pad_len
+    packed_seq_lens[-1] += pad_len
+    return sequences, attention_mask, num_actions, packed_seq_lens
+
+def unpad_sequences(sequences, attention_mask, num_actions, packed_seq_lens, ring_attn_group, action_probs=None, values=None):
+    ring_attn_size = dist.get_world_size(group=ring_attn_group)
+    pad_len = (ring_attn_size - sequences.shape[-1] % ring_attn_size) % ring_attn_size
+    if pad_len > 0:
+        sequences = sequences[:, :-pad_len]
+        attention_mask = attention_mask[:, :-pad_len]
+        num_actions[-1] -= pad_len
+        packed_seq_lens[-1] -= pad_len
+        if action_probs is not None:
+            action_probs = action_probs[:, :-pad_len]
+        if values is not None:
+            values = values[:, :-pad_len]
+    return sequences, attention_mask, num_actions, packed_seq_lens, pad_len, action_probs, values 
