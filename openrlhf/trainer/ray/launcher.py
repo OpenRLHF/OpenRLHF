@@ -137,7 +137,7 @@ class RewardModelRayActor(BasePPORole):
     ) -> torch.Tensor:
         device = torch.cuda.current_device()
         with torch.no_grad():
-            reward = self.model(sequences.to(device), attention_mask.to(device), ring_attn_group=self.strategy.ring_attn_group, packed_seq_lens=packed_seq_lens)
+            reward = self.model(sequences.to(device), attention_mask.to(device), ring_attn_group=self.strategy.ring_attn_group, values_allgather=True, packed_seq_lens=packed_seq_lens)
         return reward.to("cpu")
 
     def empty_cache(self) -> None:
