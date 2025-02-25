@@ -218,6 +218,7 @@ class Actor(nn.Module):
             return output
 
         if not self.packing_samples:
+            log_probs = log_probs_from_logits(output["logits"][:, :-1, :], sequences[:, 1:])
             action_log_probs = log_probs[:, -num_actions:]
         else:
             if ring_attn_group is not None and logps_allgather:
