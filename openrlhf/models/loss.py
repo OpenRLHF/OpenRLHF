@@ -58,7 +58,7 @@ class PolicyLoss(nn.Module):
     Policy Loss for PPO
     """
 
-    def __init__(self, clip_eps: float = 0.2, ring_attn_group=None) -> None:
+    def __init__(self, clip_eps: float = 0.2) -> None:
         super().__init__()
         self.clip_eps = clip_eps
 
