@@ -82,10 +82,9 @@ class ValueLoss(nn.Module):
     Value Loss for PPO
     """
 
-    def __init__(self, clip_eps: float = None, ring_attn_group=None) -> None:
+    def __init__(self, clip_eps: float = None) -> None:
         super().__init__()
         self.clip_eps = clip_eps
-        self.ring_attn_group = ring_attn_group
 
     def forward(
         self,
