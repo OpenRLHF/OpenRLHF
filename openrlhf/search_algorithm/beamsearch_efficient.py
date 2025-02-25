@@ -2,12 +2,13 @@
 
 import torch
 import re
+from openrlhf.search_algorithm.search_utils import Tree, Node, \
+    DEFAULT_TEMPERATURE, DEFAULT_BEAM_SIZE, DEFAULT_MAX_LENGTH, DEFAULT_MAX_STEP_LENGTH
 
 # temporal hard code
 LIMIT=32
 N=2
 BEAM=1
-TEMPERATURE=1
 MAX_REPEAT=2
 END_OF_STEP=["\n\n", "\n", "<|endoftext|>"]
 MAX_CHAR_PER_STEP = 512
@@ -15,63 +16,6 @@ MAX_CHAR_PER_PATH = 2048
 MAX_NEW_TOKENS=256
 ADD_GREEDY = False
 
-#### Search Tree ####
-class Node:
-    def __init__(self, content, value, parent, timestep, tree, is_leaf=False):
-        self.content = content
-        self.value = value
-        self.parent = parent
-        self.children = []
-        self.timestep = timestep
-        self.tree = tree
-        self.is_leaf = is_leaf
-
-    def get_depth(self):
-        return len(self.return_path()) + 1
-
-    def return_path(self):
-        if self.parent is None:
-            return [self.content]
-        return self.parent.return_path() + [self.content]
-
-    def print_path(self):
-        return "".join(self.return_path())
-
-class Tree:
-    def __init__(self, question):
-        self.question = question
-        self.all_nodes = []
-        self.root = Node(question, 0, None, 0, self)
-        self.all_nodes.append(self.root)
-
-    def return_timestep(self):
-        return max([node.timestep for node in self.all_nodes])
-
-    def add_node(self, content, value, parent, is_leaf=False):
-        node = Node(content, value, parent, parent.timestep + 1, self, is_leaf)
-        parent.children.append(node)
-        self.all_nodes.append(node)
-        return node
-
-    def get_beam_to_expand(self, beam_size=5):
-        curr_timestep = self.return_timestep()
-        latest_nodes = [node for node in self.all_nodes if node.is_leaf or node.timestep == curr_timestep]
-        # beam = sorted(latest_nodes, key=lambda x: x.value, reverse=True)[:beam_size]
-        content_dict = {}
-        beam = []
-        for node in sorted(latest_nodes, key=lambda x: x.value, reverse=True):
-            if content_dict.get(node.content, 0) >= MAX_REPEAT and node.value < 0:
-                continue
-            beam.append(node)
-            if len(beam) >= beam_size:
-                break
-            if not node.is_leaf:
-                if node.content not in content_dict:
-                    content_dict[node.content] = 1
-                else:
-                    content_dict[node.content] += 1
-        return [node for node in beam if not node.is_leaf]
-########
 
 def clean_pad_token(text, pad_token):
     return re.sub(pad_token, "", text)
@@ -80,7 +24,7 @@ def get_full_traj(traj, tokenizer, actor, greedy=False):
     input_ids = tokenizer(traj, return_tensors="pt")
     input_ids = {k: v.to(actor.model.device) for k, v in input_ids.items()}
     outputs = actor.model.generate(**input_ids, do_sample=not greedy, max_new_tokens=1024,
-                             temperature=TEMPERATURE, tokenizer=tokenizer, 
+                             temperature=DEFAULT_TEMPERATURE, tokenizer=tokenizer,
                              pad_token_id=tokenizer.pad_token_id, eos_token_id=tokenizer.eos_token_id)
     sequences = tokenizer.batch_decode(outputs, keep_special_tokens=True)
     sequences = [clean_pad_token(seq, tokenizer.pad_token) for seq in sequences]
@@ -90,7 +34,7 @@ def get_next_steps(trajs, tokenizer, actor):
     input_ids = tokenizer(trajs, padding=True, return_tensors="pt")
     input_ids = {k: v.to(actor.model.device) for k, v in input_ids.items()}
     outputs = actor.model.generate(**input_ids, do_sample=True, stop_strings=END_OF_STEP, max_new_tokens=MAX_NEW_TOKENS,
-                             temperature=TEMPERATURE, tokenizer=tokenizer, pad_token_id=tokenizer.pad_token_id)
+                             temperature=DEFAULT_TEMPERATURE, tokenizer=tokenizer, pad_token_id=tokenizer.pad_token_id)
     input_len = input_ids["input_ids"].shape[1]
     sequences = tokenizer.batch_decode(outputs[:, input_len:], keep_special_tokens=True)
     sequences = [clean_pad_token(seq, tokenizer.pad_token) for seq in sequences]
@@ -122,7 +66,7 @@ def search(query, tokenizer, actor, critic):
                 # print((search_iter, traj, next_step, next_value))
         else:
             break
-    
+
     # return the best traj
     terminal_nodes = [node for node in tree.all_nodes if node.is_leaf]
     final_traj = None

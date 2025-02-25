@@ -16,6 +16,7 @@ from openrlhf.trainer.ray import (
 )
 from openrlhf.utils import get_strategy
 
+import ast
 
 # NOTE: reward function for multiple reward models, replace this with your own function!
 def reward_fn(rewards: List[torch.Tensor]):
@@ -181,7 +182,10 @@ if __name__ == "__main__":
     # custom
     parser.add_argument("--search_algo", type=str, default="sampling",
                         choices=['sampling', 'beamsearch', 'litesearch', 'bestofn'])
-    parser.add_argument("--search_budget", type=int, default=8, help="number of nodes for reference")
+    def parse_python_dict(value):
+        return ast.literal_eval(value)
+    parser.add_argument('--search_args', type=parse_python_dict, help='Dictionary as a Python string')
+
     def comma_separated_list(value):
         return value.split(',')
     parser.add_argument("--stop_strings", type=comma_separated_list, default=[])
