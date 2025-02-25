@@ -19,6 +19,7 @@ from openrlhf.search_algorithm.beamsearch_efficient import search as beamsearch
 from openrlhf.search_algorithm.litesearch import search as litesearch
 from openrlhf.search_algorithm.bestofn import search as bestofn
 from openrlhf.search_algorithm.bestofn import search_vllm as bestofn_vllm
+from openrlhf.search_algorithm.beamsearch_efficient import search_vllm as beamsearch_vllm
 
 import random
 
@@ -746,17 +747,10 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 search_func = globals().get(args.search_algo + "_vllm")
             except KeyError:
                 raise ValueError(f"Search algorithm {args.search_algo} not supported (ray).")
+            # Expand prompt list based on the number of samples per prompt for search as well
+            all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
             trajs = search_func(all_prompts, tokenizer = self.tokenizer, actor = llms, search_args=args.search_args)
-            
-            # trajs = []
-            # for prompt in all_prompts:
-            #     try:
-            #         search_func = globals().get(args.search_algo + "_vllm")
-            #     except KeyError:
-            #         raise ValueError(f"Search algorithm {args.search_algo} not supported (ray).")
-            #     traj = search_func(prompt, tokenizer = self.tokenizer, actor = llms)[0]
-            #     trajs.append(traj)
-            
+
             all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
             all_traj_token_ids = self.tokenize_fn(trajs, self.prompt_max_len + kwargs.get("max_new_tokens", 1024), padding=False)["input_ids"]
 
@@ -768,7 +762,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 def __init__(self, prompt_token_ids, token_ids):
                     self.prompt_token_ids = prompt_token_ids
                     self.outputs = [DummyOutObj(token_ids)]
-            
+
             all_outputs = [DummyObj(prompt_token_ids, token_ids) for prompt_token_ids, token_ids in zip(all_prompt_token_ids, all_traj_token_ids)]
 
         samples_list = []
