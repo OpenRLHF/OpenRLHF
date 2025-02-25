@@ -381,13 +381,13 @@ class PPOTrainer(ABC):
         )
         # unpad sequence ensures that pad tokens do not contribute to the loss calculation.
         if self.strategy.ring_attn_group is not None:
-            sequences, attention_mask, num_actions, packed_seq_lens, action_log_probs, _ = unpad_sequences(
-                sequences, 
-                attention_mask, 
-                num_actions, 
-                packed_seq_lens, 
-                action_log_probs,
-                self.strategy.ring_attn_group
+            sequences, attention_mask, num_actions, packed_seq_lens, action_log_probs, _, _ = unpad_sequences(
+                sequences=sequences, 
+                attention_mask=attention_mask, 
+                num_actions=num_actions, 
+                packed_seq_lens=packed_seq_lens, 
+                action_log_probs=action_log_probs,
+                ring_attn_group=self.strategy.ring_attn_group
             )
 
         # loss function
@@ -514,13 +514,13 @@ class PPOTrainer(ABC):
         )
         # unpad sequence ensures that pad tokens do not contribute to the loss calculation
         if self.strategy.ring_attn_group is not None:
-            sequences, attention_mask, num_actions, packed_seq_lens, _, values = unpad_sequences(
-                sequences, 
-                attention_mask, 
-                num_actions, 
-                packed_seq_lens, 
-                values,
-                self.strategy.ring_attn_group
+            sequences, attention_mask, num_actions, packed_seq_lens, _, values, _ = unpad_sequences(
+                sequences=sequences, 
+                attention_mask=attention_mask, 
+                num_actions=num_actions, 
+                packed_seq_lens=packed_seq_lens, 
+                values=values,
+                ring_attn_group=self.strategy.ring_attn_group
             )
 
         # loss function

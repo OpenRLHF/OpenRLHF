@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from openrlhf.models.actor import Actor
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean, unpacking_samples
+from openrlhf.models.ring_attn_utils import pad_sequences, unpad_sequences
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn, remote_rm_fn_ray
 
@@ -699,16 +700,16 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             kl_mean = masked_mean(kl, action_mask, dim=-1)
         else:
             if self.strategy.ring_attn_group is not None:
-                # unpad the sequence, probs, value, kl
-                pad_len = (self.strategy.ring_attn_size - len(sequences) % self.strategy.ring_attn_size) % self.strategy.ring_attn_size
-                if pad_len > 0:
-                    sequences = sequences[:, :-pad_len]
-                    action_log_probs = action_log_probs[:, :-pad_len]
-                    if value is not None:
-                        value = value[:, :-pad_len]
-                    kl = kl[:, :-pad_len]
-                    packed_seq_lens[-1] -= pad_len
-                    num_actions[-1] -= pad_len
+                sequences, attention_mask, num_actions, packed_seq_lens, _, _, kl = unpad_sequences(
+                    sequences=sequences,
+                    attention_mask=attention_mask,
+                    num_actions=num_actions,
+                    packed_seq_lens=packed_seq_lens,
+                    ring_attn_group=self.strategy.ring_attn_group,
+                    action_log_probs=action_log_probs,
+                    values=value,
+                    kl=kl
+                )
             # convert tensor into list of tensors so that it's easier to manipulate
             # within dataset.
             sequences = unpacking_samples(sequences, packed_seq_lens)
@@ -877,12 +878,14 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
                 # pad seq makes the sequence a multiple of ring_attention_size.
                 if self.strategy.ring_attn_group is not None:
-                    pad_len = (self.strategy.ring_attn_size - len(sequences) % self.strategy.ring_attn_size) % self.strategy.ring_attn_size
-                    sequences += [pad_token_id] * pad_len
-                    output_len += pad_len
-                    packed_seq_lens[-1] += pad_len
-                    attention_mask += [i + 1] * pad_len
-                    num_actions[-1] += pad_len
+                    sequences, attention_mask, num_actions, packed_seq_lens = pad_sequences(
+                        sequences=sequences,
+                        attention_mask=attention_mask,
+                        num_actions=num_actions,
+                        packed_seq_lens=packed_seq_lens,
+                        ring_attn_group=self.strategy.ring_attn_group,
+                        pad_token_id=pad_token_id
+                    )
 
                 sequences = torch.tensor(sequences, device="cuda").unsqueeze(0)
                 attention_mask = torch.tensor(attention_mask, device="cuda").unsqueeze(0)

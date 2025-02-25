@@ -73,26 +73,39 @@ def convert_ring_attn_params(sequences, attention_mask, packed_seq_lens, ring_at
     update_ring_attn_params(packed_seq_lens, total_seq_len)
     return sequences, attention_mask, position_ids
 
-def pad_sequences(sequences, attention_mask, num_actions, packed_seq_lens, ring_attn_group):
+def pad_sequences(sequences, attention_mask, num_actions, packed_seq_lens, ring_attn_group, pad_token_id=0):
     ring_attn_size = dist.get_world_size(group=ring_attn_group)
-    pad_len = (ring_attn_size - sequences.shape[-1] % ring_attn_size) % ring_attn_size
-    padded = torch.tensor([0] * pad_len, device=sequences.device, dtype=sequences.dtype).unsqueeze(0)
-    sequences = torch.cat([sequences, padded], dim=1)
-    attention_mask = torch.cat([attention_mask, (len(sequences) + 1) * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=-1)
+    if isinstance(sequences, torch.Tensor):
+        seqlen = sequences.shape[-1]
+        pad_len = (ring_attn_size - seqlen % ring_attn_size) % ring_attn_size
+        padded = torch.tensor([pad_token_id] * pad_len, device=sequences.device, dtype=sequences.dtype).unsqueeze(0)
+        sequences = torch.cat([sequences, padded], dim=1)
+        attention_mask = torch.cat([attention_mask, (len(sequences) + 1) * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=-1)
+    elif isinstance(sequences, list):
+        seqlen = len(sequences)
+        pad_len = (ring_attn_size - seqlen % ring_attn_size) % ring_attn_size
+        sequences += [pad_token_id] * pad_len
+        attention_mask += [len(packed_seq_lens) + 1] * pad_len
     num_actions[-1] += pad_len
     packed_seq_lens[-1] += pad_len
     return sequences, attention_mask, num_actions, packed_seq_lens
 
-def unpad_sequences(sequences, attention_mask, num_actions, packed_seq_lens, ring_attn_group, action_probs=None, values=None):
+def unpad_sequences(sequences, attention_mask, num_actions, packed_seq_lens, ring_attn_group, action_log_probs=None, values=None, kl=None):
     ring_attn_size = dist.get_world_size(group=ring_attn_group)
-    pad_len = (ring_attn_size - sequences.shape[-1] % ring_attn_size) % ring_attn_size
+    if isinstance(sequences, torch.Tensor):
+        seqlen = sequences.shape[-1]
+    elif isinstance(sequences, list):
+        seqlen = len(sequences)
+    pad_len = (ring_attn_size - seqlen % ring_attn_size) % ring_attn_size
     if pad_len > 0:
         sequences = sequences[:, :-pad_len]
         attention_mask = attention_mask[:, :-pad_len]
         num_actions[-1] -= pad_len
         packed_seq_lens[-1] -= pad_len
-        if action_probs is not None:
-            action_probs = action_probs[:, :-pad_len]
+        if action_log_probs is not None:
+            action_log_probs = action_log_probs[:, :-pad_len]
         if values is not None:
             values = values[:, :-pad_len]
-    return sequences, attention_mask, num_actions, packed_seq_lens, pad_len, action_probs, values 
+        if kl is not None:
+            kl = kl[:, :-pad_len]
+    return sequences, attention_mask, num_actions, packed_seq_lens, action_log_probs, values, kl
