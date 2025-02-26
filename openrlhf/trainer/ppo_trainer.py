@@ -383,7 +383,7 @@ class PPOTrainer(ABC):
         if self.strategy.ring_attn_group is not None:
             assert pad_len is not None
             sequences, attention_mask, num_actions, packed_seq_lens, action_log_probs, _, _ = unpad_sequences(
-                pad_len=pad_len
+                pad_len=pad_len,
                 sequences=sequences, 
                 attention_mask=attention_mask, 
                 num_actions=num_actions, 
