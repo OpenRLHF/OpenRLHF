@@ -19,6 +19,7 @@ from openrlhf.search_algorithm.beamsearch_efficient import search as beamsearch
 from openrlhf.search_algorithm.litesearch import search as litesearch
 from openrlhf.search_algorithm.bestofn import search as bestofn
 from openrlhf.search_algorithm.bestofn import search_vllm as bestofn_vllm
+from openrlhf.search_algorithm.beamsearch_efficient import search_vllm as beamsearch_vllm
 
 import random
 

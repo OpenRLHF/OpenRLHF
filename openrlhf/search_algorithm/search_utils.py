@@ -2,22 +2,22 @@
 import jsonlines
 
 DEFAULT_N = 8
-DEFAULT_BEAM_SIZE = 1
-DEFAULT_TEMPERATURE = 1
+DEFAULT_EXPAND_SIZE = 1
+DEFAULT_SEARCH_STEPS = 1
+DEFAULT_TEMPERATURE = 1.0
 DEFAULT_MAX_LENGTH = 1024
 DEFAULT_MAX_STEP_LENGTH = 1024
-strategy = "best"
 
 #### Search Tree Data Structure ####
 class Node:
-    def __init__(self, content, value, parent, timestep, tree, is_leaf=False):
+    def __init__(self, content, value, parent, timestep, tree):
         self.content = content
         self.value = value
         self.parent = parent
         self.children = []
         self.timestep = timestep
         self.tree = tree
-        self.is_leaf = is_leaf
+        self.is_leaf = trajectory_finished(self.print_path())
 
     def get_depth(self):
         return len(self.return_path()) + 1
@@ -48,21 +48,8 @@ class Tree:
 
     def get_beam_to_expand(self, beam_size=5):
         curr_timestep = self.return_timestep()
-        latest_nodes = [node for node in self.all_nodes if node.is_leaf or node.timestep == curr_timestep]
-        # beam = sorted(latest_nodes, key=lambda x: x.value, reverse=True)[:beam_size]
-        content_dict = {}
-        beam = []
-        for node in sorted(latest_nodes, key=lambda x: x.value, reverse=True):
-            if content_dict.get(node.content, 0) >= MAX_REPEAT and node.value < 0:
-                continue
-            beam.append(node)
-            if len(beam) >= beam_size:
-                break
-            if not node.is_leaf:
-                if node.content not in content_dict:
-                    content_dict[node.content] = 1
-                else:
-                    content_dict[node.content] += 1
+        latest_nodes = [node for node in self.all_nodes if node.timestep == curr_timestep]
+        beam = sorted(latest_nodes, key=lambda x: x.value, reverse=True)[:beam_size]
         return [node for node in beam if not node.is_leaf]
 ########
 
@@ -89,3 +76,6 @@ def initialize_question_answer_map():
 
     answer_dict = {item["question"].strip(): {"ref": item["answer"], "type": item["type"]} for item in dataset}
     return answer_dict
+
+def trajectory_finished(tokenizer, traj):
+    return traj.endswith(tokenizer.eos_token)
