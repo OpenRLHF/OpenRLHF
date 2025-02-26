@@ -42,6 +42,11 @@ def _validate_args(args):
             actor_world_size % critic_world_size == 0
         ), f"actor_world_size must be divisible by critic_world_size, got {actor_world_size} and {critic_world_size}"
 
+    if args.use_kl_loss:
+        assert "loss" in args.kl_estimator_type
+    else:
+        assert "loss" not in args.kl_estimator_type
+
 
 def train(args):
     _validate_args(args)
@@ -316,12 +321,12 @@ if __name__ == "__main__":
     parser.add_argument("--kl_target", type=float, default=None)
     parser.add_argument("--init_kl_coef", type=float, default=0.01, help="KL penalty in PPO")
     parser.add_argument(
-        "--use_kl_estimator_k3",
-        action="store_true",
-        default=False,
+        "--kl_estimator_type",
+        type="str",
+        default="k1",
         help=(
-            "Use the k3 estimator in http://joschu.net/blog/kl-approx.html"
-            "to ensure the KL divergence calculated is non-negative"
+            "choose from k1, k2_loss, k3_loss"
+            "k3_loss is used in GRPO, and k2_loss is nearly equivalent to k1."
         ),
     )
     parser.add_argument("--aux_loss_coef", type=float, default=0, help="MoE balancing loss")

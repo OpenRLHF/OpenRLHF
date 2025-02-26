@@ -16,7 +16,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --init_kl_coef 1e-3 \
    --gamma 1.0 \
    --use_kl_loss \
-   --use_kl_estimator_k3 \
+   --kl_estimator_type k3_loss \
    --advantage_estimator group_norm \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
    --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \
@@ -46,3 +46,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_sync_backend nccl \
    --enforce_eager \
    --vllm_enable_sleep
+
+# You could also try
+#   --kl_estimator_type k2_loss \
