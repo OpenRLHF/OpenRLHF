@@ -123,6 +123,7 @@ class Samples:
     total_length: torch.Tensor
     prompts: list[str]
     labels: list[str]
+    pad_len: Optional[int]
 
 
 class NaiveExperienceMaker(ABC):
@@ -629,7 +630,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # support remote RM API with ray
         if not self.remote_rm_url:
             for rm in self.reward_model:
-                r_refs.append(rm.forward.remote(sequences_cpu, attention_mask_cpu, packed_seq_lens=packed_seq_lens))
+                r_refs.append(rm.forward.remote(sequences_cpu, attention_mask_cpu, packed_seq_lens=packed_seq_lens, pad_sequence=True))
         else:
             # remote RM
             if not self.packing_samples:
@@ -700,7 +701,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             kl_mean = masked_mean(kl, action_mask, dim=-1)
         else:
             if self.strategy.ring_attn_group is not None:
+                assert samples.pad_len is not None
                 sequences, attention_mask, num_actions, packed_seq_lens, _, _, kl = unpad_sequences(
+                    pad_len=samples.pad_len,
                     sequences=sequences,
                     attention_mask=attention_mask,
                     num_actions=num_actions,
@@ -853,6 +856,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                         total_length=attention_mask.float().sum(dim=-1),
                         prompts=prompts,
                         labels=labels,
+                        pad_len=None
                     )
                 )
             else:
@@ -878,7 +882,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
                 # pad seq makes the sequence a multiple of ring_attention_size.
                 if self.strategy.ring_attn_group is not None:
-                    sequences, attention_mask, num_actions, packed_seq_lens = pad_sequences(
+                    pad_len, sequences, attention_mask, num_actions, packed_seq_lens = pad_sequences(
                         sequences=sequences,
                         attention_mask=attention_mask,
                         num_actions=num_actions,
@@ -903,6 +907,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                         total_length=total_length,
                         prompts=prompts,
                         labels=labels,
+                        pad_len=pad_len
                     )
                 )
         return samples_list

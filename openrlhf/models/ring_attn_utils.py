@@ -86,17 +86,13 @@ def pad_sequences(sequences, attention_mask, num_actions, packed_seq_lens, ring_
         pad_len = (ring_attn_size - seqlen % ring_attn_size) % ring_attn_size
         sequences += [pad_token_id] * pad_len
         attention_mask += [len(packed_seq_lens) + 1] * pad_len
+    else:
+        raise "sequences is not available type"
     num_actions[-1] += pad_len
     packed_seq_lens[-1] += pad_len
-    return sequences, attention_mask, num_actions, packed_seq_lens
+    return pad_len, sequences, attention_mask, num_actions, packed_seq_lens
 
-def unpad_sequences(sequences, attention_mask, num_actions, packed_seq_lens, ring_attn_group, action_log_probs=None, values=None, kl=None):
-    ring_attn_size = dist.get_world_size(group=ring_attn_group)
-    if isinstance(sequences, torch.Tensor):
-        seqlen = sequences.shape[-1]
-    elif isinstance(sequences, list):
-        seqlen = len(sequences)
-    pad_len = (ring_attn_size - seqlen % ring_attn_size) % ring_attn_size
+def unpad_sequences(pad_len, sequences, attention_mask, num_actions, packed_seq_lens, ring_attn_group, action_log_probs=None, values=None, kl=None):
     if pad_len > 0:
         sequences = sequences[:, :-pad_len]
         attention_mask = attention_mask[:, :-pad_len]
