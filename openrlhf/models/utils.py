@@ -29,7 +29,7 @@ def compute_approx_kl(
     # k2 estimator loss is approximately equivalent to the
     # one-step KL divergence penalty with the k1 estimator
     # used in https://arxiv.org/pdf/2310.10505.
-    if kl_estimator_type == "k2":
+    if kl_estimator_type == "k2_loss":
         log_ratio = log_probs.float() - log_probs_base.float()
         if action_mask is not None:
             log_ratio = log_ratio * action_mask
@@ -37,8 +37,7 @@ def compute_approx_kl(
         
     # The k3 estimator is the non negative kl approximation in
     # http://joschu.net/blog/kl-approx.html
-    # Besides non negative, it is also unbiased and have lower variance.
-    if kl_estimator_type == "k3":
+    if kl_estimator_type == "k3_loss":
         log_ratio = log_probs.float() - log_probs_base.float()
         if action_mask is not None:
             log_ratio = log_ratio * action_mask
