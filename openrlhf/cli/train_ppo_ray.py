@@ -42,6 +42,11 @@ def _validate_args(args):
             actor_world_size % critic_world_size == 0
         ), f"actor_world_size must be divisible by critic_world_size, got {actor_world_size} and {critic_world_size}"
 
+    if args.use_kl_loss:
+        assert "loss" in args.kl_estimator_type
+    else:
+        assert "loss" not in args.kl_estimator_type
+
 
 def train(args):
     _validate_args(args)
