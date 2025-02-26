@@ -42,6 +42,6 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 # You could also try
 #   --use_kl_loss \
-#   --kl_estimator_type k3 | k2 \
+#   --kl_estimator_type k3_loss | k2_loss \
 
 # also supports --advantage_estimator rloo | reinforce_baseline
