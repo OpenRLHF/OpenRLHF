@@ -8,7 +8,7 @@ def compute_approx_kl(
     log_probs: torch.Tensor,
     log_probs_base: torch.Tensor,
     action_mask: Optional[torch.Tensor] = None,
-    use_kl_estimator_k3: bool = False,
+    kl_estimator_type: str = "k1",
 ) -> torch.Tensor:
     """
     Compute the approximate KL divergence between two distributions.
@@ -19,15 +19,29 @@ def compute_approx_kl(
         log_probs_base: Log probabilities of the base distribution.
         action_mask: Mask for actions.
     """
+    if kl_estimator_type == "k1":
+        log_ratio = log_probs.float() - log_probs_base.float()
+        if action_mask is not None:
+            log_ratio = log_ratio * action_mask
 
-    log_ratio = log_probs.float() - log_probs_base.float()
-    if action_mask is not None:
-        log_ratio = log_ratio * action_mask
-
+    # The k2 estimator is the non negative kl approximation in
+    # http://joschu.net/blog/kl-approx.html
+    # k2 estimator loss is approximately equivalent to the
+    # one-step KL divergence penalty with the k1 estimator
+    # used in https://arxiv.org/pdf/2310.10505.
+    if kl_estimator_type == "k2":
+        log_ratio = log_probs.float() - log_probs_base.float()
+        if action_mask is not None:
+            log_ratio = log_ratio * action_mask
+        log_ratio = log_ratio ** 2 / 2.0
+        
     # The k3 estimator is the non negative kl approximation in
     # http://joschu.net/blog/kl-approx.html
     # Besides non negative, it is also unbiased and have lower variance.
-    if use_kl_estimator_k3:
+    if kl_estimator_type == "k3":
+        log_ratio = log_probs.float() - log_probs_base.float()
+        if action_mask is not None:
+            log_ratio = log_ratio * action_mask
         log_ratio = -log_ratio
         log_ratio = log_ratio.exp() - 1 - log_ratio
 
