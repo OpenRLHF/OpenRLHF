@@ -332,12 +332,12 @@ if __name__ == "__main__":
     parser.add_argument("--kl_target", type=float, default=None)
     parser.add_argument("--init_kl_coef", type=float, default=0.01, help="KL penalty in PPO")
     parser.add_argument(
-        "--use_kl_estimator_k3",
-        action="store_true",
-        default=False,
+        "--kl_estimator_type",
+        type="str",
+        default="k1",
         help=(
-            "Use the k3 estimator in http://joschu.net/blog/kl-approx.html"
-            "to ensure the KL divergence calculated is non-negative"
+            "choose from k1, k2_loss, k3_loss"
+            "k3_loss is used in GRPO, and k2_loss is nearly equivalent to k1."
         ),
     )
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
