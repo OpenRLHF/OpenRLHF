@@ -882,6 +882,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                     num_actions.append(max(1, output_len))
 
                 # pad seq makes the sequence a multiple of ring_attention_size.
+                pad_len = None
                 if self.strategy.ring_attn_group is not None:
                     pad_len, sequences, attention_mask, num_actions, packed_seq_lens = pad_sequences(
                         sequences=sequences,
