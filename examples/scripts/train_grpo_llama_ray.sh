@@ -28,7 +28,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --init_kl_coef 1e-3 \
    --gamma 1.0 \
    --use_kl_loss \
-   --kl_estimator_type k3 \
+   --kl_estimator_type k3_loss \
    --advantage_estimator group_norm \
    --zero_stage 3 \
    --bf16 \
@@ -44,6 +44,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf
 
 # You could also try
-#   --kl_estimator_type k2 \
+#   --kl_estimator_type k2_loss \
 
 # also supports --advantage_estimator rloo | reinforce_baseline
