@@ -46,3 +46,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_sync_backend nccl \
    --enforce_eager \
    --vllm_enable_sleep
+
+# You could also try
+#   --kl_estimator_type k2 \
