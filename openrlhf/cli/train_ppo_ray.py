@@ -320,8 +320,8 @@ if __name__ == "__main__":
         type="str",
         default="k1",
         help=(
-            "Use the k3 estimator in http://joschu.net/blog/kl-approx.html"
-            "to ensure the KL divergence calculated is non-negative"
+            "choose from k1, k2_loss, k3_loss"
+            "k3_loss is used in GRPO, and k2_loss is nearly equivalent to k1."
         ),
     )
     parser.add_argument("--aux_loss_coef", type=float, default=0, help="MoE balancing loss")
