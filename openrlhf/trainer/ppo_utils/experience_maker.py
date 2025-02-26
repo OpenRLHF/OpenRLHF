@@ -203,6 +203,7 @@ class NaiveExperienceMaker(ABC):
         args = self.strategy.args
         # generate responses
         if self.strategy.ring_attn_group is not None:
+            # Only rank 0 in the ring attention group executes the generation function, and then broadcasts it to all other ranks.
             if self.strategy.ring_attn_rank == 0:
                 samples_list = self.generate_samples(all_prompts, all_labels, **generate_kwargs)
                 dist.broadcast_object_list(samples_list, src=dist.get_rank(), group=self.strategy.ring_attn_group)
