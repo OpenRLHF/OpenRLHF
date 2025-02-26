@@ -43,4 +43,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --save_steps -1 \
    --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf
 
+# You could also try
+#   --kl_estimator_type k2 \
+
 # also supports --advantage_estimator rloo | reinforce_baseline
