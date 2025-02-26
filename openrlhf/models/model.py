@@ -217,6 +217,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
                     if pad_sequence:
                         ring_attn_size = torch.distributed.get_world_size(ring_attn_group)
                         pad_len = (ring_attn_size - reward.shape[-1] % ring_attn_size) % ring_attn_size
+                        # Since padding was applied at the end during packing, the position of the EOS (End Of Sequence) needs to be corrected.
                         eos_indices[-1] -= pad_len + 1
                 else:
                     reward = values
