@@ -484,6 +484,7 @@ AIおよびNLP分野への貢献に対して、以下のプロジェクトおよ
 - [Ray ↗](https://github.com/ray-project/ray)
 
 私たちのプロジェクトは、[ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/Chat)および[DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat)にも感謝します。プロジェクトの初期段階で、彼らのコードデザインを参考にしました。
+私たちのプロジェクトでは、ring attention の開発にあたり GPU サポートを提供してくださった [Netmind.AI](https://www.netmind.ai/) にも深く感謝いたします。
 
 (2024/7) 私たちのGitHub組織はOpenLLMAIからOpenRLHFに変更されました。
 
