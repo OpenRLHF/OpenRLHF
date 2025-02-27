@@ -2,11 +2,11 @@
 import jsonlines
 
 DEFAULT_N = 8
-DEFAULT_BEAM_SIZE = 1
-DEFAULT_TEMPERATURE = 1
+DEFAULT_BEAM_SIZE = 4
+DEFAULT_SEARCH_STEPS = 5
+DEFAULT_TEMPERATURE = 1.0
 DEFAULT_MAX_LENGTH = 1024
-DEFAULT_MAX_STEP_LENGTH = 1024
-strategy = "best"
+DEFAULT_MAX_STEP_LENGTH = 256
 
 #### Search Tree Data Structure ####
 class Node:
@@ -48,7 +48,7 @@ class Tree:
 
     def get_beam_to_expand(self, beam_size=5):
         curr_timestep = self.return_timestep()
-        latest_nodes = [node for node in self.all_nodes if node.is_leaf or node.timestep == curr_timestep]
+        latest_nodes = [node for node in self.all_nodes if node.timestep == curr_timestep]
         beam = sorted(latest_nodes, key=lambda x: x.value, reverse=True)[:beam_size]
         return [node for node in beam if not node.is_leaf]
 ########
@@ -76,3 +76,6 @@ def initialize_question_answer_map():
 
     answer_dict = {item["question"].strip(): {"ref": item["answer"], "type": item["type"]} for item in dataset}
     return answer_dict
+
+def trajectory_finished(tokenizer, traj):
+    return traj.endswith(tokenizer.eos_token)

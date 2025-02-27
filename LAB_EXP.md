@@ -6,7 +6,7 @@
 mirrors.tencent.com/youngyli/openrlhf:3.0
 ```
 
-### Enviroment setup:
+### Enviroment setup for A100 (CUDA == 11.8 or 12.0):
 
 ```
 mv /root/miniconda3/envs/rlhf/lib/python3.10/site-packages/nvidia/cusparse/lib/libcusparse.so.12 /root/miniconda3/envs/rlhf/lib/python3.10/site-packages/nvidia/cusparse/lib/libcusparse.so.12.bak

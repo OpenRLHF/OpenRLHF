@@ -8,7 +8,7 @@ import numpy as np
 import jsonlines
 from tqdm import tqdm
 from openrlhf.search_algorithm.search_utils import Tree, Node, \
-    DEFAULT_TEMPERATURE, DEFAULT_BEAM_SIZE, DEFAULT_MAX_LENGTH, DEFAULT_MAX_STEP_LENGTH
+    DEFAULT_TEMPERATURE, DEFAULT_N, DEFAULT_BEAM_SIZE, DEFAULT_SEARCH_STEPS, DEFAULT_MAX_LENGTH, DEFAULT_MAX_STEP_LENGTH
 
 def clean_pad_token(text, pad_token):
     return re.sub(pad_token, "", text)
@@ -39,22 +39,32 @@ def get_step_scores(trajs, tokenizer, critic):
     outputs = critic.compute_value(**input_ids, return_dict=False)
     return (torch.clamp(outputs[0].squeeze(), min=-1, max=1) + 1) / 2
 
-def search(query, tokenizer, actor, critic):
+def search(query, tokenizer, actor, critic=None, search_args=None):
+
+    beam_size = search_args.get("beam_size", DEFAULT_BEAM_SIZE)
+    candidate_size = search_args.get("candidate_size", DEFAULT_N)
+    assert candidate_size % beam_size == 0
+    expand_size = candidate_size // beam_size
+    search_steps = search_args.get("search_steps", DEFAULT_SEARCH_STEPS)
+    max_step_length = search_args.get("max_step_length", DEFAULT_MAX_STEP_LENGTH)
+    max_length = search_args.get("max_length", DEFAULT_MAX_LENGTH)
+    add_greedy = search_args["add_greedy"]
+
     tree = Tree(query)
     query = tree.question
-    for search_iter in range(LIMIT):
-        actions = tree.get_beam_to_expand(BEAM)
+    for search_iter in range(search_steps):
+        actions = tree.get_beam_to_expand(beam_size)
         if search_iter < 1:
-            actions = actions * BEAM
+            actions = actions * beam_size
         if actions:
             trajs = [action.print_path() for action in actions]
-            trajs, anchors = trajs * (N // BEAM), actions * (N // BEAM)
+            trajs, anchors = trajs * expand_size, actions * expand_size
             with torch.no_grad():
                 next_steps = get_next_steps(trajs, tokenizer, actor)
                 next_values = get_step_scores([traj + next_step for traj, next_step in zip(trajs, next_steps)], tokenizer, critic)
             for anchor, traj, next_step, next_value in zip(anchors, trajs, next_steps, next_values):
                 state = tree.add_node(next_step, next_value.item(), anchor, next_step.endswith(tokenizer.eos_token))
-                if len(next_step) == 0 or len(next_step) > MAX_CHAR_PER_STEP or len(traj + next_step) > MAX_CHAR_PER_PATH:
+                if len(next_step) == 0 or len(next_step) > max_step_length or len(traj + next_step) > max_length:
                     state.value = -1
                 # print((search_iter, traj, next_step, next_value))
         else:
@@ -70,8 +80,8 @@ def search(query, tokenizer, actor, critic):
         with torch.no_grad():
             final_traj = get_full_traj(query, tokenizer, actor)
         # return None
-    
-    if ADD_GREEDY:
+
+    if add_greedy:
         with torch.no_grad():
             greedy_traj = get_full_traj(query, tokenizer, actor, greedy=True)
         return [final_traj, greedy_traj]
@@ -149,57 +159,18 @@ def get_next_steps_vllm(trajs, tokenizer, actor):
     avg_logprobs = [sum(list(item.values())[0].logprob for item in output.outputs[0].logprobs) / len(output.outputs[0].logprobs) for output in all_outputs] # if the same logprob, prefer longer sequence
     return sequences, cumulative_logprobs, avg_logprobs
 
-# def search_vllm(queries, tokenizer, actor, critic=None, search_args=None):
-#     rank = torch.distributed.get_rank()
-#     results = []
-#     pbar = tqdm(total=len(queries))
-#     for query in queries:
-#         tree = Tree(query)
-#         query = tree.question
-#         for search_iter in range(LIMIT):
-#             actions = tree.get_beam_to_expand(BEAM)
-#             if search_iter < 1:
-#                 actions = actions * BEAM
-#             if actions:
-#                 trajs = [action.print_path() for action in actions]
-#                 trajs, anchors = trajs * (N // BEAM), actions * (N // BEAM)
-#                 with torch.no_grad():
-#                     next_steps, sum_logps, avg_logps = get_next_steps_vllm(trajs, tokenizer, actor)
-#                     next_values = avg_logps if search_args["compute_reward_strategy"] == "average" else sum_logps # seem sum logps suitable for beamsearch
-#                     # next_values = get_step_scores([traj + next_step for traj, next_step in zip(trajs, next_steps)], tokenizer, critic)
-#                 for anchor, traj, next_step, next_value in zip(anchors, trajs, next_steps, next_values):
-#                     next_value = next_value + anchor.value if anchor.parent is not None else next_value # needed by logp, remember to remove this line when using PRM
-#                     state = tree.add_node(next_step, next_value, anchor, next_step.endswith(tokenizer.eos_token))
-#                     if len(next_step) == 0 or len(next_step) > MAX_CHAR_PER_STEP or len(traj + next_step) > MAX_CHAR_PER_PATH:
-#                         state.value = -1
-#                     # print((rank, search_iter, traj, next_step, next_value))
-#             else:
-#                 break
-        
-#         # return the best traj
-#         terminal_nodes = [node for node in tree.all_nodes if node.is_leaf]
-#         if terminal_nodes:
-#             best_node = max(terminal_nodes, key=lambda x: x.value)
-#             results.append(best_node.print_path())
-#         else:
-#             with torch.no_grad():
-#                 results.append(get_full_traj_vllm(query, tokenizer, actor)[0])
-#             # return None
-#         pbar.update(1)
-#     pbar.close()
-#     return results
 
 # multi-threads
 def process_single_query(query, args):
     """处理单个查询的线程函数"""
     tree = Tree(query)
     processed_query = tree.question
-    
+
     for search_iter in range(args["LIMIT"]):
         actions = tree.get_beam_to_expand(args["BEAM"])
         if search_iter < 1:
             actions = actions * args["BEAM"]
-        
+
         if not actions:
             break
 
@@ -236,7 +207,7 @@ from functools import partial
 
 def search_vllm(queries, tokenizer, actor, critic=None, search_args=None):
     """多线程处理主函数"""
-    
+
     rank = torch.distributed.get_rank()  # 注意：需要确认多线程环境下的rank行为
 
     worker_args = {
