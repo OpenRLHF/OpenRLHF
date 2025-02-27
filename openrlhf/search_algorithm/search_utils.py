@@ -2,22 +2,22 @@
 import jsonlines
 
 DEFAULT_N = 8
-DEFAULT_EXPAND_SIZE = 1
-DEFAULT_SEARCH_STEPS = 1
+DEFAULT_BEAM_SIZE = 4
+DEFAULT_SEARCH_STEPS = 5
 DEFAULT_TEMPERATURE = 1.0
 DEFAULT_MAX_LENGTH = 1024
-DEFAULT_MAX_STEP_LENGTH = 1024
+DEFAULT_MAX_STEP_LENGTH = 256
 
 #### Search Tree Data Structure ####
 class Node:
-    def __init__(self, content, value, parent, timestep, tree):
+    def __init__(self, content, value, parent, timestep, tree, is_leaf=False):
         self.content = content
         self.value = value
         self.parent = parent
         self.children = []
         self.timestep = timestep
         self.tree = tree
-        self.is_leaf = trajectory_finished(self.print_path())
+        self.is_leaf = is_leaf
 
     def get_depth(self):
         return len(self.return_path()) + 1

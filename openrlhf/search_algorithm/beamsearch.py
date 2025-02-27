@@ -2,20 +2,23 @@ import heapq
 import numpy as np
 import torch
 import torch.distributed
-from openrlhf.search_algorithm.search_utils import DEFAULT_N, DEFAULT_EXPAND_SIZE, DEFAULT_SEARCH_STEPS, trajectory_finished
+from openrlhf.search_algorithm.search_utils import DEFAULT_N, DEFAULT_BEAM_SIZE, DEFAULT_SEARCH_STEPS, trajectory_finished
 from openrlhf.search_algorithm.beamsearch_efficient import get_next_steps_vllm, get_step_scores
 from openrlhf.search_algorithm.bestofn import get_full_trajs_vllm
 
+
+# NOTE: legendary not in use now
 def search_vllm(queries, tokenizer, actor, critic=None, search_args=None):
     if not isinstance(queries, list):
         queries = [queries]
 
-    beam_size = search_args.get("beam_size", DEFAULT_N)
-    expand_size = search_args.get("expand_size", DEFAULT_EXPAND_SIZE)
-    candidate_size = beam_size * expand_size
+    beam_size = search_args.get("beam_size", DEFAULT_BEAM_SIZE)
+    candidate_size = search_args.get("candidate_size", DEFAULT_N)
+    assert candidate_size % beam_size == 0
+    expand_size = candidate_size // beam_size
     search_steps = search_args.get("search_steps", DEFAULT_SEARCH_STEPS)
 
-    full_trajs = get_full_trajs_vllm(queries, tokenizer, actor, search_args)
+    full_trajs, _, _ = get_full_trajs_vllm(queries, tokenizer, actor)
     finished_trajs = [[] for _ in queries]  # [batch_size, list of `(traj, score)` tuples]
     prev_beam = sum([[prompt] * beam_size for prompt in queries], [])  # [batch_size * beam_size]
     for _ in range(search_steps):
@@ -40,7 +43,7 @@ def search_vllm(queries, tokenizer, actor, critic=None, search_args=None):
             n = i // candidate_size  # which query
             _trajs, _scores = [], []  # unfinished trajectories for the query
             for j in range(i, i + candidate_size):
-                if trajectory_finished(trajs[j]):
+                if trajectory_finished(tokenizer, trajs[j]):
                     finished_trajs[n].append((trajs[j], scores[j]))
                 else:
                     _trajs.append(trajs[j])
