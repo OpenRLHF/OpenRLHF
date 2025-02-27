@@ -56,6 +56,14 @@ class bdist_wheel(_bdist_wheel):
 
         return python_version, abi_tag, platform_tag
 
+target_device = os.getenv("TARGET_DEVICE", "GPU").upper()
+
+if target_device == "NPU":
+    requirements_file = "requirements-npu.txt"
+else:
+    requirements_file = "requirements.txt"
+
+install_requires = _fetch_requirements(requirements_file)
 
 # Setup configuration
 setup(
@@ -72,7 +80,7 @@ setup(
     description="A Ray-based High-performance RLHF framework.",
     long_description=_fetch_readme(),
     long_description_content_type="text/markdown",
-    install_requires=_fetch_requirements("requirements.txt"),
+    install_requires=install_requires,
     extras_require={
         "vllm": ["vllm==0.7.2"],
         "vllm_latest": ["vllm>0.7.2"],

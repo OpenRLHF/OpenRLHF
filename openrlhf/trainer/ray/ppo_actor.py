@@ -17,6 +17,7 @@ from openrlhf.trainer.ppo_utils import Experience, RemoteExperienceMaker
 from openrlhf.utils import blending_datasets, get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.distributed_util import init_process_group
+from openrlhf import IS_NPU_AVAILABLE
 
 from .launcher import BasePPORole
 from .utils import get_physical_gpu_id
@@ -58,6 +59,9 @@ class ActorPPOTrainer(PPOTrainer):
         )
 
         backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
+        if IS_NPU_AVAILABLE:
+            backend = "hccl"
+
         self.use_cuda_ipc = False
         if backend == "nccl" and self.strategy.args.colocate_all_models:
             self.use_cuda_ipc = True
@@ -266,7 +270,7 @@ class ActorPPOTrainer(PPOTrainer):
         torch.distributed.barrier()
 
 
-@ray.remote(num_gpus=1)
+@ray.remote
 class ActorModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
         args = strategy.args

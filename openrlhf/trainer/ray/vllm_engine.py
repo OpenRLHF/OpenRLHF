@@ -7,6 +7,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from vllm import LLM
 
 from openrlhf.utils.logging_utils import init_logger
+from openrlhf import ACCELERATOR_TYPE
 
 logger = init_logger(__name__)
 
@@ -27,6 +28,7 @@ class LLMRayActor:
             # stop ray from manipulating CUDA_VISIBLE_DEVICES
             # at the top-level when the distributed_executor_backend is ray.
             os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+            os.environ.pop("ASCEND_RT_VISIBLE_DEVICES", None)
         # every worker will use 0.2 GPU, so that we can schedule
         # 2 instances on the same GPUs.
         if bundle_indices is not None:
@@ -141,7 +143,7 @@ def create_vllm_engines(
                 )
         # Distributed RLHF
         elif tensor_parallel_size > 1:
-            bundles = [{"GPU": 1, "CPU": 1}] * tensor_parallel_size
+            bundles = [{ACCELERATOR_TYPE: 1, "CPU": 1}] * tensor_parallel_size
             pg = placement_group(bundles)
             ray.get(pg.ready())
 
@@ -157,7 +159,8 @@ def create_vllm_engines(
         vllm_engines.append(
             LLMRayActor.options(
                 num_cpus=0,
-                num_gpus=num_gpus,
+                num_gpus=num_gpus if ACCELERATOR_TYPE == "GPU" else 0,
+                resources=None if ACCELERATOR_TYPE == "GPU" else {ACCELERATOR_TYPE: num_gpus},
                 scheduling_strategy=scheduling_strategy,
             ).remote(
                 model=pretrain,

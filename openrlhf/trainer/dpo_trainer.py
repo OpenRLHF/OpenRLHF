@@ -2,7 +2,6 @@ import os
 from abc import ABC
 
 import torch
-from flash_attn.utils.distributed import all_gather
 from torch.nn import functional as F
 from torch.optim import Optimizer
 from tqdm import tqdm
@@ -10,6 +9,10 @@ from tqdm import tqdm
 from openrlhf.models import DPOLoss
 from openrlhf.models.utils import log_probs_from_logits
 from openrlhf.utils.distributed_sampler import DistributedSampler
+from transformers.utils import is_flash_attn_2_available
+
+if is_flash_attn_2_available():
+    from flash_attn.utils.distributed import all_gather
 
 
 class DPOTrainer(ABC):
