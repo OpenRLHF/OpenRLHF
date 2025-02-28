@@ -19,8 +19,6 @@ def compute_approx_kl(
         log_probs_base: Log probabilities of the base distribution.
         action_mask: Mask for actions.
     """
-    # The relationship and distinction between the KL estimator and
-    # KL loss can be found at: https://zhuanlan.zhihu.com/p/26077220144
     
     if kl_estimator_type == "k1":
         log_ratio = log_probs.float() - log_probs_base.float()
