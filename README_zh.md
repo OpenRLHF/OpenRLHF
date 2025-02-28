@@ -500,6 +500,7 @@ python -m openrlhf.cli.lora_combiner \
 - [Ray ↗](https://github.com/ray-project/ray)
 
 我们的项目还想要感谢 [ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/Chat) 和 [DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat)。在项目的早期阶段，我们参考了他们的代码设计。
+我们的项目还想要感谢 [Netmind.AI](https://www.netmind.ai/) 对于ring attention开发的GPU支持。
 
 (2024/7) 我们的 GitHub 组织从 OpenLLMAI 迁移到了 OpenRLHF.
 

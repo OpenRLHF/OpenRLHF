@@ -185,6 +185,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             attention_mask: Optional[torch.Tensor] = None,
             return_output=False,
             ring_attn_group=None,
+            pad_sequence=False,
             packed_seq_lens=None,
         ) -> torch.Tensor:
             if not self.packing_samples:
@@ -209,13 +210,17 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
 
             if self.packing_samples:
-                if ring_attn_group is not None:
-                    reward = all_gather(values, ring_attn_group).reshape(1, -1)
-                else:
-                    reward = values
-                # TODO: convert packed_seq_lens into torch tensor in advance
                 packed_seq_lens = torch.tensor(packed_seq_lens, device=values.device)
                 eos_indices = packed_seq_lens.cumsum(dim=0) - 1
+                if ring_attn_group is not None:
+                    reward = all_gather(values, ring_attn_group).reshape(1, -1)
+                    if pad_sequence:
+                        ring_attn_size = torch.distributed.get_world_size(ring_attn_group)
+                        pad_len = (ring_attn_size - reward.shape[-1] % ring_attn_size) % ring_attn_size
+                        # Since padding was applied at the end during packing, the position of the EOS (End Of Sequence) needs to be corrected.
+                        eos_indices[-1] -= pad_len + 1
+                else:
+                    reward = values
                 reward = reward.squeeze(0).gather(dim=0, index=eos_indices)
             else:
                 eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
@@ -258,6 +263,8 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             num_actions: Optional[Union[int, list[int]]] = None,
             attention_mask: Optional[torch.Tensor] = None,
             return_output=False,
+            ring_attn_group=None,
+            values_allgather=False,
             packed_seq_lens=None,
         ) -> torch.Tensor:
             if not self.packing_samples:
@@ -266,7 +273,12 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 position_ids.masked_fill_(attention_mask == 0, 1)
             else:
                 # convert attention_mask to position_ids
-                position_ids = reset_position_ids(attention_mask)
+                if ring_attn_group is not None:
+                    input_ids, attention_mask, position_ids = convert_ring_attn_params(
+                        input_ids, attention_mask, packed_seq_lens, ring_attn_group
+                    )
+                else:
+                    position_ids = reset_position_ids(attention_mask)
                 # explicitly ignore attention_mask for packing_samples
                 attention_mask = None
 
@@ -274,8 +286,11 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 input_ids, attention_mask=attention_mask, position_ids=position_ids
             )
             last_hidden_states = outputs["last_hidden_state"]
-            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)[:, :-1]
-
+            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
+            if ring_attn_group is not None and values_allgather:
+                values = all_gather(values, ring_attn_group).reshape(values.shape[0], -1)[:, :-1]
+            else:
+                values = values[:, :-1]
             # normalize reward
             if self.normalize_reward:
                 values = (values - self.mean) / self.std

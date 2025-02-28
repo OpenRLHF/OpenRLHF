@@ -159,7 +159,7 @@ class CriticModelRayActor(BasePPORole):
         self.critic.eval()
         with torch.no_grad():
             value = self.critic(
-                sequences.to(device), num_actions, attention_mask.to(device), packed_seq_lens=packed_seq_lens
+                sequences.to(device), num_actions, attention_mask.to(device), ring_attn_group=self.strategy.ring_attn_group, values_allgather=True, packed_seq_lens=packed_seq_lens
             )
         self.critic.train()  # reset model state
         return value.to("cpu")
