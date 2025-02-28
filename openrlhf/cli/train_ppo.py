@@ -439,11 +439,6 @@ if __name__ == "__main__":
     if args.advantage_estimator in ["rloo", "reinforce_baseline", "group_norm"]:
         assert args.n_samples_per_prompt > 1, f"{args.advantage_estimator} requires n_samples_per_prompt > 1"
 
-    if args.use_kl_loss:
-        assert "loss" in args.kl_estimator_type
-    else:
-        assert "loss" not in args.kl_estimator_type
-
     if args.input_template and "{}" not in args.input_template:
         print("[Warning] {} not in args.input_template, set to None")
         args.input_template = None
