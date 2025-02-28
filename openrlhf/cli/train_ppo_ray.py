@@ -321,12 +321,12 @@ if __name__ == "__main__":
     parser.add_argument("--kl_target", type=float, default=None)
     parser.add_argument("--init_kl_coef", type=float, default=0.01, help="KL penalty in PPO")
     parser.add_argument(
-        "--kl_estimator_type",
+        "--kl_estimator",
         type="str",
         default="k1",
+        choices=["k1", "k2", "k3"],
         help=(
-            "choose from k1, k2_loss, k3_loss"
-            "k3_loss is used in GRPO, and k2_loss is nearly equivalent to k1."
+            "In GRPO, k3 is utilized as the loss function, while k2, when used as the loss, is nearly equivalent to k1."
         ),
     )
     parser.add_argument("--aux_loss_coef", type=float, default=0, help="MoE balancing loss")
