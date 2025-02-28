@@ -342,7 +342,7 @@ class NaiveExperienceMaker(ABC):
                 action_log_probs,
                 base_action_log_probs,
                 action_mask=action_mask,
-                kl_estimator_type=self.strategy.args.kl_estimator_type,
+                kl_estimator=self.strategy.args.kl_estimator,
             )
         else:
             kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=action_log_probs.device)
