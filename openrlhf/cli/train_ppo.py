@@ -441,10 +441,10 @@ if __name__ == "__main__":
 
     if args.use_kl_loss:
         if args.kl_estimate not in ["k2", "k3"]:
-            warnings.warn(f"When using KL as a loss, {args.kl_estimate} should be 'k2' or 'k3'.")
+            warnings.warn(f"Recommend setting {args.kl_estimate} to 'k2' or 'k3' when using KL as a loss")
     else:
         if args.kl_estimate not in ["k1"]:
-            warnings.warn(f"When not using KL as a loss, {args.kl_estimate} should be 'k1'.")
+            warnings.warn(f"Recommend setting {args.kl_estimate} to 'k1' when not using KL as a loss.")
 
     if args.input_template and "{}" not in args.input_template:
         print("[Warning] {} not in args.input_template, set to None")
