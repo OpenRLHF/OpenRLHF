@@ -28,3 +28,74 @@ def get_physical_gpu_id():
     device = torch.cuda.current_device()
     props = torch.cuda.get_device_properties(device)
     return str(props.uuid)
+
+
+#######################
+# deepspeed offload
+#######################
+from deepspeed.runtime.engine import DeepSpeedEngine
+
+
+def _get_deepspeed_engine(ctx) -> DeepSpeedEngine:
+    from openrlhf.models import Actor
+
+    model = ctx.model.model if isinstance(ctx.model, Actor) else ctx.model
+    assert isinstance(model, DeepSpeedEngine), "Model must be a DeepSpeedEngine instance"
+    
+    return model
+
+
+def offload_deepspeed_states(ctx, pin_memory=True, non_blocking=True):
+    assert ctx.model is not None
+
+    model = _get_deepspeed_engine(ctx)
+    zero_stage = model.zero_optimization_stage() # config['zero_optimization']['stage']
+    adam_offload = model.config['zero_optimization']['offload_optimizer']['device'] == 'cpu'
+
+    # state offloading not required when using Adam optimizer offloading
+    if adam_offload:
+        return
+
+    if zero_stage != 3:
+        raise NotImplementedError("Only Zero stage 3 is currently supported")
+
+    # if zero_stage == 3 and not adam_offload:
+    import torch
+
+    from deepspeed.runtime.zero.offload_config import OffloadStateTypeEnum, OffloadDeviceEnum
+
+    model.optimizer.offload_states(
+        include=[
+            OffloadStateTypeEnum.optim_states,
+            OffloadStateTypeEnum.contiguous_grad_buffer,
+            OffloadStateTypeEnum.hp_params,
+            # OffloadStateTypeEnum.lp_grads,
+            # OffloadStateTypeEnum.lp_params, # Not released yet, fixed in https://github.com/deepspeedai/DeepSpeed/pull/7050
+        ],
+        device=OffloadDeviceEnum.cpu,
+        pin_memory=pin_memory,
+        non_blocking=non_blocking,
+    )
+    model.empty_partition_cache()
+    torch.cuda.synchronize()
+
+
+def reload_deepspeed_states(ctx, non_blocking=True):
+    assert ctx.model is not None
+    
+    model = _get_deepspeed_engine(ctx)
+    zero_stage = model.zero_optimization_stage() # config['zero_optimization']['stage']
+    adam_offload = model.config['zero_optimization']['offload_optimizer']['device'] == 'cpu'
+    
+    # state offloading not required when using Adam optimizer offloading
+    if adam_offload:
+        return
+
+    if zero_stage != 3:
+        raise NotImplementedError("Only Zero stage 3 is currently supported")
+
+    # if zero_stage == 3 and not adam_offload:
+    import torch
+
+    ctx.model.reload_states(non_blocking=non_blocking)
+    torch.cuda.synchronize()
