@@ -67,10 +67,14 @@ class LLMRayActor:
         self.llm.llm_engine.reset_prefix_cache()
 
     def sleep(self, level=1):
+        self.llm.collective_rpc("sync_empty_cache")
         self.llm.sleep(level=level)
+        self.llm.collective_rpc("sync_empty_cache")
 
     def wake_up(self):
+        self.llm.collective_rpc("sync_empty_cache")
         self.llm.wake_up()
+        self.llm.collective_rpc("sync_empty_cache")
 
     def add_requests(self, actor_rank, *, sampling_params, prompt_token_ids):
         """

@@ -73,3 +73,7 @@ class WorkerWrap(Worker):
         weight = func(*list_args)
         self.model_runner.model.load_weights(weights=[(name, weight)])
         torch.cuda.synchronize()
+
+    def sync_empty_cache(self):
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()

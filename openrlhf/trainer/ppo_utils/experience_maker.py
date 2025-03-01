@@ -567,6 +567,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # vLLM wakeup when vllm_enable_sleep
         if self.strategy.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
+            # TODO: Maybe better way to handle CUDA illegal memory access error?
+            time.sleep(1)
 
         if self.vllm_engines is None:
             return super().generate_samples(all_prompts, all_labels, **generate_kwargs)
