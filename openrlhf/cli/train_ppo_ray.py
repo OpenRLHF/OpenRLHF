@@ -4,6 +4,7 @@ from typing import List
 
 import ray
 import torch
+import warnings
 from ray.util.placement_group import placement_group
 
 from openrlhf.trainer.ray import (
@@ -43,11 +44,11 @@ def _validate_args(args):
         ), f"actor_world_size must be divisible by critic_world_size, got {actor_world_size} and {critic_world_size}"
 
     if args.use_kl_loss:
-        if args.kl_estimate not in ["k2", "k3"]:
-            warnings.warn(f"Recommend setting {args.kl_estimate} to 'k2' or 'k3' when using KL as a loss")
+        if args.kl_estimator not in ["k2", "k3"]:
+            warnings.warn(f"Recommend setting {args.kl_estimator} to 'k2' or 'k3' when using KL as a loss")
     else:
-        if args.kl_estimate not in ["k1"]:
-            warnings.warn(f"Recommend setting {args.kl_estimate} to 'k1' when not using KL as a loss.")
+        if args.kl_estimator not in ["k1"]:
+            warnings.warn(f"Recommend setting {args.kl_estimator} to 'k1' when not using KL as a loss.")
 
 def train(args):
     _validate_args(args)
@@ -324,7 +325,7 @@ if __name__ == "__main__":
     parser.add_argument("--init_kl_coef", type=float, default=0.01, help="KL penalty in PPO")
     parser.add_argument(
         "--kl_estimator",
-        type="str",
+        type=str,
         default="k1",
         choices=["k1", "k2", "k3"],
         help=(

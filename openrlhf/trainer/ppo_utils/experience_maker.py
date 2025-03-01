@@ -697,7 +697,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 action_log_probs,
                 base_action_log_probs,
                 action_mask=action_mask,
-                use_kl_estimator_k3=args.use_kl_estimator_k3,
+                kl_estimator=args.kl_estimator,
             )
         else:
             kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
