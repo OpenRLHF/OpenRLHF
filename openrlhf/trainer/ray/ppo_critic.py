@@ -124,7 +124,7 @@ class CriticModelRayActor(BasePPORole):
             strategy.load_ckpt(self.critic, ckpt_path)
             strategy.print(f"Loaded the checkpoint: {ckpt_path}")
         
-        # hack for deepseek offload
+        # hack for deepspeed offload
         from types import MethodType
         from .utils import offload_deepspeed_states, reload_deepspeed_states
         self.critic.offload_states = MethodType(offload_deepspeed_states, self.critic)

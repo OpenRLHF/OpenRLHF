@@ -369,7 +369,7 @@ class ActorModelRayActor(BasePPORole):
             self.consumed_samples = states["consumed_samples"]
             strategy.print(f"Loaded the checkpoint: {ckpt_path}, consumed_samples: {self.consumed_samples}")
         
-        # hack for deepseek offload
+        # hack for deepspeed offload
         from types import MethodType
         from .utils import offload_deepspeed_states, reload_deepspeed_states
         self.actor.offload_states = MethodType(offload_deepspeed_states, self.actor)
