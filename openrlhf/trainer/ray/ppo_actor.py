@@ -148,7 +148,6 @@ class ActorPPOTrainer(PPOTrainer):
 
             status.update(super().ppo_train(global_steps))
 
-            # Not necessary if vllm_engines is not None
             if self.strategy.args.deepspeed_enable_sleep:
                 self.actor.offload_states()
 
@@ -158,10 +157,6 @@ class ActorPPOTrainer(PPOTrainer):
             if self.vllm_engines is not None:
                 if self.strategy.args.vllm_enable_sleep:
                     batch_vllm_engine_call(self.vllm_engines, "wake_up")
-                
-                # Not necessary if vllm_engines is not None
-                if self.strategy.args.deepspeed_enable_sleep:
-                    self.actor.reload_states()
 
                 torch.distributed.barrier()
                 torch.cuda.synchronize()
@@ -169,12 +164,9 @@ class ActorPPOTrainer(PPOTrainer):
 
                 if self.strategy.args.vllm_enable_sleep:
                     batch_vllm_engine_call(self.vllm_engines, "sleep")
-                
-                if self.strategy.args.deepspeed_enable_sleep:
-                    self.actor.offload_states()
 
         # 5. wait remote critic model training done
-        if self.critic_train_remote and not self.strategy.args.colocate_all_models:
+        if self.critic_train_remote and not self.strategy.args.deepspeed_enable_sleep:
             status.update(ray.get(critic_status_ref))
         torch.distributed.barrier()
 

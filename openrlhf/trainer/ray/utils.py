@@ -70,7 +70,7 @@ def offload_deepspeed_states(ctx, pin_memory=True, non_blocking=True):
             OffloadStateTypeEnum.contiguous_grad_buffer,
             OffloadStateTypeEnum.hp_params,
             # OffloadStateTypeEnum.lp_grads,
-            # OffloadStateTypeEnum.lp_params, # dangerous
+            # OffloadStateTypeEnum.lp_params, # Not released yet, fixed in https://github.com/deepspeedai/DeepSpeed/pull/7050
         ],
         device=OffloadDeviceEnum.cpu,
         pin_memory=pin_memory,
