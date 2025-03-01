@@ -64,12 +64,7 @@ def train(args):
     vllm_engines = None
     if args.vllm_num_engines is not None and args.vllm_num_engines > 0:
         max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
-        if args.colocate_all_models and args.vllm_gpu_memory_utilization >= 0.9:
-            args.vllm_gpu_memory_utilization = 0.4
-            print(
-                f"Set args.vllm_gpu_memory_utilization to {args.vllm_gpu_memory_utilization} for colocate_all_models!"
-            )
-
+        if args.colocate_all_models:
             assert (
                 args.actor_num_nodes * args.actor_num_gpus_per_node
                 == args.vllm_num_engines * args.vllm_tensor_parallel_size
@@ -271,6 +266,12 @@ if __name__ == "__main__":
     parser.add_argument("--overlap_comm", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
+    parser.add_argument(
+        "--deepspeed_enable_sleep",
+        action="store_true",
+        default=False,
+        help="Enable sleep mode for deepspeed when using --colocate_all_models",
+    )
 
     # packing samples using Flash Attention2
     parser.add_argument("--packing_samples", action="store_true", default=False)
@@ -438,6 +439,22 @@ if __name__ == "__main__":
     if args.vllm_enable_sleep and not args.colocate_all_models:
         print("Set args.vllm_enable_sleep to False when args.colocate_all_models is disabled.")
         args.vllm_enable_sleep = False
+    
+    if args.deepspeed_enable_sleep and not args.colocate_all_models:
+        print("Set args.deepspeed_enable_sleep to False when args.colocate_all_models is disabled.")
+        args.deepspeed_enable_sleep = False
+
+    if args.colocate_all_models:
+        if not args.vllm_enable_sleep:
+            print("Set args.vllm_enable_sleep to True when args.colocate_all_models is enabled.")
+            args.vllm_enable_sleep = True
+        
+        if not args.deepspeed_enable_sleep:
+            print("Set args.deepspeed_enable_sleep to True when args.colocate_all_models is enabled.")
+            args.deepspeed_enable_sleep = True
+
+        # NOTE: Zero stage 2 is not supported yet
+        assert args.zero_stage == 3, "ZeRO stage 3 is required for colocate_all_models."
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub

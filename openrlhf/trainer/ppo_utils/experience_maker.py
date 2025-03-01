@@ -561,19 +561,22 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         When not using vllm, we will fallback to the default implementation,
         in which actor will be used to generate samples.
         """
+        from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
+
+        # vLLM wakeup when vllm_enable_sleep
+        if self.strategy.args.vllm_enable_sleep:
+            batch_vllm_engine_call(self.vllm_engines, "wake_up")
+
         if self.vllm_engines is None:
             return super().generate_samples(all_prompts, all_labels, **generate_kwargs)
 
         # vLLM generation
         samples = self._generate_vllm(all_prompts, all_labels, **generate_kwargs)
 
-        # vLLM offload when colocate_all_models
+        # vLLM offload when vllm_enable_sleep
         if self.strategy.args.vllm_enable_sleep:
-            if torch.distributed.get_rank() == 0:
-                refs = []
-                for engine in self.vllm_engines:
-                    refs.append(engine.sleep.remote())
-                ray.get(refs)
+            batch_vllm_engine_call(self.vllm_engines, "sleep")
+
         return samples
 
     @torch.no_grad()

@@ -123,6 +123,16 @@ class CriticModelRayActor(BasePPORole):
             ckpt_path = os.path.join(args.ckpt_path, "_critic")
             strategy.load_ckpt(self.critic, ckpt_path)
             strategy.print(f"Loaded the checkpoint: {ckpt_path}")
+        
+        # hack for deepspeed offload
+        from types import MethodType
+        from .utils import offload_deepspeed_states, reload_deepspeed_states
+        self.critic.offload_states = MethodType(offload_deepspeed_states, self.critic)
+        self.critic.reload_states = MethodType(reload_deepspeed_states, self.critic)
+
+        # initial offload
+        if strategy.args.deepspeed_enable_sleep:
+            self.critic.offload_states()
 
         # configure Trainer
         # only use wandb at actor model
