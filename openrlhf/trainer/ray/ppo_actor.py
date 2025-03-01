@@ -172,7 +172,7 @@ class ActorPPOTrainer(PPOTrainer):
 
         return status
 
-    def training_step(self, experience: Experience, global_steps) -> Dict[str, float]:        
+    def training_step(self, experience: Experience, global_steps) -> Dict[str, float]:
         return self.training_step_actor(experience)
 
     def _broadcast_to_vllm(self):
