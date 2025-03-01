@@ -128,17 +128,30 @@ class ActorPPOTrainer(PPOTrainer):
 
         # 2. triger remote critic model training
         if self.critic_train_remote:
-            critic_status_ref = self.critic.fit.remote()
-            # sync for colocate_all_models
-            if self.strategy.args.colocate_all_models:
-                status.update(ray.get(critic_status_ref))
+            # sync for deepspeed_enable_sleep
+            if self.strategy.args.deepspeed_enable_sleep:
+                ray.get(self.critic.reload_states.remote())
 
-        if self.strategy.args.colocate_all_models:
+            critic_status_ref = self.critic.fit.remote()
+            
+            if self.strategy.args.deepspeed_enable_sleep:
+                status.update(ray.get(critic_status_ref))
+                ray.get(self.critic.offload_states.remote())
+
+        if self.strategy.args.deepspeed_enable_sleep:
             torch.distributed.barrier()
 
         # 3. actor model training
         if global_steps > self.freezing_actor_steps:
+            if self.strategy.args.deepspeed_enable_sleep:
+                self.actor.reload_states()
+
             status.update(super().ppo_train(global_steps))
+
+            # Not necessary if vllm_engines is not None
+            if self.strategy.args.deepspeed_enable_sleep:
+                self.actor.offload_states()
+
             torch.cuda.empty_cache()
 
             # 4. broadcast weights to vllm engines
@@ -146,6 +159,7 @@ class ActorPPOTrainer(PPOTrainer):
                 if self.strategy.args.vllm_enable_sleep:
                     batch_vllm_engine_call(self.vllm_engines, "wake_up")
                 
+                # Not necessary if vllm_engines is not None
                 if self.strategy.args.deepspeed_enable_sleep:
                     self.actor.reload_states()
 
@@ -166,16 +180,8 @@ class ActorPPOTrainer(PPOTrainer):
 
         return status
 
-    def training_step(self, experience: Experience, global_steps) -> Dict[str, float]:
-        if self.strategy.args.deepspeed_enable_sleep:
-            self.actor.reload_states()
-        
-        status = self.training_step_actor(experience)
-
-        if self.strategy.args.deepspeed_enable_sleep:
-            self.actor.offload_states()
-        
-        return status
+    def training_step(self, experience: Experience, global_steps) -> Dict[str, float]:        
+        return self.training_step_actor(experience)
 
     def _broadcast_to_vllm(self):
         use_prefix_cache = getattr(self.strategy.args, "enable_prefix_caching", False)

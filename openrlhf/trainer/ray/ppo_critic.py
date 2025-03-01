@@ -58,15 +58,7 @@ class CriticPPOTrainer(PPOTrainer):
         return status_mean
 
     def training_step(self, experience: Experience) -> Dict[str, float]:
-        if self.strategy.args.deepspeed_enable_sleep:
-            self.critic.reload_states()
-
-        status = self.training_step_critic(experience)
-
-        if self.strategy.args.deepspeed_enable_sleep:
-            self.critic.offload_states()
-
-        return status
+        return self.training_step_critic(experience)
 
 
 @ray.remote(num_gpus=1)
