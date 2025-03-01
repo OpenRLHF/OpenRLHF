@@ -43,9 +43,11 @@ def _validate_args(args):
         ), f"actor_world_size must be divisible by critic_world_size, got {actor_world_size} and {critic_world_size}"
 
     if args.use_kl_loss:
-        assert args.kl_estimate in ["k2", "k3"], f"When using KL as a loss, {args.kl_estimate} must be 'k2' or 'k3'."
+        if args.kl_estimate not in ["k2", "k3"]:
+            warnings.warn(f"When using KL as a loss, {args.kl_estimate} should be 'k2' or 'k3'.")
     else:
-        assert args.kl_estimate in ["k1"], f"When not using KL as a loss, {args.kl_estimate} must be 'k1'."
+        if args.kl_estimate not in ["k1"]:
+            warnings.warn(f"When not using KL as a loss, {args.kl_estimate} should be 'k1'.")
 
 def train(args):
     _validate_args(args)
