@@ -406,7 +406,7 @@ class PPOTrainer(ABC):
                     action_log_probs,
                     base_action_log_probs,
                     experience.action_mask,
-                    use_kl_estimator_k3 = self.args.use_kl_estimator_k3,
+                    kl_estimator = self.args.kl_estimator,
                 )
             else:
                 kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device = action_log_probs.device)

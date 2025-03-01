@@ -16,7 +16,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --init_kl_coef 1e-3 \
    --gamma 1.0 \
    --use_kl_loss \
-   --use_kl_estimator_k3 \
+   --kl_estimator k3 \
    --advantage_estimator group_norm \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
    --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \
@@ -43,7 +43,10 @@ ray job submit --address="http://127.0.0.1:8265" \
    --gradient_checkpointing \
    --packing_samples \
    --vllm_sync_backend nccl \
-   --enforce_eager
+   --enforce_eager \
+   --vllm_enable_sleep
 
+# You could also try
+#   --kl_estimator k2 \
 # colocate_all_models automatically configures vllm_enable_sleep 
 # and deepspeed_enable_sleep. It is not recommended to set adam_offload manually.
