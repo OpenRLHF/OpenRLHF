@@ -1,12 +1,12 @@
-import itertools
-import math
 import os
+import math
 import socket
+import itertools
 from typing import Callable, Dict, List
 
-import deepspeed
 import ray
 import torch
+import deepspeed
 import torch.distributed
 from transformers.trainer import get_scheduler
 
@@ -14,6 +14,7 @@ from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.models import Actor
 from openrlhf.trainer import PPOTrainer
 from openrlhf.trainer.ppo_utils import Experience, RemoteExperienceMaker
+from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils import blending_datasets, get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.distributed_util import init_process_group
@@ -142,17 +143,21 @@ class ActorPPOTrainer(PPOTrainer):
 
             # 4. broadcast weights to vllm engines
             if self.vllm_engines is not None:
-                # vLLM wakeup
                 if self.strategy.args.vllm_enable_sleep:
-                    torch.distributed.barrier()
-                    torch.cuda.synchronize()
-                    if torch.distributed.get_rank() == 0:
-                        refs = []
-                        for engine in self.vllm_engines:
-                            refs.append(engine.wake_up.remote())
-                        ray.get(refs)
+                    batch_vllm_engine_call(self.vllm_engines, "wake_up")
+                
+                if self.strategy.args.deepspeed_enable_sleep:
+                    self.actor.reload_states()
+
                 torch.distributed.barrier()
+                torch.cuda.synchronize()
                 self._broadcast_to_vllm()
+
+                if self.strategy.args.vllm_enable_sleep:
+                    batch_vllm_engine_call(self.vllm_engines, "sleep")
+                
+                if self.strategy.args.deepspeed_enable_sleep:
+                    self.actor.offload_states()
 
         # 5. wait remote critic model training done
         if self.critic_train_remote and not self.strategy.args.colocate_all_models:
@@ -162,7 +167,15 @@ class ActorPPOTrainer(PPOTrainer):
         return status
 
     def training_step(self, experience: Experience, global_steps) -> Dict[str, float]:
-        return self.training_step_actor(experience)
+        if self.strategy.args.deepspeed_enable_sleep:
+            self.actor.reload_states()
+        
+        status = self.training_step_actor(experience)
+
+        if self.strategy.args.deepspeed_enable_sleep:
+            self.actor.offload_states()
+        
+        return status
 
     def _broadcast_to_vllm(self):
         use_prefix_cache = getattr(self.strategy.args, "enable_prefix_caching", False)
@@ -357,6 +370,16 @@ class ActorModelRayActor(BasePPORole):
             _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
             self.consumed_samples = states["consumed_samples"]
             strategy.print(f"Loaded the checkpoint: {ckpt_path}, consumed_samples: {self.consumed_samples}")
+        
+        # hack for deepseek offload
+        from types import MethodType
+        from .utils import offload_deepspeed_states, reload_deepspeed_states
+        self.actor.offload_states = MethodType(offload_deepspeed_states, self.actor)
+        self.actor.reload_states = MethodType(reload_deepspeed_states, self.actor)
+
+        # initial offload
+        if strategy.args.deepspeed_enable_sleep:
+            self.actor.offload_states()
 
     def prepare_datasets(self):
         strategy = self.strategy
