@@ -135,8 +135,9 @@ class CriticModelRayActor(BasePPORole):
             self.critic.offload_states()
 
         # configure Trainer
-        # only use wandb at actor model
+        # only use wandb/swanlab at actor model
         strategy.args.use_wandb = False
+        strategy.args.use_swanlab = False
         self.trainer = CriticPPOTrainer(
             strategy,
             actor=None,
