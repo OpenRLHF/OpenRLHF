@@ -1,12 +1,12 @@
-import os
-import math
-import socket
 import itertools
+import math
+import os
+import socket
 from typing import Callable, Dict, List
 
+import deepspeed
 import ray
 import torch
-import deepspeed
 import torch.distributed
 from transformers.trainer import get_scheduler
 
@@ -133,12 +133,13 @@ class ActorPPOTrainer(PPOTrainer):
                 ray.get(self.critic.reload_states.remote())
 
             critic_status_ref = self.critic.fit.remote()
-            
-            if self.strategy.args.deepspeed_enable_sleep:
+
+            if self.strategy.args.colocate_all_models or self.strategy.args.deepspeed_enable_sleep:
                 status.update(ray.get(critic_status_ref))
+            if self.strategy.args.deepspeed_enable_sleep:
                 ray.get(self.critic.offload_states.remote())
 
-        if self.strategy.args.deepspeed_enable_sleep:
+        if self.strategy.args.colocate_all_models:
             torch.distributed.barrier()
 
         # 3. actor model training
@@ -166,7 +167,7 @@ class ActorPPOTrainer(PPOTrainer):
                     batch_vllm_engine_call(self.vllm_engines, "sleep")
 
         # 5. wait remote critic model training done
-        if self.critic_train_remote and not self.strategy.args.deepspeed_enable_sleep:
+        if self.critic_train_remote and not self.strategy.args.colocate_all_models:
             status.update(ray.get(critic_status_ref))
         torch.distributed.barrier()
 
@@ -368,10 +369,12 @@ class ActorModelRayActor(BasePPORole):
             _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
             self.consumed_samples = states["consumed_samples"]
             strategy.print(f"Loaded the checkpoint: {ckpt_path}, consumed_samples: {self.consumed_samples}")
-        
+
         # hack for deepspeed offload
         from types import MethodType
+
         from .utils import offload_deepspeed_states, reload_deepspeed_states
+
         self.actor.offload_states = MethodType(offload_deepspeed_states, self.actor)
         self.actor.reload_states = MethodType(reload_deepspeed_states, self.actor)
 
@@ -398,7 +401,10 @@ class ActorModelRayActor(BasePPORole):
             prompts_data, self.tokenizer, strategy, input_template=args.input_template
         )
         self.prompts_dataloader = strategy.setup_dataloader(
-            self.prompts_dataset, args.rollout_batch_size // (strategy.world_size // strategy.ring_attn_size), True, True
+            self.prompts_dataset,
+            args.rollout_batch_size // (strategy.world_size // strategy.ring_attn_size),
+            True,
+            True,
         )
 
         if args.pretrain_data:
