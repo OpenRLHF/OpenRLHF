@@ -107,7 +107,7 @@ def _z3_params_to_fetch(param_list):
 def _get_deepspeed_engine(ctx) -> DeepSpeedEngine:
     from openrlhf.models import Actor
 
-    model = ctx.model.model if isinstance(ctx.model, Actor) else ctx.model
+    model = ctx.model if isinstance(ctx, Actor) else ctx
     assert isinstance(model, DeepSpeedEngine), "Model must be a DeepSpeedEngine instance"
 
     return model
