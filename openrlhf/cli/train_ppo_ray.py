@@ -447,22 +447,6 @@ if __name__ == "__main__":
         print("Set args.vllm_enable_sleep to False when args.colocate_all_models is disabled.")
         args.vllm_enable_sleep = False
 
-    if args.deepspeed_enable_sleep and not args.colocate_all_models:
-        print("Set args.deepspeed_enable_sleep to False when args.colocate_all_models is disabled.")
-        args.deepspeed_enable_sleep = False
-
-    if args.colocate_all_models:
-        if not args.vllm_enable_sleep:
-            print("Set args.vllm_enable_sleep to True when args.colocate_all_models is enabled.")
-            args.vllm_enable_sleep = True
-
-        if not args.deepspeed_enable_sleep:
-            print("Set args.deepspeed_enable_sleep to True when args.colocate_all_models is enabled.")
-            args.deepspeed_enable_sleep = True
-
-        # NOTE: Zero stage 2 is not supported yet
-        assert args.zero_stage == 3, "ZeRO stage 3 is required for colocate_all_models."
-
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub
 
