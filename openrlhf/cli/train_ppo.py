@@ -333,7 +333,7 @@ if __name__ == "__main__":
     parser.add_argument("--init_kl_coef", type=float, default=0.01, help="KL penalty in PPO")
     parser.add_argument(
         "--kl_estimator",
-        type="str",
+        type=str,
         default="k1",
         choices=["k1", "k2", "k3"],
         help=(
