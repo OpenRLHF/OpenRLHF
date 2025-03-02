@@ -19,9 +19,9 @@ ray job submit --address="http://127.0.0.1:8265" \
    --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
    --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
    --save_hf_ckpt \
-   --micro_train_batch_size 8 \
+   --micro_train_batch_size 4 \
    --train_batch_size 128 \
-   --micro_rollout_batch_size 16 \
+   --micro_rollout_batch_size 8 \
    --rollout_batch_size 1024 \
    --n_samples_per_prompt 1 \
    --max_epochs 1 \
@@ -43,9 +43,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --enforce_eager \
    --vllm_enable_sleep \
    --deepspeed_enable_sleep
-
-# colocate_all_models automatically configures vllm_enable_sleep 
-# and deepspeed_enable_sleep. It is not recommended to set adam_offload manually.
 
 # You could also try
 #   --use_kl_loss \
