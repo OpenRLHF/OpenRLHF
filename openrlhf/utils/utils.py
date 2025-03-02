@@ -73,8 +73,13 @@ def blending_datasets(
             strategy.print(f"loaded {dataset} with data_files={dataset}")
         # local dataset saved with `datasets.Dataset.save_to_disk`
         elif os.path.isdir(dataset):
-            data = load_from_disk(dataset)
-            strategy.print(f"loaded {dataset} from disk")
+            try:
+                data = load_from_disk(dataset)
+                strategy.print(f"loaded {dataset} from disk")
+            except Exception as e:
+                strategy.print(f"failed to load {dataset} from disk: {e}")
+                data = load_dataset(dataset, data_dir=data_dir)
+                strategy.print(f"loaded {dataset} from files")
         # remote/local folder or common file
         else:
             data = load_dataset(dataset, data_dir=data_dir)
