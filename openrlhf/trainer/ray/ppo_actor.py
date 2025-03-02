@@ -17,6 +17,7 @@ from openrlhf.trainer.ppo_utils import Experience, RemoteExperienceMaker
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils import blending_datasets, get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
 from openrlhf.utils.distributed_util import init_process_group
 
 from .launcher import BasePPORole
@@ -145,12 +146,12 @@ class ActorPPOTrainer(PPOTrainer):
         # 3. actor model training
         if global_steps > self.freezing_actor_steps:
             if self.strategy.args.deepspeed_enable_sleep:
-                self.actor.reload_states()
+                self.reload_states()
 
             status.update(super().ppo_train(global_steps))
 
             if self.strategy.args.deepspeed_enable_sleep:
-                self.actor.offload_states()
+                self.offload_states()
 
             torch.cuda.empty_cache()
 
@@ -279,6 +280,12 @@ class ActorPPOTrainer(PPOTrainer):
                 ray.get(ref)
         torch.distributed.barrier()
 
+    def reload_states(self):
+        reload_deepspeed_states(self.actor.model)
+
+    def offload_states(self):
+        offload_deepspeed_states(self.actor.model)
+
 
 @ray.remote(num_gpus=1)
 class ActorModelRayActor(BasePPORole):
@@ -372,17 +379,9 @@ class ActorModelRayActor(BasePPORole):
             self.consumed_samples = states["consumed_samples"]
             strategy.print(f"Loaded the checkpoint: {ckpt_path}, consumed_samples: {self.consumed_samples}")
 
-        # hack for deepspeed offload
-        from types import MethodType
-
-        from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
-
-        self.actor.offload_states = MethodType(offload_deepspeed_states, self.actor)
-        self.actor.reload_states = MethodType(reload_deepspeed_states, self.actor)
-
         # initial offload
         if strategy.args.deepspeed_enable_sleep:
-            self.actor.offload_states()
+            offload_deepspeed_states(self.actor.model)
 
     def prepare_datasets(self):
         strategy = self.strategy

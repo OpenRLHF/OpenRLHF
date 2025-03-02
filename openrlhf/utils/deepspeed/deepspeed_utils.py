@@ -1,4 +1,3 @@
-from deepspeed.runtime.engine import DeepSpeedEngine
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
 
 
@@ -103,20 +102,7 @@ def _z3_params_to_fetch(param_list):
     return [p for p in param_list if hasattr(p, "ds_id") and p.ds_status == ZeroParamStatus.NOT_AVAILABLE]
 
 
-# For deepspeed offload
-def _get_deepspeed_engine(ctx) -> DeepSpeedEngine:
-    from openrlhf.models import Actor
-
-    model = ctx.model if isinstance(ctx, Actor) else ctx
-    assert isinstance(model, DeepSpeedEngine), "Model must be a DeepSpeedEngine instance"
-
-    return model
-
-
-def offload_deepspeed_states(ctx, pin_memory=True, non_blocking=True):
-    assert ctx.model is not None
-
-    model = _get_deepspeed_engine(ctx)
+def offload_deepspeed_states(model, pin_memory=True, non_blocking=True):
     zero_stage = model.zero_optimization_stage()  # config['zero_optimization']['stage']
     adam_offload = model.config["zero_optimization"]["offload_optimizer"]["device"] == "cpu"
 
@@ -147,10 +133,7 @@ def offload_deepspeed_states(ctx, pin_memory=True, non_blocking=True):
     torch.cuda.synchronize()
 
 
-def reload_deepspeed_states(ctx, non_blocking=True):
-    assert ctx.model is not None
-
-    model = _get_deepspeed_engine(ctx)
+def reload_deepspeed_states(model, non_blocking=True):
     zero_stage = model.zero_optimization_stage()  # config['zero_optimization']['stage']
     adam_offload = model.config["zero_optimization"]["offload_optimizer"]["device"] == "cpu"
 
@@ -164,5 +147,5 @@ def reload_deepspeed_states(ctx, non_blocking=True):
     # if zero_stage == 3 and not adam_offload:
     import torch
 
-    ctx.model.reload_states(non_blocking=non_blocking)
+    model.reload_states(non_blocking=non_blocking)
     torch.cuda.synchronize()
