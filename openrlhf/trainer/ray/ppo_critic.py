@@ -123,10 +123,11 @@ class CriticModelRayActor(BasePPORole):
             ckpt_path = os.path.join(args.ckpt_path, "_critic")
             strategy.load_ckpt(self.critic, ckpt_path)
             strategy.print(f"Loaded the checkpoint: {ckpt_path}")
-        
+
         # hack for deepspeed offload
         from types import MethodType
-        from .utils import offload_deepspeed_states, reload_deepspeed_states
+        from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
+
         self.critic.offload_states = MethodType(offload_deepspeed_states, self.critic)
         self.critic.reload_states = MethodType(reload_deepspeed_states, self.critic)
 
@@ -169,7 +170,12 @@ class CriticModelRayActor(BasePPORole):
         self.critic.eval()
         with torch.no_grad():
             value = self.critic(
-                sequences.to(device), num_actions, attention_mask.to(device), ring_attn_group=self.strategy.ring_attn_group, values_allgather=True, packed_seq_lens=packed_seq_lens
+                sequences.to(device),
+                num_actions,
+                attention_mask.to(device),
+                ring_attn_group=self.strategy.ring_attn_group,
+                values_allgather=True,
+                packed_seq_lens=packed_seq_lens,
             )
         self.critic.train()  # reset model state
         return value.to("cpu")

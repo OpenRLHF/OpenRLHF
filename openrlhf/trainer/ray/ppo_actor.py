@@ -373,7 +373,7 @@ class ActorModelRayActor(BasePPORole):
         # hack for deepspeed offload
         from types import MethodType
 
-        from .utils import offload_deepspeed_states, reload_deepspeed_states
+        from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
 
         self.actor.offload_states = MethodType(offload_deepspeed_states, self.actor)
         self.actor.reload_states = MethodType(reload_deepspeed_states, self.actor)

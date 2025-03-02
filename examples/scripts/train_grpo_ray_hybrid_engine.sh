@@ -44,7 +44,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --packing_samples \
    --vllm_sync_backend nccl \
    --enforce_eager \
-   --vllm_enable_sleep
+   --vllm_enable_sleep \
+   --deepspeed_enable_sleep
 
 # You could also try
 #   --kl_estimator k2 \

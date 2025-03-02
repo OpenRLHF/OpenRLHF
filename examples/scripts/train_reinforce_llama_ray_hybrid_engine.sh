@@ -40,7 +40,9 @@ ray job submit --address="http://127.0.0.1:8265" \
    --gradient_checkpointing \
    --packing_samples \
    --vllm_sync_backend nccl \
-   --enforce_eager
+   --enforce_eager \
+   --vllm_enable_sleep \
+   --deepspeed_enable_sleep
 
 # colocate_all_models automatically configures vllm_enable_sleep 
 # and deepspeed_enable_sleep. It is not recommended to set adam_offload manually.
