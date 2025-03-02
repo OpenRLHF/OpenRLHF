@@ -1,8 +1,3 @@
-# Copyright (c) Microsoft Corporation.
-# SPDX-License-Identifier: Apache-2.0
-
-# DeepSpeed Team
-
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
 
 
@@ -105,3 +100,52 @@ def get_optimizer_grouped_parameters(
 
 def _z3_params_to_fetch(param_list):
     return [p for p in param_list if hasattr(p, "ds_id") and p.ds_status == ZeroParamStatus.NOT_AVAILABLE]
+
+
+def offload_deepspeed_states(model, pin_memory=True, non_blocking=True):
+    zero_stage = model.zero_optimization_stage()  # config['zero_optimization']['stage']
+    adam_offload = model.config["zero_optimization"]["offload_optimizer"]["device"] == "cpu"
+
+    # state offloading not required when using Adam optimizer offloading
+    if adam_offload:
+        return
+
+    if zero_stage != 3:
+        raise NotImplementedError("Only Zero stage 3 is currently supported")
+
+    # if zero_stage == 3 and not adam_offload:
+    import torch
+    from deepspeed.runtime.zero.offload_config import OffloadDeviceEnum, OffloadStateTypeEnum
+
+    model.optimizer.offload_states(
+        include=[
+            OffloadStateTypeEnum.optim_states,
+            OffloadStateTypeEnum.contiguous_grad_buffer,
+            OffloadStateTypeEnum.hp_params,
+            # OffloadStateTypeEnum.lp_grads,
+            # OffloadStateTypeEnum.lp_params, # Not released yet, fixed in https://github.com/deepspeedai/DeepSpeed/pull/7050
+        ],
+        device=OffloadDeviceEnum.cpu,
+        pin_memory=pin_memory,
+        non_blocking=non_blocking,
+    )
+    model.empty_partition_cache()
+    torch.cuda.synchronize()
+
+
+def reload_deepspeed_states(model, non_blocking=True):
+    zero_stage = model.zero_optimization_stage()  # config['zero_optimization']['stage']
+    adam_offload = model.config["zero_optimization"]["offload_optimizer"]["device"] == "cpu"
+
+    # state offloading not required when using Adam optimizer offloading
+    if adam_offload:
+        return
+
+    if zero_stage != 3:
+        raise NotImplementedError("Only Zero stage 3 is currently supported")
+
+    # if zero_stage == 3 and not adam_offload:
+    import torch
+
+    model.reload_states(non_blocking=non_blocking)
+    torch.cuda.synchronize()

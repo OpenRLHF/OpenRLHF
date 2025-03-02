@@ -14,8 +14,10 @@ from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.models import Actor
 from openrlhf.trainer import PPOTrainer
 from openrlhf.trainer.ppo_utils import Experience, RemoteExperienceMaker
+from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils import blending_datasets, get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
 from openrlhf.utils.distributed_util import init_process_group
 
 from .launcher import BasePPORole
@@ -127,32 +129,45 @@ class ActorPPOTrainer(PPOTrainer):
 
         # 2. triger remote critic model training
         if self.critic_train_remote:
+            # sync for deepspeed_enable_sleep
+            if self.strategy.args.deepspeed_enable_sleep:
+                ray.get(self.critic.reload_states.remote())
+
             critic_status_ref = self.critic.fit.remote()
-            # sync for colocate_all_models
-            if self.strategy.args.colocate_all_models:
+
+            if self.strategy.args.colocate_all_models or self.strategy.args.deepspeed_enable_sleep:
                 status.update(ray.get(critic_status_ref))
+            if self.strategy.args.deepspeed_enable_sleep:
+                ray.get(self.critic.offload_states.remote())
 
         if self.strategy.args.colocate_all_models:
             torch.distributed.barrier()
 
         # 3. actor model training
         if global_steps > self.freezing_actor_steps:
+            if self.strategy.args.deepspeed_enable_sleep:
+                self.reload_states()
+
             status.update(super().ppo_train(global_steps))
+
+            if self.strategy.args.deepspeed_enable_sleep:
+                self.offload_states()
+
             torch.cuda.empty_cache()
 
             # 4. broadcast weights to vllm engines
             if self.vllm_engines is not None:
-                # vLLM wakeup
                 if self.strategy.args.vllm_enable_sleep:
+                    batch_vllm_engine_call(self.vllm_engines, "wake_up")
+
+                torch.distributed.barrier()
+                torch.cuda.synchronize()
+                self._broadcast_to_vllm()
+
+                if self.strategy.args.vllm_enable_sleep:
+                    batch_vllm_engine_call(self.vllm_engines, "sleep")
                     torch.distributed.barrier()
                     torch.cuda.synchronize()
-                    if torch.distributed.get_rank() == 0:
-                        refs = []
-                        for engine in self.vllm_engines:
-                            refs.append(engine.wake_up.remote())
-                        ray.get(refs)
-                torch.distributed.barrier()
-                self._broadcast_to_vllm()
 
         # 5. wait remote critic model training done
         if self.critic_train_remote and not self.strategy.args.colocate_all_models:
@@ -265,6 +280,12 @@ class ActorPPOTrainer(PPOTrainer):
                 ray.get(ref)
         torch.distributed.barrier()
 
+    def reload_states(self):
+        reload_deepspeed_states(self.actor.model)
+
+    def offload_states(self):
+        offload_deepspeed_states(self.actor.model)
+
 
 @ray.remote(num_gpus=1)
 class ActorModelRayActor(BasePPORole):
@@ -358,6 +379,10 @@ class ActorModelRayActor(BasePPORole):
             self.consumed_samples = states["consumed_samples"]
             strategy.print(f"Loaded the checkpoint: {ckpt_path}, consumed_samples: {self.consumed_samples}")
 
+        # initial offload
+        if strategy.args.deepspeed_enable_sleep:
+            offload_deepspeed_states(self.actor.model)
+
     def prepare_datasets(self):
         strategy = self.strategy
         args = self.strategy.args
@@ -377,7 +402,10 @@ class ActorModelRayActor(BasePPORole):
             prompts_data, self.tokenizer, strategy, input_template=args.input_template
         )
         self.prompts_dataloader = strategy.setup_dataloader(
-            self.prompts_dataset, args.rollout_batch_size // (strategy.world_size // strategy.ring_attn_size), True, True
+            self.prompts_dataset,
+            args.rollout_batch_size // (strategy.world_size // strategy.ring_attn_size),
+            True,
+            True,
         )
 
         if args.pretrain_data:

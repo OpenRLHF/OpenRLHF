@@ -1,11 +1,13 @@
 import os
-
 import numpy as np
+from typing import Any, List
+
 import ray
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from vllm import LLM
 
+from .utils import ray_noset_visible_devices
 from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
@@ -22,11 +24,18 @@ def get_all_env_variables():
 class LLMRayActor:
 
     def __init__(self, *args, bundle_indices: list = None, **kwargs):
+        noset_visible_devices = kwargs.pop("noset_visible_devices")
         if kwargs.get("distributed_executor_backend") == "ray":
             # a hack to make the script work.
             # stop ray from manipulating CUDA_VISIBLE_DEVICES
             # at the top-level when the distributed_executor_backend is ray.
             os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        elif noset_visible_devices:
+            # We need to set CUDA_VISIBLE_DEVICES to the ray assigned GPU
+            # when the distributed_executor_backend is not ray and
+            # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES is set.
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(ray.get_gpu_ids()[0])
+
         # every worker will use 0.2 GPU, so that we can schedule
         # 2 instances on the same GPUs.
         if bundle_indices is not None:
@@ -174,7 +183,36 @@ def create_vllm_engines(
                 gpu_memory_utilization=gpu_memory_utilization,
                 bundle_indices=bundle_indices if shared_pg else None,
                 enable_sleep_mode=vllm_enable_sleep,
+                noset_visible_devices=ray_noset_visible_devices(),
             )
         )
+    
+    if vllm_enable_sleep:
+        batch_vllm_engine_call(vllm_engines, "sleep", rank_0_only=False)
 
     return vllm_engines
+
+
+def batch_vllm_engine_call(engines: List[Any], method_name: str, *args, rank_0_only: bool = True, **kwargs):
+    """
+    Batch call a method on multiple vLLM engines.
+    Args:
+        engines: List of vLLM engine instances
+        method_name: Name of the method to call
+        rank_0_only: Only execute on rank 0 if True
+        *args: Positional arguments to pass to the method
+        **kwargs: Keyword arguments to pass to the method
+    Returns:
+        List of results from ray.get() if on rank 0, None otherwise
+    """
+    import torch
+
+    if rank_0_only and torch.distributed.get_rank() != 0:
+        return None
+
+    refs = []
+    for engine in engines:
+        method = getattr(engine, method_name)
+        refs.append(method.remote(*args, **kwargs))
+
+    return ray.get(refs)
