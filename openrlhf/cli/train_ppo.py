@@ -440,11 +440,11 @@ if __name__ == "__main__":
         assert args.n_samples_per_prompt > 1, f"{args.advantage_estimator} requires n_samples_per_prompt > 1"
 
     if args.use_kl_loss:
-        if args.kl_estimate not in ["k2", "k3"]:
-            warnings.warn(f"Recommend setting {args.kl_estimate} to 'k2' or 'k3' when using KL as a loss")
+        if args.kl_estimator not in ["k2", "k3"]:
+            print(f"Recommend setting {args.kl_estimator} to 'k2' or 'k3' when using KL as a loss")
     else:
-        if args.kl_estimate not in ["k1"]:
-            warnings.warn(f"Recommend setting {args.kl_estimate} to 'k1' when not using KL as a loss.")
+        if args.kl_estimator not in ["k1"]:
+            print(f"Recommend setting {args.kl_estimator} to 'k1' when not using KL as a loss.")
 
     if args.input_template and "{}" not in args.input_template:
         print("[Warning] {} not in args.input_template, set to None")
