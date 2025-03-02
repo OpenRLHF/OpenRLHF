@@ -49,6 +49,7 @@ def _validate_args(args):
         if args.kl_estimate not in ["k1"]:
             warnings.warn(f"Recommend setting {args.kl_estimate} to 'k1' when not using KL as a loss.")
 
+
 def train(args):
     _validate_args(args)
 
@@ -324,7 +325,7 @@ if __name__ == "__main__":
     parser.add_argument("--init_kl_coef", type=float, default=0.01, help="KL penalty in PPO")
     parser.add_argument(
         "--kl_estimator",
-        type="str",
+        type=str,
         default="k1",
         choices=["k1", "k2", "k3"],
         help=(
@@ -445,7 +446,7 @@ if __name__ == "__main__":
     if args.vllm_enable_sleep and not args.colocate_all_models:
         print("Set args.vllm_enable_sleep to False when args.colocate_all_models is disabled.")
         args.vllm_enable_sleep = False
-    
+
     if args.deepspeed_enable_sleep and not args.colocate_all_models:
         print("Set args.deepspeed_enable_sleep to False when args.colocate_all_models is disabled.")
         args.deepspeed_enable_sleep = False
@@ -454,7 +455,7 @@ if __name__ == "__main__":
         if not args.vllm_enable_sleep:
             print("Set args.vllm_enable_sleep to True when args.colocate_all_models is enabled.")
             args.vllm_enable_sleep = True
-        
+
         if not args.deepspeed_enable_sleep:
             print("Set args.deepspeed_enable_sleep to True when args.colocate_all_models is enabled.")
             args.deepspeed_enable_sleep = True
