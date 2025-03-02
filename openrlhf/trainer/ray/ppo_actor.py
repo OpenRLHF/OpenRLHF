@@ -165,6 +165,8 @@ class ActorPPOTrainer(PPOTrainer):
 
                 if self.strategy.args.vllm_enable_sleep:
                     batch_vllm_engine_call(self.vllm_engines, "sleep")
+                    torch.distributed.barrier()
+                    torch.cuda.synchronize()
 
         # 5. wait remote critic model training done
         if self.critic_train_remote and not self.strategy.args.colocate_all_models:

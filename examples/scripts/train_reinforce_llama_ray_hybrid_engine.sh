@@ -9,10 +9,10 @@ ray job submit --address="http://127.0.0.1:8265" \
    --reward_num_gpus_per_node 8 \
    --actor_num_nodes 1 \
    --actor_num_gpus_per_node 8 \
-   --vllm_num_engines 8 \
-   --vllm_tensor_parallel_size 1 \
+   --vllm_num_engines 4 \
+   --vllm_tensor_parallel_size 2 \
    --colocate_all_models \
-   --vllm_gpu_memory_utilization 0.8 \
+   --vllm_gpu_memory_utilization 0.6 \
    --advantage_estimator reinforce \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
    --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \

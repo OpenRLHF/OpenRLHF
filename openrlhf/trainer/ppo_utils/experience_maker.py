@@ -571,17 +571,20 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         if self.strategy.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
             torch.distributed.barrier()
+            torch.cuda.synchronize()
 
         if self.vllm_engines is None:
             return super().generate_samples(all_prompts, all_labels, **generate_kwargs)
 
         # vLLM generation
         samples = self._generate_vllm(all_prompts, all_labels, **generate_kwargs)
+        torch.distributed.barrier()
 
         # vLLM offload when vllm_enable_sleep
         if self.strategy.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "sleep")
             torch.distributed.barrier()
+            torch.cuda.synchronize()
 
         return samples
 
