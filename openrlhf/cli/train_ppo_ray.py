@@ -89,7 +89,7 @@ def train(args):
             args.enable_prefix_caching,
             args.enforce_eager,
             max_len,
-            args.actor_num_nodes * args.actor_num_gpus_per_node,
+            args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size,
             pg if args.colocate_all_models else None,
             args.vllm_gpu_memory_utilization,
             args.vllm_enable_sleep,
