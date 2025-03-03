@@ -16,6 +16,7 @@ from openrlhf.trainer.ray import (
 )
 from openrlhf.utils import get_strategy
 
+import ast
 
 # NOTE: reward function for multiple reward models, replace this with your own function!
 def reward_fn(rewards: List[torch.Tensor]):
@@ -48,8 +49,6 @@ def train(args):
 
     # configure strategy
     strategy = get_strategy(args)
-    strategy.search_algo = args.search_algo
-    strategy.stop_strings = args.stop_strings
 
     # if colocated, create placement group for actor and ref model explicitly.
     pg = None
@@ -183,6 +182,10 @@ if __name__ == "__main__":
     # custom
     parser.add_argument("--search_algo", type=str, default="sampling",
                         choices=['sampling', 'beamsearch', 'litesearch', 'bestofn'])
+    def parse_python_dict(value):
+        return ast.literal_eval(value)
+    parser.add_argument('--search_args', type=parse_python_dict, help='Dictionary as a Python string')
+
     def comma_separated_list(value):
         return value.split(',')
     parser.add_argument("--stop_strings", type=comma_separated_list, default=[])
@@ -223,7 +226,7 @@ if __name__ == "__main__":
         help="tensor parallel size of vLLM Engine for multi-GPU inference",
     )
     parser.add_argument("--vllm_sync_backend", type=str, default="nccl", help="DeepSpeed -> vLLM weight sync backend")
-    parser.add_argument("--gpu_memory_utilization", type=float, default=0.8)
+    parser.add_argument("--gpu_memory_utilization", type=float, default=0.85)
     parser.add_argument("--enable_prefix_caching", action="store_true", default=False)
     parser.add_argument("--enforce_eager", action="store_true", default=False, help="Disable CUDA graph in vLLM")
 

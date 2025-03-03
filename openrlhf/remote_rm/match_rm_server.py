@@ -189,7 +189,7 @@ def get_reward(sequences):
             if grade_answer(hyp, ref):
                 rewards.append(1)
             else:
-                rewards.append(-1)
+                rewards.append(-0.5)
             print((hyp, ref, rewards[-1]))
         except Exception as e:
             print(e)

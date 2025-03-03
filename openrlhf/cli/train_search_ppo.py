@@ -264,8 +264,6 @@ def train(args):
         synced_gpus=True if args.zero_stage == 3 else False, # for ZeRO-3
         # remote reward model
         remote_rm_url=args.remote_rm_url,
-        # search
-        search_algo=args.search_algo,
     )
 
     trainer.fit(args, prompts_dataloader, pretrain_dataloader, consumed_samples, num_update_steps_per_episodes)

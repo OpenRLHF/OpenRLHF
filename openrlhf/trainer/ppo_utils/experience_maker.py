@@ -15,11 +15,12 @@ from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn, remote_rm_fn_ray
 
-# from openrlhf.search_algorithm.beamsearch_efficient import search as beamsearch
-# from openrlhf.search_algorithm.litesearch import search as litesearch
-# from openrlhf.search_algorithm.bestofn import search as bestofn
-
-# from openrlhf.search_algorithm.bestofn_ray import search as bestofn_ray
+from openrlhf.search_algorithm.litesearch import search as litesearch
+from openrlhf.search_algorithm.bestofn import search as bestofn
+from openrlhf.search_algorithm.bestofn import search_vllm as bestofn_vllm
+from openrlhf.search_algorithm.beamsearch_efficient import search as beamsearch
+from openrlhf.search_algorithm.beamsearch_efficient import search_vllm as beamsearch_vllm
+from openrlhf.search_algorithm.trial_n import search_vllm as trial_n_vllm
 
 import random
 
@@ -177,7 +178,7 @@ class NaiveExperienceMaker(ABC):
         return {k: v.to(device) for k, v in batch.items()}
 
     @torch.no_grad()
-    def make_experience_list(self, all_prompts: Union[str, List[str]], search_algo: str, **generate_kwargs) -> List[Experience]:
+    def make_experience_list(self, all_prompts: Union[str, List[str]], **generate_kwargs) -> List[Experience]:
         """
         Make a list of experience with the micro_rollout_batch_size.
 
@@ -187,10 +188,7 @@ class NaiveExperienceMaker(ABC):
         """
         args = self.strategy.args
         # generate responses
-        if search_algo == "sampling":
-            samples_list = self.generate_samples(all_prompts, **generate_kwargs)
-        else:
-            samples_list = self.search_samples(all_prompts, search_algo, **generate_kwargs)
+        samples_list = self.generate_samples(all_prompts, **generate_kwargs)
         torch.distributed.barrier()
         experiences = []
         for samples in tqdm(
@@ -255,81 +253,80 @@ class NaiveExperienceMaker(ABC):
         """
         assert not getattr(self, "packing_samples", False)
         args = self.strategy.args
-        self.actor.eval()
-        # sample multiple response
-        all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
-        samples_list = []
-
-        for i in range(0, len(all_prompts), args.micro_rollout_batch_size):
-            prompts = all_prompts[i : i + args.micro_rollout_batch_size]
-            inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
-            sequences, attention_mask, action_mask = self.actor.generate(**inputs, **generate_kwargs)
-            samples = Samples(
-                sequences=sequences,
-                attention_mask=attention_mask,
-                action_mask=action_mask,
-                num_actions=action_mask.size(1),
-                packed_seq_lens=None,
-                response_length=action_mask.float().sum(dim=-1),
-                total_length=attention_mask.float().sum(dim=-1),
-            )
-            print(inputs["input_ids"].device, self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=True))
-            samples_list.append(samples)
-        return samples_list
-
-    @torch.no_grad()
-    def search_samples(self, all_prompts: List[str], search_algo: str, **generate_kwargs) -> List[Samples]:
-        """
-        Search samples using tree search algorithms and return in batches.
-        """
-        assert not getattr(self, "packing_samples", False)
-        args = self.strategy.args
-        self.actor.eval()
-        self.critic.eval()
-        samples_list = []
         
-        _all_trajs = []
-        _all_prompts = []
-        for prompt in all_prompts:
-            if search_algo == "beamsearch":
-                sequences = beamsearch(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
-            elif search_algo == "litesearch":
-                sequences = litesearch(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
-            elif search_algo == "bestofn":
-                sequences = bestofn(prompt, actor=self.actor, critic=self.critic, tokenizer=self.tokenizer)
-            else:
-                raise Exception(f"Unknown search algorithm {search_algo}")
-            _all_trajs += [seq[len(prompt):] for seq in sequences]
-            _all_prompts += [prompt] * len(sequences)
+        search_algo = args.search_algo
         
-        # antewang: make sure len(_all_prompts) == k * len(all_prompts), k can be any integer > 0
-        for i in range(0, len(_all_prompts), args.micro_rollout_batch_size):
-            prompts = _all_prompts[i: i + args.micro_rollout_batch_size]
-            trajs = _all_trajs[i: i + args.micro_rollout_batch_size]
-            prompt_ids = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
-            traj_ids = self.tokenizer(
-                        trajs,
-                        return_tensors="pt",
-                        add_special_tokens=False,
-                        max_length=generate_kwargs["max_length"],
-                        padding=True,
-                        truncation=True,
-                        padding_side="right"
-                    )
-            traj_ids = {k: v.to("cuda") for k, v in traj_ids.items()}
-            sequences = {k: torch.concatenate([v, traj_ids[k]], dim=-1) for k, v in prompt_ids.items()}
-            sequences = sequences["input_ids"]
-            sequences, attention_mask, action_mask = self.actor.process_sequences(sequences, prompt_ids["input_ids"].size(1), self.tokenizer.pad_token_id, self.tokenizer.eos_token_id)
-            samples = Samples(
-                sequences=sequences,
-                attention_mask=attention_mask,
-                action_mask=action_mask,
-                num_actions=action_mask.size(1),
-                packed_seq_lens=None,
-                response_length=action_mask.float().sum(dim=-1),
-                total_length=attention_mask.float().sum(dim=-1),
-            )
-            samples_list.append(samples)
+        if search_algo == "sampling":
+            """
+            Normal sampling
+            """
+            self.actor.eval()
+            # sample multiple response
+            all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
+            samples_list = []
+
+            for i in range(0, len(all_prompts), args.micro_rollout_batch_size):
+                prompts = all_prompts[i : i + args.micro_rollout_batch_size]
+                inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
+                sequences, attention_mask, action_mask = self.actor.generate(**inputs, **generate_kwargs)
+                samples = Samples(
+                    sequences=sequences,
+                    attention_mask=attention_mask,
+                    action_mask=action_mask,
+                    num_actions=action_mask.size(1),
+                    packed_seq_lens=None,
+                    response_length=action_mask.float().sum(dim=-1),
+                    total_length=attention_mask.float().sum(dim=-1),
+                )
+                print(inputs["input_ids"].device, self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=True))
+                samples_list.append(samples)
+        else:
+            """
+            Search
+            """
+            self.actor.eval()
+            self.critic.eval()
+            samples_list = []
+            
+            _all_trajs = []
+            _all_prompts = []
+            for prompt in all_prompts:
+                try:
+                    search_func = globals().get(search_algo)
+                except KeyError:
+                    raise Exception(f"Unknown search algorithm {search_algo}")
+                sequences = search_func(prompt, self.tokenizer, self.actor, self.critic, **generate_kwargs)
+                _all_trajs += [seq[len(prompt):] for seq in sequences]
+                _all_prompts += [prompt] * len(sequences)
+            
+            # antewang: make sure len(_all_prompts) == k * len(all_prompts), k can be any integer > 0
+            for i in range(0, len(_all_prompts), args.micro_rollout_batch_size):
+                prompts = _all_prompts[i: i + args.micro_rollout_batch_size]
+                trajs = _all_trajs[i: i + args.micro_rollout_batch_size]
+                prompt_ids = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
+                traj_ids = self.tokenizer(
+                            trajs,
+                            return_tensors="pt",
+                            add_special_tokens=False,
+                            max_length=generate_kwargs["max_length"],
+                            padding=True,
+                            truncation=True,
+                            padding_side="right"
+                        )
+                traj_ids = {k: v.to("cuda") for k, v in traj_ids.items()}
+                sequences = {k: torch.concatenate([v, traj_ids[k]], dim=-1) for k, v in prompt_ids.items()}
+                sequences = sequences["input_ids"]
+                sequences, attention_mask, action_mask = self.actor.process_sequences(sequences, prompt_ids["input_ids"].size(1), self.tokenizer.pad_token_id, self.tokenizer.eos_token_id)
+                samples = Samples(
+                    sequences=sequences,
+                    attention_mask=attention_mask,
+                    action_mask=action_mask,
+                    num_actions=action_mask.size(1),
+                    packed_seq_lens=None,
+                    response_length=action_mask.float().sum(dim=-1),
+                    total_length=attention_mask.float().sum(dim=-1),
+                )
+                samples_list.append(samples)
         return samples_list
 
     @torch.no_grad()
@@ -538,14 +535,15 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         self.packing_samples = packing_samples
 
     @torch.no_grad()
-    def make_experience_list(self, all_prompts: Union[str, List[str]], search_algo: str, **generate_kwargs) -> List[Experience]:
+    def make_experience_list(self, all_prompts: Union[str, List[str]], **generate_kwargs) -> List[Experience]:
         if self.strategy.args.perf:
             self.perf_stats = {
                 "generate_time": 0,
                 "actor_value_rm_time": 0,
                 "wait_time": 0,
             }
-        experiences = super().make_experience_list(all_prompts, search_algo, **generate_kwargs)
+        generate_kwargs["has_vllm_engines"] = not (self.vllm_engines is None)
+        experiences = super().make_experience_list(all_prompts, **generate_kwargs)
         if self.critic is not None:
             for experience in experiences:
                 # send experience to critic
@@ -618,7 +616,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         else:
             # remote RM
             if not self.packing_samples:
-                queries = self.tokenizer.batch_decode(sequences_cpu, skip_special_tokens=False)
+                queries = self.tokenizer.batch_decode(sequences_cpu, skip_special_tokens=True)
             else:
                 sequences_list = []
                 offset = 0
@@ -717,7 +715,6 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             llms = self.vllm_engines[rank::world_size]
 
         args = self.strategy.args
-
         if args.search_algo == "sampling":
             sampling_params = SamplingParams(
                 temperature=kwargs.get("temperature", 1.0),
@@ -747,13 +744,16 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             # Retrieve and combine results from all outputs
             all_outputs = sum(ray.get(all_output_refs), [])
         else:
-            # search, have not gone through testing!
-            trajs = []
-            for prompt in all_prompts:
-                traj = bestofn_ray(prompt, tokenizer = self.tokenizer, actor = llms)[0]
-                trajs.append(traj)
+            try:
+                search_func = globals().get(args.search_algo + "_vllm")
+            except KeyError:
+                raise ValueError(f"Search algorithm {args.search_algo} not supported (ray).")
+            # Expand prompt list based on the number of samples per prompt for search as well
+            all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
+            trajs = search_func(all_prompts, tokenizer = self.tokenizer, actor = llms, search_args=args.search_args)
+
             all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
-            all_traj_token_ids = self.tokenize_fn(trajs, 1024, padding=False)["input_ids"] # openrlhf does not pass generate_max_len, wired
+            all_traj_token_ids = self.tokenize_fn(trajs, self.prompt_max_len + kwargs.get("max_new_tokens", 1024), padding=False)["input_ids"]
 
             class DummyOutObj:
                 def __init__(self, token_ids):
@@ -763,7 +763,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 def __init__(self, prompt_token_ids, token_ids):
                     self.prompt_token_ids = prompt_token_ids
                     self.outputs = [DummyOutObj(token_ids)]
-            
+
             all_outputs = [DummyObj(prompt_token_ids, token_ids) for prompt_token_ids, token_ids in zip(all_prompt_token_ids, all_traj_token_ids)]
 
         samples_list = []

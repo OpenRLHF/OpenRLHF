@@ -116,7 +116,6 @@ def create_vllm_engines(
                 num_cpus=1,
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
-                gpu_memory_utilization=gpu_memory_utilization,
             ).remote(
                 pretrain,
                 noset_visible_devices=noset_visible_devices,
@@ -127,6 +126,7 @@ def create_vllm_engines(
                 enable_prefix_caching=enable_prefix_caching,
                 enforce_eager=enforce_eager,
                 max_model_len=max_model_len,
+                gpu_memory_utilization=gpu_memory_utilization,
             )
         )
 
