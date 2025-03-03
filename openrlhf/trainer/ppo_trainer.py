@@ -157,9 +157,11 @@ class PPOTrainer(ABC):
             micro_train_batch_size, buffer_limit, buffer_cpu_offload, packing_samples
         )
 
-        # wandb/tensorboard setting
+        # wandb/tensorboard/swanlab setting
         self._wandb = None
         self._tensorboard = None
+        self._swanlab = None
+        
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():
             import wandb
 
@@ -177,11 +179,27 @@ class PPOTrainer(ABC):
 
             wandb.define_metric("train/global_step")
             wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
-            wandb.define_metric("eval/epoch")
-            wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
+            wandb.define_metric("eval/global_step")
+            wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
+        
+        if self.strategy.args.use_swanlab and self._wandb is None and self.strategy.is_rank_0():
+            import swanlab
 
-        # Initialize TensorBoard writer if wandb is not available
-        if self.strategy.args.use_tensorboard and self._wandb is None and self.strategy.is_rank_0():
+            self._swanlab = swanlab
+            if not os.environ.get("SWANLAB_API_KEY") and strategy.args.swanlab_mode in ["cloud", None]:
+                swanlab.login(api_key=strategy.args.use_swanlab)     
+            swanlab.init(
+                project=strategy.args.swanlab_project,
+                workspace=strategy.args.swanlab_workspace,
+                experiment_name=strategy.args.swanlab_run_name,
+                mode=strategy.args.swanlab_mode,
+                config={"Framework": "OpenRLHF"},
+                logdir=strategy.args.swanlab_logdir,
+            )
+            swanlab.config.update(strategy.args.__dict__)
+
+        # Initialize TensorBoard writer if wandb & swanlab is not available
+        if self.strategy.args.use_tensorboard and self._wandb is None and self._swanlab is None and self.strategy.is_rank_0():
             from torch.utils.tensorboard import SummaryWriter
 
             os.makedirs(self.strategy.args.use_tensorboard, exist_ok=True)
@@ -258,6 +276,8 @@ class PPOTrainer(ABC):
 
         if self._wandb is not None and self.strategy.is_rank_0():
             self._wandb.finish()
+        if self._swanlab is not None and self.strategy.is_rank_0():
+            self._swanlab.finish()
         if self._tensorboard is not None and self.strategy.is_rank_0():
             self._tensorboard.close()
 
@@ -566,6 +586,12 @@ class PPOTrainer(ABC):
                 if self.experience_maker.perf_stats is not None:
                     logs.update({f"perf/experience_maker/{k}": v for k, v in self.experience_maker.perf_stats.items()})
                 self._wandb.log(logs)
+            # SwanLab
+            elif self._swanlab is not None and self.strategy.is_rank_0():
+                logs = {"train/%s" % k: v for k, v in {**logs_dict, "global_step": global_step}.items()}
+                if self.experience_maker.perf_stats is not None:
+                    logs.update({f"perf/experience_maker/{k}": v for k, v in self.experience_maker.perf_stats.items()})
+                self._swanlab.log(logs)
             # TensorBoard
             elif self._tensorboard is not None and self.strategy.is_rank_0():
                 for k, v in logs_dict.items():

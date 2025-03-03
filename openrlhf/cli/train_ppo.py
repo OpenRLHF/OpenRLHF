@@ -422,6 +422,18 @@ if __name__ == "__main__":
 
     # TensorBoard parameters
     parser.add_argument("--use_tensorboard", type=str, default=None, help="TensorBoard logging path")
+    
+    # SwanLab parameters
+    parser.add_argument("--use_swanlab", type=str, default=None)
+    parser.add_argument("--swanlab_project", type=str, default="openrlhf_train_ppo")
+    parser.add_argument("--swanlab_workspace", type=str, default=None)
+    parser.add_argument(
+        "--swanlab_run_name",
+        type=str,
+        default="exp_%s" % datetime.now().strftime("%m%dT%H:%M"),
+    )
+    parser.add_argument("--swanlab_mode", type=str, default=None)
+    parser.add_argument("--swanlab_logdir", type=str, default=None)
 
     # ModelScope parameters
     parser.add_argument("--use_ms", action="store_true", default=False)
