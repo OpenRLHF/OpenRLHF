@@ -1,15 +1,5 @@
 # launch the master node of ray in container
 
-
-
-export PATH=/usr/local/cuda-12.4/bin:$PATH
-export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH
-
-export TRITON_PTXAS_PATH=/usr/local/cuda-12.4/bin/ptxas                                                                      
-export TRITON_CUOBJDUMP_PATH=/usr/local/cuda-12.4/bin/cuobjdump                                                              
-export TRITON_NVDISASM_PATH=/usr/local/cuda-12.4/bin/nvdisasm
-  
-export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
 MEGATRON_REPO=/app/qi/backup/data/RPROVER/OpenRLHF
 export PYTHONPATH=${MEGATRON_REPO}:$PYTHONPATH
 ray start --head --node-ip-address 0.0.0.0 --num-gpus 8
@@ -24,13 +14,13 @@ ray job submit --address="http://127.0.0.1:8265" \
    --actor_num_gpus_per_node 2 \
    --ref_num_nodes 1 \
    --ref_num_gpus_per_node 2 \
+   --colocate_actor_ref \
    --reward_num_nodes 1 \
    --reward_num_gpus_per_node 2 \
    --critic_num_nodes 1 \
    --critic_num_gpus_per_node 2 \
    --vllm_num_engines 1 \
    --vllm_tensor_parallel_size 2 \
-    --colocate_critic_reward \
   --colocate_actor_ref \
   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
   --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
@@ -43,7 +33,7 @@ ray job submit --address="http://127.0.0.1:8265" \
   --max_epochs 1 \
   --prompt_max_len 1024 \
   --generate_max_len 1024 \
-  --zero_stage 2 \
+  --zero_stage 3 \
   --bf16 \
   --actor_learning_rate 5e-7 \
   --critic_learning_rate 9e-6 \

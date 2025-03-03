@@ -154,3 +154,5 @@ core
 wandb/
 *.wandb
 
+#ray
+./ray_results
