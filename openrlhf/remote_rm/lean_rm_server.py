@@ -121,7 +121,9 @@ async def predict_detail(input_text: InputText):
                 'errors': None,
                 'status': None,
                 'complete': False,
-                'pass': False
+                'pass': False,
+                'output': None,  # 添加output字段存储详细错误信息
+                'system_messages': None  # 添加system_messages字段
             }
             
             # 清理proof中可能存在的多余反引号
@@ -155,7 +157,9 @@ async def predict_detail(input_text: InputText):
                 'errors': result.get('errors', []),
                 'status': result.get('status', 'unknown'),
                 'complete': result.get('complete', False),
-                'pass': result.get('pass', False)
+                'pass': result.get('pass', False),
+                'output': result.get('output', ''),  # 添加详细的错误输出
+                'system_messages': result.get('system_messages', '')  # 添加系统消息
             })
             
             # 根据验证结果返回reward
