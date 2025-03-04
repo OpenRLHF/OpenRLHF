@@ -74,42 +74,42 @@ def parse_error_positions(error_output, proof_content):
     return error_positions
 
 @app.post("/predict")
-async def predict(input_text: InputText) -> List[float]:
+async def predict(input_text: InputText) -> OutputPrediction:
     rewards = []
-    
+
     for query in input_text.queries:
         try:
             start_time = time.time()
             logger.info(f"Processing query with statement: {query['formal_statement']}")
-            
+
             if 'proof' in query and query['proof']:
                 original_proof = query['proof']
                 cleaned_proof = clean_proof_backticks(original_proof)
                 if original_proof != cleaned_proof:
                     logger.info("Cleaned extraneous backticks from proof")
                 query['proof'] = cleaned_proof
-            
+
             summarizer = ProofSummarizer(
                 data={
                     'formal_statement': query['formal_statement'],
                 },
                 scheduler=lean4_scheduler
             )
-            
+
             logger.info(f"Analyzing proof: {query['proof']}")
-            
+
             proof = summarizer.analyze(
                 code=query['proof'],
                 require_verification=True
             )
-            
+
             logger.info("Waiting for verification result...")
             while not proof.is_result_ready():
                 pass
-            
+
             result = proof.result
             logger.info(f"Verification result: {result}")
-            
+
             if result.get('complete', False):
                 logger.info("Proof is complete and correct")
                 rewards.append(1.0)  
@@ -119,15 +119,15 @@ async def predict(input_text: InputText) -> List[float]:
             else:
                 logger.info(f"Proof has errors: {result.get('errors', [])}")
                 rewards.append(-1.0)  
-                
+
             logger.info(f"Verification completed in {time.time() - start_time:.2f} seconds")
             logger.info(f"Final rewards: {rewards}")
-                
+
         except Exception as e:
             logger.error(f"Error processing query: {str(e)}")
             logger.error(traceback.format_exc())
             rewards.append(-1.0)
-            
+
     return {"rewards": rewards}
 
 @app.post("/predict_detail", response_model=DetailedOutputPrediction)
