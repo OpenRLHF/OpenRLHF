@@ -130,6 +130,7 @@ def offload_deepspeed_states(model, pin_memory=True, non_blocking=True):
         non_blocking=non_blocking,
     )
     model.empty_partition_cache()
+    torch.cuda.empty_cache()
     torch.distributed.barrier()
     torch.cuda.synchronize()
 
@@ -149,5 +150,6 @@ def reload_deepspeed_states(model, non_blocking=True):
     import torch
 
     model.reload_states(non_blocking=non_blocking)
+    torch.cuda.empty_cache()
     torch.distributed.barrier()
     torch.cuda.synchronize()
