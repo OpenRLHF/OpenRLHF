@@ -509,8 +509,19 @@ class ActorModelRayActor(BasePPORole):
         # broadcast checkpoint
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path) and not vllm_engines is None:
+            # vLLM wakeup when vllm_enable_sleep
+            if self.strategy.args.vllm_enable_sleep:
+                batch_vllm_engine_call(self.vllm_engines, "wake_up")
             torch.distributed.barrier()
+            torch.cuda.synchronize()
+
             trainer._broadcast_to_vllm()
+
+            # vLLM offload when vllm_enable_sleep
+            if self.strategy.args.vllm_enable_sleep:
+                batch_vllm_engine_call(self.vllm_engines, "sleep")
+                torch.distributed.barrier()
+                torch.cuda.synchronize()
 
         trainer.fit(
             args,
