@@ -128,7 +128,7 @@ async def predict(input_text: InputText) -> List[float]:
             logger.error(traceback.format_exc())
             rewards.append(-1.0)
             
-    return rewards
+    return {"rewards": rewards}
 
 @app.post("/predict_detail", response_model=DetailedOutputPrediction)
 async def predict_detail(input_text: InputText):

@@ -19,31 +19,29 @@ from openrlhf.remote_rm.ds_prover.utils import AttrDict
 
 HOME_DIR = os.path.expanduser('~')
 DEFAULT_LAKE_PATH = f'{HOME_DIR}/.elan/bin/lake'
-# 修改为git clone的mathlib4路径
+
 DEFAULT_LEAN_WORKSPACE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mathlib4')
 
 
-def verify_lean4_file(code, lake_path=DEFAULT_LAKE_PATH, lean_workspace=DEFAULT_LEAN_WORKSPACE, last_env=None, verbose=False, timeout=300, allTactics=False, ast=False, premises=False, tactics=False):
-    # 创建临时文件
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.lean', dir=lean_workspace, delete=False) as temp_file:
-        # 写入完整的 Lean 代码
+def verify_lean4_file(code, lake_path=DEFAULT_LAKE_PATH, lean_workspace=DEFAULT_LEAN_WORKSPACE, last_env=None, verbose=True, timeout=300, allTactics=False, ast=False, premises=False, tactics=False):
+    test_file = os.path.join(lean_workspace, 'test_proof.lean')
+    try:
         full_code = f"""
 import Mathlib.Tactic.Basic
 import Mathlib.Tactic.NormNum
 
 {code}
 """
-        temp_file.write(full_code)
-        temp_file.flush()
+        with open(test_file, 'w') as f:
+            f.write(full_code)
         
         if verbose:
-            print(f"Created temp file: {temp_file.name}")
+            print(f"Created test file: {test_file}")
             print(f"Code content:\n{full_code}")
         
         try:
-            # 使用文件名运行 lean
             outputs = subprocess.run(
-                [lake_path, 'env', 'lean', os.path.basename(temp_file.name)],
+                [lake_path, 'env', 'lean', os.path.basename(test_file)],
                 cwd=lean_workspace,
                 capture_output=True,
                 timeout=timeout
@@ -65,11 +63,11 @@ import Mathlib.Tactic.NormNum
                 'complete': False,
                 'system_messages': str(e)
             }
-        finally:
-            # 清理临时文件
-            os.unlink(temp_file.name)
+    finally:
+        if not verbose:
+            os.remove(test_file)
             
-        return result
+    return result
 
 
 class Lean4ServerProcess(mp.Process):
