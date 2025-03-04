@@ -156,3 +156,6 @@ wandb/
 
 #ray
 ./ray_results
+
+# Local scripts
+scripts/*local*.sh
