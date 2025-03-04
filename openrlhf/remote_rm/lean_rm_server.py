@@ -14,7 +14,7 @@ from openrlhf.remote_rm.ds_prover.utils import AttrDict
 app = FastAPI()
 
 # 配置验证器
-lean4_scheduler = Lean4ServerScheduler(max_concurrent_requests=4, timeout=300, memory_limit=10, name='verifier')
+lean4_scheduler = Lean4ServerScheduler(max_concurrent_requests=8, timeout=300, memory_limit=10, name='verifier')
 
 # 配置logging为DEBUG级别
 logging.basicConfig(
@@ -24,26 +24,54 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class InputText(BaseModel):
-    queries: List[dict]  # 每个query包含formal_statement和proof
+    queries: List[dict]  # Contains formal_statement and proof
 
 class OutputPrediction(BaseModel):
     rewards: List[float]
 
 class DetailedOutputPrediction(BaseModel):
     rewards: List[float]
-    details: List[dict]  # 存储每个证明的详细信息
+    details: List[dict]  # Detailed verification info
 
 def clean_proof_backticks(proof_text):
-    """
-    清理证明文本中的多余反引号，特别是末尾的反引号
-    """
-    # 清理末尾的反引号
+    """Clean extra backticks from proof text"""
     cleaned_text = re.sub(r'\s*```+\s*$', '', proof_text)
-    # 清理开头的反引号
     cleaned_text = re.sub(r'^```+\s*', '', cleaned_text)
-    # 清理文本中间可能出现的独立反引号
     cleaned_text = re.sub(r'(?<!\n)```(?!\n|[a-zA-Z]+)', '', cleaned_text)
     return cleaned_text
+
+def parse_error_positions(error_output, proof_content):
+    """Parse error positions and convert to proof-relative positions"""
+    error_positions = []
+    if not error_output:
+        return error_positions
+    
+    HEADER_LINES = 11  # Fixed header lines in test file
+        
+    for line in error_output.split('\n'):
+        match = re.match(r'.*?:(\d+):(\d+):\s*error:\s*(.*)', line)
+        if match:
+            file_line = int(match.group(1))
+            error_column = int(match.group(2))
+            error_message = match.group(3)
+            
+            proof_line = file_line - HEADER_LINES
+            
+            if proof_line > 0:  
+                proof_lines = proof_content.split('\n')
+                if 0 <= proof_line - 1 < len(proof_lines):
+                    relative_pos = {
+                        'line': proof_line,
+                        'file_line': file_line,
+                        'column': error_column,
+                        'position': sum(len(l) + 1 for l in proof_lines[:proof_line-1]) + error_column,
+                        'message': error_message,
+                        'content': proof_lines[proof_line - 1]
+                    }
+                    error_positions.append(relative_pos)
+                    logger.debug(f"Error at proof line {proof_line} (file line {file_line}): {error_message}")
+                
+    return error_positions
 
 @app.post("/predict")
 async def predict(input_text: InputText) -> List[float]:
@@ -54,7 +82,6 @@ async def predict(input_text: InputText) -> List[float]:
             start_time = time.time()
             logger.info(f"Processing query with statement: {query['formal_statement']}")
             
-            # 清理proof中可能存在的多余反引号
             if 'proof' in query and query['proof']:
                 original_proof = query['proof']
                 cleaned_proof = clean_proof_backticks(original_proof)
@@ -62,7 +89,6 @@ async def predict(input_text: InputText) -> List[float]:
                     logger.info("Cleaned extraneous backticks from proof")
                 query['proof'] = cleaned_proof
             
-            # 创建ProofSummarizer实例
             summarizer = ProofSummarizer(
                 data={
                     'formal_statement': query['formal_statement'],
@@ -72,30 +98,27 @@ async def predict(input_text: InputText) -> List[float]:
             
             logger.info(f"Analyzing proof: {query['proof']}")
             
-            # 分析证明
             proof = summarizer.analyze(
                 code=query['proof'],
                 require_verification=True
             )
             
             logger.info("Waiting for verification result...")
-            # 等待结果
             while not proof.is_result_ready():
                 pass
             
             result = proof.result
             logger.info(f"Verification result: {result}")
             
-            # 根据验证结果返回reward
             if result.get('complete', False):
                 logger.info("Proof is complete and correct")
-                rewards.append(1.0)  # 完全正确
+                rewards.append(1.0)  
             elif result.get('pass', False):
                 logger.info("Proof passes but may use sorry")
-                rewards.append(0.5)  # 语法正确但可能使用了sorry
+                rewards.append(0.5)  
             else:
                 logger.info(f"Proof has errors: {result.get('errors', [])}")
-                rewards.append(-1.0)  # 存在错误
+                rewards.append(-1.0)  
                 
             logger.info(f"Verification completed in {time.time() - start_time:.2f} seconds")
             logger.info(f"Final rewards: {rewards}")
@@ -122,11 +145,11 @@ async def predict_detail(input_text: InputText):
                 'status': None,
                 'complete': False,
                 'pass': False,
-                'output': None,  # 添加output字段存储详细错误信息
-                'system_messages': None  # 添加system_messages字段
+                'output': None,  
+                'system_messages': None  
             }
             
-            # 清理proof中可能存在的多余反引号
+    
             if 'proof' in query and query['proof']:
                 original_proof = query['proof']
                 cleaned_proof = clean_proof_backticks(original_proof)
@@ -134,7 +157,6 @@ async def predict_detail(input_text: InputText):
                     detail['cleaned_proof'] = True
                 query['proof'] = cleaned_proof
             
-            # 创建ProofSummarizer实例并验证
             summarizer = ProofSummarizer(
                 data={'formal_statement': query['formal_statement']},
                 scheduler=lean4_scheduler
@@ -151,18 +173,22 @@ async def predict_detail(input_text: InputText):
             result = proof.result
             verification_time = time.time() - start_time
             
-            # 更新详细信息
+            error_positions = parse_error_positions(
+                result.get('output', ''), 
+                query['proof']  
+            )
+            
             detail.update({
                 'verification_time': verification_time,
                 'errors': result.get('errors', []),
                 'status': result.get('status', 'unknown'),
                 'complete': result.get('complete', False),
                 'pass': result.get('pass', False),
-                'output': result.get('output', ''),  # 添加详细的错误输出
-                'system_messages': result.get('system_messages', '')  # 添加系统消息
+                'output': result.get('output', ''),
+                'error_positions': error_positions,  
+                'proof_segments': proof.segmentation(result)  
             })
             
-            # 根据验证结果返回reward
             if result.get('complete', False):
                 rewards.append(1.0)
             elif result.get('pass', False):
