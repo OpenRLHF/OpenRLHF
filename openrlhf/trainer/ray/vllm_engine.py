@@ -1,5 +1,4 @@
 import os
-import numpy as np
 from typing import Any, List
 
 import ray
@@ -36,10 +35,9 @@ class LLMRayActor:
             # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES is set.
             os.environ["CUDA_VISIBLE_DEVICES"] = str(ray.get_gpu_ids()[0])
 
-        # every worker will use 0.2 GPU, so that we can schedule
-        # 2 instances on the same GPUs.
+        num_gpus = kwargs.pop("num_gpus")
         if bundle_indices is not None:
-            os.environ["VLLM_RAY_PER_WORKER_GPUS"] = "0.2"
+            os.environ["VLLM_RAY_PER_WORKER_GPUS"] = str(num_gpus)
             os.environ["VLLM_RAY_BUNDLE_INDICES"] = ",".join(map(str, bundle_indices))
             print(f"creating LLM with bundle_indices={bundle_indices}")
 
@@ -123,40 +121,31 @@ def create_vllm_engines(
 ):
     import vllm
 
-    assert vllm.__version__ >= "0.7.0", "OpenRLHF only supports vllm >= 0.7.0"
+    assert vllm.__version__ >= "0.7.2", "OpenRLHF only supports vllm >= 0.7.2"
 
     vllm_engines = []
-    num_gpus = int(tensor_parallel_size == 1)
     distributed_executor_backend = "uni" if tensor_parallel_size == 1 else "ray"
+    use_hybrid_engine = shared_pg is not None
+    num_gpus = int(tensor_parallel_size == 1)
+    if use_hybrid_engine and tensor_parallel_size == 1:
+        # every worker will use 0.2 GPU, so that we can schedule
+        # 2 instances on the same GPUs.
+        num_gpus = 0.2
+
+    if not use_hybrid_engine:
+        # Create a big placement group to ensure that all engines are packed
+        bundles = [{"GPU": 1, "CPU": 1} for _ in range(num_engines * tensor_parallel_size)]
+        shared_pg = placement_group(bundles, strategy="PACK")
+        ray.get(shared_pg.ready())
+
     for i in range(num_engines):
         bundle_indices = None
-        scheduling_strategy = None
+        if tensor_parallel_size > 1:
+            bundle_indices = list(range(i * tensor_parallel_size, (i + 1) * tensor_parallel_size))
 
-        # Hybrid engine
-        if shared_pg is not None:
-            assert vllm.__version__ >= "0.7.2", "Only vllm >= 0.7.2 supports hybrid engine"
-
-            if tensor_parallel_size > 1:
-                scheduling_strategy = PlacementGroupSchedulingStrategy(
-                    placement_group=shared_pg,
-                    placement_group_capture_child_tasks=True,
-                    placement_group_bundle_index=i * tensor_parallel_size
-                )
-                bundle_indices = np.arange(i * tensor_parallel_size, (i + 1) * tensor_parallel_size).tolist()
-            else:
-                num_gpus = 0.2
-                scheduling_strategy = PlacementGroupSchedulingStrategy(
-                    placement_group=shared_pg, placement_group_capture_child_tasks=True, placement_group_bundle_index=i
-                )
-        # Distributed RLHF
-        elif tensor_parallel_size > 1:
-            bundles = [{"GPU": 1, "CPU": 1}] * tensor_parallel_size
-            pg = placement_group(bundles)
-            ray.get(pg.ready())
-
-            scheduling_strategy = PlacementGroupSchedulingStrategy(
-                placement_group=pg, placement_group_capture_child_tasks=True, placement_group_bundle_index=0
-            )
+        scheduling_strategy = PlacementGroupSchedulingStrategy(
+            placement_group=shared_pg, placement_group_capture_child_tasks=True, placement_group_bundle_index=i * tensor_parallel_size
+        )
 
         if num_engines >= num_total_actors:
             num_actors = 1
@@ -165,7 +154,7 @@ def create_vllm_engines(
 
         vllm_engines.append(
             LLMRayActor.options(
-                num_cpus=0,
+                num_cpus=num_gpus,
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
             ).remote(
@@ -181,7 +170,8 @@ def create_vllm_engines(
                 trust_remote_code=True,
                 num_actors=num_actors,
                 gpu_memory_utilization=gpu_memory_utilization,
-                bundle_indices=bundle_indices if shared_pg else None,
+                bundle_indices=bundle_indices,
+                num_gpus=0.2 if use_hybrid_engine else 1,
                 enable_sleep_mode=vllm_enable_sleep,
                 noset_visible_devices=ray_noset_visible_devices(),
             )
