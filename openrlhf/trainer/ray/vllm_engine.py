@@ -6,8 +6,9 @@ from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from vllm import LLM
 
-from .utils import ray_noset_visible_devices
 from openrlhf.utils.logging_utils import init_logger
+
+from .utils import ray_noset_visible_devices
 
 logger = init_logger(__name__)
 
@@ -144,7 +145,9 @@ def create_vllm_engines(
             bundle_indices = list(range(i * tensor_parallel_size, (i + 1) * tensor_parallel_size))
 
         scheduling_strategy = PlacementGroupSchedulingStrategy(
-            placement_group=shared_pg, placement_group_capture_child_tasks=True, placement_group_bundle_index=i * tensor_parallel_size
+            placement_group=shared_pg,
+            placement_group_capture_child_tasks=True,
+            placement_group_bundle_index=i * tensor_parallel_size,
         )
 
         if num_engines >= num_total_actors:
@@ -176,7 +179,7 @@ def create_vllm_engines(
                 noset_visible_devices=ray_noset_visible_devices(),
             )
         )
-    
+
     if vllm_enable_sleep:
         batch_vllm_engine_call(vllm_engines, "sleep", rank_0_only=False)
 

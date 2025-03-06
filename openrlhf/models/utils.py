@@ -19,7 +19,7 @@ def compute_approx_kl(
         log_probs_base: Log probabilities of the base distribution.
         action_mask: Mask for actions.
     """
-    
+
     if kl_estimator == "k1":
         log_ratio = log_probs.float() - log_probs_base.float()
         if action_mask is not None:
@@ -34,8 +34,8 @@ def compute_approx_kl(
         log_ratio = log_probs.float() - log_probs_base.float()
         if action_mask is not None:
             log_ratio = log_ratio * action_mask
-        log_ratio = log_ratio ** 2 / 2.0
-        
+        log_ratio = log_ratio**2 / 2.0
+
     # The k3 estimator is the non negative kl approximation in
     # http://joschu.net/blog/kl-approx.html
     if kl_estimator == "k3":
