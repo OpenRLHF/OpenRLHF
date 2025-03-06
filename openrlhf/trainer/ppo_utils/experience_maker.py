@@ -139,6 +139,7 @@ class NaiveExperienceMaker(ABC):
         tokenizer,
         prompt_max_len: int,
         kl_controller,
+        use_lora_disable=False,
         strategy=None,
         remote_rm_url: Union[list[str], str] = None,
         reward_fn=None,
@@ -152,6 +153,7 @@ class NaiveExperienceMaker(ABC):
         self.tokenizer = tokenizer
         self.prompt_max_len = prompt_max_len
         self.kl_ctl = kl_controller
+        self.use_lora_disable = use_lora_disable
         self.strategy = strategy
         self.reward_fn = reward_fn
         self.perf_stats = None
@@ -347,7 +349,12 @@ class NaiveExperienceMaker(ABC):
         if self.initial_model is not None:
             base_action_log_probs = self.initial_model(sequences, num_actions, attention_mask)
         else:
-            base_action_log_probs = None
+            if self.use_lora_disable:
+                self._unwrap_actor.disable_adapters()
+                base_action_log_probs = self.actor(sequences, num_actions, attention_mask)
+                self._unwrap_actor.enable_adapters()
+            else:
+                base_action_log_probs = None
 
         # values
         if self.critic is not None:
@@ -542,6 +549,15 @@ class NaiveExperienceMaker(ABC):
             returns[:, t] = cumulative_return
 
         return returns
+
+    @torch.no_grad()
+    def _unwrap_actor(self, model) -> nn.Module:
+        if isinstance(model, Actor):
+            return self._unwrap_actor(model.model)
+        elif hasattr(model, "module"):
+            return model.module
+        else:
+            return model
 
 
 class RemoteExperienceMaker(NaiveExperienceMaker):
