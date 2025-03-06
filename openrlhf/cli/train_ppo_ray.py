@@ -59,9 +59,11 @@ def train(args):
     # if colocated, create placement group for actor and ref model explicitly.
     pg = None
     if args.colocate_actor_ref or args.colocate_all_models:
-        assert (
-            args.actor_num_nodes == args.ref_num_nodes and args.actor_num_gpus_per_node == args.ref_num_gpus_per_node
-        ), f"num_nodes and num_gpus_per_node must be the same when colocate actor and ref model."
+        if args.init_kl_coef > 0:
+            assert (
+                args.actor_num_nodes == args.ref_num_nodes
+                and args.actor_num_gpus_per_node == args.ref_num_gpus_per_node
+            ), f"num_nodes and num_gpus_per_node must be the same when colocate actor and ref model."
 
         bundles = [{"GPU": 1, "CPU": 1} for _ in range(args.actor_num_nodes * args.actor_num_gpus_per_node)]
         pg = placement_group(bundles, strategy="PACK")
