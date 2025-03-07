@@ -813,6 +813,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # Make sure all requests are sent.
         if self.strategy.ring_attn_group is None:
             torch.distributed.barrier()
+        else:
+            time.sleep(1)
 
         # Retrieve and combine results from all outputs
         all_output_refs = []
