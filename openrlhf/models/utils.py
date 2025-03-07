@@ -62,6 +62,7 @@ def compute_reward(
     action_mask: Optional[torch.Tensor] = None,
     num_actions: Optional[Union[int, list[int]]] = None,
     reward_clip_range: Tuple[float, float] = None,
+    eos_reward = True,
 ) -> Union[torch.Tensor, list[torch.Tensor]]:
     if kl_coef <= 0.0:
         kl_coef = 0.0
@@ -71,19 +72,32 @@ def compute_reward(
 
     if action_mask is not None:
         kl_reward = -kl_coef * kl
-        # The following code is equivalent to:
-        #
-        # last_reward = torch.zeros_like(kl)
-        # for i in range(last_reward.size(0)):
-        #     for t in reversed(range(last_reward.size(1))):
-        #         if action_mask[i][t] > 0.5:
-        #             last_reward[i][t] = r[i]
-        #             break
-        #
-        eos_indices = action_mask.size(1) - 1 - action_mask.long().fliplr().argmax(dim=1, keepdim=True)
-        last_reward = torch.zeros_like(kl).scatter_(dim=1, index=eos_indices, src=r.unsqueeze(1).to(kl.dtype))
-
-        reward = last_reward + kl_reward
+        if eos_reward:
+            # The following code is equivalent to:
+            #
+            # last_reward = torch.zeros_like(kl)
+            # for i in range(last_reward.size(0)):
+            #     for t in reversed(range(last_reward.size(1))):
+            #         if action_mask[i][t] > 0.5:
+            #             last_reward[i][t] = r[i]
+            #             break
+            #
+            eos_indices = action_mask.size(1) - 1 - action_mask.long().fliplr().argmax(dim=1, keepdim=True)
+            last_reward = torch.zeros_like(kl).scatter_(dim=1, index=eos_indices, src=r.unsqueeze(1).to(kl.dtype))
+            reward = last_reward + kl_reward
+        else:
+            # The following code is equivalent to:
+            #
+            # last_reward = torch.zeros_like(kl)
+            # for i in range(last_reward.size(0)):
+            #     for t in reversed(range(last_reward.size(1))):
+            #         if action_mask[i][t] > 0.5:
+            #             last_reward[i][t] = r[i]
+            #
+            mask = action_mask > 0.5
+            all_token_reward = torch.zeros_like(kl)
+            all_token_reward[mask] = r.unsqueeze(1).expand(-1, kl.size(1))[mask].to(kl.dtype)
+            reward = all_token_reward + kl_reward
     else:
         # TODO: write a more efficient version
         reward = []
