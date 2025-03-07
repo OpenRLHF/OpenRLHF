@@ -249,11 +249,11 @@ class NaiveExperienceMaker(ABC):
             experience = experience.to_device("cuda")
             reward = reward.to(device="cuda")
             num_actions = experience.info["num_actions"]
-            
-            if self.advantage_estimator in ["group_norm"] and generate_kwargs["gamma"]==0:
+
+            if self.advantage_estimator in ["group_norm"] and generate_kwargs["gamma"] == 0:
                 eos_reward = False
             else:
-                eos_reward = True                
+                eos_reward = True
             reward = compute_reward(
                 reward,
                 self.kl_ctl.value,
