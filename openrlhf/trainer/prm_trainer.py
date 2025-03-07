@@ -87,6 +87,25 @@ class ProcessRewardModelTrainer(ABC):
             wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
             wandb.define_metric("eval/global_step")
             wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
+        
+        # swanlab setting
+        self._swanlab = None
+        if self.strategy.args.use_swanlab and self._wandb is None and self.strategy.is_rank_0():
+            import swanlab
+            import os
+
+            self._swanlab = swanlab
+            if not os.environ.get("SWANLAB_API_KEY") and strategy.args.swanlab_mode in ["cloud", None]:
+                swanlab.login(api_key=strategy.args.use_swanlab)     
+            swanlab.init(
+                project=strategy.args.swanlab_project,
+                workspace=strategy.args.swanlab_workspace,
+                experiment_name=strategy.args.swanlab_run_name,
+                mode=strategy.args.swanlab_mode,
+                config={"Framework": "OpenRLHF"},
+                logdir=strategy.args.swanlab_logdir,
+            )
+            swanlab.config.update(strategy.args.__dict__)
 
     def fit(self, args, consumed_samples=0, num_update_steps_per_epoch=None):
         # get eval and save steps
@@ -188,6 +207,10 @@ class ProcessRewardModelTrainer(ABC):
             if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {"train/%s" % k: v for k, v in {**logs_dict, "global_step": global_step}.items()}
                 self._wandb.log(logs)
+            # SwanLab
+            elif self._swanlab is not None and self.strategy.is_rank_0():
+                logs = {"train/%s" % k: v for k, v in {**logs_dict, "global_step": global_step}.items()}
+                self._swanlab.log(logs)
 
         # eval
         if global_step % args.eval_steps == 0:
@@ -246,4 +269,7 @@ class ProcessRewardModelTrainer(ABC):
             if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": steps}.items()}
                 self._wandb.log(logs)
+            elif self._swanlab is not None and self.strategy.is_rank_0():
+                logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": steps}.items()}
+                self._swanlab.log(logs)
         self.model.train()  # reset model state
