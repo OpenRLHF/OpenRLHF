@@ -45,8 +45,6 @@ def compute_approx_kl(
         log_ratio = -log_ratio
         log_ratio = log_ratio.exp() - 1 - log_ratio
 
-    # The k3 estimator is the non negative kl approximation in
-    # http://joschu.net/blog/kl-approx.html
     if kl_estimator == "k3_offline":
         log_ratio = log_probs.float() - log_probs_base.float()
         if action_mask is not None:
