@@ -62,7 +62,7 @@ def compute_reward(
     action_mask: Optional[torch.Tensor] = None,
     num_actions: Optional[Union[int, list[int]]] = None,
     reward_clip_range: Tuple[float, float] = None,
-    eos_reward = True,
+    eos_reward=True,
 ) -> Union[torch.Tensor, list[torch.Tensor]]:
     if kl_coef <= 0.0:
         kl_coef = 0.0
