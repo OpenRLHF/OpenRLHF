@@ -14,7 +14,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --colocate_all_models \
    --vllm_gpu_memory_utilization 0.6 \
    --init_kl_coef 1e-3 \
-   --gamma 1.0 \
+   --gamma 0 \
    --kl_estimator k3_offline \
    --advantage_estimator group_norm \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
