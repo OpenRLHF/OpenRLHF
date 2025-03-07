@@ -1,4 +1,6 @@
 import os
+import queue
+from collections import defaultdict
 from typing import Any, List
 
 import ray
@@ -46,7 +48,7 @@ class LLMRayActor:
         self.num_actors = kwargs.pop("num_actors")
         self.actor_counter = 0
         self.requests = {}
-        self.responses = {}
+        self.response_queues = defaultdict(queue.Queue)
 
         self.llm = LLM(*args, **kwargs)
 
@@ -94,7 +96,7 @@ class LLMRayActor:
             offset = 0
             self.responses = {}
             for actor_rank, num in num_requests:
-                self.responses[actor_rank] = responses[offset : offset + num]
+                self.response_queues[actor_rank].put(responses[offset : offset + num])
                 offset += num
 
             self.actor_counter = 0
@@ -104,7 +106,7 @@ class LLMRayActor:
         """
         Return the responses for the actor with the given rank
         """
-        return self.responses.pop(actor_rank)
+        return self.response_queues[actor_rank].get()
 
 
 def create_vllm_engines(
