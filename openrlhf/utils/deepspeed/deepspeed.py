@@ -93,6 +93,13 @@ class DeepspeedStrategy(ABC):
             self.ring_attn_rank = 0
             return
 
+        # Create a group with all rank 0s from each ring attention group
+        ranks = list(range(0, torch.distributed.get_world_size(), self.ring_attn_size))
+        self.ring_attn_rank0_group = torch.distributed.new_group(
+            ranks=ranks,
+            backend="nccl",
+        )
+
         ring_head_stride = getattr(self.args, "ring_head_stride", 1)
         for i in range(dist.get_world_size() // self.ring_attn_size):
             ring_attn_ranks = list(
