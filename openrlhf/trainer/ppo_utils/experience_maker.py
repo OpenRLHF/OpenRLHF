@@ -814,9 +814,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         if self.strategy.ring_attn_group is None:
             torch.distributed.barrier()
         else:
-            torch.distributed.barrier(
-                group=self.strategy.ring_attn_rank0_group, device_ids=[torch.cuda.current_device()]
-            )
+            time.sleep(3)
 
         # Retrieve and combine results from all outputs
         all_output_refs = []
