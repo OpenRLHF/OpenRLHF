@@ -79,7 +79,7 @@ def train(args):
     tokenizer = get_tokenizer(args.pretrain, actor.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
 
     # load weights for reference actor
-    if args.init_kl_coef == 0:
+    if args.init_kl_coef == 0 or args.use_lora_disable:
         initial_model = None
     else:
         initial_model = Actor(
@@ -250,6 +250,7 @@ def train(args):
         eps_clip=args.eps_clip,
         gamma=args.gamma,
         lambd=args.lambd,
+        use_lora_disable=args.use_lora_disable,
         init_kl_coef=args.init_kl_coef,
         kl_target=args.kl_target,
         ema_beta=0.992,
@@ -377,6 +378,7 @@ if __name__ == "__main__":
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")
     parser.add_argument("--lora_dropout", type=float, default=0)
+    parser.add_argument("--use_lora_disable", action="store_true", default=False)
 
     # Models
     parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")
@@ -419,6 +421,12 @@ if __name__ == "__main__":
         type=str,
         default="ppo_%s" % datetime.now().strftime("%m%dT%H:%M"),
     )
+    parser.add_argument(
+        "--vllm_enable_sleep",
+        action="store_true",
+        default=False,
+        help="Enable sleep mode for vLLM when using --colocate_all_models",
+    )
 
     # TensorBoard parameters
     parser.add_argument("--use_tensorboard", type=str, default=None, help="TensorBoard logging path")
@@ -438,6 +446,9 @@ if __name__ == "__main__":
 
     if args.advantage_estimator in ["rloo", "reinforce_baseline", "group_norm"]:
         assert args.n_samples_per_prompt > 1, f"{args.advantage_estimator} requires n_samples_per_prompt > 1"
+
+    if args.use_lora_disable:
+        assert args.target_modules == "all-linear", "use_lora_disable requires target_modules == 'all-linear'"
 
     if args.use_kl_loss:
         if args.kl_estimator not in ["k2", "k3"]:
