@@ -16,9 +16,9 @@ from openrlhf.utils.distributed_sampler import DistributedSampler
 class GRPOTrainer(ABC):
     """
     Trainer for Generalized Reward-Preference Optimization (GRPO).
-    
+
     GRPO extends DPO by introducing a KL penalty term to control policy updates.
-    
+
     Args:
         model (torch.nn.Module): The primary model to be trained (policy).
         ref_model (torch.nn.Module): The reference model for KL penalty calculation.
@@ -125,13 +125,13 @@ class GRPOTrainer(ABC):
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Compute GRPO loss which includes reward term and KL penalty.
-        
+
         Args:
             policy_chosen_logps: Log probs of chosen responses from current policy
             policy_rejected_logps: Log probs of rejected responses from current policy
             ref_chosen_logps: Log probs of chosen responses from reference policy
             ref_rejected_logps: Log probs of rejected responses from reference policy
-            
+
         Returns:
             Tuple containing:
             - loss: The GRPO loss
@@ -140,13 +140,13 @@ class GRPOTrainer(ABC):
         """
         # Compute rewards based on preference pairs
         rewards = self.beta * (policy_chosen_logps - policy_rejected_logps)
-        
+
         # Compute KL divergence
         kl_div = (policy_chosen_logps - ref_chosen_logps) + (policy_rejected_logps - ref_rejected_logps)
-        
+
         # Compute GRPO loss
         loss = -(rewards - self.gamma * kl_div).mean()
-        
+
         return loss, rewards.mean(), kl_div.mean()
 
     def concatenated_forward(self, model, chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens):
