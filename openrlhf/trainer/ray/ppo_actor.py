@@ -494,7 +494,7 @@ class ActorModelRayActor(BasePPORole):
             ema_beta=0.992,
             ptx_coef=args.ptx_coef,
             max_norm=args.max_norm,
-            # fro GPT generation
+            # for GPT generation
             do_sample=True,
             max_new_tokens=args.generate_max_len,
             max_length=args.max_len,
