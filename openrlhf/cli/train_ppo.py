@@ -30,6 +30,7 @@ def train(args):
         target_modules=args.target_modules,
         lora_dropout=args.lora_dropout,
         ds_config=strategy.get_ds_train_config(is_actor=True),
+        temperature=strategy.args.temperature,
     )
 
     if args.actor_init_on_gpu:
@@ -88,6 +89,7 @@ def train(args):
             bf16=args.bf16,
             load_in_4bit=args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=False),
+            temperature=strategy.args.temperature,
         )
 
     if args.enable_ema:

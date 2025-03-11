@@ -319,6 +319,7 @@ class NaiveExperienceMaker(ABC):
                 total_length=attention_mask.float().sum(dim=-1),
                 prompts=prompts,
                 labels=labels,
+                pad_len=None,
             )
             samples_list.append(samples)
         return samples_list
@@ -661,24 +662,29 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 )
         else:
             # remote RM
-            if not self.packing_samples:
-                queries = self.tokenizer.batch_decode(sequences_cpu, skip_special_tokens=False)
-            else:
-                sequences_list = []
-                offset = 0
-                tokens_list = sequences_cpu.tolist()[0]
-                for length in packed_seq_lens:
-                    sequences_list.append(tokens_list[offset : offset + length])
-                    offset += length
-                queries = self.tokenizer.batch_decode(sequences_list, skip_special_tokens=False)
+            if self.strategy.ring_attn_group is None or self.strategy.ring_attn_rank == 0:
+                if not self.packing_samples:
+                    queries = self.tokenizer.batch_decode(sequences_cpu, skip_special_tokens=False)
+                else:
+                    sequences_list = []
+                    offset = 0
+                    tokens_list = sequences_cpu.tolist()[0]
+                    for length in packed_seq_lens:
+                        sequences_list.append(tokens_list[offset : offset + length])
+                        offset += length
+                    queries = self.tokenizer.batch_decode(sequences_list, skip_special_tokens=False)
 
-            if self.custom_reward_func:
-                r = self.custom_reward_func.remote(queries, samples.prompts, samples.labels)
-                r_refs.append(r)
-            else:
-                for rm in self.remote_rm_url:
-                    r = remote_rm_fn_ray.remote(rm, queries=queries, prompts=samples.prompts, labels=samples.labels)
+                if self.custom_reward_func:
+                    r = self.custom_reward_func.remote(queries, samples.prompts, samples.labels)
                     r_refs.append(r)
+                else:
+                    for rm in self.remote_rm_url:
+                        r = remote_rm_fn_ray.remote(
+                            rm, queries=queries, prompts=samples.prompts, labels=samples.labels
+                        )
+                        r_refs.append(r)
+            else:
+                r_refs.append(ray.put(None))
 
         if args.colocate_all_models and not self.remote_rm_url:
             ray.get(r_refs)
@@ -705,6 +711,16 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             base_action_log_probs = base_action_log_probs.to(device)
         if value is not None:
             value = value.to(device)
+
+        # broadcast rewards to all ring attention ranks when using remote RM
+        if self.remote_rm_url and self.strategy.ring_attn_group is not None:
+            if self.strategy.ring_attn_rank == 0:
+                dist.broadcast_object_list(rewards, src=dist.get_rank(), group=self.strategy.ring_attn_group)
+            else:
+                dist.broadcast_object_list(
+                    rewards, src=self.strategy.ring_attn_ranks[0], group=self.strategy.ring_attn_group
+                )
+
         rewards = [r.to(device) for r in rewards]
         r = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
 
@@ -828,6 +844,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # Make sure all requests are sent.
         if self.strategy.ring_attn_group is None:
             torch.distributed.barrier()
+        else:
+            time.sleep(3)
 
         # Retrieve and combine results from all outputs
         all_output_refs = []
