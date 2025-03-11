@@ -51,7 +51,6 @@ def train(args):
             ds_config=strategy.get_ds_train_config(is_actor=False),
             value_head_prefix=args.value_head_prefix,
             init_value_head=strategy.args.pretrain == strategy.args.critic_pretrain,
-            temperature=args.temperature,
         )
     else:
         critic = None
@@ -87,6 +86,7 @@ def train(args):
         bf16=args.bf16,
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=False),
+        temperature=args.temperature,
     )
 
     if args.enable_ema:
