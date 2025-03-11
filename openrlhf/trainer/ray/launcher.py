@@ -71,6 +71,7 @@ class ReferenceModelRayActor(BasePPORole):
             load_in_4bit=strategy.args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
             packing_samples=strategy.args.packing_samples,
+            temperature=strategy.args.temperature,
         )
         strategy.print(model)
 
