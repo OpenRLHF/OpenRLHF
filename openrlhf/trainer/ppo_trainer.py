@@ -160,7 +160,7 @@ class PPOTrainer(ABC):
         self._wandb = None
         self._tensorboard = None
         self._swanlab = None
-        
+
         if self.strategy.args.use_wandb and self.strategy.is_rank_0():
             import wandb
 
@@ -180,13 +180,13 @@ class PPOTrainer(ABC):
             wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
             wandb.define_metric("eval/global_step")
             wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
-        
+
         if self.strategy.args.use_swanlab and self._wandb is None and self.strategy.is_rank_0():
             import swanlab
 
             self._swanlab = swanlab
             if not os.environ.get("SWANLAB_API_KEY") and strategy.args.swanlab_mode in ["cloud", None]:
-                swanlab.login(api_key=strategy.args.use_swanlab)     
+                swanlab.login(api_key=strategy.args.use_swanlab)
             swanlab.init(
                 project=strategy.args.swanlab_project,
                 workspace=strategy.args.swanlab_workspace,
@@ -198,7 +198,12 @@ class PPOTrainer(ABC):
             swanlab.config.update(strategy.args.__dict__)
 
         # Initialize TensorBoard writer if wandb & swanlab is not available
-        if self.strategy.args.use_tensorboard and self._wandb is None and self._swanlab is None and self.strategy.is_rank_0():
+        if (
+            self.strategy.args.use_tensorboard
+            and self._wandb is None
+            and self._swanlab is None
+            and self.strategy.is_rank_0()
+        ):
             from torch.utils.tensorboard import SummaryWriter
 
             os.makedirs(self.strategy.args.use_tensorboard, exist_ok=True)

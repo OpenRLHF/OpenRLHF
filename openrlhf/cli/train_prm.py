@@ -190,7 +190,7 @@ if __name__ == "__main__":
         type=str,
         default="prm_%s" % datetime.now().strftime("%m%dT%H:%M"),
     )
-    
+
     # SwanLab parameters
     parser.add_argument("--use_swanlab", type=str, default=None)
     parser.add_argument("--swanlab_project", type=str, default="openrlhf_train_prm")

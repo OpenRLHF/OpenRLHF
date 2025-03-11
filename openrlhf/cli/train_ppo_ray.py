@@ -405,7 +405,7 @@ if __name__ == "__main__":
 
     # TensorBoard parameters
     parser.add_argument("--use_tensorboard", type=str, default=None, help="TensorBoard logging path")
-    
+
     # SwanLab parameters
     parser.add_argument("--use_swanlab", type=str, default=None)
     parser.add_argument("--swanlab_project", type=str, default="openrlhf_train_ppo")
