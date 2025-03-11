@@ -47,9 +47,11 @@ class Actor(nn.Module):
         ds_config=None,
         device_map=None,
         packing_samples=False,
+        temperature=1.0,
         **kwargs,
     ) -> None:
         super().__init__()
+        self.temperature = temperature
 
         if isinstance(pretrain_or_model, str):
             attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
@@ -218,7 +220,9 @@ class Actor(nn.Module):
             return output
 
         if not self.packing_samples:
-            log_probs = log_probs_from_logits(output["logits"][:, :-1, :], sequences[:, 1:])
+            log_probs = log_probs_from_logits(
+                output["logits"][:, :-1, :], sequences[:, 1:], temperature=self.temperature
+            )
             action_log_probs = log_probs[:, -num_actions:]
         else:
             if ring_attn_group is not None and logps_allgather:
@@ -237,7 +241,9 @@ class Actor(nn.Module):
                 per_token_logps = all_gather(local_per_token_logps, ring_attn_group).reshape((1, -1))
                 log_probs = per_token_logps[:, :-1]
             else:
-                log_probs = log_probs_from_logits(output["logits"][:, :-1, :], sequences[:, 1:])
+                log_probs = log_probs_from_logits(
+                    output["logits"][:, :-1, :], sequences[:, 1:], temperature=self.temperature
+                )
 
             assert isinstance(num_actions, list) and len(num_actions) == len(packed_seq_lens)
             action_log_probs = []
