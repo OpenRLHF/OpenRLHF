@@ -170,7 +170,9 @@ class SFTTrainer(ABC):
                             dump_labels = torch.full(labels.size(), self.loss_fn.IGNORE_INDEX).to(labels.device)
                             for response_ranges in infos["response_ranges"]:
                                 for response_range in response_ranges:
-                                    dump_labels[0][response_range[0]: response_range[1] + 1] = labels[0][response_range[0]: response_range[1] + 1]
+                                    dump_labels[0][response_range[0] : response_range[1] + 1] = labels[0][
+                                        response_range[0] : response_range[1] + 1
+                                    ]
                             labels = dump_labels
                         else:
                             index = 0
@@ -179,7 +181,7 @@ class SFTTrainer(ABC):
                                 index += input_length
                     else:
                         for label, source_len in zip(labels, prompt_id_lens):
-                            label[:source_len + 1] = self.loss_fn.IGNORE_INDEX
+                            label[: source_len + 1] = self.loss_fn.IGNORE_INDEX
 
                 gpt_loss = self.loss_fn(output.logits, labels)
                 loss = gpt_loss + aux_loss * self.args.aux_loss_coef
