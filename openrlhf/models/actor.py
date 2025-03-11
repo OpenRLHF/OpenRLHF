@@ -45,6 +45,7 @@ class Actor(nn.Module):
         ds_config=None,
         device_map=None,
         packing_samples=False,
+        temperature=1.,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -117,6 +118,7 @@ class Actor(nn.Module):
             self.packing_samples = packing_samples
         else:
             self.model = pretrain_or_model
+        self.temperature = temperature
 
     @torch.no_grad()
     def generate(self, input_ids: torch.Tensor, **kwargs) -> Union[
@@ -211,7 +213,7 @@ class Actor(nn.Module):
             assert return_output
             return output
 
-        log_probs = log_probs_from_logits(output["logits"][:, :-1, :], sequences[:, 1:])
+        log_probs = log_probs_from_logits(output["logits"][:, :-1, :], sequences[:, 1:], self.temperature)
 
         if not self.packing_samples:
             action_log_probs = log_probs[:, -num_actions:]
