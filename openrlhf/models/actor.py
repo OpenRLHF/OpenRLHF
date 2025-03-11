@@ -235,8 +235,11 @@ class Actor(nn.Module):
                 if rank == ring_attn_size - 1:
                     # add a dummy label to the last logit
                     local_label = F.pad(local_label, (0, 1), value=0)
+                logits = output["logits"]
+                if self.temperature != 1.0:
+                    logits = logits.div(self.temperature)
                 local_per_token_logps = torch.gather(
-                    output["logits"].log_softmax(-1), dim=2, index=local_label.unsqueeze(2)
+                    logits.log_softmax(-1), dim=2, index=local_label.unsqueeze(2)
                 ).squeeze(2)
                 per_token_logps = all_gather(local_per_token_logps, ring_attn_group).reshape((1, -1))
                 log_probs = per_token_logps[:, :-1]
