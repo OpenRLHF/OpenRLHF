@@ -1,4 +1,6 @@
 import os
+import queue
+from collections import defaultdict
 from typing import Any, List
 
 import ray
@@ -6,8 +8,9 @@ from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from vllm import LLM
 
-from .utils import ray_noset_visible_devices
 from openrlhf.utils.logging_utils import init_logger
+
+from .utils import ray_noset_visible_devices
 
 logger = init_logger(__name__)
 
@@ -45,7 +48,7 @@ class LLMRayActor:
         self.num_actors = kwargs.pop("num_actors")
         self.actor_counter = 0
         self.requests = {}
-        self.responses = {}
+        self.response_queues = defaultdict(queue.Queue)
 
         self.llm = LLM(*args, **kwargs)
 
@@ -93,7 +96,7 @@ class LLMRayActor:
             offset = 0
             self.responses = {}
             for actor_rank, num in num_requests:
-                self.responses[actor_rank] = responses[offset : offset + num]
+                self.response_queues[actor_rank].put(responses[offset : offset + num])
                 offset += num
 
             self.actor_counter = 0
@@ -103,7 +106,7 @@ class LLMRayActor:
         """
         Return the responses for the actor with the given rank
         """
-        return self.responses.pop(actor_rank)
+        return self.response_queues[actor_rank].get()
 
 
 def create_vllm_engines(
@@ -144,7 +147,9 @@ def create_vllm_engines(
             bundle_indices = list(range(i * tensor_parallel_size, (i + 1) * tensor_parallel_size))
 
         scheduling_strategy = PlacementGroupSchedulingStrategy(
-            placement_group=shared_pg, placement_group_capture_child_tasks=True, placement_group_bundle_index=i * tensor_parallel_size
+            placement_group=shared_pg,
+            placement_group_capture_child_tasks=True,
+            placement_group_bundle_index=i * tensor_parallel_size,
         )
 
         if num_engines >= num_total_actors:
@@ -176,7 +181,7 @@ def create_vllm_engines(
                 noset_visible_devices=ray_noset_visible_devices(),
             )
         )
-    
+
     if vllm_enable_sleep:
         batch_vllm_engine_call(vllm_engines, "sleep", rank_0_only=False)
 

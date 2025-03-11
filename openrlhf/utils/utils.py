@@ -65,7 +65,7 @@ def blending_datasets(
             data = load_dataset(dataset, trust_remote_code=True)
             strategy.print(f"loaded {dataset} with python script")
         # local text file
-        elif ext in [".json", ".jsonl", ".csv"]:
+        elif ext in [".json", ".jsonl", ".csv", ".parquet"]:
             ext = ext.lower().strip(".")
             if ext == "jsonl":
                 ext = "json"

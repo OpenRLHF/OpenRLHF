@@ -74,11 +74,14 @@ class DeepspeedStrategy(ABC):
     def setup_distributed(self, timeout=timedelta(minutes=60)) -> None:
         self.set_seed(self.seed)
 
-        if self.args.local_rank == -1 and "LOCAL_RANK" in os.environ:  # for slurm
-            self.args.local_rank = int(os.environ["LOCAL_RANK"])
-
+        # Take the local rank from args as first priority
         if self.args.local_rank != -1:
-            torch.cuda.set_device(self.args.local_rank)
+            os.environ["LOCAL_RANK"] = str(self.args.local_rank)
+
+        local_rank = int(os.environ.get("LOCAL_RANK", "-1"))
+        if local_rank != -1:
+            torch.cuda.set_device(local_rank)
+
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         deepspeed.init_distributed(timeout=timeout)
         self.setup_ring_attn()
@@ -209,7 +212,7 @@ class DeepspeedStrategy(ABC):
             optimizer=optim,
             lr_scheduler=scheduler,
             config=ds_config,
-            args={"local_rank": self.args.local_rank},
+            args={"local_rank": int(os.environ.get("LOCAL_RANK", "-1"))},
             dist_init_required=True,
         )
         if is_actor:
@@ -249,7 +252,7 @@ class DeepspeedStrategy(ABC):
 
         engine, *_ = deepspeed.initialize(
             model=model.model if is_actor else model,
-            args={"local_rank": self.args.local_rank},
+            args={"local_rank": int(os.environ.get("LOCAL_RANK", "-1"))},
             config=ds_config,
             dist_init_required=True,
         )

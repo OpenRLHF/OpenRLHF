@@ -1,4 +1,3 @@
-import numbers
 from typing import Callable
 
 import torch
@@ -83,7 +82,7 @@ class ProcessRewardDataset(Dataset):
         # Find the length of the last dimension of the mask
         num_placeholders = mask.sum(dim=-1)
         # Truncate label_tensor along the last dimension to match num_placeholders
-        truncated_labels = label_tensor[..., :num_placeholders.max()]
+        truncated_labels = label_tensor[..., : num_placeholders.max()]
         # Step 3: Update labels at placeholder token positions
         labels = torch.full_like(input_ids, -100)
         labels[mask] = truncated_labels
