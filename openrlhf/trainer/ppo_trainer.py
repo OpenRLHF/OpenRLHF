@@ -10,7 +10,8 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
-from openrlhf.models.utils import masked_mean, unpacking_samples, compute_approx_kl
+from openrlhf.models.ring_attn_utils import pad_sequences, unpad_sequences
+from openrlhf.models.utils import compute_approx_kl, masked_mean, unpacking_samples
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 from .ppo_utils import AdaptiveKLController, Experience, FixedKLController, NaiveExperienceMaker, NaiveReplayBuffer
@@ -265,7 +266,7 @@ class PPOTrainer(ABC):
         dataloader = DataLoader(
             self.replay_buffer,
             batch_size=self.replay_buffer.sample_batch_size,
-            shuffle=True,
+            shuffle=False if self.strategy.ring_attn_group is not None else True,
             drop_last=True,
             pin_memory=self.dataloader_pin_memory,
             collate_fn=self.replay_buffer.collate_fn,
@@ -346,6 +347,11 @@ class PPOTrainer(ABC):
             attention_mask = torch.cat(
                 [torch.full_like(s, i + 1) for i, s in enumerate(experience.sequences)], dim=0
             ).unsqueeze(0)
+            # pad seq makes the sequence a multiple of ring_attention_size.
+            if self.strategy.ring_attn_group is not None:
+                pad_len, sequences, attention_mask, num_actions, packed_seq_lens = pad_sequences(
+                    sequences, attention_mask, num_actions, packed_seq_lens, self.strategy.ring_attn_group
+                )
             if self.args.use_kl_loss and experience.base_action_log_probs is not None:
                 base_action_log_probs = torch.cat(experience.base_action_log_probs, dim=0).unsqueeze(0)
         else:
@@ -364,8 +370,22 @@ class PPOTrainer(ABC):
             num_actions,
             attention_mask=attention_mask,
             return_output=True,
+            ring_attn_group=self.strategy.ring_attn_group,
+            logps_allgather=True,
             packed_seq_lens=packed_seq_lens,
         )
+        # unpad sequence ensures that pad tokens do not contribute to the loss calculation.
+        if self.strategy.ring_attn_group is not None:
+            assert pad_len is not None
+            sequences, attention_mask, num_actions, packed_seq_lens, action_log_probs, _, _ = unpad_sequences(
+                pad_len=pad_len,
+                sequences=sequences,
+                attention_mask=attention_mask,
+                num_actions=num_actions,
+                packed_seq_lens=packed_seq_lens,
+                action_log_probs=action_log_probs,
+                ring_attn_group=self.strategy.ring_attn_group,
+            )
 
         # loss function
         actor_loss = self.actor_loss_fn(
@@ -381,10 +401,10 @@ class PPOTrainer(ABC):
                     action_log_probs,
                     base_action_log_probs,
                     experience.action_mask,
-                    use_kl_estimator_k3 = self.args.use_kl_estimator_k3,
+                    kl_estimator=self.args.kl_estimator,
                 )
             else:
-                kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device = action_log_probs.device)
+                kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=action_log_probs.device)
 
             if not self.args.packing_samples:
                 kl_mean = masked_mean(kl, experience.action_mask, dim=-1)
@@ -393,7 +413,7 @@ class PPOTrainer(ABC):
                 # within dataset.
 
                 kl = unpacking_samples(kl, num_actions)
-                kl_mean = torch.tensor([each_kl.mean() for each_kl in kl], device = action_log_probs.device)
+                kl_mean = torch.tensor([each_kl.mean() for each_kl in kl], device=action_log_probs.device)
 
             kl_loss = kl_mean.mean()
             experience.info["kl"] = kl_loss.item()
@@ -462,6 +482,12 @@ class PPOTrainer(ABC):
             attention_mask = torch.cat(
                 [torch.full_like(s, i + 1) for i, s in enumerate(experience.sequences)], dim=0
             ).unsqueeze(0)
+            # pad seq makes the sequence len a multiple of ring_attention_size.
+            if self.strategy.ring_attn_group is not None:
+                pad_len, sequences, attention_mask, num_actions, packed_seq_lens = pad_sequences(
+                    sequences, attention_mask, num_actions, packed_seq_lens, self.strategy.ring_attn_group
+                )
+
         else:
             sequences = experience.sequences
             old_values = experience.values
@@ -476,8 +502,23 @@ class PPOTrainer(ABC):
             num_actions=num_actions,
             attention_mask=attention_mask,
             return_output=True,
+            ring_attn_group=self.strategy.ring_attn_group,
+            values_allgather=True,
             packed_seq_lens=packed_seq_lens,
         )
+        # unpad sequence ensures that pad tokens do not contribute to the loss calculation
+        if self.strategy.ring_attn_group is not None:
+            assert pad_len is not None
+            sequences, attention_mask, num_actions, packed_seq_lens, _, values, _ = unpad_sequences(
+                pad_len=pad_len,
+                sequences=sequences,
+                attention_mask=attention_mask,
+                num_actions=num_actions,
+                packed_seq_lens=packed_seq_lens,
+                values=values,
+                ring_attn_group=self.strategy.ring_attn_group,
+            )
+
         # loss function
         critic_loss = self.critic_loss_fn(
             values,

@@ -14,7 +14,7 @@ RUN sudo su -
 RUN DEBIAN_FRONTEND=noninteractive apt install -y tzdata
 
 RUN apt-get -y install build-essential git python3-dev python3-pip libopenexr-dev libxi-dev libglfw3-dev libglew-dev libomp-dev libxinerama-dev libxcursor-dev gdb
-RUN pip uninstall xgboost transformer_engine flash_attn pynvml -y
+RUN pip uninstall xgboost transformer_engine flash_attn pynvml opencv-python-headless -y
 RUN pip install vllm==0.7.2
 
 COPY docker-entrypoint.sh .

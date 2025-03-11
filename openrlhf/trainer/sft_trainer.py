@@ -288,7 +288,9 @@ class SFTTrainer(ABC):
                             dump_labels = torch.full(labels.size(), self.loss_fn.IGNORE_INDEX).to(labels.device)
                             for response_ranges in infos["response_ranges"]:
                                 for response_range in response_ranges:
-                                    dump_labels[0][response_range[0]: response_range[1]] = labels[0][response_range[0]: response_range[1]]
+                                    dump_labels[0][response_range[0] : response_range[1]] = labels[0][
+                                        response_range[0] : response_range[1]
+                                    ]
                             labels = dump_labels
                         else:
                             index = 0
