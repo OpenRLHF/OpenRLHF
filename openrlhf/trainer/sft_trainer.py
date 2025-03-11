@@ -2,10 +2,7 @@ import os
 from abc import ABC
 
 import torch
-import torch.distributed as dist
-from flash_attn.utils.distributed import all_gather
 from torch.optim import Optimizer
-from torch.nn import functional as F
 from tqdm import tqdm
 
 from openrlhf.models import GPTLMLoss
@@ -141,8 +138,8 @@ class SFTTrainer(ABC):
                     output = self.model(inputs, attention_mask=attention_mask, return_output=True)
                 else:
                     output = self.model(
-                        inputs, 
-                        attention_mask=attention_mask, 
+                        inputs,
+                        attention_mask=attention_mask,
                         return_output=True,
                         ring_attn_group=self.strategy.ring_attn_group,
                         packed_seq_lens=infos["input_length"],
@@ -251,13 +248,13 @@ class SFTTrainer(ABC):
                     output = self.model(inputs, attention_mask=attention_mask, return_output=True)
                 else:
                     output = self.model(
-                        inputs, 
-                        attention_mask=attention_mask, 
+                        inputs,
+                        attention_mask=attention_mask,
                         return_output=True,
                         ring_attn_group=self.strategy.ring_attn_group,
                         packed_seq_lens=infos["input_length"],
                     )
-                    
+
                 # loss function
                 labels = torch.where(
                     attention_mask.bool(),
@@ -292,4 +289,3 @@ class SFTTrainer(ABC):
                     for k, v in logs.items():
                         self._tensorboard.add_scalar(f"eval/{k}", v, steps)
         self.model.train()  # reset model state
-        

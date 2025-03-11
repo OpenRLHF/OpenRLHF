@@ -245,5 +245,5 @@ if __name__ == "__main__":
     # TODO: [packing samples]
     if args.ring_attn_size > 1:
         assert args.packing_samples, "packing_samples must be enabled when using ring attention"
-    
+
     train(args)

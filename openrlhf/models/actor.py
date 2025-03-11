@@ -45,7 +45,7 @@ class Actor(nn.Module):
         ds_config=None,
         device_map=None,
         packing_samples=False,
-        temperature=1.,
+        temperature=1.0,
         **kwargs,
     ) -> None:
         super().__init__()

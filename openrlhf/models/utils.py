@@ -74,7 +74,7 @@ def compute_reward(
     return reward
 
 
-def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor, temperature: float = 1.) -> torch.Tensor:
+def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:
     logits.div_(temperature)
     log_probs = F.log_softmax(logits, dim=-1)
     log_probs_labels = log_probs.gather(dim=-1, index=labels.unsqueeze(-1))

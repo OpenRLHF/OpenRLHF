@@ -30,7 +30,7 @@ def train(args):
         target_modules=args.target_modules,
         lora_dropout=args.lora_dropout,
         ds_config=strategy.get_ds_train_config(is_actor=True),
-        temperature=args.temperature, 
+        temperature=args.temperature,
     )
 
     if args.actor_init_on_gpu:
@@ -51,7 +51,7 @@ def train(args):
             ds_config=strategy.get_ds_train_config(is_actor=False),
             value_head_prefix=args.value_head_prefix,
             init_value_head=strategy.args.pretrain == strategy.args.critic_pretrain,
-            temperature=args.temperature, 
+            temperature=args.temperature,
         )
     else:
         critic = None

@@ -168,8 +168,10 @@ class SFTDataset(Dataset):
 
         packed_input_ids = torch.cat(packed_input_ids, dim=0).unsqueeze(0)
         packed_attention_masks = torch.cat(packed_attention_masks, dim=0).unsqueeze(0)
-        
-        if self.multiple_of > 1 and packed_input_ids.numel() % self.multiple_of != 0: # not divisible by multiple_of; here we align for grouping
+
+        if (
+            self.multiple_of > 1 and packed_input_ids.numel() % self.multiple_of != 0
+        ):  # not divisible by multiple_of; here we align for grouping
             padding_len = self.multiple_of - (packed_input_ids.numel() % self.multiple_of)
             packed_input_ids = F.pad(packed_input_ids, (0, padding_len), value=self.tokenizer.pad_token_id)
             packed_attention_masks = F.pad(packed_attention_masks, (0, padding_len), value=0)
