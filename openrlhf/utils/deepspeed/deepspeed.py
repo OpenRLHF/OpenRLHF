@@ -216,6 +216,8 @@ class DeepspeedStrategy(ABC):
             args={"local_rank": int(os.environ.get("LOCAL_RANK", "-1"))},
             dist_init_required=True,
         )
+        if self.torch_compile:
+            engine.compile()
         if is_actor:
             model.model = engine
         else:
@@ -234,7 +236,6 @@ class DeepspeedStrategy(ABC):
             zpg=self.zpg,
             grad_accum_dtype=self.grad_accum_dtype,
             overlap_comm=self.overlap_comm,
-            compile=self.torch_compile,
         )
 
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
@@ -258,6 +259,8 @@ class DeepspeedStrategy(ABC):
             config=ds_config,
             dist_init_required=True,
         )
+        if self.torch_compile:
+            engine.compile()
         if is_actor:
             model.model = engine
         else:
@@ -266,9 +269,7 @@ class DeepspeedStrategy(ABC):
 
     def get_ds_eval_config(self, offload=False):
         # DS Config
-        ds_config = get_eval_ds_config(
-            offload=offload, stage=self.stage if self.stage == 3 else 0, bf16=self.bf16, compile=self.torch_compile
-        )
+        ds_config = get_eval_ds_config(offload=offload, stage=self.stage if self.stage == 3 else 0, bf16=self.bf16)
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
         ds_config["train_batch_size"] = self.train_batch_size * self.ring_attn_size
 
