@@ -154,6 +154,7 @@ if __name__ == "__main__":
     parser.add_argument("--train_batch_size", type=int, default=128, help="Global training batch size")
     parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
+    parser.add_argument("--torch_compile", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
