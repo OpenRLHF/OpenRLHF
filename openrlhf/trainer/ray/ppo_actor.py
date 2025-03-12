@@ -312,6 +312,7 @@ class ActorModelRayActor(BasePPORole):
             ds_config=strategy.get_ds_train_config(is_actor=True),
             packing_samples=strategy.args.packing_samples,
             temperature=strategy.args.temperature,
+            use_linger_kernel=strategy.args.use_linger_kernel,
         )
         strategy.print(actor)
 

@@ -32,6 +32,8 @@ class Actor(nn.Module):
         ds_config (dict, optional): Configuration for DeepSpeed, enabling model partitioning across multiple GPUs. Defaults to None.
         device_map (dict, optional): Device mapping for loading the model onto specific devices. Defaults to None.
         packing_samples (bool, optional): Whether to pack samples during training. Defaults to False.
+        temperature (float, optional): Temperature for action selection. Defaults to 1.0.
+        use_linger_kernel (bool, optional): Whether to use Liger Kernel for the model. Defaults to False.
     """
 
     def __init__(
@@ -48,6 +50,7 @@ class Actor(nn.Module):
         device_map=None,
         packing_samples=False,
         temperature=1.0,
+        use_linger_kernel=False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -74,7 +77,14 @@ class Actor(nn.Module):
             else:
                 nf4_config = None
 
-            self.model = AutoModelForCausalLM.from_pretrained(
+            if use_linger_kernel:
+                from liger_kernel.transformers import AutoLigerKernelForCausalLM
+
+                model_class = AutoLigerKernelForCausalLM
+            else:
+                model_class = AutoModelForCausalLM
+
+            self.model = model_class.from_pretrained(
                 pretrain_or_model,
                 trust_remote_code=True,
                 attn_implementation=attn_implementation,
