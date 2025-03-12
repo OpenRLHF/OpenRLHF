@@ -33,7 +33,7 @@ class Actor(nn.Module):
         device_map (dict, optional): Device mapping for loading the model onto specific devices. Defaults to None.
         packing_samples (bool, optional): Whether to pack samples during training. Defaults to False.
         temperature (float, optional): Temperature for action selection. Defaults to 1.0.
-        use_linger_kernel (bool, optional): Whether to use Liger Kernel for the model. Defaults to False.
+        use_liger_kernel (bool, optional): Whether to use Liger Kernel for the model. Defaults to False.
     """
 
     def __init__(
@@ -50,7 +50,7 @@ class Actor(nn.Module):
         device_map=None,
         packing_samples=False,
         temperature=1.0,
-        use_linger_kernel=False,
+        use_liger_kernel=False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -77,7 +77,7 @@ class Actor(nn.Module):
             else:
                 nf4_config = None
 
-            if use_linger_kernel:
+            if use_liger_kernel:
                 from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
                 model_class = AutoLigerKernelForCausalLM

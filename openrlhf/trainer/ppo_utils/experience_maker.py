@@ -231,6 +231,7 @@ class NaiveExperienceMaker(ABC):
         if self.strategy.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "sleep")
 
+        torch.cuda.empty_cache()
         torch.distributed.barrier()
         torch.cuda.synchronize()
 
