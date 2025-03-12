@@ -10,6 +10,7 @@ def get_train_ds_config(
     zpg=8,
     grad_accum_dtype=None,
     overlap_comm=False,
+    compile=False,
 ):
     device = "cpu" if offload else "none"
     zero_opt_dict = {
@@ -44,6 +45,7 @@ def get_train_ds_config(
         "prescale_gradients": False,
         "wall_clock_breakdown": False,
         "data_types": {"grad_accum_dtype": grad_accum_dtype},
+        "compile": {"disable": not compile, "backend": "inductor"},
     }
 
 
@@ -51,10 +53,14 @@ def get_eval_ds_config(
     offload,
     stage=0,
     bf16=True,
+    compile=False,
 ):
     zero_opt_dict = {
         "stage": stage,
+        "stage3_max_live_parameters": "auto",
+        "stage3_max_reuse_distance": "auto",
         "stage3_param_persistence_threshold": "auto",
+        "stage3_prefetch_bucket_size": "auto",
         "offload_param": {
             "device": "cpu" if offload else "none",
             "pin_memory": True,
@@ -69,6 +75,7 @@ def get_eval_ds_config(
         "gradient_clipping": 1.0,
         "prescale_gradients": False,
         "wall_clock_breakdown": False,
+        "compile": {"disable": not compile, "backend": "inductor"},
     }
 
 
