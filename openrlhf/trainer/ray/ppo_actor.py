@@ -180,7 +180,7 @@ class ActorPPOTrainer(PPOTrainer):
     def training_step(self, experience: Experience, global_steps) -> Dict[str, float]:
         return self.training_step_actor(experience)
 
-    def _get_leaf_modules(self,model):
+    def _get_leaf_modules(self,model,use_lora):
         leaf_modules = []
         lora_module_keyword = ["lora_","base_layer"]
         class IsoParamWrapper:
@@ -197,13 +197,14 @@ class ActorPPOTrainer(PPOTrainer):
                 return [(self.name,self.parameter)]
 
         for name,module in model.named_modules():
-            if len(list(module.children())) == 0 or hasattr(module,"base_layer"):
+            if len(list(module.children())) == 0 or (use_lora and hasattr(module,"base_layer")):
                 leaf_modules.append((name,module))
             else:
                 #find isolated parameter
                 for pname, p in module.named_parameters(recurse=False,prefix=name):
                     leaf_modules.append((pname,IsoParamWrapper(pname,p)))
-        leaf_modules = [(n,m) for n,m in leaf_modules if not any([keyword in n for keyword in lora_module_keyword])]
+        if use_lora:
+            leaf_modules = [(n,m) for n,m in leaf_modules if not any([keyword in n for keyword in lora_module_keyword])]
         return leaf_modules
 
     def _broadcast_module(self,module,prefix=None,empty_cache=False,need_gather=False):
@@ -282,7 +283,7 @@ class ActorPPOTrainer(PPOTrainer):
             model = lora_model.model
             use_lora = True
 
-        leaf_modules = self._get_leaf_modules(model) # parameters of leaf_modules should not overlap
+        leaf_modules = self._get_leaf_modules(model,use_lora) # parameters of leaf_modules should not overlap
         count, num_modules = 0, len(leaf_modules)
         for key,module in leaf_modules:
             count += 1
@@ -362,6 +363,7 @@ class ActorModelRayActor(BasePPORole):
             lora_rank=strategy.args.lora_rank,
             lora_alpha=strategy.args.lora_alpha,
             target_modules=strategy.args.target_modules,
+            exclude_modules=strategy.args.exclude_modules,
             lora_dropout=strategy.args.lora_dropout,
             ds_config=strategy.get_ds_train_config(is_actor=True),
             packing_samples=strategy.args.packing_samples,
