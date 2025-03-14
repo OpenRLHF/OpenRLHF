@@ -28,6 +28,7 @@ def get_llm_for_sequence_regression(
     lora_rank=0,
     lora_alpha=16,
     target_modules=None,
+    exclude_modules=None,
     lora_dropout=0,
     normalize_reward=False,
     use_flash_attention_2=False,
@@ -50,6 +51,7 @@ def get_llm_for_sequence_regression(
         lora_rank (int, optional): Rank for LoRA adaptation. Defaults to 0.
         lora_alpha (int, optional): Alpha parameter for LoRA. Defaults to 16.
         target_modules (list, optional): List of target modules for LoRA. Defaults to None.
+        exclude_modules (list, optional): List of modules to exclude from LoRA. Defaults to None.
         lora_dropout (float, optional): Dropout rate for LoRA layers. Defaults to 0.
         normalize_reward (bool, optional): Normalize reward values. Defaults to False.
         use_flash_attention_2 (bool, optional): Use Flash Attention 2.0. Defaults to False.
@@ -112,10 +114,15 @@ def get_llm_for_sequence_regression(
     # LoRA
     if lora_rank > 0:
         model.enable_input_require_grads()
+        if isinstance(target_modules, list) and len(target_modules) == 1:
+            target_modules = target_modules[0]
+        if isinstance(exclude_modules, list) and len(exclude_modules) == 1:
+            exclude_modules = exclude_modules[0]
         lora_config = LoraConfig(
             r=lora_rank,
             lora_alpha=lora_alpha,
             target_modules=target_modules,
+            exclude_modules=exclude_modules,
             lora_dropout=lora_dropout,
             bias="none",
         )
