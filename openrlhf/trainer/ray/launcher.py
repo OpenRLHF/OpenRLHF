@@ -105,6 +105,7 @@ class ReferenceModelRayActor(BasePPORole):
         return log_probs.to("cpu")
 
     def empty_cache(self) -> None:
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
 
@@ -152,6 +153,7 @@ class RewardModelRayActor(BasePPORole):
         return reward.to("cpu")
 
     def empty_cache(self) -> None:
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
 

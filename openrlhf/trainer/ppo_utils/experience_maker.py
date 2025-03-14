@@ -714,6 +714,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             ray.get([self.reward_model[0].empty_cache.remote()])
 
         if args.colocate_actor_ref or args.colocate_all_models:
+            torch.cuda.synchronize()
             torch.cuda.empty_cache()
 
         if (self.initial_model is not None) and (not args.use_kl_loss):
