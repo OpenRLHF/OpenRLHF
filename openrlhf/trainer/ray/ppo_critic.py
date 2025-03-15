@@ -188,6 +188,7 @@ class CriticModelRayActor(BasePPORole):
         return status
 
     def empty_cache(self) -> None:
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
     def save_model(self):
