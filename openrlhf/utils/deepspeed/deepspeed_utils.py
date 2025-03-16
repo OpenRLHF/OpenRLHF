@@ -33,6 +33,8 @@ def get_train_ds_config(
     if overlap_comm:
         zero_opt_dict["overlap_comm"] = True
         zero_opt_dict["contiguous_gradients"] = True
+    if stage == 3:
+        zero_opt_dict["reduce_scatter"] = True
 
     return {
         "steps_per_print": 100,
@@ -54,7 +56,10 @@ def get_eval_ds_config(
 ):
     zero_opt_dict = {
         "stage": stage,
+        "stage3_max_live_parameters": "auto",
+        "stage3_max_reuse_distance": "auto",
         "stage3_param_persistence_threshold": "auto",
+        "stage3_prefetch_bucket_size": "auto",
         "offload_param": {
             "device": "cpu" if offload else "none",
             "pin_memory": True,

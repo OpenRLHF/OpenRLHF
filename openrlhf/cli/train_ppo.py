@@ -30,6 +30,8 @@ def train(args):
         target_modules=args.target_modules,
         lora_dropout=args.lora_dropout,
         ds_config=strategy.get_ds_train_config(is_actor=True),
+        temperature=strategy.args.temperature,
+        use_liger_kernel=args.use_liger_kernel,
     )
 
     if args.actor_init_on_gpu:
@@ -88,6 +90,8 @@ def train(args):
             bf16=args.bf16,
             load_in_4bit=args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=False),
+            temperature=strategy.args.temperature,
+            use_liger_kernel=args.use_liger_kernel,
         )
 
     if args.enable_ema:
@@ -345,15 +349,23 @@ if __name__ == "__main__":
 
     # DeepSpeed
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--full_determinism",
+        action="store_true",
+        default=False,
+        help="Enable reproducible behavior during distributed training",
+    )
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
+    parser.add_argument("--torch_compile", action="store_true", default=False)
     parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
     parser.add_argument("--enable_ema", action="store_true", help="Enable EMA checkpoint for the model.")
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument("--actor_init_on_gpu", action="store_true", default=False)
     parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
+    parser.add_argument("--use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
     parser.add_argument("--aux_loss_coef", type=float, default=0, help="MoE balancing loss")
     parser.add_argument("--grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
     parser.add_argument("--overlap_comm", action="store_true", default=False)

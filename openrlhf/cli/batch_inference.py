@@ -301,6 +301,12 @@ if __name__ == "__main__":
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument("--micro_batch_size", type=int, default=16)
     parser.add_argument("--seed", type=int, default=1234)
+    parser.add_argument(
+        "--full_determinism",
+        action="store_true",
+        default=False,
+        help="Enable reproducible behavior during distributed training",
+    )
 
     # Models
     parser.add_argument("--pretrain", type=str, default=None, help="HF pretrain model name or path")
