@@ -27,6 +27,7 @@ def train(args):
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
         target_modules=args.target_modules,
+        exclude_modules=args.exclude_modules,
         ds_config=strategy.get_ds_train_config(is_actor=True),
         packing_samples=args.packing_samples,
         use_liger_kernel=args.use_liger_kernel,
@@ -225,6 +226,7 @@ if __name__ == "__main__":
     parser.add_argument("--lora_rank", type=int, default=0)
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")
+    parser.add_argument("--exclude_modules", type=str, nargs="*", default=None)
     parser.add_argument("--lora_dropout", type=float, default=0)
 
     # packing samples using Flash Attention2
