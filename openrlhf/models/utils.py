@@ -90,14 +90,10 @@ def compute_reward(
 
 def _logsumexp_by_chunk(logits: torch.Tensor, chunk_size: int = 1024) -> torch.Tensor:
     seq_len = logits.shape[0]
-    logsumexp_values = torch.zeros(
-        (seq_len), device=logits.device, dtype=logits.dtype
-    )
+    logsumexp_values = torch.zeros((seq_len), device=logits.device, dtype=logits.dtype)
     for s_idx in range(0, seq_len, chunk_size):
         end_idx = min(s_idx + chunk_size, seq_len)
-        logsumexp_values[s_idx:end_idx] = torch.logsumexp(
-            logits[s_idx:end_idx], dim=-1
-        )
+        logsumexp_values[s_idx:end_idx] = torch.logsumexp(logits[s_idx:end_idx], dim=-1)
 
     return logsumexp_values
 
