@@ -576,20 +576,4 @@ class PPOTrainer(ABC):
             self._save_checkpoint(args, tag, client_states)
 
     def _save_checkpoint(self, args, tag, client_states):
-        if not self.disable_ds_ckpt:
-            self.strategy.save_ckpt(
-                self.actor.model,
-                os.path.join(args.ckpt_path, "_actor"),
-                tag,
-                args.max_ckpt_num,
-                args.max_ckpt_mem,
-                client_states,
-            )
-            if self.critic is not None:
-                self.strategy.save_ckpt(
-                    self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
-                )
-
-        if self.save_hf_ckpt:
-            save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
-            self.strategy.save_model(self.actor, self.tokenizer, save_path)
+        raise NotImplementedError("This method should be implemented by the subclass.")
