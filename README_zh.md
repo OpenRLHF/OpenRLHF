@@ -171,7 +171,7 @@ data
 
 > [!NOTE]
 >默认情况下我们使用 `train` 和 `test` 作为 split 区分 Huggingface 的训练/测试数据。
->`JSON key` 选项取决于具体的数据集。请参阅 [Reward Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/reward_dataset.py#L10) 和 [SFT Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/mai
+>`JSON key` 选项取决于具体的数据集。请参阅 [Reward Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/reward_dataset.py#L10) 和 [SFT Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/sft_dataset.py#L9)
 
 
 ### Supervised Fine-tuning
@@ -261,43 +261,6 @@ reward_model = AutoModelForSequenceClassification.from_pretrained(
 inputs = xxxx (Left Padding Input Tokens)
 reward = reward_model.model(*inputs).last_hidden_state
 reward = reward_model.score(reward)[:, -1]
-```
-
-### 不使用 Ray 的 PPO
-
-```bash
-deepspeed --module openrlhf.cli.train_ppo \
-  --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-  --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
-  --save_path ./checkpoint/llama-3-8b-rlhf \
-  --save_steps -1 \
-  --logging_steps 1 \
-  --eval_steps -1 \
-  --micro_train_batch_size 2 \
-  --train_batch_size 128 \
-  --micro_rollout_batch_size 4 \
-  --rollout_batch_size 1024 \
-  --max_epochs 1 \
-  --prompt_max_len 1024 \
-  --generate_max_len 1024 \
-  --zero_stage 2 \
-  --bf16 \
-  --actor_learning_rate 5e-7 \
-  --critic_learning_rate 9e-6 \
-  --init_kl_coef 0.01 \
-  --prompt_data OpenRLHF/prompt-collection-v0.1 \
-  --input_key context_messages \
-  --apply_chat_template \
-  --max_samples 100000 \
-  --normalize_reward \
-  --adam_offload \
-  --flash_attn \
-  --gradient_checkpointing \
-  --load_checkpoint \
-  --use_wandb {wandb_token}
-
-# 支持远程 reward model (HTTP)
-# --remote_rm_url http://localhost:5000/get_reward
 ```
 
 ### 使用 Ray 和 vLLM 的 PPO/REINFORCE++
@@ -500,6 +463,7 @@ python -m openrlhf.cli.lora_combiner \
 - [Ray ↗](https://github.com/ray-project/ray)
 
 我们的项目还想要感谢 [ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/Chat) 和 [DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat)。在项目的早期阶段，我们参考了他们的代码设计。
+我们的项目还想要感谢 [Netmind.AI](https://www.netmind.ai/) 对于ring attention开发的GPU支持。
 
 (2024/7) 我们的 GitHub 组织从 OpenLLMAI 迁移到了 OpenRLHF.
 

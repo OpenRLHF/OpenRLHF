@@ -1,12 +1,16 @@
 import os
+import queue
+from collections import defaultdict
+from typing import Any, List
 
-import numpy as np
 import ray
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from vllm import LLM
 
 from openrlhf.utils.logging_utils import init_logger
+
+from .utils import ray_noset_visible_devices
 
 logger = init_logger(__name__)
 
@@ -22,15 +26,21 @@ def get_all_env_variables():
 class LLMRayActor:
 
     def __init__(self, *args, bundle_indices: list = None, **kwargs):
+        noset_visible_devices = kwargs.pop("noset_visible_devices")
         if kwargs.get("distributed_executor_backend") == "ray":
             # a hack to make the script work.
             # stop ray from manipulating CUDA_VISIBLE_DEVICES
             # at the top-level when the distributed_executor_backend is ray.
             os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-        # every worker will use 0.2 GPU, so that we can schedule
-        # 2 instances on the same GPUs.
+        elif noset_visible_devices:
+            # We need to set CUDA_VISIBLE_DEVICES to the ray assigned GPU
+            # when the distributed_executor_backend is not ray and
+            # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES is set.
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(ray.get_gpu_ids()[0])
+
+        num_gpus = kwargs.pop("num_gpus")
         if bundle_indices is not None:
-            os.environ["VLLM_RAY_PER_WORKER_GPUS"] = "0.2"
+            os.environ["VLLM_RAY_PER_WORKER_GPUS"] = str(num_gpus)
             os.environ["VLLM_RAY_BUNDLE_INDICES"] = ",".join(map(str, bundle_indices))
             print(f"creating LLM with bundle_indices={bundle_indices}")
 
@@ -38,7 +48,7 @@ class LLMRayActor:
         self.num_actors = kwargs.pop("num_actors")
         self.actor_counter = 0
         self.requests = {}
-        self.responses = {}
+        self.response_queues = defaultdict(queue.Queue)
 
         self.llm = LLM(*args, **kwargs)
 
@@ -86,7 +96,7 @@ class LLMRayActor:
             offset = 0
             self.responses = {}
             for actor_rank, num in num_requests:
-                self.responses[actor_rank] = responses[offset : offset + num]
+                self.response_queues[actor_rank].put(responses[offset : offset + num])
                 offset += num
 
             self.actor_counter = 0
@@ -96,7 +106,7 @@ class LLMRayActor:
         """
         Return the responses for the actor with the given rank
         """
-        return self.responses.pop(actor_rank)
+        return self.response_queues[actor_rank].get()
 
 
 def create_vllm_engines(
@@ -114,40 +124,33 @@ def create_vllm_engines(
 ):
     import vllm
 
-    assert vllm.__version__ >= "0.7.0", "OpenRLHF only supports vllm >= 0.7.0"
+    assert vllm.__version__ >= "0.7.2", "OpenRLHF only supports vllm >= 0.7.2"
 
     vllm_engines = []
-    num_gpus = int(tensor_parallel_size == 1)
     distributed_executor_backend = "uni" if tensor_parallel_size == 1 else "ray"
+    use_hybrid_engine = shared_pg is not None
+    num_gpus = int(tensor_parallel_size == 1)
+    if use_hybrid_engine and tensor_parallel_size == 1:
+        # every worker will use 0.2 GPU, so that we can schedule
+        # 2 instances on the same GPUs.
+        num_gpus = 0.2
+
+    if not use_hybrid_engine:
+        # Create a big placement group to ensure that all engines are packed
+        bundles = [{"GPU": 1, "CPU": 1} for _ in range(num_engines * tensor_parallel_size)]
+        shared_pg = placement_group(bundles, strategy="PACK")
+        ray.get(shared_pg.ready())
+
     for i in range(num_engines):
         bundle_indices = None
-        scheduling_strategy = None
+        if tensor_parallel_size > 1:
+            bundle_indices = list(range(i * tensor_parallel_size, (i + 1) * tensor_parallel_size))
 
-        # Hybrid engine
-        if shared_pg is not None:
-            assert vllm.__version__ >= "0.7.2", "Only vllm >= 0.7.2 supports hybrid engine"
-
-            if tensor_parallel_size > 1:
-                scheduling_strategy = PlacementGroupSchedulingStrategy(
-                    placement_group=shared_pg,
-                    placement_group_capture_child_tasks=True,
-                    placement_group_bundle_index=i * tensor_parallel_size
-                )
-                bundle_indices = np.arange(i * tensor_parallel_size, (i + 1) * tensor_parallel_size).tolist()
-            else:
-                num_gpus = 0.2
-                scheduling_strategy = PlacementGroupSchedulingStrategy(
-                    placement_group=shared_pg, placement_group_capture_child_tasks=True, placement_group_bundle_index=i
-                )
-        # Distributed RLHF
-        elif tensor_parallel_size > 1:
-            bundles = [{"GPU": 1, "CPU": 1}] * tensor_parallel_size
-            pg = placement_group(bundles)
-            ray.get(pg.ready())
-
-            scheduling_strategy = PlacementGroupSchedulingStrategy(
-                placement_group=pg, placement_group_capture_child_tasks=True, placement_group_bundle_index=0
-            )
+        scheduling_strategy = PlacementGroupSchedulingStrategy(
+            placement_group=shared_pg,
+            placement_group_capture_child_tasks=True,
+            placement_group_bundle_index=i * tensor_parallel_size,
+        )
 
         if num_engines >= num_total_actors:
             num_actors = 1
@@ -156,7 +159,7 @@ def create_vllm_engines(
 
         vllm_engines.append(
             LLMRayActor.options(
-                num_cpus=0,
+                num_cpus=num_gpus,
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
             ).remote(
@@ -172,9 +175,39 @@ def create_vllm_engines(
                 trust_remote_code=True,
                 num_actors=num_actors,
                 gpu_memory_utilization=gpu_memory_utilization,
-                bundle_indices=bundle_indices if shared_pg else None,
+                bundle_indices=bundle_indices,
+                num_gpus=0.2 if use_hybrid_engine else 1,
                 enable_sleep_mode=vllm_enable_sleep,
+                noset_visible_devices=ray_noset_visible_devices(),
             )
         )
 
+    if vllm_enable_sleep:
+        batch_vllm_engine_call(vllm_engines, "sleep", rank_0_only=False)
+
     return vllm_engines
+
+
+def batch_vllm_engine_call(engines: List[Any], method_name: str, *args, rank_0_only: bool = True, **kwargs):
+    """
+    Batch call a method on multiple vLLM engines.
+    Args:
+        engines: List of vLLM engine instances
+        method_name: Name of the method to call
+        rank_0_only: Only execute on rank 0 if True
+        *args: Positional arguments to pass to the method
+        **kwargs: Keyword arguments to pass to the method
+    Returns:
+        List of results from ray.get() if on rank 0, None otherwise
+    """
+    import torch
+
+    if rank_0_only and torch.distributed.get_rank() != 0:
+        return None
+
+    refs = []
+    for engine in engines:
+        method = getattr(engine, method_name)
+        refs.append(method.remote(*args, **kwargs))
+
+    return ray.get(refs)

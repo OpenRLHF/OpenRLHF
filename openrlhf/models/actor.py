@@ -3,8 +3,10 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+from flash_attn.utils.distributed import all_gather
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
+from torch.nn import functional as F
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
@@ -30,6 +32,8 @@ class Actor(nn.Module):
         ds_config (dict, optional): Configuration for DeepSpeed, enabling model partitioning across multiple GPUs. Defaults to None.
         device_map (dict, optional): Device mapping for loading the model onto specific devices. Defaults to None.
         packing_samples (bool, optional): Whether to pack samples during training. Defaults to False.
+        temperature (float, optional): Temperature for action selection. Defaults to 1.0.
+        use_liger_kernel (bool, optional): Whether to use Liger Kernel for the model. Defaults to False.
     """
 
     def __init__(
@@ -45,9 +49,12 @@ class Actor(nn.Module):
         ds_config=None,
         device_map=None,
         packing_samples=False,
+        temperature=1.0,
+        use_liger_kernel=False,
         **kwargs,
     ) -> None:
         super().__init__()
+        self.temperature = temperature
 
         if isinstance(pretrain_or_model, str):
             attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
@@ -70,7 +77,14 @@ class Actor(nn.Module):
             else:
                 nf4_config = None
 
-            self.model = AutoModelForCausalLM.from_pretrained(
+            if use_liger_kernel:
+                from liger_kernel.transformers import AutoLigerKernelForCausalLM
+
+                model_class = AutoLigerKernelForCausalLM
+            else:
+                model_class = AutoModelForCausalLM
+
+            self.model = model_class.from_pretrained(
                 pretrain_or_model,
                 trust_remote_code=True,
                 attn_implementation=attn_implementation,
@@ -187,6 +201,7 @@ class Actor(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         return_output=False,
         ring_attn_group: Optional[dist.ProcessGroup] = None,
+        logps_allgather=False,
         packed_seq_lens: Optional[list[int]] = None,
     ) -> torch.Tensor:
         """Returns action log probs"""
@@ -197,6 +212,7 @@ class Actor(nn.Module):
         else:
             # convert attention_mask to position_ids
             if ring_attn_group is not None:
+                labels = sequences
                 sequences, attention_mask, position_ids = convert_ring_attn_params(
                     sequences, attention_mask, packed_seq_lens, ring_attn_group
                 )
@@ -213,11 +229,35 @@ class Actor(nn.Module):
             assert return_output
             return output
 
-        log_probs = log_probs_from_logits(output["logits"][:, :-1, :], sequences[:, 1:])
-
         if not self.packing_samples:
+            log_probs = log_probs_from_logits(
+                output["logits"][:, :-1, :], sequences[:, 1:], temperature=self.temperature
+            )
             action_log_probs = log_probs[:, -num_actions:]
         else:
+            if ring_attn_group is not None and logps_allgather:
+                rank = dist.get_rank(ring_attn_group)
+                ring_attn_size = dist.get_world_size(ring_attn_group)
+                total_seq_len = labels.numel()
+                local_seq_len = total_seq_len // ring_attn_size
+                local_slice = slice(rank * local_seq_len + 1, (rank + 1) * local_seq_len + 1)
+                local_label = labels[:, local_slice]
+                if rank == ring_attn_size - 1:
+                    # add a dummy label to the last logit
+                    local_label = F.pad(local_label, (0, 1), value=0)
+                logits = output["logits"]
+                if self.temperature != 1.0:
+                    logits = logits.div(self.temperature)
+                local_per_token_logps = torch.gather(
+                    logits.log_softmax(-1), dim=2, index=local_label.unsqueeze(2)
+                ).squeeze(2)
+                per_token_logps = all_gather(local_per_token_logps, ring_attn_group).reshape((1, -1))
+                log_probs = per_token_logps[:, :-1]
+            else:
+                log_probs = log_probs_from_logits(
+                    output["logits"][:, :-1, :], sequences[:, 1:], temperature=self.temperature
+                )
+
             assert isinstance(num_actions, list) and len(num_actions) == len(packed_seq_lens)
             action_log_probs = []
             offset = 0

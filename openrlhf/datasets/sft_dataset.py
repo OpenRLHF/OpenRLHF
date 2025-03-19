@@ -7,7 +7,9 @@ from torch.utils.data import Dataset
 from .utils import zero_pad_sequences
 
 
-def preprocess_data(data, input_template=None, input_key="input", output_key=None, apply_chat_template=None, multiturn=False):
+def preprocess_data(
+    data, input_template=None, input_key="input", output_key=None, apply_chat_template=None, multiturn=False
+):
     if apply_chat_template:
         if output_key:
             prompt_message = data[input_key]
@@ -75,7 +77,7 @@ class SFTDataset(Dataset):
 
         # Parallel loading datasets
         processed_dataset = dataset.map(
-            self.process_data, 
+            self.process_data,
             remove_columns=dataset.column_names,
             num_proc=num_processors,
         )
@@ -91,36 +93,50 @@ class SFTDataset(Dataset):
         if self.multiturn and self.output_key:
             data[self.input_key].append(data[self.output_key])
             data[self.output_key] = None
-        
+
         if self.multiturn:
-            assert not self.output_key or not data[self.output_key], "You should put the whole trajactory into data[input_key] and do not set output_key"
+            assert (
+                not self.output_key or not data[self.output_key]
+            ), "You should put the whole trajactory into data[input_key] and do not set output_key"
             input_key = self.input_key
             apply_chat_template = self.apply_chat_template
             response_ranges = []
             for idx, message in enumerate(data[input_key]):
-                if message['role'] == 'assistant':
-                    prompt = apply_chat_template(data[input_key][: idx], tokenize=False, add_generation_prompt=True)
-                    response = apply_chat_template(data[input_key][: idx + 1], tokenize=False)[len(prompt):]
+                if message["role"] == "assistant":
+                    prompt = apply_chat_template(data[input_key][:idx], tokenize=False, add_generation_prompt=True)
+                    response = apply_chat_template(data[input_key][: idx + 1], tokenize=False)[len(prompt) :]
 
-                    start_idx = self.tokenizer(
-                        prompt,
-                        max_length=self.max_length,
-                        padding=False,
-                        truncation=True,
-                        return_tensors="pt",
-                        add_special_tokens=False,
-                    )["attention_mask"].int().sum().item()
-                    
-                    end_idx = start_idx + self.tokenizer(
-                        response,
-                        max_length=self.max_length,
-                        padding=False,
-                        truncation=True,
-                        return_tensors="pt",
-                        add_special_tokens=False,
-                    )["attention_mask"].int().sum().item() - 1
-                    response_ranges.append((start_idx, end_idx)) # left close right open
-                    
+                    start_idx = (
+                        self.tokenizer(
+                            prompt,
+                            max_length=self.max_length,
+                            padding=False,
+                            truncation=True,
+                            return_tensors="pt",
+                            add_special_tokens=False,
+                        )["attention_mask"]
+                        .int()
+                        .sum()
+                        .item()
+                    )
+
+                    end_idx = (
+                        start_idx
+                        + self.tokenizer(
+                            response,
+                            max_length=self.max_length,
+                            padding=False,
+                            truncation=True,
+                            return_tensors="pt",
+                            add_special_tokens=False,
+                        )["attention_mask"]
+                        .int()
+                        .sum()
+                        .item()
+                        - 1
+                    )
+                    response_ranges.append((start_idx, end_idx))  # left close right open
+
         prompt, response = preprocess_data(
             data,
             None if self.pretrain_mode else self.input_template,
@@ -147,7 +163,12 @@ class SFTDataset(Dataset):
         else:
             prompt_ids_len = 0
 
-        return {"prompt": prompt, "response": response, "prompt_ids_len": prompt_ids_len, "response_ranges": response_ranges if self.multiturn else None}
+        return {
+            "prompt": prompt,
+            "response": response,
+            "prompt_ids_len": prompt_ids_len,
+            "response_ranges": response_ranges if self.multiturn else None,
+        }
 
     def __len__(self):
         length = len(self.prompts)
@@ -178,7 +199,12 @@ class SFTDataset(Dataset):
             # to avoid EOS_token truncation
             input_token["input_ids"][0][-1] = self.tokenizer.eos_token_id
             input_token["attention_mask"][0][-1] = True
-        info = {"input": prompt, "output": response, "input_length": input_token["attention_mask"].int().sum().item(), "response_ranges": self.response_ranges[idx] if self.multiturn else None}
+        info = {
+            "input": prompt,
+            "output": response,
+            "input_length": input_token["attention_mask"].int().sum().item(),
+            "response_ranges": self.response_ranges[idx] if self.multiturn else None,
+        }
 
         return prompt_ids_len, input_token["input_ids"], input_token["attention_mask"], info
 
@@ -213,8 +239,8 @@ class SFTDataset(Dataset):
             if self.multiturn:
                 if len(infos["response_ranges"]) >= 1:
                     for i in range(len(info["response_ranges"])):
-                        info["response_ranges"][i][0] += infos["response_ranges"][-1][-1][1] # end_index of the last response of the last item
-                        info["response_ranges"][i][1] += infos["response_ranges"][-1][-1][1]
+                        info["response_ranges"][i][0] += sum(infos["input_length"][:-1])
+                        info["response_ranges"][i][1] += sum(infos["input_length"][:-1])
                 infos["response_ranges"].append(info["response_ranges"])
             index += 1
 

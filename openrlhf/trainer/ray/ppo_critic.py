@@ -13,6 +13,7 @@ from openrlhf.trainer import PPOTrainer
 from openrlhf.trainer.ppo_utils import Experience
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
 
 from .launcher import BasePPORole
 
@@ -124,6 +125,10 @@ class CriticModelRayActor(BasePPORole):
             strategy.load_ckpt(self.critic, ckpt_path)
             strategy.print(f"Loaded the checkpoint: {ckpt_path}")
 
+        # initial offload
+        if strategy.args.deepspeed_enable_sleep:
+            self.offload_states()
+
         # configure Trainer
         # only use wandb at actor model
         strategy.args.use_wandb = False
@@ -159,7 +164,12 @@ class CriticModelRayActor(BasePPORole):
         self.critic.eval()
         with torch.no_grad():
             value = self.critic(
-                sequences.to(device), num_actions, attention_mask.to(device), packed_seq_lens=packed_seq_lens
+                sequences.to(device),
+                num_actions,
+                attention_mask.to(device),
+                ring_attn_group=self.strategy.ring_attn_group,
+                values_allgather=True,
+                packed_seq_lens=packed_seq_lens,
             )
         self.critic.train()  # reset model state
         return value.to("cpu")
@@ -178,6 +188,7 @@ class CriticModelRayActor(BasePPORole):
         return status
 
     def empty_cache(self) -> None:
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
     def save_model(self):
@@ -195,3 +206,9 @@ class CriticModelRayActor(BasePPORole):
         self.strategy.save_ckpt(
             self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
         )
+
+    def reload_states(self):
+        reload_deepspeed_states(self.critic)
+
+    def offload_states(self):
+        offload_deepspeed_states(self.critic)

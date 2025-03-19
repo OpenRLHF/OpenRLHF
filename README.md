@@ -262,42 +262,6 @@ reward = reward_model.model(*inputs).last_hidden_state
 reward = reward_model.score(reward)[:, -1]
 ```
 
-### PPO without Ray
-
-```bash
-deepspeed --module openrlhf.cli.train_ppo \
-  --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-  --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
-  --save_path ./checkpoint/llama-3-8b-rlhf \
-  --save_steps -1 \
-  --logging_steps 1 \
-  --eval_steps -1 \
-  --micro_train_batch_size 2 \
-  --train_batch_size 128 \
-  --micro_rollout_batch_size 4 \
-  --rollout_batch_size 1024 \
-  --max_epochs 1 \
-  --prompt_max_len 1024 \
-  --generate_max_len 1024 \
-  --zero_stage 2 \
-  --bf16 \
-  --actor_learning_rate 5e-7 \
-  --critic_learning_rate 9e-6 \
-  --init_kl_coef 0.01 \
-  --prompt_data OpenRLHF/prompt-collection-v0.1 \
-  --input_key context_messages \
-  --apply_chat_template \
-  --max_samples 100000 \
-  --normalize_reward \
-  --adam_offload \
-  --flash_attn \
-  --gradient_checkpointing \
-  --use_wandb {wandb_token}
-
-# Support remote reward model (HTTP)
-# --remote_rm_url http://localhost:5000/get_reward
-```
-
 ### PPO/REINFORCE++ with Ray and vLLM
 
 To improve RLHF training speed or support 70B models, we can use the PPO with Ray and vLLM acceleration
@@ -495,6 +459,7 @@ We would like to express our gratitude to the following projects and organizatio
 - [Ray ↗](https://github.com/ray-project/ray)
 
 Our project would also like to thank [ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/Chat) and [DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat). In the early stages of the project, we referred to their code design. 
+Our project would like to thank [Netmind.AI](https://www.netmind.ai/) for the GPU support of developing ring attention.
 
 (2024/7) Our GitHub organization has changed from OpenLLMAI to OpenRLHF.
 

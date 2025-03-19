@@ -1,5 +1,4 @@
 import os
-import random
 import shutil
 from abc import ABC
 from collections import defaultdict
@@ -7,10 +6,11 @@ from datetime import timedelta
 from typing import List, Tuple, Union
 
 import deepspeed
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import transformers
+import transformers.modeling_flash_attention_utils
 from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
 from peft import PeftModel, get_peft_model_state_dict
 from torch import distributed as dist
@@ -40,6 +40,7 @@ class DeepspeedStrategy(ABC):
     def __init__(
         self,
         seed: int = 42,
+        full_determinism: bool = False,
         max_norm: float = 0.0,
         micro_train_batch_size=1,
         train_batch_size=1,
@@ -55,30 +56,35 @@ class DeepspeedStrategy(ABC):
         self.micro_train_batch_size = micro_train_batch_size
         self.bf16 = bf16
         self.seed = seed
+        self.full_determinism = full_determinism
         self.max_norm = max_norm
         self.adam_offload = getattr(args, "adam_offload", False)
         self.zpg = getattr(args, "zpg", 1)
         self.grad_accum_dtype = getattr(args, "grad_accum_dtype", None)
         # overlap_comm
         self.overlap_comm = getattr(args, "overlap_comm", False)
+        self.torch_compile = getattr(args, "torch_compile", False)
 
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
 
-    def set_seed(self, seed: int) -> None:
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-
     def setup_distributed(self, timeout=timedelta(minutes=60)) -> None:
-        self.set_seed(self.seed)
+        if self.full_determinism:
+            transformers.enable_full_determinism(self.seed)
+            # Use deterministic backward in flash attention as, by default, flash attention uses atomic adds
+            # https://github.com/Dao-AILab/flash-attention/commit/732654583c2e640adc012ecb60e460bf19dcd9e3
+            transformers.modeling_flash_attention_utils.deterministic_g = True
+        else:
+            transformers.set_seed(self.seed)
 
-        if self.args.local_rank == -1 and "LOCAL_RANK" in os.environ:  # for slurm
-            self.args.local_rank = int(os.environ["LOCAL_RANK"])
-
+        # Take the local rank from args as first priority
         if self.args.local_rank != -1:
-            torch.cuda.set_device(self.args.local_rank)
+            os.environ["LOCAL_RANK"] = str(self.args.local_rank)
+
+        local_rank = int(os.environ.get("LOCAL_RANK", "-1"))
+        if local_rank != -1:
+            torch.cuda.set_device(local_rank)
+
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         deepspeed.init_distributed(timeout=timeout)
         self.setup_ring_attn()
@@ -105,6 +111,7 @@ class DeepspeedStrategy(ABC):
             if dist.get_rank() in ring_attn_ranks:
                 set_ring_attn_group(group)
                 self.ring_attn_rank = dist.get_rank(group=group)
+                self.ring_attn_ranks = ring_attn_ranks
 
         from ring_flash_attn import substitute_hf_flash_attn
 
@@ -208,9 +215,11 @@ class DeepspeedStrategy(ABC):
             optimizer=optim,
             lr_scheduler=scheduler,
             config=ds_config,
-            args={"local_rank": self.args.local_rank},
+            args={"local_rank": int(os.environ.get("LOCAL_RANK", "-1"))},
             dist_init_required=True,
         )
+        if self.torch_compile:
+            engine.compile()
         if is_actor:
             model.model = engine
         else:
@@ -248,10 +257,12 @@ class DeepspeedStrategy(ABC):
 
         engine, *_ = deepspeed.initialize(
             model=model.model if is_actor else model,
-            args={"local_rank": self.args.local_rank},
+            args={"local_rank": int(os.environ.get("LOCAL_RANK", "-1"))},
             config=ds_config,
             dist_init_required=True,
         )
+        if self.torch_compile:
+            engine.compile()
         if is_actor:
             model.model = engine
         else:
@@ -361,6 +372,8 @@ class DeepspeedStrategy(ABC):
                 for filename in os.listdir(train_from_model_path):
                     if filename.endswith(".py"):
                         shutil.copy(os.path.join(train_from_model_path, filename), os.path.join(output_dir, filename))
+        dist.barrier()
+        torch.cuda.synchronize()
 
     def all_reduce(self, data, op="mean"):
         assert op in ("mean", "max", "sum")
