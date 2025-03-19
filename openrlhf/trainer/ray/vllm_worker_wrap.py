@@ -1,9 +1,10 @@
 import torch
 from vllm.worker.worker import Worker
 
+from openrlhf import IS_NPU_AVAILABLE
 from openrlhf.utils.distributed_util import init_process_group
 from openrlhf.utils.logging_utils import init_logger
-from openrlhf import IS_NPU_AVAILABLE
+
 from .utils import get_physical_gpu_id
 
 if IS_NPU_AVAILABLE:

@@ -56,6 +56,7 @@ class bdist_wheel(_bdist_wheel):
 
         return python_version, abi_tag, platform_tag
 
+
 target_device = os.getenv("TARGET_DEVICE", "GPU").upper()
 
 if target_device == "NPU":

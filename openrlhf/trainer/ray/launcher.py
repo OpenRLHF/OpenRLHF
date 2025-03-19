@@ -8,10 +8,10 @@ import torch
 from ray.util.placement_group import PlacementGroup, placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
+from openrlhf import ACCELERATOR_TYPE
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
 from openrlhf.utils.deepspeed import DeepspeedStrategy
-from openrlhf import ACCELERATOR_TYPE, IS_NPU_AVAILABLE
 
 
 class DistributedTorchRayActor:
@@ -33,8 +33,11 @@ class DistributedTorchRayActor:
         # environment variable for each actor, unless
         # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES is set, so
         # set local rank to 0 when the flag is not applicable.
-        os.environ["LOCAL_RANK"] = str(ray.get_runtime_context().get_accelerator_ids()[ACCELERATOR_TYPE][0]) \
-            if ray_noset_visible_devices() else "0"
+        os.environ["LOCAL_RANK"] = (
+            str(ray.get_runtime_context().get_accelerator_ids()[ACCELERATOR_TYPE][0])
+            if ray_noset_visible_devices()
+            else "0"
+        )
 
     @staticmethod
     def _get_current_node_ip():
@@ -232,7 +235,9 @@ class PPORayActorGroup:
                     worker_actor = self.ray_actor_type.options(
                         num_cpus=num_gpus_per_actor,
                         num_gpus=num_gpus_per_actor if ACCELERATOR_TYPE == "GPU" else 0,
-                        resources=self._resources if ACCELERATOR_TYPE == "GPU" else {ACCELERATOR_TYPE: num_gpus_per_actor},
+                        resources=(
+                            self._resources if ACCELERATOR_TYPE == "GPU" else {ACCELERATOR_TYPE: num_gpus_per_actor}
+                        ),
                         scheduling_strategy=PlacementGroupSchedulingStrategy(
                             placement_group=pg,
                             placement_group_bundle_index=rank,
@@ -242,7 +247,9 @@ class PPORayActorGroup:
                     worker_actor = self.ray_actor_type.options(
                         num_cpus=num_gpus_per_actor,
                         num_gpus=num_gpus_per_actor if ACCELERATOR_TYPE == "GPU" else 0,
-                        resources=self._resources if ACCELERATOR_TYPE == "GPU" else {ACCELERATOR_TYPE: num_gpus_per_actor},
+                        resources=(
+                            self._resources if ACCELERATOR_TYPE == "GPU" else {ACCELERATOR_TYPE: num_gpus_per_actor}
+                        ),
                     ).remote(world_size, rank, master_addr, master_port)
                 self._actor_handlers.append(worker_actor)
 

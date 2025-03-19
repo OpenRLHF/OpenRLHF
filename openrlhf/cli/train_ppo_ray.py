@@ -6,6 +6,7 @@ import ray
 import torch
 from ray.util.placement_group import placement_group
 
+from openrlhf import ACCELERATOR_TYPE
 from openrlhf.trainer.ray import (
     ActorModelRayActor,
     CriticModelRayActor,
@@ -15,7 +16,6 @@ from openrlhf.trainer.ray import (
     create_vllm_engines,
 )
 from openrlhf.utils import get_strategy
-from openrlhf import ACCELERATOR_TYPE
 
 
 # NOTE: reward function for multiple reward models, replace this with your own function!
@@ -127,7 +127,9 @@ def train(args):
             and args.critic_num_gpus_per_node == args.reward_num_gpus_per_node
         ), f"num_nodes and num_gpus_per_node must be the same when colocate critic and reward model."
 
-        bundles = [{ACCELERATOR_TYPE: 1, "CPU": 1} for _ in range(args.critic_num_nodes * args.critic_num_gpus_per_node)]
+        bundles = [
+            {ACCELERATOR_TYPE: 1, "CPU": 1} for _ in range(args.critic_num_nodes * args.critic_num_gpus_per_node)
+        ]
         pg = placement_group(bundles, strategy="PACK")
         ray.get(pg.ready())
 

@@ -9,8 +9,8 @@ from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 from transformers.utils import is_flash_attn_2_available
 
-from openrlhf.utils.logging_utils import init_logger
 from openrlhf import IS_NPU_AVAILABLE
+from openrlhf.utils.logging_utils import init_logger
 
 from .ring_attn_utils import convert_ring_attn_params
 from .utils import reset_position_ids
