@@ -62,7 +62,7 @@ class CriticPPOTrainer(PPOTrainer):
         return self.training_step_critic(experience)
 
 
-@ray.remote(num_gpus=1)
+@ray.remote
 class CriticModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps):
         args = strategy.args

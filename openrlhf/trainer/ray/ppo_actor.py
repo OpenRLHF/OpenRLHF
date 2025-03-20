@@ -10,6 +10,7 @@ import torch
 import torch.distributed
 from transformers.trainer import get_scheduler
 
+from openrlhf import IS_NPU_AVAILABLE
 from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.models import Actor
 from openrlhf.trainer import PPOTrainer
@@ -60,6 +61,9 @@ class ActorPPOTrainer(PPOTrainer):
         )
 
         backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
+        if IS_NPU_AVAILABLE:
+            backend = "hccl"
+
         self.use_cuda_ipc = False
         if backend == "nccl" and self.strategy.args.colocate_all_models:
             self.use_cuda_ipc = True
@@ -287,7 +291,7 @@ class ActorPPOTrainer(PPOTrainer):
         offload_deepspeed_states(self.actor.model)
 
 
-@ray.remote(num_gpus=1)
+@ray.remote
 class ActorModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
         args = strategy.args
