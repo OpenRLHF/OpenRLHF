@@ -84,6 +84,7 @@ def blending_datasets(
         # remote/local folder or common file
         elif strategy.args.use_ms:
             from modelscope.msdatasets import MsDataset
+
             namespace, dataset = dataset.split("/")
             data = MsDataset.load(dataset, namespace=namespace)
         else:
