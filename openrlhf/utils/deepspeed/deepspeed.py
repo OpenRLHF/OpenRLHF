@@ -64,6 +64,7 @@ class DeepspeedStrategy(ABC):
         # overlap_comm
         self.overlap_comm = getattr(args, "overlap_comm", False)
         self.torch_compile = getattr(args, "torch_compile", False)
+        self.universal_ckpt = getattr(args, "universal_ckpt", False)
 
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
@@ -238,6 +239,7 @@ class DeepspeedStrategy(ABC):
             zpg=self.zpg,
             grad_accum_dtype=self.grad_accum_dtype,
             overlap_comm=self.overlap_comm,
+            universal_ckpt=self.universal_ckpt,
         )
 
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size

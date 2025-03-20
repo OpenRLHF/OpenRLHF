@@ -167,6 +167,7 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_dpo")
     parser.add_argument("--max_ckpt_num", type=int, default=3)
     parser.add_argument("--max_ckpt_mem", type=int, default=1e8)
+    parser.add_argument("--universal_ckpt", action="store_true", default=False)
 
     # DeepSpeed
     parser.add_argument("--micro_train_batch_size", type=int, default=8, help="batch size per GPU")
