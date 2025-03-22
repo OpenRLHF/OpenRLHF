@@ -8,23 +8,28 @@ import deepspeed
 import ray
 import torch
 import torch.distributed
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.models import Actor
-from openrlhf.trainer import PPOTrainer
+from openrlhf.models.ring_attn_utils import pad_sequences, unpad_sequences
+from openrlhf.models.utils import compute_approx_kl, masked_mean, unpacking_samples
+from openrlhf.trainer import BasePPOTrainer
 from openrlhf.trainer.ppo_utils import Experience, RemoteExperienceMaker
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils import blending_datasets, get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
+from openrlhf.utils.distributed_sampler import DistributedSampler
 from openrlhf.utils.distributed_util import init_process_group
 
 from .launcher import BasePPORole
 from .utils import get_physical_gpu_id
 
 
-class ActorPPOTrainer(PPOTrainer):
+class ActorPPOTrainer(BasePPOTrainer):
     def __init__(
         self,
         *args,
@@ -43,6 +48,37 @@ class ActorPPOTrainer(PPOTrainer):
         self.remote_rm_url = remote_rm_url
         self.vllm_engines = vllm_engines
         self.critic_train_remote = critic_train_remote
+
+        # wandb/tensorboard setting
+        self._wandb = None
+        self._tensorboard = None
+        if self.strategy.args.use_wandb and self.strategy.is_rank_0():
+            import wandb
+
+            self._wandb = wandb
+            if not wandb.api.api_key:
+                wandb.login(key=self.strategy.args.use_wandb)
+            wandb.init(
+                entity=self.strategy.args.wandb_org,
+                project=self.strategy.args.wandb_project,
+                group=self.strategy.args.wandb_group,
+                name=self.strategy.args.wandb_run_name,
+                config=self.strategy.args.__dict__,
+                reinit=True,
+            )
+
+            wandb.define_metric("train/global_step")
+            wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
+            wandb.define_metric("eval/epoch")
+            wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
+
+        # Initialize TensorBoard writer if wandb is not available
+        if self.strategy.args.use_tensorboard and self._wandb is None and self.strategy.is_rank_0():
+            from torch.utils.tensorboard import SummaryWriter
+
+            os.makedirs(self.strategy.args.use_tensorboard, exist_ok=True)
+            log_dir = os.path.join(self.strategy.args.use_tensorboard, self.strategy.args.wandb_run_name)
+            self._tensorboard = SummaryWriter(log_dir=log_dir)
 
         self.experience_maker = RemoteExperienceMaker(
             self.actor,
@@ -121,6 +157,79 @@ class ActorPPOTrainer(PPOTrainer):
 
         torch.distributed.barrier()
 
+    def fit(
+        self,
+        args,
+        prompts_dataloader,
+        pretrain_dataloader,
+        consumed_samples=0,
+        num_update_steps_per_episodes=1,
+    ) -> None:
+        num_rollouts_per_episodes = (
+            num_update_steps_per_episodes
+            * args.train_batch_size
+            // args.max_epochs
+            // args.rollout_batch_size
+            // args.n_samples_per_prompt
+        )
+
+        # get eval and save steps
+        if args.eval_steps == -1:
+            args.eval_steps = num_rollouts_per_episodes  # Evaluate once per epoch
+        if args.save_steps == -1:
+            args.save_steps = float("inf")  # do not save ckpt
+
+        self.prompts_dataloader = prompts_dataloader
+        self.pretrain_dataloader = pretrain_dataloader
+
+        # Restore step and start_epoch
+        steps = consumed_samples // args.rollout_batch_size + 1
+        start_episode = consumed_samples // args.rollout_batch_size // num_rollouts_per_episodes
+        consumed_samples = consumed_samples % (num_rollouts_per_episodes * args.rollout_batch_size)
+
+        for episode in range(start_episode, args.num_episodes):
+            if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
+                self.prompts_dataloader.sampler.set_epoch(
+                    episode, consumed_samples=0 if episode > start_episode else consumed_samples
+                )
+            pbar = tqdm(
+                range(self.prompts_dataloader.__len__()),
+                desc=f"Episode [{episode + 1}/{args.num_episodes}]",
+                disable=not self.strategy.is_rank_0(),
+            )
+
+            for rand_prompts, labels in self.prompts_dataloader:
+                for i, experience in enumerate(
+                    self.experience_maker.make_experience_list(rand_prompts, labels, **self.generate_kwargs)
+                ):
+                    if i == 0:
+                        output = self.tokenizer.batch_decode(
+                            experience.sequences[0].unsqueeze(0), skip_special_tokens=True
+                        )
+                        self.strategy.print(output)
+                    self.replay_buffer.append(experience)
+
+                if self.args.advantage_estimator != "group_norm":
+                    self.replay_buffer.normalize("advantages", self.strategy)
+                status = self.ppo_train(steps)
+                self.replay_buffer.clear()
+
+                if "kl" in status:
+                    self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
+                pbar.set_postfix(status)
+
+                # logs/checkpoints
+                client_states = {"consumed_samples": steps * args.rollout_batch_size}
+                self.save_logs_and_checkpoints(args, steps, pbar, status, client_states)
+
+                pbar.update()
+                steps = steps + 1
+
+        if self._wandb is not None and self.strategy.is_rank_0():
+            self._wandb.finish()
+        if self._tensorboard is not None and self.strategy.is_rank_0():
+            self._tensorboard.close()
+
     def ppo_train(self, global_steps):
         # 1. ensure all experience makers done
         self.experience_maker.flush()
@@ -148,7 +257,7 @@ class ActorPPOTrainer(PPOTrainer):
             if self.strategy.args.deepspeed_enable_sleep:
                 self.reload_states()
 
-            status.update(super().ppo_train(global_steps))
+            status.update(self.ppo_train_actor(global_steps))
 
             if self.strategy.args.deepspeed_enable_sleep:
                 self.offload_states()
@@ -176,8 +285,206 @@ class ActorPPOTrainer(PPOTrainer):
 
         return status
 
-    def training_step(self, experience: Experience, global_steps) -> Dict[str, float]:
-        return self.training_step_actor(experience)
+    def ppo_train_actor(self, global_steps):
+        torch.cuda.empty_cache()
+        # replay buffer may be empty at first, we should rebuild at each training
+        dataloader = DataLoader(
+            self.replay_buffer,
+            batch_size=self.replay_buffer.sample_batch_size,
+            shuffle=False if self.strategy.ring_attn_group is not None else True,
+            drop_last=True,
+            pin_memory=self.dataloader_pin_memory,
+            collate_fn=self.replay_buffer.collate_fn,
+        )
+        device = torch.cuda.current_device()
+
+        status_list = []
+        status_mean = {}
+        for epoch in range(self.max_epochs):
+            pbar = tqdm(
+                dataloader,
+                desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
+                disable=not self.strategy.is_rank_0(),
+            )
+            for experience in pbar:
+                experience.to_device(device)
+                status = self.training_step(experience)
+
+                # for DP
+                # weighted mean for kl
+                if "kl" in status:
+                    status["kl"] *= status["response_length"]
+                    status = self.strategy.all_reduce(status)
+                    status["kl"] /= status["response_length"]
+
+                short_status = {}
+
+                if "policy_loss" in status:
+                    short_status = {
+                        "pg": status["policy_loss"],
+                        "rm": status["reward"],
+                        "ret": status["return"],
+                        "glen": status["response_length"],
+                        "tlen": status["total_length"],
+                        "kl": status["kl"],
+                        "act_lr": status["actor_lr"],
+                    }
+
+                if "critic_loss" in status:
+                    short_status["cri"] = status["critic_loss"]
+                    short_status["vals"] = status["values"]
+                    short_status["cri_lr"] = status["critic_lr"]
+
+                if "ptx_loss" in status:
+                    short_status["ptx"] = status["ptx_loss"]
+
+                status_list.append(status)
+                pbar.set_postfix(short_status)
+
+        if status_list:
+            status_mean = status_list[0]
+            for m in status_list[1:]:
+                for k, v in m.items():
+                    status_mean[k] += v
+            for k in status_mean.keys():
+                status_mean[k] /= len(status_list)
+        torch.cuda.empty_cache()
+        return status_mean
+
+    def training_step(self, experience: Experience) -> Dict[str, float]:
+        self.actor.train()
+
+        # TODO: this is a bad indicator to say that data is packed...
+        if isinstance(experience.sequences, list):
+            sequences = torch.cat(experience.sequences, dim=0).unsqueeze(0)
+            old_action_log_probs = torch.cat(experience.action_log_probs, dim=0).unsqueeze(0)
+            advantages = torch.cat(experience.advantages, dim=0).unsqueeze(0)
+            num_actions = [v.numel() for v in experience.advantages]
+            packed_seq_lens = [s.numel() for s in experience.sequences]
+            attention_mask = torch.cat(
+                [torch.full_like(s, i + 1) for i, s in enumerate(experience.sequences)], dim=0
+            ).unsqueeze(0)
+            # pad seq makes the sequence a multiple of ring_attention_size.
+            if self.strategy.ring_attn_group is not None:
+                pad_len, sequences, attention_mask, num_actions, packed_seq_lens = pad_sequences(
+                    sequences, attention_mask, num_actions, packed_seq_lens, self.strategy.ring_attn_group
+                )
+            if self.args.use_kl_loss and experience.base_action_log_probs is not None:
+                base_action_log_probs = torch.cat(experience.base_action_log_probs, dim=0).unsqueeze(0)
+        else:
+            sequences = experience.sequences
+            old_action_log_probs = experience.action_log_probs
+            advantages = experience.advantages
+            num_actions = experience.action_mask.size(1)
+            packed_seq_lens = None
+            attention_mask = experience.attention_mask
+            if self.args.use_kl_loss and experience.base_action_log_probs is not None:
+                base_action_log_probs = experience.base_action_log_probs
+
+        # actor loss
+        action_log_probs, output = self.actor(
+            sequences,
+            num_actions,
+            attention_mask=attention_mask,
+            return_output=True,
+            ring_attn_group=self.strategy.ring_attn_group,
+            logps_allgather=True,
+            packed_seq_lens=packed_seq_lens,
+        )
+        # unpad sequence ensures that pad tokens do not contribute to the loss calculation.
+        if self.strategy.ring_attn_group is not None:
+            assert pad_len is not None
+            sequences, attention_mask, num_actions, packed_seq_lens, action_log_probs, _, _ = unpad_sequences(
+                pad_len=pad_len,
+                sequences=sequences,
+                attention_mask=attention_mask,
+                num_actions=num_actions,
+                packed_seq_lens=packed_seq_lens,
+                action_log_probs=action_log_probs,
+                ring_attn_group=self.strategy.ring_attn_group,
+            )
+
+        # loss function
+        actor_loss = self.actor_loss_fn(
+            action_log_probs,
+            old_action_log_probs,
+            advantages,
+            action_mask=experience.action_mask,
+        )
+
+        if self.args.use_kl_loss:
+            if self.initial_model is not None:
+                kl = compute_approx_kl(
+                    action_log_probs,
+                    base_action_log_probs,
+                    experience.action_mask,
+                    kl_estimator=self.args.kl_estimator,
+                )
+            else:
+                kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=action_log_probs.device)
+
+            if not self.args.packing_samples:
+                kl_mean = masked_mean(kl, experience.action_mask, dim=-1)
+            else:
+                # convert tensor into list of tensors so that it's easier to manipulate
+                # within dataset.
+
+                kl = unpacking_samples(kl, num_actions)
+                kl_mean = torch.tensor([each_kl.mean() for each_kl in kl], device=action_log_probs.device)
+
+            kl_loss = kl_mean.mean()
+            experience.info["kl"] = kl_loss.item()
+        else:
+            kl_loss = 0
+
+        # mixtral
+        if self.aux_loss:
+            aux_loss = output.aux_loss
+        else:
+            aux_loss = 0
+        loss = actor_loss + aux_loss * self.args.aux_loss_coef + kl_loss * self.kl_ctl.value
+        self.strategy.backward(loss, self.actor, self.actor_optim)
+
+        # ptx loss
+        if self.pretrain_dataloader is not None:
+            data = next(self.pretrain_dataloader)
+            inputs = data[1].squeeze(1).to(torch.cuda.current_device())
+            attention_mask = data[2].squeeze(1).to(torch.cuda.current_device())
+            label = torch.where(
+                attention_mask.bool(),
+                inputs,
+                self.ptx_loss_fn.IGNORE_INDEX,
+            )
+
+            output = self.actor(inputs, attention_mask=attention_mask, return_output=True)
+            ptx_log_probs = output["logits"]
+
+            # loss function
+            ptx_loss = self.ptx_loss_fn(ptx_log_probs, label)
+            # mixtral
+            if self.aux_loss:
+                aux_loss = output.aux_loss
+            else:
+                aux_loss = 0
+            loss = ptx_loss + aux_loss * self.args.aux_loss_coef
+            self.strategy.backward(self.ptx_coef * loss, self.actor, self.actor_optim)
+
+        self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
+        if self.ema_model:
+            self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
+
+        # status
+        status = {"policy_loss": actor_loss.item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}
+        if self.pretrain_dataloader is not None:
+            status["ptx_loss"] = ptx_loss.item()
+        for k, v in experience.info.items():
+            if k == "kl":
+                status[k] = (
+                    (v * experience.info["response_length"]).sum() / experience.info["response_length"].sum()
+                ).item()
+            else:
+                status[k] = v.mean().item()
+        return status
 
     def _broadcast_to_vllm(self):
         use_prefix_cache = getattr(self.strategy.args, "enable_prefix_caching", False)
@@ -253,6 +560,38 @@ class ActorPPOTrainer(PPOTrainer):
             ray.get(cache_reset_refs)
         torch.cuda.empty_cache()
         torch.distributed.barrier()
+
+    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
+        if global_step % args.logging_steps == 0:
+            # wandb
+            if self._wandb is not None and self.strategy.is_rank_0():
+                logs = {
+                    "train/%s" % k: v
+                    for k, v in {
+                        **logs_dict,
+                        "global_step": global_step,
+                    }.items()
+                }
+                if self.experience_maker.perf_stats is not None:
+                    logs.update({f"perf/experience_maker/{k}": v for k, v in self.experience_maker.perf_stats.items()})
+                self._wandb.log(logs)
+            # TensorBoard
+            elif self._tensorboard is not None and self.strategy.is_rank_0():
+                for k, v in logs_dict.items():
+                    self._tensorboard.add_scalar(f"train/{k}", v, global_step)
+                if self.experience_maker.perf_stats is not None:
+                    for k, v in self.experience_maker.perf_stats.items():
+                        self._tensorboard.add_scalar(f"perf/experience_maker/{k}", v, global_step)
+
+        # TODO: Add evaluation mechanism for PPO
+        if global_step % args.eval_steps == 0:
+            # self.evaluate(self.eval_dataloader, global_step)
+            pass
+        # save ckpt
+        # TODO: save best model on dev, use loss/perplexity/others on whole dev dataset as metric
+        if global_step % args.save_steps == 0:
+            tag = f"global_step{global_step}"
+            self._save_checkpoint(args, tag, client_states)
 
     def _save_checkpoint(self, args, tag, client_states):
         # call remote critic
