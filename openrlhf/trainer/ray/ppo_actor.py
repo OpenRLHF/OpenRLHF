@@ -308,7 +308,7 @@ class ActorPPOTrainer(BasePPOTrainer):
             )
             for experience in pbar:
                 experience.to_device(device)
-                status = self.training_step(experience, global_steps)
+                status = self.training_step(experience)
 
                 # for DP
                 # weighted mean for kl
