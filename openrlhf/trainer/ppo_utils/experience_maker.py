@@ -125,9 +125,9 @@ class Samples:
     pad_len: Optional[int]
 
 
-class NaiveExperienceMaker(ABC):
+class BaseExperienceMaker(ABC):
     """
-    Naive experience maker.
+    Base experience maker that only handles initialization.
     """
 
     def __init__(
@@ -188,6 +188,16 @@ class NaiveExperienceMaker(ABC):
             truncation=True,
         )
         return {k: v.to(device) for k, v in batch.items()}
+
+
+class RemoteExperienceMaker(BaseExperienceMaker):
+    def __init__(self, *args, vllm_engines: List = None, packing_samples=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.vllm_engines = vllm_engines
+        self.packing_samples = packing_samples
+
+        if self.custom_reward_func:
+            self.custom_reward_func = ray.remote(self.custom_reward_func)
 
     @torch.no_grad()
     def make_experience_list(
@@ -290,223 +300,6 @@ class NaiveExperienceMaker(ABC):
             del experience.info["num_actions"]
             experience.to_device("cpu")
         return experiences
-
-    @torch.no_grad()
-    def generate_samples(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Samples]:
-        """
-        Generate samples and return in batches.
-        """
-        assert not getattr(self, "packing_samples", False)
-        args = self.strategy.args
-        self.actor.eval()
-        # sample multiple response
-        all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
-        all_labels = sum([[label] * args.n_samples_per_prompt for label in all_labels], [])
-        samples_list = []
-        for i in range(0, len(all_prompts), args.micro_rollout_batch_size):
-            prompts = all_prompts[i : i + args.micro_rollout_batch_size]
-            labels = all_labels[i : i + args.micro_rollout_batch_size]
-            inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
-            sequences, attention_mask, action_mask = self.actor.generate(**inputs, **generate_kwargs)
-            samples = Samples(
-                sequences=sequences,
-                attention_mask=attention_mask,
-                action_mask=action_mask,
-                num_actions=action_mask.size(1),
-                packed_seq_lens=None,
-                response_length=action_mask.float().sum(dim=-1),
-                total_length=attention_mask.float().sum(dim=-1),
-                prompts=prompts,
-                labels=labels,
-                pad_len=None,
-            )
-            samples_list.append(samples)
-        return samples_list
-
-    @torch.no_grad()
-    def make_experience(self, samples: Samples) -> Experience:
-        raise NotImplementedError("This method should be implemented by the subclass.")
-
-    @torch.no_grad()
-    def process_experiences(self, experiences: List[Experience]) -> Tuple[List[Experience], List[torch.Tensor]]:
-        """
-        Process experiences, this can be used to filter out some experiences or do some processing on the rewards.
-
-        Output:
-        - experiences: List of Experience
-        - rewards: List of rewards
-        """
-        args = self.strategy.args
-        # reward shaping for rloo and reinforce_baseline
-        if args.advantage_estimator == "rloo":
-            rewards = torch.cat([experience.info["reward"] for experience in experiences])
-            rewards = rewards.reshape(-1, args.n_samples_per_prompt).to(device="cuda")
-            baseline = (rewards.sum(-1, keepdim=True) - rewards) / (args.n_samples_per_prompt - 1)
-            rewards = rewards - baseline
-            rewards = rewards.flatten().to(device="cpu").chunk(len(experiences))
-            return experiences, rewards
-        elif args.advantage_estimator == "reinforce_baseline":
-            # REINFORCE++-baseline removed the / std and K3 kl loss in GRPO.
-            # `/ std` is not needed in RL variance reduction theory, and `k3 KL` has a larger variance than `k1 KL` under a categorical distribution.
-            rewards = torch.cat([experience.info["reward"] for experience in experiences])
-            rewards = rewards.reshape(-1, args.n_samples_per_prompt).to(device="cuda")
-            rewards = rewards - rewards.mean(-1, keepdim=True)
-            rewards = rewards.reshape(-1).to(device="cpu").chunk(len(experiences))
-            return experiences, rewards
-        elif args.advantage_estimator == "group_norm":
-            rewards = torch.cat([experience.info["reward"] for experience in experiences])
-            rewards = rewards.reshape(-1, args.n_samples_per_prompt).to(device="cuda")
-            rewards = (rewards - rewards.mean(-1, keepdim=True)) / (rewards.std(-1, keepdim=True) + 1e-9)
-            rewards = rewards.reshape(-1).to(device="cpu").chunk(len(experiences))
-            return experiences, rewards
-        # default rewards
-        return experiences, [experience.info["reward"] for experience in experiences]
-
-    @torch.no_grad()
-    def get_advantages_and_returns(
-        self,
-        values: torch.Tensor,
-        rewards: torch.Tensor,
-        action_mask: torch.Tensor,
-        gamma: float,
-        lambd: float,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Function that computes advantages and returns from rewards and values.
-        Calculated as in the original PPO paper: https://arxiv.org/abs/1707.06347
-        Note that rewards may include a KL divergence loss term.
-
-        Advantages looks like this:
-        Adv1 =  R1 + γ * λ * R2     + γ^2 * λ^2 * R3       + ...
-              - V1 + γ * (1 - λ) V2 + γ^2 * λ * (1 - λ) V3 + ...
-
-        Returns looks like this:
-        Ret1 =  R1 + γ * λ * R2     + γ^2 * λ^2 * R3       + ...
-                   + γ * (1 - λ) V2 + γ^2 * λ * (1 - λ) V3 + ...
-
-        Input:
-        - values: Tensor of shape (batch_size, response_size)
-        - rewards: Tensor of shape (batch_size, response_size)
-
-        Output:
-        - advantages: Tensor of shape (batch_size, response_size)
-        - returns: Tensor of shape (batch_size, response_size)
-        """
-        if isinstance(values, list):
-            # packing samples
-            # TODO: this is slow...
-            advantages = []
-            returns = []
-            for v, r in zip(values, rewards):
-                adv, ret = self.get_advantages_and_returns(v.unsqueeze(0), r.unsqueeze(0), action_mask, gamma, lambd)
-                advantages.append(adv.squeeze(0))
-                returns.append(ret.squeeze(0))
-            return advantages, returns
-
-        lastgaelam = 0
-        advantages_reversed = []
-        response_length = rewards.size(1)
-
-        # Mask invalid responses
-        if action_mask is not None:
-            values = action_mask * values
-            rewards = action_mask * rewards
-
-        for t in reversed(range(response_length)):
-            nextvalues = values[:, t + 1] if t < response_length - 1 else 0.0
-            delta = rewards[:, t] + gamma * nextvalues - values[:, t]
-            lastgaelam = delta + gamma * lambd * lastgaelam
-            advantages_reversed.append(lastgaelam)
-        advantages = torch.stack(advantages_reversed[::-1], dim=1)
-        returns = advantages + values
-        return advantages.detach(), returns
-
-    @torch.no_grad()
-    def get_cumulative_returns(
-        self,
-        rewards: torch.Tensor,
-        action_mask: torch.Tensor,
-        gamma: float,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Function that computes advantages and returns from rewards using REINFORCE.
-        REINFORCE uses cumulative returns without the GAE (Generalized Advantage Estimation).
-
-        Input:
-        - rewards: Tensor of shape (batch_size, response_size)
-        - action_mask: Tensor of shape (batch_size, response_size), binary mask
-        - gamma: discount factor
-
-        Output:
-        - returns: Tensor of shape (batch_size, response_size)
-        """
-
-        if isinstance(rewards, list):
-            # packing samples
-            # TODO: this is slow...
-            returns = []
-            for r in rewards:
-                ret = self.get_cumulative_returns(r.unsqueeze(0), action_mask, gamma)
-                returns.append(ret.squeeze(0))
-            return returns
-
-        response_length = rewards.size(1)
-        returns = torch.zeros_like(rewards)
-        cumulative_return = torch.zeros(rewards.size(0), device=rewards.device)
-
-        # Mask invalid responses if action_mask is provided
-        if action_mask is not None:
-            rewards = action_mask * rewards
-
-        # Calculate returns by accumulating discounted rewards
-        for t in reversed(range(response_length)):
-            cumulative_return = rewards[:, t] + gamma * cumulative_return
-            returns[:, t] = cumulative_return
-
-        return returns
-
-
-class RemoteExperienceMaker(NaiveExperienceMaker):
-    def __init__(self, *args, vllm_engines: List = None, packing_samples=False, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.vllm_engines = vllm_engines
-        self.packing_samples = packing_samples
-
-        if self.custom_reward_func:
-            self.custom_reward_func = ray.remote(self.custom_reward_func)
-
-    @torch.no_grad()
-    def make_experience_list(
-        self, all_prompts: Union[str, List[str]], all_labels, **generate_kwargs
-    ) -> List[Experience]:
-        if self.strategy.args.perf:
-            self.perf_stats = {
-                "generate_time": 0,
-                "actor_value_rm_time": 0,
-                "wait_time": 0,
-            }
-        experiences = super().make_experience_list(all_prompts, all_labels, **generate_kwargs)
-        if self.critic is not None:
-            for experience in experiences:
-                # send experience to critic
-                experience_cpu = deepcopy(experience)
-                experience_cpu.to_device("cpu")
-                self._ref = self.critic.append.remote(experience_cpu)
-        return experiences
-
-    @torch.no_grad()
-    def generate_samples(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Samples]:
-        """
-        Generate samples and return in batches.
-
-        When not using vllm, we will fallback to the default implementation,
-        in which actor will be used to generate samples.
-        """
-        if self.vllm_engines is None:
-            return super().generate_samples(all_prompts, all_labels, **generate_kwargs)
-
-        # vLLM generation
-        samples = self._generate_vllm(all_prompts, all_labels, **generate_kwargs)
-        return samples
 
     @torch.no_grad()
     def make_experience(self, samples: Samples) -> Experience:
@@ -705,6 +498,189 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         self.actor.train()  # reset model state
         return experience
+
+    @torch.no_grad()
+    def process_experiences(self, experiences: List[Experience]) -> Tuple[List[Experience], List[torch.Tensor]]:
+        """
+        Process experiences, this can be used to filter out some experiences or do some processing on the rewards.
+
+        Output:
+        - experiences: List of Experience
+        - rewards: List of rewards
+        """
+        args = self.strategy.args
+        # reward shaping for rloo and reinforce_baseline
+        if args.advantage_estimator == "rloo":
+            rewards = torch.cat([experience.info["reward"] for experience in experiences])
+            rewards = rewards.reshape(-1, args.n_samples_per_prompt).to(device="cuda")
+            baseline = (rewards.sum(-1, keepdim=True) - rewards) / (args.n_samples_per_prompt - 1)
+            rewards = rewards - baseline
+            rewards = rewards.flatten().to(device="cpu").chunk(len(experiences))
+            return experiences, rewards
+        elif args.advantage_estimator == "reinforce_baseline":
+            # REINFORCE++-baseline removed the / std and K3 kl loss in GRPO.
+            # `/ std` is not needed in RL variance reduction theory, and `k3 KL` has a larger variance than `k1 KL` under a categorical distribution.
+            rewards = torch.cat([experience.info["reward"] for experience in experiences])
+            rewards = rewards.reshape(-1, args.n_samples_per_prompt).to(device="cuda")
+            rewards = rewards - rewards.mean(-1, keepdim=True)
+            rewards = rewards.reshape(-1).to(device="cpu").chunk(len(experiences))
+            return experiences, rewards
+        elif args.advantage_estimator == "group_norm":
+            rewards = torch.cat([experience.info["reward"] for experience in experiences])
+            rewards = rewards.reshape(-1, args.n_samples_per_prompt).to(device="cuda")
+            rewards = (rewards - rewards.mean(-1, keepdim=True)) / (rewards.std(-1, keepdim=True) + 1e-9)
+            rewards = rewards.reshape(-1).to(device="cpu").chunk(len(experiences))
+            return experiences, rewards
+        # default rewards
+        return experiences, [experience.info["reward"] for experience in experiences]
+
+    @torch.no_grad()
+    def get_advantages_and_returns(
+        self,
+        values: torch.Tensor,
+        rewards: torch.Tensor,
+        action_mask: torch.Tensor,
+        gamma: float,
+        lambd: float,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Function that computes advantages and returns from rewards and values.
+        Calculated as in the original PPO paper: https://arxiv.org/abs/1707.06347
+        Note that rewards may include a KL divergence loss term.
+
+        Advantages looks like this:
+        Adv1 =  R1 + γ * λ * R2     + γ^2 * λ^2 * R3       + ...
+              - V1 + γ * (1 - λ) V2 + γ^2 * λ * (1 - λ) V3 + ...
+
+        Returns looks like this:
+        Ret1 =  R1 + γ * λ * R2     + γ^2 * λ^2 * R3       + ...
+                   + γ * (1 - λ) V2 + γ^2 * λ * (1 - λ) V3 + ...
+
+        Input:
+        - values: Tensor of shape (batch_size, response_size)
+        - rewards: Tensor of shape (batch_size, response_size)
+
+        Output:
+        - advantages: Tensor of shape (batch_size, response_size)
+        - returns: Tensor of shape (batch_size, response_size)
+        """
+        if isinstance(values, list):
+            # packing samples
+            # TODO: this is slow...
+            advantages = []
+            returns = []
+            for v, r in zip(values, rewards):
+                adv, ret = self.get_advantages_and_returns(v.unsqueeze(0), r.unsqueeze(0), action_mask, gamma, lambd)
+                advantages.append(adv.squeeze(0))
+                returns.append(ret.squeeze(0))
+            return advantages, returns
+
+        lastgaelam = 0
+        advantages_reversed = []
+        response_length = rewards.size(1)
+
+        # Mask invalid responses
+        if action_mask is not None:
+            values = action_mask * values
+            rewards = action_mask * rewards
+
+        for t in reversed(range(response_length)):
+            nextvalues = values[:, t + 1] if t < response_length - 1 else 0.0
+            delta = rewards[:, t] + gamma * nextvalues - values[:, t]
+            lastgaelam = delta + gamma * lambd * lastgaelam
+            advantages_reversed.append(lastgaelam)
+        advantages = torch.stack(advantages_reversed[::-1], dim=1)
+        returns = advantages + values
+        return advantages.detach(), returns
+
+    @torch.no_grad()
+    def get_cumulative_returns(
+        self,
+        rewards: torch.Tensor,
+        action_mask: torch.Tensor,
+        gamma: float,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Function that computes advantages and returns from rewards using REINFORCE.
+        REINFORCE uses cumulative returns without the GAE (Generalized Advantage Estimation).
+
+        Input:
+        - rewards: Tensor of shape (batch_size, response_size)
+        - action_mask: Tensor of shape (batch_size, response_size), binary mask
+        - gamma: discount factor
+
+        Output:
+        - returns: Tensor of shape (batch_size, response_size)
+        """
+
+        if isinstance(rewards, list):
+            # packing samples
+            # TODO: this is slow...
+            returns = []
+            for r in rewards:
+                ret = self.get_cumulative_returns(r.unsqueeze(0), action_mask, gamma)
+                returns.append(ret.squeeze(0))
+            return returns
+
+        response_length = rewards.size(1)
+        returns = torch.zeros_like(rewards)
+        cumulative_return = torch.zeros(rewards.size(0), device=rewards.device)
+
+        # Mask invalid responses if action_mask is provided
+        if action_mask is not None:
+            rewards = action_mask * rewards
+
+        # Calculate returns by accumulating discounted rewards
+        for t in reversed(range(response_length)):
+            cumulative_return = rewards[:, t] + gamma * cumulative_return
+            returns[:, t] = cumulative_return
+
+        return returns
+
+    @torch.no_grad()
+    def generate_samples(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Samples]:
+        """
+        Generate samples and return in batches.
+
+        When not using vllm, we will fallback to the default implementation,
+        in which actor will be used to generate samples.
+        """
+        if self.vllm_engines is None:
+            return self._generate_with_hf(all_prompts, all_labels, **generate_kwargs)
+
+        # vLLM generation
+        return self._generate_vllm(all_prompts, all_labels, **generate_kwargs)
+
+    @torch.no_grad()
+    def _generate_with_hf(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Samples]:
+        """
+        Generate samples and return in batches.
+        """
+        assert not getattr(self, "packing_samples", False)
+        args = self.strategy.args
+        self.actor.eval()
+        # sample multiple response
+        all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
+        all_labels = sum([[label] * args.n_samples_per_prompt for label in all_labels], [])
+        samples_list = []
+        for i in range(0, len(all_prompts), args.micro_rollout_batch_size):
+            prompts = all_prompts[i : i + args.micro_rollout_batch_size]
+            labels = all_labels[i : i + args.micro_rollout_batch_size]
+            inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
+            sequences, attention_mask, action_mask = self.actor.generate(**inputs, **generate_kwargs)
+            samples = Samples(
+                sequences=sequences,
+                attention_mask=attention_mask,
+                action_mask=action_mask,
+                num_actions=action_mask.size(1),
+                packed_seq_lens=None,
+                response_length=action_mask.float().sum(dim=-1),
+                total_length=attention_mask.float().sum(dim=-1),
+                prompts=prompts,
+                labels=labels,
+                pad_len=None,
+            )
+            samples_list.append(samples)
+        return samples_list
 
     def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> List[Samples]:
         from vllm import SamplingParams
