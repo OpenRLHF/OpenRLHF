@@ -125,7 +125,7 @@ def create_vllm_engines(
 ):
     import vllm
 
-    assert vllm.__version__ >= "0.7.2", "OpenRLHF only supports vllm >= 0.7.2"
+    assert vllm.__version__ >= "0.8.1", "OpenRLHF only supports vllm >= 0.8.1"
 
     vllm_engines = []
     distributed_executor_backend = "uni" if tensor_parallel_size == 1 else "ray"
@@ -166,7 +166,7 @@ def create_vllm_engines(
             ).remote(
                 model=pretrain,
                 enforce_eager=enforce_eager,
-                worker_cls="openrlhf.trainer.ray.vllm_worker_wrap.WorkerWrap",
+                worker_extension_cls="openrlhf.trainer.ray.vllm_worker_wrap.WorkerWrap",
                 tensor_parallel_size=tensor_parallel_size,
                 seed=seed + i,
                 distributed_executor_backend=distributed_executor_backend,

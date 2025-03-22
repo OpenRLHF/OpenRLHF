@@ -1,5 +1,4 @@
 import torch
-from vllm.worker.worker import Worker
 
 from openrlhf.utils.distributed_util import init_process_group
 from openrlhf.utils.logging_utils import init_logger
@@ -8,7 +7,7 @@ from .utils import get_physical_gpu_id
 logger = init_logger(__name__)
 
 
-class WorkerWrap(Worker):
+class WorkerWrap:
     def init_process_group(
         self, master_address, master_port, rank_offset, world_size, group_name, backend="nccl", use_ray=False
     ):
