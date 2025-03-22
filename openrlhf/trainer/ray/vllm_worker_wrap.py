@@ -1,8 +1,3 @@
-from openrlhf.utils.logging_utils import init_logger
-
-logger = init_logger(__name__)
-
-
 class WorkerWrap:
     def init_process_group(
         self, master_address, master_port, rank_offset, world_size, group_name, backend="nccl", use_ray=False
