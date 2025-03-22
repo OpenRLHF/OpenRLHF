@@ -1,6 +1,4 @@
-from openrlhf.utils.distributed_util import init_process_group
 from openrlhf.utils.logging_utils import init_logger
-from .utils import get_physical_gpu_id
 
 logger = init_logger(__name__)
 
@@ -11,6 +9,7 @@ class WorkerWrap:
     ):
         """Init torch process group for model weights update"""
         import torch
+        from openrlhf.utils.distributed_util import init_process_group
 
         assert torch.distributed.is_initialized(), f"default torch process group must be initialized"
         assert group_name != "", f"group name must not be empty"
@@ -60,6 +59,7 @@ class WorkerWrap:
 
     def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handles=None, empty_cache=False):
         import torch
+        from openrlhf.utils.distributed_util import get_physical_gpu_id
 
         if torch.distributed.get_rank() == 0:
             print(f"update weight: {name}, dtype: {dtype}, shape: {shape}")
