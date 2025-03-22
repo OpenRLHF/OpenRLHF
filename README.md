@@ -119,7 +119,6 @@ pip install -e .
 
 > [!NOTE]
 >We recommend using vLLM 0.8.1 or higher.
->`export VLLM_USE_V1=1` requires vLLM > 0.8.1 or the Nightly version and use `export VLLM_ENABLE_V1_MULTIPROCESSING=0`.
 >We also provided the [Dockerfiles for vLLM](./dockerfile/) and [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh).
 
 ### Prepare Datasets
