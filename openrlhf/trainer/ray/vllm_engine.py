@@ -6,7 +6,6 @@ from typing import Any, List
 import ray
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-from vllm import LLM
 
 from openrlhf.utils.logging_utils import init_logger
 
@@ -50,6 +49,8 @@ class LLMRayActor:
         self.actor_counter = 0
         self.requests = {}
         self.response_queues = defaultdict(queue.Queue)
+
+        from vllm import LLM
 
         self.llm = LLM(*args, **kwargs)
 
