@@ -382,11 +382,10 @@ class RemoteExperienceMaker(BaseExperienceMaker):
                     r = self.custom_reward_func.remote(queries, samples.prompts, samples.labels)
                     r_refs.append(r)
                 else:
-                    for rm in self.remote_rm_url:
-                        r = remote_rm_fn_ray.remote(
-                            rm, queries=queries, prompts=samples.prompts, labels=samples.labels
-                        )
-                        r_refs.append(r)
+                    rank = torch.distributed.get_rank() // self.strategy.ring_attn_size
+                    rm = self.remote_rm_url[rank % len(self.remote_rm_url)]
+                    r = remote_rm_fn_ray.remote(rm, queries=queries, prompts=samples.prompts, labels=samples.labels)
+                    r_refs.append(r)
             else:
                 r_refs.append(ray.put(None))
 
