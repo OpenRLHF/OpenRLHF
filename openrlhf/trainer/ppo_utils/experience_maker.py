@@ -299,6 +299,13 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             experience.kl = None
             del experience.info["num_actions"]
             experience.to_device("cpu")
+
+        # send experience to critic
+        if self.critic is not None:
+            for experience in experiences:
+                experience_cpu = deepcopy(experience)
+                experience_cpu.to_device("cpu")
+                self._ref = self.critic.append.remote(experience_cpu)
         return experiences
 
     @torch.no_grad()
