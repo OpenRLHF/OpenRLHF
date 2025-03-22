@@ -59,7 +59,7 @@ class WorkerWrap:
 
     def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handles=None, empty_cache=False):
         import torch
-        from openrlhf.utils.distributed_util import get_physical_gpu_id
+        from openrlhf.trainer.ray.utils import get_physical_gpu_id
 
         if torch.distributed.get_rank() == 0:
             print(f"update weight: {name}, dtype: {dtype}, shape: {shape}")
