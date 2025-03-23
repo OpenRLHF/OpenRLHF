@@ -8,7 +8,6 @@ import ray
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from tqdm import tqdm
 
 from openrlhf.models.actor import Actor
 from openrlhf.models.ring_attn_utils import pad_sequences, unpad_sequences
@@ -154,7 +153,7 @@ class BaseExperienceMaker(ABC):
         self.kl_ctl = kl_controller
         self.strategy = strategy
         self.reward_fn = reward_fn
-        self.perf_stats = None
+        self.perf_stats = {}
         self.advantage_estimator = strategy.args.advantage_estimator
 
         # custom reward func for reinforced finetuning
@@ -225,6 +224,7 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             # Only rank 0 in the ring attention group executes the generation function, and then broadcasts it to all other ranks.
             if self.strategy.ring_attn_rank == 0:
                 samples_list = self.generate_samples(all_prompts, all_labels, **generate_kwargs)
+
                 dist.broadcast_object_list(samples_list, src=dist.get_rank(), group=self.strategy.ring_attn_group)
             else:
                 world_size = torch.distributed.get_world_size() // args.ring_attn_size
@@ -245,15 +245,280 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         torch.distributed.barrier()
         torch.cuda.synchronize()
 
-        experiences = []
-        for samples in tqdm(
-            samples_list,
-            desc="make_experience",
-            disable=not self.strategy.is_rank_0(),
-        ):
-            experiences.append(self.make_experience(samples).to_device("cpu"))
+        # Make experiences (models forward: logprobs, values, rewards, and kl divergence)
+        experiences = self.make_experience(samples_list)
 
-        experiences, rewards = self.process_experiences(experiences)
+        # Process experiences (reward shaping, etc.)
+        experiences = self.compute_advantages_and_returns(experiences, **generate_kwargs)
+
+        # send experience to critic
+        if self.critic is not None:
+            for experience in experiences:
+                experience_cpu = deepcopy(experience)
+                experience_cpu.to_device("cpu")
+                self._ref = self.critic.append.remote(experience_cpu)
+        return experiences
+
+    @torch.no_grad()
+    def make_experience(self, samples_list: List[Samples]) -> List[Experience]:
+        """
+        Turn samples into experience by calculating logprobs, values, rewards, and kl divergence.
+        """
+        start_time = time.time()
+        if dist.get_rank() == 0:
+            logger.info(f"Starting make_experience with {len(samples_list)} sample batches")
+
+        args = self.strategy.args
+        self.actor.eval()
+        device = torch.cuda.current_device()
+        experiences = []
+
+        # Extract all information from samples in one pass
+        # Convert samples into lists of tensors and metadata for batch processing
+        sequences_list = [s.sequences for s in samples_list]
+        attention_mask_list = [s.attention_mask for s in samples_list]
+        num_actions_list = [s.num_actions for s in samples_list]
+        packed_seq_lens_list = [s.packed_seq_lens for s in samples_list]
+        prompts_list = [p for s in samples_list for p in s.prompts]
+        labels_list = [l for s in samples_list for l in s.labels]
+
+        # Move data to CPU for remote processing
+        sequences_cpu_list = [seq.to("cpu") for seq in sequences_list]
+        attention_mask_cpu_list = [mask.to("cpu") for mask in attention_mask_list]
+
+        # Batch call initial model
+        if self.initial_model is not None:
+            base_action_log_probs_ref = self.initial_model.forward_batch.remote(
+                sequences=sequences_cpu_list,
+                num_actions=num_actions_list,
+                attention_mask=attention_mask_cpu_list,
+                logps_allgather=[True] * len(samples_list),
+                packed_seq_lens=packed_seq_lens_list,
+            )
+
+            if args.colocate_actor_ref or args.colocate_all_models:
+                ray.get([base_action_log_probs_ref])
+                ray.get([self.initial_model.empty_cache.remote()])
+        else:
+            base_action_log_probs_ref = ray.put([None] * len(samples_list))
+
+        # Batch call critic model
+        if self.critic is not None:
+            value_ref = self.critic.forward_batch.remote(
+                sequences=sequences_cpu_list,
+                attention_mask=attention_mask_cpu_list,
+                packed_seq_lens=packed_seq_lens_list,
+                pad_sequence=[True] * len(samples_list),
+            )
+            if args.colocate_critic_reward or args.colocate_all_models:
+                ray.get([value_ref])
+                ray.get([self.critic.empty_cache.remote()])
+        else:
+            value_ref = ray.put([None] * len(samples_list))
+
+        # Batch call reward model
+        r_refs = []
+        if not self.remote_rm_url:
+            for rm in self.reward_model:
+                r_refs.append(
+                    rm.forward_batch.remote(
+                        sequences=sequences_cpu_list,
+                        attention_mask=attention_mask_cpu_list,
+                        packed_seq_lens=packed_seq_lens_list,
+                        pad_sequence=[True] * len(samples_list),
+                    )
+                )
+        else:
+            if self.strategy.ring_attn_group is None or self.strategy.ring_attn_rank == 0:
+                queries_list = []
+                for i, (seq, packed_lens) in enumerate(zip(sequences_cpu_list, packed_seq_lens_list)):
+                    if not self.packing_samples:
+                        queries = self.tokenizer.batch_decode(seq, skip_special_tokens=False)
+                    else:
+                        sequences_list = []
+                        offset = 0
+                        tokens_list = seq.tolist()[0]
+                        for length in packed_lens:
+                            sequences_list.append(tokens_list[offset : offset + length])
+                            offset += length
+                        queries = self.tokenizer.batch_decode(sequences_list, skip_special_tokens=False)
+                    queries_list.extend(queries)
+
+                if self.custom_reward_func:
+                    r = self.custom_reward_func.remote(queries_list, prompts_list, labels_list)
+                else:
+                    rank = torch.distributed.get_rank() // self.strategy.ring_attn_size
+                    rm = self.remote_rm_url[rank % len(self.remote_rm_url)]
+                    r = remote_rm_fn_ray.remote(rm, queries=queries_list, prompts=prompts_list, labels=labels_list)
+                r_refs.append(r)
+            else:
+                r_refs.append(ray.put([None] * len(samples_list)))
+
+        if args.colocate_all_models and not self.remote_rm_url:
+            ray.get(r_refs)
+            ray.get([self.reward_model[0].empty_cache.remote()])
+
+        # Batch call actor model
+        action_log_probs_list = []
+        for seq, num_acts, attn_mask, packed_lens in zip(
+            sequences_cpu_list, num_actions_list, attention_mask_cpu_list, packed_seq_lens_list
+        ):
+            action_log_probs = self.actor(
+                seq.to(device),
+                num_acts,
+                attn_mask.to(device),
+                ring_attn_group=self.strategy.ring_attn_group,
+                logps_allgather=True,
+                packed_seq_lens=packed_lens,
+            )
+            action_log_probs_list.append(action_log_probs)
+
+        actor_value_rm_time = time.time() - start_time
+
+        # Wait for all remote calls to complete
+        start = time.time()
+        ref_values = ray.get([base_action_log_probs_ref, value_ref] + r_refs)
+        wait_time = time.time() - start
+
+        base_action_log_probs_list, value_list, rewards_list = ref_values[0], ref_values[1], ref_values[2]
+        if self.remote_rm_url is not None and isinstance(rewards_list, torch.Tensor):
+            rewards_list = rewards_list.chunk(len(samples_list))
+
+        # Avoid CUDA OOM when colocate models
+        if args.colocate_actor_ref or args.colocate_all_models:
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+
+        # Process results for each sample
+        for i, (samples, action_log_probs, base_action_log_probs, value, rewards) in enumerate(
+            zip(samples_list, action_log_probs_list, base_action_log_probs_list, value_list, rewards_list)
+        ):
+            if base_action_log_probs is not None:
+                base_action_log_probs = base_action_log_probs.to(device)
+            if value is not None:
+                value = value.to(device)
+
+            # Broadcast rewards to all ring attention ranks when using remote RM
+            rewards = [rewards]
+            if self.remote_rm_url and self.strategy.ring_attn_group is not None:
+                if self.strategy.ring_attn_rank == 0:
+                    dist.broadcast_object_list(rewards, src=dist.get_rank(), group=self.strategy.ring_attn_group)
+                else:
+                    dist.broadcast_object_list(
+                        rewards, src=self.strategy.ring_attn_ranks[0], group=self.strategy.ring_attn_group
+                    )
+            r = rewards[0].to(device)
+
+            if (self.initial_model is not None) and (not args.use_kl_loss):
+                kl = compute_approx_kl(
+                    action_log_probs,
+                    base_action_log_probs,
+                    action_mask=samples.action_mask,
+                    kl_estimator=self.strategy.args.kl_estimator,
+                )
+            else:
+                kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
+
+            if not self.packing_samples:
+                kl_mean = masked_mean(kl, samples.action_mask, dim=-1)
+            else:
+                if self.strategy.ring_attn_group is not None:
+                    assert samples.pad_len is not None
+                    sequences, attention_mask, num_actions, packed_seq_lens, _, _, kl = unpad_sequences(
+                        pad_len=samples.pad_len,
+                        sequences=samples.sequences,
+                        attention_mask=samples.attention_mask,
+                        num_actions=samples.num_actions,
+                        packed_seq_lens=samples.packed_seq_lens,
+                        ring_attn_group=self.strategy.ring_attn_group,
+                        action_log_probs=action_log_probs,
+                        values=value,
+                        kl=kl,
+                    )
+                # Convert tensor into list of tensors for easier manipulation within dataset
+                sequences = unpacking_samples(sequences, packed_seq_lens)
+                attention_mask = None
+                action_log_probs = unpacking_samples(action_log_probs, num_actions)
+                if value is not None:
+                    value = unpacking_samples(value, num_actions)
+                if base_action_log_probs is not None:
+                    base_action_log_probs = unpacking_samples(base_action_log_probs, num_actions)
+
+                kl = unpacking_samples(kl, num_actions)
+                kl_mean = torch.tensor([each_kl.mean() for each_kl in kl], device=device)
+
+            if not args.use_kl_loss:
+                base_action_log_probs = None
+
+            info = {
+                "kl": kl_mean,
+                "reward": r,
+                "response_length": samples.response_length,
+                "total_length": samples.total_length,
+                "num_actions": samples.num_actions,
+            }
+
+            if self.strategy.args.perf:
+                self.perf_stats["actor_value_rm_time"] += actor_value_rm_time
+                self.perf_stats["wait_time"] += wait_time
+
+            experience = Experience(
+                sequences,
+                action_log_probs,
+                base_action_log_probs,
+                value,
+                None,
+                None,
+                attention_mask,
+                samples.action_mask,
+                info,
+                kl,
+            )
+
+            experiences.append(experience)
+
+        self.actor.train()  # Reset model state
+
+        end_time = time.time()
+        duration = end_time - start_time
+        if dist.get_rank() == 0:
+            logger.info(f"Finished make_experience in {duration:.2f} seconds")
+        return experiences
+
+    @torch.no_grad()
+    def compute_advantages_and_returns(
+        self, experiences: List[Experience], **kwargs
+    ) -> Tuple[List[Experience], List[torch.Tensor]]:
+        """
+        Process experiences, this can be used to filter out some experiences or do some processing on the rewards.
+
+        Output:
+        - experiences: List of Experience
+        - rewards: List of rewards
+        """
+        args = self.strategy.args
+
+        # reward shaping for all estimators
+        if args.advantage_estimator == "rloo":
+            rewards = torch.cat([experience.info["reward"] for experience in experiences])
+            rewards = rewards.reshape(-1, args.n_samples_per_prompt).to(device="cuda")
+            baseline = (rewards.sum(-1, keepdim=True) - rewards) / (args.n_samples_per_prompt - 1)
+            rewards = rewards - baseline
+            rewards = rewards.flatten().to(device="cpu").chunk(len(experiences))
+        elif args.advantage_estimator == "reinforce_baseline":
+            # REINFORCE++-baseline removed the / std and K3 kl loss in GRPO.
+            # `/ std` is not needed in RL variance reduction theory, and `k3 KL` has a larger variance than `k1 KL` under a categorical distribution.
+            rewards = torch.cat([experience.info["reward"] for experience in experiences])
+            rewards = rewards.reshape(-1, args.n_samples_per_prompt).to(device="cuda")
+            rewards = rewards - rewards.mean(-1, keepdim=True)
+            rewards = rewards.reshape(-1).to(device="cpu").chunk(len(experiences))
+        elif args.advantage_estimator == "group_norm":
+            rewards = torch.cat([experience.info["reward"] for experience in experiences])
+            rewards = rewards.reshape(-1, args.n_samples_per_prompt).to(device="cuda")
+            rewards = (rewards - rewards.mean(-1, keepdim=True)) / (rewards.std(-1, keepdim=True) + 1e-9)
+            rewards = rewards.reshape(-1).to(device="cpu").chunk(len(experiences))
+        else:
+            rewards = [experience.info["reward"] for experience in experiences]
 
         # calculate return and advantages
         for experience, reward in zip(experiences, rewards):
@@ -274,14 +539,14 @@ class RemoteExperienceMaker(BaseExperienceMaker):
                     experience.values,
                     reward,
                     experience.action_mask,
-                    generate_kwargs["gamma"],
-                    generate_kwargs["lambd"],
+                    kwargs["gamma"],
+                    kwargs["lambd"],
                 )
             elif self.advantage_estimator in ["reinforce", "rloo", "reinforce_baseline", "group_norm"]:
                 experience.returns = self.get_cumulative_returns(
                     reward,
                     experience.action_mask,
-                    generate_kwargs["gamma"],
+                    kwargs["gamma"],
                 )
                 experience.advantages = deepcopy(experience.returns)
             else:
@@ -300,245 +565,7 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             del experience.info["num_actions"]
             experience.to_device("cpu")
 
-        # send experience to critic
-        if self.critic is not None:
-            for experience in experiences:
-                experience_cpu = deepcopy(experience)
-                experience_cpu.to_device("cpu")
-                self._ref = self.critic.append.remote(experience_cpu)
         return experiences
-
-    @torch.no_grad()
-    def make_experience(self, samples: Samples) -> Experience:
-        """
-        Turn samples into experience by calculating logprobs, values, rewards, and kl divergence.
-        """
-        args = self.strategy.args
-        self.actor.eval()
-        device = torch.cuda.current_device()
-
-        # extract values from samples
-        sequences = samples.sequences
-        attention_mask = samples.attention_mask
-        action_mask = samples.action_mask
-        num_actions = samples.num_actions
-        packed_seq_lens = samples.packed_seq_lens
-
-        start = time.time()
-        sequences_cpu, attention_mask_cpu = (
-            sequences.to("cpu"),
-            attention_mask.to("cpu"),
-        )
-
-        # init log probs
-        if self.initial_model is not None:
-            base_action_log_probs_ref = self.initial_model.forward.remote(
-                sequences_cpu, num_actions, attention_mask_cpu, logps_allgather=True, packed_seq_lens=packed_seq_lens
-            )
-
-            if args.colocate_actor_ref or args.colocate_all_models:
-                ray.get([base_action_log_probs_ref])
-                ray.get([self.initial_model.empty_cache.remote()])
-        else:
-            base_action_log_probs_ref = ray.put(None)
-
-        # values
-        if self.critic is not None:
-            value_ref = self.critic.forward.remote(
-                sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens
-            )
-            # avoid CUDA OOM when colocate models
-            if args.colocate_critic_reward or args.colocate_all_models:
-                ray.get([value_ref])
-                ray.get([self.critic.empty_cache.remote()])
-        else:
-            value_ref = ray.put(None)
-
-        # rewards
-        r_refs = []
-        # support remote RM API with ray
-        if not self.remote_rm_url:
-            for rm in self.reward_model:
-                r_refs.append(
-                    rm.forward.remote(
-                        sequences_cpu, attention_mask_cpu, packed_seq_lens=packed_seq_lens, pad_sequence=True
-                    )
-                )
-        else:
-            # remote RM
-            if self.strategy.ring_attn_group is None or self.strategy.ring_attn_rank == 0:
-                if not self.packing_samples:
-                    queries = self.tokenizer.batch_decode(sequences_cpu, skip_special_tokens=False)
-                else:
-                    sequences_list = []
-                    offset = 0
-                    tokens_list = sequences_cpu.tolist()[0]
-                    for length in packed_seq_lens:
-                        sequences_list.append(tokens_list[offset : offset + length])
-                        offset += length
-                    queries = self.tokenizer.batch_decode(sequences_list, skip_special_tokens=False)
-
-                if self.custom_reward_func:
-                    r = self.custom_reward_func.remote(queries, samples.prompts, samples.labels)
-                    r_refs.append(r)
-                else:
-                    rank = torch.distributed.get_rank() // self.strategy.ring_attn_size
-                    rm = self.remote_rm_url[rank % len(self.remote_rm_url)]
-                    r = remote_rm_fn_ray.remote(rm, queries=queries, prompts=samples.prompts, labels=samples.labels)
-                    r_refs.append(r)
-            else:
-                r_refs.append(ray.put(None))
-
-        if args.colocate_all_models and not self.remote_rm_url:
-            ray.get(r_refs)
-            ray.get([self.reward_model[0].empty_cache.remote()])
-
-        # log probs
-        action_log_probs = self.actor(
-            sequences,
-            num_actions,
-            attention_mask,
-            ring_attn_group=self.strategy.ring_attn_group,
-            logps_allgather=True,
-            packed_seq_lens=packed_seq_lens,
-        )
-        actor_value_rm_time = time.time() - start
-
-        # wait initial/critic/reward model done
-        start = time.time()
-        ref_values = ray.get([base_action_log_probs_ref, value_ref] + r_refs)
-        wait_time = time.time() - start
-
-        base_action_log_probs, value, rewards = ref_values[0], ref_values[1], ref_values[2:]
-        if base_action_log_probs is not None:
-            base_action_log_probs = base_action_log_probs.to(device)
-        if value is not None:
-            value = value.to(device)
-
-        # broadcast rewards to all ring attention ranks when using remote RM
-        if self.remote_rm_url and self.strategy.ring_attn_group is not None:
-            if self.strategy.ring_attn_rank == 0:
-                dist.broadcast_object_list(rewards, src=dist.get_rank(), group=self.strategy.ring_attn_group)
-            else:
-                dist.broadcast_object_list(
-                    rewards, src=self.strategy.ring_attn_ranks[0], group=self.strategy.ring_attn_group
-                )
-
-        rewards = [r.to(device) for r in rewards]
-        r = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
-
-        # avoid CUDA OOM when colocate models
-        if args.colocate_critic_reward and not self.remote_rm_url:
-            ray.get([self.reward_model[0].empty_cache.remote()])
-
-        if args.colocate_actor_ref or args.colocate_all_models:
-            torch.cuda.synchronize()
-            torch.cuda.empty_cache()
-
-        if (self.initial_model is not None) and (not args.use_kl_loss):
-            kl = compute_approx_kl(
-                action_log_probs,
-                base_action_log_probs,
-                action_mask=action_mask,
-                kl_estimator=self.strategy.args.kl_estimator,
-            )
-        else:
-            kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
-
-        if not self.packing_samples:
-            kl_mean = masked_mean(kl, action_mask, dim=-1)
-        else:
-            if self.strategy.ring_attn_group is not None:
-                assert samples.pad_len is not None
-                sequences, attention_mask, num_actions, packed_seq_lens, _, _, kl = unpad_sequences(
-                    pad_len=samples.pad_len,
-                    sequences=sequences,
-                    attention_mask=attention_mask,
-                    num_actions=num_actions,
-                    packed_seq_lens=packed_seq_lens,
-                    ring_attn_group=self.strategy.ring_attn_group,
-                    action_log_probs=action_log_probs,
-                    values=value,
-                    kl=kl,
-                )
-            # convert tensor into list of tensors so that it's easier to manipulate
-            # within dataset.
-            sequences = unpacking_samples(sequences, packed_seq_lens)
-            attention_mask = None
-            action_log_probs = unpacking_samples(action_log_probs, num_actions)
-            if value is not None:
-                value = unpacking_samples(value, num_actions)
-            if base_action_log_probs is not None:
-                base_action_log_probs = unpacking_samples(base_action_log_probs, num_actions)
-
-            kl = unpacking_samples(kl, num_actions)
-            kl_mean = torch.tensor([each_kl.mean() for each_kl in kl], device=device)
-
-        if not args.use_kl_loss:
-            base_action_log_probs = None
-
-        info = {
-            "kl": kl_mean,
-            "reward": r,
-            "response_length": samples.response_length,
-            "total_length": samples.total_length,
-            "num_actions": num_actions,
-        }
-
-        if self.strategy.args.perf:
-            self.perf_stats["actor_value_rm_time"] += actor_value_rm_time
-            self.perf_stats["wait_time"] += wait_time
-
-        experience = Experience(
-            sequences,
-            action_log_probs,
-            base_action_log_probs,
-            value,
-            None,
-            None,
-            attention_mask,
-            action_mask,
-            info,
-            kl,
-        )
-
-        self.actor.train()  # reset model state
-        return experience
-
-    @torch.no_grad()
-    def process_experiences(self, experiences: List[Experience]) -> Tuple[List[Experience], List[torch.Tensor]]:
-        """
-        Process experiences, this can be used to filter out some experiences or do some processing on the rewards.
-
-        Output:
-        - experiences: List of Experience
-        - rewards: List of rewards
-        """
-        args = self.strategy.args
-        # reward shaping for rloo and reinforce_baseline
-        if args.advantage_estimator == "rloo":
-            rewards = torch.cat([experience.info["reward"] for experience in experiences])
-            rewards = rewards.reshape(-1, args.n_samples_per_prompt).to(device="cuda")
-            baseline = (rewards.sum(-1, keepdim=True) - rewards) / (args.n_samples_per_prompt - 1)
-            rewards = rewards - baseline
-            rewards = rewards.flatten().to(device="cpu").chunk(len(experiences))
-            return experiences, rewards
-        elif args.advantage_estimator == "reinforce_baseline":
-            # REINFORCE++-baseline removed the / std and K3 kl loss in GRPO.
-            # `/ std` is not needed in RL variance reduction theory, and `k3 KL` has a larger variance than `k1 KL` under a categorical distribution.
-            rewards = torch.cat([experience.info["reward"] for experience in experiences])
-            rewards = rewards.reshape(-1, args.n_samples_per_prompt).to(device="cuda")
-            rewards = rewards - rewards.mean(-1, keepdim=True)
-            rewards = rewards.reshape(-1).to(device="cpu").chunk(len(experiences))
-            return experiences, rewards
-        elif args.advantage_estimator == "group_norm":
-            rewards = torch.cat([experience.info["reward"] for experience in experiences])
-            rewards = rewards.reshape(-1, args.n_samples_per_prompt).to(device="cuda")
-            rewards = (rewards - rewards.mean(-1, keepdim=True)) / (rewards.std(-1, keepdim=True) + 1e-9)
-            rewards = rewards.reshape(-1).to(device="cpu").chunk(len(experiences))
-            return experiences, rewards
-        # default rewards
-        return experiences, [experience.info["reward"] for experience in experiences]
 
     @torch.no_grad()
     def get_advantages_and_returns(
