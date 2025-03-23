@@ -306,9 +306,9 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         if self.critic is not None:
             value_ref = self.critic.forward_batch.remote(
                 sequences=sequences_cpu_list,
+                num_actions=num_actions_list,
                 attention_mask=attention_mask_cpu_list,
                 packed_seq_lens=packed_seq_lens_list,
-                pad_sequence=[True] * len(samples_list),
             )
             if args.colocate_critic_reward or args.colocate_all_models:
                 ray.get([value_ref])
