@@ -400,7 +400,18 @@ python -m openrlhf.cli.lora_combiner \
 > 数据已经过时; 请参考后面的调优指南重新测试
 
 ## 调优指南
-为了获得最佳的性能，我们建议您分配节点为 `vLLM:Actor:Critic = 1:1:1`。例如，对于 70B 模型以及 48 张 A100，建议分配 16 张以上 A100 给 vLLM Engine，16 张给 Actor 模型，以及最后 16 张给 Critic 模型，同时开启 `--colocate_critic_reward`, `--colocate_actor_ref` 或者 `--ref_reward_offload (可选)` 选项合并部分节点。最后您应该尽可能增大 `--rollout_micro_batch_size` ，以及减小 vLLM 的 TP 切分数量。训练阶段的 `micro_train_batch_size` 也是越大越好，请同时使用 `--packing_samples` 。当 GPU 数量足够时请关闭 `--adam_offload` 以及启用 `--overlap_comm`. 对于vLLM, 请使用 `--vllm_sync_backend nccl` 和 `export VLLM_USE_V1=1` 以及 `export VLLM_ENABLE_V1_MULTIPROCESSING=0` 基于 vLLM 0.8.2+. 启用 `enable_prefix_caching` 对于 vLLM 当 ``n_samples_per_prompts`` > 1. 当模型规模和上下文长度较小时，使用 Hybrid Engine `--colocate_all_models` 和 `--vllm_enable_sleep`，而不是分布式 RLHF。对于尺寸大的基础模型, 如果出现 OOM, 请不要使用任何`--colocate_xxxx`选项。
+
+为了获得最佳性能，我们建议按照 `vLLM:Actor:Critic = 1:1:1` 的比例分配节点。
+
+- 例如，对于使用48个A100 GPU的70B模型，建议分配16个A100 GPU给vLLM引擎，16个GPU给Actor模型，剩余16个GPU给Critic模型。
+- 当有足够的GPU内存时，使用 Hybrid Engine `--colocate_all_models` 和 `--vllm_enable_sleep` 以及 `--deepspeed_enable_sleep`，而不是分布式RLHF。
+- 启用 `--colocate_critic_reward`、`--colocate_actor_ref` 选项来合并节点。
+- 您应该尽可能增加 `rollout_micro_batch_size`（并最小化vLLM引擎的TP大小）。在训练阶段，更大的 `--micro_train_batch_size` 效果更好，并启用 `--packing_samples`。
+- 当有足够的GPU内存时，请禁用 `--adam_offload` 并启用 `--overlap_comm`。
+- 对于vLLM，请使用 `--vllm_sync_backend nccl` 并在vLLM 0.8.2+版本中设置 `export VLLM_USE_V1=1` 和 `export VLLM_ENABLE_V1_MULTIPROCESSING=0`。
+- 当 `n_samples_per_prompts` > 1 时，在vLLM生成中启用 [enable_prefix_caching](https://docs.vllm.ai/en/stable/automatic_prefix_caching/apc.html)。
+- 对于大型基础模型，如果出现OOM，不要使用任何 `--colocate_xxxx` 选项。
+
 
 ## 使用 OpenRLHF 的公司和组织
 

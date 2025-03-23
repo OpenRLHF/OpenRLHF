@@ -114,7 +114,8 @@ pip install -e .
 ```
 
 > [!NOTE]
->vLLM 0.6.4以降の使用をお勧めします。他のバージョン（vLLM >= 0.4.2）は、Glooを介して重みの同期が必要な場合があります（`--vllm_sync_backend gloo`）。
+>vLLM 0.8.1以降の使用をお勧めします。
+>`export VLLM_USE_V1=1`はvLLM 0.8.2以降またはNightlyバージョンが必要で、`export VLLM_ENABLE_V1_MULTIPROCESSING=0`と`export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1`を有効にする必要があります。
 >また、[vLLM用のDockerfile](./dockerfile/)および[Nvidia-Dockerのワンクリックインストールスクリプト](./examples/scripts/nvidia_docker_install.sh)も提供しています。
 
 ### データセットの準備
@@ -312,7 +313,6 @@ ray job submit --address="http://127.0.0.1:8265" \
 # リモート報酬モデルのサポート（HTTP）
 # --remote_rm_url http://localhost:5000/get_reward
 
-
 # Nサンプルのサポート
 # --n_samples_per_prompt 4
 ```
@@ -320,13 +320,16 @@ ray job submit --address="http://127.0.0.1:8265" \
 > `--vllm_num_engines`を設定しない場合は、vLLMエンジンを使用しないことを意味します。
 > `setup_commands`を使用してRayが自動的に環境をデプロイすることもできます。例えば、`--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`。
 
-[!NOTE]
-OPENRLHFのRLOOは、REINFORCE++を基に改良されたものであり、オリジナル版とは異なります。
+> [!NOTE]
+> OPENRLHFのRLOOとREINFORCE++-baselineはREINFORCE++に基づく修正版です：
+> - REINFORCE++はPPOの主要な最適化技術（アドバンテージ正規化やPPO-clip損失など）を統合しながら、criticネットワークの必要性を排除します。
+> - REINFORCE++-baselineは同じプロンプトからの複数サンプルの平均報酬をベースラインとして使用して報酬を再形成します。
+> - OpenRLHFのRLOOは、`per-token KL報酬`を組み込み、`PPO-clip損失`を利用するように元のバージョンを修正しています。
 
 > [!NOTE]
-> deepspeedがGPUデバイスを設定する際にインデックスが範囲外に関連するエラーが発生した場合、環境変数[`RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES`](openrlhf/trainer/ray/utils.py)を設定して回避策を試すことができます。
+> deepspeedがGPUデバイスをセットアップする際にインデックス範囲外のエラーが発生した場合、環境変数[`RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES`](openrlhf/trainer/ray/utils.py)を設定することで回避できます。
 >   ```bash
->   # NVIDIA GPUの場合:
+>   # NVIDIA GPUの場合：
 >   export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
 >   ```
 
@@ -385,7 +388,16 @@ Adamオフロードの有効化、報酬モデル（RM）および参照モデ�
 
 ### パフォーマンスチューニングガイド
 
-最適なパフォーマンスを達成するために、vLLMエンジンにより多くのノードを割り当てることをお勧めします。例えば、32個のA100 GPUを持つ70Bモデルの場合、16個のA100 GPUをvLLMエンジンに割り当て、8個のGPUをActorモデルに、残りの8個のGPUをCriticモデルに割り当てることをお勧めします。さらに、`--colocate_critic_reward`、`--colocate_actor_ref`オプションを有効にしてノードをマージします。最後に、`rollout_micro_batch_size`（およびvLLMエンジンのTPサイズを最小化）を可能な限り増やすべきです。トレーニングフェーズでは、より大きな`--micro_train_batch_size`が望ましく、`--packing_samples`を有効にします。十分なGPUがある場合、`--adam_offload`を無効にし、`--overlap_comm`を有効にします。マルチノードRLHFの場合、vLLM 0.6.4+で`--vllm_sync_backend nccl`を使用してください。
+最適なパフォーマンスを達成するために、ノードを`vLLM:Actor:Critic = 1:1:1`で割り当てることをお勧めします。
+
+- 例えば、48 A100 GPUで70Bモデルの場合、16 A100 GPUをvLLMエンジンに、16 GPUをActorモデルに、残りの16 GPUをCriticモデルに割り当てることを推奨します。
+- GPUメモリが十分にある場合は、分散RLHFではなくハイブリッドエンジン`--colocate_all_models`と`--vllm_enable_sleep`と`--deepspeed_enable_sleep`を使用します。
+- `--colocate_critic_reward`、`--colocate_actor_ref`オプションを有効にしてノードをマージします。
+- `rollout_micro_batch_size`を可能な限り増やし（vLLMエンジンのTPサイズを最小限に抑え）、トレーニングフェーズでは`--micro_train_batch_size`を大きくし、`--packing_samples`を有効にします。
+- GPUメモリが十分にある場合は、`--adam_offload`を無効にし、`--overlap_comm`を有効にします。
+- vLLMの場合、vLLM 0.8.2以降で`--vllm_sync_backend nccl`と`export VLLM_USE_V1=1`と`export VLLM_ENABLE_V1_MULTIPROCESSING=0`を使用します。
+- `n_samples_per_prompts` > 1の場合、vLLM生成で[enable_prefix_caching](https://docs.vllm.ai/en/stable/automatic_prefix_caching/apc.html)を有効にします。
+- 大きなベースモデルの場合、OOMが発生した場合は、`--colocate_xxxx`オプションを使用しないでください。
 
 ## OpenRLHFを使用している企業と組織
 
