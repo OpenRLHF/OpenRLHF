@@ -121,7 +121,7 @@ pip install -e .
 
 > [!NOTE]
 >我们推荐使用 vLLM 0.8.1 及以上版本。
->`export VLLM_USE_V1=1` 需要 vLLM 0.8.2 或者 Nightly 版本以及启用 `export VLLM_ENABLE_V1_MULTIPROCESSING=0` 和 `export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1`.
+>`export VLLM_USE_V1=1` 需要 vLLM 0.8.2 或者 Nightly 版本以及启用 `export VLLM_ENABLE_V1_MULTIPROCESSING=0`.
 >我们也提供了 [Dockerfiles for vLLM](./dockerfile/) 和 [Nvidia-Docker 一键安装脚本](./examples/scripts/nvidia_docker_install.sh)。
 
 ### 准备数据集
