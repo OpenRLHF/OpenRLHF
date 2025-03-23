@@ -369,8 +369,11 @@ ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
   ...
-  --remote_rm_url /path/to/reward_func.py
+  --remote_rm_url /path/to/reward_func.py \
+  --label_key answer
 ```
+
+其中 `label_key` 参数用于向奖励函数传递额外的样本信息比如答案。
 
 
 ### 使用 LoRA

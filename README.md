@@ -366,8 +366,11 @@ ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
   ...
-  --remote_rm_url /path/to/reward_func.py
+  --remote_rm_url /path/to/reward_func.py \
+  --label_key answer
 ```
+
+where the `label_key` parameter is used to pass additional sample information such as answer to the reward function.
 
 ### LoRA
 If you use `LoRA (Low-Rank Adaptation)`, `OpenRLHF` will not save the full weights by default instead of `LoRA Adapter`. To continue in your task normally, you should combine the `Adapter` with weights of your base model

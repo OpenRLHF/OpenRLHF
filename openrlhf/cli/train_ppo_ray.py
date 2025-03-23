@@ -144,6 +144,7 @@ def train(args):
     # multiple reward models
     if not args.remote_rm_url:
         reward_pretrains = args.reward_pretrain.split(",")
+        assert len(reward_pretrains) == 1, "Only one reward model is supported"
         reward_models = []
         for _ in reward_pretrains:
             reward_models.append(
