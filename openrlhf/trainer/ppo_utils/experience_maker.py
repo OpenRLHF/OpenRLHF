@@ -423,14 +423,18 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             if not self.packing_samples:
                 kl_mean = masked_mean(kl, samples.action_mask, dim=-1)
             else:
+                sequences = samples.sequences
+                attention_mask = samples.attention_mask
+                num_actions = samples.num_actions
+                packed_seq_lens = samples.packed_seq_lens
                 if self.strategy.ring_attn_group is not None:
                     assert samples.pad_len is not None
                     sequences, attention_mask, num_actions, packed_seq_lens, _, _, kl = unpad_sequences(
                         pad_len=samples.pad_len,
-                        sequences=samples.sequences,
-                        attention_mask=samples.attention_mask,
-                        num_actions=samples.num_actions,
-                        packed_seq_lens=samples.packed_seq_lens,
+                        sequences=sequences,
+                        attention_mask=attention_mask,
+                        num_actions=num_actions,
+                        packed_seq_lens=packed_seq_lens,
                         ring_attn_group=self.strategy.ring_attn_group,
                         action_log_probs=action_log_probs,
                         values=value,
