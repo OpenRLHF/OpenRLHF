@@ -2,6 +2,7 @@ import time
 from abc import ABC
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import List, Optional, Tuple, Union
 
 import ray
@@ -266,7 +267,7 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         """
         start_time = time.time()
         if dist.get_rank() == 0:
-            logger.info(f"Starting make_experience with {len(samples_list)} sample batches")
+            logger.info(f"🚀 Starting experience making with {len(samples_list)} batches")
 
         args = self.strategy.args
         self.actor.eval()
@@ -482,7 +483,8 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         end_time = time.time()
         duration = end_time - start_time
         if dist.get_rank() == 0:
-            logger.info(f"Finished make_experience in {duration:.2f} seconds")
+            time_str = str(timedelta(seconds=duration)).split(".")[0]
+            logger.info(f"✨ Experience making completed in {time_str}")
         return experiences
 
     @torch.no_grad()
