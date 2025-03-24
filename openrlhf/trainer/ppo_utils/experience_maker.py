@@ -156,6 +156,7 @@ class BaseExperienceMaker(ABC):
         self.reward_fn = reward_fn
         self.perf_stats = {}
         self.advantage_estimator = strategy.args.advantage_estimator
+        self.ring_rank0_group = None
 
         # custom reward func for reinforced finetuning
         self.custom_reward_func = None
@@ -267,7 +268,7 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         """
         start_time = time.time()
         if dist.get_rank() == 0:
-            logger.info(f"🚀 Starting experience making with {len(samples_list)} batches")
+            logger.info(f"🚀 Starting experience making with {len(samples_list) * dist.get_world_size()} batches")
 
         args = self.strategy.args
         self.actor.eval()
@@ -762,6 +763,19 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             refs.append(
                 llm.add_requests.remote(rank, sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
             )
+
+        # Waiting for all requests to be sent to avoid ray object race condition
+        if self.strategy.ring_attn_group is not None:
+            if self.ring_rank0_group is None:
+                world_size = dist.get_world_size()
+                ring_rank0 = [
+                    i * self.strategy.ring_attn_size for i in range(world_size // self.strategy.ring_attn_size)
+                ]
+                self.ring_rank0_group = dist.new_group(ranks=ring_rank0)
+            dist.barrier(group=self.ring_rank0_group)
+        else:
+            dist.barrier()
+
         ray.get(refs)
 
         # Retrieve and combine results from all outputs
