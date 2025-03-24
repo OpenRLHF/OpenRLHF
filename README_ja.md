@@ -258,7 +258,7 @@ reward = reward_model.score(reward)[:, -1]
 
 ### RayとvLLMを使用したPPO/REINFORCE++
 
-RLHFトレーニング速度を向上させるか、70Bモデルをサポートするために、RayとvLLM加速を使用したPPOを使用できます
+RLHFトレーニング速度を向上させるか、70Bモデルをサポートするために、RayとvLLM加速を使用したPPOを使用できます (Hybrid Engine)
 
 ```bash
 # コンテナ内でRayのマスターノードを起動
@@ -278,20 +278,23 @@ ray job submit --address="http://127.0.0.1:8265" \
   --critic_num_gpus_per_node 2 \
   --actor_num_nodes 1 \
   --actor_num_gpus_per_node 2 \
-  --vllm_num_engines 2 \
+  --vllm_num_engines 4 \
   --vllm_tensor_parallel_size 2 \
-  --colocate_critic_reward \
-  --colocate_actor_ref \
+  --colocate_all_models \
+  --vllm_gpu_memory_utilization 0.5 \
   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-  --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
-  --save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
+  --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \
+  --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
+  --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
+  --save_hf_ckpt \
   --micro_train_batch_size 8 \
   --train_batch_size 128 \
   --micro_rollout_batch_size 16 \
   --rollout_batch_size 1024 \
-  --max_samples 100000 \
+  --n_samples_per_prompt 1 \
   --max_epochs 1 \
   --prompt_max_len 1024 \
+  --max_samples 100000 \
   --generate_max_len 1024 \
   --zero_stage 3 \
   --bf16 \
@@ -302,14 +305,18 @@ ray job submit --address="http://127.0.0.1:8265" \
   --input_key context_messages \
   --apply_chat_template \
   --normalize_reward \
-  --packing_samples \
-  --adam_offload \
-  --flash_attn \
   --gradient_checkpointing \
+  --packing_samples \
+  --vllm_sync_backend nccl \
+  --enforce_eager \
+  --vllm_enable_sleep \
+  --deepspeed_enable_sleep \
   --use_wandb {wandb_token}
 
 # REINFORCE++  | RLOO | REINFORCE++-baseline | GRPO | Dr. GRPO をサポート
 # --advantage_estimator reinforce | rloo | reinforce_baseline | group_norm | dr_grpo
+
+# --init_kl_coef を 0 に設定すると参照モデルが起動しません
 
 # リモート報酬モデル（HTTP）をサポート
 # --remote_rm_url http://localhost:5000/get_reward

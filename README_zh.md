@@ -266,7 +266,7 @@ reward = reward_model.score(reward)[:, -1]
 
 ### 使用 Ray 和 vLLM 的 PPO/REINFORCE++
 
-为了提高 RLHF 训练速度或支持 70B 模型，我们可以使用 Ray 和 vLLM 加速的 PPO
+为了提高 RLHF 训练速度或支持 70B 模型，我们可以使用 Ray 和 vLLM 加速的 PPO (Hybrid Engine)
 
 ```bash
 # 在容器中启动 Ray 的主节点
@@ -278,28 +278,23 @@ ray start --address {MASTER-NODE-ADDRESS}:6379 --num-gpus 8
 ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
-  --ref_num_nodes 1 \
-  --ref_num_gpus_per_node 2 \
-  --reward_num_nodes 1 \
-  --reward_num_gpus_per_node 2 \
-  --critic_num_nodes 1 \
-  --critic_num_gpus_per_node 2 \
-  --actor_num_nodes 1 \
-  --actor_num_gpus_per_node 2 \
-  --vllm_num_engines 2 \
+  --vllm_num_engines 4 \
   --vllm_tensor_parallel_size 2 \
-  --colocate_critic_reward \
-  --colocate_actor_ref \
+  --colocate_all_models \
+  --vllm_gpu_memory_utilization 0.5 \
   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-  --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
-  --save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
+  --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \
+  --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
+  --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
+  --save_hf_ckpt \
   --micro_train_batch_size 8 \
   --train_batch_size 128 \
-  --micro_rollout_batch_size 32 \
+  --micro_rollout_batch_size 16 \
   --rollout_batch_size 1024 \
-  --max_samples 100000 \
+  --n_samples_per_prompt 1 \
   --max_epochs 1 \
   --prompt_max_len 1024 \
+  --max_samples 100000 \
   --generate_max_len 1024 \
   --zero_stage 3 \
   --bf16 \
@@ -310,15 +305,18 @@ ray job submit --address="http://127.0.0.1:8265" \
   --input_key context_messages \
   --apply_chat_template \
   --normalize_reward \
-  --packing_samples \
-  --adam_offload \
-  --flash_attn \
   --gradient_checkpointing \
-  --load_checkpoint \
+  --packing_samples \
+  --vllm_sync_backend nccl \
+  --enforce_eager \
+  --vllm_enable_sleep \
+  --deepspeed_enable_sleep \
   --use_wandb {wandb_token}
 
 # 支持 REINFORCE++  | RLOO | REINFORCE++-baseline | GRPO | Dr. GRPO
 # --advantage_estimator reinforce | rloo | reinforce_baseline | group_norm | dr_grpo
+
+# 设置 --init_kl_coef 为 0 将不会启动参考模型
 
 # 支持远程奖励模型 (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
