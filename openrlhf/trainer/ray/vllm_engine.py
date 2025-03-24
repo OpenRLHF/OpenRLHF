@@ -1,5 +1,6 @@
 import os
 import queue
+import time
 from collections import defaultdict
 from typing import Any, List
 
@@ -108,6 +109,8 @@ class LLMRayActor:
         """
         Return the responses for the actor with the given rank
         """
+        while self.requests:
+            time.sleep(1)
         return self.response_queues[actor_rank].get()
 
 
