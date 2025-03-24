@@ -420,11 +420,11 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             else:
                 kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
 
+            sequences = samples.sequences
+            attention_mask = samples.attention_mask
             if not self.packing_samples:
                 kl_mean = masked_mean(kl, samples.action_mask, dim=-1)
             else:
-                sequences = samples.sequences
-                attention_mask = samples.attention_mask
                 num_actions = samples.num_actions
                 packed_seq_lens = samples.packed_seq_lens
                 if self.strategy.ring_attn_group is not None:
