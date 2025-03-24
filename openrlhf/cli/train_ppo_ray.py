@@ -246,7 +246,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--vllm_gpu_memory_utilization",
         type=float,
-        default=0.9,
+        default=0.95,
         help="vLLM gpu_memory_utilization",
     )
 
@@ -260,7 +260,9 @@ if __name__ == "__main__":
     parser.add_argument("--max_ckpt_num", type=int, default=3)
     parser.add_argument("--max_ckpt_mem", type=int, default=1e8)
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
-    parser.add_argument("--universal_ckpt", action="store_true", default=False)
+    parser.add_argument(
+        "--use_ds_universal_ckpt", action="store_true", help="Use deepspeed universal checkpoint", default=False
+    )
 
     # DeepSpeed
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
@@ -311,7 +313,7 @@ if __name__ == "__main__":
     parser.add_argument("--ptx_coef", type=float, default=0.05, help="PPO-ptx loss coef")
     parser.add_argument("--eps_clip", type=float, default=0.2, help="PPO clip range")
     parser.add_argument("--value_clip", type=float, default=0.2, help="PPO value clip range")
-    parser.add_argument("--lambd", type=float, default=0.95, help="PPO GAE lambd")
+    parser.add_argument("--lambd", type=float, default=1, help="PPO GAE lambd")
     parser.add_argument("--gamma", type=float, default=1, help="PPO GAE gamma")
     parser.add_argument("--micro_train_batch_size", type=int, default=4, help="batch size per GPU")
     parser.add_argument("--train_batch_size", type=int, default=128, help="Global training batch size")
@@ -357,6 +359,12 @@ if __name__ == "__main__":
         help="Choose advantage estimation method: gae, reinforce, rloo, reinforce_baseline, group_norm, dr_grpo",
     )
     parser.add_argument("--use_kl_loss", action="store_true", default=False, help="whether to use KL loss from GRPO")
+    parser.add_argument(
+        "--no_advantage_std_norm",
+        action="store_true",
+        default=False,
+        help="disable dividing by std for advantages while keeping mean normalization",
+    )
 
     # Context Parallel
     parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")

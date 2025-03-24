@@ -10,7 +10,7 @@ def get_train_ds_config(
     zpg=8,
     grad_accum_dtype=None,
     overlap_comm=False,
-    universal_ckpt=False,
+    use_ds_universal_ckpt=False,
 ):
     device = "cpu" if offload else "none"
     zero_opt_dict = {
@@ -48,7 +48,7 @@ def get_train_ds_config(
         "wall_clock_breakdown": False,
         "data_types": {"grad_accum_dtype": grad_accum_dtype},
         "checkpoint": {
-            "load_universal": universal_ckpt,
+            "load_universal": use_ds_universal_ckpt,
         },
     }
 

@@ -210,7 +210,9 @@ class ActorPPOTrainer(BasePPOTrainer):
                     self.replay_buffer.append(experience)
 
                 if self.args.advantage_estimator not in ["group_norm", "dr_grpo"]:
-                    self.replay_buffer.normalize("advantages", self.strategy)
+                    self.replay_buffer.normalize(
+                        self.strategy, "advantages", divide_by_std=not self.args.no_advantage_std_norm
+                    )
                 status = self.ppo_train(steps)
                 self.replay_buffer.clear()
 

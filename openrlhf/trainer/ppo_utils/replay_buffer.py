@@ -212,7 +212,7 @@ class NaiveReplayBuffer(ABC):
         experience = make_experience_batch(batch, self.packing_samples)
         return experience
 
-    def normalize(self, attribute: str, strategy) -> None:
+    def normalize(self, strategy, attribute: str, divide_by_std: bool = True) -> None:
         assert attribute == "advantages"
         items = []
         action_masks = []
@@ -236,9 +236,12 @@ class NaiveReplayBuffer(ABC):
         all_sum, all_count = strategy.all_reduce(sum_and_count, "sum")
         mean = all_sum / all_count
         # std
-        std = ((items_vector - mean).pow(2) * action_masks_vector).sum()
-        all_std = strategy.all_reduce(std, "sum")
-        rstd = (all_std / all_count).clamp(min=1e-8).rsqrt()
+        if divide_by_std:
+            std = ((items_vector - mean).pow(2) * action_masks_vector).sum()
+            all_std = strategy.all_reduce(std, "sum")
+            rstd = (all_std / all_count).clamp(min=1e-8).rsqrt()
+        else:
+            rstd = 1
 
         for i, item in enumerate(self):
             setattr(item, attribute, (items[i] - mean) * rstd)
