@@ -315,8 +315,8 @@ ray job submit --address="http://127.0.0.1:8265" \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
 
-# Support REINFORCE++  | RLOO | REINFORCE++-baseline | GRPO
-# --advantage_estimator reinforce | rloo | reinforce_baseline | group_norm
+# Support REINFORCE++  | RLOO | REINFORCE++-baseline | GRPO | Dr. GRPO
+# --advantage_estimator reinforce | rloo | reinforce_baseline | group_norm | dr_grpo
 
 # Support remote reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
@@ -331,8 +331,9 @@ ray job submit --address="http://127.0.0.1:8265" \
 > [!NOTE]
 > RLOO and REINFORCE++-baseline in OPENRLHF are a modification based on REINFORCE++:
 > - REINFORCE++ integrates key optimization techniques from PPO (such as advantage normalization and PPO-clip loss) while eliminating the need for a critic network.
-> - REINFORCE++-baseline uses the mean reward of multiple samples from the same prompt as the baseline to reshape the rewards.
+> - REINFORCE++-baseline uses the `mean reward of multiple samples from the same prompt` as the baseline to reshape the rewards (with global batch normalization `/std`).
 > - RLOO in OpenRLHF modifies the original version by incorporating the `per-token KL reward` and utilizing the `PPO-clip loss`.
+> - Dr. GRPO remove the group normalization `/std` in GRPO.
 
 
 > [!NOTE]

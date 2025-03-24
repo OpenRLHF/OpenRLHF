@@ -35,7 +35,7 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 - **简单易用**: OpenRLHF 是目前可用的最简单的高性能 RLHF 库之一，无缝兼容 Huggingface 模型和数据集。
 - **高性能**: RLHF 训练中 80% 的时间用于样本生成阶段。得益于使用 Ray, Packing Samples 以及 vLLM 生成加速的能力，OpenRLHF 的性能是极致优化的 DeepSpeedChat with Hybrid Engine 的3~4倍以上。
 - **分布式 RLHF**:  OpenRLHF 使用 Ray 将 Actor、Reward、Reference 和 Critic 模型分布到不同的 GPU 上，同时将 Adam 优化器放在 CPU 上。这使得使用多个 A100 80G GPU 和 vLLM 可以全面微调超过 70B+ 的模型 以及在多个 24GB RTX 4090 GPU 上微调 7B 模型。
-- **Hybrid Engine**: OpenRLHF 还支持还支持 Hybrid engine 所有训练引擎和推理引擎共用GPU来避免资源闲置。
+- **Hybrid Engine**: OpenRLHF 还支持 Hybrid engine，所有训练引擎和推理引擎共用 GPU 来避免资源闲置。
 - **PPO 实现技巧**: 我们集成了 PPO 的实现技巧以提高训练稳定性，详情参考 [知乎](https://zhuanlan.zhihu.com/p/622134699) 和 [Notion blog](https://hijkzzz.notion.site/rlhf-implementation-tricks?v=158d9a33ecc98132bf9e000c39227361).
 
 更多细节请参考 [PPT](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [技术报告](https://arxiv.org/abs/2405.11143) | [使用文档](https://openrlhf.readthedocs.io/)
@@ -317,33 +317,34 @@ ray job submit --address="http://127.0.0.1:8265" \
   --load_checkpoint \
   --use_wandb {wandb_token}
 
-# 支持 REINFORCE++  | RLOO  | REINFORCE++-baseline | GRPO
-# --advantage_estimator reinforce | rloo | reinforce_baseline | group_norm
+# 支持 REINFORCE++  | RLOO | REINFORCE++-baseline | GRPO | Dr. GRPO
+# --advantage_estimator reinforce | rloo | reinforce_baseline | group_norm | dr_grpo
 
-# 支持远程 reward model (HTTP)
+# 支持远程奖励模型 (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
 
-# 支持 N 倍采样
+# 支持 N 个样本
 # --n_samples_per_prompt 4
 ```
 
 > [!NOTE]
-> 不设置 `--vllm_num_engines` 则是不使用 vLLM engine。
-> 您也可以通过 ``setup_commands`` 让 Ray 自动初始化环境, 比如 `--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`
+> 不设置 `--vllm_num_engines` 意味着不使用 vLLM 引擎。
+> 你也可以使用 ``setup_commands`` 让 Ray 自动部署环境，例如 `--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`。
 
 > [!NOTE]
-> OpenRLHF 中的 RLOO 和 REINFORCE++-baseline 是基于 REINFORCE++ 的修改版本:
-> - REINFORCE++ 在 REINFORCE 的基础上集成了 PPO 的关键优化技术 (如优势值归一化和PPO-Clip loss)，所以不依赖于 Value Network
-> - REINFORCE++-baseline 使用了相同 prompt 多次采样的 reward 均值作为 baseline 重塑奖励
-> - OpenRLHF 中的 RLOO 在原版的基础上采用了 **per token KL reward** 和 **PPO-clip loss** 
+> OpenRLHF 中的 RLOO 和 REINFORCE++-baseline 是基于 REINFORCE++ 的修改版本：
+> - REINFORCE++ 集成了 PPO 的关键优化技术（如优势归一化和 PPO-clip loss），同时消除了对 critic 网络的需求。
+> - REINFORCE++-baseline 使用`来自同一个 prompt 的多个样本的平均奖励`作为基线来重塑奖励（使用全局批次归一化 `/std`）。
+> - OpenRLHF 中的 RLOO 通过引入`per token 的 KL 奖励`并使用 `PPO-clip loss` 来修改原始版本。
+> - Dr. GRPO 移除了 GRPO 中的组归一化 `/std`。
 
 
 > [!NOTE]
-> 如果您由于某种原因，在 deepspeed 设置显卡设备时遇到与索引超出范围相关的错误，您可以尝试设置环境变量 [`RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES`](openrlhf/trainer/ray/utils.py)。
-> ```bash
-> # 对于 NVIDIA 显卡:
-> export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
-> ```
+> 如果遇到 deepspeed 设置 GPU 设备时出现索引越界错误，可以尝试设置环境变量 [`RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES`](openrlhf/trainer/ray/utils.py) 作为临时解决方案。
+>   ```bash
+>   # 对于 NVIDIA GPU：
+>   export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
+>   ```
 
 所有支持算法的启动脚本和文档在 [example/scripts](./examples/scripts/) 和 [Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)
 

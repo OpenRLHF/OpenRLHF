@@ -33,6 +33,7 @@ OpenRLHFは、Ray、DeepSpeed、およびHF Transformersを基盤とした高性
 - **高性能**: RLHFトレーニングの80％の時間はサンプル生成段階に費やされます。RayとPacking SamplesおよびvLLM生成加速の能力を活用することで、OpenRLHFのパフォーマンスはOptimized DeepSpeedChat with Hybrid Engineの3〜4倍以上です。
 - **分散RLHF**: OpenRLHFは、Actor、Reward、Reference、およびCriticモデルをRayを使用して別々のGPUに分散し、AdamオプティマイザをCPUに配置します。これにより、複数のA100 80G GPUとvLLMを使用して70B+モデルのフルスケールの微調整が可能になり、複数の24GB RTX 4090 GPUで7Bモデルを微調整できます。
 - **PPO実装の最適化**: トレーニングの安定性を向上させるために、PPOの実装トリックを統合しました。詳細は[Zhihu](https://zhuanlan.zhihu.com/p/622134699)および[Notionブログ](https://hijkzzz.notion.site/rlhf-implementation-tricks?v=158d9a33ecc98132bf9e000c39227361)を参照してください。
+- **Hybrid Engine**: OpenRLHFはHybrid Engineもサポートしており、すべてのトレーニングエンジンと推論エンジンがGPUを共有してリソースのアイドル状態を防ぎます。
 
 詳細は[スライド](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [技術報告](https://arxiv.org/abs/2405.11143) | [ドキュメント](https://openrlhf.readthedocs.io/)をご覧ください。
 
@@ -307,27 +308,28 @@ ray job submit --address="http://127.0.0.1:8265" \
   --gradient_checkpointing \
   --use_wandb {wandb_token}
 
-# REINFORCE++ | RLOOのサポート | REINFORCE++-baseline | GRPO
-# --advantage_estimator reinforce | rloo | reinforce_baseline | group_norm
+# REINFORCE++  | RLOO | REINFORCE++-baseline | GRPO | Dr. GRPO をサポート
+# --advantage_estimator reinforce | rloo | reinforce_baseline | group_norm | dr_grpo
 
-# リモート報酬モデルのサポート（HTTP）
+# リモート報酬モデル（HTTP）をサポート
 # --remote_rm_url http://localhost:5000/get_reward
 
-# Nサンプルのサポート
+# N個のサンプルをサポート
 # --n_samples_per_prompt 4
 ```
 > [!NOTE]
-> `--vllm_num_engines`を設定しない場合は、vLLMエンジンを使用しないことを意味します。
-> `setup_commands`を使用してRayが自動的に環境をデプロイすることもできます。例えば、`--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`。
+> `--vllm_num_engines`を設定しない場合、vLLMエンジンを使用しないことを意味します。
+> また、``setup_commands``を使用してRayに環境を自動的にデプロイさせることもできます。例：`--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`
 
 > [!NOTE]
-> OPENRLHFのRLOOとREINFORCE++-baselineはREINFORCE++に基づく修正版です：
-> - REINFORCE++はPPOの主要な最適化技術（アドバンテージ正規化やPPO-clip損失など）を統合しながら、criticネットワークの必要性を排除します。
-> - REINFORCE++-baselineは同じプロンプトからの複数サンプルの平均報酬をベースラインとして使用して報酬を再形成します。
-> - OpenRLHFのRLOOは、`per-token KL報酬`を組み込み、`PPO-clip損失`を利用するように元のバージョンを修正しています。
+> OpenRLHFのRLOOとREINFORCE++-baselineはREINFORCE++に基づく修正版です：
+> - REINFORCE++は、PPOの主要な最適化技術（アドバンテージ正規化やPPO-clipロスなど）を統合し、criticネットワークの必要性を排除します。
+> - REINFORCE++-baselineは、`同じプロンプトから生成された複数のサンプルの平均報酬`をベースラインとして報酬を再形成します（グローバルバッチ正規化 `/std` を使用）。
+> - OpenRLHFのRLOOは、`トークンごとのKL報酬`を導入し、`PPO-clipロス`を使用することで元のバージョンを修正しています。
+> - Dr. GRPOは、GRPOのグループ正規化 `/std` を削除します。
 
 > [!NOTE]
-> deepspeedがGPUデバイスをセットアップする際にインデックス範囲外のエラーが発生した場合、環境変数[`RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES`](openrlhf/trainer/ray/utils.py)を設定することで回避できます。
+> deepspeedがGPUデバイスをセットアップする際にインデックス範囲外のエラーが発生した場合は、環境変数 [`RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES`](openrlhf/trainer/ray/utils.py) を設定することで一時的な解決策として対応できます。
 >   ```bash
 >   # NVIDIA GPUの場合：
 >   export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
