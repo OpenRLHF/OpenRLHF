@@ -508,15 +508,15 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         # get rewards from experiences
         rewards = [experience.info["reward"] for experience in experiences]
 
-        # reward shaping for estimators using baseline
+        # reward shaping
         if args.advantage_estimator == "rloo":
             rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt).to(device="cuda")
             baseline = (rewards.sum(-1, keepdim=True) - rewards) / (args.n_samples_per_prompt - 1)
             rewards = rewards - baseline
             rewards = rewards.flatten().to(device="cpu").chunk(len(experiences))
-        elif args.advantage_estimator == "reinforce_baseline":
-            # REINFORCE++-baseline removed the / std and K3 kl loss in GRPO.
-            # `/ std` is not needed in RL variance reduction theory, and `k3 KL` has a larger variance than `k1 KL` under a categorical distribution.
+        elif args.advantage_estimator in ["reinforce_baseline", "dr_grpo"]:
+            # REINFORCE++-baseline and Dr. GRPO removed the `/std` in GRPO as `/ std` is not needed in RL variance reduction theory.
+            # And `k3 KL` has a larger variance than `k1 KL` under a categorical distribution.
             rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt).to(device="cuda")
             rewards = rewards - rewards.mean(-1, keepdim=True)
             rewards = rewards.reshape(-1).to(device="cpu").chunk(len(experiences))
@@ -547,8 +547,13 @@ class RemoteExperienceMaker(BaseExperienceMaker):
                     kwargs["gamma"],
                     kwargs["lambd"],
                 )
-            elif self.advantage_estimator in ["reinforce", "rloo", "reinforce_baseline", "group_norm"]:
-                if kwargs["gamma"] != 1.0 and self.advantage_estimator in ["rloo", "reinforce_baseline", "group_norm"]:
+            elif self.advantage_estimator in ["reinforce", "rloo", "reinforce_baseline", "group_norm", "dr_grpo"]:
+                if kwargs["gamma"] != 1.0 and self.advantage_estimator in [
+                    "rloo",
+                    "reinforce_baseline",
+                    "group_norm",
+                    "dr_grpo",
+                ]:
                     if dist.get_rank() == 0:
                         logger.warning("gamma is set to 1.0 for rloo, reinforce_baseline, and group_norm")
                     kwargs["gamma"] = 1.0
