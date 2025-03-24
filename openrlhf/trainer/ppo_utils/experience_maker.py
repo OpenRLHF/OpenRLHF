@@ -768,8 +768,9 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             refs.append(
                 llm.add_requests.remote(rank, sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
             )
+        ray.get(refs)
 
-        # Waiting for all requests to be sent to avoid ray object race condition
+        # Waiting for all requests to be sent
         if self.strategy.ring_attn_group is not None:
             if self.ring_rank0_group is None:
                 world_size = dist.get_world_size()
@@ -780,8 +781,7 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             dist.barrier(group=self.ring_rank0_group)
         else:
             dist.barrier()
-
-        ray.get(refs)
+        torch.cuda.synchronize()
 
         # Retrieve and combine results from all outputs
         all_output_refs = []
