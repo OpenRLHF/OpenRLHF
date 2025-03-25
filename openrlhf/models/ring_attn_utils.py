@@ -82,8 +82,9 @@ def pad_sequences(sequences, attention_mask, num_actions, packed_seq_lens, ring_
         pad_len = (ring_attn_size - seqlen % ring_attn_size) % ring_attn_size
         padded = torch.tensor([pad_token_id] * pad_len, device=sequences.device, dtype=sequences.dtype).unsqueeze(0)
         sequences = torch.cat([sequences, padded], dim=1)
+        max_seq_id = attention_mask.max().item()
         attention_mask = torch.cat(
-            [attention_mask, (len(sequences) + 1) * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=-1
+            [attention_mask, (max_seq_id + 1) * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=-1
         )
     elif isinstance(sequences, list):
         seqlen = len(sequences)
