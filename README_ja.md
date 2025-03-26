@@ -100,7 +100,7 @@ sudo pip uninstall xgboost transformer_engine flash_attn -y
 # pip install
 pip install openrlhf
 
-# vLLM加速を使用する場合（vLLM 0.8.1をインストール）
+# vLLM加速を使用する場合（vLLM 0.8.2をインストール）
 pip install openrlhf[vllm]
 # 最新のvLLMもサポートされています
 pip install openrlhf[vllm_latest]
@@ -115,7 +115,7 @@ pip install -e .
 ```
 
 > [!NOTE]
->vLLM 0.8.1以降の使用をお勧めします。
+>vLLM 0.8.2以降の使用をお勧めします。
 >`export VLLM_USE_V1=1`はvLLM 0.8.2以降またはNightlyバージョンが必要で、`export VLLM_ENABLE_V1_MULTIPROCESSING=0`を有効にする必要があります。
 >また、[vLLM用のDockerfile](./dockerfile/)および[Nvidia-Dockerのワンクリックインストールスクリプト](./examples/scripts/nvidia_docker_install.sh)も提供しています。
 
