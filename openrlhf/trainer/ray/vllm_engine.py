@@ -33,15 +33,12 @@ class LLMRayActor:
             # stop ray from manipulating CUDA_VISIBLE_DEVICES
             # at the top-level when the distributed_executor_backend is ray.
             os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-            os.environ.pop("ASCEND_RT_VISIBLE_DEVICES", None)
         elif noset_visible_devices:
             # We need to set CUDA_VISIBLE_DEVICES to the ray assigned GPU
             # when the distributed_executor_backend is not ray and
             # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES is set.
             if ACCELERATOR_TYPE == "GPU":
                 os.environ["CUDA_VISIBLE_DEVICES"] = str(ray.get_gpu_ids()[0])
-            elif ACCELERATOR_TYPE == "NPU":
-                os.environ["ASCEND_RT_VISIBLE_DEVICES"] = str(ray.get_runtime_context().get_accelerator_ids()[ACCELERATOR_TYPE][0])
 
         num_gpus = kwargs.pop("num_gpus")
         if bundle_indices is not None:
@@ -132,7 +129,10 @@ def create_vllm_engines(
     assert vllm.__version__ >= "0.7.2", "OpenRLHF only supports vllm >= 0.7.2"
 
     vllm_engines = []
-    distributed_executor_backend = "uni" if tensor_parallel_size == 1 else "ray"
+    if ACCELERATOR_TYPE == "GPU":
+        distributed_executor_backend = "uni" if tensor_parallel_size == 1 else "ray"
+    elif ACCELERATOR_TYPE == "NPU":
+        distributed_executor_backend = "uni" if tensor_parallel_size == 1 else "mp"
     use_hybrid_engine = shared_pg is not None
     num_gpus = int(tensor_parallel_size == 1)
     if use_hybrid_engine and tensor_parallel_size == 1:
@@ -140,7 +140,7 @@ def create_vllm_engines(
         # 2 instances on the same GPUs.
         num_gpus = 0.2
 
-    if not use_hybrid_engine:
+    if not use_hybrid_engine and ACCELERATOR_TYPE == "GPU":
         # Create a big placement group to ensure that all engines are packed
         bundles = [{ACCELERATOR_TYPE: 1, "CPU": 1} for _ in range(num_engines * tensor_parallel_size)]
         shared_pg = placement_group(bundles, strategy="PACK")
@@ -166,8 +166,8 @@ def create_vllm_engines(
             LLMRayActor.options(
                 num_cpus=num_gpus,
                 num_gpus=num_gpus if ACCELERATOR_TYPE == "GPU" else 0,
-                resources=None if ACCELERATOR_TYPE =="GPU" else {ACCELERATOR_TYPE: num_gpus},
-                scheduling_strategy=scheduling_strategy,
+                resources=None if ACCELERATOR_TYPE =="GPU" else {ACCELERATOR_TYPE: tensor_parallel_size},
+                scheduling_strategy=scheduling_strategy if ACCELERATOR_TYPE == "GPU" else None,
             ).remote(
                 model=pretrain,
                 enforce_eager=enforce_eager,
@@ -181,7 +181,7 @@ def create_vllm_engines(
                 trust_remote_code=True,
                 num_actors=num_actors,
                 gpu_memory_utilization=gpu_memory_utilization,
-                bundle_indices=bundle_indices,
+                bundle_indices=bundle_indices if ACCELERATOR_TYPE == "GPU" else None,
                 num_gpus=0.2 if use_hybrid_engine else 1,
                 enable_sleep_mode=vllm_enable_sleep,
                 noset_visible_devices=ray_noset_visible_devices(),

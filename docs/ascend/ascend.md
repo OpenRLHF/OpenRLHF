@@ -34,9 +34,7 @@ VLLM_TARGET_DEVICE=empty pip install .
 git clone -b v0.7.3-dev https://github.com/vllm-project/vllm-ascend.git
 cd vllm-ascend
 pip install -e .
-```
-
-> 当前设置 vllm tp>1 报错，正在修复中。 
+``` 
 
 ### 源码安装
 
