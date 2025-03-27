@@ -530,6 +530,11 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             experience = experience.to_device("cuda")
             reward = reward.to(device="cuda")
             num_actions = experience.info["num_actions"]
+
+            if self.advantage_estimator in ["group_norm"] and generate_kwargs["gamma"] == 0:
+                eos_reward = False
+            else:
+                eos_reward = True
             reward = compute_reward(
                 reward,
                 self.kl_ctl.value,
@@ -537,6 +542,7 @@ class RemoteExperienceMaker(BaseExperienceMaker):
                 action_mask=experience.action_mask,
                 num_actions=num_actions,
                 reward_clip_range=args.reward_clip_range,
+                eos_reward=eos_reward,
             )
 
             if self.advantage_estimator == "gae":
