@@ -104,11 +104,8 @@ def make_experience_batch(items: List[BufferItem], packing_samples=False) -> Exp
     )
     for key in keys:
         vals = [getattr(item, key) for item in items]
-        if not packing_samples:
-            batch_data = zero_pad_sequences(vals, "left") if vals[0] is not None else None
-        else:
-            batch_data = vals if vals[0] is not None else None
-        kwargs[key] = batch_data
+        vals = torch.stack(vals, dim=0) if vals[0] is not None else None
+        kwargs[key] = vals
 
     kwargs["info"] = {}
     for key in items[0].info.keys():
@@ -182,9 +179,6 @@ class NaiveReplayBuffer(ABC):
         if self.cpu_offload:
             experience.to_device(torch.device("cpu"))
         items = split_experience_batch(experience)
-        # the packed samples comes with no padding
-        if not self.packing_samples:
-            items = remove_padding_in_sequences(items)
         self.items.extend(items)
         if self.limit > 0:
             samples_to_remove = len(self.items) - self.limit
@@ -222,13 +216,8 @@ class NaiveReplayBuffer(ABC):
 
         items_vector = torch.cat(items).float().flatten()
 
-        if action_masks[0] is None:
-            # packing samples has no action mask
-            action_masks_vector = 1
-            num_actions = items_vector.numel()
-        else:
-            action_masks_vector = torch.cat(action_masks).flatten()
-            num_actions = action_masks_vector.sum()
+        action_masks_vector = torch.cat(action_masks).flatten()
+        num_actions = action_masks_vector.sum()
 
         # for DP
         # mean

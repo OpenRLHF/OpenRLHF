@@ -9,7 +9,6 @@ from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
 from openrlhf.models import get_llm_for_sequence_regression
-from openrlhf.models.ring_attn_utils import pad_sequences, unpad_sequences
 from openrlhf.models.utils import masked_mean
 from openrlhf.trainer import BasePPOTrainer
 from openrlhf.trainer.ppo_utils import Experience
@@ -63,52 +62,23 @@ class CriticPPOTrainer(BasePPOTrainer):
     def training_step(self, experience: Experience) -> Dict[str, float]:
         self.critic.train()
 
-        # TODO: this is a bad indicator to say that data is packed...
-        if isinstance(experience.sequences, list):
-            sequences = torch.cat(experience.sequences, dim=0).unsqueeze(0)
-            old_values = torch.cat(experience.values, dim=0).unsqueeze(0)
-            returns = torch.cat(experience.returns, dim=0).unsqueeze(0)
-            num_actions = [v.numel() for v in experience.advantages]
-            packed_seq_lens = [s.numel() for s in experience.sequences]
-            attention_mask = torch.cat(
-                [torch.full_like(s, i + 1) for i, s in enumerate(experience.sequences)], dim=0
-            ).unsqueeze(0)
-            # pad seq makes the sequence len a multiple of ring_attention_size.
-            if self.strategy.ring_attn_group is not None:
-                pad_len, sequences, attention_mask, num_actions, packed_seq_lens = pad_sequences(
-                    sequences, attention_mask, num_actions, packed_seq_lens, self.strategy.ring_attn_group
-                )
-
-        else:
-            sequences = experience.sequences
-            old_values = experience.values
-            returns = experience.returns
-            num_actions = experience.action_mask.size(1)
-            packed_seq_lens = None
-            attention_mask = experience.attention_mask
+        sequences = experience.sequences
+        old_values = experience.values
+        returns = experience.returns
+        action_mask = experience.action_mask
+        packed_seq_lens = None
+        attention_mask = experience.attention_mask
 
         # critic loss
         values, output = self.critic(
             sequences,
-            num_actions=num_actions,
+            action_mask=action_mask,
             attention_mask=attention_mask,
             return_output=True,
             ring_attn_group=self.strategy.ring_attn_group,
             values_allgather=True,
             packed_seq_lens=packed_seq_lens,
         )
-        # unpad sequence ensures that pad tokens do not contribute to the loss calculation
-        if self.strategy.ring_attn_group is not None:
-            assert pad_len is not None
-            sequences, attention_mask, num_actions, packed_seq_lens, _, values, _ = unpad_sequences(
-                pad_len=pad_len,
-                sequences=sequences,
-                attention_mask=attention_mask,
-                num_actions=num_actions,
-                packed_seq_lens=packed_seq_lens,
-                values=values,
-                ring_attn_group=self.strategy.ring_attn_group,
-            )
 
         # loss function
         critic_loss = self.critic_loss_fn(
@@ -226,7 +196,7 @@ class CriticModelRayActor(BasePPORole):
     def forward(
         self,
         sequences: torch.LongTensor,
-        num_actions: Optional[Union[int, list[int]]] = None,
+        action_mask: Optional[Union[int, list[int]]] = None,
         attention_mask: Optional[torch.Tensor] = None,
         packed_seq_lens=None,
     ) -> torch.Tensor:
@@ -236,7 +206,7 @@ class CriticModelRayActor(BasePPORole):
         with torch.no_grad():
             value = self.critic(
                 sequences.to(device),
-                num_actions,
+                action_mask.to(device),
                 attention_mask.to(device),
                 ring_attn_group=self.strategy.ring_attn_group,
                 values_allgather=True,
