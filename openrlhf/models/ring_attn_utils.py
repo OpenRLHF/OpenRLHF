@@ -59,14 +59,18 @@ def update_ring_attn_params(packed_seq_lens, total_seq_len):
 
     update_ring_flash_attn_params(cu_seqlens, RING_ATTN_GROUP)
 
-
-def convert_ring_attn_params(sequences, attention_mask, packed_seq_lens, ring_attn_group):
-    # each rank within the ring group will process sequences[start:end]
+def get_slice_in_this_ring_attn_rank(total_seq_len, ring_attn_group):
     ring_attn_rank = dist.get_rank(group=ring_attn_group)
     ring_attn_size = dist.get_world_size(group=ring_attn_group)
-    total_seq_len = sequences.numel()
+    assert total_seq_len % ring_attn_size == 0, f"total_seq_len {total_seq_len} must be divisible by ring_attn_size {ring_attn_size}"
     local_seq_len = total_seq_len // ring_attn_size
     start, end = ring_attn_rank * local_seq_len, (ring_attn_rank + 1) * local_seq_len
+    return start, end
+
+def convert_ring_attn_params(sequences, attention_mask, packed_seq_lens, ring_attn_group, seq_dim=-1):
+    # each rank within the ring group will process sequences[start:end]
+    total_seq_len = sequences.numel()
+    start, end = get_slice_in_this_ring_attn_rank(total_seq_len, ring_attn_group)
     sequences = sequences[:, start:end]
     attention_mask = attention_mask[:, start:end]
     position_ids = reset_ring_attn_position_ids(start, end, packed_seq_lens)
@@ -74,51 +78,16 @@ def convert_ring_attn_params(sequences, attention_mask, packed_seq_lens, ring_at
     return sequences, attention_mask, position_ids
 
 
-def pad_sequences(sequences, attention_mask, num_actions, packed_seq_lens, ring_attn_group, pad_token_id=0):
+def pad_sequences(sequences, attention_mask, packed_seq_lens, ring_attn_group, pad_token_id=0):
     # Pads the input sequences and attention mask to ensure that their lengths are multiples of the ring attention size.
     ring_attn_size = dist.get_world_size(group=ring_attn_group)
+    pad_attn_mask_id = len(packed_seq_lens) + 1
     if isinstance(sequences, torch.Tensor):
         seqlen = sequences.shape[-1]
         pad_len = (ring_attn_size - seqlen % ring_attn_size) % ring_attn_size
-        padded = torch.tensor([pad_token_id] * pad_len, device=sequences.device, dtype=sequences.dtype).unsqueeze(0)
-        sequences = torch.cat([sequences, padded], dim=1)
-        max_seq_id = attention_mask.max().item()
-        attention_mask = torch.cat(
-            [attention_mask, (max_seq_id + 1) * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=-1
-        )
-    elif isinstance(sequences, list):
-        seqlen = len(sequences)
-        pad_len = (ring_attn_size - seqlen % ring_attn_size) % ring_attn_size
-        sequences += [pad_token_id] * pad_len
-        attention_mask += [len(packed_seq_lens) + 1] * pad_len
+        sequences = torch.nn.functional.pad(sequences, (0, pad_len), value=pad_attn_mask_id)
+        attention_mask = torch.nn.functional.pad(attention_mask, (0, pad_len), value=pad_attn_mask_id)
     else:
         raise "sequences is not available type"
-    num_actions[-1] += pad_len
     packed_seq_lens[-1] += pad_len
-    return pad_len, sequences, attention_mask, num_actions, packed_seq_lens
-
-
-def unpad_sequences(
-    pad_len,
-    sequences,
-    attention_mask,
-    num_actions,
-    packed_seq_lens,
-    ring_attn_group,
-    action_log_probs=None,
-    values=None,
-    kl=None,
-):
-    # Removes the padding from the input sequences, attention mask, and other optional tensors after padding.
-    if pad_len > 0:
-        sequences = sequences[:, :-pad_len]
-        attention_mask = attention_mask[:, :-pad_len]
-        num_actions[-1] -= pad_len
-        packed_seq_lens[-1] -= pad_len
-        if action_log_probs is not None:
-            action_log_probs = action_log_probs[:, :-pad_len]
-        if values is not None:
-            values = values[:, :-pad_len]
-        if kl is not None:
-            kl = kl[:, :-pad_len]
-    return sequences, attention_mask, num_actions, packed_seq_lens, action_log_probs, values, kl
+    return pad_len, sequences, attention_mask, packed_seq_lens

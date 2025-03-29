@@ -4,13 +4,14 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 from flash_attn.utils.distributed import all_gather
+from flash_attn.bert_padding import pad_input, unpad_input, rearrange, index_first_axis
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
 from torch.nn import functional as F
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
-from .ring_attn_utils import convert_ring_attn_params
+from .ring_attn_utils import convert_ring_attn_params, pad_sequences, get_slice_in_this_ring_attn_rank
 from .utils import log_probs_from_logits, reset_position_ids
 
 
@@ -197,7 +198,7 @@ class Actor(nn.Module):
     def forward(
         self,
         sequences: torch.LongTensor,
-        num_actions: Optional[Union[int, list[int]]] = None,
+        action_mask: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         return_output=False,
         ring_attn_group: Optional[dist.ProcessGroup] = None,
@@ -205,67 +206,63 @@ class Actor(nn.Module):
         packed_seq_lens: Optional[list[int]] = None,
     ) -> torch.Tensor:
         """Returns action log probs"""
-        if not self.packing_samples:
-            # https://github.com/OpenRLHF/OpenRLHF/issues/217
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
-        else:
-            # convert attention_mask to position_ids
+        batch, seqlen = sequences.size()
+        labels = torch.roll(sequences, shifts=-1, dims=1)
+        if self.packing_samples:
+            # operate the sequences:
+            # 1. remove padding, unpad the sequences from (batch, seqlen) to (1, total_seqs)
+            # 2. adapt to ring_attn_group, pad the sequences to divisible by ring_attn_group
+            # 3. get the sequences in current ring_attn_rank, the sequences len is total_seqs + pad_len // len(ring_attn_group)
+            sequences, indices, cu_seqlens, _, _ = unpad_input(sequences.unsqueeze(-1), attention_mask)  # sequences: (total_seqs, 1)
+            sequences = sequences.transpose(0, 1)  # (1, total_seqs)
+            packed_seq_lens = [cu_seqlens[i] - cu_seqlens[i-1] for i in range(1, len(cu_seqlens))]
+            labels = index_first_axis(rearrange(labels.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(0, 1) # (1, total_seqs)
+            position_ids = torch.clip(torch.cumsum(attention_mask, dim=-1) - 1, min=0, max=None)
+            position_ids = index_first_axis(
+                rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(0, 1) # (1, total_seqs)
             if ring_attn_group is not None:
-                labels = sequences
+                pad_len, sequences, attention_mask, packed_seq_lens = pad_sequences(
+                    sequences=sequences,
+                    attention_mask=attention_mask,
+                    packed_seq_lens=packed_seq_lens,
+                    ring_attn_group=ring_attn_group,
+                    pad_token_id=0,
+                )
+                labels = torch.nn.functional.pad(labels, (0, pad_len), value=0)
+
                 sequences, attention_mask, position_ids = convert_ring_attn_params(
                     sequences, attention_mask, packed_seq_lens, ring_attn_group
                 )
-            else:
-                position_ids = reset_position_ids(attention_mask)
-            # explicitly ignore attention_mask for packing_samples
+                start, end = get_slice_in_this_ring_attn_rank(labels.numel(), ring_attn_group)
+                labels = labels[:, start:end]
+            labels = labels.squeeze(0)
             attention_mask = None
+        else:
+            # https://github.com/OpenRLHF/OpenRLHF/issues/217
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
 
         output = self.model(sequences, attention_mask=attention_mask, position_ids=position_ids)
         # https://github.com/OpenRLHF/OpenRLHF/pull/634
         output["logits"] = output["logits"].to(torch.float32)
 
-        if num_actions is None:
+        if action_mask is None:
             assert return_output
             return output
 
-        if not self.packing_samples:
-            log_probs = log_probs_from_logits(
-                output["logits"][:, :-1, :], sequences[:, 1:], temperature=self.temperature
-            )
-            action_log_probs = log_probs[:, -num_actions:]
-        else:
-            if ring_attn_group is not None and logps_allgather:
-                rank = dist.get_rank(ring_attn_group)
-                ring_attn_size = dist.get_world_size(ring_attn_group)
-                total_seq_len = labels.numel()
-                local_seq_len = total_seq_len // ring_attn_size
-                local_slice = slice(rank * local_seq_len + 1, (rank + 1) * local_seq_len + 1)
-                local_label = labels[:, local_slice]
-                if rank == ring_attn_size - 1:
-                    # add a dummy label to the last logit
-                    local_label = F.pad(local_label, (0, 1), value=0)
-                logits = output["logits"]
-                if self.temperature != 1.0:
-                    logits = logits.div(self.temperature)
-                local_per_token_logps = torch.gather(
-                    logits.log_softmax(-1), dim=2, index=local_label.unsqueeze(2)
-                ).squeeze(2)
-                per_token_logps = all_gather(local_per_token_logps, ring_attn_group).reshape((1, -1))
-                log_probs = per_token_logps[:, :-1]
-            else:
-                log_probs = log_probs_from_logits(
-                    output["logits"][:, :-1, :], sequences[:, 1:], temperature=self.temperature
-                )
+        log_probs = log_probs_from_logits(
+            output["logits"], labels, temperature=self.temperature
+        )
 
-            assert isinstance(num_actions, list) and len(num_actions) == len(packed_seq_lens)
-            action_log_probs = []
-            offset = 0
-            for num_action, seq_len in zip(num_actions, packed_seq_lens):
-                start, end = max(0, offset + seq_len - num_action - 1), offset + seq_len - 1
-                action_log_probs.append(log_probs[:, start:end])
-                offset += seq_len
-            action_log_probs = torch.cat(action_log_probs, dim=1)
+        if self.packing_samples:
+            # The reverse operation to sequences operations
+            if ring_attn_group is not None and logps_allgather:
+                log_probs = all_gather(log_probs.transpose(0, 1), ring_attn_group).transpose(0, 1) # (1, total_seqs)
+                log_probs = log_probs[:, -pad_len:]
+            log_probs = pad_input(log_probs.transpose(0, 1), indices, batch, seqlen).squeeze(-1)  # (batch, seqlen)
+
+        log_probs = log_probs[:, :-1]
+        action_log_probs = log_probs[:, -action_mask.shape[1]:] * action_mask.float()
 
         if return_output:
             return (action_log_probs, output)
