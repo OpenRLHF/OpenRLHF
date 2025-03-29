@@ -11,7 +11,6 @@ import torch.distributed as dist
 import torch.nn as nn
 
 from openrlhf.models.actor import Actor
-from openrlhf.models.ring_attn_utils import pad_sequences, unpad_sequences
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean, unpacking_samples
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
@@ -103,7 +102,6 @@ class Samples:
     attention_mask: (B, S) or (1, total_length), the attention mask for sequences.
     action_mask: (B, A) or None, the action (response) mask to show which part of the
         sequence is the response. When the samples are packed, this is None.
-    num_actions: int or (B,), the number of actions (tokens) in the response.
         When the samples are not packed, we will use action_mask, so this is an int to
         show the size of action_mask. Otherwise, this is a tensor to show the number of
         actions for each sample.
@@ -116,13 +114,45 @@ class Samples:
     sequences: torch.Tensor
     attention_mask: Optional[torch.LongTensor]
     action_mask: Optional[torch.BoolTensor]
-    num_actions: Union[int, torch.Tensor]
-    packed_seq_lens: Optional[torch.Tensor]
     response_length: torch.Tensor
     total_length: torch.Tensor
     prompts: list[str]
     labels: list[str]
-    pad_len: Optional[int]
+
+    def __init__(self,
+                 sequences=None,
+                 attention_mask=None,
+                 action_mask=None,
+                 response_length=None,
+                 total_length=None,
+                 prompts=None,
+                 labels=None,
+                 packed_seq_lens=None):
+        self.sequences = sequences
+        self.attention_mask = attention_mask
+        self.action_mask = action_mask
+        self.response_length = response_length
+        self.total_length = total_length
+        self.prompts = prompts or []
+        self.labels = labels or []
+        self.packed_seq_lens = packed_seq_lens
+
+    def split(self, split_size: int):
+        sequences_list = self.sequences.split(split_size, dim=0)
+        attention_mask_list = self.attention_mask.split(split_size, dim=0)
+        action_mask_list = self.action_mask.split(split_size, dim=0)
+        sample_list = []
+        for i, (seq, mask, action_mask) in enumerate(zip(sequences_list, attention_mask_list, action_mask_list)):
+            sample = Samples()
+            sample.sequences = seq
+            sample.attention_mask = mask
+            sample.action_mask = action_mask
+            sample.response_length = sample.action_mask.float().sum(dim=-1)
+            sample.total_length = sample.attention_mask.float().sum(dim=-1)
+            sample.prompts = self.prompts[i * split_size:(i+1) * split_size]
+            sample.labels = self.labels[i * split_size:(i+1) * split_size]
+            sample_list.append(sample)
+        return sample_list
 
 
 class BaseExperienceMaker(ABC):
@@ -225,19 +255,16 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         if self.strategy.ring_attn_group is not None:
             # Only rank 0 in the ring attention group executes the generation function, and then broadcasts it to all other ranks.
             if self.strategy.ring_attn_rank == 0:
-                samples_list = self.generate_samples(all_prompts, all_labels, **generate_kwargs)
-
-                dist.broadcast_object_list(samples_list, src=dist.get_rank(), group=self.strategy.ring_attn_group)
+                rollout_samples = self.generate_samples(all_prompts, all_labels, **generate_kwargs)
+                dist.broadcast_object_list([rollout_samples], src=dist.get_rank(), group=self.strategy.ring_attn_group)
             else:
-                world_size = torch.distributed.get_world_size() // args.ring_attn_size
-                samples_list = [None] * (
-                    args.rollout_batch_size * args.n_samples_per_prompt // world_size // args.micro_rollout_batch_size
-                )
+                rollout_samples = [None]
                 dist.broadcast_object_list(
-                    samples_list, src=self.strategy.ring_attn_ranks[0], group=self.strategy.ring_attn_group
+                    rollout_samples, src=self.strategy.ring_attn_ranks[0], group=self.strategy.ring_attn_group
                 )
+                rollout_samples = rollout_samples[0]
         else:
-            samples_list = self.generate_samples(all_prompts, all_labels, **generate_kwargs)
+            rollout_samples = self.generate_samples(all_prompts, all_labels, **generate_kwargs)
 
         # vLLM offload when vllm_enable_sleep
         if self.strategy.args.vllm_enable_sleep:
@@ -248,7 +275,7 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         torch.cuda.synchronize()
 
         # Make experiences (models forward: logprobs, values, rewards, and kl divergence)
-        experiences = self.make_experience(samples_list)
+        experiences = self.make_experience(rollout_samples)
 
         # Process experiences (reward shaping, etc.)
         experiences = self.compute_advantages_and_returns(experiences, **generate_kwargs)
@@ -262,25 +289,27 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         return experiences
 
     @torch.no_grad()
-    def make_experience(self, samples_list: List[Samples]) -> List[Experience]:
+    def make_experience(self, rollout_samples: Samples) -> List[Experience]:
         """
         Turn samples into experience by calculating logprobs, values, rewards, and kl divergence.
         """
         start_time = time.time()
         if dist.get_rank() == 0:
-            logger.info(f"🚀 Starting experience making with {len(samples_list) * dist.get_world_size()} batches")
+            logger.info(f"🚀 Starting experience making with {len(rollout_samples.sequences) * dist.get_world_size()} batches")
 
         args = self.strategy.args
         self.actor.eval()
         device = torch.cuda.current_device()
         experiences = []
 
+        # TODO(gzpan): Support dynamic batch later
+        samples_list = rollout_samples.split(args.micro_rollout_batch_size)
+
         # Extract all information from samples in one pass
         # Convert samples into lists of tensors and metadata for batch processing
         sequences_list = [s.sequences for s in samples_list]
         attention_mask_list = [s.attention_mask for s in samples_list]
-        num_actions_list = [s.num_actions for s in samples_list]
-        packed_seq_lens_list = [s.packed_seq_lens for s in samples_list]
+        action_mask_list = [s.action_mask for s in samples_list]
         prompts_list = [p for s in samples_list for p in s.prompts]
         labels_list = [l for s in samples_list for l in s.labels]
 
@@ -292,10 +321,9 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         if self.initial_model is not None:
             base_action_log_probs_ref = self.initial_model.forward_batch.remote(
                 sequences=sequences_cpu_list,
-                num_actions=num_actions_list,
+                action_mask=action_mask_list,
                 attention_mask=attention_mask_cpu_list,
                 logps_allgather=[True] * len(samples_list),
-                packed_seq_lens=packed_seq_lens_list,
             )
 
             if args.colocate_actor_ref or args.colocate_all_models:
@@ -308,9 +336,8 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         if self.critic is not None:
             value_ref = self.critic.forward_batch.remote(
                 sequences=sequences_cpu_list,
-                num_actions=num_actions_list,
+                action_mask=action_mask_list,
                 attention_mask=attention_mask_cpu_list,
-                packed_seq_lens=packed_seq_lens_list,
             )
             if args.colocate_critic_reward or args.colocate_all_models:
                 ray.get([value_ref])
@@ -326,25 +353,12 @@ class RemoteExperienceMaker(BaseExperienceMaker):
                     rm.forward_batch.remote(
                         sequences=sequences_cpu_list,
                         attention_mask=attention_mask_cpu_list,
-                        packed_seq_lens=packed_seq_lens_list,
                         pad_sequence=[True] * len(samples_list),
                     )
                 )
         else:
             if self.strategy.ring_attn_group is None or self.strategy.ring_attn_rank == 0:
-                queries_list = []
-                for i, (seq, packed_lens) in enumerate(zip(sequences_cpu_list, packed_seq_lens_list)):
-                    if not self.packing_samples:
-                        queries = self.tokenizer.batch_decode(seq, skip_special_tokens=False)
-                    else:
-                        sequences_list = []
-                        offset = 0
-                        tokens_list = seq.tolist()[0]
-                        for length in packed_lens:
-                            sequences_list.append(tokens_list[offset : offset + length])
-                            offset += length
-                        queries = self.tokenizer.batch_decode(sequences_list, skip_special_tokens=False)
-                    queries_list.extend(queries)
+                queries_list = sum([self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in sequences_cpu_list], [])
 
                 if self.custom_reward_func:
                     r = self.custom_reward_func.remote(queries_list, prompts_list, labels_list)
@@ -362,16 +376,15 @@ class RemoteExperienceMaker(BaseExperienceMaker):
 
         # Batch call actor model
         action_log_probs_list = []
-        for seq, num_acts, attn_mask, packed_lens in zip(
-            sequences_cpu_list, num_actions_list, attention_mask_cpu_list, packed_seq_lens_list
+        for seq, action_mask, attn_mask in zip(
+            sequences_cpu_list, action_mask_list, attention_mask_cpu_list
         ):
             action_log_probs = self.actor(
                 seq.to(device),
-                num_acts,
+                action_mask,
                 attn_mask.to(device),
                 ring_attn_group=self.strategy.ring_attn_group,
                 logps_allgather=True,
-                packed_seq_lens=packed_lens,
             )
             action_log_probs_list.append(action_log_probs)
 
@@ -415,43 +428,15 @@ class RemoteExperienceMaker(BaseExperienceMaker):
                 kl = compute_approx_kl(
                     action_log_probs,
                     base_action_log_probs,
-                    action_mask=samples.action_mask,
                     kl_estimator=self.strategy.args.kl_estimator,
                 )
             else:
                 kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
 
+            kl_mean = masked_mean(kl, None, dim=-1)
+
             sequences = samples.sequences
             attention_mask = samples.attention_mask
-            if not self.packing_samples:
-                kl_mean = masked_mean(kl, samples.action_mask, dim=-1)
-            else:
-                num_actions = samples.num_actions
-                packed_seq_lens = samples.packed_seq_lens
-                if self.strategy.ring_attn_group is not None:
-                    assert samples.pad_len is not None
-                    sequences, attention_mask, num_actions, packed_seq_lens, _, _, kl = unpad_sequences(
-                        pad_len=samples.pad_len,
-                        sequences=sequences,
-                        attention_mask=attention_mask,
-                        num_actions=num_actions,
-                        packed_seq_lens=packed_seq_lens,
-                        ring_attn_group=self.strategy.ring_attn_group,
-                        action_log_probs=action_log_probs,
-                        values=value,
-                        kl=kl,
-                    )
-                # Convert tensor into list of tensors for easier manipulation within dataset
-                sequences = unpacking_samples(sequences, packed_seq_lens)
-                attention_mask = None
-                action_log_probs = unpacking_samples(action_log_probs, num_actions)
-                if value is not None:
-                    value = unpacking_samples(value, num_actions)
-                if base_action_log_probs is not None:
-                    base_action_log_probs = unpacking_samples(base_action_log_probs, num_actions)
-
-                kl = unpacking_samples(kl, num_actions)
-                kl_mean = torch.tensor([each_kl.mean() for each_kl in kl], device=device)
 
             if not args.use_kl_loss:
                 base_action_log_probs = None
@@ -461,7 +446,6 @@ class RemoteExperienceMaker(BaseExperienceMaker):
                 "reward": r,
                 "response_length": samples.response_length,
                 "total_length": samples.total_length,
-                "num_actions": samples.num_actions,
             }
 
             if self.strategy.args.perf:
@@ -529,13 +513,11 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         for experience, reward in zip(experiences, rewards):
             experience = experience.to_device("cuda")
             reward = reward.to(device="cuda")
-            num_actions = experience.info["num_actions"]
             reward = compute_reward(
                 reward,
                 self.kl_ctl.value,
                 experience.kl,
                 action_mask=experience.action_mask,
-                num_actions=num_actions,
                 reward_clip_range=args.reward_clip_range,
             )
 
@@ -577,7 +559,6 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             experience.info["return"] = return_sums
             # remove unnecessary info
             experience.kl = None
-            del experience.info["num_actions"]
             experience.to_device("cpu")
 
         return experiences
@@ -611,17 +592,6 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         - advantages: Tensor of shape (batch_size, response_size)
         - returns: Tensor of shape (batch_size, response_size)
         """
-        if isinstance(values, list):
-            # packing samples
-            # TODO: this is slow...
-            advantages = []
-            returns = []
-            for v, r in zip(values, rewards):
-                adv, ret = self.get_advantages_and_returns(v.unsqueeze(0), r.unsqueeze(0), action_mask, gamma, lambd)
-                advantages.append(adv.squeeze(0))
-                returns.append(ret.squeeze(0))
-            return advantages, returns
-
         lastgaelam = 0
         advantages_reversed = []
         response_length = rewards.size(1)
@@ -659,16 +629,6 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         Output:
         - returns: Tensor of shape (batch_size, response_size)
         """
-
-        if isinstance(rewards, list):
-            # packing samples
-            # TODO: this is slow...
-            returns = []
-            for r in rewards:
-                ret = self.get_cumulative_returns(r.unsqueeze(0), action_mask, gamma)
-                returns.append(ret.squeeze(0))
-            return returns
-
         response_length = rewards.size(1)
         returns = torch.zeros_like(rewards)
         cumulative_return = torch.zeros(rewards.size(0), device=rewards.device)
@@ -685,7 +645,7 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         return returns
 
     @torch.no_grad()
-    def generate_samples(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Samples]:
+    def generate_samples(self, all_prompts: List[str], all_labels, **generate_kwargs) -> Samples:
         """
         Generate samples and return in batches.
 
@@ -699,7 +659,7 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         return self._generate_vllm(all_prompts, all_labels, **generate_kwargs)
 
     @torch.no_grad()
-    def _generate_with_hf(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Samples]:
+    def _generate_with_hf(self, all_prompts: List[str], all_labels, **generate_kwargs) -> Samples:
         """
         Generate samples and return in batches.
         """
@@ -709,28 +669,31 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         # sample multiple response
         all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
         all_labels = sum([[label] * args.n_samples_per_prompt for label in all_labels], [])
-        samples_list = []
+        rollout_sequences = []
+        rollout_attention_mask = []
+        rollout_action_mask = []
         for i in range(0, len(all_prompts), args.micro_rollout_batch_size):
             prompts = all_prompts[i : i + args.micro_rollout_batch_size]
-            labels = all_labels[i : i + args.micro_rollout_batch_size]
             inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
             sequences, attention_mask, action_mask = self.actor.generate(**inputs, **generate_kwargs)
-            samples = Samples(
-                sequences=sequences,
-                attention_mask=attention_mask,
-                action_mask=action_mask,
-                num_actions=action_mask.size(1),
-                packed_seq_lens=None,
-                response_length=action_mask.float().sum(dim=-1),
-                total_length=attention_mask.float().sum(dim=-1),
-                prompts=prompts,
-                labels=labels,
-                pad_len=None,
-            )
-            samples_list.append(samples)
-        return samples_list
+            rollout_sequences.append(sequences)
+            rollout_attention_mask.append(attention_mask)
+            rollout_action_mask.append(action_mask)
+        rollout_sequences = torch.cat(rollout_sequences, dim=0)
+        rollout_attention_mask = torch.cat(rollout_attention_mask, dim=0)
+        rollout_action_mask = torch.cat(rollout_action_mask, dim=0)
+        rollout_samples = Samples(
+            sequences=rollout_sequences,
+            attention_mask=rollout_attention_mask,
+            action_mask=rollout_action_mask,
+            response_length=rollout_action_mask.float().sum(dim=-1),
+            total_length=rollout_attention_mask.float().sum(dim=-1),
+            prompts=all_prompts,
+            labels=all_labels,
+        )
+        return rollout_samples
 
-    def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> List[Samples]:
+    def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> Samples:
         from vllm import SamplingParams
 
         # round-robin load balance
@@ -789,111 +752,55 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             all_output_refs.append(llm.get_responses.remote(rank))
         all_outputs = sum(ray.get(all_output_refs), [])
 
-        samples_list = []
-        for i in range(0, len(all_outputs), args.micro_rollout_batch_size):
-            outputs = all_outputs[i : i + self.strategy.args.micro_rollout_batch_size]
-            prompts = all_prompts[i : i + self.strategy.args.micro_rollout_batch_size]
-            labels = all_labels[i : i + self.strategy.args.micro_rollout_batch_size]
-            if not self.packing_samples:
-                # NOTE: concat all outputs to following format:
-                #
-                # | [PAD] [PAD] token token token | token token [EOS] [PAD] |
-                # | token token token token token | token token [EOS] [PAD] |
-                # | [PAD] [PAD] [PAD] token token | token token token [EOS] |
-                # |<---------- prompt ----------->|<-------- answer ------->|
-                max_input_len, max_output_len = 0, 0
-                for output in outputs:
-                    max_input_len = max(max_input_len, len(output.prompt_token_ids))
-                    max_output_len = max(max_output_len, len(output.outputs[0].token_ids))
+        #
+        # NOTE: concat all outputs to following format:
+        #
+        # | [PAD] [PAD] token token token | token token [EOS] [PAD] |
+        # | token token token token token | token token [EOS] [PAD] |
+        # | [PAD] [PAD] [PAD] token token | token token token [EOS] |
+        # |<---------- prompt ----------->|<-------- answer ------->|
+        max_input_len, max_output_len = 0, 0
+        for output in all_outputs:
+            max_input_len = max(max_input_len, len(output.prompt_token_ids))
+            max_output_len = max(max_output_len, len(output.outputs[0].token_ids))
 
-                pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
-                sequences = []
-                for output in outputs:
-                    # left padding input
-                    input_len = len(output.prompt_token_ids)
-                    input_ids = [pad_token_id] * (max_input_len - input_len) + list(output.prompt_token_ids)
+        pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
+        sequences = []
+        for output in all_outputs:
+            # left padding input
+            # TODO(gzpan): check if trunc input to max_input_len?
+            input_len = len(output.prompt_token_ids)
+            input_ids = [pad_token_id] * (max_input_len - input_len) + list(output.prompt_token_ids)
 
-                    # right padding output
-                    output_len = len(output.outputs[0].token_ids)
-                    output_ids = list(output.outputs[0].token_ids) + [pad_token_id] * (max_output_len - output_len)
+            # right padding output
+            # TODO(gzpan): check if trunc output to max_output_len?
+            output_len = len(output.outputs[0].token_ids)
+            output_ids = list(output.outputs[0].token_ids) + [pad_token_id] * (max_output_len - output_len)
 
-                    # concat input and output
-                    sequences.append(input_ids + output_ids)
+            # concat input and output
+            sequences.append(input_ids + output_ids)
 
-                sequences = torch.tensor(sequences)
-                sequences, attention_mask, action_mask = self.actor.process_sequences(
-                    sequences, max_input_len, eos_token_id, pad_token_id
-                )
-                sequences = sequences.to("cuda")
-                attention_mask = attention_mask.to("cuda")
-                action_mask = action_mask.to("cuda")
-                samples_list.append(
-                    Samples(
-                        sequences=sequences,
-                        attention_mask=attention_mask,
-                        action_mask=action_mask,
-                        num_actions=action_mask.size(1),
-                        packed_seq_lens=None,
-                        response_length=action_mask.float().sum(dim=-1),
-                        total_length=attention_mask.float().sum(dim=-1),
-                        prompts=prompts,
-                        labels=labels,
-                        pad_len=None,
-                    )
-                )
-            else:
-                # NOTE: concat all outputs to following format:
-                #
-                # | token token token | token token [EOS] | token token token token token | token token [EOS] | token token | token token token [EOS] |
-                # |<---  prompt ----->|<---- answer ----->|<---------- prompt ----------->|<----- answer ---->|<- prompt -->|<-------- answer ------->|
-                pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
-                sequences = []
-                packed_seq_lens = []
-                attention_mask = []
-                num_actions = []
-                for i, output in enumerate(outputs):
-                    input_len = len(output.prompt_token_ids)
-                    output_len = len(output.outputs[0].token_ids)
-                    packed_seq_lens.append(input_len + output_len)
-                    sequences.extend(output.prompt_token_ids + list(output.outputs[0].token_ids))
-                    attention_mask.extend([i + 1] * (input_len + output_len))
+        sequences = torch.tensor(sequences)
+        sequences, attention_mask, action_mask = self.actor.process_sequences(
+            sequences, max_input_len, eos_token_id, pad_token_id
+        )
+        sequences = sequences.to("cuda")
+        attention_mask = attention_mask.to("cuda")
+        action_mask = action_mask.to("cuda")
+        response_length = action_mask.float().sum(dim=-1)
+        total_length=attention_mask.float().sum(dim=-1)
 
-                    # current_action_mask = [0] * (input_len - 1) + [1] * output_len + [0]
-                    # num_actions.append(max(1, sum(current_action_mask)))
-                    num_actions.append(max(1, output_len))
+        rollout_samples = Samples(
+            sequences=sequences,
+            attention_mask=attention_mask,
+            action_mask=action_mask,
+            response_length=response_length,
+            total_length=total_length,
+            prompts=all_prompts,
+            labels=all_labels,
+        )
 
-                # pad seq makes the sequence a multiple of ring_attention_size.
-                pad_len = None
-                if self.strategy.ring_attn_group is not None:
-                    pad_len, sequences, attention_mask, num_actions, packed_seq_lens = pad_sequences(
-                        sequences=sequences,
-                        attention_mask=attention_mask,
-                        num_actions=num_actions,
-                        packed_seq_lens=packed_seq_lens,
-                        ring_attn_group=self.strategy.ring_attn_group,
-                        pad_token_id=pad_token_id,
-                    )
-
-                sequences = torch.tensor(sequences, device="cuda").unsqueeze(0)
-                attention_mask = torch.tensor(attention_mask, device="cuda").unsqueeze(0)
-                action_mask = None
-                response_length = torch.tensor(num_actions, device="cuda", dtype=torch.float)
-                total_length = torch.tensor(packed_seq_lens, device="cuda", dtype=torch.float)
-                samples_list.append(
-                    Samples(
-                        sequences=sequences,
-                        attention_mask=attention_mask,
-                        action_mask=None,
-                        num_actions=num_actions,
-                        packed_seq_lens=packed_seq_lens,
-                        response_length=response_length,
-                        total_length=total_length,
-                        prompts=prompts,
-                        labels=labels,
-                        pad_len=pad_len,
-                    )
-                )
-        return samples_list
+        return rollout_samples
 
     def flush(self):
         "Ensure all experience has been send to critic"
