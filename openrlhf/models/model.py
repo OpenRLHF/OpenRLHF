@@ -1,10 +1,10 @@
-from typing import Optional, Union
+from typing import Optional
 
 import deepspeed
 import torch
 import torch.nn as nn
+from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
 from flash_attn.utils.distributed import all_gather
-from flash_attn.bert_padding import pad_input, unpad_input, rearrange, index_first_axis
 from peft import LoraConfig, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
@@ -13,7 +13,6 @@ from transformers.integrations.deepspeed import HfDeepSpeedConfig
 from openrlhf.utils.logging_utils import init_logger
 
 from .ring_attn_utils import convert_ring_attn_params, pad_sequences
-from .utils import reset_position_ids
 
 logger = init_logger(__name__)
 
@@ -198,10 +197,11 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 # 3. get the sequences in current ring_attn_rank, the sequences len is total_seqs + pad_len // len(ring_attn_group)
                 input_ids, indices, cu_seqlens, _, _ = unpad_input(input_ids.unsqueeze(-1), attention_mask)
                 input_ids = input_ids.transpose(0, 1)  # (1, total_seqs)
-                packed_seq_lens = [cu_seqlens[i] - cu_seqlens[i-1] for i in range(1, len(cu_seqlens))]
+                packed_seq_lens = [cu_seqlens[i] - cu_seqlens[i - 1] for i in range(1, len(cu_seqlens))]
                 position_ids = torch.clip(torch.cumsum(attention_mask, dim=-1) - 1, min=0, max=None)
                 position_ids = index_first_axis(
-                    rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(0, 1)
+                    rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices
+                ).transpose(0, 1)
 
                 if ring_attn_group is not None:
                     pad_len, input_ids, attention_mask, packed_seq_lens = pad_sequences(
@@ -233,7 +233,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 if ring_attn_group is not None:
                     values = all_gather(values.transpose(0, 1), ring_attn_group).transpose(0, 1)
                     values = values[:, -pad_len:]
-                values = pad_input(values.transpose(0, 1), indices, batch, seqlen).squeeze(-1) # (batch, seqlen)
+                values = pad_input(values.transpose(0, 1), indices, batch, seqlen).squeeze(-1)  # (batch, seqlen)
             reward = values.gather(dim=1, index=eos_indices).squeeze(1)
 
             if not self.training and self.normalize_reward:
@@ -283,12 +283,15 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 # 1. remove padding, unpad the sequences from (batch, seqlen) to (1, total_seqs)
                 # 2. adapt to ring_attn_group, pad the sequences to divisible by ring_attn_group
                 # 3. get the sequences in current ring_attn_rank, the sequences len is total_seqs + pad_len // len(ring_attn_group)
-                input_ids, indices, cu_seqlens, _, _ = unpad_input(input_ids.unsqueeze(-1), attention_mask)  # input_ids_rmpad (total_seqs, ...)
+                input_ids, indices, cu_seqlens, _, _ = unpad_input(
+                    input_ids.unsqueeze(-1), attention_mask
+                )  # input_ids_rmpad (total_seqs, ...)
                 input_ids = input_ids.transpose(0, 1)  # (1, total_seqs)
-                packed_seq_lens = [cu_seqlens[i] - cu_seqlens[i-1] for i in range(1, len(cu_seqlens))]
+                packed_seq_lens = [cu_seqlens[i] - cu_seqlens[i - 1] for i in range(1, len(cu_seqlens))]
                 position_ids = torch.clip(torch.cumsum(attention_mask, dim=-1) - 1, min=0, max=None)
                 position_ids = index_first_axis(
-                    rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(0, 1)
+                    rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices
+                ).transpose(0, 1)
                 if ring_attn_group is not None:
                     pad_len, input_ids, attention_mask, packed_seq_lens = pad_sequences(
                         sequences=input_ids,
@@ -316,7 +319,7 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 return outputs
 
             last_hidden_states = outputs["last_hidden_state"]
-            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1) # (1, total_seqs)
+            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)  # (1, total_seqs)
 
             # normalize reward
             if self.normalize_reward:
@@ -329,7 +332,7 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                     values = values[:, -pad_len:]
                 values = pad_input(values.transpose(0, 1), indices, batch, seqlen).squeeze(-1)
 
-            action_values = values[:, -action_mask.shape[1]:] * action_mask.float()
+            action_values = values[:, -action_mask.shape[1] :] * action_mask.float()
 
             if return_output:
                 return (action_values, outputs)

@@ -59,13 +59,17 @@ def update_ring_attn_params(packed_seq_lens, total_seq_len):
 
     update_ring_flash_attn_params(cu_seqlens, RING_ATTN_GROUP)
 
+
 def get_slice_in_this_ring_attn_rank(total_seq_len, ring_attn_group):
     ring_attn_rank = dist.get_rank(group=ring_attn_group)
     ring_attn_size = dist.get_world_size(group=ring_attn_group)
-    assert total_seq_len % ring_attn_size == 0, f"total_seq_len {total_seq_len} must be divisible by ring_attn_size {ring_attn_size}"
+    assert (
+        total_seq_len % ring_attn_size == 0
+    ), f"total_seq_len {total_seq_len} must be divisible by ring_attn_size {ring_attn_size}"
     local_seq_len = total_seq_len // ring_attn_size
     start, end = ring_attn_rank * local_seq_len, (ring_attn_rank + 1) * local_seq_len
     return start, end
+
 
 def convert_ring_attn_params(sequences, attention_mask, packed_seq_lens, ring_attn_group, seq_dim=-1):
     # each rank within the ring group will process sequences[start:end]
