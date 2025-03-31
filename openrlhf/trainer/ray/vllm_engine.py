@@ -6,6 +6,7 @@ from typing import Any, List
 import ray
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+from vllm.inputs import TokensPrompt
 
 from openrlhf.utils.logging_utils import init_logger
 
@@ -84,14 +85,15 @@ class LLMRayActor:
         if self.actor_counter == self.num_actors:
             assert len(self.requests) == self.num_actors
             num_requests = []
-            requests = []
+            requests: list[TokensPrompt] = []
             for actor_rank, request in self.requests.items():
                 num_requests.append((actor_rank, len(request)))
-                requests.extend(request)
+                for r in request:
+                    requests.append(TokensPrompt(prompt_token_ids=r))
 
             if len(requests) > 0:
                 # For now we assume that all requests have the same sampling params
-                responses = self.llm.generate(sampling_params=sampling_params, prompt_token_ids=requests)
+                responses = self.llm.generate(prompts=requests, sampling_params=sampling_params)
             else:
                 responses = []
 
