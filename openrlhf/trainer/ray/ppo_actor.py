@@ -215,8 +215,10 @@ class ActorPPOTrainer(BasePPOTrainer):
                         self.strategy.print(output)
                     self.replay_buffer.append(experience)
 
-                if not self.replay_buffer.full():
-                    self.strategy.print(f"Replay buffer space: {len(self.replay_buffer)}/{self.replay_buffer.limit}. Continue to sample more data.")
+                replay_buffer_ready = self.replay_buffer.full()
+                replay_buffer_ready = self.strategy.all_gather(replay_buffer_ready)
+                if not replay_buffer_ready.all():
+                    print(f"Replay buffer space: {len(self.replay_buffer)}/{self.replay_buffer.limit}. Continue to sample more data.")
                     continue
 
                 if self.args.advantage_estimator not in ["group_norm", "dr_grpo"]:
@@ -226,7 +228,7 @@ class ActorPPOTrainer(BasePPOTrainer):
                 status = self.ppo_train(steps)
                 self.replay_buffer.clear()
                 if args.store_extra_buffers:
-                    self.strategy.print(f"Replay buffer space: {len(self.replay_buffer)}/{self.replay_buffer.limit}. Stored buffers are used after clearing.")
+                    print(f"Replay buffer space: {len(self.replay_buffer)}/{self.replay_buffer.limit}. Stored buffers are used after clearing.")
 
                 if "kl" in status:
                     self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
