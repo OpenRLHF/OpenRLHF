@@ -175,6 +175,7 @@ class BaseExperienceMaker(ABC):
         strategy=None,
         remote_rm_url: Union[list[str], str] = None,
         reward_fn=None,
+        custom_experience_filter:str=None,
     ) -> None:
         super().__init__()
         self.actor = actor
@@ -208,6 +209,17 @@ class BaseExperienceMaker(ABC):
             reward_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(reward_module)
             self.custom_reward_func = reward_module.reward_func
+        
+        self.custom_experience_filter = None
+        if custom_experience_filter:
+            if not custom_experience_filter.endswith(".py"):
+                raise ValueError(f"custom_experience_filter must be a python file, got {custom_experience_filter}")
+            print(f"Loading custom `experience_filter(self,experience)` from {custom_experience_filter}")
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("experience_filter", custom_experience_filter)
+            experience_filter_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(experience_filter_module)
+            self.custom_experience_filter = experience_filter_module.experience_filter
 
     # tokenizer
     def tokenize_fn(self, texts, max_length, padding=True, device=None):
@@ -228,6 +240,7 @@ class BaseExperienceMaker(ABC):
             truncation=True,
         )
         return {k: v.to(device) for k, v in batch.items()}
+
 
 
 class RemoteExperienceMaker(BaseExperienceMaker):
@@ -494,6 +507,9 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         - experiences: List of Experience
         - rewards: List of rewards
         """
+        if self.custom_experience_filter:
+            experiences = self.custom_experience_filter(self,experiences)
+
         args = self.strategy.args
 
         # get rewards from experiences

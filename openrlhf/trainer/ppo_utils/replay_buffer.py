@@ -163,7 +163,7 @@ class NaiveReplayBuffer(ABC):
     """
 
     def __init__(
-        self, sample_batch_size: int, limit: int = 0, cpu_offload: bool = True, packing_samples: bool = False
+        self, sample_batch_size: int, limit: int = 0, cpu_offload: bool = True, packing_samples: bool = False, store_extra_buffers: bool = False
     ) -> None:
         super().__init__()
         self.sample_batch_size = sample_batch_size
@@ -173,6 +173,8 @@ class NaiveReplayBuffer(ABC):
         self.packing_samples = packing_samples
         self.target_device = torch.device(f"cuda:{torch.cuda.current_device()}")
         self.items: List[BufferItem] = []
+        self.store_extra_buffers = store_extra_buffers
+        self.extra_buffers: List[BufferItem] = []
 
     @torch.no_grad()
     def append(self, experience: Experience) -> None:
@@ -181,12 +183,17 @@ class NaiveReplayBuffer(ABC):
         items = split_experience_batch(experience)
         self.items.extend(items)
         if self.limit > 0:
-            samples_to_remove = len(self.items) - self.limit
-            if samples_to_remove > 0:
-                self.items = self.items[samples_to_remove:]
+            num_samples_to_remove = max(0, len(self.items) - self.limit)
+            samples_to_remove = self.items[:num_samples_to_remove]
+            self.items = self.items[num_samples_to_remove:]
+            if self.store_extra_buffers:
+                self.extra_buffers.extend(samples_to_remove)
 
     def clear(self) -> None:
         self.items.clear()
+        if self.store_extra_buffers:
+            self.items.extend(self.extra_buffers)
+            self.extra_buffers = []
 
     @torch.no_grad()
     def sample(self) -> Experience:
@@ -234,3 +241,9 @@ class NaiveReplayBuffer(ABC):
 
         for i, item in enumerate(self):
             setattr(item, attribute, (items[i] - mean) * rstd)
+
+    def set_limit(self, limit: int) -> None:
+        self.limit = limit
+    
+    def full(self) -> bool:
+        return len(self.items) >= self.limit

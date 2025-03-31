@@ -98,6 +98,7 @@ class ActorPPOTrainer(BasePPOTrainer):
             self.reward_fn,
             vllm_engines=self.vllm_engines,
             packing_samples=self.strategy.args.packing_samples,
+            custom_experience_filter=self.custom_experience_filter,
         )
 
         backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
@@ -169,15 +170,9 @@ class ActorPPOTrainer(BasePPOTrainer):
         pretrain_dataloader,
         eval_dataloader,
         consumed_samples=0,
-        num_update_steps_per_episodes=1,
+        num_rollouts_per_episodes=1,
+        trained_steps=0,
     ) -> None:
-        num_rollouts_per_episodes = (
-            num_update_steps_per_episodes
-            * args.train_batch_size
-            // args.max_epochs
-            // args.rollout_batch_size
-            // args.n_samples_per_prompt
-        )
 
         # get eval and save steps
         if args.eval_steps == -1:
@@ -188,24 +183,28 @@ class ActorPPOTrainer(BasePPOTrainer):
         self.prompts_dataloader = prompts_dataloader
         self.pretrain_dataloader = pretrain_dataloader
         self.eval_dataloader = eval_dataloader
+        self.replay_buffer.set_limit(prompts_dataloader.batch_size * args.n_samples_per_prompt)
 
         # Restore step and start_epoch
-        steps = consumed_samples // args.rollout_batch_size + 1
+        steps = trained_steps + 1
+        total_consumed_samples = consumed_samples
         start_episode = consumed_samples // args.rollout_batch_size // num_rollouts_per_episodes
         consumed_samples = consumed_samples % (num_rollouts_per_episodes * args.rollout_batch_size)
-
-        for episode in range(start_episode, args.num_episodes):
+        episode = start_episode
+        pbar = tqdm(
+            range(args.max_steps),
+            desc=f"Steps [Episode {episode+1}]",
+            disable=not self.strategy.is_rank_0(),
+            initial=steps-1,
+        )
+        while steps <= args.max_steps:
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
                 self.prompts_dataloader.sampler.set_epoch(
                     episode, consumed_samples=0 if episode > start_episode else consumed_samples
                 )
-            pbar = tqdm(
-                range(self.prompts_dataloader.__len__()),
-                desc=f"Episode [{episode + 1}/{args.num_episodes}]",
-                disable=not self.strategy.is_rank_0(),
-            )
 
             for _, rand_prompts, labels in self.prompts_dataloader:
+                total_consumed_samples += len(rand_prompts)
                 for i, experience in enumerate(
                     self.experience_maker.make_experience_list(rand_prompts, labels, **self.generate_kwargs)
                 ):
@@ -216,23 +215,32 @@ class ActorPPOTrainer(BasePPOTrainer):
                         self.strategy.print(output)
                     self.replay_buffer.append(experience)
 
+                if not self.replay_buffer.full():
+                    self.strategy.print(f"Replay buffer space: {len(self.replay_buffer)}/{self.replay_buffer.limit}. Continue to sample more data.")
+                    continue
+
                 if self.args.advantage_estimator not in ["group_norm", "dr_grpo"]:
                     self.replay_buffer.normalize(
                         self.strategy, "advantages", divide_by_std=not self.args.no_advantage_std_norm
                     )
                 status = self.ppo_train(steps)
                 self.replay_buffer.clear()
+                if args.store_extra_buffers:
+                    self.strategy.print(f"Replay buffer space: {len(self.replay_buffer)}/{self.replay_buffer.limit}. Stored buffers are used after clearing.")
 
                 if "kl" in status:
                     self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
                 pbar.set_postfix(status)
 
                 # logs/checkpoints
-                client_states = {"consumed_samples": steps * args.rollout_batch_size}
+                client_states = {"consumed_samples": total_consumed_samples, "trained_steps": steps}
                 self.save_logs_and_checkpoints(args, steps, pbar, status, client_states)
 
                 pbar.update()
                 steps = steps + 1
+
+            episode = episode + 1
+            pbar.set_description(f"Steps [Episode {episode+1}]")
 
         if self._wandb is not None and self.strategy.is_rank_0():
             self._wandb.finish()
@@ -765,10 +773,24 @@ class ActorModelRayActor(BasePPORole):
         self.prepare_datasets()
 
         # configure scheduler
-        self.num_update_steps_per_episodes = (
+        num_update_steps_per_episodes = (
             len(self.prompts_dataset) * args.n_samples_per_prompt // args.train_batch_size * args.max_epochs
         )
-        max_steps = math.ceil(args.num_episodes * self.num_update_steps_per_episodes)
+        self.num_rollouts_per_episodes = (
+            num_update_steps_per_episodes
+            * args.train_batch_size
+            // args.max_epochs
+            // args.rollout_batch_size
+            // args.n_samples_per_prompt
+        )
+        if args.max_steps is None:
+            # If args.max_steps is not set, we use num_episodes to calculate max_steps
+            # For dynamic sampling, we need multiple rollouts for one training stage.
+            # In this case, max_steps is not the real training steps of actor model, and you should set args.max_steps explicitly.
+            max_steps = math.ceil(args.num_episodes * num_update_steps_per_episodes)
+            args.max_steps = max_steps
+        else:
+            max_steps = args.max_steps
         self._max_steps = max_steps
 
         actor_scheduler = get_scheduler(
@@ -798,11 +820,13 @@ class ActorModelRayActor(BasePPORole):
 
         # load checkpoint
         self.consumed_samples = 0
+        self.trained_steps = 0
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path):
             _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
             self.consumed_samples = states["consumed_samples"]
-            strategy.print(f"Loaded the checkpoint: {ckpt_path}, consumed_samples: {self.consumed_samples}")
+            self.trained_steps = states["trained_steps"]
+            strategy.print(f"Loaded the checkpoint: {ckpt_path}, consumed_samples: {self.consumed_samples}, trained_steps: {self.trained_steps}")
 
         # initial offload
         if strategy.args.deepspeed_enable_sleep:
@@ -895,6 +919,7 @@ class ActorModelRayActor(BasePPORole):
         reward_model: List[ray.actor.ActorHandle],
         remote_rm_url: List[str] = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
+        custom_experience_filter:str=None,
         vllm_engines: List[ray.actor.ActorHandle] = None,
         critic_train_remote: bool = False,
     ):
@@ -916,6 +941,7 @@ class ActorModelRayActor(BasePPORole):
             critic_scheduler=None,
             remote_rm_url=remote_rm_url,
             reward_fn=reward_fn,
+            custom_experience_filter=custom_experience_filter,
             vllm_engines=vllm_engines,
             max_epochs=args.max_epochs,
             micro_train_batch_size=args.micro_train_batch_size,
@@ -966,7 +992,8 @@ class ActorModelRayActor(BasePPORole):
             self.pretrain_dataloader,
             self.eval_dataloader,
             self.consumed_samples,
-            self.num_update_steps_per_episodes,
+            self.num_rollouts_per_episodes,
+            self.trained_steps,
         )
 
     def save_model(self):

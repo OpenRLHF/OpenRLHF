@@ -180,7 +180,7 @@ def train(args):
 
     # train actor and critic model
     refs = actor_model.async_fit_actor_model(
-        critic_model, ref_model, reward_models, args.remote_rm_url, reward_fn=reward_fn, vllm_engines=vllm_engines
+        critic_model, ref_model, reward_models, args.remote_rm_url, reward_fn=reward_fn, custom_experience_filter=args.custom_experience_filter, vllm_engines=vllm_engines
     )
     ray.get(refs)
 
@@ -302,8 +302,10 @@ if __name__ == "__main__":
     # PPO
     parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--num_episodes", type=int, default=1)
+    parser.add_argument("--max_steps", type=int, default=None, help="Max steps for PPO training. This will override num_episodes if set. Useful for dynamic sampling, which needs multiple rollouts for one training stage.")
     parser.add_argument("--rollout_batch_size", type=int, default=1024)
     parser.add_argument("--micro_rollout_batch_size", type=int, default=8)
+    parser.add_argument("--store_extra_buffers", action="store_true", default=False, help="Store extra buffers in replay buffer for oversampling.")
     parser.add_argument("--max_epochs", type=int, default=1)
     parser.add_argument("--prompt_max_len", type=int, default=1024, help="Max tokens for each prompt")
     parser.add_argument("--generate_max_len", type=int, default=1024, help="Max tokens to generate in PPO")
@@ -385,7 +387,7 @@ if __name__ == "__main__":
     parser.add_argument("--critic_pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--value_head_prefix", type=str, default="score")
     parser.add_argument("--ref_reward_offload", action="store_true", default=False)
-
+    parser.add_argument("--custom_experience_filter", type=str, default=None, help="Custom experience filter")
     # Custom dataset
     parser.add_argument("--prompt_data", type=str, default=None, help="HF dataset name or path")
     parser.add_argument(

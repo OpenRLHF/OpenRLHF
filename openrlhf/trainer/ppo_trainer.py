@@ -44,6 +44,7 @@ class BasePPOTrainer(ABC):
         dataloader_pin_memory (bool, defaults to True): If True, pins memory in the data loader.
         remote_rm_url (str, optional): URL for remote reward model API.
         reward_fn (Callable, optional): Custom reward function for computing rewards.
+        custom_experience_filter (str, optional): Custom experience filter for filtering experiences.
         save_hf_ckpt (bool): Whether to save huggingface-format model weight.
         disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight. (Deepspeed model weight is used for training recovery)
         **generate_kwargs: Additional arguments for model generation.
@@ -80,6 +81,7 @@ class BasePPOTrainer(ABC):
         dataloader_pin_memory: bool = True,
         remote_rm_url: str = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
+        custom_experience_filter:str=None,
         save_hf_ckpt: bool = False,
         disable_ds_ckpt: bool = False,
         **generate_kwargs,
@@ -111,6 +113,7 @@ class BasePPOTrainer(ABC):
         self.critic = critic
         self.reward_model = reward_model
         self.remote_rm_url = remote_rm_url
+        self.custom_experience_filter = custom_experience_filter
         self.initial_model = initial_model
         self.ema_model = ema_model
         self.actor_optim = actor_optim
@@ -133,7 +136,7 @@ class BasePPOTrainer(ABC):
             self.kl_ctl = FixedKLController(init_kl_coef)
 
         self.replay_buffer = NaiveReplayBuffer(
-            micro_train_batch_size, buffer_limit, buffer_cpu_offload, getattr(self.args, "packing_samples", False)
+            micro_train_batch_size, buffer_limit, buffer_cpu_offload, getattr(self.args, "packing_samples", False), store_extra_buffers=self.args.store_extra_buffers
         )
 
     def ppo_train(self, global_steps=0):
