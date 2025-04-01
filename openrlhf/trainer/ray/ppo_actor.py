@@ -370,7 +370,6 @@ class ActorPPOTrainer(BasePPOTrainer):
             attention_mask=attention_mask,
             return_output=True,
             ring_attn_group=self.strategy.ring_attn_group,
-            logps_allgather=True,
             packed_seq_lens=packed_seq_lens,
         )
 

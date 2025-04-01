@@ -1,7 +1,8 @@
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-
+from flash_attn.utils.distributed import all_gather
+from flash_attn.bert_padding import pad_input, unpad_input, rearrange, index_first_axis
 
 RING_ATTN_GROUP = None
 
@@ -56,7 +57,6 @@ def update_ring_attn_params(packed_seq_lens, total_seq_len):
     cu_seqlens = F.pad(F.pad(cu_seqlens, (1, 0), value=0), (0, 1), value=total_seq_len)
 
     from ring_flash_attn import update_ring_flash_attn_params
-
     update_ring_flash_attn_params(cu_seqlens, RING_ATTN_GROUP)
 
 def get_slice_in_this_ring_attn_rank(total_seq_len, ring_attn_group):
@@ -77,17 +77,67 @@ def convert_ring_attn_params(sequences, attention_mask, packed_seq_lens, ring_at
     update_ring_attn_params(packed_seq_lens, total_seq_len)
     return sequences, attention_mask, position_ids
 
+def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
+    """
+    Unpad and slice tensor for distributed training with ring attention.
 
-def pad_sequences(sequences, attention_mask, packed_seq_lens, ring_attn_group, pad_token_id=0):
-    # Pads the input sequences and attention mask to ensure that their lengths are multiples of the ring attention size.
-    ring_attn_size = dist.get_world_size(group=ring_attn_group)
-    pad_attn_mask_id = len(packed_seq_lens) + 1
-    if isinstance(sequences, torch.Tensor):
+    This function performs several operations:
+    1. Removes padding, unpads sequences from (batch, seqlen) to (1, total_seqs)
+    2. Adapts to ring_attn_group, pads sequences to be divisible by ring_attn_group
+    3. Slices the sequences for the current ring_attn_rank
+
+    Args:
+        sequences: Input sequences tensor of shape (batch, seqlen)
+        attention_mask: Attention mask tensor for the sequences
+        ring_attn_group: Ring attention group for distributed processing
+
+    Returns:
+        tuple: Processed sequences and related tensors for ring attention
+    """
+    labels = torch.roll(sequences, shifts=-1, dims=1)
+    sequences, indices, cu_seqlens, _, _ = unpad_input(sequences.unsqueeze(-1), attention_mask)
+    sequences = sequences.transpose(0, 1) # (1, total_seqs)
+    packed_seq_lens = [cu_seqlens[i] - cu_seqlens[i-1] for i in range(1, len(cu_seqlens))]
+    labels = index_first_axis(rearrange(labels.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(0, 1) # (1, total_seqs)
+    position_ids = torch.clip(torch.cumsum(attention_mask, dim=-1) - 1, min=0, max=None)
+    position_ids = index_first_axis(
+        rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(0, 1) # (1, total_seqs)
+    ring_attn_pad_len = None
+    if ring_attn_group is not None:
+        ring_attn_size = dist.get_world_size(group=ring_attn_group)
         seqlen = sequences.shape[-1]
-        pad_len = (ring_attn_size - seqlen % ring_attn_size) % ring_attn_size
-        sequences = torch.nn.functional.pad(sequences, (0, pad_len), value=pad_attn_mask_id)
-        attention_mask = torch.nn.functional.pad(attention_mask, (0, pad_len), value=pad_attn_mask_id)
-    else:
-        raise "sequences is not available type"
-    packed_seq_lens[-1] += pad_len
-    return pad_len, sequences, attention_mask, packed_seq_lens
+        # pad the sequences to divisible by ring_attn_size
+        ring_attn_pad_len = (ring_attn_size - seqlen % ring_attn_size) % ring_attn_size
+        pad_attn_mask_id = len(packed_seq_lens) + 1
+        sequences = torch.nn.functional.pad(sequences, (0, ring_attn_pad_len), value=pad_attn_mask_id)
+        attention_mask = torch.nn.functional.pad(attention_mask, (0, ring_attn_pad_len), value=pad_attn_mask_id)
+        packed_seq_lens[-1] += ring_attn_pad_len
+        labels = torch.nn.functional.pad(labels, (0, ring_attn_pad_len), value=0)
+        # slice the sequences to current ring_attn_rank
+        sequences, attention_mask, position_ids = convert_ring_attn_params(
+            sequences, attention_mask, packed_seq_lens, ring_attn_group
+        )
+        start, end = get_slice_in_this_ring_attn_rank(labels.numel(), ring_attn_group)
+        labels = labels[:, start:end]
+    return sequences, attention_mask, position_ids, labels, ring_attn_pad_len, indices
+
+def gather_and_pad_tensor(tensor, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen):
+    """
+    Gather and pad tensor data (such as logits, log_probs, etc.).
+
+    Args:
+        tensor: Input tensor, can be logits, log_probs, etc.
+        ring_attn_group: Ring attention group
+        ring_attn_pad_len: Padding length
+        indices: Indices
+        batch: Batch size
+        seqlen: Sequence length
+
+    Returns:
+        Padded tensor
+    """
+    if ring_attn_group is not None:
+        tensor = all_gather(tensor.transpose(0, 1), ring_attn_group).transpose(0, 1)  # (1, total_seqs)
+        tensor = tensor[:, -ring_attn_pad_len:]
+    tensor = pad_input(tensor.transpose(0, 1), indices, batch, seqlen).squeeze(-1)  # (batch, seqlen)
+    return tensor

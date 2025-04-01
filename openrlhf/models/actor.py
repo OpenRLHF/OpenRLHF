@@ -11,8 +11,8 @@ from torch.nn import functional as F
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
-from .ring_attn_utils import convert_ring_attn_params, pad_sequences, get_slice_in_this_ring_attn_rank
-from .utils import log_probs_from_logits, reset_position_ids
+from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
+from .utils import log_probs_from_logits
 
 
 class Actor(nn.Module):
@@ -201,44 +201,21 @@ class Actor(nn.Module):
         action_mask: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         return_output=False,
+        allgather_logits=False,
+        return_logprobs=False,
         ring_attn_group: Optional[dist.ProcessGroup] = None,
-        logps_allgather=False,
         packed_seq_lens: Optional[list[int]] = None,
     ) -> torch.Tensor:
         """Returns action log probs"""
         batch, seqlen = sequences.size()
-        labels = torch.roll(sequences, shifts=-1, dims=1)
         if self.packing_samples:
-            # operate the sequences:
-            # 1. remove padding, unpad the sequences from (batch, seqlen) to (1, total_seqs)
-            # 2. adapt to ring_attn_group, pad the sequences to divisible by ring_attn_group
-            # 3. get the sequences in current ring_attn_rank, the sequences len is total_seqs + pad_len // len(ring_attn_group)
-            sequences, indices, cu_seqlens, _, _ = unpad_input(sequences.unsqueeze(-1), attention_mask)  # sequences: (total_seqs, 1)
-            sequences = sequences.transpose(0, 1)  # (1, total_seqs)
-            packed_seq_lens = [cu_seqlens[i] - cu_seqlens[i-1] for i in range(1, len(cu_seqlens))]
-            labels = index_first_axis(rearrange(labels.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(0, 1) # (1, total_seqs)
-            position_ids = torch.clip(torch.cumsum(attention_mask, dim=-1) - 1, min=0, max=None)
-            position_ids = index_first_axis(
-                rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(0, 1) # (1, total_seqs)
-            if ring_attn_group is not None:
-                pad_len, sequences, attention_mask, packed_seq_lens = pad_sequences(
-                    sequences=sequences,
-                    attention_mask=attention_mask,
-                    packed_seq_lens=packed_seq_lens,
-                    ring_attn_group=ring_attn_group,
-                    pad_token_id=0,
-                )
-                labels = torch.nn.functional.pad(labels, (0, pad_len), value=0)
-
-                sequences, attention_mask, position_ids = convert_ring_attn_params(
-                    sequences, attention_mask, packed_seq_lens, ring_attn_group
-                )
-                start, end = get_slice_in_this_ring_attn_rank(labels.numel(), ring_attn_group)
-                labels = labels[:, start:end]
-            labels = labels.squeeze(0)
+            sequences, attention_mask, position_ids, labels, ring_attn_pad_len, indices = (
+                unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group)
+            )
             attention_mask = None
         else:
             # https://github.com/OpenRLHF/OpenRLHF/issues/217
+            labels = torch.roll(sequences, shifts=-1, dims=1)
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
 
@@ -246,7 +223,13 @@ class Actor(nn.Module):
         # https://github.com/OpenRLHF/OpenRLHF/pull/634
         output["logits"] = output["logits"].to(torch.float32)
 
-        if action_mask is None:
+        if allgather_logits and self.packing_samples:
+            output["logits"] = gather_and_pad_tensor(
+                output["logits"], ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
+            )
+
+        return_action_log_probs = action_mask is not None
+        if not return_action_log_probs and not return_logprobs:
             assert return_output
             return output
 
@@ -255,19 +238,17 @@ class Actor(nn.Module):
         )
 
         if self.packing_samples:
-            # The reverse operation to sequences operations
-            if ring_attn_group is not None and logps_allgather:
-                log_probs = all_gather(log_probs.transpose(0, 1), ring_attn_group).transpose(0, 1) # (1, total_seqs)
-                log_probs = log_probs[:, -pad_len:]
-            log_probs = pad_input(log_probs.transpose(0, 1), indices, batch, seqlen).squeeze(-1)  # (batch, seqlen)
+            log_probs = gather_and_pad_tensor(
+                log_probs, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
+            )
 
         log_probs = log_probs[:, :-1]
+        if not return_action_log_probs and return_logprobs:
+            return (log_probs, output) if return_output else log_probs
+
         action_log_probs = log_probs[:, -action_mask.shape[1]:] * action_mask.float()
 
-        if return_output:
-            return (action_log_probs, output)
-        else:
-            return action_log_probs
+        return (action_log_probs, output) if return_output else action_log_probs
 
     def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs={"use_reentrant": False}):
         self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)

@@ -12,8 +12,7 @@ from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from openrlhf.utils.logging_utils import init_logger
 
-from .ring_attn_utils import convert_ring_attn_params, pad_sequences
-from .utils import reset_position_ids
+from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
 
 logger = init_logger(__name__)
 
@@ -192,29 +191,9 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             batch, seqlen = input_ids.size()
             eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
             if self.packing_samples:
-                # operate the sequences:
-                # 1. remove padding, unpad the sequences from (batch, seqlen) to (1, total_seqs)
-                # 2. adapt to ring_attn_group, pad the sequences to divisible by ring_attn_group
-                # 3. get the sequences in current ring_attn_rank, the sequences len is total_seqs + pad_len // len(ring_attn_group)
-                input_ids, indices, cu_seqlens, _, _ = unpad_input(input_ids.unsqueeze(-1), attention_mask)
-                input_ids = input_ids.transpose(0, 1)  # (1, total_seqs)
-                packed_seq_lens = [cu_seqlens[i] - cu_seqlens[i-1] for i in range(1, len(cu_seqlens))]
-                position_ids = torch.clip(torch.cumsum(attention_mask, dim=-1) - 1, min=0, max=None)
-                position_ids = index_first_axis(
-                    rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(0, 1)
-
-                if ring_attn_group is not None:
-                    pad_len, input_ids, attention_mask, packed_seq_lens = pad_sequences(
-                        sequences=input_ids,
-                        attention_mask=attention_mask,
-                        packed_seq_lens=packed_seq_lens,
-                        ring_attn_group=ring_attn_group,
-                        pad_token_id=0,
-                    )
-
-                    input_ids, attention_mask, position_ids = convert_ring_attn_params(
-                        input_ids, attention_mask, packed_seq_lens, ring_attn_group
-                    )
+                input_ids, attention_mask, position_ids, _, ring_attn_pad_len, indices = (
+                    unpad_and_slice_tensor(input_ids, attention_mask, ring_attn_group)
+                )
                 attention_mask = None
             else:
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
@@ -229,11 +208,9 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
 
             if self.packing_samples:
-                # The reverse operation to sequences operations
-                if ring_attn_group is not None:
-                    values = all_gather(values.transpose(0, 1), ring_attn_group).transpose(0, 1)
-                    values = values[:, -pad_len:]
-                values = pad_input(values.transpose(0, 1), indices, batch, seqlen).squeeze(-1) # (batch, seqlen)
+                values = gather_and_pad_tensor(
+                    values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
+                )
             reward = values.gather(dim=1, index=eos_indices).squeeze(1)
 
             if not self.training and self.normalize_reward:
@@ -279,28 +256,9 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
         ) -> torch.Tensor:
             batch, seqlen = input_ids.size()
             if self.packing_samples:
-                # operate the sequences:
-                # 1. remove padding, unpad the sequences from (batch, seqlen) to (1, total_seqs)
-                # 2. adapt to ring_attn_group, pad the sequences to divisible by ring_attn_group
-                # 3. get the sequences in current ring_attn_rank, the sequences len is total_seqs + pad_len // len(ring_attn_group)
-                input_ids, indices, cu_seqlens, _, _ = unpad_input(input_ids.unsqueeze(-1), attention_mask)  # input_ids_rmpad (total_seqs, ...)
-                input_ids = input_ids.transpose(0, 1)  # (1, total_seqs)
-                packed_seq_lens = [cu_seqlens[i] - cu_seqlens[i-1] for i in range(1, len(cu_seqlens))]
-                position_ids = torch.clip(torch.cumsum(attention_mask, dim=-1) - 1, min=0, max=None)
-                position_ids = index_first_axis(
-                    rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(0, 1)
-                if ring_attn_group is not None:
-                    pad_len, input_ids, attention_mask, packed_seq_lens = pad_sequences(
-                        sequences=input_ids,
-                        attention_mask=attention_mask,
-                        packed_seq_lens=packed_seq_lens,
-                        ring_attn_group=ring_attn_group,
-                        pad_token_id=0,
-                    )
-
-                    input_ids, attention_mask, position_ids = convert_ring_attn_params(
-                        input_ids, attention_mask, packed_seq_lens, ring_attn_group
-                    )
+                input_ids, attention_mask, position_ids, _, ring_attn_pad_len, indices = (
+                    unpad_and_slice_tensor(input_ids, attention_mask, ring_attn_group)
+                )
                 attention_mask = None
             else:
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
@@ -323,11 +281,9 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 values = (values - self.mean) / self.std
 
             if self.packing_samples:
-                # The reverse operation to sequences operations
-                if ring_attn_group is not None and values_allgather:
-                    values = all_gather(values.transpose(0, 1), ring_attn_group).transpose(0, 1)
-                    values = values[:, -pad_len:]
-                values = pad_input(values.transpose(0, 1), indices, batch, seqlen).squeeze(-1)
+                values = gather_and_pad_tensor(
+                    values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
+                )
 
             action_values = values[:, -action_mask.shape[1]:] * action_mask.float()
 
