@@ -88,6 +88,7 @@ def train(args):
             args.vllm_tensor_parallel_size,
             args.pretrain,
             args.seed,
+            args.full_determinism,
             args.enable_prefix_caching,
             args.enforce_eager,
             max_len,
