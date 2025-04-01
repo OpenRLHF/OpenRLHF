@@ -1,10 +1,8 @@
-from typing import Optional, Union
+from typing import Optional
 
 import deepspeed
 import torch
 import torch.nn as nn
-from flash_attn.utils.distributed import all_gather
-from flash_attn.bert_padding import pad_input, unpad_input, rearrange, index_first_axis
 from peft import LoraConfig, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
@@ -191,8 +189,8 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             batch, seqlen = input_ids.size()
             eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
             if self.packing_samples:
-                input_ids, attention_mask, position_ids, _, ring_attn_pad_len, indices = (
-                    unpad_and_slice_tensor(input_ids, attention_mask, ring_attn_group)
+                input_ids, attention_mask, position_ids, _, ring_attn_pad_len, indices = unpad_and_slice_tensor(
+                    input_ids, attention_mask, ring_attn_group
                 )
                 attention_mask = None
             else:
@@ -208,9 +206,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
 
             if self.packing_samples:
-                values = gather_and_pad_tensor(
-                    values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
-                )
+                values = gather_and_pad_tensor(values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
             reward = values.gather(dim=1, index=eos_indices).squeeze(1)
 
             if not self.training and self.normalize_reward:
@@ -256,8 +252,8 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
         ) -> torch.Tensor:
             batch, seqlen = input_ids.size()
             if self.packing_samples:
-                input_ids, attention_mask, position_ids, _, ring_attn_pad_len, indices = (
-                    unpad_and_slice_tensor(input_ids, attention_mask, ring_attn_group)
+                input_ids, attention_mask, position_ids, _, ring_attn_pad_len, indices = unpad_and_slice_tensor(
+                    input_ids, attention_mask, ring_attn_group
                 )
                 attention_mask = None
             else:
@@ -274,18 +270,16 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 return outputs
 
             last_hidden_states = outputs["last_hidden_state"]
-            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1) # (1, total_seqs)
+            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)  # (1, total_seqs)
 
             # normalize reward
             if self.normalize_reward:
                 values = (values - self.mean) / self.std
 
             if self.packing_samples:
-                values = gather_and_pad_tensor(
-                    values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
-                )
+                values = gather_and_pad_tensor(values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
 
-            action_values = values[:, -action_mask.shape[1]:] * action_mask.float()
+            action_values = values[:, -action_mask.shape[1] :] * action_mask.float()
 
             if return_output:
                 return (action_values, outputs)

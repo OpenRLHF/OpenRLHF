@@ -1,8 +1,8 @@
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
 from flash_attn.utils.distributed import all_gather
-from flash_attn.bert_padding import pad_input, unpad_input, rearrange, index_first_axis
 
 RING_ATTN_GROUP = None
 
@@ -57,15 +57,20 @@ def update_ring_attn_params(packed_seq_lens, total_seq_len):
     cu_seqlens = F.pad(F.pad(cu_seqlens, (1, 0), value=0), (0, 1), value=total_seq_len)
 
     from ring_flash_attn import update_ring_flash_attn_params
+
     update_ring_flash_attn_params(cu_seqlens, RING_ATTN_GROUP)
+
 
 def get_slice_in_this_ring_attn_rank(total_seq_len, ring_attn_group):
     ring_attn_rank = dist.get_rank(group=ring_attn_group)
     ring_attn_size = dist.get_world_size(group=ring_attn_group)
-    assert total_seq_len % ring_attn_size == 0, f"total_seq_len {total_seq_len} must be divisible by ring_attn_size {ring_attn_size}"
+    assert (
+        total_seq_len % ring_attn_size == 0
+    ), f"total_seq_len {total_seq_len} must be divisible by ring_attn_size {ring_attn_size}"
     local_seq_len = total_seq_len // ring_attn_size
     start, end = ring_attn_rank * local_seq_len, (ring_attn_rank + 1) * local_seq_len
     return start, end
+
 
 def convert_ring_attn_params(sequences, attention_mask, packed_seq_lens, ring_attn_group, seq_dim=-1):
     # each rank within the ring group will process sequences[start:end]
@@ -76,6 +81,7 @@ def convert_ring_attn_params(sequences, attention_mask, packed_seq_lens, ring_at
     position_ids = reset_ring_attn_position_ids(start, end, packed_seq_lens)
     update_ring_attn_params(packed_seq_lens, total_seq_len)
     return sequences, attention_mask, position_ids
+
 
 def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
     """
@@ -96,12 +102,15 @@ def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
     """
     labels = torch.roll(sequences, shifts=-1, dims=1)
     sequences, indices, cu_seqlens, _, _ = unpad_input(sequences.unsqueeze(-1), attention_mask)
-    sequences = sequences.transpose(0, 1) # (1, total_seqs)
-    packed_seq_lens = [cu_seqlens[i] - cu_seqlens[i-1] for i in range(1, len(cu_seqlens))]
-    labels = index_first_axis(rearrange(labels.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(0, 1) # (1, total_seqs)
+    sequences = sequences.transpose(0, 1)  # (1, total_seqs)
+    packed_seq_lens = [cu_seqlens[i] - cu_seqlens[i - 1] for i in range(1, len(cu_seqlens))]
+    labels = index_first_axis(rearrange(labels.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(
+        0, 1
+    )  # (1, total_seqs)
     position_ids = torch.clip(torch.cumsum(attention_mask, dim=-1) - 1, min=0, max=None)
-    position_ids = index_first_axis(
-        rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(0, 1) # (1, total_seqs)
+    position_ids = index_first_axis(rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(
+        0, 1
+    )  # (1, total_seqs)
     ring_attn_pad_len = None
     if ring_attn_group is not None:
         ring_attn_size = dist.get_world_size(group=ring_attn_group)
@@ -120,6 +129,7 @@ def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
         start, end = get_slice_in_this_ring_attn_rank(labels.numel(), ring_attn_group)
         labels = labels[:, start:end]
     return sequences, attention_mask, position_ids, labels, ring_attn_pad_len, indices
+
 
 def gather_and_pad_tensor(tensor, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen):
     """
