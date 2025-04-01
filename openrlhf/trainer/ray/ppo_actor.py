@@ -192,12 +192,12 @@ class ActorPPOTrainer(BasePPOTrainer):
         consumed_samples = consumed_samples % (num_rollouts_per_episodes * args.rollout_batch_size)
         episode = start_episode
         pbar = tqdm(
-            range(args.max_steps),
+            range(args.max_global_steps),
             desc=f"Steps [Episode {episode+1}]",
             disable=not self.strategy.is_rank_0(),
             initial=steps-1,
         )
-        while steps <= args.max_steps:
+        while steps <= args.max_global_steps:
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
                 self.prompts_dataloader.sampler.set_epoch(
                     episode, consumed_samples=0 if episode > start_episode else consumed_samples
@@ -785,14 +785,14 @@ class ActorModelRayActor(BasePPORole):
             // args.rollout_batch_size
             // args.n_samples_per_prompt
         )
-        if args.max_steps is None:
-            # If args.max_steps is not set, we use num_episodes to calculate max_steps
+        if args.max_global_steps is None:
+            # If args.max_global_steps is not set, we use num_episodes to calculate max_steps
             # For dynamic sampling, we need multiple rollouts for one training stage.
-            # In this case, max_steps is not the real training steps of actor model, and you should set args.max_steps explicitly.
+            # In this case, max_steps is not the real training steps of actor model, and you should set args.max_global_steps explicitly.
             max_steps = math.ceil(args.num_episodes * num_update_steps_per_episodes)
-            args.max_steps = max_steps
+            args.max_global_steps = args.num_episodes * self.num_rollouts_per_episodes
         else:
-            max_steps = args.max_steps
+            max_steps = args.max_global_steps * args.rollout_batch_size * args.n_samples_per_prompt // args.train_batch_size * args.max_epochs
         self._max_steps = max_steps
 
         actor_scheduler = get_scheduler(
