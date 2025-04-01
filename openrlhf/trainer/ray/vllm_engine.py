@@ -33,6 +33,7 @@ class LLMRayActor:
             # at the top-level when the distributed_executor_backend is ray.
             os.environ.pop("CUDA_VISIBLE_DEVICES", None)
             os.environ.pop("ROCR_VISIBLE_DEVICES", None)
+            os.environ.pop("HIP_VISIBLE_DEVICES", None)
         elif noset_visible_devices:
             # We need to set CUDA_VISIBLE_DEVICES to the ray assigned GPU
             # when the distributed_executor_backend is not ray and
@@ -131,6 +132,7 @@ def create_vllm_engines(
     assert vllm.__version__ >= "0.8.1", "OpenRLHF only supports vllm >= 0.8.1"
 
     vllm_engines = []
+    noset_visible_devices = ray_noset_visible_devices(ray.get(get_all_env_variables.remote()))
     distributed_executor_backend = "uni" if tensor_parallel_size == 1 else "ray"
     use_hybrid_engine = shared_pg is not None
     num_gpus = int(tensor_parallel_size == 1)
@@ -182,7 +184,7 @@ def create_vllm_engines(
                 bundle_indices=bundle_indices,
                 num_gpus=0.2 if use_hybrid_engine else 1,
                 enable_sleep_mode=vllm_enable_sleep,
-                noset_visible_devices=ray_noset_visible_devices(),
+                noset_visible_devices=noset_visible_devices,
             )
         )
 
