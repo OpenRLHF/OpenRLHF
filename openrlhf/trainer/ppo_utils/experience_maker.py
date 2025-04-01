@@ -323,7 +323,6 @@ class RemoteExperienceMaker(BaseExperienceMaker):
                 sequences=sequences_cpu_list,
                 action_mask=action_mask_list,
                 attention_mask=attention_mask_cpu_list,
-                logps_allgather=[True] * len(samples_list),
             )
 
             if args.colocate_actor_ref or args.colocate_all_models:
@@ -384,7 +383,6 @@ class RemoteExperienceMaker(BaseExperienceMaker):
                 action_mask,
                 attn_mask.to(device),
                 ring_attn_group=self.strategy.ring_attn_group,
-                logps_allgather=True,
             )
             action_log_probs_list.append(action_log_probs)
 

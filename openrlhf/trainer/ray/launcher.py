@@ -121,7 +121,6 @@ class ReferenceModelRayActor(BasePPORole):
         action_mask: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         return_output=False,
-        logps_allgather=False,
         packed_seq_lens: Optional[list[int]] = None,
     ) -> torch.Tensor:
         device = torch.cuda.current_device()
@@ -130,9 +129,7 @@ class ReferenceModelRayActor(BasePPORole):
                 sequences.to(device),
                 action_mask.to(device),
                 attention_mask.to(device),
-                return_output=return_output,
                 ring_attn_group=self.strategy.ring_attn_group,
-                logps_allgather=logps_allgather,
                 packed_seq_lens=packed_seq_lens,
             )
         return log_probs.to("cpu")
