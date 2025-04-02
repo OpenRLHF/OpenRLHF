@@ -27,6 +27,10 @@ class LLMRayActor:
 
     def __init__(self, *args, bundle_indices: list = None, **kwargs):
         noset_visible_devices = kwargs.pop("noset_visible_devices")
+        full_determinism = kwargs.pop("full_determinism", False)
+        if full_determinism:
+            # https://github.com/vllm-project/vllm/blob/effc5d24fae10b29996256eb7a88668ff7941aed/examples/offline_inference/reproduciblity.py#L11
+            os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
         if kwargs.get("distributed_executor_backend") == "ray":
             # a hack to make the script work.
             # stop ray from manipulating *_VISIBLE_DEVICES
@@ -119,6 +123,7 @@ def create_vllm_engines(
     tensor_parallel_size: int,
     pretrain: str,
     seed: int,
+    full_determinism: bool,
     enable_prefix_caching: bool,
     enforce_eager: bool,
     max_model_len: int,
@@ -179,6 +184,7 @@ def create_vllm_engines(
                 enable_prefix_caching=enable_prefix_caching,
                 dtype="bfloat16",
                 trust_remote_code=True,
+                full_determinism=full_determinism,
                 num_actors=num_actors,
                 gpu_memory_utilization=gpu_memory_utilization,
                 bundle_indices=bundle_indices,
