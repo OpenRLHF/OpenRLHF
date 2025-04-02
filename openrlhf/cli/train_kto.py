@@ -221,10 +221,10 @@ if __name__ == "__main__":
     # TensorBoard parameters
     parser.add_argument("--use_tensorboard", type=str, default=None, help="TensorBoard logging path")
 
-    args = parser.parse_args()
-
     # ModelScope parameters
     parser.add_argument("--use_ms", action="store_true", default=False)
+
+    args = parser.parse_args()
 
     if args.input_template and "{}" not in args.input_template:
         print("[Warning] {} not in args.input_template, set to None")
