@@ -27,10 +27,6 @@ class LLMRayActor:
 
     def __init__(self, *args, bundle_indices: list = None, **kwargs):
         noset_visible_devices = kwargs.pop("noset_visible_devices")
-        full_determinism = kwargs.pop("full_determinism", False)
-        if full_determinism:
-            # https://github.com/vllm-project/vllm/blob/effc5d24fae10b29996256eb7a88668ff7941aed/examples/offline_inference/reproduciblity.py#L11
-            os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
         if kwargs.get("distributed_executor_backend") == "ray":
             # a hack to make the script work.
             # stop ray from manipulating *_VISIBLE_DEVICES
@@ -56,9 +52,14 @@ class LLMRayActor:
         self.requests = {}
         self.response_queues = defaultdict(queue.Queue)
 
-        from vllm import LLM
+        import vllm
 
-        self.llm = LLM(*args, **kwargs)
+        full_determinism = kwargs.pop("full_determinism", False)
+        if full_determinism or vllm.__version__ == "0.8.2":
+            # https://github.com/vllm-project/vllm/blob/effc5d24fae10b29996256eb7a88668ff7941aed/examples/offline_inference/reproduciblity.py#L11
+            os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+
+        self.llm = vllm.LLM(*args, **kwargs)
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray):
         return self.llm.collective_rpc(
