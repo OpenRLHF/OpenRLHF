@@ -14,8 +14,7 @@ from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.models import Actor
-from openrlhf.models.ring_attn_utils import pad_sequences, unpad_sequences
-from openrlhf.models.utils import compute_approx_kl, masked_mean, unpacking_samples
+from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer import BasePPOTrainer
 from openrlhf.trainer.ppo_utils import Experience, RemoteExperienceMaker
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
@@ -356,55 +355,23 @@ class ActorPPOTrainer(BasePPOTrainer):
     def training_step(self, experience: Experience) -> Dict[str, float]:
         self.actor.train()
 
-        # TODO: this is a bad indicator to say that data is packed...
-        if isinstance(experience.sequences, list):
-            sequences = torch.cat(experience.sequences, dim=0).unsqueeze(0)
-            old_action_log_probs = torch.cat(experience.action_log_probs, dim=0).unsqueeze(0)
-            advantages = torch.cat(experience.advantages, dim=0).unsqueeze(0)
-            num_actions = [v.numel() for v in experience.advantages]
-            packed_seq_lens = [s.numel() for s in experience.sequences]
-            attention_mask = torch.cat(
-                [torch.full_like(s, i + 1) for i, s in enumerate(experience.sequences)], dim=0
-            ).unsqueeze(0)
-            # pad seq makes the sequence a multiple of ring_attention_size.
-            if self.strategy.ring_attn_group is not None:
-                pad_len, sequences, attention_mask, num_actions, packed_seq_lens = pad_sequences(
-                    sequences, attention_mask, num_actions, packed_seq_lens, self.strategy.ring_attn_group
-                )
-            if self.args.use_kl_loss and experience.base_action_log_probs is not None:
-                base_action_log_probs = torch.cat(experience.base_action_log_probs, dim=0).unsqueeze(0)
-        else:
-            sequences = experience.sequences
-            old_action_log_probs = experience.action_log_probs
-            advantages = experience.advantages
-            num_actions = experience.action_mask.size(1)
-            packed_seq_lens = None
-            attention_mask = experience.attention_mask
-            if self.args.use_kl_loss and experience.base_action_log_probs is not None:
-                base_action_log_probs = experience.base_action_log_probs
+        sequences = experience.sequences
+        action_mask = experience.action_mask
+        attention_mask = experience.attention_mask
+        packed_seq_lens = None
+        old_action_log_probs = experience.action_log_probs
+        advantages = experience.advantages
+        base_action_log_probs = experience.base_action_log_probs
 
         # actor loss
         action_log_probs, output = self.actor(
             sequences,
-            num_actions,
+            action_mask,
             attention_mask=attention_mask,
             return_output=True,
             ring_attn_group=self.strategy.ring_attn_group,
-            logps_allgather=True,
             packed_seq_lens=packed_seq_lens,
         )
-        # unpad sequence ensures that pad tokens do not contribute to the loss calculation.
-        if self.strategy.ring_attn_group is not None:
-            assert pad_len is not None
-            sequences, attention_mask, num_actions, packed_seq_lens, action_log_probs, _, _ = unpad_sequences(
-                pad_len=pad_len,
-                sequences=sequences,
-                attention_mask=attention_mask,
-                num_actions=num_actions,
-                packed_seq_lens=packed_seq_lens,
-                action_log_probs=action_log_probs,
-                ring_attn_group=self.strategy.ring_attn_group,
-            )
 
         # loss function
         actor_loss = self.actor_loss_fn(
@@ -419,20 +386,11 @@ class ActorPPOTrainer(BasePPOTrainer):
                 kl = compute_approx_kl(
                     action_log_probs,
                     base_action_log_probs,
-                    experience.action_mask,
                     kl_estimator=self.args.kl_estimator,
                 )
             else:
                 kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=action_log_probs.device)
-
-            if not self.args.packing_samples:
-                kl_mean = masked_mean(kl, experience.action_mask, dim=-1)
-            else:
-                # convert tensor into list of tensors so that it's easier to manipulate
-                # within dataset.
-
-                kl = unpacking_samples(kl, num_actions)
-                kl_mean = torch.tensor([each_kl.mean() for each_kl in kl], device=action_log_probs.device)
+            kl_mean = masked_mean(kl, experience.action_mask, dim=-1)
 
             kl_loss = kl_mean.mean()
             experience.info["kl"] = kl_loss.item()
