@@ -208,34 +208,32 @@ class Actor(nn.Module):
     ) -> torch.Tensor:
         """Returns action log probs"""
         batch, seqlen = sequences.size()
+        foward_attention_mask = attention_mask
         if self.packing_samples:
-            sequences, attention_mask, position_ids, labels, ring_attn_pad_len, indices = (
-                unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group)
+            sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices = unpad_and_slice_tensor(
+                sequences, attention_mask, ring_attn_group
             )
-            attention_mask = None
+            foward_attention_mask = None
         else:
             # https://github.com/OpenRLHF/OpenRLHF/issues/217
-            labels = torch.roll(sequences, shifts=-1, dims=1)
+            rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
 
-        output = self.model(sequences, attention_mask=attention_mask, position_ids=position_ids)
+        output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids)
         # https://github.com/OpenRLHF/OpenRLHF/pull/634
         output["logits"] = output["logits"].to(torch.float32)
-
-        if allgather_logits and self.packing_samples:
-            output["logits"] = gather_and_pad_tensor(
-                output["logits"], ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
-            )
 
         return_action_log_probs = action_mask is not None
         if not return_action_log_probs and not return_logprobs:
             assert return_output
+            if allgather_logits and self.packing_samples:
+                output["logits"] = gather_and_pad_tensor(
+                    output["logits"], ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
+                )
             return output
 
-        log_probs = log_probs_from_logits(
-            output["logits"], labels, temperature=self.temperature
-        )
+        log_probs = log_probs_from_logits(output["logits"], rolled_sequences, temperature=self.temperature)
 
         if self.packing_samples:
             log_probs = gather_and_pad_tensor(

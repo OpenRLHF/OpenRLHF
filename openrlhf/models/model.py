@@ -190,18 +190,19 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
         ) -> torch.Tensor:
             batch, seqlen = input_ids.size()
             eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
+            forward_attention_mask = attention_mask
             if self.packing_samples:
-                input_ids, attention_mask, position_ids, _, ring_attn_pad_len, indices = (
-                    unpad_and_slice_tensor(input_ids, attention_mask, ring_attn_group)
+                input_ids, position_ids, _, ring_attn_pad_len, indices = unpad_and_slice_tensor(
+                    input_ids, attention_mask, ring_attn_group
                 )
-                attention_mask = None
+                forward_attention_mask = None
             else:
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
                 position_ids = attention_mask.long().cumsum(-1) - 1
                 position_ids.masked_fill_(attention_mask == 0, 1)
 
             outputs = getattr(self, self.base_model_prefix)(
-                input_ids, attention_mask=attention_mask, position_ids=position_ids
+                input_ids, attention_mask=forward_attention_mask, position_ids=position_ids
             )
             last_hidden_states = outputs["last_hidden_state"]
 
@@ -255,18 +256,19 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             packed_seq_lens=None,
         ) -> torch.Tensor:
             batch, seqlen = input_ids.size()
+            forward_attention_mask = attention_mask
             if self.packing_samples:
-                input_ids, attention_mask, position_ids, _, ring_attn_pad_len, indices = (
-                    unpad_and_slice_tensor(input_ids, attention_mask, ring_attn_group)
+                input_ids, position_ids, _, ring_attn_pad_len, indices = unpad_and_slice_tensor(
+                    input_ids, attention_mask, ring_attn_group
                 )
-                attention_mask = None
+                forward_attention_mask = None
             else:
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
                 position_ids = attention_mask.long().cumsum(-1) - 1
                 position_ids.masked_fill_(attention_mask == 0, 1)
 
             outputs = getattr(self, self.base_model_prefix)(
-                input_ids, attention_mask=attention_mask, position_ids=position_ids
+                input_ids, attention_mask=forward_attention_mask, position_ids=position_ids
             )
 
             if action_mask is None:
