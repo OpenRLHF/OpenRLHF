@@ -276,16 +276,15 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             last_hidden_states = outputs["last_hidden_state"]
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1) # (1, total_seqs)
 
+            if self.packing_samples:
+                values = gather_and_pad_tensor(values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
+
+            values = values[:, :-1]
             # normalize reward
             if self.normalize_reward:
                 values = (values - self.mean) / self.std
 
-            if self.packing_samples:
-                values = gather_and_pad_tensor(
-                    values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
-                )
-
-            action_values = values[:, -action_mask.shape[1]:] * action_mask.float()
+            action_values = values[:, -action_mask.shape[1] :] * action_mask.float()
 
             if return_output:
                 return (action_values, outputs)

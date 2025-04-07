@@ -98,9 +98,10 @@ class ValueLoss(nn.Module):
     Value Loss for PPO
     """
 
-    def __init__(self, clip_eps: float = None) -> None:
+    def __init__(self, clip_eps: float = None, token_level_loss: bool = True) -> None:
         super().__init__()
         self.clip_eps = clip_eps
+        self.token_level_loss = token_level_loss
 
     def forward(
         self,
@@ -117,7 +118,7 @@ class ValueLoss(nn.Module):
         else:
             loss = (values - returns) ** 2
 
-        loss = masked_mean(loss, action_mask, dim=-1).mean()
+        loss = masked_mean(loss, action_mask, dim=None) if self.token_level_loss else masked_mean(loss, action_mask, dim=-1).mean()
         return 0.5 * loss
 
 

@@ -548,12 +548,7 @@ class RemoteExperienceMaker(BaseExperienceMaker):
                 raise Exception(f"Unkown advantage_estimator {self.advantage_estimator}")
 
             # calculate the return info.
-            if not getattr(self, "packing_samples", False):
-                return_sums = reward.sum(dim=-1)
-            else:
-                return_sums = torch.tensor(
-                    [each_reward.sum() for each_reward in reward], device=torch.cuda.current_device()
-                )
+            return_sums = reward.sum(dim=-1)
             experience.info["return"] = return_sums
             # remove unnecessary info
             experience.kl = None
