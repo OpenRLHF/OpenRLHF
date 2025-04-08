@@ -137,7 +137,7 @@ def offload_deepspeed_states(model, pin_memory=True, non_blocking=True):
         # These offload types are fixed in https://github.com/deepspeedai/DeepSpeed/pull/7050
         offload_state_types += [
             OffloadStateTypeEnum.lp_grads,
-            OffloadStateTypeEnum.lp_params,
+            # OffloadStateTypeEnum.lp_params,
         ]
 
     model.optimizer.offload_states(
