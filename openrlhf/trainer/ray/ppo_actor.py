@@ -476,7 +476,7 @@ class ActorPPOTrainer(BasePPOTrainer):
             self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
 
         # status
-        status = {"policy_loss": actor_loss.item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}
+        status = {"policy_loss": actor_loss.detach().item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}
         if self.pretrain_dataloader is not None:
             status["ptx_loss"] = ptx_loss.item()
         for k, v in experience.info.items():
