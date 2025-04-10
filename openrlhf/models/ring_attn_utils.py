@@ -1,8 +1,7 @@
 import torch
 import torch.distributed as dist
-import torch.nn.functional as F
+from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
 from flash_attn.utils.distributed import all_gather
-from flash_attn.bert_padding import pad_input, unpad_input, rearrange, index_first_axis
 
 RING_ATTN_GROUP = None
 
@@ -51,6 +50,7 @@ def update_ring_attn_params(cu_seqlens):
     assert RING_ATTN_GROUP is not None
 
     from ring_flash_attn import update_ring_flash_attn_params
+
     update_ring_flash_attn_params(cu_seqlens, RING_ATTN_GROUP)
 
 
@@ -84,6 +84,7 @@ def get_tensor_in_current_ring_attn_rank(tensors: list[torch.Tensor] | torch.Ten
         output_tensors = output_tensors[0]
     return output_tensors, ring_attn_pad_len
 
+
 def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
     """
     Unpad and slice tensor for distributed training with ring attention.
@@ -104,7 +105,9 @@ def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
     rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
     sequences, indices, cu_seqlens, _, _ = unpad_input(sequences.unsqueeze(-1), attention_mask)
     sequences = sequences.transpose(0, 1)  # (1, total_seqs)
-    rolled_sequences = index_first_axis(rearrange(rolled_sequences.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(
+    rolled_sequences = index_first_axis(
+        rearrange(rolled_sequences.unsqueeze(-1), "b s ... -> (b s) ..."), indices
+    ).transpose(
         0, 1
     )  # (1, total_seqs)
     position_ids = torch.clip(torch.cumsum(attention_mask, dim=-1) - 1, min=0, max=None)
@@ -114,10 +117,12 @@ def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
     ring_attn_pad_len = 0
     if ring_attn_group is not None:
         (sequences, position_ids, rolled_sequences), ring_attn_pad_len = get_tensor_in_current_ring_attn_rank(
-            [sequences, position_ids, rolled_sequences], ring_attn_group, 0)
+            [sequences, position_ids, rolled_sequences], ring_attn_group, 0
+        )
         cu_seqlens[-1] += ring_attn_pad_len
         update_ring_attn_params(cu_seqlens)
     return sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices
+
 
 def gather_and_pad_tensor(tensor, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen):
     """

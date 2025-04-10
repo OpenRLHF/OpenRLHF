@@ -1,7 +1,5 @@
 from typing import Callable
 
-import torch
-import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from .utils import zero_pad_sequences

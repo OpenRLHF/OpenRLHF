@@ -3,11 +3,8 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from flash_attn.utils.distributed import all_gather
-from flash_attn.bert_padding import pad_input, unpad_input, rearrange, index_first_axis
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
-from torch.nn import functional as F
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
@@ -235,15 +232,13 @@ class Actor(nn.Module):
         log_probs = log_probs_from_logits(output["logits"], rolled_sequences, temperature=self.temperature)
 
         if self.packing_samples:
-            log_probs = gather_and_pad_tensor(
-                log_probs, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
-            )
+            log_probs = gather_and_pad_tensor(log_probs, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
 
         log_probs = log_probs[:, :-1]
         if not return_action_log_probs and return_logprobs:
             return (log_probs, output) if return_output else log_probs
 
-        action_log_probs = log_probs[:, -action_mask.shape[1]:] * action_mask.float()
+        action_log_probs = log_probs[:, -action_mask.shape[1] :] * action_mask.float()
 
         return (action_log_probs, output) if return_output else action_log_probs
 
