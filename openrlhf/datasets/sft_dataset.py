@@ -135,7 +135,7 @@ class SFTDataset(Dataset):
                         .item()
                         - 1
                     )
-                    response_ranges.append((start_idx, end_idx))  # left close right open
+                    response_ranges.append((start_idx, end_idx))  # left close right close
 
         prompt, response = preprocess_data(
             data,
@@ -156,7 +156,6 @@ class SFTDataset(Dataset):
                 add_special_tokens=False,
             )
             prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
-
             # filter the sample whose length is greater than max_length (2 for answer length)
             if not prompt or not response or prompt_ids_len >= self.max_length - 2:
                 prompt = None
@@ -175,7 +174,6 @@ class SFTDataset(Dataset):
         return length
 
     def __getitem__(self, idx):
-        prompt_ids_len = self.prompt_ids_lens[idx]
         prompt = self.prompts[idx]
         response = self.responses[idx]
 
@@ -194,33 +192,41 @@ class SFTDataset(Dataset):
             return_tensors="pt",
             add_special_tokens=False,
         )
+        input_ids = input_token["input_ids"]
+        attention_mask = input_token["attention_mask"]
+        loss_mask = self.get_loss_mask(input_ids, idx)
 
         if not self.pretrain_mode:
             # to avoid EOS_token truncation
-            input_token["input_ids"][0][-1] = self.tokenizer.eos_token_id
-            input_token["attention_mask"][0][-1] = True
-        info = {
-            "input": prompt,
-            "output": response,
-            "input_length": input_token["attention_mask"].int().sum().item(),
-            "response_ranges": self.response_ranges[idx] if self.multiturn else None,
-        }
+            input_ids[0][-1] = self.tokenizer.eos_token_id
+            attention_mask[0][-1] = True
+        return input_ids, attention_mask, loss_mask
 
-        return prompt_ids_len, input_token["input_ids"], input_token["attention_mask"], info
+    def get_loss_mask(self, input_ids, idx):
+        if self.pretrain_mode:
+            return torch.ones_like(input_ids, dtype=torch.float32)  # shape:[1, seq_len]
+
+        loss_mask = torch.zeros_like(input_ids, dtype=torch.float32)
+        if not self.multiturn:
+            prompt_ids_len = self.prompt_ids_lens[idx]
+            loss_mask[0, prompt_ids_len:-1] = 1
+        else:
+            response_ranges = self.response_ranges[idx]
+            for start_idx, end_idx in response_ranges:
+                loss_mask[0, start_idx-1:end_idx] = 1
+        return loss_mask
 
     def collate_fn(self, item_list):
-        prompt_ids_lens = []
         input_ids = []
         attention_masks = []
-        infos = {"input": [], "output": []}
+        loss_masks = []
 
-        for prompt_ids_len, input_id, attention_mask, info in item_list:
-            prompt_ids_lens.append(prompt_ids_len)
+        for input_id, attention_mask, loss_mask in item_list:
             input_ids.append(input_id)
             attention_masks.append(attention_mask)
-            infos["input"].append(info["input"])
-            infos["output"].append(info["output"])
+            loss_masks.append(loss_mask)
 
         input_ids = zero_pad_sequences(input_ids, "right", self.tokenizer.pad_token_id)
         attention_masks = zero_pad_sequences(attention_masks, "right")
-        return prompt_ids_lens, input_ids, attention_masks, infos
+        loss_masks = zero_pad_sequences(loss_masks, "right")
+        return input_ids, attention_masks, loss_masks

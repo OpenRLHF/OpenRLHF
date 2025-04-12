@@ -132,9 +132,10 @@ class SFTTrainer(ABC):
 
             # train
             self.model.train()
-            for prompt_id_lens, inputs, attention_masks, infos in self.train_dataloader:
+            for inputs, attention_masks, loss_masks in self.train_dataloader:
                 inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
                 attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
+                loss_mask = loss_masks.to(torch.cuda.current_device()).squeeze(1)
                 per_token_log_probs, output = self.model(
                     inputs,
                     attention_mask=attention_mask,
@@ -148,12 +149,7 @@ class SFTTrainer(ABC):
                     aux_loss = output.aux_loss
                 else:
                     aux_loss = 0
-
-                loss_mask = torch.ones_like(per_token_log_probs, dtype=torch.bool)
-                if not self.pretrain_mode:
-                    for source_len in prompt_id_lens:
-                        loss_mask[:, :source_len] = False
-                gpt_loss = self.loss_fn(per_token_log_probs, loss_mask)
+                gpt_loss = self.loss_fn(per_token_log_probs, loss_mask[:, :-1])
                 loss = gpt_loss + aux_loss * self.args.aux_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
@@ -228,9 +224,10 @@ class SFTTrainer(ABC):
                 disable=not self.strategy.is_rank_0(),
             )
 
-            for prompt_id_lens, inputs, attention_masks, infos in eval_dataloader:
+            for inputs, attention_masks, loss_masks in eval_dataloader:
                 inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
                 attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
+                loss_mask = loss_masks.to(torch.cuda.current_device()).squeeze(1)
                 per_token_log_probs = self.model(
                     inputs,
                     attention_mask=attention_mask,
@@ -238,11 +235,7 @@ class SFTTrainer(ABC):
                     ring_attn_group=self.strategy.ring_attn_group,
                 )
 
-                loss_mask = torch.ones_like(per_token_log_probs, dtype=torch.bool)
-                if not self.pretrain_mode:
-                    for source_len in prompt_id_lens:
-                        loss_mask[:, :source_len] = False
-                loss = self.loss_fn(per_token_log_probs, loss_mask)
+                loss = self.loss_fn(per_token_log_probs, loss_mask[:, :-1])
 
                 times += 1
                 loss_sum += loss.item()
