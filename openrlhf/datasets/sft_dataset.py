@@ -1,7 +1,6 @@
 from typing import Callable
 
 import torch
-import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from .utils import zero_pad_sequences
@@ -213,7 +212,7 @@ class SFTDataset(Dataset):
         else:
             response_ranges = self.response_ranges[idx]
             for start_idx, end_idx in response_ranges:
-                loss_mask[0, start_idx-1:end_idx] = 1
+                loss_mask[0, start_idx - 1 : end_idx] = 1
         return loss_mask
 
     def collate_fn(self, item_list):

@@ -1,6 +1,5 @@
 from .actor import Actor
 from .loss import (
-    SFTLoss,
     DPOLoss,
     GPTLMLoss,
     KDLoss,
@@ -9,6 +8,7 @@ from .loss import (
     PairWiseLoss,
     PolicyLoss,
     PRMLoss,
+    SFTLoss,
     ValueLoss,
     VanillaKTOLoss,
 )

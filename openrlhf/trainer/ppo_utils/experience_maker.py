@@ -11,7 +11,7 @@ import torch.distributed as dist
 import torch.nn as nn
 
 from openrlhf.models.actor import Actor
-from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean, unpacking_samples
+from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
 
@@ -119,15 +119,17 @@ class Samples:
     prompts: list[str]
     labels: list[str]
 
-    def __init__(self,
-                 sequences=None,
-                 attention_mask=None,
-                 action_mask=None,
-                 response_length=None,
-                 total_length=None,
-                 prompts=None,
-                 labels=None,
-                 packed_seq_lens=None):
+    def __init__(
+        self,
+        sequences=None,
+        attention_mask=None,
+        action_mask=None,
+        response_length=None,
+        total_length=None,
+        prompts=None,
+        labels=None,
+        packed_seq_lens=None,
+    ):
         self.sequences = sequences
         self.attention_mask = attention_mask
         self.action_mask = action_mask
@@ -149,8 +151,8 @@ class Samples:
             sample.action_mask = action_mask
             sample.response_length = sample.action_mask.float().sum(dim=-1)
             sample.total_length = sample.attention_mask.float().sum(dim=-1)
-            sample.prompts = self.prompts[i * split_size:(i+1) * split_size]
-            sample.labels = self.labels[i * split_size:(i+1) * split_size]
+            sample.prompts = self.prompts[i * split_size : (i + 1) * split_size]
+            sample.labels = self.labels[i * split_size : (i + 1) * split_size]
             sample_list.append(sample)
         return sample_list
 
@@ -295,7 +297,9 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         """
         start_time = time.time()
         if dist.get_rank() == 0:
-            logger.info(f"🚀 Starting experience making with {len(rollout_samples.sequences) * dist.get_world_size()} batches")
+            logger.info(
+                f"🚀 Starting experience making with {len(rollout_samples.sequences) * dist.get_world_size()} batches"
+            )
 
         args = self.strategy.args
         self.actor.eval()
@@ -357,7 +361,9 @@ class RemoteExperienceMaker(BaseExperienceMaker):
                 )
         else:
             if self.strategy.ring_attn_group is None or self.strategy.ring_attn_rank == 0:
-                queries_list = sum([self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in sequences_cpu_list], [])
+                queries_list = sum(
+                    [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in sequences_cpu_list], []
+                )
 
                 if self.custom_reward_func:
                     r = self.custom_reward_func.remote(queries_list, prompts_list, labels_list)
@@ -375,9 +381,7 @@ class RemoteExperienceMaker(BaseExperienceMaker):
 
         # Batch call actor model
         action_log_probs_list = []
-        for seq, action_mask, attn_mask in zip(
-            sequences_cpu_list, action_mask_list, attention_mask_cpu_list
-        ):
+        for seq, action_mask, attn_mask in zip(sequences_cpu_list, action_mask_list, attention_mask_cpu_list):
             action_log_probs = self.actor(
                 seq.to(device),
                 action_mask,
@@ -781,7 +785,7 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         attention_mask = attention_mask.to("cuda")
         action_mask = action_mask.to("cuda")
         response_length = action_mask.float().sum(dim=-1)
-        total_length=attention_mask.float().sum(dim=-1)
+        total_length = attention_mask.float().sum(dim=-1)
 
         rollout_samples = Samples(
             sequences=sequences,
