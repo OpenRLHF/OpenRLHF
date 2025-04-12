@@ -101,7 +101,7 @@ sudo pip uninstall xgboost transformer_engine flash_attn -y
 # pip install
 pip install openrlhf
 
-# vLLM加速を使用する場合（vLLM 0.8.2をインストール）
+# vLLM加速を使用する場合（vLLM 0.8.3をインストール）
 pip install openrlhf[vllm]
 # 最新のvLLMもサポートされています
 pip install openrlhf[vllm_latest]
@@ -116,8 +116,7 @@ pip install -e .
 ```
 
 > [!NOTE]
->vLLM 0.8.2以降の使用をお勧めします。
->`export VLLM_USE_V1=1`はvLLM 0.8.2以降またはNightlyバージョンが必要で、`export VLLM_ENABLE_V1_MULTIPROCESSING=0`を有効にする必要があります。
+>vLLM 0.8.3以降の使用をお勧めします。
 >また、[vLLM用のDockerfile](./dockerfile/)および[Nvidia-Dockerのワンクリックインストールスクリプト](./examples/scripts/nvidia_docker_install.sh)も提供しています。
 
 ### データセットの準備
@@ -405,7 +404,7 @@ Adamオフロードの有効化、報酬モデル（RM）および参照モデ�
 - `--colocate_critic_reward`、`--colocate_actor_ref`オプションを有効にしてノードをマージします。
 - `rollout_micro_batch_size`を可能な限り増やし（vLLMエンジンのTPサイズを最小限に抑え）、トレーニングフェーズでは`--micro_train_batch_size`を大きくし、`--packing_samples`を有効にします。
 - GPUメモリが十分にある場合は、`--adam_offload`を無効にし、`--overlap_comm`を有効にします。
-- vLLMの場合、vLLM 0.8.2以降で`--vllm_sync_backend nccl`と`export VLLM_USE_V1=1`と`export VLLM_ENABLE_V1_MULTIPROCESSING=0`を使用します。
+- vLLMの場合、vLLM 0.8.3以降で`--vllm_sync_backend nccl`
 - `n_samples_per_prompts` > 1の場合、vLLM生成で[enable_prefix_caching](https://docs.vllm.ai/en/stable/automatic_prefix_caching/apc.html)を有効にします。
 - 大きなベースモデルの場合、OOMが発生した場合は、`--colocate_xxxx`オプションを使用しないでください。
 

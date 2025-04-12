@@ -298,7 +298,7 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         start_time = time.time()
         if dist.get_rank() == 0:
             logger.info(
-                f"🚀 Starting experience making with {len(rollout_samples.sequences) * dist.get_world_size()} batches"
+                f"🚀 Starting experience making with {len(rollout_samples.sequences) * dist.get_world_size() // self.strategy.ring_attn_size} batches"
             )
 
         args = self.strategy.args

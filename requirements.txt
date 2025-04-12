@@ -12,7 +12,7 @@ optree>=0.13.0
 packaging
 peft
 pynvml>=12.0.0
-ray[default]==2.44.0
+ray[default]==2.43.0
 tensorboard
 torch
 torchmetrics

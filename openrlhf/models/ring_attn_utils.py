@@ -94,6 +94,15 @@ def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
     2. Adapts to ring_attn_group, pads sequences to be divisible by ring_attn_group
     3. Slices the sequences for the current ring_attn_rank
 
+    Example:
+        >>> # Input sequences shape: (batch=2, seqlen=4)
+        >>> sequences = [[1, 2, 3, 0], [4, 5, 0, 0]]  # 0 is padding
+        >>> attention_mask = [[1, 1, 1, 0], [1, 1, 0, 0]]
+        >>> # After unpad:
+        >>> # sequences: [1, 2, 3, 4, 5]  # shape (1, total_seqs=5)
+        >>> # If ring_attn_group size is 2, it will pad to length 6
+        >>> # Then slice for current rank (e.g., rank 0 gets [1,2,3], rank 1 gets [4,5,0])
+
     Args:
         sequences: Input sequences tensor of shape (batch, seqlen)
         attention_mask: Attention mask tensor for the sequences
@@ -127,6 +136,17 @@ def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
 def gather_and_pad_tensor(tensor, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen):
     """
     Gather and pad tensor data (such as logits, log_probs, etc.).
+
+    Example:
+        >>> # Input tensor from each rank (shape: (1, local_seq_len))
+        >>> # Rank 0: [1, 2, 3]
+        >>> # Rank 1: [4, 5, 0]  # 0 is padding
+        >>> # After all_gather:
+        >>> # tensor: [1, 2, 3, 4, 5, 0]  # shape (1, total_seqs=6)
+        >>> # After removing padding (ring_attn_pad_len=1):
+        >>> # tensor: [1, 2, 3, 4, 5]  # shape (1, total_seqs=5)
+        >>> # After pad_input with original indices:
+        >>> # tensor: [[1, 2, 3, 0], [4, 5, 0, 0]]  # shape (batch=2, seqlen=4)
 
     Args:
         tensor: Input tensor, can be logits, log_probs, etc.
