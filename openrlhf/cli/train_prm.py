@@ -53,18 +53,8 @@ def train(args):
         max_count=args.max_samples,
     )
 
-    if getattr(args, "eval_dataset", None):
-        eval_data = blending_datasets(
-            args.eval_dataset,
-            None,  # No probability sampling for eval datasets
-            strategy,
-        )
-    else:
-        eval_data = []
-
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
     train_dataset = ProcessRewardDataset(train_data, tokenizer, args.max_len, strategy)
-    eval_dataset = ProcessRewardDataset(eval_data, tokenizer, args.max_len, strategy)
 
     # prepare dataloader
     train_dataloader = strategy.setup_dataloader(
@@ -74,13 +64,23 @@ def train(args):
         True,
         train_dataset.packing_collate_fn if args.packing_samples else train_dataset.collate_fn,
     )
-    eval_dataloader = strategy.setup_dataloader(
-        eval_dataset,
-        args.micro_train_batch_size,
-        True,
-        False,
-        eval_dataset.packing_collate_fn if args.packing_samples else eval_dataset.collate_fn,
-    )
+
+    eval_dataset = None
+    eval_dataloader = None
+    if getattr(args, "eval_dataset", None):
+        eval_data = blending_datasets(
+            args.eval_dataset,
+            None,  # No probability sampling for eval datasets
+            strategy,
+        )
+        eval_dataset = ProcessRewardDataset(eval_data, tokenizer, args.max_len, strategy)
+        eval_dataloader = strategy.setup_dataloader(
+            eval_dataset,
+            args.micro_train_batch_size,
+            True,
+            False,
+            eval_dataset.packing_collate_fn if args.packing_samples else eval_dataset.collate_fn,
+        )
 
     # scheduler
     num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size

@@ -52,15 +52,6 @@ def train(args):
         args.seed,
         max_count=args.max_samples,
     )
-    if getattr(args, "eval_dataset", None):
-        eval_data = blending_datasets(
-            args.eval_dataset,
-            None,
-            strategy,
-        )
-    else:
-        eval_data = []
-
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
     train_dataset = SFTDataset(
         train_data,
@@ -72,17 +63,6 @@ def train(args):
         multiple_of=args.ring_attn_size,
         multiturn=args.multiturn,
     )
-    eval_dataset = SFTDataset(
-        eval_data,
-        tokenizer,
-        args.max_len,
-        strategy,
-        pretrain_mode=args.pretrain_mode,
-        input_template=args.input_template,
-        multiple_of=args.ring_attn_size,
-        multiturn=args.multiturn,
-    )
-
     # prepare dataloader
     train_dataloader = strategy.setup_dataloader(
         train_dataset,
@@ -91,13 +71,31 @@ def train(args):
         True,
         train_dataset.collate_fn,
     )
-    eval_dataloader = strategy.setup_dataloader(
-        eval_dataset,
-        args.micro_train_batch_size,
-        True,
-        False,
-        eval_dataset.collate_fn,
-    )
+
+    eval_dataloader = None
+    if getattr(args, "eval_dataset", None):
+        eval_data = blending_datasets(
+            args.eval_dataset,
+            None,
+            strategy,
+        )
+        eval_dataset = SFTDataset(
+            eval_data,
+            tokenizer,
+            args.max_len,
+            strategy,
+            pretrain_mode=args.pretrain_mode,
+            input_template=args.input_template,
+            multiple_of=args.ring_attn_size,
+            multiturn=args.multiturn,
+        )
+        eval_dataloader = strategy.setup_dataloader(
+            eval_dataset,
+            args.micro_train_batch_size,
+            True,
+            False,
+            eval_dataset.collate_fn,
+        )
 
     # scheduler
     num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size

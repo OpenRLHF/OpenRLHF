@@ -59,15 +59,6 @@ def train(args):
         max_count=args.max_samples,
     )
 
-    if getattr(args, "eval_dataset", None):
-        eval_data = blending_datasets(
-            args.eval_dataset,
-            None,  # No probability sampling for eval datasets
-            strategy,
-        )
-    else:
-        eval_data = []
-
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
     train_dataset = SFTDataset(
         train_data,
@@ -77,21 +68,31 @@ def train(args):
         pretrain_mode=args.pretrain_mode,
         input_template=args.input_template,
     )
-    eval_dataset = SFTDataset(
-        eval_data,
-        tokenizer,
-        args.max_len,
-        strategy,
-        pretrain_mode=args.pretrain_mode,
-        input_template=args.input_template,
-    )
 
+    # prepare dataloader
     train_dataloader = strategy.setup_dataloader(
         train_dataset, args.micro_train_batch_size, True, True, train_dataset.collate_fn
     )
-    eval_dataloader = strategy.setup_dataloader(
-        eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn
-    )
+
+    eval_dataset = None
+    eval_dataloader = None
+    if getattr(args, "eval_dataset", None):
+        eval_data = blending_datasets(
+            args.eval_dataset,
+            None,  # No probability sampling for eval datasets
+            strategy,
+        )
+        eval_dataset = SFTDataset(
+            eval_data,
+            tokenizer,
+            args.max_len,
+            strategy,
+            pretrain_mode=args.pretrain_mode,
+            input_template=args.input_template,
+        )
+        eval_dataloader = strategy.setup_dataloader(
+            eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn
+        )
 
     # scheduler
     num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size

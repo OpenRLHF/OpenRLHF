@@ -51,6 +51,25 @@ def train(args):
         max_count=args.max_samples,
     )
 
+    train_data = train_data.select(range(min(args.max_samples, len(train_data))))
+    train_dataset = RewardDataset(
+        train_data,
+        tokenizer,
+        args.max_len,
+        strategy,
+        input_template=args.input_template,
+        multiple_of=args.ring_attn_size,
+    )
+
+    # prepare dataloader
+    train_dataloader = strategy.setup_dataloader(
+        train_dataset,
+        args.micro_train_batch_size,
+        True,
+        True,
+        train_dataset.collate_fn,
+    )
+
     if getattr(args, "eval_dataset", None):
         eval_data = blending_datasets(
             args.eval_dataset,
@@ -61,15 +80,6 @@ def train(args):
         # Used for calculating mean/std for reward normalization
         eval_data = train_data.select(range(min(args.max_samples, len(train_data) * 0.01)))
 
-    train_data = train_data.select(range(min(args.max_samples, len(train_data))))
-    train_dataset = RewardDataset(
-        train_data,
-        tokenizer,
-        args.max_len,
-        strategy,
-        input_template=args.input_template,
-        multiple_of=args.ring_attn_size,
-    )
     eval_dataset = RewardDataset(
         eval_data,
         tokenizer,
@@ -77,14 +87,6 @@ def train(args):
         strategy,
         input_template=args.input_template,
         multiple_of=args.ring_attn_size,
-    )
-
-    train_dataloader = strategy.setup_dataloader(
-        train_dataset,
-        args.micro_train_batch_size,
-        True,
-        True,
-        train_dataset.collate_fn,
     )
     eval_dataloader = strategy.setup_dataloader(
         eval_dataset,

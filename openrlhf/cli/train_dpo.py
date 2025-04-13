@@ -67,27 +67,9 @@ def train(args):
         max_count=args.max_samples,
     )
 
-    if getattr(args, "eval_dataset", None):
-        eval_data = blending_datasets(
-            args.eval_dataset,
-            None,  # No probability sampling for eval datasets
-            strategy,
-        )
-    else:
-        eval_data = []
-
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
     train_dataset = RewardDataset(
         train_data,
-        tokenizer,
-        args.max_len,
-        strategy,
-        input_template=args.input_template,
-        is_dpo=True,
-        multiple_of=args.ring_attn_size,
-    )
-    eval_dataset = RewardDataset(
-        eval_data,
         tokenizer,
         args.max_len,
         strategy,
@@ -105,13 +87,30 @@ def train(args):
         train_dataset.collate_fn,
     )
 
-    eval_dataloader = strategy.setup_dataloader(
-        eval_dataset,
-        args.micro_train_batch_size,
-        True,
-        False,
-        eval_dataset.collate_fn,
-    )
+    eval_dataset = None
+    eval_dataloader = None
+    if getattr(args, "eval_dataset", None):
+        eval_data = blending_datasets(
+            args.eval_dataset,
+            None,  # No probability sampling for eval datasets
+            strategy,
+        )
+        eval_dataset = RewardDataset(
+            eval_data,
+            tokenizer,
+            args.max_len,
+            strategy,
+            input_template=args.input_template,
+            is_dpo=True,
+            multiple_of=args.ring_attn_size,
+        )
+        eval_dataloader = strategy.setup_dataloader(
+            eval_dataset,
+            args.micro_train_batch_size,
+            True,
+            False,
+            eval_dataset.collate_fn,
+        )
 
     # scheduler
     num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size

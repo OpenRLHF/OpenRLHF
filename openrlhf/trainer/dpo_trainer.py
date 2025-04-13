@@ -206,7 +206,6 @@ class DPOTrainer(ABC):
 
     # logs/checkpoints/evaluate
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
-        # logs
         if global_step % args.logging_steps == 0:
             # wandb
             if self._wandb is not None and self.strategy.is_rank_0():
@@ -218,7 +217,7 @@ class DPOTrainer(ABC):
                     self._tensorboard.add_scalar(f"train/{k}", v, global_step)
 
         # eval
-        if global_step % args.eval_steps == 0:
+        if global_step % args.eval_steps == 0 and self.eval_dataloader is not None:
             # do eval when len(dataloader) > 0, avoid zero division in eval.
             if len(self.eval_dataloader) > 0:
                 self.evaluate(self.eval_dataloader, global_step)

@@ -217,7 +217,7 @@ class ActorPPOTrainer(BasePPOTrainer):
                 disable=not self.strategy.is_rank_0(),
             )
 
-            for rand_prompts, labels in self.prompts_dataloader:
+            for _, rand_prompts, labels in self.prompts_dataloader:
                 for i, experience in enumerate(
                     self.experience_maker.make_experience_list(rand_prompts, labels, **self.generate_kwargs)
                 ):
