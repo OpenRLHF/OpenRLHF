@@ -57,18 +57,24 @@ def train(args):
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
 
     # prepare for data and dataset
-    train_data, eval_data = blending_datasets(
+    train_data = blending_datasets(
         args.dataset,
         args.dataset_probs,
         strategy,
         args.seed,
         max_count=args.max_samples,
-        stopping_strategy="all_exhausted",
-        train_split=args.train_split,
-        eval_split=args.eval_split,
     )
+
+    if getattr(args, "eval_dataset", None):
+        eval_data = blending_datasets(
+            args.eval_dataset,
+            None,  # No probability sampling for eval datasets
+            strategy,
+        )
+    else:
+        eval_data = []
+
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
-    eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
 
     train_dataset = UnpairedPreferenceDataset(
         train_data, tokenizer, args.max_len, strategy, input_template=args.input_template
@@ -191,10 +197,9 @@ if __name__ == "__main__":
     )
 
     # Custom dataset
-    parser.add_argument("--dataset", type=str, default="Dahoas/full-hh-rlhf")
-    parser.add_argument("--dataset_probs", type=str, default="1.0", help="sampling probs for datasets")
-    parser.add_argument("--train_split", type=str, default="train", help="train split of the HF dataset")
-    parser.add_argument("--eval_split", type=str, default="test", help="test split of the dataset")
+    parser.add_argument("--dataset", type=str, default="Dahoas/full-hh-rlhf", help="Path to the training dataset")
+    parser.add_argument("--dataset_probs", type=str, default=None, help="Sampling probabilities for training datasets")
+    parser.add_argument("--eval_dataset", type=str, default=None, help="Paths to the evaluation datasets")
 
     parser.add_argument("--input_key", type=str, default="input", help="JSON dataset key")
     parser.add_argument("--output_key", type=str, default=None, help="JSON dataset key")

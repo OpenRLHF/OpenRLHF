@@ -391,15 +391,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "--prompt_data_probs",
         type=str,
-        default="1.0",
+        default=None,
         help="sampling probs for datasets",
     )
-    parser.add_argument("--prompt_split", type=str, default="train")
+    parser.add_argument("--eval_dataset", type=str, default=None, help="Path to the evaluation dataset")
+    parser.add_argument("--eval_temperature", type=float, default=0.6, help="Temperature for evaluation")
+    parser.add_argument(
+        "--eval_n_samples_per_prompt", type=int, default=4, help="Number of samples per prompt for evaluation"
+    )
     parser.add_argument("--pretrain_data", type=str, default=None, help="HF dataset name or path")
     parser.add_argument(
         "--pretrain_data_probs",
         type=str,
-        default="1.0",
+        default=None,
         help="sampling probs for datasets",
     )
     parser.add_argument("--pretrain_split", type=str, default="train")

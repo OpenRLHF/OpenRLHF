@@ -188,7 +188,13 @@ class BaseExperienceMaker(ABC):
         self.reward_fn = reward_fn
         self.perf_stats = {}
         self.advantage_estimator = strategy.args.advantage_estimator
+
+        # init ring rank0 group
         self.ring_rank0_group = None
+        if self.strategy.ring_attn_group is not None:
+            world_size = dist.get_world_size()
+            ring_rank0 = [i * self.strategy.ring_attn_size for i in range(world_size // self.strategy.ring_attn_size)]
+            self.ring_rank0_group = dist.new_group(ranks=ring_rank0)
 
         # custom reward func for reinforced finetuning
         self.custom_reward_func = None
@@ -732,12 +738,6 @@ class RemoteExperienceMaker(BaseExperienceMaker):
 
         # Waiting for all requests to be sent
         if self.strategy.ring_attn_group is not None:
-            if self.ring_rank0_group is None:
-                world_size = dist.get_world_size()
-                ring_rank0 = [
-                    i * self.strategy.ring_attn_size for i in range(world_size // self.strategy.ring_attn_size)
-                ]
-                self.ring_rank0_group = dist.new_group(ranks=ring_rank0)
             dist.barrier(group=self.ring_rank0_group)
         else:
             dist.barrier()
