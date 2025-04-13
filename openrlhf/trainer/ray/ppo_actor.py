@@ -182,25 +182,6 @@ class ActorPPOTrainer(BasePPOTrainer):
         self.prompts_dataloader = prompts_dataloader
         self.pretrain_dataloader = pretrain_dataloader
 
-        # Initialize eval_dataloader if eval_data is provided
-        if hasattr(args, "eval_data"):
-            eval_data = blending_datasets(
-                args.eval_data,
-                args.eval_data_probs,
-                self.strategy,
-                args.seed,
-                max_count=args.max_eval_samples,
-                return_eval=True,
-                train_split=args.eval_split,
-            )
-            eval_dataset = PromptDataset(eval_data, self.tokenizer, self.strategy, input_template=args.input_template)
-            self.eval_dataloader = self.strategy.setup_dataloader(
-                eval_dataset,
-                args.eval_batch_size,
-                True,
-                True,
-            )
-
         # Restore step and start_epoch
         steps = consumed_samples // args.rollout_batch_size + 1
         start_episode = consumed_samples // args.rollout_batch_size // num_rollouts_per_episodes
