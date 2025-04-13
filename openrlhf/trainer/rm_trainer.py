@@ -210,7 +210,7 @@ class RewardModelTrainer(ABC):
         if global_step % args.eval_steps == 0 and self.eval_dataloader is not None:
             # do eval when len(dataloader) > 0, avoid zero division in eval.
             if len(self.eval_dataloader) > 0:
-                self.evaluate(global_step)
+                self.evaluate(self.eval_dataloader, global_step)
 
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
