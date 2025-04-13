@@ -170,9 +170,12 @@ data
 └── train.jsonl
 ```
 
+如何指定测试数据集 ?
+
+请使用 ``--eval_dataset {name or path}`` 来设置测试数据集路径。
+
 > [!NOTE]
->默认情况下我们使用 `train` 和 `test` 作为 split 区分 Huggingface 的训练/测试数据。
->`JSON key` 选项取决于具体的数据集。请参阅 [Reward Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/reward_dataset.py#L10) 和 [SFT Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/sft_dataset.py#L9)
+> ``JSON key`` 选项取决于具体的数据集。请参阅 [Reward Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/reward_dataset.py#L10) 和 [SFT Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/sft_dataset.py#L9)
 
 
 ### Supervised Fine-tuning
