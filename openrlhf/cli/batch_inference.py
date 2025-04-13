@@ -54,9 +54,7 @@ def batch_generate_vllm(args):
         args.dataset_probs,
         dummy_strategy,
         args.seed,
-        return_eval=False,
         max_count=args.max_samples,
-        train_split=args.dataset_split,
     )
     if args.iter is None:
         prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
@@ -126,9 +124,7 @@ def batch_generate(args):
         args.dataset_probs,
         strategy,
         args.seed,
-        return_eval=False,
         max_count=args.max_samples,
-        train_split=args.dataset_split,
     )
     if args.iter is None:
         prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
@@ -229,9 +225,7 @@ def batch_rm_inference(args):
         args.dataset_probs,
         strategy,
         args.seed,
-        return_eval=False,
         max_count=args.max_samples,
-        train_split=args.dataset_split,
     )
     dataset = dataset.select(range(min(args.max_samples, len(dataset))))
     dataset = SFTDataset(
@@ -316,8 +310,7 @@ if __name__ == "__main__":
 
     # Custom dataset
     parser.add_argument("--dataset", type=str, default=None)
-    parser.add_argument("--dataset_probs", type=str, default="1.0")
-    parser.add_argument("--dataset_split", type=str, default="train")
+    parser.add_argument("--dataset_probs", type=str, default=None)
     parser.add_argument("--input_key", type=str, default="input", help="JSON dataset key")
     parser.add_argument("--output_key", type=str, default="output", help="JSON dataset key")
     parser.add_argument(

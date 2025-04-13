@@ -40,6 +40,7 @@ def blending_datasets(
     seed=42,
     max_count=1e8,
     stopping_strategy="all_exhausted",
+    dataset_split=None,
 ):
     """Blend multiple datasets with optional probability sampling.
 
@@ -99,6 +100,8 @@ def blending_datasets(
             strategy.print(f"loaded {dataset} from files")
 
         # Select dataset
+        if dataset_split and dataset_split in data:
+            data = data[dataset_split]
         data = data.select(range(min(max_count, len(data))))
         data_list.append(data)
 
