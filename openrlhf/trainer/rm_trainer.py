@@ -258,8 +258,8 @@ class RewardModelTrainer(ABC):
                 loss_sum += loss.item()
                 step_bar.update()
 
-            acc_mean = acc / self.eval_dataloader.__len__()
-            loss_mean = loss_sum / self.eval_dataloader.__len__()
+            acc_mean = acc / eval_dataloader.__len__()
+            loss_mean = loss_sum / eval_dataloader.__len__()
 
             rewards = torch.cat(rewards).float()
             rewards = self.strategy.all_gather(rewards)
