@@ -628,8 +628,8 @@ class ActorPPOTrainer(BasePPOTrainer):
             queries = [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in samples.sequences]
 
             # Calculate rewards
-            if self.custom_reward_func:
-                rewards = self.custom_reward_func.remote(queries, all_prompts, all_labels)
+            if self.experience_maker.custom_reward_func:
+                rewards = self.experience_maker.custom_reward_func.remote(queries, all_prompts, all_labels)
             else:
                 rank = torch.distributed.get_rank() // self.strategy.ring_attn_size
                 rm = self.remote_rm_url[rank % len(self.remote_rm_url)]
@@ -827,6 +827,7 @@ class ActorModelRayActor(BasePPORole):
                 None,  # No probability sampling for eval datasets
                 strategy,
             )
+            eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
             eval_dataset = PromptDataset(eval_data, self.tokenizer, strategy, input_template=args.input_template)
             self.eval_dataloader = strategy.setup_dataloader(
                 eval_dataset,
