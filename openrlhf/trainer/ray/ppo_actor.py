@@ -162,6 +162,7 @@ class ActorPPOTrainer(BasePPOTrainer):
         args,
         prompts_dataloader,
         pretrain_dataloader,
+        eval_dataloader,
         consumed_samples=0,
         num_update_steps_per_episodes=1,
     ) -> None:
@@ -181,6 +182,7 @@ class ActorPPOTrainer(BasePPOTrainer):
 
         self.prompts_dataloader = prompts_dataloader
         self.pretrain_dataloader = pretrain_dataloader
+        self.eval_dataloader = eval_dataloader
 
         # Restore step and start_epoch
         steps = consumed_samples // args.rollout_batch_size + 1
@@ -936,6 +938,7 @@ class ActorModelRayActor(BasePPORole):
             args,
             self.prompts_dataloader,
             self.pretrain_dataloader,
+            self.eval_dataloader,
             self.consumed_samples,
             self.num_update_steps_per_episodes,
         )
