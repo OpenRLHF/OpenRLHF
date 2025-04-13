@@ -472,6 +472,9 @@ if __name__ == "__main__":
         print("Set args.vllm_enable_sleep to False when args.colocate_all_models is disabled.")
         args.vllm_enable_sleep = False
 
+    if args.eval_dataset:
+        assert args.remote_rm_url, "`--eval_dataset` is only supported with `--remote_rm_url`."
+
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub
 
