@@ -603,7 +603,7 @@ class ActorPPOTrainer(BasePPOTrainer):
             torch_dist_barrier_and_cuda_sync()
 
         # Only run evaluation on ring attention rank0
-        if self.strategy.ring_attn_group is not None or self.strategy.ring_attn_rank == 0:
+        if self.strategy.ring_attn_group is None or self.strategy.ring_attn_rank == 0:
 
             with torch.no_grad():
                 # First collect all prompts and labels
