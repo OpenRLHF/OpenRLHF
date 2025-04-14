@@ -603,15 +603,20 @@ class ActorPPOTrainer(BasePPOTrainer):
                 all_datasources = []
 
                 for datasources, prompts, labels in eval_dataloader:
-                    all_prompts.extend(prompts * n_samples_per_prompt)
-                    all_labels.extend(labels * n_samples_per_prompt)
-                    all_datasources.extend(datasources * n_samples_per_prompt)
+                    all_prompts.extend(prompts)
+                    all_labels.extend(labels)
+                    all_datasources.extend(datasources)
 
                 # Generate samples and calculate rewards
                 generate_kwargs = self.generate_kwargs.copy()
                 generate_kwargs["temperature"] = temperature
+                generate_kwargs["n_samples_per_prompt"] = n_samples_per_prompt
                 samples = self.experience_maker.generate_samples(all_prompts, all_labels, **generate_kwargs)
                 queries = [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in samples.sequences]
+
+                # duplicate prompts and labels for each sample
+                all_prompts = sum([[prompt] * n_samples_per_prompt for prompt in all_prompts], [])
+                all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
 
                 # Calculate rewards
                 if self.experience_maker.custom_reward_func:
@@ -628,7 +633,7 @@ class ActorPPOTrainer(BasePPOTrainer):
                 # Collect local statistics for each data source
                 local_metrics = {}  # {datasource: {"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}}
 
-                for i, datasource in enumerate(all_datasources[::n_samples_per_prompt]):
+                for i, datasource in enumerate(all_datasources):
                     if datasource not in local_metrics:
                         local_metrics[datasource] = {f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}
 
