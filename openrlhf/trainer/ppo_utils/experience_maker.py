@@ -12,6 +12,7 @@ import torch.nn as nn
 
 from openrlhf.models.actor import Actor
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
+from openrlhf.utils.distributed_util import sync_distributed_and_cuda
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
 
@@ -256,8 +257,7 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
-            torch.distributed.barrier()
-            torch.cuda.synchronize()
+            sync_distributed_and_cuda()
 
         # generate responses
         if self.strategy.ring_attn_group is not None:
@@ -279,8 +279,7 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             batch_vllm_engine_call(self.vllm_engines, "sleep")
 
         torch.cuda.empty_cache()
-        torch.distributed.barrier()
-        torch.cuda.synchronize()
+        sync_distributed_and_cuda()
 
         # Make experiences (models forward: logprobs, values, rewards, and kl divergence)
         experiences = self.make_experience(rollout_samples)
