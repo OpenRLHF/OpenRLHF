@@ -842,7 +842,7 @@ class ActorModelRayActor(BasePPORole):
             eval_dataset = PromptDataset(eval_data, self.tokenizer, strategy, input_template=args.input_template)
             self.eval_dataloader = strategy.setup_dataloader(
                 eval_dataset,
-                args.micro_rollout_batch_size,
+                1,
                 True,
                 False,
             )
