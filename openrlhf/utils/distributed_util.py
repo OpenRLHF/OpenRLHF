@@ -14,7 +14,7 @@ from torch.distributed.distributed_c10d import (
 )
 
 
-def sync_distributed_and_cuda():
+def torch_dist_barrier_and_cuda_sync():
     """Synchronize distributed training and CUDA operations.
     This function ensures that:
     1. All distributed processes reach this point (barrier)

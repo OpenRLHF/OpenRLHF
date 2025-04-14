@@ -22,7 +22,7 @@ from openrlhf.utils import blending_datasets, get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
 from openrlhf.utils.distributed_sampler import DistributedSampler
-from openrlhf.utils.distributed_util import init_process_group, sync_distributed_and_cuda
+from openrlhf.utils.distributed_util import init_process_group, torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
 
 from .launcher import BasePPORole
@@ -155,7 +155,7 @@ class ActorPPOTrainer(BasePPOTrainer):
 
             ray.get(refs)
 
-        sync_distributed_and_cuda()
+        torch_dist_barrier_and_cuda_sync()
 
     def fit(
         self,
@@ -237,7 +237,7 @@ class ActorPPOTrainer(BasePPOTrainer):
     def ppo_train(self, global_steps):
         # 1. ensure all experience makers done
         self.experience_maker.flush()
-        sync_distributed_and_cuda()
+        torch_dist_barrier_and_cuda_sync()
         status = {}
 
         # 2. triger remote critic model training
@@ -254,7 +254,7 @@ class ActorPPOTrainer(BasePPOTrainer):
                 ray.get(self.critic.offload_states.remote())
 
         if self.strategy.args.colocate_all_models:
-            sync_distributed_and_cuda()
+            torch_dist_barrier_and_cuda_sync()
 
         # 3. actor model training
         if global_steps > self.freezing_actor_steps:
@@ -273,17 +273,17 @@ class ActorPPOTrainer(BasePPOTrainer):
                 if self.strategy.args.vllm_enable_sleep:
                     batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
-                sync_distributed_and_cuda()
+                torch_dist_barrier_and_cuda_sync()
                 self._broadcast_to_vllm()
 
                 if self.strategy.args.vllm_enable_sleep:
                     batch_vllm_engine_call(self.vllm_engines, "sleep")
-                    sync_distributed_and_cuda()
+                    torch_dist_barrier_and_cuda_sync()
 
         # 5. wait remote critic model training done
         if self.critic_train_remote and not self.strategy.args.colocate_all_models:
             status.update(ray.get(critic_status_ref))
-        sync_distributed_and_cuda()
+        torch_dist_barrier_and_cuda_sync()
 
         return status
 
@@ -514,12 +514,12 @@ class ActorPPOTrainer(BasePPOTrainer):
                             for engine in self.vllm_engines
                         ]
                         ray.get(refs)
-                    sync_distributed_and_cuda()
+                    torch_dist_barrier_and_cuda_sync()
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)
         torch.cuda.empty_cache()
-        sync_distributed_and_cuda()
+        torch_dist_barrier_and_cuda_sync()
 
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         if global_step % args.logging_steps == 0:
@@ -576,7 +576,7 @@ class ActorPPOTrainer(BasePPOTrainer):
         if not self.disable_ds_ckpt:
             if self.critic_train_remote:
                 ray.get(ref)
-        sync_distributed_and_cuda()
+        torch_dist_barrier_and_cuda_sync()
 
     def evaluate(self, eval_dataloader, global_step, temperature=0.6, n_samples_per_prompt=1):
         """Evaluate model performance on eval dataset.
@@ -591,7 +591,7 @@ class ActorPPOTrainer(BasePPOTrainer):
             from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
-            sync_distributed_and_cuda()
+            torch_dist_barrier_and_cuda_sync()
 
         # Only run evaluation on ring attention rank0
         if self.strategy.ring_attn_group is not None or self.strategy.ring_attn_rank == 0:
@@ -682,7 +682,7 @@ class ActorPPOTrainer(BasePPOTrainer):
             batch_vllm_engine_call(self.vllm_engines, "sleep")
 
         torch.cuda.empty_cache()
-        sync_distributed_and_cuda()
+        torch_dist_barrier_and_cuda_sync()
 
     def reload_states(self):
         reload_deepspeed_states(self.actor.model)
@@ -932,14 +932,14 @@ class ActorModelRayActor(BasePPORole):
             # vLLM wakeup when vllm_enable_sleep
             if self.strategy.args.vllm_enable_sleep:
                 batch_vllm_engine_call(vllm_engines, "wake_up")
-            sync_distributed_and_cuda()
+            torch_dist_barrier_and_cuda_sync()
 
             trainer._broadcast_to_vllm()
 
             # vLLM offload when vllm_enable_sleep
             if self.strategy.args.vllm_enable_sleep:
                 batch_vllm_engine_call(vllm_engines, "sleep")
-                sync_distributed_and_cuda()
+                torch_dist_barrier_and_cuda_sync()
 
         trainer.fit(
             args,
