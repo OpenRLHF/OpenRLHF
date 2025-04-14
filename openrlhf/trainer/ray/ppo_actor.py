@@ -844,7 +844,7 @@ class ActorModelRayActor(BasePPORole):
                 eval_dataset,
                 args.micro_rollout_batch_size,
                 True,
-                True,
+                False,
             )
         else:
             self.eval_dataloader = None
