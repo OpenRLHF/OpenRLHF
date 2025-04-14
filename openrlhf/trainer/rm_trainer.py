@@ -104,6 +104,7 @@ class RewardModelTrainer(ABC):
             args.eval_steps = num_update_steps_per_epoch  # Evaluate once per epoch
         if args.save_steps == -1:
             args.save_steps = float("inf")  # do not save ckpt
+        self.num_update_steps_per_epoch = num_update_steps_per_epoch
 
         # Restore step and start_epoch
         step = consumed_samples // args.train_batch_size * self.strategy.accumulated_gradient + 1
@@ -207,7 +208,9 @@ class RewardModelTrainer(ABC):
                     self._tensorboard.add_scalar(f"train/{k}", v, global_step)
 
         # eval
-        if global_step % args.eval_steps == 0 and self.eval_dataloader is not None:
+        if (
+            global_step % args.eval_steps == 0 or global_step % self.num_update_steps_per_epoch == 0
+        ) and self.eval_dataloader is not None:
             # do eval when len(dataloader) > 0, avoid zero division in eval.
             if len(self.eval_dataloader) > 0:
                 self.evaluate(self.eval_dataloader, global_step)
