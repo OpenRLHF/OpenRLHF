@@ -12,6 +12,7 @@ import torch.nn as nn
 
 from openrlhf.models.actor import Actor
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
+from openrlhf.utils.distributed_util import torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
 
@@ -188,7 +189,13 @@ class BaseExperienceMaker(ABC):
         self.reward_fn = reward_fn
         self.perf_stats = {}
         self.advantage_estimator = strategy.args.advantage_estimator
+
+        # init ring rank0 group
         self.ring_rank0_group = None
+        if self.strategy.ring_attn_group is not None:
+            world_size = dist.get_world_size()
+            ring_rank0 = [i * self.strategy.ring_attn_size for i in range(world_size // self.strategy.ring_attn_size)]
+            self.ring_rank0_group = dist.new_group(ranks=ring_rank0)
 
         # custom reward func for reinforced finetuning
         self.custom_reward_func = None
@@ -250,8 +257,7 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
-            torch.distributed.barrier()
-            torch.cuda.synchronize()
+            torch_dist_barrier_and_cuda_sync()
 
         # generate responses
         if self.strategy.ring_attn_group is not None:
@@ -273,8 +279,7 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             batch_vllm_engine_call(self.vllm_engines, "sleep")
 
         torch.cuda.empty_cache()
-        torch.distributed.barrier()
-        torch.cuda.synchronize()
+        torch_dist_barrier_and_cuda_sync()
 
         # Make experiences (models forward: logprobs, values, rewards, and kl divergence)
         experiences = self.make_experience(rollout_samples)
@@ -732,12 +737,6 @@ class RemoteExperienceMaker(BaseExperienceMaker):
 
         # Waiting for all requests to be sent
         if self.strategy.ring_attn_group is not None:
-            if self.ring_rank0_group is None:
-                world_size = dist.get_world_size()
-                ring_rank0 = [
-                    i * self.strategy.ring_attn_size for i in range(world_size // self.strategy.ring_attn_size)
-                ]
-                self.ring_rank0_group = dist.new_group(ranks=ring_rank0)
             dist.barrier(group=self.ring_rank0_group)
         else:
             dist.barrier()

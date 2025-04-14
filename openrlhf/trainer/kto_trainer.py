@@ -190,7 +190,6 @@ class KTOTrainer(ABC):
 
     # logs/checkpoints/evaluate
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
-        # logs
         if global_step % args.logging_steps == 0:
             # wandb
             if self._wandb is not None and self.strategy.is_rank_0():
@@ -202,30 +201,35 @@ class KTOTrainer(ABC):
                     self._tensorboard.add_scalar(f"train/{k}", v, global_step)
 
         # eval
-        if global_step % args.eval_steps == 0:
+        if global_step % args.eval_steps == 0 and self.eval_dataloader is not None:
             # do eval when len(dataloader) > 0, avoid zero division in eval.
             if len(self.eval_dataloader) > 0:
-                self.evaluate(global_step)
+                self.evaluate(self.eval_dataloader, global_step)
+
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
-            self.strategy.save_ckpt(
-                self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
-            )
+            if not self.disable_ds_ckpt:
+                self.strategy.save_ckpt(
+                    self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+                )
+            if self.save_hf_ckpt:
+                save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
+                self.strategy.save_model(self.model, self.tokenizer, save_path)
 
-    def evaluate(self, steps=0):
+    def evaluate(self, eval_dataloader, steps=0):
         self.model.eval()
         with torch.no_grad():
             step_bar = tqdm(
-                range(self.eval_dataloader.__len__()),
+                range(eval_dataloader.__len__()),
                 desc="Eval stage of global_step %d" % steps,
                 disable=not self.strategy.is_rank_0(),
             )
 
             loss_sum = 0
             chosen_reward, reject_reward = 0, 0
-            for input_ids, attention_mask, labels, prompt_ids_lens in self.eval_dataloader:
+            for input_ids, attention_mask, labels, prompt_ids_lens in eval_dataloader:
                 input_ids = input_ids.squeeze(1).to(torch.cuda.current_device())
                 attention_mask = attention_mask.squeeze(1).to(torch.cuda.current_device())
 
@@ -254,9 +258,9 @@ class KTOTrainer(ABC):
                 loss_sum += kto_loss.item()
                 step_bar.update()
 
-            loss_mean = loss_sum / self.eval_dataloader.__len__()
-            chosen_reward = chosen_reward / self.eval_dataloader.__len__()
-            reject_reward = reject_reward / self.eval_dataloader.__len__()
+            loss_mean = loss_sum / eval_dataloader.__len__()
+            chosen_reward = chosen_reward / eval_dataloader.__len__()
+            reject_reward = reject_reward / eval_dataloader.__len__()
 
             logs = {"eval_loss": loss_mean, "chosen_reward": chosen_reward, "reject_reward": reject_reward}
             logs = self.strategy.all_reduce(logs)

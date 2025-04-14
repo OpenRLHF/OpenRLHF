@@ -14,6 +14,16 @@ from torch.distributed.distributed_c10d import (
 )
 
 
+def torch_dist_barrier_and_cuda_sync():
+    """Synchronize distributed training and CUDA operations.
+    This function ensures that:
+    1. All distributed processes reach this point (barrier)
+    2. All CUDA operations are completed (synchronize)
+    """
+    torch.distributed.barrier()
+    torch.cuda.synchronize()
+
+
 # Copy from pytorch to allow creating multiple main groups.
 # https://github.com/pytorch/pytorch/blob/main/torch/distributed/distributed_c10d.py
 def init_process_group(

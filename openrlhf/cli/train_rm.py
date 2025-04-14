@@ -43,18 +43,15 @@ def train(args):
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
 
     # prepare for data and dataset
-    train_data, eval_data = blending_datasets(
+    train_data = blending_datasets(
         args.dataset,
         args.dataset_probs,
         strategy,
         args.seed,
         max_count=args.max_samples,
-        stopping_strategy="all_exhausted",
-        train_split=args.train_split,
-        eval_split=args.eval_split,
     )
+
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
-    eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
     train_dataset = RewardDataset(
         train_data,
         tokenizer,
@@ -63,6 +60,26 @@ def train(args):
         input_template=args.input_template,
         multiple_of=args.ring_attn_size,
     )
+
+    # prepare dataloader
+    train_dataloader = strategy.setup_dataloader(
+        train_dataset,
+        args.micro_train_batch_size,
+        True,
+        True,
+        train_dataset.collate_fn,
+    )
+
+    if getattr(args, "eval_dataset", None):
+        eval_data = blending_datasets(
+            args.eval_dataset,
+            None,  # No probability sampling for eval datasets
+            strategy,
+        )
+    else:
+        # Used for calculating mean/std for reward normalization
+        eval_data = train_data.select(range(min(args.max_samples, int(len(train_data) * 0.01))))
+
     eval_dataset = RewardDataset(
         eval_data,
         tokenizer,
@@ -70,14 +87,6 @@ def train(args):
         strategy,
         input_template=args.input_template,
         multiple_of=args.ring_attn_size,
-    )
-
-    train_dataloader = strategy.setup_dataloader(
-        train_dataset,
-        args.micro_train_batch_size,
-        True,
-        True,
-        train_dataset.collate_fn,
     )
     eval_dataloader = strategy.setup_dataloader(
         eval_dataset,
@@ -228,9 +237,8 @@ if __name__ == "__main__":
         "--apply_chat_template", action="store_true", default=False, help="Use HF tokenizer chat template"
     )
     parser.add_argument("--tokenizer_chat_template", type=str, default=None)
-    parser.add_argument("--train_split", type=str, default="train", help="train split of the HF dataset")
-    parser.add_argument("--eval_split", type=str, default="test", help="test split of the dataset")
     parser.add_argument("--max_samples", type=int, default=1e8, help="Max number of samples")
+    parser.add_argument("--eval_dataset", type=str, default=None, help="Path to the evaluation dataset")
     parser.add_argument("--max_len", type=int, default=512)
 
     # wandb parameters

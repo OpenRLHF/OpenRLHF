@@ -197,8 +197,8 @@ class SFTTrainer(ABC):
 
         # eval
         if global_step % args.eval_steps == 0:
-            # do eval when len(dataloader) > 0, avoid zero division in eval.
-            if len(self.eval_dataloader) > 0:
+            # do eval when eval_dataloader is not None and len(dataloader) > 0, avoid zero division in eval.
+            if self.eval_dataloader is not None and len(self.eval_dataloader) > 0:
                 self.evaluate(self.eval_dataloader, global_step)
 
         # save ckpt

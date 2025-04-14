@@ -155,19 +155,12 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 "<s>[INST] Hello, how are you? [/INST]I'm doing great. How can I help you today?</s> [INST] I'd like to show off how chat templating works! [/INST]"
 ```
 
-トレーニングおよびテストデータセットの指定方法：
+トレーニングおよびテストデータセットの指定方法
 
-`data_type@data_dir`形式を使用して指定できます。例えば、データセットは`--dataset json@./data`として設定できます。
-
-```
-data
-├── test.jsonl
-└── train.jsonl
-```
+テストデータセットのパスは ``--eval_dataset {name or path}`` を使用して設定してください。
 
 > [!NOTE]
-> デフォルトでは、`train`および`test`を使用してHuggingfaceのトレーニングおよびテストデータセットを区別します。
-> `JSON key`オプションは特定のデータセットに依存します。詳細は[Reward Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/reward_dataset.py#L10)および[SFT Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/sft_dataset.py#L9)を参照してください。
+> ``JSON key`` オプションは特定のデータセットに依存します。詳細は [Reward Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/reward_dataset.py#L10) および [SFT Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/sft_dataset.py#L9) を参照してください。
 
 ### 教師あり微調整
 
@@ -346,143 +339,4 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 ### Reinforced Fine-tuning
 
-OpenRLHFは、便利で効率的なReinforced Fine-tuningをサポートしています。カスタム `reward_func` 関数を含む[ファイル](./examples/scripts/reward_func.py)を実装し、そのパスを `remote_rm_url` パラメータに渡すだけです。例えば：
-
-```python
-# reward_func.py
-import torch
-
-def reward_func(queries, prompts, labels):
-    # queries は prompts + responses
-    # labels は answers
-    print(queries)
-    return torch.randn(len(queries))
-```
-
-そして、以下のように設定するだけです：
-
-```shell 
-ray job submit --address="http://127.0.0.1:8265" \
-  --runtime-env-json='{"working_dir": "/openrlhf"}' \
-  -- python3 -m openrlhf.cli.train_ppo_ray \
-  ...
-  --remote_rm_url /path/to/reward_func.py
-```
-
-### LoRA  
-`LoRA (Low-Rank Adaptation)` を使用する場合、`OpenRLHF` はデフォルトで `LoRA Adapter` のみを保存し、フルウェイトは保存しません。タスクを通常どおり続行するには、`Adapter` をベースモデルのウェイトと統合する必要があります。  
-
-```bash
-python -m openrlhf.cli.lora_combiner \
-    --model_path meta-llama/Meta-Llama-3-8B \
-    --lora_path ./checkpoint/llama3-8b-rm \
-    --output_path ./checkpoint/llama-3-8b-rm-combined \
-    --is_rm \
-    --bf16
-```
-
-## パフォーマンス
-
-Adamオフロードの有効化、報酬モデル（RM）および参照モデル（Ref）オフロードなどの技術を使用して、DSChatのパフォーマンスを最大限に最適化し、推論段階でのマイクロバッチサイズを増やし、メモリ不足の問題を回避しました。LLaMA2のハイブリッドエンジン（HE）を有効にするために、DSChatのいくつかのバグも修正しました。Optimized DSChatとOpenRLHFを使用して1024のプロンプトを1つのPPOエポックでトレーニングするのにかかる平均時間（秒）は次のとおりです：
-
-| **サイズ** | **NVIDIA A800-80GB GPU** | **Optimized DSChat（ハイブリッドエンジン付き）** | **OpenRLHF** | **スピードアップ** |
-| :---: | :---: | :---: | :---: | :---: |
-| 7B | 16 | 855.09 | 471.11 | 1.82x |
-| 13B | 32 | 1528.93 | 608.93 | 2.5x |
-| 34B | 32 | 3634.98 | 1526.4 | 2.4x |
-| 70B | 32 | 10407.0 | 4488.53 | 2.3x |
-
-> [!NOTE]
-> データは古くなっています。再テストのためにパフォーマンスチューニングセクションを参照してください。
-
-### パフォーマンスチューニングガイド
-
-最適なパフォーマンスを達成するために、ノードを`vLLM:Actor:Critic = 1:1:1`で割り当てることをお勧めします。
-
-- 例えば、48 A100 GPUで70Bモデルの場合、16 A100 GPUをvLLMエンジンに、16 GPUをActorモデルに、残りの16 GPUをCriticモデルに割り当てることを推奨します。
-- GPUメモリが十分にある場合は、分散RLHFではなくハイブリッドエンジン`--colocate_all_models`と`--vllm_enable_sleep`と`--deepspeed_enable_sleep`を使用します。
-- `--colocate_critic_reward`、`--colocate_actor_ref`オプションを有効にしてノードをマージします。
-- `rollout_micro_batch_size`を可能な限り増やし（vLLMエンジンのTPサイズを最小限に抑え）、トレーニングフェーズでは`--micro_train_batch_size`を大きくし、`--packing_samples`を有効にします。
-- GPUメモリが十分にある場合は、`--adam_offload`を無効にし、`--overlap_comm`を有効にします。
-- vLLMの場合、vLLM 0.8.3以降で`--vllm_sync_backend nccl`
-- `n_samples_per_prompts` > 1の場合、vLLM生成で[enable_prefix_caching](https://docs.vllm.ai/en/stable/automatic_prefix_caching/apc.html)を有効にします。
-- 大きなベースモデルの場合、OOMが発生した場合は、`--colocate_xxxx`オプションを使用しないでください。
-
-## OpenRLHFを使用している企業と組織
-
-- Google
-- ByteDance
-- Tencent
-- Alibaba
-- Baidu
-- China Telecom
-- Vivo
-- Allen AI
-- NexusFlow
-- Jülich Supercomputing Centre (JSC)
-- Berkeley Starling Team
-- M-A-P
-- ...
-
-## 参加方法
-
-**参加方法**
-
-1. janhu9527@gmail.comにメールを送るか、[GitHub Organization](https://github.com/OpenRLHF)に参加してください。以下の詳細を含めてください：
-   - あなたの名前
-   - あなたのGitHubユーザー名
-   - あなたの興味のある分野
-   - NLPおよび/またはAIに関連するスキルと経験
-1. 公式GitHub[OpenRLHF ↗](https://github.com/OpenRLHF/OpenRLHF)プロジェクトページを通じて参加することもできます。貢献したい興味についてのissueを作成するだけで、私たちが連絡します。
-
-**何ができるか**
-
-1. チームに参加し、OpenRLHFプロジェクトの開発に参加します。
-1. プロジェクトに貢献するためにプルリクエストを提出します。
-1. ドキュメントの改善、バグの修正、新機能の作成を手伝います。
-1. プロジェクトを共有し、コミュニティの成長を支援します。
-
-## スポンサー
-
-スポンサーシップは、OpenRLHFの維持と改善に役立ちます。このプロジェクトが役立つと感じた場合は、スポンサーを検討してください。[Open Collective ↗](https://opencollective.com/OpenRLHF)でスポンサーになることができます。
-
-## スター履歴
-
-[![Star History Chart](https://api.star-history.com/svg?repos=OpenRLHF/OpenRLHF&type=Date)](https://star-history.com/#OpenRLHF/OpenRLHF&Date)
-
-## 貢献者
-
-すべての貢献者に感謝します！貢献したい場合は、プルリクエストを作成するか、issueを作成してください。
-
-<a href="https://github.com/OpenRLHF/OpenRLHF/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=OpenRLHF/OpenRLHF" />
-</a>
-
-## 参考文献と謝辞
-
-AIおよびNLP分野への貢献に対して、以下のプロジェクトおよび組織に感謝します：
-
-- [Hugging Face Transformers ↗](https://github.com/huggingface/transformers)
-- [OpenAI GPT ↗](https://github.com/openai/gpt-3)
-- [LLaMA ↗](https://llama.meta.com/)
-- [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
-- [Ray ↗](https://github.com/ray-project/ray)
-
-私たちのプロジェクトは、[ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/Chat)および[DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat)にも感謝します。プロジェクトの初期段階で、彼らのコードデザインを参考にしました。
-私たちのプロジェクトでは、ring attention の開発にあたり GPU サポートを提供してくださった [Netmind.AI](https://www.netmind.ai/) にも深く感謝いたします。
-
-(2024/7) 私たちのGitHub組織はOpenLLMAIからOpenRLHFに変更されました。
-
-## 引用
-```
-@article{hu2024openrlhf,
-  title={OpenRLHF: An Easy-to-use, Scalable and High-performance RLHF Framework},
-  author={Jian Hu and Xibin Wu and Zilin Zhu and Xianyu and Weixun Wang and Dehao Zhang and Yu Cao},
-  journal={arXiv preprint arXiv:2405.11143},
-  year={2024}
-}
-```
-
-______________________________________________________________________
-
-*OpenRLHF © 2025 OpenRLHF. All Rights Reserved.*
+OpenRLHFは、便利で効率的なReinforced Fine-tuningをサポートしています。カスタム `reward_func` 関数を含む[ファイル](./examples/scripts/reward_func.py)を実装し、そのパスを `
