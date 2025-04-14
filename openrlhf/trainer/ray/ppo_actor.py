@@ -2,6 +2,8 @@ import itertools
 import math
 import os
 import socket
+import time
+from datetime import timedelta
 from typing import Callable, Dict, List
 
 import deepspeed
@@ -23,7 +25,10 @@ from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
 from openrlhf.utils.distributed_sampler import DistributedSampler
 from openrlhf.utils.distributed_util import init_process_group, torch_dist_barrier_and_cuda_sync
+from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
+
+logger = init_logger(__name__)
 
 from .launcher import BasePPORole
 from .utils import get_physical_gpu_id
@@ -586,6 +591,10 @@ class ActorPPOTrainer(BasePPOTrainer):
             global_step: Current training step for logging
             n_samples_per_prompt: Number of samples to generate per prompt for pass@k calculation
         """
+        start_time = time.time()
+        if self.strategy.is_rank_0():
+            logger.info(f"⏰ Evaluation start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+
         # vLLM wakeup when vllm_enable_sleep
         if self.strategy.args.vllm_enable_sleep:
             from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
@@ -687,7 +696,12 @@ class ActorPPOTrainer(BasePPOTrainer):
             batch_vllm_engine_call(self.vllm_engines, "sleep")
 
         torch.cuda.empty_cache()
-        torch_dist_barrier_and_cuda_sync()
+
+        end_time = time.time()
+        duration = end_time - start_time
+        if self.strategy.is_rank_0():
+            time_str = str(timedelta(seconds=duration)).split(".")[0]
+            logger.info(f"✨ Evaluation completed in {time_str}")
 
     def reload_states(self):
         reload_deepspeed_states(self.actor.model)
