@@ -163,7 +163,12 @@ class NaiveReplayBuffer(ABC):
     """
 
     def __init__(
-        self, sample_batch_size: int, limit: int = 0, cpu_offload: bool = True, packing_samples: bool = False, store_extra_buffers: bool = False
+        self,
+        sample_batch_size: int,
+        limit: int = 0,
+        cpu_offload: bool = True,
+        packing_samples: bool = False,
+        store_extra_buffers: bool = False,
     ) -> None:
         super().__init__()
         self.sample_batch_size = sample_batch_size
@@ -192,9 +197,9 @@ class NaiveReplayBuffer(ABC):
     def clear(self) -> None:
         self.items.clear()
         if self.store_extra_buffers:
-            self.items.extend(self.extra_buffers[:self.limit])
-            #TODO: whether to drop too old buffers?
-            self.extra_buffers = self.extra_buffers[self.limit:]
+            self.items.extend(self.extra_buffers[: self.limit])
+            # TODO: whether to drop too old buffers?
+            self.extra_buffers = self.extra_buffers[self.limit :]
 
     @torch.no_grad()
     def sample(self) -> Experience:
@@ -245,6 +250,6 @@ class NaiveReplayBuffer(ABC):
 
     def set_limit(self, limit: int) -> None:
         self.limit = limit
-    
+
     def full(self) -> bool:
         return len(self.items) >= self.limit

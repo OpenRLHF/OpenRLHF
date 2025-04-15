@@ -195,7 +195,7 @@ class ActorPPOTrainer(BasePPOTrainer):
             range(args.max_global_steps),
             desc=f"Steps [Episode {episode+1}]",
             disable=not self.strategy.is_rank_0(),
-            initial=steps-1,
+            initial=steps - 1,
         )
         while steps <= args.max_global_steps:
             if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
@@ -218,7 +218,9 @@ class ActorPPOTrainer(BasePPOTrainer):
                 replay_buffer_ready = self.replay_buffer.full()
                 replay_buffer_ready = self.strategy.all_gather(replay_buffer_ready)
                 if not replay_buffer_ready.all():
-                    print(f"Replay buffer space: {len(self.replay_buffer)}/{self.replay_buffer.limit}. Continue to sample more data.")
+                    print(
+                        f"Replay buffer space: {len(self.replay_buffer)}/{self.replay_buffer.limit}. Continue to sample more data."
+                    )
                     continue
 
                 if self.args.advantage_estimator not in ["group_norm", "dr_grpo"]:
@@ -228,7 +230,9 @@ class ActorPPOTrainer(BasePPOTrainer):
                 status = self.ppo_train(steps)
                 self.replay_buffer.clear()
                 if args.store_extra_buffers:
-                    print(f"Replay buffer space: {len(self.replay_buffer)}/{self.replay_buffer.limit}. Stored buffers are used after clearing.")
+                    print(
+                        f"Replay buffer space: {len(self.replay_buffer)}/{self.replay_buffer.limit}. Stored buffers are used after clearing."
+                    )
 
                 if "kl" in status:
                     self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
@@ -792,7 +796,13 @@ class ActorModelRayActor(BasePPORole):
             max_steps = math.ceil(args.num_episodes * num_update_steps_per_episodes)
             args.max_global_steps = args.num_episodes * self.num_rollouts_per_episodes
         else:
-            max_steps = args.max_global_steps * args.rollout_batch_size * args.n_samples_per_prompt // args.train_batch_size * args.max_epochs
+            max_steps = (
+                args.max_global_steps
+                * args.rollout_batch_size
+                * args.n_samples_per_prompt
+                // args.train_batch_size
+                * args.max_epochs
+            )
         self._max_steps = max_steps
 
         actor_scheduler = get_scheduler(
@@ -828,7 +838,9 @@ class ActorModelRayActor(BasePPORole):
             _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
             self.consumed_samples = states["consumed_samples"]
             self.trained_steps = states["trained_steps"]
-            strategy.print(f"Loaded the checkpoint: {ckpt_path}, consumed_samples: {self.consumed_samples}, trained_steps: {self.trained_steps}")
+            strategy.print(
+                f"Loaded the checkpoint: {ckpt_path}, consumed_samples: {self.consumed_samples}, trained_steps: {self.trained_steps}"
+            )
 
         # initial offload
         if strategy.args.deepspeed_enable_sleep:
@@ -921,7 +933,7 @@ class ActorModelRayActor(BasePPORole):
         reward_model: List[ray.actor.ActorHandle],
         remote_rm_url: List[str] = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
-        custom_experience_filter:str=None,
+        custom_experience_filter: str = None,
         vllm_engines: List[ray.actor.ActorHandle] = None,
         critic_train_remote: bool = False,
     ):

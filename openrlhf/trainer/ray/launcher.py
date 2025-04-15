@@ -293,7 +293,7 @@ class PPORayActorGroup:
         reward_model_groups: List["PPORayActorGroup"],
         remote_rm_urls: List[str] = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
-        custom_experience_filter:str=None,
+        custom_experience_filter: str = None,
         vllm_engines: List = None,
     ):
         """Train actor model.

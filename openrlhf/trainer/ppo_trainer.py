@@ -81,7 +81,7 @@ class BasePPOTrainer(ABC):
         dataloader_pin_memory: bool = True,
         remote_rm_url: str = None,
         reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
-        custom_experience_filter:str=None,
+        custom_experience_filter: str = None,
         save_hf_ckpt: bool = False,
         disable_ds_ckpt: bool = False,
         **generate_kwargs,
@@ -136,7 +136,11 @@ class BasePPOTrainer(ABC):
             self.kl_ctl = FixedKLController(init_kl_coef)
 
         self.replay_buffer = NaiveReplayBuffer(
-            micro_train_batch_size, buffer_limit, buffer_cpu_offload, getattr(self.args, "packing_samples", False), store_extra_buffers=self.args.store_extra_buffers
+            micro_train_batch_size,
+            buffer_limit,
+            buffer_cpu_offload,
+            getattr(self.args, "packing_samples", False),
+            store_extra_buffers=self.args.store_extra_buffers,
         )
 
     def ppo_train(self, global_steps=0):
