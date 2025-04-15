@@ -64,6 +64,7 @@ class DeepspeedStrategy(ABC):
         # overlap_comm
         self.overlap_comm = getattr(args, "overlap_comm", False)
         self.torch_compile = getattr(args, "torch_compile", False)
+        self.use_ds_universal_ckpt = getattr(args, "use_ds_universal_ckpt", False)
 
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
@@ -238,6 +239,7 @@ class DeepspeedStrategy(ABC):
             zpg=self.zpg,
             grad_accum_dtype=self.grad_accum_dtype,
             overlap_comm=self.overlap_comm,
+            use_ds_universal_ckpt=self.use_ds_universal_ckpt,
         )
 
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
@@ -372,6 +374,8 @@ class DeepspeedStrategy(ABC):
                 for filename in os.listdir(train_from_model_path):
                     if filename.endswith(".py"):
                         shutil.copy(os.path.join(train_from_model_path, filename), os.path.join(output_dir, filename))
+        dist.barrier()
+        torch.cuda.synchronize()
 
     def all_reduce(self, data, op="mean"):
         assert op in ("mean", "max", "sum")

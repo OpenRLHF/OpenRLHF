@@ -1,9 +1,8 @@
-from typing import Optional, Union
+from typing import Optional
 
 import deepspeed
 import torch
 import torch.nn as nn
-from flash_attn.utils.distributed import all_gather
 from peft import LoraConfig, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
@@ -11,8 +10,7 @@ from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from openrlhf.utils.logging_utils import init_logger
 
-from .ring_attn_utils import convert_ring_attn_params
-from .utils import reset_position_ids
+from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
 
 logger = init_logger(__name__)
 
@@ -195,43 +193,29 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             pad_sequence=False,
             packed_seq_lens=None,
         ) -> torch.Tensor:
-            if not self.packing_samples:
+            batch, seqlen = input_ids.size()
+            eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
+            forward_attention_mask = attention_mask
+            if self.packing_samples:
+                input_ids, position_ids, _, ring_attn_pad_len, indices = unpad_and_slice_tensor(
+                    input_ids, attention_mask, ring_attn_group
+                )
+                forward_attention_mask = None
+            else:
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
                 position_ids = attention_mask.long().cumsum(-1) - 1
                 position_ids.masked_fill_(attention_mask == 0, 1)
-            else:
-                # convert attention_mask to position_ids
-                if ring_attn_group is not None:
-                    input_ids, attention_mask, position_ids = convert_ring_attn_params(
-                        input_ids, attention_mask, packed_seq_lens, ring_attn_group
-                    )
-                else:
-                    position_ids = reset_position_ids(attention_mask)
-                # explicitly ignore attention_mask for packing_samples
-                attention_mask = None
 
             outputs = getattr(self, self.base_model_prefix)(
-                input_ids, attention_mask=attention_mask, position_ids=position_ids
+                input_ids, attention_mask=forward_attention_mask, position_ids=position_ids
             )
             last_hidden_states = outputs["last_hidden_state"]
+
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
 
             if self.packing_samples:
-                packed_seq_lens = torch.tensor(packed_seq_lens, device=values.device)
-                eos_indices = packed_seq_lens.cumsum(dim=0) - 1
-                if ring_attn_group is not None:
-                    reward = all_gather(values, ring_attn_group).reshape(1, -1)
-                    if pad_sequence:
-                        ring_attn_size = torch.distributed.get_world_size(ring_attn_group)
-                        pad_len = (ring_attn_size - reward.shape[-1] % ring_attn_size) % ring_attn_size
-                        # Since padding was applied at the end during packing, the position of the EOS (End Of Sequence) needs to be corrected.
-                        eos_indices[-1] -= pad_len + 1
-                else:
-                    reward = values
-                reward = reward.squeeze(0).gather(dim=0, index=eos_indices)
-            else:
-                eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
-                reward = values.gather(dim=1, index=eos_indices).squeeze(1)
+                values = gather_and_pad_tensor(values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
+            reward = values.gather(dim=1, index=eos_indices).squeeze(1)
 
             if not self.training and self.normalize_reward:
                 reward = (reward - self.mean) / self.std
@@ -267,56 +251,45 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
         def forward(
             self,
             input_ids: torch.LongTensor = None,
-            num_actions: Optional[Union[int, list[int]]] = None,
+            action_mask: Optional[torch.Tensor] = None,
             attention_mask: Optional[torch.Tensor] = None,
             return_output=False,
             ring_attn_group=None,
             values_allgather=False,
             packed_seq_lens=None,
         ) -> torch.Tensor:
-            if not self.packing_samples:
+            batch, seqlen = input_ids.size()
+            forward_attention_mask = attention_mask
+            if self.packing_samples:
+                input_ids, position_ids, _, ring_attn_pad_len, indices = unpad_and_slice_tensor(
+                    input_ids, attention_mask, ring_attn_group
+                )
+                forward_attention_mask = None
+            else:
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
                 position_ids = attention_mask.long().cumsum(-1) - 1
                 position_ids.masked_fill_(attention_mask == 0, 1)
-            else:
-                # convert attention_mask to position_ids
-                if ring_attn_group is not None:
-                    input_ids, attention_mask, position_ids = convert_ring_attn_params(
-                        input_ids, attention_mask, packed_seq_lens, ring_attn_group
-                    )
-                else:
-                    position_ids = reset_position_ids(attention_mask)
-                # explicitly ignore attention_mask for packing_samples
-                attention_mask = None
 
             outputs = getattr(self, self.base_model_prefix)(
-                input_ids, attention_mask=attention_mask, position_ids=position_ids
+                input_ids, attention_mask=forward_attention_mask, position_ids=position_ids
             )
+
+            if action_mask is None:
+                assert return_output
+                return outputs
+
             last_hidden_states = outputs["last_hidden_state"]
-            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
-            if ring_attn_group is not None and values_allgather:
-                values = all_gather(values, ring_attn_group).reshape(values.shape[0], -1)[:, :-1]
-            else:
-                values = values[:, :-1]
+            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)  # (1, total_seqs)
+
+            if self.packing_samples:
+                values = gather_and_pad_tensor(values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
+
+            values = values[:, :-1]
             # normalize reward
             if self.normalize_reward:
                 values = (values - self.mean) / self.std
 
-            if num_actions is None:
-                assert return_output
-                return outputs
-
-            if not self.packing_samples:
-                action_values = values[:, -num_actions:]
-            else:
-                assert isinstance(num_actions, list) and len(num_actions) == len(packed_seq_lens)
-                action_values = []
-                offset = 0
-                for num_action, seq_len in zip(num_actions, packed_seq_lens):
-                    start, end = max(0, offset + seq_len - num_action - 1), offset + seq_len - 1
-                    action_values.append(values[:, start:end])
-                    offset += seq_len
-                action_values = torch.cat(action_values, dim=1)
+            action_values = values[:, -action_mask.shape[1] :] * action_mask.float()
 
             if return_output:
                 return (action_values, outputs)

@@ -50,14 +50,16 @@ class PromptDataset(Dataset):
 
         self.prompts = []
         self.labels = []
+        self.datasources = []
         for data in tqdm(dataset, desc="Preprocessing data", disable=not self.strategy.is_rank_0()):
             prompt, label = preprocess_data(data, input_template, input_key, label_key, apply_chat_template)
             self.prompts.append(prompt)
             self.labels.append(label)
+            self.datasources.append(data.get("datasource", "default"))
 
     def __len__(self):
         length = len(self.prompts)
         return length
 
     def __getitem__(self, idx):
-        return self.prompts[idx], self.labels[idx]
+        return self.datasources[idx], self.prompts[idx], self.labels[idx]

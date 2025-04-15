@@ -5,7 +5,7 @@ import torch
 from torch.optim import Optimizer
 from tqdm import tqdm
 
-from openrlhf.models import GPTLMLoss
+from openrlhf.models import SFTLoss
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 
@@ -61,7 +61,7 @@ class SFTTrainer(ABC):
         self.save_hf_ckpt = save_hf_ckpt
         self.disable_ds_ckpt = disable_ds_ckpt
 
-        self.loss_fn = GPTLMLoss(ring_attn_group=self.strategy.ring_attn_group)
+        self.loss_fn = SFTLoss()
 
         # Mixtral 8*7b
         self.aux_loss = self.args.aux_loss_coef > 1e-8
@@ -132,58 +132,24 @@ class SFTTrainer(ABC):
 
             # train
             self.model.train()
-            for prompt_id_lens, inputs, attention_masks, infos in self.train_dataloader:
-                if self.packing_samples:
-                    inputs = inputs.to(torch.cuda.current_device())
-                    attention_mask = attention_masks.to(torch.cuda.current_device())
-                else:
-                    inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
-                    attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
-
-                if self.strategy.ring_attn_group is None:
-                    output = self.model(inputs, attention_mask=attention_mask, return_output=True)
-                else:
-                    output = self.model(
-                        inputs,
-                        attention_mask=attention_mask,
-                        return_output=True,
-                        ring_attn_group=self.strategy.ring_attn_group,
-                        packed_seq_lens=infos["input_length"],
-                    )
-
-                # loss function
-                labels = torch.where(
-                    attention_mask.bool(),
+            for inputs, attention_masks, loss_masks in self.train_dataloader:
+                inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
+                attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
+                loss_mask = loss_masks.to(torch.cuda.current_device()).squeeze(1)
+                per_token_log_probs, output = self.model(
                     inputs,
-                    self.loss_fn.IGNORE_INDEX,
+                    attention_mask=attention_mask,
+                    return_output=True,
+                    return_logprobs=True,
+                    ring_attn_group=self.strategy.ring_attn_group,
                 )
+
                 # mixtral
                 if self.aux_loss:
                     aux_loss = output.aux_loss
                 else:
                     aux_loss = 0
-
-                if not self.pretrain_mode:
-                    if self.packing_samples:
-                        # As response_ranges need to constrain the dataset organization strictly, we handle multiturn feature separately.
-                        if infos["response_ranges"]:
-                            dump_labels = torch.full(labels.size(), self.loss_fn.IGNORE_INDEX).to(labels.device)
-                            for response_ranges in infos["response_ranges"]:
-                                for response_range in response_ranges:
-                                    dump_labels[0][response_range[0] : response_range[1] + 1] = labels[0][
-                                        response_range[0] : response_range[1] + 1
-                                    ]
-                            labels = dump_labels
-                        else:
-                            index = 0
-                            for input_length, source_len in zip(infos["input_length"], prompt_id_lens):
-                                labels[0][index : index + source_len + 1] = self.loss_fn.IGNORE_INDEX
-                                index += input_length
-                    else:
-                        for label, source_len in zip(labels, prompt_id_lens):
-                            label[: source_len + 1] = self.loss_fn.IGNORE_INDEX
-
-                gpt_loss = self.loss_fn(output.logits, labels)
+                gpt_loss = self.loss_fn(per_token_log_probs, loss_mask[:, :-1])
                 loss = gpt_loss + aux_loss * self.args.aux_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
@@ -231,8 +197,8 @@ class SFTTrainer(ABC):
 
         # eval
         if global_step % args.eval_steps == 0:
-            # do eval when len(dataloader) > 0, avoid zero division in eval.
-            if len(self.eval_dataloader) > 0:
+            # do eval when eval_dataloader is not None and len(dataloader) > 0, avoid zero division in eval.
+            if self.eval_dataloader is not None and len(self.eval_dataloader) > 0:
                 self.evaluate(self.eval_dataloader, global_step)
 
         # save ckpt
@@ -258,52 +224,18 @@ class SFTTrainer(ABC):
                 disable=not self.strategy.is_rank_0(),
             )
 
-            for prompt_id_lens, inputs, attention_masks, infos in eval_dataloader:
-                if self.packing_samples:
-                    inputs = inputs.to(torch.cuda.current_device())
-                    attention_mask = attention_masks.to(torch.cuda.current_device())
-                else:
-                    inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
-                    attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
-
-                if self.strategy.ring_attn_group is None:
-                    output = self.model(inputs, attention_mask=attention_mask, return_output=True)
-                else:
-                    output = self.model(
-                        inputs,
-                        attention_mask=attention_mask,
-                        return_output=True,
-                        ring_attn_group=self.strategy.ring_attn_group,
-                        packed_seq_lens=infos["input_length"],
-                    )
-
-                # loss function
-                labels = torch.where(
-                    attention_mask.bool(),
+            for inputs, attention_masks, loss_masks in eval_dataloader:
+                inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
+                attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
+                loss_mask = loss_masks.to(torch.cuda.current_device()).squeeze(1)
+                per_token_log_probs = self.model(
                     inputs,
-                    self.loss_fn.IGNORE_INDEX,
+                    attention_mask=attention_mask,
+                    return_logprobs=True,
+                    ring_attn_group=self.strategy.ring_attn_group,
                 )
 
-                if not self.pretrain_mode:
-                    if self.packing_samples:
-                        if infos["response_ranges"]:
-                            dump_labels = torch.full(labels.size(), self.loss_fn.IGNORE_INDEX).to(labels.device)
-                            for response_ranges in infos["response_ranges"]:
-                                for response_range in response_ranges:
-                                    dump_labels[0][response_range[0] : response_range[1]] = labels[0][
-                                        response_range[0] : response_range[1]
-                                    ]
-                            labels = dump_labels
-                        else:
-                            index = 0
-                            for input_length, source_len in zip(infos["input_length"], prompt_id_lens):
-                                labels[0][index : index + source_len] = self.loss_fn.IGNORE_INDEX
-                                index += input_length
-                    else:
-                        for label, source_len in zip(labels, prompt_id_lens):
-                            label[:source_len] = self.loss_fn.IGNORE_INDEX
-
-                loss = self.loss_fn(output.logits, labels)
+                loss = self.loss_fn(per_token_log_probs, loss_mask[:, :-1])
 
                 times += 1
                 loss_sum += loss.item()

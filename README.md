@@ -38,6 +38,7 @@ OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Tra
 More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [Technical Report](https://arxiv.org/abs/2405.11143) | [Documents](https://openrlhf.readthedocs.io/)
 
 ## News
+- [2025/3] The CMU [Advanced Natural Language Processing Spring 2025](https://cmu-l3.github.io/anlp-spring2025/) course uses OpenRLHF as the RLHF framework teaching case.
 - [2025/2] [Logic-RL](https://arxiv.org/abs/2502.14768) and [PRIME](https://arxiv.org/abs/2502.01456) demonstrate that REINFORCE++ is more stable in training compared to GRPO and faster than PPO.
 - [2025/2] StepFunc implements a [single-controller version of OpenRLHF](https://github.com/Open-Reasoner-Zero/Open-Reasoner-Zero).
 - [2025/2] [LMM-R1](https://github.com/TideDra/lmm-r1) is a fork of OpenRLHF, aimed at providing high-performance RL infrastructure for reproduction of DeepSeek-R1 on multimodal tasks.
@@ -49,9 +50,9 @@ More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csof
 
 ## Features
 
-- Distributed [PPO](./examples/scripts/train_ppo_llama_ray.sh) and [REINFORCE++/RLOO](./examples/scripts/train_reinforce_llama_ray.sh) implementations based on Ray.  
+- Distributed [PPO](./examples/scripts/train_ppo_llama_ray.sh) and [REINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray.sh) implementations based on Ray.  
 - [Ray-based Reinforced Finetuning](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
-- Support Ray-based [PPO](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh) and [REINFORCE++/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh) using Hybrid Engine  (`--colocate_all_models`, `--vllm_enable_sleep` and `--vllm_gpu_memory_utilization 0.5`)
+- Support Ray-based [PPO](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh) and [REINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh) using Hybrid Engine  (`--colocate_all_models`, `--vllm_enable_sleep` and `--vllm_gpu_memory_utilization 0.5`)
 - Full RLHF fine-tuning support for models with [over 70 billion parameters](./examples/scripts/train_ppo_llama_ray_70b.sh).  
 - Integration with vLLM for accelerated generation in RLHF tasks (`--vllm_num_engines`).  
 - Support for multiple reward models (`--reward_pretrain model1,model2...`) and remote reward models (`--remote_rm_url`).  
@@ -103,7 +104,7 @@ sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
 # pip install
 pip install openrlhf
 
-# If you want to use vLLM acceleration (Install vLLM 0.7.2)
+# If you want to use vLLM acceleration (Install vLLM 0.8.3)
 pip install openrlhf[vllm]
 # latest vLLM is also supported
 pip install openrlhf[vllm_latest]
@@ -118,7 +119,7 @@ pip install -e .
 ```
 
 > [!NOTE]
->We recommend using vLLM 0.7.2 or higher.
+>We recommend using vLLM 0.8.3 or higher.
 >We also provided the [Dockerfiles for vLLM](./dockerfile/) and [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh).
 
 ### Prepare Datasets
@@ -157,18 +158,12 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 "<s>[INST] Hello, how are you? [/INST]I'm doing great. How can I help you today?</s> [INST] I'd like to show off how chat templating works! [/INST]"
 ```
 
-How to specify training and test datasets ?
+How to specify test datasets ?
 
-You can specify it using the `data_type@data_dir` format. For example, the dataset can be set as `--dataset json@./data`.
+Please set test datasets path using ``--eval_dataset {name or path}``.
 
-```
-data
-├── test.jsonl
-└── train.jsonl
-```
 
 > [!NOTE]
-> By default, we use `train` and `test` as splits to distinguish training and testing datasets from Huggingface.
 > The ``JSON key`` options depends on the specific datasets. See [Reward Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/reward_dataset.py#L10) and [SFT Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/sft_dataset.py#L9)
 
 ### Supervised Fine-tuning
@@ -262,45 +257,9 @@ reward = reward_model.model(*inputs).last_hidden_state
 reward = reward_model.score(reward)[:, -1]
 ```
 
-### PPO without Ray
-
-```bash
-deepspeed --module openrlhf.cli.train_ppo \
-  --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-  --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
-  --save_path ./checkpoint/llama-3-8b-rlhf \
-  --save_steps -1 \
-  --logging_steps 1 \
-  --eval_steps -1 \
-  --micro_train_batch_size 2 \
-  --train_batch_size 128 \
-  --micro_rollout_batch_size 4 \
-  --rollout_batch_size 1024 \
-  --max_epochs 1 \
-  --prompt_max_len 1024 \
-  --generate_max_len 1024 \
-  --zero_stage 2 \
-  --bf16 \
-  --actor_learning_rate 5e-7 \
-  --critic_learning_rate 9e-6 \
-  --init_kl_coef 0.01 \
-  --prompt_data OpenRLHF/prompt-collection-v0.1 \
-  --input_key context_messages \
-  --apply_chat_template \
-  --max_samples 100000 \
-  --normalize_reward \
-  --adam_offload \
-  --flash_attn \
-  --gradient_checkpointing \
-  --use_wandb {wandb_token}
-
-# Support remote reward model (HTTP)
-# --remote_rm_url http://localhost:5000/get_reward
-```
-
 ### PPO/REINFORCE++ with Ray and vLLM
 
-To improve RLHF training speed or support 70B models, we can use the PPO with Ray and vLLM acceleration
+To improve RLHF training speed or support 70B models, we can use the PPO with Ray and vLLM acceleration (Hybrid Engine)
 
 ```bash
 # launch the master node of ray in container
@@ -310,48 +269,55 @@ ray start --head --node-ip-address 0.0.0.0 --num-gpus 8
 ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 
 ray job submit --address="http://127.0.0.1:8265" \
-  --runtime-env-json='{"working_dir": "/openrlhf"}' \
-  -- python3 -m openrlhf.cli.train_ppo_ray \
-  --ref_num_nodes 1 \
-  --ref_num_gpus_per_node 2 \
-  --reward_num_nodes 1 \
-  --reward_num_gpus_per_node 2 \
-  --critic_num_nodes 1 \
-  --critic_num_gpus_per_node 2 \
-  --actor_num_nodes 1 \
-  --actor_num_gpus_per_node 2 \
-  --vllm_num_engines 2 \
-  --vllm_tensor_parallel_size 2 \
-  --colocate_critic_reward \
-  --colocate_actor_ref \
-  --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-  --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
-  --save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
-  --micro_train_batch_size 8 \
-  --train_batch_size 128 \
-  --micro_rollout_batch_size 16 \
-  --rollout_batch_size 1024 \
-  --max_samples 100000 \
-  --max_epochs 1 \
-  --prompt_max_len 1024 \
-  --generate_max_len 1024 \
-  --zero_stage 3 \
-  --bf16 \
-  --actor_learning_rate 5e-7 \
-  --critic_learning_rate 9e-6 \
-  --init_kl_coef 0.01 \
-  --prompt_data OpenRLHF/prompt-collection-v0.1 \
-  --input_key context_messages \
-  --apply_chat_template \
-  --normalize_reward \
-  --packing_samples \
-  --adam_offload \
-  --flash_attn \
-  --gradient_checkpointing \
-  --use_wandb {wandb_token}
+   --runtime-env-json='{"working_dir": "/openrlhf"}' \
+   -- python3 -m openrlhf.cli.train_ppo_ray \
+   --ref_num_nodes 1 \
+   --ref_num_gpus_per_node 8 \
+   --reward_num_nodes 1 \
+   --reward_num_gpus_per_node 8 \
+   --critic_num_nodes 1 \
+   --critic_num_gpus_per_node 8 \
+   --actor_num_nodes 1 \
+   --actor_num_gpus_per_node 8 \
+   --vllm_num_engines 4 \
+   --vllm_tensor_parallel_size 2 \
+   --colocate_all_models \
+   --vllm_gpu_memory_utilization 0.5 \
+   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
+   --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \
+   --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
+   --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
+   --save_hf_ckpt \
+   --micro_train_batch_size 8 \
+   --train_batch_size 128 \
+   --micro_rollout_batch_size 16 \
+   --rollout_batch_size 1024 \
+   --n_samples_per_prompt 1 \
+   --max_epochs 1 \
+   --prompt_max_len 1024 \
+   --max_samples 100000 \
+   --generate_max_len 1024 \
+   --zero_stage 3 \
+   --bf16 \
+   --actor_learning_rate 5e-7 \
+   --critic_learning_rate 9e-6 \
+   --init_kl_coef 0.01 \
+   --prompt_data OpenRLHF/prompt-collection-v0.1 \
+   --input_key context_messages \
+   --apply_chat_template \
+   --normalize_reward \
+   --gradient_checkpointing \
+   --packing_samples \
+   --vllm_sync_backend nccl \
+   --enforce_eager \
+   --vllm_enable_sleep \
+   --deepspeed_enable_sleep
+   --use_wandb {wandb_token}
 
-# Support REINFORCE++  | RLOO | REINFORCE++-baseline | GRPO
-# --advantage_estimator reinforce | rloo | reinforce_baseline | group_norm
+# Support REINFORCE++  | RLOO | REINFORCE++-baseline | GRPO | Dr. GRPO
+# --advantage_estimator reinforce | rloo | reinforce_baseline | group_norm | dr_grpo
+
+# Set --init_kl_coef to 0 will not launch the reference model
 
 # Support remote reward model (HTTP)
 # --remote_rm_url http://localhost:5000/get_reward
@@ -365,9 +331,10 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 > [!NOTE]
 > RLOO and REINFORCE++-baseline in OPENRLHF are a modification based on REINFORCE++:
-> - REINFORCE++ integrates key optimization techniques from PPO while eliminating the need for a critic network.
-> - REINFORCE++-baseline uses the mean reward of multiple samples from the same prompt as the baseline.
+> - REINFORCE++ integrates key optimization techniques from PPO (such as advantage normalization and PPO-clip loss) while eliminating the need for a critic network.
+> - REINFORCE++-baseline uses the `mean reward of multiple samples from the same prompt` as the baseline to reshape the rewards (with global batch normalization `/std`).
 > - RLOO in OpenRLHF modifies the original version by incorporating the `per-token KL reward` and utilizing the `PPO-clip loss`.
+> - Dr. GRPO remove the group normalization `/std` in GRPO.
 
 
 > [!NOTE]
@@ -401,8 +368,11 @@ ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
   ...
-  --remote_rm_url /path/to/reward_func.py
+  --remote_rm_url /path/to/reward_func.py \
+  --label_key answer
 ```
+
+where the `label_key` parameter is used to pass additional sample information such as answer to the reward function.
 
 ### LoRA
 If you use `LoRA (Low-Rank Adaptation)`, `OpenRLHF` will not save the full weights by default instead of `LoRA Adapter`. To continue in your task normally, you should combine the `Adapter` with weights of your base model
@@ -432,7 +402,17 @@ We optimized DSChat's performance to the greatest extent possible by employing t
 
 ### Performance Tuning Guide
 
-To achieve optimal performance, we recommend allocating nodes number `vLLM:Actor:Critic = 1:1:1`. For example, for a 70B model with 48 A100 GPUs, it is advised to allocate 16 A100 GPUs to the vLLM Engine, 16 GPUs to the Actor model, and the remaining 16 GPUs to the Critic model. Additionally, enable the `--colocate_critic_reward`, `--colocate_actor_ref` options to merge nodes. Finally, you should increase the `rollout_micro_batch_size` (and minimize the TP size of vLLM engine) as much as possible. During the training phase, a larger `--micro_train_batch_size` is better and enable `--packing_samples`. When there are enough GPUs, please disable `--adam_offload` and enable `--overlap_comm`. For multi-nodes RLHF, please use `--vllm_sync_backend nccl` with vLLM 0.7.2+. Enable `enable_prefix_caching` in vLLM generation when ``n_samples_per_prompts`` > 1. Using hybrid engine `--colocate_all_models` and ``–vllm_enable_sleep``rather than distributed RLHF when the model size and context length are small values.  For a large base model, if an OOM occurs, do not use any colocate options.
+To achieve optimal performance, we recommend allocating nodes `vLLM:Actor:Critic = 1:1:1`. 
+
+- For example, for a 70B model with 48 A100 GPUs, it is advised to allocate 16 A100 GPUs to the vLLM Engine, 16 GPUs to the Actor model, and the remaining 16 GPUs to the Critic model. 
+- Using hybrid engine `--colocate_all_models` and `--vllm_enable_sleep` and `--deepspeed_enable_sleep` rather than distributed RLHF when there are enough GPU memory.
+- Enable the `--colocate_critic_reward`, `--colocate_actor_ref` options to merge nodes.  
+- You should increase the `rollout_micro_batch_size` (and minimize the TP size of vLLM engine) as much as possible. During the training phase, a larger `--micro_train_batch_size` is better and enable `--packing_samples`.
+- When there are enough GPU memory, please disable `--adam_offload` and enable `--overlap_comm`.
+- For vLLM, please use `--vllm_sync_backend nccl`
+- Enable [enable_prefix_caching](https://docs.vllm.ai/en/stable/automatic_prefix_caching/apc.html) in vLLM generation when `n_samples_per_prompts` > 1.
+- For a large base model, if an OOM occurs, do not use any `--colocate_xxxx` options.
+
 
 ## Companies and Organizations using OpenRLHF
 

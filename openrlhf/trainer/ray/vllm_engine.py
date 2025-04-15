@@ -6,7 +6,7 @@ from typing import Any, List
 import ray
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-from vllm import LLM
+from vllm.inputs import TokensPrompt
 
 from openrlhf.utils.logging_utils import init_logger
 
@@ -29,9 +29,11 @@ class LLMRayActor:
         noset_visible_devices = kwargs.pop("noset_visible_devices")
         if kwargs.get("distributed_executor_backend") == "ray":
             # a hack to make the script work.
-            # stop ray from manipulating CUDA_VISIBLE_DEVICES
+            # stop ray from manipulating *_VISIBLE_DEVICES
             # at the top-level when the distributed_executor_backend is ray.
             os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+            os.environ.pop("ROCR_VISIBLE_DEVICES", None)
+            os.environ.pop("HIP_VISIBLE_DEVICES", None)
         elif noset_visible_devices:
             # We need to set CUDA_VISIBLE_DEVICES to the ray assigned GPU
             # when the distributed_executor_backend is not ray and
@@ -50,7 +52,14 @@ class LLMRayActor:
         self.requests = {}
         self.response_queues = defaultdict(queue.Queue)
 
-        self.llm = LLM(*args, **kwargs)
+        import vllm
+
+        full_determinism = kwargs.pop("full_determinism", False)
+        if full_determinism or vllm.__version__ == "0.8.2":
+            # https://github.com/vllm-project/vllm/blob/effc5d24fae10b29996256eb7a88668ff7941aed/examples/offline_inference/reproduciblity.py#L11
+            os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+
+        self.llm = vllm.LLM(*args, **kwargs)
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray):
         return self.llm.collective_rpc(
@@ -82,14 +91,15 @@ class LLMRayActor:
         if self.actor_counter == self.num_actors:
             assert len(self.requests) == self.num_actors
             num_requests = []
-            requests = []
+            requests: list[TokensPrompt] = []
             for actor_rank, request in self.requests.items():
                 num_requests.append((actor_rank, len(request)))
-                requests.extend(request)
+                for r in request:
+                    requests.append(TokensPrompt(prompt_token_ids=r))
 
             if len(requests) > 0:
                 # For now we assume that all requests have the same sampling params
-                responses = self.llm.generate(sampling_params=sampling_params, prompt_token_ids=requests)
+                responses = self.llm.generate(prompts=requests, sampling_params=sampling_params)
             else:
                 responses = []
 
@@ -114,6 +124,7 @@ def create_vllm_engines(
     tensor_parallel_size: int,
     pretrain: str,
     seed: int,
+    full_determinism: bool,
     enable_prefix_caching: bool,
     enforce_eager: bool,
     max_model_len: int,
@@ -124,9 +135,10 @@ def create_vllm_engines(
 ):
     import vllm
 
-    assert vllm.__version__ >= "0.7.2", "OpenRLHF only supports vllm >= 0.7.2"
+    assert vllm.__version__ >= "0.8.1", "OpenRLHF only supports vllm >= 0.8.1"
 
     vllm_engines = []
+    noset_visible_devices = ray_noset_visible_devices(ray.get(get_all_env_variables.remote()))
     distributed_executor_backend = "uni" if tensor_parallel_size == 1 else "ray"
     use_hybrid_engine = shared_pg is not None
     num_gpus = int(tensor_parallel_size == 1)
@@ -165,7 +177,7 @@ def create_vllm_engines(
             ).remote(
                 model=pretrain,
                 enforce_eager=enforce_eager,
-                worker_cls="openrlhf.trainer.ray.vllm_worker_wrap.WorkerWrap",
+                worker_extension_cls="openrlhf.trainer.ray.vllm_worker_wrap.WorkerWrap",
                 tensor_parallel_size=tensor_parallel_size,
                 seed=seed + i,
                 distributed_executor_backend=distributed_executor_backend,
@@ -173,12 +185,13 @@ def create_vllm_engines(
                 enable_prefix_caching=enable_prefix_caching,
                 dtype="bfloat16",
                 trust_remote_code=True,
+                full_determinism=full_determinism,
                 num_actors=num_actors,
                 gpu_memory_utilization=gpu_memory_utilization,
                 bundle_indices=bundle_indices,
                 num_gpus=0.2 if use_hybrid_engine else 1,
                 enable_sleep_mode=vllm_enable_sleep,
-                noset_visible_devices=ray_noset_visible_devices(),
+                noset_visible_devices=noset_visible_devices,
             )
         )
 

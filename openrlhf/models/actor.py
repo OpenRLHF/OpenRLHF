@@ -3,15 +3,13 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from flash_attn.utils.distributed import all_gather
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
-from torch.nn import functional as F
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
-from .ring_attn_utils import convert_ring_attn_params
-from .utils import log_probs_from_logits, reset_position_ids
+from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
+from .utils import log_probs_from_logits
 
 
 class Actor(nn.Module):
@@ -174,28 +172,41 @@ class Actor(nn.Module):
         return self.process_sequences(sequences, input_ids.size(1), eos_token_id, pad_token_id)
 
     def process_sequences(self, sequences: torch.Tensor, input_len, eos_token_id, pad_token_id):
+        """
+        Process generated sequences to create attention masks and action masks.
+
+        Args:
+            sequences (torch.Tensor): Generated sequence tensor
+            input_len (int): Length of the input sequence
+            eos_token_id (int): Token ID for the end-of-sequence token
+            pad_token_id (int): Token ID for the padding token
+
+        Returns:
+            tuple: A tuple containing three elements:
+                - sequences: Original sequence
+                - attention_mask: Attention mask indicating valid token positions
+                - action_mask: Action mask indicating valid action token positions
+        """
+        # Create initial attention mask by marking positions that are neither EOS nor padding tokens
         attention_mask = (sequences.ne(eos_token_id) & sequences.ne(pad_token_id)).to(dtype=torch.long)
         seq_length = attention_mask.size(1)
 
-        # The following code is equivalent to:
-        #
-        # for i in range(attention_mask.size(0)):
-        #     for t in reversed(range(seq_length)):
-        #         if attention_mask[i][t] > 0.5:
-        #             attention_mask[i][min(t + 1, seq_length - 1)] = True
-        #             sequences[i][min(t + 1, seq_length - 1)] = eos_token_id
-        #             break
-        #
+        # Find the position of the last valid token in each sequence
         eos_indices = seq_length - attention_mask.long().fliplr().argmax(dim=1, keepdim=True).clamp(min=1)
-        sequences.scatter_(dim=1, index=eos_indices, value=eos_token_id)
 
-        # For Llama3 and Qwen2 models, there are some eos_tokens in the middle of the prompt.
+        # Handle cases where EOS tokens might appear in the middle of the prompt (for Llama3 and Qwen2 models)
+        # Find the position of the first valid token in each sequence
         first_token_indices = attention_mask.long().argmax(dim=1, keepdim=True)
+        # Create position mask
         mask = torch.arange(seq_length).unsqueeze(0).expand(sequences.size(0), -1).to(device=sequences.device)
+        # Generate final attention mask, keeping only positions between first and last valid tokens
         attention_mask = (mask >= first_token_indices) & (mask <= eos_indices).to(dtype=torch.long)
 
-        # in RL, state_i (current token) + action_i (next token) -> state_i+1 (next token)
+        # In reinforcement learning, the state transition is represented as:
+        # state_i (current token) + action_i (next token) -> state_i+1 (next token)
+        # Generate state sequence from input_len-1 to second-to-last token
         state_seq = sequences[:, input_len - 1 : -1]
+        # Generate action mask indicating valid action token positions
         action_mask = state_seq.ne(eos_token_id) & state_seq.ne(pad_token_id)
         action_mask[:, 0] = 1
 
@@ -204,80 +215,53 @@ class Actor(nn.Module):
     def forward(
         self,
         sequences: torch.LongTensor,
-        num_actions: Optional[Union[int, list[int]]] = None,
+        action_mask: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         return_output=False,
+        allgather_logits=False,
+        return_logprobs=False,
         ring_attn_group: Optional[dist.ProcessGroup] = None,
-        logps_allgather=False,
         packed_seq_lens: Optional[list[int]] = None,
     ) -> torch.Tensor:
         """Returns action log probs"""
-        if not self.packing_samples:
+        batch, seqlen = sequences.size()
+        foward_attention_mask = attention_mask
+        if self.packing_samples:
+            sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices = unpad_and_slice_tensor(
+                sequences, attention_mask, ring_attn_group
+            )
+            foward_attention_mask = None
+        else:
             # https://github.com/OpenRLHF/OpenRLHF/issues/217
+            rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
-        else:
-            # convert attention_mask to position_ids
-            if ring_attn_group is not None:
-                labels = sequences
-                sequences, attention_mask, position_ids = convert_ring_attn_params(
-                    sequences, attention_mask, packed_seq_lens, ring_attn_group
-                )
-            else:
-                position_ids = reset_position_ids(attention_mask)
-            # explicitly ignore attention_mask for packing_samples
-            attention_mask = None
 
-        output = self.model(sequences, attention_mask=attention_mask, position_ids=position_ids)
+        output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids)
         # https://github.com/OpenRLHF/OpenRLHF/pull/634
         output["logits"] = output["logits"].to(torch.float32)
 
-        if num_actions is None:
+        return_action_log_probs = action_mask is not None
+        if not return_action_log_probs and not return_logprobs:
             assert return_output
+            if allgather_logits and self.packing_samples:
+                output["logits"] = gather_and_pad_tensor(
+                    output["logits"], ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
+                )
             return output
 
-        if not self.packing_samples:
-            log_probs = log_probs_from_logits(
-                output["logits"][:, :-1, :], sequences[:, 1:], temperature=self.temperature
-            )
-            action_log_probs = log_probs[:, -num_actions:]
-        else:
-            if ring_attn_group is not None and logps_allgather:
-                rank = dist.get_rank(ring_attn_group)
-                ring_attn_size = dist.get_world_size(ring_attn_group)
-                total_seq_len = labels.numel()
-                local_seq_len = total_seq_len // ring_attn_size
-                local_slice = slice(rank * local_seq_len + 1, (rank + 1) * local_seq_len + 1)
-                local_label = labels[:, local_slice]
-                if rank == ring_attn_size - 1:
-                    # add a dummy label to the last logit
-                    local_label = F.pad(local_label, (0, 1), value=0)
-                logits = output["logits"]
-                if self.temperature != 1.0:
-                    logits = logits.div(self.temperature)
-                local_per_token_logps = torch.gather(
-                    logits.log_softmax(-1), dim=2, index=local_label.unsqueeze(2)
-                ).squeeze(2)
-                per_token_logps = all_gather(local_per_token_logps, ring_attn_group).reshape((1, -1))
-                log_probs = per_token_logps[:, :-1]
-            else:
-                log_probs = log_probs_from_logits(
-                    output["logits"][:, :-1, :], sequences[:, 1:], temperature=self.temperature
-                )
+        log_probs = log_probs_from_logits(output["logits"], rolled_sequences, temperature=self.temperature)
 
-            assert isinstance(num_actions, list) and len(num_actions) == len(packed_seq_lens)
-            action_log_probs = []
-            offset = 0
-            for num_action, seq_len in zip(num_actions, packed_seq_lens):
-                start, end = max(0, offset + seq_len - num_action - 1), offset + seq_len - 1
-                action_log_probs.append(log_probs[:, start:end])
-                offset += seq_len
-            action_log_probs = torch.cat(action_log_probs, dim=1)
+        if self.packing_samples:
+            log_probs = gather_and_pad_tensor(log_probs, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
 
-        if return_output:
-            return (action_log_probs, output)
-        else:
-            return action_log_probs
+        log_probs = log_probs[:, :-1]
+        if not return_action_log_probs and return_logprobs:
+            return (log_probs, output) if return_output else log_probs
+
+        action_log_probs = log_probs[:, -action_mask.shape[1] :] * action_mask.float()
+
+        return (action_log_probs, output) if return_output else action_log_probs
 
     def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs={"use_reentrant": False}):
         self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)

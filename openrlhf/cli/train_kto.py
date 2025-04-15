@@ -58,25 +58,20 @@ def train(args):
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
 
     # prepare for data and dataset
-    train_data, eval_data = blending_datasets(
+    train_data = blending_datasets(
         args.dataset,
         args.dataset_probs,
         strategy,
         args.seed,
         max_count=args.max_samples,
-        stopping_strategy="all_exhausted",
-        train_split=args.train_split,
-        eval_split=args.eval_split,
     )
-    train_data = train_data.select(range(min(args.max_samples, len(train_data))))
-    eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
 
+    train_data = train_data.select(range(min(args.max_samples, len(train_data))))
     train_dataset = UnpairedPreferenceDataset(
         train_data, tokenizer, args.max_len, strategy, input_template=args.input_template
     )
-    eval_dataset = UnpairedPreferenceDataset(
-        eval_data, tokenizer, args.max_len, strategy, input_template=args.input_template
-    )
+
+    # prepare dataloader
     train_dataloader = strategy.setup_dataloader(
         train_dataset,
         args.micro_train_batch_size,
@@ -84,9 +79,21 @@ def train(args):
         True,
         train_dataset.collate_fn,
     )
-    eval_dataloader = strategy.setup_dataloader(
-        eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn
-    )
+
+    eval_dataset = None
+    eval_dataloader = None
+    if getattr(args, "eval_dataset", None):
+        eval_data = blending_datasets(
+            args.eval_dataset,
+            None,  # No probability sampling for eval datasets
+            strategy,
+        )
+        eval_dataset = UnpairedPreferenceDataset(
+            eval_data, tokenizer, args.max_len, strategy, input_template=args.input_template
+        )
+        eval_dataloader = strategy.setup_dataloader(
+            eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn
+        )
 
     # scheduler
     num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size
@@ -142,6 +149,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_ckpt_num", type=int, default=3)
     parser.add_argument("--max_ckpt_mem", type=int, default=1e8)
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
+    parser.add_argument("--use_ds_universal_ckpt", action="store_true", default=False)
 
     # DeepSpeed
     parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
@@ -192,10 +200,9 @@ if __name__ == "__main__":
     )
 
     # Custom dataset
-    parser.add_argument("--dataset", type=str, default="Dahoas/full-hh-rlhf")
-    parser.add_argument("--dataset_probs", type=str, default="1.0", help="sampling probs for datasets")
-    parser.add_argument("--train_split", type=str, default="train", help="train split of the HF dataset")
-    parser.add_argument("--eval_split", type=str, default="test", help="test split of the dataset")
+    parser.add_argument("--dataset", type=str, default="Dahoas/full-hh-rlhf", help="Path to the training dataset")
+    parser.add_argument("--dataset_probs", type=str, default=None, help="Sampling probabilities for training datasets")
+    parser.add_argument("--eval_dataset", type=str, default=None, help="Paths to the evaluation datasets")
 
     parser.add_argument("--input_key", type=str, default="input", help="JSON dataset key")
     parser.add_argument("--output_key", type=str, default=None, help="JSON dataset key")
@@ -222,10 +229,10 @@ if __name__ == "__main__":
     # TensorBoard parameters
     parser.add_argument("--use_tensorboard", type=str, default=None, help="TensorBoard logging path")
 
-    args = parser.parse_args()
-
     # ModelScope parameters
     parser.add_argument("--use_ms", action="store_true", default=False)
+
+    args = parser.parse_args()
 
     if args.input_template and "{}" not in args.input_template:
         print("[Warning] {} not in args.input_template, set to None")

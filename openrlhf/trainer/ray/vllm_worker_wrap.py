@@ -1,18 +1,11 @@
-import torch
-from vllm.worker.worker import Worker
-
-from openrlhf.utils.distributed_util import init_process_group
-from openrlhf.utils.logging_utils import init_logger
-from .utils import get_physical_gpu_id
-
-logger = init_logger(__name__)
-
-
-class WorkerWrap(Worker):
+class WorkerWrap:
     def init_process_group(
         self, master_address, master_port, rank_offset, world_size, group_name, backend="nccl", use_ray=False
     ):
         """Init torch process group for model weights update"""
+        import torch
+        from openrlhf.utils.distributed_util import init_process_group
+
         assert torch.distributed.is_initialized(), f"default torch process group must be initialized"
         assert group_name != "", f"group name must not be empty"
 
@@ -37,6 +30,8 @@ class WorkerWrap(Worker):
         )
 
     def update_weight(self, name, dtype, shape, empty_cache=False):
+        import torch
+
         """Broadcast weight to all vllm workers from source rank 0 (actor model)"""
         if torch.distributed.get_rank() == 0:
             print(f"update weight: {name}, dtype: {dtype}, shape: {shape}")
@@ -58,6 +53,9 @@ class WorkerWrap(Worker):
         #     torch.cuda.empty_cache()
 
     def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handles=None, empty_cache=False):
+        import torch
+        from openrlhf.trainer.ray.utils import get_physical_gpu_id
+
         if torch.distributed.get_rank() == 0:
             print(f"update weight: {name}, dtype: {dtype}, shape: {shape}")
 

@@ -10,6 +10,7 @@ def get_train_ds_config(
     zpg=8,
     grad_accum_dtype=None,
     overlap_comm=False,
+    use_ds_universal_ckpt=False,
 ):
     device = "cpu" if offload else "none"
     zero_opt_dict = {
@@ -46,6 +47,9 @@ def get_train_ds_config(
         "prescale_gradients": False,
         "wall_clock_breakdown": False,
         "data_types": {"grad_accum_dtype": grad_accum_dtype},
+        "checkpoint": {
+            "load_universal": use_ds_universal_ckpt,
+        },
     }
 
 
@@ -119,17 +123,25 @@ def offload_deepspeed_states(model, pin_memory=True, non_blocking=True):
         raise NotImplementedError("Only Zero stage 3 is currently supported")
 
     # if zero_stage == 3 and not adam_offload:
+    import deepspeed
     import torch
     from deepspeed.runtime.zero.offload_config import OffloadDeviceEnum, OffloadStateTypeEnum
 
+    offload_state_types = [
+        OffloadStateTypeEnum.optim_states,
+        OffloadStateTypeEnum.contiguous_grad_buffer,
+        OffloadStateTypeEnum.hp_params,
+    ]
+
+    if deepspeed.__version__ >= "0.16.5":
+        # These offload types are fixed in https://github.com/deepspeedai/DeepSpeed/pull/7050
+        offload_state_types += [
+            OffloadStateTypeEnum.lp_grads,
+            # OffloadStateTypeEnum.lp_params,
+        ]
+
     model.optimizer.offload_states(
-        include=[
-            OffloadStateTypeEnum.optim_states,
-            OffloadStateTypeEnum.contiguous_grad_buffer,
-            OffloadStateTypeEnum.hp_params,
-            # OffloadStateTypeEnum.lp_grads,
-            # OffloadStateTypeEnum.lp_params, # Not released yet, fixed in https://github.com/deepspeedai/DeepSpeed/pull/7050
-        ],
+        include=offload_state_types,
         device=OffloadDeviceEnum.cpu,
         pin_memory=pin_memory,
         non_blocking=non_blocking,
