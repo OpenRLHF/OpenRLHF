@@ -1,20 +1,21 @@
 import math
 import os
 import socket
+from abc import ABC
 from typing import Callable, Dict, List
 
 import deepspeed
 import ray
 import torch
 import torch.distributed
+from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
-from openrlhf.models import Actor
+from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
 from openrlhf.models.utils import compute_approx_kl, masked_mean
-from openrlhf.trainer import BasePPOTrainer
-from openrlhf.trainer.ppo_utils import Experience, RemoteExperienceMaker
+from openrlhf.trainer.ppo_utils import Experience
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
@@ -22,19 +23,38 @@ from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, r
 from openrlhf.utils.distributed_util import init_process_group, torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.logging_utils import init_logger
 
+from ..ppo_utils import NaiveReplayBuffer
+
 logger = init_logger(__name__)
 
 from .launcher import BasePPORole
 from .utils import get_physical_gpu_id
 
 
-class ActorPPOTrainer(BasePPOTrainer):
+class ActorPPOTrainer(ABC):
     def __init__(
         self,
-        *args,
+        strategy,
+        actor: Actor,
+        ema_model: Actor,
+        actor_optim: Optimizer,
+        actor_scheduler,
+        ema_beta: float = 0.992,
+        ptx_coef: float = 0,
+        micro_train_batch_size: int = 8,
+        buffer_limit: int = 0,
+        buffer_cpu_offload: bool = True,
+        eps_clip: float = 0.2,
+        value_clip: float = 0.2,
+        micro_rollout_batch_size: int = 8,
+        gradient_checkpointing: bool = False,
+        max_epochs: int = 1,
+        max_norm: float = 1.0,
+        tokenizer=None,
+        prompt_max_len: int = 128,
+        dataloader_pin_memory: bool = True,
         vllm_engines: List = None,
         remote_rm_url: List[str] = None,
-        critic_train_remote: bool = False,
         **kwargs,
     ):
         """PPOTrainer for ray.
@@ -43,10 +63,33 @@ class ActorPPOTrainer(BasePPOTrainer):
             vllm_engines (List, optional): vllm engines for text generation, if not specified, generate text by actor model directly. Defaults to None.
             critic_train_remote (bool, optional): whether this actor should triger corresponding critic model training. Defaults to False.
         """
-        super().__init__(*args, **kwargs)
+        self.strategy = strategy
+        self.args = strategy.args
+        self.micro_rollout_batch_size = micro_rollout_batch_size
+        self.max_epochs = max_epochs
+        self.tokenizer = tokenizer
+        self.generate_kwargs = kwargs
+        self.dataloader_pin_memory = dataloader_pin_memory
+        self.max_norm = max_norm
+        self.ptx_coef = ptx_coef
+        self.micro_train_batch_size = micro_train_batch_size
+        self.prompt_max_len = prompt_max_len
+        self.ema_beta = ema_beta
+        self.gradient_checkpointing = gradient_checkpointing
+
+        self.actor = actor
+        self.ema_model = ema_model
+        self.actor_optim = actor_optim
+        self.actor_scheduler = actor_scheduler
         self.remote_rm_url = remote_rm_url
         self.vllm_engines = vllm_engines
-        self.critic_train_remote = critic_train_remote
+
+        self.actor_loss_fn = PolicyLoss(eps_clip)
+        self.critic_loss_fn = ValueLoss(value_clip)
+        self.ptx_loss_fn = GPTLMLoss()
+
+        # Mixtral 8x7b
+        self.aux_loss = self.args.aux_loss_coef > 1e-8
 
         # wandb/tensorboard setting
         self._wandb = None
@@ -79,21 +122,11 @@ class ActorPPOTrainer(BasePPOTrainer):
             log_dir = os.path.join(self.strategy.args.use_tensorboard, self.strategy.args.wandb_run_name)
             self._tensorboard = SummaryWriter(log_dir=log_dir)
 
-        self.experience_maker = RemoteExperienceMaker(
-            self.actor,
-            self.critic,
-            self.reward_model,
-            self.initial_model,
-            self.tokenizer,
-            self.prompt_max_len,
-            self.kl_ctl,
-            self.strategy,
-            self.remote_rm_url,
-            self.reward_fn,
-            vllm_engines=self.vllm_engines,
-            packing_samples=self.strategy.args.packing_samples,
+        self.replay_buffer = NaiveReplayBuffer(
+            micro_train_batch_size, buffer_limit, buffer_cpu_offload, getattr(self.args, "packing_samples", False)
         )
 
+        # Init torch group for weights sync
         backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
         self.use_cuda_ipc = False
         if backend == "nccl" and self.strategy.args.colocate_all_models:
