@@ -2,8 +2,8 @@ import itertools
 import math
 import os
 import socket
-from contextlib import ExitStack
 import time
+from contextlib import ExitStack
 from datetime import timedelta
 from typing import Callable, Dict, List
 
