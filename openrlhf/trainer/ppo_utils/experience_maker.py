@@ -669,8 +669,9 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         args = self.strategy.args
         self.actor.eval()
         # sample multiple response
-        all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
-        all_labels = sum([[label] * args.n_samples_per_prompt for label in all_labels], [])
+        n_samples_per_prompt = generate_kwargs.pop("n_samples_per_prompt", args.n_samples_per_prompt)
+        all_prompts = sum([[prompt] * n_samples_per_prompt for prompt in all_prompts], [])
+        all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
         rollout_sequences = []
         rollout_attention_mask = []
         rollout_action_mask = []
@@ -721,8 +722,9 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         )
 
         # Expand prompt list based on the number of samples per prompt
-        all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
-        all_labels = sum([[label] * args.n_samples_per_prompt for label in all_labels], [])
+        n_samples_per_prompt = kwargs.pop("n_samples_per_prompt", args.n_samples_per_prompt)
+        all_prompts = sum([[prompt] * n_samples_per_prompt for prompt in all_prompts], [])
+        all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
         all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
 
         # Distribute requests to engines and collect responses to outputs
