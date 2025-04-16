@@ -362,7 +362,12 @@ if __name__ == "__main__":
         help="Choose advantage estimation method: gae, reinforce, rloo, reinforce_baseline, group_norm, dr_grpo",
     )
     parser.add_argument("--use_kl_loss", action="store_true", default=False, help="whether to use KL loss from GRPO")
-    parser.add_argument("--use_kl_loss_important_sampling", action="store_true", default=False, help="whether to use important sampling for KL loss from GRPO.")
+    parser.add_argument(
+        "--use_kl_loss_important_sampling",
+        action="store_true",
+        default=False,
+        help="whether to use important sampling for KL loss from GRPO.",
+    )
     parser.add_argument(
         "--no_advantage_std_norm",
         action="store_true",
