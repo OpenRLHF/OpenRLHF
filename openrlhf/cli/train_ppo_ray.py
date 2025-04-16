@@ -23,10 +23,10 @@ def reward_fn(rewards: List[torch.Tensor]):
 
 
 def _validate_args(args):
-    actor_world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
+    actor_world_size = args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size
 
     assert (
-        args.rollout_batch_size % actor_world_size == 0
+        args.rollout_batch_size % (actor_world_size) == 0
     ), f"rollout_bach_size must be divisible by actor_world_size, got {args.rollout_batch_size} and {actor_world_size}"
 
     assert args.zero_stage != 3 or args.vllm_num_engines > 0, f"ZeRO-3 is only supported when vLLM enabled"
@@ -39,8 +39,10 @@ def _validate_args(args):
     if args.critic_pretrain:
         critic_world_size = args.critic_num_nodes * args.critic_num_gpus_per_node
         assert (
-            actor_world_size % critic_world_size == 0
-        ), f"actor_world_size must be divisible by critic_world_size, got {actor_world_size} and {critic_world_size}"
+            actor_world_size * args.ring_attn_size
+        ) % critic_world_size == 0, (
+            f"actor_world_size must be divisible by critic_world_size, got {actor_world_size} and {critic_world_size}"
+        )
 
     if args.use_kl_loss:
         if args.kl_estimator not in ["k2", "k3"]:
