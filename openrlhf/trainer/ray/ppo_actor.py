@@ -396,16 +396,16 @@ class ActorPPOTrainer(BasePPOTrainer):
                 )
             else:
                 kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=action_log_probs.device)
-            ratio = (log_probs - old_log_probs).exp()
-            surr1 = ratio * kl
-            surr2 = ratio.clamp(1 - self.clip_eps, 1 + self.clip_eps) * kl
-            loss = -torch.min(surr1, surr2)
+            if self.args.use_kl_loss_clip:
+                ratio = (log_probs - old_log_probs).exp()
+                surr1 = ratio * kl
+                surr2 = ratio.clamp(1 - self.clip_eps, 1 + self.clip_eps) * kl
+                kl = -torch.min(surr1, surr2)
             kl_mean = (
-                masked_mean(loss, action_mask, dim=None)
+                masked_mean(kl, action_mask, dim=None)
                 if self.token_level_loss
-                else masked_mean(loss, action_mask, dim=-1).mean()
+                else masked_mean(kl, action_mask, dim=-1).mean()
             )
-            # kl_mean = masked_mean(kl, experience.action_mask, dim=-1)
 
             kl_loss = kl_mean.mean()
             experience.info["kl"] = kl_loss.item()
