@@ -176,12 +176,14 @@ class PPORayActorGroup:
         ray_actor_type: Type[BasePPORole],
         pg: PlacementGroup = None,
         num_gpus_per_actor=1,
+        ring_attn_size: int = 1,
         resources: Dict[str, float] = None,
         num_resources_per_node: int = None,
     ) -> None:
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
         self.ray_actor_type = ray_actor_type
+        self.ring_attn_size = ring_attn_size
 
         # custom resources, see https://docs.ray.io/en/latest/ray-core/scheduling/resources.html
         self._resources = resources
@@ -298,27 +300,28 @@ class PPORayActorGroup:
         # Verify total_length is divisible by num_actors
         num_actors = len(self._actor_handlers)
         assert (
-            total_length % num_actors == 0
+            total_length % (num_actors // self.ring_attn_size) == 0
         ), f"Total length {total_length} must be divisible by number of actors {num_actors}"
 
         # Process data one by one in round-robin fashion
         refs = []
 
         for i in range(total_length):
-            # Get current actor index
-            actor_idx = i % num_actors
-            actor = self._actor_handlers[actor_idx]
+            for j in range(self.ring_attn_size):
+                # Get current actor index
+                actor_idx = (i * self.ring_attn_size + j) % num_actors
+                actor = self._actor_handlers[actor_idx]
 
-            # Prepare single data point
-            single_kwargs = {}
-            for key, value in kwargs.items():
-                if isinstance(value, torch.Tensor):
-                    single_kwargs[key] = value[i : i + 1]  # Keep tensor dimension
-                else:
-                    single_kwargs[key] = value[i]
+                # Prepare single data point
+                single_kwargs = {}
+                for key, value in kwargs.items():
+                    if isinstance(value, torch.Tensor):
+                        single_kwargs[key] = value[i : i + 1]  # Keep tensor dimension
+                    else:
+                        single_kwargs[key] = value[i]
 
-            # Call method with single data point
-            method = getattr(actor, method_name)
-            refs.append(method.remote(**single_kwargs))
+                # Call method with single data point
+                method = getattr(actor, method_name)
+                refs.append(method.remote(**single_kwargs))
 
         return refs
