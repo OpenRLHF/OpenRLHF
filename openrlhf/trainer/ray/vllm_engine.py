@@ -117,7 +117,6 @@ def create_vllm_engines(
     enable_prefix_caching: bool,
     enforce_eager: bool,
     max_model_len: int,
-    num_total_actors: int,
     shared_pg=None,
     gpu_memory_utilization=None,
     vllm_enable_sleep=False,
@@ -152,11 +151,6 @@ def create_vllm_engines(
             placement_group_capture_child_tasks=True,
             placement_group_bundle_index=bundle_indices[0] if bundle_indices else i,
         )
-
-        if num_engines >= num_total_actors:
-            num_actors = 1
-        else:
-            num_actors = num_total_actors // num_engines + int(i < num_total_actors % num_engines)
 
         vllm_engines.append(
             LLMRayActor.options(

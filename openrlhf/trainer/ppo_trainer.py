@@ -2,7 +2,6 @@ import os
 import time
 from abc import ABC
 from datetime import timedelta
-from typing import Any, Callable, Optional
 
 import ray
 import torch
@@ -31,37 +30,36 @@ class PPOTrainer(ABC):
         critic_model_group: PPORayActorGroup,
         reward_model_group: PPORayActorGroup,
         reference_model_group: PPORayActorGroup,
-        init_kl_coef: float = 0.001,
-        kl_target: float = None,
-        kl_horizon: int = 10000,
-        max_epochs: int = 1,
-        tokenizer: Optional[Callable[[Any], dict]] = None,
-        prompt_max_len: int = 128,
+        prompt_max_len: int = 120,
         dataloader_pin_memory: bool = True,
-        remote_rm_url: str = None,
         **generate_kwargs,
     ) -> None:
         super().__init__()
 
         self.strategy = strategy
+        self.args = strategy.args
+
         self.actor_model_group = actor_model_group
         self.critic_model_group = critic_model_group
         self.reward_model_group = reward_model_group
         self.reference_model_group = reference_model_group
-        self.max_epochs = max_epochs
-        self.tokenizer = tokenizer
-        self.prompt_max_len = prompt_max_len
         self.dataloader_pin_memory = dataloader_pin_memory
-        self.remote_rm_url = remote_rm_url
+        self.prompt_max_len = prompt_max_len
         self.generate_kwargs = generate_kwargs
 
-        self.args = strategy.args
+        self.max_epochs = self.args.max_epochs
+        self.tokenizer = self.args.tokenizer
+        self.remote_rm_url = self.args.remote_rm_url
+        self.init_kl_coef = self.args.init_kl_coef
+        self.kl_target = self.args.kl_target
+        self.kl_horizon = self.args.kl_horizon
+
         self.freezing_actor_steps = getattr(self.args, "freezing_actor_steps", -1)
 
         if self.kl_target:
-            self.kl_ctl = AdaptiveKLController(init_kl_coef, kl_target, kl_horizon)
+            self.kl_ctl = AdaptiveKLController(self.init_kl_coef, self.kl_target, self.kl_horizon)
         else:
-            self.kl_ctl = FixedKLController(init_kl_coef)
+            self.kl_ctl = FixedKLController(self.init_kl_coef)
 
         self.experience_maker = RemoteExperienceMaker(
             self.actor_model_group,
@@ -76,6 +74,8 @@ class PPOTrainer(ABC):
             vllm_engines=self.vllm_engines,
             packing_samples=self.strategy.args.packing_samples,
         )
+
+        self.prepare_datasets()
 
         # wandb/tensorboard setting
         self._wandb = None
@@ -110,12 +110,8 @@ class PPOTrainer(ABC):
 
     def fit(
         self,
-        prompts_dataloader,
-        eval_dataloader,
     ) -> None:
         args = self.args
-        self.prompts_dataloader = prompts_dataloader
-        self.eval_dataloader = eval_dataloader
 
         # Load datasets
         num_rollouts_per_episodes = len(self.prompts_dataloader)
@@ -384,38 +380,42 @@ class PPOTrainer(ABC):
             time_str = str(timedelta(seconds=duration)).split(".")[0]
             logger.info(f"✨ Evaluation completed in {time_str}")
 
+    def prepare_datasets(self):
+        args = self.args
+        strategy = self.strategy
 
-def prepare_datasets(strategy, args, tokenizer):
-    # prepare datasets
-    train_data = blending_datasets(
-        args.prompt_data,
-        args.prompt_data_probs,
-        strategy,
-        args.seed,
-        max_count=args.max_samples,
-    )
-
-    # Create train dataset
-    train_data = train_data.select(range(min(args.max_samples, len(train_data))))
-    prompts_dataset = PromptDataset(train_data, tokenizer, strategy, input_template=args.input_template)
-    prompts_dataloader = strategy.setup_dataloader(
-        prompts_dataset,
-        args.rollout_batch_size,
-        True,
-        True,
-    )
-
-    # Create eval dataset if eval data exists
-    if getattr(args, "eval_dataset", None):
-        eval_data = blending_datasets(
-            args.eval_dataset,
-            None,  # No probability sampling for eval datasets
+        # prepare datasets
+        train_data = blending_datasets(
+            args.prompt_data,
+            args.prompt_data_probs,
             strategy,
+            args.seed,
+            max_count=args.max_samples,
         )
-        eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
-        eval_dataset = PromptDataset(eval_data, tokenizer, strategy, input_template=args.input_template)
-        eval_dataloader = strategy.setup_dataloader(eval_dataset, 1, True, False)
-    else:
-        eval_dataloader = None
 
-    return prompts_dataloader, eval_dataloader
+        # Create train dataset
+        train_data = train_data.select(range(min(args.max_samples, len(train_data))))
+        prompts_dataset = PromptDataset(train_data, self.tokenizer, strategy, input_template=args.input_template)
+        prompts_dataloader = strategy.setup_dataloader(
+            prompts_dataset,
+            args.rollout_batch_size,
+            True,
+            True,
+        )
+
+        # Create eval dataset if eval data exists
+        if getattr(args, "eval_dataset", None):
+            eval_data = blending_datasets(
+                args.eval_dataset,
+                None,  # No probability sampling for eval datasets
+                strategy,
+            )
+            eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
+            eval_dataset = PromptDataset(eval_data, self.tokenizer, strategy, input_template=args.input_template)
+            eval_dataloader = strategy.setup_dataloader(eval_dataset, 1, True, False)
+        else:
+            eval_dataloader = None
+
+        self.prompts_dataloader = prompts_dataloader
+        self.eval_dataloader = eval_dataloader
+        self.max_steps = len(prompts_dataset) * args.n_samples_per_prompt // args.train_batch_size
