@@ -82,14 +82,50 @@ class PPOTrainer(ABC):
             packing_samples=self.strategy.args.packing_samples,
         )
 
+        # wandb/tensorboard setting
+        self._wandb = None
+        self._tensorboard = None
+        if self.strategy.args.use_wandb:
+            import wandb
+
+            self._wandb = wandb
+            if not wandb.api.api_key:
+                wandb.login(key=self.strategy.args.use_wandb)
+            wandb.init(
+                entity=self.strategy.args.wandb_org,
+                project=self.strategy.args.wandb_project,
+                group=self.strategy.args.wandb_group,
+                name=self.strategy.args.wandb_run_name,
+                config=self.strategy.args.__dict__,
+                reinit=True,
+            )
+
+            wandb.define_metric("train/global_step")
+            wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
+            wandb.define_metric("eval/epoch")
+            wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
+
+        # Initialize TensorBoard writer if wandb is not available
+        if self.strategy.args.use_tensorboard and self._wandb is None:
+            from torch.utils.tensorboard import SummaryWriter
+
+            os.makedirs(self.strategy.args.use_tensorboard, exist_ok=True)
+            log_dir = os.path.join(self.strategy.args.use_tensorboard, self.strategy.args.wandb_run_name)
+            self._tensorboard = SummaryWriter(log_dir=log_dir)
+
     def fit(
         self,
+        prompts_dataloader,
+        eval_dataloader,
+        pretrain_dataloader,
     ) -> None:
         args = self.args
+        self.prompts_dataloader = prompts_dataloader
+        self.eval_dataloader = eval_dataloader
+        self.pretrain_dataloader = pretrain_dataloader
 
         # Load datasets
-        self.prepare_datasets()
-        num_rollouts_per_episodes = len(self.prompts_dataset) // args.rollout_batch_size
+        num_rollouts_per_episodes = len(self.prompts_dataloader)
 
         # get eval and save steps
         if args.eval_steps == -1:
@@ -163,6 +199,17 @@ class PPOTrainer(ABC):
         if self._tensorboard is not None and self.strategy.is_rank_0():
             self._tensorboard.close()
 
+    def _average_dict_list(self, dict_list):
+        if not dict_list:
+            return {}
+        avg_dict = dict_list[0].copy()
+        for d in dict_list[1:]:
+            for k, v in d.items():
+                avg_dict[k] += v
+        for k in avg_dict:
+            avg_dict[k] /= len(dict_list)
+        return avg_dict
+
     def ppo_train(self, global_steps):
         status = {}
 
@@ -175,111 +222,38 @@ class PPOTrainer(ABC):
             critic_status_ref = self.critic_model_group.async_run_method(method_name="fit")
 
             if self.strategy.args.colocate_all_models or self.strategy.args.deepspeed_enable_sleep:
-                status.update(ray.get(critic_status_ref))
+                status.update(self._average_dict_list(ray.get(critic_status_ref)))
             if self.strategy.args.deepspeed_enable_sleep:
                 ray.get(self.critic_model_group.async_run_method(method_name="offload_states"))
 
-        # 3. actor model training
+        # actor model training
         if global_steps > self.freezing_actor_steps:
             if self.strategy.args.deepspeed_enable_sleep:
                 self.actor_model_group.async_run_method(method_name="reload_states")
 
-            status.update(self.ppo_train_actor(global_steps))
+            actor_status_ref = self.actor_model_group.async_run_method(method_name="fit", global_steps=global_steps)
+            status.update(self._average_dict_list(ray.get(actor_status_ref)))
 
             if self.strategy.args.deepspeed_enable_sleep:
                 self.actor_model_group.async_run_method(method_name="offload_states")
 
-            torch.cuda.empty_cache()
-
             # 4. broadcast weights to vllm engines
             if self.vllm_engines is not None:
                 if self.strategy.args.vllm_enable_sleep:
+                    from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
+
                     batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
-                torch_dist_barrier_and_cuda_sync()
-                self._broadcast_to_vllm()
+                ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
 
                 if self.strategy.args.vllm_enable_sleep:
                     batch_vllm_engine_call(self.vllm_engines, "sleep")
-                    torch_dist_barrier_and_cuda_sync()
 
         # 5. wait remote critic model training done
-        if self.critic_train_remote and not self.strategy.args.colocate_all_models:
-            status.update(ray.get(critic_status_ref))
-        torch_dist_barrier_and_cuda_sync()
+        if self.critic_model_group and not self.strategy.args.colocate_all_models:
+            status.update(self._average_dict_list(ray.get(critic_status_ref)))
 
         return status
-
-    def prepare_datasets(self):
-        strategy = self.strategy
-        args = self.strategy.args
-
-        # prepare datasets
-        train_data = blending_datasets(
-            args.prompt_data,
-            args.prompt_data_probs,
-            strategy,
-            args.seed,
-            max_count=args.max_samples,
-        )
-
-        # Create train dataset
-        train_data = train_data.select(range(min(args.max_samples, len(train_data))))
-        self.prompts_dataset = PromptDataset(train_data, self.tokenizer, strategy, input_template=args.input_template)
-        self.prompts_dataloader = strategy.setup_dataloader(
-            self.prompts_dataset,
-            args.rollout_batch_size // (strategy.world_size // strategy.ring_attn_size),
-            True,
-            True,
-        )
-
-        # Create eval dataset if eval data exists
-        if getattr(args, "eval_dataset", None):
-            eval_data = blending_datasets(
-                args.eval_dataset,
-                None,  # No probability sampling for eval datasets
-                strategy,
-            )
-            eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
-            eval_dataset = PromptDataset(eval_data, self.tokenizer, strategy, input_template=args.input_template)
-            self.eval_dataloader = strategy.setup_dataloader(eval_dataset, 1, True, False)
-        else:
-            self.eval_dataloader = None
-
-        if args.pretrain_data:
-            pretrain_data = blending_datasets(
-                args.pretrain_data,
-                args.pretrain_data_probs,
-                strategy,
-                args.seed,
-            )
-            pretrain_max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
-            pretrain_dataset = SFTDataset(
-                pretrain_data.select(
-                    range(
-                        min(
-                            len(pretrain_data), args.max_epochs * len(self.prompts_dataset) * args.n_samples_per_prompt
-                        )
-                    )
-                ),
-                self.tokenizer,
-                pretrain_max_len,
-                strategy,
-                pretrain_mode=True,
-            )
-            self.pretrain_dataloader = itertools.cycle(
-                iter(
-                    strategy.setup_dataloader(
-                        pretrain_dataset,
-                        args.micro_train_batch_size,
-                        True,
-                        True,
-                        collate_fn=pretrain_dataset.collate_fn,
-                    )
-                )
-            )
-        else:
-            self.pretrain_dataloader = None
 
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         if global_step % args.logging_steps == 0:
@@ -427,3 +401,70 @@ class PPOTrainer(ABC):
         if self.strategy.is_rank_0():
             time_str = str(timedelta(seconds=duration)).split(".")[0]
             logger.info(f"✨ Evaluation completed in {time_str}")
+
+
+def prepare_datasets(strategy, args, tokenizer):
+    # prepare datasets
+    train_data = blending_datasets(
+        args.prompt_data,
+        args.prompt_data_probs,
+        strategy,
+        args.seed,
+        max_count=args.max_samples,
+    )
+
+    # Create train dataset
+    train_data = train_data.select(range(min(args.max_samples, len(train_data))))
+    prompts_dataset = PromptDataset(train_data, tokenizer, strategy, input_template=args.input_template)
+    prompts_dataloader = strategy.setup_dataloader(
+        prompts_dataset,
+        args.rollout_batch_size // (strategy.world_size // strategy.ring_attn_size),
+        True,
+        True,
+    )
+
+    # Create eval dataset if eval data exists
+    if getattr(args, "eval_dataset", None):
+        eval_data = blending_datasets(
+            args.eval_dataset,
+            None,  # No probability sampling for eval datasets
+            strategy,
+        )
+        eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
+        eval_dataset = PromptDataset(eval_data, tokenizer, strategy, input_template=args.input_template)
+        eval_dataloader = strategy.setup_dataloader(eval_dataset, 1, True, False)
+    else:
+        eval_dataloader = None
+
+    if args.pretrain_data:
+        pretrain_data = blending_datasets(
+            args.pretrain_data,
+            args.pretrain_data_probs,
+            strategy,
+            args.seed,
+        )
+        pretrain_max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
+        pretrain_dataset = SFTDataset(
+            pretrain_data.select(
+                range(min(len(pretrain_data), args.max_epochs * len(prompts_dataset) * args.n_samples_per_prompt))
+            ),
+            tokenizer,
+            pretrain_max_len,
+            strategy,
+            pretrain_mode=True,
+        )
+        pretrain_dataloader = itertools.cycle(
+            iter(
+                strategy.setup_dataloader(
+                    pretrain_dataset,
+                    args.micro_train_batch_size,
+                    True,
+                    True,
+                    collate_fn=pretrain_dataset.collate_fn,
+                )
+            )
+        )
+    else:
+        pretrain_dataloader = None
+
+    return prompts_dataloader, eval_dataloader, pretrain_dataloader

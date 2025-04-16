@@ -88,37 +88,6 @@ class ActorPPOTrainer(ABC):
         # Mixtral 8x7b
         self.aux_loss = self.args.aux_loss_coef > 1e-8
 
-        # wandb/tensorboard setting
-        self._wandb = None
-        self._tensorboard = None
-        if self.strategy.args.use_wandb and self.strategy.is_rank_0():
-            import wandb
-
-            self._wandb = wandb
-            if not wandb.api.api_key:
-                wandb.login(key=self.strategy.args.use_wandb)
-            wandb.init(
-                entity=self.strategy.args.wandb_org,
-                project=self.strategy.args.wandb_project,
-                group=self.strategy.args.wandb_group,
-                name=self.strategy.args.wandb_run_name,
-                config=self.strategy.args.__dict__,
-                reinit=True,
-            )
-
-            wandb.define_metric("train/global_step")
-            wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
-            wandb.define_metric("eval/epoch")
-            wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
-
-        # Initialize TensorBoard writer if wandb is not available
-        if self.strategy.args.use_tensorboard and self._wandb is None and self.strategy.is_rank_0():
-            from torch.utils.tensorboard import SummaryWriter
-
-            os.makedirs(self.strategy.args.use_tensorboard, exist_ok=True)
-            log_dir = os.path.join(self.strategy.args.use_tensorboard, self.strategy.args.wandb_run_name)
-            self._tensorboard = SummaryWriter(log_dir=log_dir)
-
         self.replay_buffer = NaiveReplayBuffer(
             micro_train_batch_size, buffer_limit, buffer_cpu_offload, getattr(self.args, "packing_samples", False)
         )
