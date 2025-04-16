@@ -398,7 +398,7 @@ class ActorPPOTrainer(BasePPOTrainer):
                 kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=action_log_probs.device)
 
             if self.args.use_kl_loss_important_sampling:
-                ratio = (action_log_probs - base_action_log_probs).exp()
+                ratio = (action_log_probs - old_action_log_probs).exp()
                 surr1 = ratio * kl.detach()
                 surr2 = ratio.clamp(1 - self.clip_eps, 1 + self.clip_eps) * kl.detach()
                 kl = torch.max(surr1, surr2)
