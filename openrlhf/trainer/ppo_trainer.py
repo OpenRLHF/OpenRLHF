@@ -39,8 +39,6 @@ class PPOTrainer(ABC):
         prompt_max_len: int = 128,
         dataloader_pin_memory: bool = True,
         remote_rm_url: str = None,
-        save_hf_ckpt: bool = False,
-        disable_ds_ckpt: bool = False,
         **generate_kwargs,
     ) -> None:
         super().__init__()
@@ -55,8 +53,6 @@ class PPOTrainer(ABC):
         self.prompt_max_len = prompt_max_len
         self.dataloader_pin_memory = dataloader_pin_memory
         self.remote_rm_url = remote_rm_url
-        self.save_hf_ckpt = save_hf_ckpt
-        self.disable_ds_ckpt = disable_ds_ckpt
         self.generate_kwargs = generate_kwargs
 
         self.args = strategy.args
