@@ -1,13 +1,12 @@
 import logging
 import os
 import socket
-from typing import Any, Dict, List, Optional, Type
+from typing import Dict, Optional, Type
 
 import ray
 import torch
 from ray.util.placement_group import PlacementGroup, placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-from tqdm import tqdm
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
@@ -59,38 +58,6 @@ class BasePPORole(DistributedTorchRayActor):
 
     def init_model_from_pretrained(self, *args, **kwargs):
         raise NotImplementedError()
-
-    def forward_batch(
-        self,
-        **kwargs,
-    ) -> List[Any]:
-        """Process input data by calling forward function for each item in the lists.
-
-        Args:
-            **kwargs: Input parameters in list format. Each parameter should be a list with same length.
-                     The first parameter's length determines the number of forward calls.
-
-        Returns:
-            List[Any]: List of results from forward function
-        """
-        # Get the first parameter to determine list length
-        first_param = next(iter(kwargs.values()))
-        list_length = len(first_param)
-
-        # Verify all parameters have same length
-        for param_name, param_value in kwargs.items():
-            if len(param_value) != list_length:
-                raise ValueError(f"Parameter {param_name} has length {len(param_value)}, expected {list_length}")
-
-        results = []
-        for i in tqdm(range(list_length), desc="Inference", disable=not self.strategy.is_rank_0()):
-            # Create kwargs for single item
-            sample_kwargs = {param_name: param_value[i] for param_name, param_value in kwargs.items()}
-
-            result = self.forward(**sample_kwargs)
-            results.append(result)
-
-        return results
 
 
 @ray.remote(num_gpus=1)
@@ -299,4 +266,59 @@ class PPORayActorGroup:
         for actor in self._actor_handlers:
             method = getattr(actor, method_name)
             refs.append(method.remote(*args, **kwargs))
+        return refs
+
+    def async_run_method_batch(self, method_name, **kwargs):
+        """Run method on all actors with batched input data asynchronously using round-robin scheduling.
+        Each actor processes one data point at a time.
+
+        Args:
+            method_name (str): Name of the method to run
+            **kwargs: Keyword arguments for the method. Each value should be a list/tensor of the same length.
+
+        Returns:
+            List[ray.ObjectRef]: List of remote object references to the results
+        """
+        # Check if all kwargs parameters are iterable
+        for key, value in kwargs.items():
+            if not hasattr(value, "__len__"):
+                raise ValueError(f"Parameter {key} must be iterable")
+
+        # Get the length of the first parameter as reference
+        first_param = next(iter(kwargs.values()))
+        total_length = len(first_param)
+
+        # Verify all parameters have the same length
+        for key, value in kwargs.items():
+            if len(value) != total_length:
+                raise ValueError(
+                    f"All parameters must have the same length. {key} has length {len(value)}, expected {total_length}"
+                )
+
+        # Verify total_length is divisible by num_actors
+        num_actors = len(self._actor_handlers)
+        assert (
+            total_length % num_actors == 0
+        ), f"Total length {total_length} must be divisible by number of actors {num_actors}"
+
+        # Process data one by one in round-robin fashion
+        refs = []
+
+        for i in range(total_length):
+            # Get current actor index
+            actor_idx = i % num_actors
+            actor = self._actor_handlers[actor_idx]
+
+            # Prepare single data point
+            single_kwargs = {}
+            for key, value in kwargs.items():
+                if isinstance(value, torch.Tensor):
+                    single_kwargs[key] = value[i : i + 1]  # Keep tensor dimension
+                else:
+                    single_kwargs[key] = value[i]
+
+            # Call method with single data point
+            method = getattr(actor, method_name)
+            refs.append(method.remote(**single_kwargs))
+
         return refs

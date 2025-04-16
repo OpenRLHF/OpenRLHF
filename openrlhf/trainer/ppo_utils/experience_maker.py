@@ -277,7 +277,8 @@ class RemoteExperienceMaker(ABC):
 
         # Batch call initial model
         if self.initial_model is not None:
-            base_action_log_probs_ref = self.initial_model.forward_batch.remote(
+            base_action_log_probs_ref = self.initial_model_group.async_run_method_batch(
+                method_name="forward",
                 sequences=sequences_list,
                 action_mask=action_mask_list,
                 attention_mask=attention_mask_list,
@@ -285,20 +286,21 @@ class RemoteExperienceMaker(ABC):
 
             if args.colocate_actor_ref or args.colocate_all_models:
                 ray.get([base_action_log_probs_ref])
-                ray.get([self.initial_model.empty_cache.remote()])
+                ray.get([self.initial_model_group.async_run_method(method_name="empty_cache")])
         else:
             base_action_log_probs_ref = ray.put([None] * len(samples_list))
 
         # Batch call critic model
         if self.critic is not None:
-            value_ref = self.critic.forward_batch.remote(
+            value_ref = self.critic_model_group.async_run_method_batch(
+                method_name="forward",
                 sequences=sequences_list,
                 action_mask=action_mask_list,
                 attention_mask=attention_mask_list,
             )
             if args.colocate_critic_reward or args.colocate_all_models:
                 ray.get([value_ref])
-                ray.get([self.critic.empty_cache.remote()])
+                ray.get([self.critic_model_group.async_run_method(method_name="empty_cache")])
         else:
             value_ref = ray.put([None] * len(samples_list))
 
@@ -307,58 +309,79 @@ class RemoteExperienceMaker(ABC):
         if not self.remote_rm_url:
             for rm in self.reward_model:
                 r_refs.append(
-                    rm.forward_batch.remote(
+                    self.reward_model_group.async_run_method_batch(
+                        method_name="forward",
                         sequences=sequences_list,
                         attention_mask=attention_mask_list,
                         pad_sequence=[True] * len(samples_list),
                     )
                 )
         else:
-            if self.strategy.ring_attn_group is None or self.strategy.ring_attn_rank == 0:
-                queries_list = sum(
-                    [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in sequences_list], []
-                )
+            queries_list = sum(
+                [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in sequences_list], []
+            )
 
-                if self.custom_reward_func:
-                    r = self.custom_reward_func.remote(queries_list, prompts_list, labels_list)
-                else:
-                    rank = torch.distributed.get_rank() // self.strategy.ring_attn_size
-                    rm = self.remote_rm_url[rank % len(self.remote_rm_url)]
-                    r = remote_rm_fn_ray.remote(rm, queries=queries_list, prompts=prompts_list, labels=labels_list)
-                r_refs.append(r)
+            if self.custom_reward_func:
+                # Let Ray automatically distribute the workload across available resources
+                batch_size = self.strategy.args.micro_rollout_batch_size
+                num_chunks = (len(queries_list) + batch_size - 1) // batch_size
+                r_refs = []
+                for i in range(num_chunks):
+                    start_idx = i * batch_size
+                    end_idx = min((i + 1) * batch_size, len(queries_list))
+                    r = self.custom_reward_func.remote(
+                        queries_list[start_idx:end_idx],
+                        prompts_list[start_idx:end_idx],
+                        labels_list[start_idx:end_idx],
+                    )
+                    r_refs.append(r)
             else:
-                r_refs.append(ray.put([None] * len(samples_list)))
+                # Distribute data across different remote reward function servers
+                num_servers = len(self.remote_rm_url)
+                batch_size = (len(queries_list) + num_servers - 1) // num_servers
+                r_refs = []
+                for i in range(num_servers):
+                    start_idx = i * batch_size
+                    end_idx = min((i + 1) * batch_size, len(queries_list))
+                    rm = self.remote_rm_url[i]
+                    r = remote_rm_fn_ray.remote(
+                        rm,
+                        queries=queries_list[start_idx:end_idx],
+                        prompts=prompts_list[start_idx:end_idx],
+                        labels=labels_list[start_idx:end_idx],
+                    )
+                    r_refs.append(r)
 
         if args.colocate_all_models and not self.remote_rm_url:
             ray.get(r_refs)
-            ray.get([self.reward_model[0].empty_cache.remote()])
+            ray.get([self.reward_model_group.async_run_method(method_name="empty_cache")])
 
         # Batch call actor model
-        action_log_probs_list = []
-        for seq, action_mask, attn_mask in zip(sequences_list, action_mask_list, attention_mask_list):
-            action_log_probs = self.actor(
-                seq.to(device),
-                action_mask,
-                attn_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
-            )
-            action_log_probs_list.append(action_log_probs)
+        action_log_probs_ref = self.actor_model_group.async_run_method_batch(
+            method_name="forward",
+            sequences=sequences_list,
+            action_mask=action_mask_list,
+            attention_mask=attention_mask_list,
+        )
 
         actor_value_rm_time = time.time() - start_time
 
         # Wait for all remote calls to complete
         start = time.time()
-        ref_values = ray.get([base_action_log_probs_ref, value_ref] + r_refs)
+        ref_values = ray.get([action_log_probs_ref, base_action_log_probs_ref, value_ref] + r_refs)
         wait_time = time.time() - start
 
-        base_action_log_probs_list, value_list, rewards_list = ref_values[0], ref_values[1], ref_values[2]
+        action_log_probs_list, base_action_log_probs_list, value_list, rewards_list = (
+            ref_values[0],
+            ref_values[1],
+            ref_values[2],
+        )
         if self.remote_rm_url is not None and isinstance(rewards_list, torch.Tensor):
             rewards_list = rewards_list.chunk(len(samples_list))
 
         # Avoid CUDA OOM when colocate models
         if args.colocate_actor_ref or args.colocate_all_models:
-            torch.cuda.synchronize()
-            torch.cuda.empty_cache()
+            ray.get([self.actor_model_group.async_run_method(method_name="empty_cache")])
 
         # Process results for each sample
         for i, (samples, action_log_probs, base_action_log_probs, value, rewards) in enumerate(

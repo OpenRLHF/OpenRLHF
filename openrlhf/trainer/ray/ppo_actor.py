@@ -2,7 +2,7 @@ import math
 import os
 import socket
 from abc import ABC
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional, Union
 
 import deepspeed
 import ray
@@ -634,3 +634,27 @@ class ActorModelRayActor(BasePPORole):
             self.tokenizer,
             args.save_path,
         )
+
+    def forward(
+        self,
+        sequences: torch.LongTensor,
+        action_mask: Optional[Union[int, list[int]]] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        packed_seq_lens=None,
+    ) -> torch.Tensor:
+        """Generates actor values."""
+        device = torch.cuda.current_device()
+        self.actor.eval()
+        with torch.no_grad():
+            action_log_probs = self.actor(
+                sequences.to(device),
+                action_mask.to(device),
+                attention_mask.to(device),
+                ring_attn_group=self.strategy.ring_attn_group,
+            )
+        self.actor.train()  # reset model state
+        return action_log_probs.to("cpu")
+
+    def empty_cache(self) -> None:
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
