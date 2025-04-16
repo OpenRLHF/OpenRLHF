@@ -10,7 +10,7 @@ from vllm.inputs import TokensPrompt
 
 from openrlhf.utils.logging_utils import init_logger
 
-from .utils import ray_noset_visible_devices
+from .utils import get_bundle_indices, ray_noset_visible_devices
 
 logger = init_logger(__name__)
 
@@ -156,12 +156,12 @@ def create_vllm_engines(
     for i in range(num_engines):
         bundle_indices = None
         if tensor_parallel_size > 1:
-            bundle_indices = list(range(i * tensor_parallel_size, (i + 1) * tensor_parallel_size))
+            bundle_indices = get_bundle_indices(shared_pg, i, tensor_parallel_size)
 
         scheduling_strategy = PlacementGroupSchedulingStrategy(
             placement_group=shared_pg,
             placement_group_capture_child_tasks=True,
-            placement_group_bundle_index=i * tensor_parallel_size,
+            placement_group_bundle_index=bundle_indices[0] if bundle_indices else i,
         )
 
         if num_engines >= num_total_actors:
