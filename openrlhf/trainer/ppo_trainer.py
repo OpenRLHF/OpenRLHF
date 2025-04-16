@@ -163,6 +163,53 @@ class PPOTrainer(ABC):
         if self._tensorboard is not None and self.strategy.is_rank_0():
             self._tensorboard.close()
 
+    def ppo_train(self, global_steps):
+        status = {}
+
+        # triger remote critic model training
+        if self.critic_model_group is not None:
+            # sync for deepspeed_enable_sleep
+            if self.strategy.args.deepspeed_enable_sleep:
+                ray.get(self.critic_model_group.async_run_method(method_name="reload_states"))
+
+            critic_status_ref = self.critic_model_group.async_run_method(method_name="fit")
+
+            if self.strategy.args.colocate_all_models or self.strategy.args.deepspeed_enable_sleep:
+                status.update(ray.get(critic_status_ref))
+            if self.strategy.args.deepspeed_enable_sleep:
+                ray.get(self.critic_model_group.async_run_method(method_name="offload_states"))
+
+        # 3. actor model training
+        if global_steps > self.freezing_actor_steps:
+            if self.strategy.args.deepspeed_enable_sleep:
+                self.actor_model_group.async_run_method(method_name="reload_states")
+
+            status.update(self.ppo_train_actor(global_steps))
+
+            if self.strategy.args.deepspeed_enable_sleep:
+                self.actor_model_group.async_run_method(method_name="offload_states")
+
+            torch.cuda.empty_cache()
+
+            # 4. broadcast weights to vllm engines
+            if self.vllm_engines is not None:
+                if self.strategy.args.vllm_enable_sleep:
+                    batch_vllm_engine_call(self.vllm_engines, "wake_up")
+
+                torch_dist_barrier_and_cuda_sync()
+                self._broadcast_to_vllm()
+
+                if self.strategy.args.vllm_enable_sleep:
+                    batch_vllm_engine_call(self.vllm_engines, "sleep")
+                    torch_dist_barrier_and_cuda_sync()
+
+        # 5. wait remote critic model training done
+        if self.critic_train_remote and not self.strategy.args.colocate_all_models:
+            status.update(ray.get(critic_status_ref))
+        torch_dist_barrier_and_cuda_sync()
+
+        return status
+
     def prepare_datasets(self):
         strategy = self.strategy
         args = self.strategy.args
@@ -245,16 +292,11 @@ class PPOTrainer(ABC):
                         "global_step": global_step,
                     }.items()
                 }
-                if self.experience_maker.perf_stats is not None:
-                    logs.update({f"perf/experience_maker/{k}": v for k, v in self.experience_maker.perf_stats.items()})
                 self._wandb.log(logs)
             # TensorBoard
             elif self._tensorboard is not None and self.strategy.is_rank_0():
                 for k, v in logs_dict.items():
                     self._tensorboard.add_scalar(f"train/{k}", v, global_step)
-                if self.experience_maker.perf_stats is not None:
-                    for k, v in self.experience_maker.perf_stats.items():
-                        self._tensorboard.add_scalar(f"perf/experience_maker/{k}", v, global_step)
 
         # TODO: Add evaluation mechanism for PPO
         if global_step % args.eval_steps == 0 and self.eval_dataloader and len(self.eval_dataloader) > 0:
@@ -263,7 +305,16 @@ class PPOTrainer(ABC):
         # TODO: save best model on dev, use loss/perplexity/others on whole dev dataset as metric
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
-            self._save_checkpoint(args, tag, client_states)
+            ref = self.actor_model_group.async_run_method(
+                method_name="save_checkpoint", args=args, tag=tag, client_states=client_states
+            )
+            if self.critic_model_group is not None:
+                ref.append(
+                    self.critic_model_group.async_run_method(
+                        method_name="save_checkpoint", args=args, tag=tag, client_states=client_states
+                    )
+                )
+            ray.get(ref)
 
     def evaluate(self, eval_dataloader, global_step, temperature=0.6, n_samples_per_prompt=1):
         """Evaluate model performance on eval dataset.
@@ -274,8 +325,7 @@ class PPOTrainer(ABC):
             n_samples_per_prompt: Number of samples to generate per prompt for pass@k calculation
         """
         start_time = time.time()
-        if self.strategy.is_rank_0():
-            logger.info(f"⏰ Evaluation start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"⏰ Evaluation start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
         # vLLM wakeup when vllm_enable_sleep
         if self.strategy.args.vllm_enable_sleep:
@@ -283,100 +333,94 @@ class PPOTrainer(ABC):
 
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
-        # Only run evaluation on ring attention rank0
-        if self.strategy.ring_attn_group is None or self.strategy.ring_attn_rank == 0:
+        with torch.no_grad():
+            # First collect all prompts and labels
+            all_prompts = []
+            all_labels = []
+            all_datasources = []
 
-            with torch.no_grad():
-                # First collect all prompts and labels
-                all_prompts = []
-                all_labels = []
-                all_datasources = []
+            for datasources, prompts, labels in eval_dataloader:
+                all_prompts.extend(prompts)
+                all_labels.extend(labels)
+                all_datasources.extend(datasources)
 
-                for datasources, prompts, labels in eval_dataloader:
-                    all_prompts.extend(prompts)
-                    all_labels.extend(labels)
-                    all_datasources.extend(datasources)
+            # Generate samples and calculate rewards
+            generate_kwargs = self.generate_kwargs.copy()
+            generate_kwargs["temperature"] = temperature
+            generate_kwargs["n_samples_per_prompt"] = n_samples_per_prompt
+            samples = self.experience_maker.generate_samples(all_prompts, all_labels, **generate_kwargs)
+            queries_list = [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in samples.sequences]
 
-                # Generate samples and calculate rewards
-                generate_kwargs = self.generate_kwargs.copy()
-                generate_kwargs["temperature"] = temperature
-                generate_kwargs["n_samples_per_prompt"] = n_samples_per_prompt
-                samples = self.experience_maker.generate_samples(all_prompts, all_labels, **generate_kwargs)
-                queries = [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in samples.sequences]
+            # duplicate prompts and labels for each sample
+            all_prompts = sum([[prompt] * n_samples_per_prompt for prompt in all_prompts], [])
+            all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
 
-                # duplicate prompts and labels for each sample
-                all_prompts = sum([[prompt] * n_samples_per_prompt for prompt in all_prompts], [])
-                all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
-
-                # Calculate rewards
-                if self.experience_maker.custom_reward_func:
-                    rewards = self.experience_maker.custom_reward_func.remote(queries, all_prompts, all_labels)
-                else:
-                    rank = torch.distributed.get_rank() // self.strategy.ring_attn_size
-                    rm = self.remote_rm_url[rank % len(self.remote_rm_url)]
-                    rewards = remote_rm_fn_ray.remote(rm, queries=queries, prompts=all_prompts, labels=all_labels)
-                rewards = ray.get(rewards)
-
-                # Reshape rewards to (num_prompts, n_samples_per_prompt)
-                rewards = rewards.reshape(-1, n_samples_per_prompt)
-
-                # Collect local statistics for each data source
-                local_metrics = {}  # {datasource: {"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}}
-
-                for i, datasource in enumerate(all_datasources):
-                    if datasource not in local_metrics:
-                        local_metrics[datasource] = {f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}
-
-                    # Calculate pass@k and pass@1
-                    prompt_rewards = rewards[i]
-                    local_metrics[datasource][f"pass{n_samples_per_prompt}"] += prompt_rewards.max().float().item()
-                    local_metrics[datasource]["pass1"] += prompt_rewards.mean().float().item()
-                    local_metrics[datasource]["count"] += 1
-
-                # All gather metrics from all ranks
-                gathered_metrics = [None] * (self.strategy.world_size // self.strategy.ring_attn_size)
-                if self.strategy.ring_attn_group is not None:
-                    # Only rank 0 in ring attention group gathers metrics
-                    torch.distributed.all_gather_object(
-                        gathered_metrics, local_metrics, group=self.experience_maker.ring_rank0_group
+            # Calculate rewards
+            if self.experience_maker.custom_reward_func:
+                # Let Ray automatically distribute the workload across available resources
+                batch_size = self.strategy.args.micro_rollout_batch_size
+                num_chunks = (len(queries_list) + batch_size - 1) // batch_size
+                r_refs = []
+                for i in range(num_chunks):
+                    start_idx = i * batch_size
+                    end_idx = min((i + 1) * batch_size, len(queries_list))
+                    r = self.custom_reward_func.remote(
+                        queries_list[start_idx:end_idx],
+                        all_prompts[start_idx:end_idx],
+                        all_labels[start_idx:end_idx],
                     )
-                else:
-                    torch.distributed.all_gather_object(gathered_metrics, local_metrics)
+                    r_refs.append(r)
+            else:
+                # Distribute data across different remote reward function servers
+                num_servers = len(self.remote_rm_url)
+                batch_size = (len(queries_list) + num_servers - 1) // num_servers
+                r_refs = []
+                for i in range(num_servers):
+                    start_idx = i * batch_size
+                    end_idx = min((i + 1) * batch_size, len(queries_list))
+                    rm = self.remote_rm_url[i]
+                    r = remote_rm_fn_ray.remote(
+                        rm,
+                        queries=queries_list[start_idx:end_idx],
+                        prompts=all_prompts[start_idx:end_idx],
+                        labels=all_labels[start_idx:end_idx],
+                    )
+                    r_refs.append(r)
 
-                # Only rank0 processes the gathered metrics
-                if self.strategy.is_rank_0():
-                    # Combine metrics from all ranks
-                    global_metrics = {}
-                    for rank_metrics in gathered_metrics:
-                        for datasource, metrics in rank_metrics.items():
-                            if datasource not in global_metrics:
-                                global_metrics[datasource] = {f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}
-                            global_metrics[datasource][f"pass{n_samples_per_prompt}"] += metrics[
-                                f"pass{n_samples_per_prompt}"
-                            ]
-                            global_metrics[datasource]["pass1"] += metrics["pass1"]
-                            global_metrics[datasource]["count"] += metrics["count"]
+            # Reshape rewards to (num_prompts, n_samples_per_prompt)
+            rewards = rewards.reshape(-1, n_samples_per_prompt)
 
-                    # Calculate global averages
-                    logs = {}
-                    for datasource, metrics in global_metrics.items():
-                        logs[f"eval_{datasource}_pass{n_samples_per_prompt}"] = (
-                            metrics[f"pass{n_samples_per_prompt}"] / metrics["count"]
-                        )
-                        logs[f"eval_{datasource}_pass1"] = metrics["pass1"] / metrics["count"]
+            # Collect local statistics for each data source
+            global_metrics = {}  # {datasource: {"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}}
 
-                    # Log to wandb/tensorboard
-                    if self._wandb is not None:
-                        logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": global_step}.items()}
-                        self._wandb.log(logs)
-                    elif self._tensorboard is not None:
-                        for k, v in logs.items():
-                            self._tensorboard.add_scalar(f"eval/{k}", v, global_step)
+            for i, datasource in enumerate(all_datasources):
+                if datasource not in global_metrics:
+                    global_metrics[datasource] = {f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}
+
+                # Calculate pass@k and pass@1
+                prompt_rewards = rewards[i]
+                global_metrics[datasource][f"pass{n_samples_per_prompt}"] += prompt_rewards.max().float().item()
+                global_metrics[datasource]["pass1"] += prompt_rewards.mean().float().item()
+                global_metrics[datasource]["count"] += 1
+
+            # Calculate global averages
+            logs = {}
+            for datasource, metrics in global_metrics.items():
+                logs[f"eval_{datasource}_pass{n_samples_per_prompt}"] = (
+                    metrics[f"pass{n_samples_per_prompt}"] / metrics["count"]
+                )
+                logs[f"eval_{datasource}_pass1"] = metrics["pass1"] / metrics["count"]
+
+            # Log to wandb/tensorboard
+            if self._wandb is not None:
+                logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": global_step}.items()}
+                self._wandb.log(logs)
+            elif self._tensorboard is not None:
+                for k, v in logs.items():
+                    self._tensorboard.add_scalar(f"eval/{k}", v, global_step)
 
         if self.strategy.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "sleep")
-
-        torch.cuda.empty_cache()
 
         end_time = time.time()
         duration = end_time - start_time

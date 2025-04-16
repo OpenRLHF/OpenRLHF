@@ -2,7 +2,7 @@ import math
 import os
 import socket
 from abc import ABC
-from typing import Callable, Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import deepspeed
 import ray
@@ -53,7 +53,6 @@ class ActorPPOTrainer(ABC):
         prompt_max_len: int = 128,
         dataloader_pin_memory: bool = True,
         vllm_engines: List = None,
-        remote_rm_url: List[str] = None,
         **kwargs,
     ):
         """PPOTrainer for ray.
@@ -80,7 +79,6 @@ class ActorPPOTrainer(ABC):
         self.ema_model = ema_model
         self.actor_optim = actor_optim
         self.actor_scheduler = actor_scheduler
-        self.remote_rm_url = remote_rm_url
         self.vllm_engines = vllm_engines
 
         self.actor_loss_fn = PolicyLoss(eps_clip)
@@ -188,7 +186,7 @@ class ActorPPOTrainer(ABC):
 
         torch_dist_barrier_and_cuda_sync()
 
-    def ppo_train_actor(self, global_steps):
+    def ppo_train(self, global_steps):
         torch.cuda.empty_cache()
         # replay buffer may be empty at first, we should rebuild at each training
         dataloader = DataLoader(
@@ -422,38 +420,6 @@ class ActorPPOTrainer(ABC):
         torch.cuda.empty_cache()
         torch_dist_barrier_and_cuda_sync()
 
-    def _save_checkpoint(self, args, tag, client_states):
-        # call remote critic
-        if not self.disable_ds_ckpt:
-            if self.critic_train_remote:
-                ref = self.critic.save_checkpoint.remote(tag)
-            self.strategy.save_ckpt(
-                self.actor.model,
-                os.path.join(args.ckpt_path, "_actor"),
-                tag,
-                args.max_ckpt_num,
-                args.max_ckpt_mem,
-                client_states,
-            )
-        if self.save_hf_ckpt:
-            save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
-            self.strategy.save_model(
-                self.ema_model if args.enable_ema else self.actor,
-                self.tokenizer,
-                save_path,
-            )
-        # wait
-        if not self.disable_ds_ckpt:
-            if self.critic_train_remote:
-                ray.get(ref)
-        torch_dist_barrier_and_cuda_sync()
-
-    def reload_states(self):
-        reload_deepspeed_states(self.actor.model)
-
-    def offload_states(self):
-        offload_deepspeed_states(self.actor.model)
-
 
 @ray.remote(num_gpus=1)
 class ActorModelRayActor(BasePPORole):
@@ -567,34 +533,18 @@ class ActorModelRayActor(BasePPORole):
             ema_beta=0.992,
             ptx_coef=args.ptx_coef,
             max_norm=args.max_norm,
-            # for GPT generation
-            do_sample=True,
-            max_new_tokens=args.generate_max_len,
-            max_length=args.max_len,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            pad_token_id=self.tokenizer.pad_token_id,
-            eos_token_id=self.tokenizer.eos_token_id,
             save_hf_ckpt=args.save_hf_ckpt,
             disable_ds_ckpt=args.disable_ds_ckpt,
         )
 
-    def fit(
-        self,
-        critic_model: ray.actor.ActorHandle,
-        initial_model: ray.actor.ActorHandle,
-        reward_model: List[ray.actor.ActorHandle],
-        remote_rm_url: List[str] = None,
-        reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
-        vllm_engines: List[ray.actor.ActorHandle] = None,
-        critic_train_remote: bool = False,
-    ):
-        """Train actor model with prompt datasets."""
-        strategy = self.strategy
-        args = self.strategy.args
-
+    def fit(self):
+        """Train critic model with the replay buffer."""
+        torch.cuda.empty_cache()
+        self.actor.train()
+        status = self.trainer.ppo_train()
         self.trainer.replay_buffer.clear()
-        return True
+        torch.cuda.empty_cache()
+        return status
 
     def save_model(self):
         args = self.strategy.args
@@ -638,3 +588,28 @@ class ActorModelRayActor(BasePPORole):
 
     def append(self, experience: Experience):
         self.trainer.replay_buffer.append(experience)
+
+    def reload_states(self):
+        reload_deepspeed_states(self.actor.model)
+
+    def offload_states(self):
+        offload_deepspeed_states(self.actor.model)
+
+    def save_checkpoint(self, args, tag, client_states):
+        self.strategy.save_ckpt(
+            self.actor.model,
+            os.path.join(args.ckpt_path, "_actor"),
+            tag,
+            args.max_ckpt_num,
+            args.max_ckpt_mem,
+            client_states,
+        )
+        if self.save_hf_ckpt:
+            save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
+            self.strategy.save_model(
+                self.ema_model if args.enable_ema else self.actor,
+                self.tokenizer,
+                save_path,
+            )
+        # wait
+        torch_dist_barrier_and_cuda_sync()
