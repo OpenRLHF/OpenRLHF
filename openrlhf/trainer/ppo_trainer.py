@@ -196,17 +196,6 @@ class PPOTrainer(ABC):
         if self._tensorboard is not None and self.strategy.is_rank_0():
             self._tensorboard.close()
 
-    def _average_dict_list(self, dict_list):
-        if not dict_list:
-            return {}
-        avg_dict = dict_list[0].copy()
-        for d in dict_list[1:]:
-            for k, v in d.items():
-                avg_dict[k] += v
-        for k in avg_dict:
-            avg_dict[k] /= len(dict_list)
-        return avg_dict
-
     def ppo_train(self, global_steps):
         status = {}
 
@@ -219,7 +208,7 @@ class PPOTrainer(ABC):
             critic_status_ref = self.critic_model_group.async_run_method(method_name="fit")
 
             if self.strategy.args.colocate_all_models or self.strategy.args.deepspeed_enable_sleep:
-                status.update(self._average_dict_list(ray.get(critic_status_ref)))
+                status.update(ray.get(critic_status_ref)[0])
             if self.strategy.args.deepspeed_enable_sleep:
                 ray.get(self.critic_model_group.async_run_method(method_name="offload_states"))
 
@@ -229,7 +218,7 @@ class PPOTrainer(ABC):
                 self.actor_model_group.async_run_method(method_name="reload_states")
 
             actor_status_ref = self.actor_model_group.async_run_method(method_name="fit", global_steps=global_steps)
-            status.update(self._average_dict_list(ray.get(actor_status_ref)))
+            status.update(ray.get(actor_status_ref)[0])
 
             if self.strategy.args.deepspeed_enable_sleep:
                 self.actor_model_group.async_run_method(method_name="offload_states")
@@ -248,7 +237,7 @@ class PPOTrainer(ABC):
 
         # 5. wait remote critic model training done
         if self.critic_model_group and not self.strategy.args.colocate_all_models:
-            status.update(self._average_dict_list(ray.get(critic_status_ref)))
+            status.update(ray.get(critic_status_ref)[0])
 
         return status
 
