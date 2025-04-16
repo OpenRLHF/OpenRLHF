@@ -4,6 +4,7 @@ from abc import ABC
 from datetime import timedelta
 from typing import Any, Callable, Optional
 
+import ray
 import torch
 
 from openrlhf.datasets import PromptDataset, SFTDataset
@@ -12,7 +13,10 @@ from openrlhf.trainer.ray.launcher import PPORayActorGroup
 from openrlhf.utils import blending_datasets
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.distributed_sampler import DistributedSampler
+from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
+
+logger = init_logger(__name__)
 
 
 class PPOTrainer(ABC):
@@ -262,7 +266,6 @@ class PPOTrainer(ABC):
             from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
-            torch_dist_barrier_and_cuda_sync()
 
         # Only run evaluation on ring attention rank0
         if self.strategy.ring_attn_group is None or self.strategy.ring_attn_rank == 0:

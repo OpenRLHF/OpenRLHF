@@ -47,8 +47,6 @@ class LLMRayActor:
             print(f"creating LLM with bundle_indices={bundle_indices}")
 
         # Number of actors that will send prompt to this engine
-        self.num_actors = kwargs.pop("num_actors")
-        self.actor_counter = 0
         self.requests = {}
         self.response_queues = defaultdict(queue.Queue)
 
@@ -87,30 +85,21 @@ class LLMRayActor:
         Save the requests from actors and generate responses when all actors have sent their requests
         """
         self.requests[actor_rank] = prompt_token_ids
-        self.actor_counter += 1
-        if self.actor_counter == self.num_actors:
-            assert len(self.requests) == self.num_actors
-            num_requests = []
-            requests: list[TokensPrompt] = []
-            for actor_rank, request in self.requests.items():
-                num_requests.append((actor_rank, len(request)))
-                for r in request:
-                    requests.append(TokensPrompt(prompt_token_ids=r))
+        num_requests = []
+        requests: list[TokensPrompt] = []
+        for actor_rank, request in self.requests.items():
+            num_requests.append((actor_rank, len(request)))
+            for r in request:
+                requests.append(TokensPrompt(prompt_token_ids=r))
 
-            if len(requests) > 0:
-                # For now we assume that all requests have the same sampling params
-                responses = self.llm.generate(prompts=requests, sampling_params=sampling_params)
-            else:
-                responses = []
+        responses = self.llm.generate(prompts=requests, sampling_params=sampling_params)
+        offset = 0
+        self.responses = {}
+        for actor_rank, num in num_requests:
+            self.response_queues[actor_rank].put(responses[offset : offset + num])
+            offset += num
 
-            offset = 0
-            self.responses = {}
-            for actor_rank, num in num_requests:
-                self.response_queues[actor_rank].put(responses[offset : offset + num])
-                offset += num
-
-            self.actor_counter = 0
-            self.requests = {}
+        self.requests = {}
 
     def get_responses(self, actor_rank):
         """
@@ -186,7 +175,6 @@ def create_vllm_engines(
                 dtype="bfloat16",
                 trust_remote_code=True,
                 full_determinism=full_determinism,
-                num_actors=num_actors,
                 gpu_memory_utilization=gpu_memory_utilization,
                 bundle_indices=bundle_indices,
                 num_gpus=0.2 if use_hybrid_engine else 1,

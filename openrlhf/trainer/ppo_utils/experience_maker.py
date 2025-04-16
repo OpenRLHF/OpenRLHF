@@ -9,7 +9,7 @@ import ray
 import torch
 import torch.distributed as dist
 
-from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
+from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean, process_sequences
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
@@ -185,7 +185,6 @@ class RemoteExperienceMaker(ABC):
         self.kl_ctl = kl_controller
         self.strategy = strategy
         self.advantage_estimator = strategy.args.advantage_estimator
-        self.perf_stats = {}
 
         # custom reward func for reinforced finetuning
         self.custom_reward_func = None
@@ -258,9 +257,7 @@ class RemoteExperienceMaker(ABC):
         """
         start_time = time.time()
         if dist.get_rank() == 0:
-            logger.info(
-                f"🚀 Starting experience making with {len(rollout_samples.sequences) * dist.get_world_size() // self.strategy.ring_attn_size} batches"
-            )
+            logger.info(f"🚀 Starting experience making with {len(rollout_samples.sequences)} batches")
 
         args = self.strategy.args
         self.actor.eval()
@@ -278,16 +275,12 @@ class RemoteExperienceMaker(ABC):
         prompts_list = [p for s in samples_list for p in s.prompts]
         labels_list = [l for s in samples_list for l in s.labels]
 
-        # Move data to CPU for remote processing
-        sequences_cpu_list = [seq.to("cpu") for seq in sequences_list]
-        attention_mask_cpu_list = [mask.to("cpu") for mask in attention_mask_list]
-
         # Batch call initial model
         if self.initial_model is not None:
             base_action_log_probs_ref = self.initial_model.forward_batch.remote(
-                sequences=sequences_cpu_list,
+                sequences=sequences_list,
                 action_mask=action_mask_list,
-                attention_mask=attention_mask_cpu_list,
+                attention_mask=attention_mask_list,
             )
 
             if args.colocate_actor_ref or args.colocate_all_models:
@@ -299,9 +292,9 @@ class RemoteExperienceMaker(ABC):
         # Batch call critic model
         if self.critic is not None:
             value_ref = self.critic.forward_batch.remote(
-                sequences=sequences_cpu_list,
+                sequences=sequences_list,
                 action_mask=action_mask_list,
-                attention_mask=attention_mask_cpu_list,
+                attention_mask=attention_mask_list,
             )
             if args.colocate_critic_reward or args.colocate_all_models:
                 ray.get([value_ref])
@@ -315,15 +308,15 @@ class RemoteExperienceMaker(ABC):
             for rm in self.reward_model:
                 r_refs.append(
                     rm.forward_batch.remote(
-                        sequences=sequences_cpu_list,
-                        attention_mask=attention_mask_cpu_list,
+                        sequences=sequences_list,
+                        attention_mask=attention_mask_list,
                         pad_sequence=[True] * len(samples_list),
                     )
                 )
         else:
             if self.strategy.ring_attn_group is None or self.strategy.ring_attn_rank == 0:
                 queries_list = sum(
-                    [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in sequences_cpu_list], []
+                    [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in sequences_list], []
                 )
 
                 if self.custom_reward_func:
@@ -342,7 +335,7 @@ class RemoteExperienceMaker(ABC):
 
         # Batch call actor model
         action_log_probs_list = []
-        for seq, action_mask, attn_mask in zip(sequences_cpu_list, action_mask_list, attention_mask_cpu_list):
+        for seq, action_mask, attn_mask in zip(sequences_list, action_mask_list, attention_mask_list):
             action_log_probs = self.actor(
                 seq.to(device),
                 action_mask,
@@ -457,25 +450,23 @@ class RemoteExperienceMaker(ABC):
 
         # reward shaping
         if args.advantage_estimator == "rloo":
-            rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt).to(device="cuda")
+            rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt)
             baseline = (rewards.sum(-1, keepdim=True) - rewards) / (args.n_samples_per_prompt - 1)
             rewards = rewards - baseline
-            rewards = rewards.flatten().to(device="cpu").chunk(len(experiences))
+            rewards = rewards.reshape(-1).chunk(len(experiences))
         elif args.advantage_estimator in ["reinforce_baseline", "dr_grpo"]:
             # REINFORCE++-baseline and Dr. GRPO removed the `/std` in GRPO as `/ std` is not needed in RL variance reduction theory.
             # And `k3 KL` has a larger variance than `k1 KL` under a categorical distribution.
-            rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt).to(device="cuda")
+            rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt)
             rewards = rewards - rewards.mean(-1, keepdim=True)
-            rewards = rewards.reshape(-1).to(device="cpu").chunk(len(experiences))
+            rewards = rewards.reshape(-1).chunk(len(experiences))
         elif args.advantage_estimator == "group_norm":
-            rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt).to(device="cuda")
+            rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt)
             rewards = (rewards - rewards.mean(-1, keepdim=True)) / (rewards.std(-1, keepdim=True) + 1e-9)
-            rewards = rewards.reshape(-1).to(device="cpu").chunk(len(experiences))
+            rewards = rewards.reshape(-1).chunk(len(experiences))
 
         # calculate return and advantages
         for experience, reward in zip(experiences, rewards):
-            experience = experience.to_device("cuda")
-            reward = reward.to(device="cuda")
             reward = compute_reward(
                 reward,
                 self.kl_ctl.value,
@@ -499,8 +490,7 @@ class RemoteExperienceMaker(ABC):
                     "group_norm",
                     "dr_grpo",
                 ]:
-                    if dist.get_rank() == 0:
-                        logger.warning("gamma is set to 1.0 for rloo, reinforce_baseline, and group_norm")
+                    logger.warning("gamma is set to 1.0 for rloo, reinforce_baseline, and group_norm")
                     kwargs["gamma"] = 1.0
 
                 experience.returns = self.get_cumulative_returns(
@@ -517,7 +507,6 @@ class RemoteExperienceMaker(ABC):
             experience.info["return"] = return_sums
             # remove unnecessary info
             experience.kl = None
-            experience.to_device("cpu")
 
         return experiences
 
@@ -618,53 +607,12 @@ class RemoteExperienceMaker(ABC):
 
     @torch.no_grad()
     def _generate_with_hf(self, all_prompts: List[str], all_labels, **generate_kwargs) -> Samples:
-        """
-        Generate samples and return in batches.
-        """
-        assert not getattr(self, "packing_samples", False)
-        args = self.strategy.args
-        self.actor.eval()
-        # sample multiple response
-        n_samples_per_prompt = generate_kwargs.pop("n_samples_per_prompt", args.n_samples_per_prompt)
-        all_prompts = sum([[prompt] * n_samples_per_prompt for prompt in all_prompts], [])
-        all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
-        rollout_sequences = []
-        rollout_attention_mask = []
-        rollout_action_mask = []
-        for i in range(0, len(all_prompts), args.micro_rollout_batch_size):
-            prompts = all_prompts[i : i + args.micro_rollout_batch_size]
-            inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
-            sequences, attention_mask, action_mask = self.actor_model_group.generate(**inputs, **generate_kwargs)
-            rollout_sequences.append(sequences)
-            rollout_attention_mask.append(attention_mask)
-            rollout_action_mask.append(action_mask)
-        rollout_sequences = torch.cat(rollout_sequences, dim=0)
-        rollout_attention_mask = torch.cat(rollout_attention_mask, dim=0)
-        rollout_action_mask = torch.cat(rollout_action_mask, dim=0)
-        rollout_samples = Samples(
-            sequences=rollout_sequences,
-            attention_mask=rollout_attention_mask,
-            action_mask=rollout_action_mask,
-            response_length=rollout_action_mask.float().sum(dim=-1),
-            total_length=rollout_attention_mask.float().sum(dim=-1),
-            prompts=all_prompts,
-            labels=all_labels,
-        )
-        return rollout_samples
+        raise NotImplementedError("HF generation is not implemented yet")
 
     def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> Samples:
         from vllm import SamplingParams
 
-        # round-robin load balance
-        rank = torch.distributed.get_rank() // self.strategy.ring_attn_size
-        world_size = torch.distributed.get_world_size() // self.strategy.ring_attn_size
-
-        # Select LLM engines: assign each rank an engine, or cycle through engines if world_size < engine_count
-        if len(self.vllm_engines) <= world_size:
-            llms = [self.vllm_engines[rank % len(self.vllm_engines)]]
-        else:
-            llms = self.vllm_engines[rank::world_size]
-
+        llms = self.vllm_engines
         args = self.strategy.args
 
         sampling_params = SamplingParams(
@@ -688,15 +636,13 @@ class RemoteExperienceMaker(ABC):
         batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
         for i, llm in enumerate(llms):
             prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
-            refs.append(
-                llm.add_requests.remote(rank, sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
-            )
+            refs.append(llm.add_requests.remote(0, sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
         ray.get(refs)
 
         # Retrieve and combine results from all outputs
         all_output_refs = []
         for i, llm in enumerate(llms):
-            all_output_refs.append(llm.get_responses.remote(rank))
+            all_output_refs.append(llm.get_responses.remote(0))
         all_outputs = sum(ray.get(all_output_refs), [])
 
         #
@@ -728,12 +674,12 @@ class RemoteExperienceMaker(ABC):
             sequences.append(input_ids + output_ids)
 
         sequences = torch.tensor(sequences)
-        sequences, attention_mask, action_mask = self.actor.process_sequences(
+        sequences, attention_mask, action_mask = process_sequences(
             sequences, max_input_len, eos_token_id, pad_token_id
         )
-        sequences = sequences.to("cuda")
-        attention_mask = attention_mask.to("cuda")
-        action_mask = action_mask.to("cuda")
+        sequences = sequences.to("cpu")
+        attention_mask = attention_mask.to("cpu")
+        action_mask = action_mask.to("cpu")
         response_length = action_mask.float().sum(dim=-1)
         total_length = attention_mask.float().sum(dim=-1)
 
