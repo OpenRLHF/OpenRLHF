@@ -344,7 +344,7 @@ if __name__ == "__main__":
         "--kl_estimator",
         type=str,
         default="k1",
-        choices=["k1", "k2", "k3"],
+        choices=["k1", "k2", "k3", "k3_offpolicy"],
         help=(
             "In GRPO, k3 is utilized as the loss function, while k2, when used as the loss, is nearly equivalent to k1."
         ),
