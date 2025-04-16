@@ -16,7 +16,6 @@ from transformers.trainer import get_scheduler
 from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
 from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils import Experience
-from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
@@ -544,40 +543,19 @@ class ActorModelRayActor(BasePPORole):
         if strategy.args.deepspeed_enable_sleep:
             offload_deepspeed_states(self.actor.model)
 
-    def fit(
-        self,
-        critic_model: ray.actor.ActorHandle,
-        initial_model: ray.actor.ActorHandle,
-        reward_model: List[ray.actor.ActorHandle],
-        remote_rm_url: List[str] = None,
-        reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
-        vllm_engines: List[ray.actor.ActorHandle] = None,
-        critic_train_remote: bool = False,
-    ):
-        """Train actor model with prompt datasets."""
-        strategy = self.strategy
-        args = self.strategy.args
-
-        # configure Trainer
-        trainer = ActorPPOTrainer(
+            # configure Trainer
+        self.trainer = ActorPPOTrainer(
             strategy,
             self.actor,
-            critic_model,
-            reward_model,
-            initial_model,
             ema_model=self.ema_model,
             actor_optim=None,
             critic_optim=None,
             actor_scheduler=self.actor_scheduler,
             critic_scheduler=None,
-            remote_rm_url=remote_rm_url,
-            reward_fn=reward_fn,
-            vllm_engines=vllm_engines,
             max_epochs=args.max_epochs,
             micro_train_batch_size=args.micro_train_batch_size,
             micro_rollout_batch_size=args.micro_rollout_batch_size,
             gradient_checkpointing=args.gradient_checkpointing,
-            critic_train_remote=critic_train_remote,
             tokenizer=self.tokenizer,
             prompt_max_len=args.prompt_max_len,
             value_clip=args.value_clip,
@@ -601,29 +579,22 @@ class ActorModelRayActor(BasePPORole):
             disable_ds_ckpt=args.disable_ds_ckpt,
         )
 
-        # broadcast checkpoint
-        ckpt_path = os.path.join(args.ckpt_path, "_actor")
-        if args.load_checkpoint and os.path.exists(ckpt_path) and not vllm_engines is None:
-            # vLLM wakeup when vllm_enable_sleep
-            if self.strategy.args.vllm_enable_sleep:
-                batch_vllm_engine_call(vllm_engines, "wake_up")
-            torch_dist_barrier_and_cuda_sync()
+    def fit(
+        self,
+        critic_model: ray.actor.ActorHandle,
+        initial_model: ray.actor.ActorHandle,
+        reward_model: List[ray.actor.ActorHandle],
+        remote_rm_url: List[str] = None,
+        reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
+        vllm_engines: List[ray.actor.ActorHandle] = None,
+        critic_train_remote: bool = False,
+    ):
+        """Train actor model with prompt datasets."""
+        strategy = self.strategy
+        args = self.strategy.args
 
-            trainer._broadcast_to_vllm()
-
-            # vLLM offload when vllm_enable_sleep
-            if self.strategy.args.vllm_enable_sleep:
-                batch_vllm_engine_call(vllm_engines, "sleep")
-                torch_dist_barrier_and_cuda_sync()
-
-        trainer.fit(
-            args,
-            self.prompts_dataloader,
-            self.pretrain_dataloader,
-            self.eval_dataloader,
-            self.consumed_samples,
-            self.num_update_steps_per_episodes,
-        )
+        self.trainer.replay_buffer.clear()
+        return True
 
     def save_model(self):
         args = self.strategy.args
@@ -658,3 +629,12 @@ class ActorModelRayActor(BasePPORole):
     def empty_cache(self) -> None:
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
+
+    def broadcast_to_vllm(self):
+        self.trainer._broadcast_to_vllm()
+
+    def get_consumed_samples(self):
+        return self.consumed_samples
+
+    def append(self, experience: Experience):
+        self.trainer.replay_buffer.append(experience)

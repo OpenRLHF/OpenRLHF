@@ -1,4 +1,5 @@
 import itertools
+import os
 import time
 from abc import ABC
 from datetime import timedelta
@@ -6,13 +7,13 @@ from typing import Any, Callable, Optional
 
 import ray
 import torch
+import tqdm
 
 from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.trainer.ppo_utils import AdaptiveKLController, FixedKLController, RemoteExperienceMaker
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
 from openrlhf.utils import blending_datasets
 from openrlhf.utils.deepspeed import DeepspeedStrategy
-from openrlhf.utils.distributed_sampler import DistributedSampler
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
 
@@ -83,7 +84,6 @@ class PPOTrainer(ABC):
 
     def fit(
         self,
-        consumed_samples=0,
     ) -> None:
         args = self.args
 
@@ -97,16 +97,32 @@ class PPOTrainer(ABC):
         if args.save_steps == -1:
             args.save_steps = float("inf")  # do not save ckpt
 
+        # broadcast init checkpoint to vllm
+        ckpt_path = os.path.join(args.ckpt_path, "_actor")
+        if args.load_checkpoint and os.path.exists(ckpt_path) and not self.vllm_engines is None:
+            # vLLM wakeup when vllm_enable_sleep
+            if self.strategy.args.vllm_enable_sleep:
+                from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
+
+                batch_vllm_engine_call(self.vllm_engines, "wake_up")
+
+            ref = self.actor_model_group.async_run_method(method_name="broadcast_to_vllm")
+            ray.get(ref)
+
+            # vLLM offload when vllm_enable_sleep
+            if self.strategy.args.vllm_enable_sleep:
+                batch_vllm_engine_call(self.vllm_engines, "sleep")
+
         # Restore step and start_epoch
+        consumed_samples = ray.get(self.actor_model_group.async_run_method(method_name="get_consumed_samples"))[0]
         steps = consumed_samples // args.rollout_batch_size + 1
         start_episode = consumed_samples // args.rollout_batch_size // num_rollouts_per_episodes
         consumed_samples = consumed_samples % (num_rollouts_per_episodes * args.rollout_batch_size)
 
         for episode in range(start_episode, args.num_episodes):
-            if isinstance(self.prompts_dataloader.sampler, DistributedSampler):
-                self.prompts_dataloader.sampler.set_epoch(
-                    episode, consumed_samples=0 if episode > start_episode else consumed_samples
-                )
+            self.prompts_dataloader.sampler.set_epoch(
+                episode, consumed_samples=0 if episode > start_episode else consumed_samples
+            )
             pbar = tqdm(
                 range(self.prompts_dataloader.__len__()),
                 desc=f"Episode [{episode + 1}/{args.num_episodes}]",
@@ -122,14 +138,14 @@ class PPOTrainer(ABC):
                             experience.sequences[0].unsqueeze(0), skip_special_tokens=True
                         )
                         self.strategy.print(output)
-                    self.replay_buffer.append(experience)
+                    refs = self.actor_model_group.async_run_method(method_name="append", experience=experience)
+                    if self.critic_model_group is not None:
+                        refs.append(
+                            self.critic_model_group.async_run_method(method_name="append", experience=experience)
+                        )
+                    ray.get(refs)
 
-                if self.args.advantage_estimator not in ["group_norm", "dr_grpo"]:
-                    self.replay_buffer.normalize(
-                        self.strategy, "advantages", divide_by_std=not self.args.no_advantage_std_norm
-                    )
                 status = self.ppo_train(steps)
-                self.replay_buffer.clear()
 
                 if "kl" in status:
                     self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)

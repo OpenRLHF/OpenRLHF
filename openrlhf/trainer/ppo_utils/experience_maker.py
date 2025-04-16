@@ -502,6 +502,31 @@ class RemoteExperienceMaker(ABC):
             # remove unnecessary info
             experience.kl = None
 
+        # Normalize advantages across all experiences
+        if self.args.advantage_estimator not in ["group_norm", "dr_grpo"]:
+            all_advantages = []
+            all_action_masks = []
+            for exp in experiences:
+                all_advantages.append(exp.advantages)
+                all_action_masks.append(exp.action_mask)
+
+            advantages_vector = torch.cat(all_advantages).float().flatten()
+            action_masks_vector = torch.cat(all_action_masks).flatten()
+            num_actions = action_masks_vector.sum()
+
+            # mean
+            mean = advantages_vector.sum() / num_actions
+            # std
+            if not self.args.no_advantage_std_norm:
+                std = ((advantages_vector - mean).pow(2) * action_masks_vector).sum() / num_actions
+                rstd = std.clamp(min=1e-8).rsqrt()
+            else:
+                rstd = 1
+
+            # Apply normalization to each experience
+            for exp in experiences:
+                exp.advantages = (exp.advantages - mean) * rstd
+
         return experiences
 
     @torch.no_grad()
