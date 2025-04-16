@@ -401,7 +401,7 @@ class ActorPPOTrainer(BasePPOTrainer):
                 ratio = (log_probs - old_log_probs).exp()
                 surr1 = ratio * kl.detach()
                 surr2 = ratio.clamp(1 - self.clip_eps, 1 + self.clip_eps) * kl.detach()
-                kl = -torch.min(surr1, surr2)
+                kl = torch.max(surr1, surr2)
 
             kl_mean = (
                 masked_mean(kl, experience.action_mask, dim=None)
