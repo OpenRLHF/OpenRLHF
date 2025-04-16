@@ -215,7 +215,7 @@ def batch_vllm_engine_call(engines: List[Any], method_name: str, *args, rank_0_o
     """
     import torch
 
-    if rank_0_only and torch.distributed.get_rank() != 0:
+    if rank_0_only and not torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
         return None
 
     refs = []

@@ -161,8 +161,12 @@ class DeepspeedStrategy(ABC):
     ):
         # DDP only mode, replay buffers on each rank are different.
         if sampler is None:
-            num_replicas = dist.get_world_size() // self.ring_attn_size
-            rank = dist.get_rank() // self.ring_attn_size
+            if dist.is_initialized():
+                num_replicas = dist.get_world_size() // self.ring_attn_size
+                rank = dist.get_rank() // self.ring_attn_size
+            else:
+                num_replicas = 1
+                rank = 0
             sampler = DistributedSampler(
                 replay_buffer,
                 num_replicas=num_replicas,
@@ -420,9 +424,13 @@ class DeepspeedStrategy(ABC):
             print(*msg)
 
     def is_rank_0(self) -> bool:
+        if not dist.is_initialized():
+            return True
         return dist.get_rank() == 0
 
     def get_rank(self) -> int:
+        if not dist.is_initialized():
+            return 0
         return dist.get_rank()
 
     def save_ckpt(self, model, save_dir, tag=None, max_num=3, max_mem=1000, client_state={}, save_latest=True):

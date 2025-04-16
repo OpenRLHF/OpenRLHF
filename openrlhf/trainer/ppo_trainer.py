@@ -10,52 +10,19 @@ from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.trainer.ppo_utils import AdaptiveKLController, FixedKLController, RemoteExperienceMaker
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
 from openrlhf.utils import blending_datasets
+from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.distributed_sampler import DistributedSampler
 from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
 
 
 class PPOTrainer(ABC):
     """
-    Base Trainer for Proximal Policy Optimization (PPO) algorithm.
-
-    Args:
-        strategy (Strategy): The training strategy to use.
-        actor (Actor): The actor model in the PPO algorithm.
-        critic (nn.Module): The critic model in the PPO algorithm.
-        reward_model (nn.Module): The reward model for calculating rewards in the RLHF setup.
-        initial_model (Actor): The initial model for reference logits to limit actor updates in RLHF.
-        ema_model (Actor): The exponential moving average model for stable training.
-        actor_optim (Optimizer): The optimizer for the actor model.
-        critic_optim (Optimizer): The optimizer for the critic model.
-        actor_scheduler (Scheduler): The learning rate scheduler for the actor.
-        critic_scheduler (Scheduler): The learning rate scheduler for the critic.
-        ema_beta (float, defaults to 0.992): EMA decay rate for model stability.
-        init_kl_coef (float, defaults to 0.001): Initial coefficient for KL divergence.
-        kl_target (float, optional): Target value for KL divergence.
-        kl_horizon (int, defaults to 10000): Horizon for KL annealing.
-        ptx_coef (float, defaults to 0): Coefficient for supervised loss from pre-trained data.
-        micro_train_batch_size (int, defaults to 8): Micro-batch size for actor training.
-        buffer_limit (int, defaults to 0): Maximum size of the replay buffer.
-        buffer_cpu_offload (bool, defaults to True): If True, offloads replay buffer to CPU.
-        eps_clip (float, defaults to 0.2): Clipping coefficient for policy loss.
-        value_clip (float, defaults to 0.2): Clipping coefficient for value function loss.
-        micro_rollout_batch_size (int, defaults to 8): Micro-batch size for generating rollouts.
-        gradient_checkpointing (bool, defaults to False): If True, enables gradient checkpointing.
-        max_epochs (int, defaults to 1): Number of epochs to train.
-        max_norm (float, defaults to 1.0): Maximum gradient norm for gradient clipping.
-        tokenizer (Callable, optional): Tokenizer for input data.
-        prompt_max_len (int, defaults to 128): Maximum length for prompts.
-        dataloader_pin_memory (bool, defaults to True): If True, pins memory in the data loader.
-        remote_rm_url (str, optional): URL for remote reward model API.
-        reward_fn (Callable, optional): Custom reward function for computing rewards.
-        save_hf_ckpt (bool): Whether to save huggingface-format model weight.
-        disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight. (Deepspeed model weight is used for training recovery)
-        **generate_kwargs: Additional arguments for model generation.
+    Trainer for Proximal Policy Optimization (PPO) algorithm.
     """
 
     def __init__(
         self,
-        strategy,
+        strategy: DeepspeedStrategy,
         actor_model_group: PPORayActorGroup,
         critic_model_group: PPORayActorGroup,
         reward_model_group: PPORayActorGroup,
@@ -74,6 +41,21 @@ class PPOTrainer(ABC):
     ) -> None:
         super().__init__()
 
+        self.strategy = strategy
+        self.actor_model_group = actor_model_group
+        self.critic_model_group = critic_model_group
+        self.reward_model_group = reward_model_group
+        self.reference_model_group = reference_model_group
+        self.max_epochs = max_epochs
+        self.tokenizer = tokenizer
+        self.prompt_max_len = prompt_max_len
+        self.dataloader_pin_memory = dataloader_pin_memory
+        self.remote_rm_url = remote_rm_url
+        self.save_hf_ckpt = save_hf_ckpt
+        self.disable_ds_ckpt = disable_ds_ckpt
+        self.generate_kwargs = generate_kwargs
+
+        self.args = strategy.args
         self.freezing_actor_steps = getattr(self.args, "freezing_actor_steps", -1)
 
         if self.kl_target:
@@ -82,46 +64,34 @@ class PPOTrainer(ABC):
             self.kl_ctl = FixedKLController(init_kl_coef)
 
         self.experience_maker = RemoteExperienceMaker(
-            self.actor,
-            self.critic,
-            self.reward_model,
-            self.initial_model,
+            self.actor_model_group,
+            self.critic_model_group,
+            self.reward_model_group,
+            self.reference_model_group,
             self.tokenizer,
             self.prompt_max_len,
             self.kl_ctl,
             self.strategy,
             self.remote_rm_url,
-            self.reward_fn,
             vllm_engines=self.vllm_engines,
             packing_samples=self.strategy.args.packing_samples,
         )
 
     def fit(
         self,
-        args,
-        prompts_dataloader,
-        pretrain_dataloader,
-        eval_dataloader,
         consumed_samples=0,
-        num_update_steps_per_episodes=1,
     ) -> None:
-        num_rollouts_per_episodes = (
-            num_update_steps_per_episodes
-            * args.train_batch_size
-            // args.max_epochs
-            // args.rollout_batch_size
-            // args.n_samples_per_prompt
-        )
+        args = self.args
+
+        # Load datasets
+        self.prepare_datasets()
+        num_rollouts_per_episodes = len(self.prompts_dataset) // args.rollout_batch_size
 
         # get eval and save steps
         if args.eval_steps == -1:
             args.eval_steps = num_rollouts_per_episodes  # Evaluate once per epoch
         if args.save_steps == -1:
             args.save_steps = float("inf")  # do not save ckpt
-
-        self.prompts_dataloader = prompts_dataloader
-        self.pretrain_dataloader = pretrain_dataloader
-        self.eval_dataloader = eval_dataloader
 
         # Restore step and start_epoch
         steps = consumed_samples // args.rollout_batch_size + 1
@@ -205,12 +175,7 @@ class PPOTrainer(ABC):
             )
             eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
             eval_dataset = PromptDataset(eval_data, self.tokenizer, strategy, input_template=args.input_template)
-            self.eval_dataloader = strategy.setup_dataloader(
-                eval_dataset,
-                1,
-                True,
-                False,
-            )
+            self.eval_dataloader = strategy.setup_dataloader(eval_dataset, 1, True, False)
         else:
             self.eval_dataloader = None
 
@@ -242,7 +207,7 @@ class PPOTrainer(ABC):
                         args.micro_train_batch_size,
                         True,
                         True,
-                        pretrain_dataset.collate_fn,
+                        collate_fn=pretrain_dataset.collate_fn,
                     )
                 )
             )

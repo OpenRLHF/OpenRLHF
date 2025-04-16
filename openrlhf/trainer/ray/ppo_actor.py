@@ -458,7 +458,7 @@ class ActorPPOTrainer(ABC):
 
 @ray.remote(num_gpus=1)
 class ActorModelRayActor(BasePPORole):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps):
         args = strategy.args
 
         if getattr(args, "vllm_num_engines", 0) > 0:
@@ -506,16 +506,6 @@ class ActorModelRayActor(BasePPORole):
         actor_optim = strategy.create_optimizer(
             actor, lr=args.actor_learning_rate, betas=strategy.args.adam_betas, weight_decay=args.l2
         )
-
-        # prepare_datasets
-        self.prepare_datasets()
-
-        # configure scheduler
-        self.num_update_steps_per_episodes = (
-            len(self.prompts_dataset) * args.n_samples_per_prompt // args.train_batch_size * args.max_epochs
-        )
-        max_steps = math.ceil(args.num_episodes * self.num_update_steps_per_episodes)
-        self._max_steps = max_steps
 
         actor_scheduler = get_scheduler(
             "cosine_with_min_lr",

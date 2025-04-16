@@ -1,7 +1,7 @@
 import logging
 import os
 import socket
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type
 
 import ray
 import torch
@@ -285,65 +285,6 @@ class PPORayActorGroup:
             List: list of remote object refs.
         """
         return [actor.init_model_from_pretrained.remote(*args, **kwargs) for actor in self._actor_handlers]
-
-    def async_fit_actor_model(
-        self,
-        critic_model_group: "PPORayActorGroup",
-        initial_model_group: "PPORayActorGroup",
-        reward_model_groups: List["PPORayActorGroup"],
-        remote_rm_urls: List[str] = None,
-        reward_fn: Callable[[List[torch.Tensor]], torch.Tensor] = None,
-        vllm_engines: List = None,
-    ):
-        """Train actor model.
-
-        Args:
-            critic_model_group (PPORayActorGroup): critic model group.
-            initial_model_group (PPORayActorGroup): reference model group.
-            reward_model_groups (PPORayActorGroup): reward model groups.
-            remote_rm_urls: remote RM APIs.
-            reward_fn: reward calculate function, must be specified if using multiple reward models.
-            vllm_engines: vllm engines for text generation, if not specified, generate text by actor model directly.
-
-        Returns:
-            List: list of remote object refs.
-        """
-        assert (
-            (remote_rm_urls and len(remote_rm_urls) == 1)
-            or (reward_model_groups and len(reward_model_groups) == 1)
-            or reward_fn is not None
-        ), "reward_fn must be specified if using multiple reward models"
-
-        critic_actors = critic_model_group._actor_handlers if critic_model_group else None
-        initial_actors = initial_model_group._actor_handlers if initial_model_group else None
-
-        refs = []
-        # TODO(wuxibin): actor model choose critic/reward/initial model in a
-        # round robin fashion, implement more efficient dispatching strategy.
-        for i, actor in enumerate(self._actor_handlers):
-            critic_actor = critic_actors[i % len(critic_actors)] if critic_actors else None
-            initial_actor = initial_actors[i % len(initial_actors)] if initial_actors else None
-
-            reward_actors = []
-            if not remote_rm_urls:
-                for reward_model_group in reward_model_groups:
-                    actors = reward_model_group._actor_handlers
-                    reward_actors.append(actors[i % len(actors)])
-
-            refs.append(
-                actor.fit.remote(
-                    critic_model=critic_actor,
-                    initial_model=initial_actor,
-                    reward_model=reward_actors,
-                    remote_rm_url=remote_rm_urls,
-                    reward_fn=reward_fn,
-                    vllm_engines=vllm_engines,
-                    # whether this actor should triger corresponding critic model training
-                    critic_train_remote=(i < len(critic_actors)) if critic_actor else None,
-                )
-            )
-
-        return refs
 
     def async_save_model(self):
         """Save actor model on rank 0.
