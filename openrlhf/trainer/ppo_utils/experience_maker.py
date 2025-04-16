@@ -7,7 +7,6 @@ from typing import List, Optional, Tuple, Union
 
 import ray
 import torch
-import torch.distributed as dist
 
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean, process_sequences
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
@@ -256,12 +255,10 @@ class RemoteExperienceMaker(ABC):
         Turn samples into experience by calculating logprobs, values, rewards, and kl divergence.
         """
         start_time = time.time()
-        if dist.get_rank() == 0:
-            logger.info(f"🚀 Starting experience making with {len(rollout_samples.sequences)} batches")
+        logger.info(f"🚀 Starting experience making with {len(rollout_samples.sequences)} batches")
 
         args = self.strategy.args
-        self.actor.eval()
-        device = torch.cuda.current_device()
+        device = "cpu"
         experiences = []
 
         # TODO(gzpan): Support dynamic batch later
@@ -364,17 +361,14 @@ class RemoteExperienceMaker(ABC):
             attention_mask=attention_mask_list,
         )
 
-        actor_value_rm_time = time.time() - start_time
-
         # Wait for all remote calls to complete
-        start = time.time()
         ref_values = ray.get([action_log_probs_ref, base_action_log_probs_ref, value_ref] + r_refs)
-        wait_time = time.time() - start
 
         action_log_probs_list, base_action_log_probs_list, value_list, rewards_list = (
             ref_values[0],
             ref_values[1],
             ref_values[2],
+            ref_values[3],
         )
         if self.remote_rm_url is not None and isinstance(rewards_list, torch.Tensor):
             rewards_list = rewards_list.chunk(len(samples_list))
@@ -387,23 +381,7 @@ class RemoteExperienceMaker(ABC):
         for i, (samples, action_log_probs, base_action_log_probs, value, rewards) in enumerate(
             zip(samples_list, action_log_probs_list, base_action_log_probs_list, value_list, rewards_list)
         ):
-            if base_action_log_probs is not None:
-                base_action_log_probs = base_action_log_probs.to(device)
-            if value is not None:
-                value = value.to(device)
-
-            # Broadcast rewards to all ring attention ranks when using remote RM
-            rewards = [rewards]
-            if self.remote_rm_url and self.strategy.ring_attn_group is not None:
-                if self.strategy.ring_attn_rank == 0:
-                    dist.broadcast_object_list(rewards, src=dist.get_rank(), group=self.strategy.ring_attn_group)
-                else:
-                    dist.broadcast_object_list(
-                        rewards, src=self.strategy.ring_attn_ranks[0], group=self.strategy.ring_attn_group
-                    )
-            r = rewards[0].to(device)
-
-            if (self.initial_model is not None) and (not args.use_kl_loss):
+            if (self.initial_model_group is not None) and (not args.use_kl_loss):
                 kl = compute_approx_kl(
                     action_log_probs,
                     base_action_log_probs,
@@ -427,10 +405,6 @@ class RemoteExperienceMaker(ABC):
                 "total_length": samples.total_length,
             }
 
-            if self.strategy.args.perf:
-                self.perf_stats["actor_value_rm_time"] += actor_value_rm_time
-                self.perf_stats["wait_time"] += wait_time
-
             experience = Experience(
                 sequences,
                 action_log_probs,
@@ -446,13 +420,10 @@ class RemoteExperienceMaker(ABC):
 
             experiences.append(experience)
 
-        self.actor.train()  # Reset model state
-
         end_time = time.time()
         duration = end_time - start_time
-        if dist.get_rank() == 0:
-            time_str = str(timedelta(seconds=duration)).split(".")[0]
-            logger.info(f"✨ Experience making completed in {time_str}")
+        time_str = str(timedelta(seconds=duration)).split(".")[0]
+        logger.info(f"✨ Experience making completed in {time_str}")
         return experiences
 
     @torch.no_grad()
