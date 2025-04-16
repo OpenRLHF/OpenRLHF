@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
-from openrlhf.models import Actor, PolicyLoss, ValueLoss
+from openrlhf.models import Actor, PolicyLoss
 from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils import Experience
 from openrlhf.utils import get_tokenizer
@@ -43,13 +43,7 @@ class ActorPPOTrainer(ABC):
         buffer_limit: int = 0,
         buffer_cpu_offload: bool = True,
         eps_clip: float = 0.2,
-        value_clip: float = 0.2,
-        micro_rollout_batch_size: int = 8,
-        gradient_checkpointing: bool = False,
-        max_epochs: int = 1,
-        max_norm: float = 1.0,
         tokenizer=None,
-        prompt_max_len: int = 128,
         dataloader_pin_memory: bool = True,
         vllm_engines: List = None,
         **kwargs,
@@ -62,16 +56,11 @@ class ActorPPOTrainer(ABC):
         """
         self.strategy = strategy
         self.args = strategy.args
-        self.micro_rollout_batch_size = micro_rollout_batch_size
-        self.max_epochs = max_epochs
         self.tokenizer = tokenizer
         self.generate_kwargs = kwargs
         self.dataloader_pin_memory = dataloader_pin_memory
-        self.max_norm = max_norm
         self.micro_train_batch_size = micro_train_batch_size
-        self.prompt_max_len = prompt_max_len
         self.ema_beta = ema_beta
-        self.gradient_checkpointing = gradient_checkpointing
 
         self.actor = actor
         self.ema_model = ema_model
@@ -80,7 +69,6 @@ class ActorPPOTrainer(ABC):
         self.vllm_engines = vllm_engines
 
         self.actor_loss_fn = PolicyLoss(eps_clip)
-        self.critic_loss_fn = ValueLoss(value_clip)
 
         # Mixtral 8x7b
         self.aux_loss = self.args.aux_loss_coef > 1e-8
@@ -360,8 +348,12 @@ class ActorPPOTrainer(ABC):
 
 @ray.remote(num_gpus=1)
 class ActorModelRayActor(BasePPORole):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps):
+    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps, vllm_engines):
         args = strategy.args
+        self.save_hf_ckpt = args.save_hf_ckpt
+        self.disable_ds_ckpt = args.disable_ds_ckpt
+        self.vllm_engines = vllm_engines
+        self.max_steps = max_steps
 
         if getattr(args, "vllm_num_engines", 0) > 0:
             # To prevent hanging during NCCL synchronization of weights between DeepSpeed and vLLM.
@@ -455,22 +447,10 @@ class ActorModelRayActor(BasePPORole):
             critic_optim=None,
             actor_scheduler=self.actor_scheduler,
             critic_scheduler=None,
-            max_epochs=args.max_epochs,
-            micro_train_batch_size=args.micro_train_batch_size,
-            micro_rollout_batch_size=args.micro_rollout_batch_size,
-            gradient_checkpointing=args.gradient_checkpointing,
             tokenizer=self.tokenizer,
-            prompt_max_len=args.prompt_max_len,
-            value_clip=args.value_clip,
             eps_clip=args.eps_clip,
-            gamma=args.gamma,
-            lambd=args.lambd,
-            init_kl_coef=args.init_kl_coef,
-            kl_target=args.kl_target,
             ema_beta=0.992,
-            max_norm=args.max_norm,
-            save_hf_ckpt=args.save_hf_ckpt,
-            disable_ds_ckpt=args.disable_ds_ckpt,
+            vllm_engines=self.vllm_engines,
         )
 
     def fit(self):
