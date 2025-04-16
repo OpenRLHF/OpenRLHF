@@ -402,9 +402,9 @@ class ActorPPOTrainer(BasePPOTrainer):
                 surr2 = ratio.clamp(1 - self.clip_eps, 1 + self.clip_eps) * kl
                 kl = -torch.min(surr1, surr2)
             kl_mean = (
-                masked_mean(kl, action_mask, dim=None)
+                masked_mean(kl, experience.action_mask, dim=None)
                 if self.args.token_level_loss
-                else masked_mean(kl, action_mask, dim=-1).mean()
+                else masked_mean(kl, experience.action_mask, dim=-1).mean()
             )
 
             kl_loss = kl_mean.mean()
