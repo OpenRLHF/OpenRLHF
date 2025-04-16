@@ -1,4 +1,3 @@
-import itertools
 import os
 import time
 from abc import ABC
@@ -9,7 +8,7 @@ import ray
 import torch
 import tqdm
 
-from openrlhf.datasets import PromptDataset, SFTDataset
+from openrlhf.datasets import PromptDataset
 from openrlhf.trainer.ppo_utils import AdaptiveKLController, FixedKLController, RemoteExperienceMaker
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
 from openrlhf.utils import blending_datasets
@@ -117,12 +116,10 @@ class PPOTrainer(ABC):
         self,
         prompts_dataloader,
         eval_dataloader,
-        pretrain_dataloader,
     ) -> None:
         args = self.args
         self.prompts_dataloader = prompts_dataloader
         self.eval_dataloader = eval_dataloader
-        self.pretrain_dataloader = pretrain_dataloader
 
         # Load datasets
         num_rollouts_per_episodes = len(self.prompts_dataloader)
@@ -418,7 +415,7 @@ def prepare_datasets(strategy, args, tokenizer):
     prompts_dataset = PromptDataset(train_data, tokenizer, strategy, input_template=args.input_template)
     prompts_dataloader = strategy.setup_dataloader(
         prompts_dataset,
-        args.rollout_batch_size // (strategy.world_size // strategy.ring_attn_size),
+        args.rollout_batch_size,
         True,
         True,
     )
@@ -436,35 +433,4 @@ def prepare_datasets(strategy, args, tokenizer):
     else:
         eval_dataloader = None
 
-    if args.pretrain_data:
-        pretrain_data = blending_datasets(
-            args.pretrain_data,
-            args.pretrain_data_probs,
-            strategy,
-            args.seed,
-        )
-        pretrain_max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
-        pretrain_dataset = SFTDataset(
-            pretrain_data.select(
-                range(min(len(pretrain_data), args.max_epochs * len(prompts_dataset) * args.n_samples_per_prompt))
-            ),
-            tokenizer,
-            pretrain_max_len,
-            strategy,
-            pretrain_mode=True,
-        )
-        pretrain_dataloader = itertools.cycle(
-            iter(
-                strategy.setup_dataloader(
-                    pretrain_dataset,
-                    args.micro_train_batch_size,
-                    True,
-                    True,
-                    collate_fn=pretrain_dataset.collate_fn,
-                )
-            )
-        )
-    else:
-        pretrain_dataloader = None
-
-    return prompts_dataloader, eval_dataloader, pretrain_dataloader
+    return prompts_dataloader, eval_dataloader

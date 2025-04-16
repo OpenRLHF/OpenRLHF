@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
-from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
+from openrlhf.models import Actor, PolicyLoss, ValueLoss
 from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils import Experience
 from openrlhf.utils import get_tokenizer
@@ -39,7 +39,6 @@ class ActorPPOTrainer(ABC):
         actor_optim: Optimizer,
         actor_scheduler,
         ema_beta: float = 0.992,
-        ptx_coef: float = 0,
         micro_train_batch_size: int = 8,
         buffer_limit: int = 0,
         buffer_cpu_offload: bool = True,
@@ -69,7 +68,6 @@ class ActorPPOTrainer(ABC):
         self.generate_kwargs = kwargs
         self.dataloader_pin_memory = dataloader_pin_memory
         self.max_norm = max_norm
-        self.ptx_coef = ptx_coef
         self.micro_train_batch_size = micro_train_batch_size
         self.prompt_max_len = prompt_max_len
         self.ema_beta = ema_beta
@@ -83,7 +81,6 @@ class ActorPPOTrainer(ABC):
 
         self.actor_loss_fn = PolicyLoss(eps_clip)
         self.critic_loss_fn = ValueLoss(value_clip)
-        self.ptx_loss_fn = GPTLMLoss()
 
         # Mixtral 8x7b
         self.aux_loss = self.args.aux_loss_coef > 1e-8
@@ -205,9 +202,6 @@ class ActorPPOTrainer(ABC):
                     short_status["vals"] = status["values"]
                     short_status["cri_lr"] = status["critic_lr"]
 
-                if "ptx_loss" in status:
-                    short_status["ptx"] = status["ptx_loss"]
-
                 status_list.append(status)
                 pbar.set_postfix(short_status)
 
@@ -274,38 +268,12 @@ class ActorPPOTrainer(ABC):
         loss = actor_loss + aux_loss * self.args.aux_loss_coef + kl_loss * self.kl_ctl.value
         self.strategy.backward(loss, self.actor, self.actor_optim)
 
-        # ptx loss
-        if self.pretrain_dataloader is not None:
-            data = next(self.pretrain_dataloader)
-            inputs = data[1].squeeze(1).to(torch.cuda.current_device())
-            attention_mask = data[2].squeeze(1).to(torch.cuda.current_device())
-            label = torch.where(
-                attention_mask.bool(),
-                inputs,
-                self.ptx_loss_fn.IGNORE_INDEX,
-            )
-
-            output = self.actor(inputs, attention_mask=attention_mask, return_output=True)
-            ptx_log_probs = output["logits"]
-
-            # loss function
-            ptx_loss = self.ptx_loss_fn(ptx_log_probs, label)
-            # mixtral
-            if self.aux_loss:
-                aux_loss = output.aux_loss
-            else:
-                aux_loss = 0
-            loss = ptx_loss + aux_loss * self.args.aux_loss_coef
-            self.strategy.backward(self.ptx_coef * loss, self.actor, self.actor_optim)
-
         self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
         if self.ema_model:
             self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
 
         # status
         status = {"policy_loss": actor_loss.detach().item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}
-        if self.pretrain_dataloader is not None:
-            status["ptx_loss"] = ptx_loss.item()
         for k, v in experience.info.items():
             if k == "kl":
                 status[k] = (
@@ -500,7 +468,6 @@ class ActorModelRayActor(BasePPORole):
             init_kl_coef=args.init_kl_coef,
             kl_target=args.kl_target,
             ema_beta=0.992,
-            ptx_coef=args.ptx_coef,
             max_norm=args.max_norm,
             save_hf_ckpt=args.save_hf_ckpt,
             disable_ds_ckpt=args.disable_ds_ckpt,
