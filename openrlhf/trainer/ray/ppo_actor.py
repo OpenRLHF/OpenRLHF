@@ -399,8 +399,8 @@ class ActorPPOTrainer(BasePPOTrainer):
 
             if self.args.use_kl_loss_clip:
                 ratio = (log_probs - old_log_probs).exp()
-                surr1 = ratio * kl
-                surr2 = ratio.clamp(1 - self.clip_eps, 1 + self.clip_eps) * kl
+                surr1 = ratio * kl.detach()
+                surr2 = ratio.clamp(1 - self.clip_eps, 1 + self.clip_eps) * kl.detach()
                 kl = -torch.min(surr1, surr2)
 
             kl_mean = (
