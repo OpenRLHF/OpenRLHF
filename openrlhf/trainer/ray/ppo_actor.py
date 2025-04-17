@@ -232,7 +232,7 @@ class ActorPPOTrainer(ABC):
         )
 
         if self.args.use_kl_loss:
-            if self.initial_model is not None:
+            if self.args.init_kl_coef > 0:
                 kl = compute_approx_kl(
                     action_log_probs,
                     base_action_log_probs,

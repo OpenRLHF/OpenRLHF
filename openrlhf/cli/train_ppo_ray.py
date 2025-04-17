@@ -72,7 +72,7 @@ def train(args):
         ring_attn_size=args.ring_attn_size,
     )
 
-    if args.init_kl_coef == 0:
+    if args.init_kl_coef <= 0:
         ref_model = None
     else:
         ref_model = PPORayActorGroup(
