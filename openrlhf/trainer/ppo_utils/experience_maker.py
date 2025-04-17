@@ -273,7 +273,7 @@ class RemoteExperienceMaker(ABC):
         labels_list = [l for s in samples_list for l in s.labels]
 
         # Batch call initial model
-        if self.initial_model is not None:
+        if self.initial_model_group is not None:
             base_action_log_probs_ref = self.initial_model_group.async_run_method_batch(
                 method_name="forward",
                 sequences=sequences_list,
