@@ -285,7 +285,7 @@ class RemoteExperienceMaker(ABC):
                 ray.get(base_action_log_probs_ref)
                 ray.get(self.initial_model_group.async_run_method(method_name="empty_cache"))
         else:
-            base_action_log_probs_ref = ray.put([None] * len(samples_list))
+            base_action_log_probs_ref = ray.put([[None]] * len(samples_list))
 
         # Batch call critic model
         if self.critic_model_group is not None:
@@ -299,7 +299,7 @@ class RemoteExperienceMaker(ABC):
                 ray.get(value_ref)
                 ray.get(self.critic_model_group.async_run_method(method_name="empty_cache"))
         else:
-            value_ref = ray.put([None] * len(samples_list))
+            value_ref = ray.put([[None]] * len(samples_list))
 
         # Batch call reward model
         r_refs = None
