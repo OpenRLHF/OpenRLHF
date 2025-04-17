@@ -361,14 +361,17 @@ class RemoteExperienceMaker(ABC):
         # Wait for all remote calls to complete
         ref_values = ray.get([action_log_probs_ref, base_action_log_probs_ref, value_ref, r_refs])
 
+        # Flatten the results
         action_log_probs_list, base_action_log_probs_list, value_list, rewards_list = (
-            ref_values[0],
-            ref_values[1],
-            ref_values[2],
+            sum(ref_values[0], []),
+            sum(ref_values[1], []),
+            sum(ref_values[2], []),
             ref_values[3],
         )
         if self.remote_rm_url is not None:
             rewards_list = torch.cat(rewards_list, dim=0).chunk(len(samples_list))
+        else:
+            rewards_list = sum(rewards_list, [])
 
         # Avoid CUDA OOM when colocate models
         if args.colocate_actor_ref or args.colocate_all_models:
