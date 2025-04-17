@@ -7,6 +7,7 @@ import ray
 import torch
 from ray.util.placement_group import PlacementGroup, placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+from tqdm import tqdm
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
@@ -62,6 +63,41 @@ class BasePPORole(DistributedTorchRayActor):
     def empty_cache(self) -> None:
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
+
+    def execute_batch(self, method_name: str, **kwargs):
+        """Process input data by calling specified function for each item in the lists.
+
+        Args:
+            method_name (str): Name of the function to execute
+            **kwargs: Input parameters in list format. Each parameter should be a list with same length.
+                     The first parameter's length determines the number of function calls.
+
+        Returns:
+            List[Any]: List of results from function execution
+        """
+        # Get the first parameter to determine list length
+        first_param = next(iter(kwargs.values()))
+        list_length = len(first_param)
+
+        # Verify all parameters have same length
+        for param_name, param_value in kwargs.items():
+            if len(param_value) != list_length:
+                raise ValueError(f"Parameter {param_name} has length {len(param_value)}, expected {list_length}")
+
+        # Get the function to execute
+        func = getattr(self, method_name)
+        if not callable(func):
+            raise ValueError(f"Function {method_name} is not callable")
+
+        results = []
+        for i in tqdm(range(list_length), desc=f"{method_name}", disable=not self.strategy.is_rank_0()):
+            # Create kwargs for single item
+            sample_kwargs = {param_name: param_value[i] for param_name, param_value in kwargs.items()}
+
+            result = func(**sample_kwargs)
+            results.append(result)
+
+        return results
 
 
 @ray.remote(num_gpus=1)
@@ -268,7 +304,7 @@ class PPORayActorGroup:
 
     def async_run_method_batch(self, method_name, **kwargs):
         """Run method on all actors with batched input data asynchronously using round-robin scheduling.
-        Each actor processes one data point at a time.
+        Each actor processes one chunk of data at a time. Actors in the same ring group process the same chunk.
 
         Args:
             method_name (str): Name of the method to run
@@ -293,31 +329,27 @@ class PPORayActorGroup:
                     f"All parameters must have the same length. {key} has length {len(value)}, expected {total_length}"
                 )
 
-        # Verify total_length is divisible by num_actors
+        # Calculate chunk size based on number of effective actors (considering ring groups)
         num_actors = len(self._actor_handlers)
-        assert (
-            total_length % (num_actors // self.ring_attn_size) == 0
-        ), f"Total length {total_length} must be divisible by number of actors {num_actors}"
+        effective_actors = num_actors // self.ring_attn_size
+        chunk_size = total_length // effective_actors
+        if total_length % effective_actors != 0:
+            chunk_size += 1
 
-        # Process data one by one in round-robin fashion
         refs = []
+        for i in range(0, total_length, chunk_size):
+            # Prepare chunked data
+            chunk_kwargs = {}
+            for key, value in kwargs.items():
+                chunk_kwargs[key] = value[i : i + chunk_size]
 
-        for i in range(total_length):
+            # Calculate which ring group should handle this chunk
+            ring_group_idx = (i // chunk_size) % effective_actors
+
+            # Send the same chunk to all actors in the ring group
             for j in range(self.ring_attn_size):
-                # Get current actor index
-                actor_idx = (i * self.ring_attn_size + j) % num_actors
+                actor_idx = ring_group_idx * self.ring_attn_size + j
                 actor = self._actor_handlers[actor_idx]
-
-                # Prepare single data point
-                single_kwargs = {}
-                for key, value in kwargs.items():
-                    if isinstance(value, torch.Tensor):
-                        single_kwargs[key] = value[i : i + 1]  # Keep tensor dimension
-                    else:
-                        single_kwargs[key] = value[i]
-
-                # Call method with single data point
-                method = getattr(actor, method_name)
-                refs.append(method.remote(**single_kwargs))
+                refs.extend(actor.execute_batch.remote(method_name, **chunk_kwargs))
 
         return refs
