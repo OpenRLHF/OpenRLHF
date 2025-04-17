@@ -262,6 +262,7 @@ class RemoteExperienceMaker(ABC):
         experiences = []
 
         # TODO(gzpan): Support dynamic batch later
+        # Split samples into smaller batches for batched actor/critic/reward/ref forward pass
         samples_list = rollout_samples.split(args.micro_rollout_batch_size)
 
         # Extract all information from samples in one pass
@@ -368,10 +369,10 @@ class RemoteExperienceMaker(ABC):
             sum(ref_values[2], []),
             ref_values[3],
         )
-        if self.remote_rm_url is not None:
-            rewards_list = torch.cat(rewards_list, dim=0).chunk(len(samples_list))
-        else:
+        if self.remote_rm_url is None:
             rewards_list = sum(rewards_list, [])
+        else:
+            rewards_list = torch.cat(rewards_list, dim=0).chunk(len(samples_list))
 
         # Avoid CUDA OOM when colocate models
         if args.colocate_actor_ref or args.colocate_all_models:
