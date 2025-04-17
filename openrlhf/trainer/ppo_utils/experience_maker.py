@@ -360,7 +360,7 @@ class RemoteExperienceMaker(ABC):
         )
 
         # Wait for all remote calls to complete
-        ref_values = ray.get([action_log_probs_ref, base_action_log_probs_ref, value_ref, r_refs])
+        ref_values = ray.get(action_log_probs_ref, base_action_log_probs_ref, value_ref, r_refs)
 
         # Flatten the results
         action_log_probs_list, base_action_log_probs_list, value_list, rewards_list = (
