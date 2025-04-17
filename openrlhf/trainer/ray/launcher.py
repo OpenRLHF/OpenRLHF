@@ -302,7 +302,7 @@ class PPORayActorGroup:
             refs.append(method.remote(*args, **kwargs))
         return refs
 
-    def async_run_method_chunk(self, method_name, execute_batch=True, **kwargs):
+    def async_run_method_chunk(self, method_name, **kwargs):
         """Run method on all actors with batched input data asynchronously using round-robin scheduling.
         Each actor processes one chunk of data at a time. Actors in the same ring group process the same chunk.
 
@@ -351,14 +351,6 @@ class PPORayActorGroup:
             for j in range(self.ring_attn_size):
                 actor_idx = ring_group_idx * self.ring_attn_size + j
                 actor = self._actor_handlers[actor_idx]
-
-                if execute_batch:
-                    refs.append(actor.execute_batch.remote(method_name, **chunk_kwargs))
-                else:
-                    # Get the function to execute
-                    func = getattr(self, method_name)
-                    if not callable(func):
-                        raise ValueError(f"Function {method_name} is not callable")
-                    refs.append(func.remote(**chunk_kwargs))
+                refs.append(actor.execute_batch.remote(method_name, **chunk_kwargs))
 
         return refs
