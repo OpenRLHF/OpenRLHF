@@ -184,6 +184,7 @@ class RemoteExperienceMaker(ABC):
         self.kl_ctl = kl_controller
         self.strategy = strategy
         self.advantage_estimator = strategy.args.advantage_estimator
+        self.args = strategy.args
 
         # custom reward func for reinforced finetuning
         self.custom_reward_func = None
