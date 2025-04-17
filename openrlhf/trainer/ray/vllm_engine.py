@@ -178,7 +178,7 @@ def create_vllm_engines(
         )
 
     if vllm_enable_sleep:
-        batch_vllm_engine_call(vllm_engines, "sleep", rank_0_only=True)
+        batch_vllm_engine_call(vllm_engines, "sleep")
 
     return vllm_engines
 
