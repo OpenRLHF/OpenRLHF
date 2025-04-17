@@ -22,7 +22,8 @@ logger = init_logger(__name__)
 @ray.remote
 class PPOTrainer(ABC):
     """
-    Trainer for Proximal Policy Optimization (PPO) algorithm.
+    Trainer for Proximal Policy Optimization (PPO) / REINFORCE++ / GRPO / RLOO and their variants.
+    Single Controller with Multiple ActorGroups
     """
 
     def __init__(
