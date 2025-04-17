@@ -282,8 +282,8 @@ class RemoteExperienceMaker(ABC):
             )
 
             if args.colocate_actor_ref or args.colocate_all_models:
-                ray.get([base_action_log_probs_ref])
-                ray.get([self.initial_model_group.async_run_method(method_name="empty_cache")])
+                ray.get(base_action_log_probs_ref)
+                ray.get(self.initial_model_group.async_run_method(method_name="empty_cache"))
         else:
             base_action_log_probs_ref = ray.put([None] * len(samples_list))
 
@@ -296,8 +296,8 @@ class RemoteExperienceMaker(ABC):
                 attention_mask=attention_mask_list,
             )
             if args.colocate_critic_reward or args.colocate_all_models:
-                ray.get([value_ref])
-                ray.get([self.critic_model_group.async_run_method(method_name="empty_cache")])
+                ray.get(value_ref)
+                ray.get(self.critic_model_group.async_run_method(method_name="empty_cache"))
         else:
             value_ref = ray.put([None] * len(samples_list))
 
@@ -348,7 +348,7 @@ class RemoteExperienceMaker(ABC):
 
         if args.colocate_all_models and not self.remote_rm_url:
             ray.get(r_refs)
-            ray.get([self.reward_model_group.async_run_method(method_name="empty_cache")])
+            ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
 
         # Batch call actor model
         action_log_probs_ref = self.actor_model_group.async_run_method_batch(
@@ -372,7 +372,7 @@ class RemoteExperienceMaker(ABC):
 
         # Avoid CUDA OOM when colocate models
         if args.colocate_actor_ref or args.colocate_all_models:
-            ray.get([self.actor_model_group.async_run_method(method_name="empty_cache")])
+            ray.get(self.actor_model_group.async_run_method(method_name="empty_cache"))
 
         # Process results for each sample
         for i, (samples, action_log_probs, base_action_log_probs, value, rewards) in enumerate(
