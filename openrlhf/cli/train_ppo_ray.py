@@ -120,7 +120,7 @@ def train(args):
     else:
         reward_model = None
 
-    # init PPO trainer
+    # init PPO trainer (Single controller)
     ppo_trainer = PPOTrainer.remote(
         args.pretrain,
         strategy,
