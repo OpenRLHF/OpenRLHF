@@ -67,6 +67,7 @@ class ActorPPOTrainer(ABC):
         self.actor_optim = actor_optim
         self.actor_scheduler = actor_scheduler
         self.vllm_engines = vllm_engines
+        self.max_epochs = self.args.max_epochs
 
         self.actor_loss_fn = PolicyLoss(eps_clip)
 
