@@ -161,20 +161,21 @@ class PPOTrainer(ABC):
             )
 
             for _, rand_prompts, labels in self.prompts_dataloader:
-                for i, experience in enumerate(
-                    self.experience_maker.make_experience_list(rand_prompts, labels, **self.generate_kwargs)
-                ):
-                    if i == 0:
-                        output = self.tokenizer.batch_decode(
-                            experience.sequences[0].unsqueeze(0), skip_special_tokens=True
+                experiences = self.experience_maker.make_experience_list(rand_prompts, labels, **self.generate_kwargs)
+                output = self.tokenizer.batch_decode(
+                    experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True
+                )
+                self.strategy.print(output)
+                refs = self.actor_model_group.async_run_method_chunk(
+                    method_name="append", execute_batch=False, experience=experiences
+                )
+                if self.critic_model_group is not None:
+                    refs.append(
+                        self.critic_model_group.async_run_method_chunk(
+                            method_name="append", execute_batch=False, experience=experiences
                         )
-                        self.strategy.print(output)
-                    refs = self.actor_model_group.async_run_method(method_name="append", experience=experience)
-                    if self.critic_model_group is not None:
-                        refs.append(
-                            self.critic_model_group.async_run_method(method_name="append", experience=experience)
-                        )
-                    ray.get(refs)
+                    )
+                ray.get(refs)
 
                 status = self.ppo_train(steps)
 
