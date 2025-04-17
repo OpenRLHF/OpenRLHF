@@ -44,12 +44,12 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 ## 新闻  
 - [2025/3] CMU的[2025春季高级自然语言处理课程](https://cmu-l3.github.io/anlp-spring2025/)使用OpenRLHF作为RLHF框架教学案例。
 - [2025/2] [Logic-RL](https://arxiv.org/abs/2502.14768) 和 [PRIME](https://arxiv.org/abs/2502.01456) 展示了 REINFORCE++ 在训练稳定性上优于 GRPO 并且比 PPO 更快。
-- [2025/2] StepFunc 实现了 [OpenRLHF 的单控制器版本](https://github.com/Open-Reasoner-Zero/Open-Reasoner-Zero).
 - [2025/2] [LMM-R1](https://github.com/TideDra/lmm-r1) 是 OpenRLHF 的一个分支，旨在为多模态任务上复现 DeepSeek-R1 提供高性能的 RL 基础设施。
 - [2025/2] MIT & Microsoft 提出了 [On the Emergence of Thinking in LLMs I: Searching for the Right Intuition](https://arxiv.org/pdf/2502.06773) 基于 OpenRLHF
 - [2025/1] 港科大复现了 [DeepSeek-R1-Zero and DeepSeek-R1 training on small models 使用 OpenRLHF](https://github.com/hkust-nlp/simpleRL-reason)
 - [2024/12] 我们"提出"了 😊 [REINFORCE++ 对齐算法](https://www.researchgate.net/publication/387487679_REINFORCE_A_SIMPLE_AND_EFFICIENT_APPROACH_FOR_ALIGNING_LARGE_LANGUAGE_MODELS).
 - [2024/12] 在 [Notion Blog](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05) 中，我们对 PPO、REINFORCE++、GRPO 和 RLOO 进行了分析。  
+- [2023/8] OpenRLHF 开启开源之旅. 
 
 ## 特性  
 

@@ -40,7 +40,6 @@ OpenRLHFは、Ray、DeepSpeed、およびHF Transformersを基盤とした高性
 ## ニュース
 - [2025/3] CMUの[2025年春の高度自然言語処理コース](https://cmu-l3.github.io/anlp-spring2025/)がOpenRLHFをRLHFフレームワークの教育事例として採用。
 - [2025/2] [Logic-RL](https://arxiv.org/abs/2502.14768) と [PRIME](https://arxiv.org/abs/2502.01456) は、REINFORCE++ が訓練の安定性において GRPO より優れ、PPO より高速であることを示した。
-- [2025/2] StepFunc は [OpenRLHF のシングルコントローラーバージョン](https://github.com/Open-Reasoner-Zero/Open-Reasoner-Zero)を実装しました。
 - [2025/2] [LMM-R1](https://github.com/TideDra/lmm-r1) は OpenRLHF のフォークで、マルチモーダルタスクでの DeepSeek-R1 の再現のための高性能 RL インフラストラクチャを提供することを目的としています。
 - [2025/2] MIT & Microsoft は OpenRLHF を使用して [On the Emergence of Thinking in LLMs I: Searching for the Right Intuition](https://arxiv.org/pdf/2502.06773) を提案しました。
 - [2025/1] HKUSTは [OpenRLHF を使用して小規模モデルでの DeepSeek-R1-Zero と DeepSeek-R1 のトレーニング](https://github.com/hkust-nlp/simpleRL-reason)を再現しました。
