@@ -53,6 +53,9 @@ class CriticPPOTrainer(ABC):
 
         self.critic_loss_fn = ValueLoss(value_clip)
 
+        # Mixtral 8x7b
+        self.aux_loss = self.args.aux_loss_coef > 1e-8
+
     def ppo_train(self):
         # replay buffer may be empty at first, we should rebuild at each training
         dataloader = DataLoader(
