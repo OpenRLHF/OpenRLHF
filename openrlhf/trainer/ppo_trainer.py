@@ -5,7 +5,7 @@ from datetime import timedelta
 
 import ray
 import torch
-import tqdm
+from tqdm import tqdm
 
 from openrlhf.datasets import PromptDataset
 from openrlhf.trainer.ppo_utils import AdaptiveKLController, FixedKLController
