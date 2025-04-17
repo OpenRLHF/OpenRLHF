@@ -329,7 +329,6 @@ ray job submit --address="http://127.0.0.1:8265" \
 ```
 
 > [!NOTE]
-> 不设置 `--vllm_num_engines` 意味着不使用 vLLM 引擎。
 > 你也可以使用 ``setup_commands`` 让 Ray 自动部署环境，例如 `--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`。
 
 > [!NOTE]

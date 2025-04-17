@@ -318,7 +318,6 @@ ray job submit --address="http://127.0.0.1:8265" \
 # --n_samples_per_prompt 4
 ```
 > [!NOTE]
-> `--vllm_num_engines`を設定しない場合、vLLMエンジンを使用しないことを意味します。
 > また、``setup_commands``を使用してRayに環境を自動的にデプロイさせることもできます。例：`--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`
 
 > [!NOTE]
