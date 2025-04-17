@@ -206,7 +206,6 @@ class PPOTrainer(ABC):
                 status.update(ray.get(critic_status_ref)[0])
             if self.strategy.args.deepspeed_enable_sleep:
                 ray.get(self.critic_model_group.async_run_method(method_name="offload_states"))
-            self.actor_model_group.async_run_method(method_name="empty_cache")
 
         # actor model training
         if global_steps > self.freezing_actor_steps:
@@ -218,7 +217,6 @@ class PPOTrainer(ABC):
 
             if self.strategy.args.deepspeed_enable_sleep:
                 self.actor_model_group.async_run_method(method_name="offload_states")
-            self.actor_model_group.async_run_method(method_name="empty_cache")
 
             # 4. broadcast weights to vllm engines
             if self.vllm_engines is not None:
