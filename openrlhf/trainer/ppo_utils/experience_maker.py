@@ -158,18 +158,18 @@ class Samples:
         return sample_list
 
     @classmethod
-    def merge(cls, sample_list: List['Samples']) -> 'Samples':
+    def merge(cls, sample_list: List["Samples"]) -> "Samples":
         """Merge a list of Samples into a single Samples object.
-        
+
         Args:
             sample_list: List of Samples objects to merge
-            
+
         Returns:
             A single Samples object containing all the data from the input list
         """
         if not sample_list:
             return cls()
-            
+
         merged = cls()
         # Concatenate all tensors along the batch dimension
         merged.sequences = torch.cat([s.sequences for s in sample_list], dim=0)
@@ -177,11 +177,11 @@ class Samples:
         merged.action_mask = torch.cat([s.action_mask for s in sample_list], dim=0)
         merged.response_length = torch.cat([s.response_length for s in sample_list], dim=0)
         merged.total_length = torch.cat([s.total_length for s in sample_list], dim=0)
-        
+
         # Concatenate all lists
         merged.prompts = sum([s.prompts for s in sample_list], [])
         merged.labels = sum([s.labels for s in sample_list], [])
-        
+
         return merged
 
 
@@ -295,12 +295,19 @@ class RemoteExperienceMaker(BaseExperienceMaker):
                 samples_list = rollout_samples.split(args.micro_rollout_batch_size)
                 # Broadcast each sample with its index
                 for idx, sample in enumerate(samples_list):
-                    logger.info(f'====Rank {dist.get_rank()} broadcasting sample {idx} ====')
+                    logger.info(f"====Rank {dist.get_rank()} broadcasting sample {idx} ====")
                     broadcast_data = [idx, sample]
-                    dist.broadcast_object_list(broadcast_data, src=dist.get_rank(), group=self.strategy.ring_attn_group)
+                    dist.broadcast_object_list(
+                        broadcast_data, src=dist.get_rank(), group=self.strategy.ring_attn_group
+                    )
             else:
                 # Calculate number of samples to receive
-                num_samples = args.rollout_batch_size * args.n_samples_per_prompt // (dist.get_world_size() // self.strategy.ring_attn_size) // args.micro_rollout_batch_size
+                num_samples = (
+                    args.rollout_batch_size
+                    * args.n_samples_per_prompt
+                    // (dist.get_world_size() // self.strategy.ring_attn_size)
+                    // args.micro_rollout_batch_size
+                )
                 samples_list = [None] * num_samples
                 # Receive each sample individually
                 for _ in range(num_samples):
@@ -310,8 +317,8 @@ class RemoteExperienceMaker(BaseExperienceMaker):
                     )
                     idx, sample = broadcast_data
                     samples_list[idx] = sample
-                    logger.info(f'====Rank {dist.get_rank()} received sample {idx} ====')
-                
+                    logger.info(f"====Rank {dist.get_rank()} received sample {idx} ====")
+
                 # Merge all received samples back into a single Samples object
                 rollout_samples = Samples.merge(samples_list)
         else:
