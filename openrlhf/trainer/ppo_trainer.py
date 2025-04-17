@@ -8,7 +8,8 @@ import torch
 import tqdm
 
 from openrlhf.datasets import PromptDataset
-from openrlhf.trainer.ppo_utils import AdaptiveKLController, FixedKLController, RemoteExperienceMaker
+from openrlhf.trainer.ppo_utils import AdaptiveKLController, FixedKLController
+from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
 from openrlhf.utils import blending_datasets, get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
