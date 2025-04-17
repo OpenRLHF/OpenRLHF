@@ -475,7 +475,7 @@ class RemoteExperienceMaker(ABC):
                     args.lambd,
                 )
             elif self.advantage_estimator in ["reinforce", "rloo", "reinforce_baseline", "group_norm", "dr_grpo"]:
-                if kwargs["gamma"] != 1.0 and self.advantage_estimator in [
+                if args.gamma != 1.0 and self.advantage_estimator in [
                     "rloo",
                     "reinforce_baseline",
                     "group_norm",
