@@ -319,7 +319,7 @@ class PPOTrainer(ABC):
                 for i in range(num_chunks):
                     start_idx = i * batch_size
                     end_idx = min((i + 1) * batch_size, len(queries_list))
-                    r = self.custom_reward_func.remote(
+                    r = self.experience_maker.custom_reward_func.remote(
                         queries_list[start_idx:end_idx],
                         all_prompts[start_idx:end_idx],
                         all_labels[start_idx:end_idx],
