@@ -69,6 +69,7 @@ def train(args):
         ActorModelRayActor,
         pg=pg,
         num_gpus_per_actor=0.2 if pg else 1,
+        ring_attn_size=args.ring_attn_size,
     )
 
     if args.init_kl_coef == 0:
@@ -80,6 +81,7 @@ def train(args):
             ReferenceModelRayActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
+            ring_attn_size=args.ring_attn_size,
         )
 
     if not args.colocate_all_models:
@@ -103,6 +105,7 @@ def train(args):
             CriticModelRayActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
+            ring_attn_size=args.ring_attn_size,
         )
     else:
         critic_model = None
@@ -116,6 +119,7 @@ def train(args):
             RewardModelRayActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
+            ring_attn_size=args.ring_attn_size,
         )
     else:
         reward_model = None
