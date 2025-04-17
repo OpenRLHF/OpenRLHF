@@ -141,7 +141,7 @@ class ActorPPOTrainer(ABC):
 
         torch_dist_barrier_and_cuda_sync()
 
-    def ppo_train(self):
+    def ppo_train(self, kl_ctl: float):
         # replay buffer may be empty at first, we should rebuild at each training
         dataloader = DataLoader(
             self.replay_buffer,
@@ -163,7 +163,7 @@ class ActorPPOTrainer(ABC):
             )
             for experience in pbar:
                 experience.to_device(device)
-                status = self.training_step(experience)
+                status = self.training_step(experience, kl_ctl)
 
                 # for DP
                 # weighted mean for kl
@@ -202,7 +202,7 @@ class ActorPPOTrainer(ABC):
                 status_mean[k] /= len(status_list)
         return status_mean
 
-    def training_step(self, experience: Experience) -> Dict[str, float]:
+    def training_step(self, experience: Experience, kl_ctl: float) -> Dict[str, float]:
         self.actor.train()
 
         sequences = experience.sequences
@@ -252,7 +252,7 @@ class ActorPPOTrainer(ABC):
             aux_loss = output.aux_loss
         else:
             aux_loss = 0
-        loss = actor_loss + aux_loss * self.args.aux_loss_coef + kl_loss * self.kl_ctl.value
+        loss = actor_loss + aux_loss * self.args.aux_loss_coef + kl_loss * kl_ctl
         self.strategy.backward(loss, self.actor, self.actor_optim)
 
         self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
@@ -450,11 +450,11 @@ class ActorModelRayActor(BasePPORole):
             vllm_engines=self.vllm_engines,
         )
 
-    def fit(self):
+    def fit(self, kl_ctl: float = 0):
         """Train critic model with the replay buffer."""
         torch.cuda.empty_cache()
         self.actor.train()
-        status = self.trainer.ppo_train()
+        status = self.trainer.ppo_train(kl_ctl)
         self.trainer.replay_buffer.clear()
         torch.cuda.empty_cache()
         torch.cuda.synchronize()

@@ -212,7 +212,7 @@ class PPOTrainer(ABC):
             if self.strategy.args.deepspeed_enable_sleep:
                 self.actor_model_group.async_run_method(method_name="reload_states")
 
-            actor_status_ref = self.actor_model_group.async_run_method(method_name="fit")
+            actor_status_ref = self.actor_model_group.async_run_method(method_name="fit", kl_ctl=self.kl_ctl.value)
             status.update(ray.get(actor_status_ref)[0])
 
             if self.strategy.args.deepspeed_enable_sleep:
