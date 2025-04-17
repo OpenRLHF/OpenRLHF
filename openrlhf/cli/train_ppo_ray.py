@@ -6,13 +6,13 @@ from ray.util.placement_group import placement_group
 
 from openrlhf.trainer.ppo_trainer import PPOTrainer
 from openrlhf.trainer.ray import (
-    ActorModelRayActor,
-    CriticModelRayActor,
     PPORayActorGroup,
     ReferenceModelRayActor,
     RewardModelRayActor,
     create_vllm_engines,
 )
+from openrlhf.trainer.ray.ppo_actor import ActorModelRayActor
+from openrlhf.trainer.ray.ppo_critic import CriticModelRayActor
 from openrlhf.utils import get_strategy
 
 
