@@ -312,6 +312,7 @@ if __name__ == "__main__":
     parser.add_argument("--critic_learning_rate", type=float, default=9e-6)
     parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
     parser.add_argument("--kl_target", type=float, default=None)
+    parser.add_argument("--kl_horizon", type=int, default=10000)
     parser.add_argument("--init_kl_coef", type=float, default=0.01, help="KL penalty in PPO")
     parser.add_argument(
         "--kl_estimator",
