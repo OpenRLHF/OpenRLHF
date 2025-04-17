@@ -334,6 +334,9 @@ class PPORayActorGroup:
         num_actors = len(self._actor_handlers)
         effective_actors = num_actors // self.ring_attn_size
         chunk_size = total_length // effective_actors
+        assert (
+            total_length >= effective_actors
+        ), f"Total length {total_length} must be greater than or equal to effective actors {effective_actors}"
         if total_length % effective_actors != 0:
             chunk_size += 1
 
