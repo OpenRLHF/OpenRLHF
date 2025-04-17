@@ -63,6 +63,10 @@ def get_eval_ds_config(
     bf16=True,
     deepcompile=False,
 ):
+    # At least for 0.16.6, DeepCompile hasn't support pure inference mode
+    # https://github.com/deepspeedai/DeepSpeed/pull/7225
+    deepcompile = False
+
     zero_opt_dict = {
         "stage": stage,
         "stage3_max_live_parameters": "auto",
