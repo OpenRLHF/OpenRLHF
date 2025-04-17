@@ -246,7 +246,7 @@ class RemoteExperienceMaker(ABC):
         experiences = self.make_experience(rollout_samples)
 
         # Process experiences (reward shaping, etc.)
-        experiences = self.compute_advantages_and_returns(experiences, **generate_kwargs)
+        experiences = self.compute_advantages_and_returns(experiences)
         return experiences
 
     @torch.no_grad()
@@ -471,8 +471,8 @@ class RemoteExperienceMaker(ABC):
                     experience.values,
                     reward,
                     experience.action_mask,
-                    kwargs["gamma"],
-                    kwargs["lambd"],
+                    args.gamma,
+                    args.lambd,
                 )
             elif self.advantage_estimator in ["reinforce", "rloo", "reinforce_baseline", "group_norm", "dr_grpo"]:
                 if kwargs["gamma"] != 1.0 and self.advantage_estimator in [
@@ -482,12 +482,12 @@ class RemoteExperienceMaker(ABC):
                     "dr_grpo",
                 ]:
                     logger.warning("gamma is set to 1.0 for rloo, reinforce_baseline, and group_norm")
-                    kwargs["gamma"] = 1.0
+                    args.gamma = 1.0
 
                 experience.returns = self.get_cumulative_returns(
                     reward,
                     experience.action_mask,
-                    kwargs["gamma"],
+                    args.gamma,
                 )
                 experience.advantages = deepcopy(experience.returns)
             else:
