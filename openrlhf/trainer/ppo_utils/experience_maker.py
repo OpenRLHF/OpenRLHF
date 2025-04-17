@@ -288,7 +288,7 @@ class RemoteExperienceMaker(ABC):
             base_action_log_probs_ref = ray.put([None] * len(samples_list))
 
         # Batch call critic model
-        if self.critic is not None:
+        if self.critic_model_group is not None:
             value_ref = self.critic_model_group.async_run_method_batch(
                 method_name="forward",
                 sequences=sequences_list,
