@@ -443,7 +443,7 @@ class ActorModelRayActor(BasePPORole):
             strategy,
             self.actor,
             ema_model=self.ema_model,
-            actor_optim=None,
+            actor_optim=self.actor_optim,
             actor_scheduler=self.actor_scheduler,
             tokenizer=self.tokenizer,
             eps_clip=args.eps_clip,
