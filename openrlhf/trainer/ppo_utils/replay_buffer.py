@@ -205,32 +205,3 @@ class NaiveReplayBuffer(ABC):
     def collate_fn(self, batch) -> Experience:
         experience = make_experience_batch(batch, self.packing_samples)
         return experience
-
-    def normalize(self, strategy, attribute: str, divide_by_std: bool = True) -> None:
-        assert attribute == "advantages"
-        items = []
-        action_masks = []
-        for item in self:
-            items.append(getattr(item, attribute))
-            action_masks.append(item.action_mask)
-
-        items_vector = torch.cat(items).float().flatten()
-
-        action_masks_vector = torch.cat(action_masks).flatten()
-        num_actions = action_masks_vector.sum()
-
-        # for DP
-        # mean
-        sum_and_count = torch.tensor([items_vector.sum(), num_actions], device=items_vector.device)
-        all_sum, all_count = strategy.all_reduce(sum_and_count, "sum")
-        mean = all_sum / all_count
-        # std
-        if divide_by_std:
-            std = ((items_vector - mean).pow(2) * action_masks_vector).sum()
-            all_std = strategy.all_reduce(std, "sum")
-            rstd = (all_std / all_count).clamp(min=1e-8).rsqrt()
-        else:
-            rstd = 1
-
-        for i, item in enumerate(self):
-            setattr(item, attribute, (items[i] - mean) * rstd)
