@@ -359,16 +359,12 @@ class RemoteExperienceMaker(ABC):
             attention_mask=attention_mask_list,
         )
 
-        # Wait for all remote calls to complete
-        ref_values = ray.get(action_log_probs_ref, base_action_log_probs_ref, value_ref, r_refs)
+        # Wait for all remote calls to complete and flatten the results
+        action_log_probs_list = sum(ray.get(action_log_probs_ref), [])
+        base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref), [])
+        value_list = sum(ray.get(value_ref), [])
+        rewards_list = ray.get(r_refs)
 
-        # Flatten the results
-        action_log_probs_list, base_action_log_probs_list, value_list, rewards_list = (
-            sum(ref_values[0], []),
-            sum(ref_values[1], []),
-            sum(ref_values[2], []),
-            ref_values[3],
-        )
         if self.remote_rm_url is None:
             rewards_list = sum(rewards_list, [])
         else:
