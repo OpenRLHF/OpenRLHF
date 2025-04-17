@@ -166,10 +166,10 @@ class PPOTrainer(ABC):
                     experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True
                 )
                 self.strategy.print(output)
-                refs = self.actor_model_group.async_run_method_chunk(method_name="append", experience=experiences)
+                refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences)
                 if self.critic_model_group is not None:
                     refs.extend(
-                        self.critic_model_group.async_run_method_chunk(method_name="append", experience=experiences)
+                        self.critic_model_group.async_run_method_batch(method_name="append", experience=experiences)
                     )
                 ray.get(refs)
 

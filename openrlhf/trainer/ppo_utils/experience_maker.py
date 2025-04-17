@@ -276,7 +276,7 @@ class RemoteExperienceMaker(ABC):
 
         # Batch call initial model
         if self.initial_model_group is not None:
-            base_action_log_probs_ref = self.initial_model_group.async_run_method_chunk(
+            base_action_log_probs_ref = self.initial_model_group.async_run_method_batch(
                 method_name="forward",
                 sequences=sequences_list,
                 action_mask=action_mask_list,
@@ -291,7 +291,7 @@ class RemoteExperienceMaker(ABC):
 
         # Batch call critic model
         if self.critic_model_group is not None:
-            value_ref = self.critic_model_group.async_run_method_chunk(
+            value_ref = self.critic_model_group.async_run_method_batch(
                 method_name="forward",
                 sequences=sequences_list,
                 action_mask=action_mask_list,
@@ -306,7 +306,7 @@ class RemoteExperienceMaker(ABC):
         # Batch call reward model
         r_refs = None
         if not self.remote_rm_url:
-            r_refs = self.reward_model_group.async_run_method_chunk(
+            r_refs = self.reward_model_group.async_run_method_batch(
                 method_name="forward",
                 sequences=sequences_list,
                 attention_mask=attention_mask_list,
@@ -353,7 +353,7 @@ class RemoteExperienceMaker(ABC):
             ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
 
         # Batch call actor model
-        action_log_probs_ref = self.actor_model_group.async_run_method_chunk(
+        action_log_probs_ref = self.actor_model_group.async_run_method_batch(
             method_name="forward",
             sequences=sequences_list,
             action_mask=action_mask_list,
