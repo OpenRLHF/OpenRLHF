@@ -157,6 +157,33 @@ class Samples:
             sample_list.append(sample)
         return sample_list
 
+    @classmethod
+    def merge(cls, sample_list: List['Samples']) -> 'Samples':
+        """Merge a list of Samples into a single Samples object.
+        
+        Args:
+            sample_list: List of Samples objects to merge
+            
+        Returns:
+            A single Samples object containing all the data from the input list
+        """
+        if not sample_list:
+            return cls()
+            
+        merged = cls()
+        # Concatenate all tensors along the batch dimension
+        merged.sequences = torch.cat([s.sequences for s in sample_list], dim=0)
+        merged.attention_mask = torch.cat([s.attention_mask for s in sample_list], dim=0)
+        merged.action_mask = torch.cat([s.action_mask for s in sample_list], dim=0)
+        merged.response_length = torch.cat([s.response_length for s in sample_list], dim=0)
+        merged.total_length = torch.cat([s.total_length for s in sample_list], dim=0)
+        
+        # Concatenate all lists
+        merged.prompts = sum([s.prompts for s in sample_list], [])
+        merged.labels = sum([s.labels for s in sample_list], [])
+        
+        return merged
+
 
 class BaseExperienceMaker(ABC):
     """
@@ -264,13 +291,29 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             # Only rank 0 in the ring attention group executes the generation function, and then broadcasts it to all other ranks.
             if self.strategy.ring_attn_rank == 0:
                 rollout_samples = self.generate_samples(all_prompts, all_labels, **generate_kwargs)
-                dist.broadcast_object_list([rollout_samples], src=dist.get_rank(), group=self.strategy.ring_attn_group)
+                # Split samples into smaller batches for broadcasting
+                samples_list = rollout_samples.split(args.micro_rollout_batch_size)
+                # Broadcast each sample with its index
+                for idx, sample in enumerate(samples_list):
+                    logger.info(f'====Rank {dist.get_rank()} broadcasting sample {idx} ====')
+                    broadcast_data = [idx, sample]
+                    dist.broadcast_object_list(broadcast_data, src=dist.get_rank(), group=self.strategy.ring_attn_group)
             else:
-                rollout_samples = [None]
-                dist.broadcast_object_list(
-                    rollout_samples, src=self.strategy.ring_attn_ranks[0], group=self.strategy.ring_attn_group
-                )
-                rollout_samples = rollout_samples[0]
+                # Calculate number of samples to receive
+                num_samples = args.rollout_batch_size * args.n_samples_per_prompt // (dist.get_world_size() // self.strategy.ring_attn_size) // args.micro_rollout_batch_size
+                samples_list = [None] * num_samples
+                # Receive each sample individually
+                for _ in range(num_samples):
+                    broadcast_data = [None, None]
+                    dist.broadcast_object_list(
+                        broadcast_data, src=self.strategy.ring_attn_ranks[0], group=self.strategy.ring_attn_group
+                    )
+                    idx, sample = broadcast_data
+                    samples_list[idx] = sample
+                    logger.info(f'====Rank {dist.get_rank()} received sample {idx} ====')
+                
+                # Merge all received samples back into a single Samples object
+                rollout_samples = Samples.merge(samples_list)
         else:
             rollout_samples = self.generate_samples(all_prompts, all_labels, **generate_kwargs)
 
