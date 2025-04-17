@@ -438,18 +438,16 @@ class ActorModelRayActor(BasePPORole):
         if strategy.args.deepspeed_enable_sleep:
             offload_deepspeed_states(self.actor.model)
 
-            # configure Trainer
+        # configure Trainer
         self.trainer = ActorPPOTrainer(
             strategy,
             self.actor,
             ema_model=self.ema_model,
             actor_optim=None,
-            critic_optim=None,
             actor_scheduler=self.actor_scheduler,
-            critic_scheduler=None,
             tokenizer=self.tokenizer,
             eps_clip=args.eps_clip,
-            ema_beta=0.992,
+            ema_beta=args.ema_beta,
             vllm_engines=self.vllm_engines,
         )
 
@@ -460,6 +458,7 @@ class ActorModelRayActor(BasePPORole):
         status = self.trainer.ppo_train()
         self.trainer.replay_buffer.clear()
         torch.cuda.empty_cache()
+        torch.cuda.synchronize()
         return status
 
     def save_model(self):
@@ -491,10 +490,6 @@ class ActorModelRayActor(BasePPORole):
             )
         self.actor.train()  # reset model state
         return action_log_probs.to("cpu")
-
-    def empty_cache(self) -> None:
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
 
     def broadcast_to_vllm(self):
         self.trainer._broadcast_to_vllm()

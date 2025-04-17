@@ -302,17 +302,14 @@ class RemoteExperienceMaker(ABC):
             value_ref = ray.put([None] * len(samples_list))
 
         # Batch call reward model
-        r_refs = []
+        r_refs = None
         if not self.remote_rm_url:
-            for rm in self.reward_model:
-                r_refs.append(
-                    self.reward_model_group.async_run_method_batch(
-                        method_name="forward",
-                        sequences=sequences_list,
-                        attention_mask=attention_mask_list,
-                        pad_sequence=[True] * len(samples_list),
-                    )
-                )
+            r_refs = self.reward_model_group.async_run_method_batch(
+                method_name="forward",
+                sequences=sequences_list,
+                attention_mask=attention_mask_list,
+                pad_sequence=[True] * len(samples_list),
+            )
         else:
             queries_list = sum(
                 [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in sequences_list], []
@@ -362,7 +359,7 @@ class RemoteExperienceMaker(ABC):
         )
 
         # Wait for all remote calls to complete
-        ref_values = ray.get([action_log_probs_ref, base_action_log_probs_ref, value_ref] + r_refs)
+        ref_values = ray.get([action_log_probs_ref, base_action_log_probs_ref, value_ref, r_refs])
 
         action_log_probs_list, base_action_log_probs_list, value_list, rewards_list = (
             ref_values[0],
@@ -370,8 +367,8 @@ class RemoteExperienceMaker(ABC):
             ref_values[2],
             ref_values[3],
         )
-        if self.remote_rm_url is not None and isinstance(rewards_list, torch.Tensor):
-            rewards_list = rewards_list.chunk(len(samples_list))
+        if self.remote_rm_url is not None:
+            rewards_list = torch.cat(rewards_list, dim=0).chunk(len(samples_list))
 
         # Avoid CUDA OOM when colocate models
         if args.colocate_actor_ref or args.colocate_all_models:
@@ -515,11 +512,11 @@ class RemoteExperienceMaker(ABC):
             num_actions = action_masks_vector.sum()
 
             # mean
-            mean = advantages_vector.sum() / num_actions
+            mean = (advantages_vector * action_masks_vector).sum() / num_actions
             # std
             if not self.args.no_advantage_std_norm:
-                std = ((advantages_vector - mean).pow(2) * action_masks_vector).sum() / num_actions
-                rstd = std.clamp(min=1e-8).rsqrt()
+                var = ((advantages_vector - mean).pow(2) * action_masks_vector).sum() / num_actions
+                rstd = var.clamp(min=1e-8).rsqrt()
             else:
                 rstd = 1
 

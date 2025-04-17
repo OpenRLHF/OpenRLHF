@@ -10,7 +10,7 @@ import tqdm
 from openrlhf.datasets import PromptDataset
 from openrlhf.trainer.ppo_utils import AdaptiveKLController, FixedKLController, RemoteExperienceMaker
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
-from openrlhf.utils import blending_datasets
+from openrlhf.utils import blending_datasets, get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
@@ -18,6 +18,7 @@ from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
 logger = init_logger(__name__)
 
 
+@ray.remote
 class PPOTrainer(ABC):
     """
     Trainer for Proximal Policy Optimization (PPO) algorithm.
@@ -25,6 +26,7 @@ class PPOTrainer(ABC):
 
     def __init__(
         self,
+        pretrain: str,
         strategy: DeepspeedStrategy,
         actor_model_group: PPORayActorGroup,
         critic_model_group: PPORayActorGroup,
@@ -39,16 +41,17 @@ class PPOTrainer(ABC):
         self.strategy = strategy
         self.args = strategy.args
 
+        self.tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not self.args.disable_fast_tokenizer)
         self.actor_model_group = actor_model_group
         self.critic_model_group = critic_model_group
         self.reward_model_group = reward_model_group
         self.reference_model_group = reference_model_group
         self.dataloader_pin_memory = dataloader_pin_memory
+
         self.prompt_max_len = prompt_max_len
         self.generate_kwargs = generate_kwargs
 
         self.max_epochs = self.args.max_epochs
-        self.tokenizer = self.args.tokenizer
         self.remote_rm_url = self.args.remote_rm_url
         self.init_kl_coef = self.args.init_kl_coef
         self.kl_target = self.args.kl_target
@@ -340,7 +343,7 @@ class PPOTrainer(ABC):
                     r_refs.append(r)
 
             # Reshape rewards to (num_prompts, n_samples_per_prompt)
-            rewards = rewards.reshape(-1, n_samples_per_prompt)
+            rewards = torch.cat(rewards, dim=0).reshape(-1, n_samples_per_prompt)
 
             # Collect local statistics for each data source
             global_metrics = {}  # {datasource: {"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}}
@@ -419,3 +422,6 @@ class PPOTrainer(ABC):
         self.prompts_dataloader = prompts_dataloader
         self.eval_dataloader = eval_dataloader
         self.max_steps = len(prompts_dataset) * args.n_samples_per_prompt // args.train_batch_size
+
+    def get_max_steps(self):
+        return self.max_steps

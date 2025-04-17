@@ -230,7 +230,6 @@ class CriticModelRayActor(BasePPORole):
                 attention_mask.to(device),
                 ring_attn_group=self.strategy.ring_attn_group,
                 values_allgather=True,
-                packed_seq_lens=packed_seq_lens,
             )
         self.critic.train()  # reset model state
         return value.to("cpu")
@@ -246,11 +245,8 @@ class CriticModelRayActor(BasePPORole):
         status = self.trainer.ppo_train()
         self.trainer.replay_buffer.clear()
         torch.cuda.empty_cache()
-        return status
-
-    def empty_cache(self) -> None:
         torch.cuda.synchronize()
-        torch.cuda.empty_cache()
+        return status
 
     def save_model(self):
         args = self.strategy.args

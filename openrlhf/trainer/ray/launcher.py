@@ -59,6 +59,10 @@ class BasePPORole(DistributedTorchRayActor):
     def init_model_from_pretrained(self, *args, **kwargs):
         raise NotImplementedError()
 
+    def empty_cache(self) -> None:
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
 
 @ray.remote(num_gpus=1)
 class ReferenceModelRayActor(BasePPORole):
@@ -100,10 +104,6 @@ class ReferenceModelRayActor(BasePPORole):
                 packed_seq_lens=packed_seq_lens,
             )
         return log_probs.to("cpu")
-
-    def empty_cache(self) -> None:
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
 
 
 @ray.remote(num_gpus=1)
@@ -148,10 +148,6 @@ class RewardModelRayActor(BasePPORole):
                 packed_seq_lens=packed_seq_lens,
             )
         return reward.to("cpu")
-
-    def empty_cache(self) -> None:
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
 
 
 class PPORayActorGroup:

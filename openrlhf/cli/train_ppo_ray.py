@@ -121,7 +121,8 @@ def train(args):
         reward_model = None
 
     # init PPO trainer
-    ppo_trainer = PPOTrainer(
+    ppo_trainer = PPOTrainer.remote(
+        args.pretrain,
         strategy,
         actor_model,
         critic_model,
@@ -136,7 +137,7 @@ def train(args):
         top_p=args.top_p,
     )
     # training update steps
-    max_steps = ppo_trainer.max_steps
+    max_steps = ray.get(ppo_trainer.get_max_steps.remote())
 
     # init reference/reward/actor model
     refs = []
@@ -155,7 +156,7 @@ def train(args):
         ray.get(refs)
 
     # train actor and critic model
-    ppo_trainer.fit()
+    ray.get(ppo_trainer.fit.remote())
 
     # save model
     ray.get(actor_model.async_save_model())
@@ -246,6 +247,7 @@ if __name__ == "__main__":
     parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
     ## Make EMA as an optional feature
     parser.add_argument("--enable_ema", action="store_true", help="Enable EMA checkpoint for the model.")
+    parser.add_argument("--ema_beta", type=float, default=0.992, help="EMA beta coefficient")
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument("--actor_init_on_gpu", action="store_true", default=False)
