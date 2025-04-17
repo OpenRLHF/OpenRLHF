@@ -397,7 +397,7 @@ class RemoteExperienceMaker(ABC):
 
             info = {
                 "kl": kl_mean,
-                "reward": r,
+                "reward": rewards,
                 "response_length": samples.response_length,
                 "total_length": samples.total_length,
             }
