@@ -343,6 +343,7 @@ class PPOTrainer(ABC):
                     r_refs.append(r)
 
             # Reshape rewards to (num_prompts, n_samples_per_prompt)
+            rewards = ray.get(r_refs)
             rewards = torch.cat(rewards, dim=0).reshape(-1, n_samples_per_prompt)
 
             # Collect local statistics for each data source
