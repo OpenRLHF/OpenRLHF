@@ -36,6 +36,7 @@ class CriticPPOTrainer(ABC):
         **kwargs,
     ):
         self.strategy = strategy
+        self.args = strategy.args
         self.critic = critic
         self.critic_optim = critic_optim
         self.critic_scheduler = critic_scheduler
