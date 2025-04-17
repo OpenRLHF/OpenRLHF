@@ -140,7 +140,7 @@ class ActorPPOTrainer(ABC):
 
         torch_dist_barrier_and_cuda_sync()
 
-    def ppo_train(self, global_steps):
+    def ppo_train(self):
         torch.cuda.empty_cache()
         # replay buffer may be empty at first, we should rebuild at each training
         dataloader = DataLoader(
