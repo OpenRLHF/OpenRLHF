@@ -122,27 +122,43 @@ def masked_normalize(tensor: torch.Tensor, mask: torch.Tensor, dim: int = 1, eps
     return mean_centered * var.clamp(min=eps).rsqrt()
 
 
-# Reset positions for packed samples
-# For example
-# Input: attention_mask = torch.tensor([[1, 1, 1, 2, 2, 2, 3, 3, 0]])
-# Output: position_ids  = torch.tensor([[0, 1, 2, 0, 1, 2, 0, 1, 0]])
-def reset_position_ids(attention_mask):
-    position_ids = torch.zeros_like(attention_mask, dtype=torch.long)
-    for i in range(attention_mask.size(0)):
-        mask = attention_mask[i]
-        seq_num = mask.max().item()
-        for index in range(1, seq_num + 1):
-            sample_mask = mask == index
-            sample_length = sample_mask.sum().item()
-            position_ids[i, sample_mask] = torch.arange(sample_length, device=mask.device)
-    return position_ids
+def process_sequences(sequences: torch.Tensor, input_len, eos_token_id, pad_token_id):
+    """
+    Process generated sequences to create attention masks and action masks.
 
+    Args:
+        sequences (torch.Tensor): Generated sequence tensor
+        input_len (int): Length of the input sequence
+        eos_token_id (int): Token ID for the end-of-sequence token
+        pad_token_id (int): Token ID for the padding token
 
-def unpacking_samples(values: torch.Tensor, packed_seqlens: list[int]):
-    values = values.squeeze(0)
-    unpacked_values = []
-    offset = 0
-    for seqlen in packed_seqlens:
-        unpacked_values.append(values[offset : offset + seqlen])
-        offset += seqlen
-    return unpacked_values
+    Returns:
+        tuple: A tuple containing three elements:
+            - sequences: Original sequence
+            - attention_mask: Attention mask indicating valid token positions
+            - action_mask: Action mask indicating valid action token positions
+    """
+    # Create initial attention mask by marking positions that are neither EOS nor padding tokens
+    attention_mask = (sequences.ne(eos_token_id) & sequences.ne(pad_token_id)).to(dtype=torch.long)
+    seq_length = attention_mask.size(1)
+
+    # Find the position of the last valid token in each sequence
+    eos_indices = seq_length - attention_mask.long().fliplr().argmax(dim=1, keepdim=True).clamp(min=1)
+
+    # Handle cases where EOS tokens might appear in the middle of the prompt (for Llama3 and Qwen2 models)
+    # Find the position of the first valid token in each sequence
+    first_token_indices = attention_mask.long().argmax(dim=1, keepdim=True)
+    # Create position mask
+    mask = torch.arange(seq_length).unsqueeze(0).expand(sequences.size(0), -1).to(device=sequences.device)
+    # Generate final attention mask, keeping only positions between first and last valid tokens
+    attention_mask = (mask >= first_token_indices) & (mask <= eos_indices).to(dtype=torch.long)
+
+    # In reinforcement learning, the state transition is represented as:
+    # state_i (current token) + action_i (next token) -> state_i+1 (next token)
+    # Generate state sequence from input_len-1 to second-to-last token
+    state_seq = sequences[:, input_len - 1 : -1]
+    # Generate action mask indicating valid action token positions
+    action_mask = state_seq.ne(eos_token_id) & state_seq.ne(pad_token_id)
+    action_mask[:, 0] = 1
+
+    return sequences, attention_mask, action_mask

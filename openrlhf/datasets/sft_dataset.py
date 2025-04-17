@@ -208,7 +208,7 @@ class SFTDataset(Dataset):
         loss_mask = torch.zeros_like(input_ids, dtype=torch.float32)
         if not self.multiturn:
             prompt_ids_len = self.prompt_ids_lens[idx]
-            loss_mask[0, prompt_ids_len:-1] = 1
+            loss_mask[0, prompt_ids_len - 1 : -1] = 1
         else:
             response_ranges = self.response_ranges[idx]
             for start_idx, end_idx in response_ranges:

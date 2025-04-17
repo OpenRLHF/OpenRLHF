@@ -1,63 +1,27 @@
 import argparse
 from datetime import datetime
-from typing import List
 
 import ray
-import torch
 from ray.util.placement_group import placement_group
 
+from openrlhf.trainer.ppo_trainer import PPOTrainer
 from openrlhf.trainer.ray import (
-    ActorModelRayActor,
-    CriticModelRayActor,
     PPORayActorGroup,
     ReferenceModelRayActor,
     RewardModelRayActor,
     create_vllm_engines,
 )
+from openrlhf.trainer.ray.ppo_actor import ActorModelRayActor
+from openrlhf.trainer.ray.ppo_critic import CriticModelRayActor
 from openrlhf.utils import get_strategy
 
 
-# NOTE: reward function for multiple reward models, replace this with your own function!
-def reward_fn(rewards: List[torch.Tensor]):
-    return torch.stack(rewards).sum(dim=0)
-
-
-def _validate_args(args):
-    actor_world_size = args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size
-
-    assert (
-        args.rollout_batch_size % (actor_world_size) == 0
-    ), f"rollout_bach_size must be divisible by actor_world_size, got {args.rollout_batch_size} and {actor_world_size}"
-
-    assert args.zero_stage != 3 or args.vllm_num_engines > 0, f"ZeRO-3 is only supported when vLLM enabled"
-
-    if args.vllm_num_engines > 0:
-        assert (
-            actor_world_size % args.vllm_num_engines == 0 or args.vllm_num_engines % actor_world_size == 0
-        ), f"actor_world_size must be divisible by vllm_num_engines, got {actor_world_size} and {args.vllm_num_engines}"
-
-    if args.critic_pretrain:
-        critic_world_size = args.critic_num_nodes * args.critic_num_gpus_per_node
-        assert (
-            actor_world_size * args.ring_attn_size
-        ) % critic_world_size == 0, (
-            f"actor_world_size must be divisible by critic_world_size, got {actor_world_size} and {critic_world_size}"
-        )
-
-    if args.use_kl_loss:
-        if args.kl_estimator not in ["k2", "k3"]:
-            print(f"Recommend setting {args.kl_estimator} to 'k2' or 'k3' when using KL as a loss")
-    else:
-        if args.kl_estimator not in ["k1"]:
-            print(f"Recommend setting {args.kl_estimator} to 'k1' when not using KL as a loss.")
-
-
 def train(args):
-    _validate_args(args)
-
     # configure strategy
     strategy = get_strategy(args)
+    strategy.print(args)
 
+    # init vllm / actor /critic /ref /reward model
     # if colocated, create placement group for actor and ref model explicitly.
     pg = None
     if args.colocate_actor_ref or args.colocate_all_models:
@@ -94,7 +58,6 @@ def train(args):
             args.enable_prefix_caching,
             args.enforce_eager,
             max_len,
-            args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size,
             pg if args.colocate_all_models else None,
             args.vllm_gpu_memory_utilization,
             args.vllm_enable_sleep,
@@ -106,6 +69,7 @@ def train(args):
         ActorModelRayActor,
         pg=pg,
         num_gpus_per_actor=0.2 if pg else 1,
+        ring_attn_size=args.ring_attn_size,
     )
 
     if args.init_kl_coef == 0:
@@ -117,6 +81,7 @@ def train(args):
             ReferenceModelRayActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
+            ring_attn_size=args.ring_attn_size,
         )
 
     if not args.colocate_all_models:
@@ -140,51 +105,62 @@ def train(args):
             CriticModelRayActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
+            ring_attn_size=args.ring_attn_size,
         )
     else:
         critic_model = None
 
     # multiple reward models
     if not args.remote_rm_url:
-        reward_pretrains = args.reward_pretrain.split(",")
-        assert len(reward_pretrains) == 1, "Only one reward model is supported"
-        reward_models = []
-        for _ in reward_pretrains:
-            reward_models.append(
-                PPORayActorGroup(
-                    args.reward_num_nodes,
-                    args.reward_num_gpus_per_node,
-                    RewardModelRayActor,
-                    pg=pg,
-                    num_gpus_per_actor=0.2 if pg else 1,
-                )
-            )
+        reward_pretrain = args.reward_pretrain
+        reward_model = PPORayActorGroup(
+            args.reward_num_nodes,
+            args.reward_num_gpus_per_node,
+            RewardModelRayActor,
+            pg=pg,
+            num_gpus_per_actor=0.2 if pg else 1,
+            ring_attn_size=args.ring_attn_size,
+        )
     else:
-        reward_models = None
+        reward_model = None
+
+    # init PPO trainer (Single controller)
+    ppo_trainer = PPOTrainer.remote(
+        args.pretrain,
+        strategy,
+        actor_model,
+        critic_model,
+        reward_model,
+        ref_model,
+        vllm_engines,
+        # generate kwargs
+        do_sample=True,
+        prompt_max_len=args.prompt_max_len,
+        max_new_tokens=args.generate_max_len,
+        max_length=args.max_len,
+        temperature=args.temperature,
+        top_p=args.top_p,
+    )
+    # training update steps
+    max_steps = ray.get(ppo_trainer.get_max_steps.remote())
 
     # init reference/reward/actor model
     refs = []
     if ref_model is not None:
         refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.pretrain))
-    refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.pretrain))
+    refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.pretrain, max_steps, vllm_engines))
     if not args.remote_rm_url:
-        for reward_model, reward_pretrain in zip(reward_models, reward_pretrains):
-            refs.extend(reward_model.async_init_model_from_pretrained(strategy, reward_pretrain))
-
+        refs.extend(reward_model.async_init_model_from_pretrained(strategy, reward_pretrain))
     ray.get(refs)
 
     if args.critic_pretrain:
         # critic scheduler initialization depends on max_step, so we have to init critic after actor
         # TODO: use first reward model as critic model
-        max_steps = ray.get(actor_model._actor_handlers[0].max_steps.remote())
         refs.extend(critic_model.async_init_model_from_pretrained(strategy, args.critic_pretrain, max_steps))
         ray.get(refs)
 
     # train actor and critic model
-    refs = actor_model.async_fit_actor_model(
-        critic_model, ref_model, reward_models, args.remote_rm_url, reward_fn=reward_fn, vllm_engines=vllm_engines
-    )
-    ray.get(refs)
+    ray.get(ppo_trainer.fit.remote())
 
     # save model
     ray.get(actor_model.async_save_model())
@@ -271,10 +247,11 @@ if __name__ == "__main__":
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
-    parser.add_argument("--torch_compile", action="store_true", default=False)
+    parser.add_argument("--deepcompile", action="store_true", default=False)
     parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
     ## Make EMA as an optional feature
     parser.add_argument("--enable_ema", action="store_true", help="Enable EMA checkpoint for the model.")
+    parser.add_argument("--ema_beta", type=float, default=0.992, help="EMA beta coefficient")
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument("--actor_init_on_gpu", action="store_true", default=False)
@@ -339,6 +316,7 @@ if __name__ == "__main__":
     parser.add_argument("--critic_learning_rate", type=float, default=9e-6)
     parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
     parser.add_argument("--kl_target", type=float, default=None)
+    parser.add_argument("--kl_horizon", type=int, default=10000)
     parser.add_argument("--init_kl_coef", type=float, default=0.01, help="KL penalty in PPO")
     parser.add_argument(
         "--kl_estimator",
@@ -401,14 +379,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--eval_n_samples_per_prompt", type=int, default=4, help="Number of samples per prompt for evaluation"
     )
-    parser.add_argument("--pretrain_data", type=str, default=None, help="HF dataset name or path")
-    parser.add_argument(
-        "--pretrain_data_probs",
-        type=str,
-        default=None,
-        help="sampling probs for datasets",
-    )
-    parser.add_argument("--pretrain_split", type=str, default="train")
 
     parser.add_argument("--input_key", type=str, default="input", help="JSON dataset key")
     parser.add_argument("--label_key", type=str, default=None, help="JSON dataset key")
@@ -439,6 +409,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # Validate arguments
     if args.advantage_estimator not in ["gae"]:
         args.critic_pretrain = None
     elif args.critic_pretrain is None:
@@ -468,7 +439,6 @@ if __name__ == "__main__":
             print("[Warning] Please --flash_attn to accelerate when --packing_samples is enabled.")
             args.flash_attn = True
         assert args.vllm_num_engines > 0, "Only support `--packing_samples` with vLLM."
-        assert not args.pretrain_data, "`--pretrain_data` is not supported with `--packing_samples` yet."
 
     if args.vllm_enable_sleep and not args.colocate_all_models:
         print("Set args.vllm_enable_sleep to False when args.colocate_all_models is disabled.")
@@ -476,6 +446,13 @@ if __name__ == "__main__":
 
     if args.eval_dataset:
         assert args.remote_rm_url, "`--eval_dataset` is only supported with `--remote_rm_url`."
+
+    if args.use_kl_loss:
+        if args.kl_estimator not in ["k2", "k3"]:
+            print(f"Recommend setting {args.kl_estimator} to 'k2' or 'k3' when using KL as a loss")
+    else:
+        if args.kl_estimator not in ["k1"]:
+            print(f"Recommend setting {args.kl_estimator} to 'k1' when not using KL as a loss.")
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub

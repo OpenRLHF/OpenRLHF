@@ -7,12 +7,9 @@ from typing import List, Optional, Tuple, Union
 
 import ray
 import torch
-import torch.distributed as dist
-import torch.nn as nn
 
-from openrlhf.models.actor import Actor
-from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
-from openrlhf.utils.distributed_util import torch_dist_barrier_and_cuda_sync
+from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean, process_sequences
+from openrlhf.trainer.ray.launcher import PPORayActorGroup
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
 
@@ -158,48 +155,40 @@ class Samples:
         return sample_list
 
 
-class BaseExperienceMaker(ABC):
-    """
-    Base experience maker that only handles initialization.
-    """
-
+class RemoteExperienceMaker(ABC):
     def __init__(
         self,
-        actor: Actor,
-        critic: nn.Module,
-        reward_model: nn.Module,
-        initial_model: Actor,
+        actor_model_group: PPORayActorGroup,
+        critic_model_group: PPORayActorGroup,
+        reward_model_group: PPORayActorGroup,
+        initial_model_group: PPORayActorGroup,
         tokenizer,
         prompt_max_len: int,
         kl_controller,
         strategy=None,
         remote_rm_url: Union[list[str], str] = None,
-        reward_fn=None,
-    ) -> None:
+        vllm_engines: List = None,
+        packing_samples=False,
+        **kwargs,
+    ):
         super().__init__()
-        self.actor = actor
-        self.critic = critic
-        self.reward_model = reward_model
-        self.remote_rm_url = remote_rm_url
-        self.initial_model = initial_model
+
+        self.vllm_engines = vllm_engines
+        self.packing_samples = packing_samples
+        self.actor_model_group = actor_model_group
+        self.critic_model_group = critic_model_group
+        self.reward_model_group = reward_model_group
+        self.initial_model_group = initial_model_group
         self.tokenizer = tokenizer
         self.prompt_max_len = prompt_max_len
         self.kl_ctl = kl_controller
         self.strategy = strategy
-        self.reward_fn = reward_fn
-        self.perf_stats = {}
         self.advantage_estimator = strategy.args.advantage_estimator
-
-        # init ring rank0 group
-        self.ring_rank0_group = None
-        if self.strategy.ring_attn_group is not None:
-            world_size = dist.get_world_size()
-            ring_rank0 = [i * self.strategy.ring_attn_size for i in range(world_size // self.strategy.ring_attn_size)]
-            self.ring_rank0_group = dist.new_group(ranks=ring_rank0)
+        self.args = strategy.args
 
         # custom reward func for reinforced finetuning
         self.custom_reward_func = None
-        remote_rm_url = [remote_rm_url] if isinstance(remote_rm_url, str) else remote_rm_url
+        self.remote_rm_url = [remote_rm_url] if isinstance(remote_rm_url, str) else remote_rm_url
         if remote_rm_url and remote_rm_url[0].endswith(".py"):
             print(f"Loading custom `reward_func(queries, prompts, labels)` from {remote_rm_url[0]}")
             import importlib.util
@@ -207,7 +196,7 @@ class BaseExperienceMaker(ABC):
             spec = importlib.util.spec_from_file_location("reward_func", remote_rm_url[0])
             reward_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(reward_module)
-            self.custom_reward_func = reward_module.reward_func
+            self.custom_reward_func = ray.remote(reward_module.reward_func)
 
     # tokenizer
     def tokenize_fn(self, texts, max_length, padding=True, device=None):
@@ -229,16 +218,6 @@ class BaseExperienceMaker(ABC):
         )
         return {k: v.to(device) for k, v in batch.items()}
 
-
-class RemoteExperienceMaker(BaseExperienceMaker):
-    def __init__(self, *args, vllm_engines: List = None, packing_samples=False, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.vllm_engines = vllm_engines
-        self.packing_samples = packing_samples
-
-        if self.custom_reward_func:
-            self.custom_reward_func = ray.remote(self.custom_reward_func)
-
     @torch.no_grad()
     def make_experience_list(
         self, all_prompts: Union[str, List[str]], all_labels, **generate_kwargs
@@ -257,42 +236,18 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
-            torch_dist_barrier_and_cuda_sync()
 
-        # generate responses
-        if self.strategy.ring_attn_group is not None:
-            # Only rank 0 in the ring attention group executes the generation function, and then broadcasts it to all other ranks.
-            if self.strategy.ring_attn_rank == 0:
-                rollout_samples = self.generate_samples(all_prompts, all_labels, **generate_kwargs)
-                dist.broadcast_object_list([rollout_samples], src=dist.get_rank(), group=self.strategy.ring_attn_group)
-            else:
-                rollout_samples = [None]
-                dist.broadcast_object_list(
-                    rollout_samples, src=self.strategy.ring_attn_ranks[0], group=self.strategy.ring_attn_group
-                )
-                rollout_samples = rollout_samples[0]
-        else:
-            rollout_samples = self.generate_samples(all_prompts, all_labels, **generate_kwargs)
+        rollout_samples = self.generate_samples(all_prompts, all_labels, **generate_kwargs)
 
         # vLLM offload when vllm_enable_sleep
         if self.strategy.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "sleep")
 
-        torch.cuda.empty_cache()
-        torch_dist_barrier_and_cuda_sync()
-
         # Make experiences (models forward: logprobs, values, rewards, and kl divergence)
         experiences = self.make_experience(rollout_samples)
 
         # Process experiences (reward shaping, etc.)
-        experiences = self.compute_advantages_and_returns(experiences, **generate_kwargs)
-
-        # send experience to critic
-        if self.critic is not None:
-            for experience in experiences:
-                experience_cpu = deepcopy(experience)
-                experience_cpu.to_device("cpu")
-                self._ref = self.critic.append.remote(experience_cpu)
+        experiences = self.compute_advantages_and_returns(experiences)
         return experiences
 
     @torch.no_grad()
@@ -301,17 +256,14 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         Turn samples into experience by calculating logprobs, values, rewards, and kl divergence.
         """
         start_time = time.time()
-        if dist.get_rank() == 0:
-            logger.info(
-                f"🚀 Starting experience making with {len(rollout_samples.sequences) * dist.get_world_size() // self.strategy.ring_attn_size} batches"
-            )
+        logger.info(f"🚀 Starting experience making with {len(rollout_samples.sequences)} batches")
 
         args = self.strategy.args
-        self.actor.eval()
-        device = torch.cuda.current_device()
+        device = "cpu"
         experiences = []
 
         # TODO(gzpan): Support dynamic batch later
+        # Split samples into smaller batches for batched actor/critic/reward/ref forward pass
         samples_list = rollout_samples.split(args.micro_rollout_batch_size)
 
         # Extract all information from samples in one pass
@@ -322,116 +274,112 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         prompts_list = [p for s in samples_list for p in s.prompts]
         labels_list = [l for s in samples_list for l in s.labels]
 
-        # Move data to CPU for remote processing
-        sequences_cpu_list = [seq.to("cpu") for seq in sequences_list]
-        attention_mask_cpu_list = [mask.to("cpu") for mask in attention_mask_list]
-
         # Batch call initial model
-        if self.initial_model is not None:
-            base_action_log_probs_ref = self.initial_model.forward_batch.remote(
-                sequences=sequences_cpu_list,
+        if self.initial_model_group is not None:
+            base_action_log_probs_ref = self.initial_model_group.async_run_method_batch(
+                method_name="forward",
+                sequences=sequences_list,
                 action_mask=action_mask_list,
-                attention_mask=attention_mask_cpu_list,
+                attention_mask=attention_mask_list,
             )
 
             if args.colocate_actor_ref or args.colocate_all_models:
-                ray.get([base_action_log_probs_ref])
-                ray.get([self.initial_model.empty_cache.remote()])
+                ray.get(base_action_log_probs_ref)
+                ray.get(self.initial_model_group.async_run_method(method_name="empty_cache"))
         else:
-            base_action_log_probs_ref = ray.put([None] * len(samples_list))
+            base_action_log_probs_ref = ray.put([[None]] * len(samples_list))
 
         # Batch call critic model
-        if self.critic is not None:
-            value_ref = self.critic.forward_batch.remote(
-                sequences=sequences_cpu_list,
+        if self.critic_model_group is not None:
+            value_ref = self.critic_model_group.async_run_method_batch(
+                method_name="forward",
+                sequences=sequences_list,
                 action_mask=action_mask_list,
-                attention_mask=attention_mask_cpu_list,
+                attention_mask=attention_mask_list,
             )
             if args.colocate_critic_reward or args.colocate_all_models:
-                ray.get([value_ref])
-                ray.get([self.critic.empty_cache.remote()])
+                ray.get(value_ref)
+                ray.get(self.critic_model_group.async_run_method(method_name="empty_cache"))
         else:
-            value_ref = ray.put([None] * len(samples_list))
+            value_ref = ray.put([[None]] * len(samples_list))
 
         # Batch call reward model
-        r_refs = []
+        r_refs = None
         if not self.remote_rm_url:
-            for rm in self.reward_model:
-                r_refs.append(
-                    rm.forward_batch.remote(
-                        sequences=sequences_cpu_list,
-                        attention_mask=attention_mask_cpu_list,
-                        pad_sequence=[True] * len(samples_list),
-                    )
-                )
+            r_refs = self.reward_model_group.async_run_method_batch(
+                method_name="forward",
+                sequences=sequences_list,
+                attention_mask=attention_mask_list,
+                pad_sequence=[True] * len(samples_list),
+            )
         else:
-            if self.strategy.ring_attn_group is None or self.strategy.ring_attn_rank == 0:
-                queries_list = sum(
-                    [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in sequences_cpu_list], []
-                )
+            queries_list = sum(
+                [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in sequences_list], []
+            )
 
-                if self.custom_reward_func:
-                    r = self.custom_reward_func.remote(queries_list, prompts_list, labels_list)
-                else:
-                    rank = torch.distributed.get_rank() // self.strategy.ring_attn_size
-                    rm = self.remote_rm_url[rank % len(self.remote_rm_url)]
-                    r = remote_rm_fn_ray.remote(rm, queries=queries_list, prompts=prompts_list, labels=labels_list)
-                r_refs.append(r)
+            if self.custom_reward_func:
+                # Let Ray automatically distribute the workload across available resources
+                batch_size = self.strategy.args.micro_rollout_batch_size
+                num_chunks = (len(queries_list) + batch_size - 1) // batch_size
+                r_refs = []
+                for i in range(num_chunks):
+                    start_idx = i * batch_size
+                    end_idx = min((i + 1) * batch_size, len(queries_list))
+                    r = self.custom_reward_func.remote(
+                        queries_list[start_idx:end_idx],
+                        prompts_list[start_idx:end_idx],
+                        labels_list[start_idx:end_idx],
+                    )
+                    r_refs.append(r)
             else:
-                r_refs.append(ray.put([None] * len(samples_list)))
+                # Distribute data across different remote reward function servers
+                num_servers = len(self.remote_rm_url)
+                batch_size = (len(queries_list) + num_servers - 1) // num_servers
+                r_refs = []
+                for i in range(num_servers):
+                    start_idx = i * batch_size
+                    end_idx = min((i + 1) * batch_size, len(queries_list))
+                    rm = self.remote_rm_url[i]
+                    r = remote_rm_fn_ray.remote(
+                        rm,
+                        queries=queries_list[start_idx:end_idx],
+                        prompts=prompts_list[start_idx:end_idx],
+                        labels=labels_list[start_idx:end_idx],
+                    )
+                    r_refs.append(r)
 
         if args.colocate_all_models and not self.remote_rm_url:
             ray.get(r_refs)
-            ray.get([self.reward_model[0].empty_cache.remote()])
+            ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
 
         # Batch call actor model
-        action_log_probs_list = []
-        for seq, action_mask, attn_mask in zip(sequences_cpu_list, action_mask_list, attention_mask_cpu_list):
-            action_log_probs = self.actor(
-                seq.to(device),
-                action_mask,
-                attn_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
-            )
-            action_log_probs_list.append(action_log_probs)
+        action_log_probs_ref = self.actor_model_group.async_run_method_batch(
+            method_name="forward",
+            sequences=sequences_list,
+            action_mask=action_mask_list,
+            attention_mask=attention_mask_list,
+        )
 
-        actor_value_rm_time = time.time() - start_time
+        # Wait for all remote calls to complete and flatten the results
+        action_log_probs_list = sum(ray.get(action_log_probs_ref)[:: args.ring_attn_size], [])
+        base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref)[:: args.ring_attn_size], [])
+        value_list = sum(ray.get(value_ref)[:: args.ring_attn_size], [])
+        rewards_list = ray.get(r_refs)
 
-        # Wait for all remote calls to complete
-        start = time.time()
-        ref_values = ray.get([base_action_log_probs_ref, value_ref] + r_refs)
-        wait_time = time.time() - start
-
-        base_action_log_probs_list, value_list, rewards_list = ref_values[0], ref_values[1], ref_values[2]
-        if self.remote_rm_url is not None and isinstance(rewards_list, torch.Tensor):
-            rewards_list = rewards_list.chunk(len(samples_list))
+        if self.remote_rm_url is None:
+            rewards_list = sum(rewards_list[:: args.ring_attn_size], [])
+        else:
+            rewards_list = torch.cat(rewards_list, dim=0).chunk(len(samples_list))
 
         # Avoid CUDA OOM when colocate models
         if args.colocate_actor_ref or args.colocate_all_models:
-            torch.cuda.synchronize()
-            torch.cuda.empty_cache()
+            ray.get(self.actor_model_group.async_run_method(method_name="empty_cache"))
 
         # Process results for each sample
         for i, (samples, action_log_probs, base_action_log_probs, value, rewards) in enumerate(
             zip(samples_list, action_log_probs_list, base_action_log_probs_list, value_list, rewards_list)
         ):
-            if base_action_log_probs is not None:
-                base_action_log_probs = base_action_log_probs.to(device)
-            if value is not None:
-                value = value.to(device)
-
-            # Broadcast rewards to all ring attention ranks when using remote RM
-            rewards = [rewards]
-            if self.remote_rm_url and self.strategy.ring_attn_group is not None:
-                if self.strategy.ring_attn_rank == 0:
-                    dist.broadcast_object_list(rewards, src=dist.get_rank(), group=self.strategy.ring_attn_group)
-                else:
-                    dist.broadcast_object_list(
-                        rewards, src=self.strategy.ring_attn_ranks[0], group=self.strategy.ring_attn_group
-                    )
-            r = rewards[0].to(device)
-
-            if (self.initial_model is not None) and (not args.use_kl_loss):
+            if (self.initial_model_group is not None) and (not args.use_kl_loss):
                 kl = compute_approx_kl(
                     action_log_probs,
                     base_action_log_probs,
@@ -450,14 +398,10 @@ class RemoteExperienceMaker(BaseExperienceMaker):
 
             info = {
                 "kl": kl_mean,
-                "reward": r,
+                "reward": rewards,
                 "response_length": samples.response_length,
                 "total_length": samples.total_length,
             }
-
-            if self.strategy.args.perf:
-                self.perf_stats["actor_value_rm_time"] += actor_value_rm_time
-                self.perf_stats["wait_time"] += wait_time
 
             experience = Experience(
                 sequences,
@@ -474,13 +418,10 @@ class RemoteExperienceMaker(BaseExperienceMaker):
 
             experiences.append(experience)
 
-        self.actor.train()  # Reset model state
-
         end_time = time.time()
         duration = end_time - start_time
-        if dist.get_rank() == 0:
-            time_str = str(timedelta(seconds=duration)).split(".")[0]
-            logger.info(f"✨ Experience making completed in {time_str}")
+        time_str = str(timedelta(seconds=duration)).split(".")[0]
+        logger.info(f"✨ Experience making completed in {time_str}")
         return experiences
 
     @torch.no_grad()
@@ -501,25 +442,23 @@ class RemoteExperienceMaker(BaseExperienceMaker):
 
         # reward shaping
         if args.advantage_estimator == "rloo":
-            rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt).to(device="cuda")
+            rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt)
             baseline = (rewards.sum(-1, keepdim=True) - rewards) / (args.n_samples_per_prompt - 1)
             rewards = rewards - baseline
-            rewards = rewards.flatten().to(device="cpu").chunk(len(experiences))
+            rewards = rewards.reshape(-1).chunk(len(experiences))
         elif args.advantage_estimator in ["reinforce_baseline", "dr_grpo"]:
             # REINFORCE++-baseline and Dr. GRPO removed the `/std` in GRPO as `/ std` is not needed in RL variance reduction theory.
             # And `k3 KL` has a larger variance than `k1 KL` under a categorical distribution.
-            rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt).to(device="cuda")
+            rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt)
             rewards = rewards - rewards.mean(-1, keepdim=True)
-            rewards = rewards.reshape(-1).to(device="cpu").chunk(len(experiences))
+            rewards = rewards.reshape(-1).chunk(len(experiences))
         elif args.advantage_estimator == "group_norm":
-            rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt).to(device="cuda")
+            rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt)
             rewards = (rewards - rewards.mean(-1, keepdim=True)) / (rewards.std(-1, keepdim=True) + 1e-9)
-            rewards = rewards.reshape(-1).to(device="cpu").chunk(len(experiences))
+            rewards = rewards.reshape(-1).chunk(len(experiences))
 
         # calculate return and advantages
         for experience, reward in zip(experiences, rewards):
-            experience = experience.to_device("cuda")
-            reward = reward.to(device="cuda")
             reward = compute_reward(
                 reward,
                 self.kl_ctl.value,
@@ -533,24 +472,23 @@ class RemoteExperienceMaker(BaseExperienceMaker):
                     experience.values,
                     reward,
                     experience.action_mask,
-                    kwargs["gamma"],
-                    kwargs["lambd"],
+                    args.gamma,
+                    args.lambd,
                 )
             elif self.advantage_estimator in ["reinforce", "rloo", "reinforce_baseline", "group_norm", "dr_grpo"]:
-                if kwargs["gamma"] != 1.0 and self.advantage_estimator in [
+                if args.gamma != 1.0 and self.advantage_estimator in [
                     "rloo",
                     "reinforce_baseline",
                     "group_norm",
                     "dr_grpo",
                 ]:
-                    if dist.get_rank() == 0:
-                        logger.warning("gamma is set to 1.0 for rloo, reinforce_baseline, and group_norm")
-                    kwargs["gamma"] = 1.0
+                    logger.warning("gamma is set to 1.0 for rloo, reinforce_baseline, and group_norm")
+                    args.gamma = 1.0
 
                 experience.returns = self.get_cumulative_returns(
                     reward,
                     experience.action_mask,
-                    kwargs["gamma"],
+                    args.gamma,
                 )
                 experience.advantages = deepcopy(experience.returns)
             else:
@@ -561,7 +499,31 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             experience.info["return"] = return_sums
             # remove unnecessary info
             experience.kl = None
-            experience.to_device("cpu")
+
+        # Normalize advantages across all experiences
+        if self.args.advantage_estimator not in ["group_norm", "dr_grpo"]:
+            all_advantages = []
+            all_action_masks = []
+            for exp in experiences:
+                all_advantages.append(exp.advantages)
+                all_action_masks.append(exp.action_mask)
+
+            advantages_vector = torch.cat(all_advantages).float().flatten()
+            action_masks_vector = torch.cat(all_action_masks).flatten()
+            num_actions = action_masks_vector.sum()
+
+            # mean
+            mean = (advantages_vector * action_masks_vector).sum() / num_actions
+            # std
+            if not self.args.no_advantage_std_norm:
+                var = ((advantages_vector - mean).pow(2) * action_masks_vector).sum() / num_actions
+                rstd = var.clamp(min=1e-8).rsqrt()
+            else:
+                rstd = 1
+
+            # Apply normalization to each experience
+            for exp in experiences:
+                exp.advantages = (exp.advantages - mean) * rstd
 
         return experiences
 
@@ -662,53 +624,12 @@ class RemoteExperienceMaker(BaseExperienceMaker):
 
     @torch.no_grad()
     def _generate_with_hf(self, all_prompts: List[str], all_labels, **generate_kwargs) -> Samples:
-        """
-        Generate samples and return in batches.
-        """
-        assert not getattr(self, "packing_samples", False)
-        args = self.strategy.args
-        self.actor.eval()
-        # sample multiple response
-        n_samples_per_prompt = generate_kwargs.pop("n_samples_per_prompt", args.n_samples_per_prompt)
-        all_prompts = sum([[prompt] * n_samples_per_prompt for prompt in all_prompts], [])
-        all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
-        rollout_sequences = []
-        rollout_attention_mask = []
-        rollout_action_mask = []
-        for i in range(0, len(all_prompts), args.micro_rollout_batch_size):
-            prompts = all_prompts[i : i + args.micro_rollout_batch_size]
-            inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
-            sequences, attention_mask, action_mask = self.actor.generate(**inputs, **generate_kwargs)
-            rollout_sequences.append(sequences)
-            rollout_attention_mask.append(attention_mask)
-            rollout_action_mask.append(action_mask)
-        rollout_sequences = torch.cat(rollout_sequences, dim=0)
-        rollout_attention_mask = torch.cat(rollout_attention_mask, dim=0)
-        rollout_action_mask = torch.cat(rollout_action_mask, dim=0)
-        rollout_samples = Samples(
-            sequences=rollout_sequences,
-            attention_mask=rollout_attention_mask,
-            action_mask=rollout_action_mask,
-            response_length=rollout_action_mask.float().sum(dim=-1),
-            total_length=rollout_attention_mask.float().sum(dim=-1),
-            prompts=all_prompts,
-            labels=all_labels,
-        )
-        return rollout_samples
+        raise NotImplementedError("HF generation is not implemented yet")
 
     def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> Samples:
         from vllm import SamplingParams
 
-        # round-robin load balance
-        rank = torch.distributed.get_rank() // self.strategy.ring_attn_size
-        world_size = torch.distributed.get_world_size() // self.strategy.ring_attn_size
-
-        # Select LLM engines: assign each rank an engine, or cycle through engines if world_size < engine_count
-        if len(self.vllm_engines) <= world_size:
-            llms = [self.vllm_engines[rank % len(self.vllm_engines)]]
-        else:
-            llms = self.vllm_engines[rank::world_size]
-
+        llms = self.vllm_engines
         args = self.strategy.args
 
         sampling_params = SamplingParams(
@@ -732,22 +653,13 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
         for i, llm in enumerate(llms):
             prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
-            refs.append(
-                llm.add_requests.remote(rank, sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
-            )
+            refs.append(llm.add_requests.remote(0, sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
         ray.get(refs)
-
-        # Waiting for all requests to be sent
-        if self.strategy.ring_attn_group is not None:
-            dist.barrier(group=self.ring_rank0_group)
-        else:
-            dist.barrier()
-        torch.cuda.synchronize()
 
         # Retrieve and combine results from all outputs
         all_output_refs = []
         for i, llm in enumerate(llms):
-            all_output_refs.append(llm.get_responses.remote(rank))
+            all_output_refs.append(llm.get_responses.remote(0))
         all_outputs = sum(ray.get(all_output_refs), [])
 
         #
@@ -779,12 +691,12 @@ class RemoteExperienceMaker(BaseExperienceMaker):
             sequences.append(input_ids + output_ids)
 
         sequences = torch.tensor(sequences)
-        sequences, attention_mask, action_mask = self.actor.process_sequences(
+        sequences, attention_mask, action_mask = process_sequences(
             sequences, max_input_len, eos_token_id, pad_token_id
         )
-        sequences = sequences.to("cuda")
-        attention_mask = attention_mask.to("cuda")
-        action_mask = action_mask.to("cuda")
+        sequences = sequences.to("cpu")
+        attention_mask = attention_mask.to("cpu")
+        action_mask = action_mask.to("cpu")
         response_length = action_mask.float().sum(dim=-1)
         total_length = attention_mask.float().sum(dim=-1)
 
@@ -799,9 +711,3 @@ class RemoteExperienceMaker(BaseExperienceMaker):
         )
 
         return rollout_samples
-
-    def flush(self):
-        "Ensure all experience has been send to critic"
-        if self.critic is not None:
-            ray.get(self._ref)
-            self._ref = None

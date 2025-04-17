@@ -63,7 +63,7 @@ class DeepspeedStrategy(ABC):
         self.grad_accum_dtype = getattr(args, "grad_accum_dtype", None)
         # overlap_comm
         self.overlap_comm = getattr(args, "overlap_comm", False)
-        self.torch_compile = getattr(args, "torch_compile", False)
+        self.deepcompile = getattr(args, "deepcompile", False)
         self.use_ds_universal_ckpt = getattr(args, "use_ds_universal_ckpt", False)
 
         self.is_rlhf = False
@@ -161,8 +161,12 @@ class DeepspeedStrategy(ABC):
     ):
         # DDP only mode, replay buffers on each rank are different.
         if sampler is None:
-            num_replicas = dist.get_world_size() // self.ring_attn_size
-            rank = dist.get_rank() // self.ring_attn_size
+            if dist.is_initialized():
+                num_replicas = dist.get_world_size() // self.ring_attn_size
+                rank = dist.get_rank() // self.ring_attn_size
+            else:
+                num_replicas = 1
+                rank = 0
             sampler = DistributedSampler(
                 replay_buffer,
                 num_replicas=num_replicas,
@@ -219,8 +223,6 @@ class DeepspeedStrategy(ABC):
             args={"local_rank": int(os.environ.get("LOCAL_RANK", "-1"))},
             dist_init_required=True,
         )
-        if self.torch_compile:
-            engine.compile()
         if is_actor:
             model.model = engine
         else:
@@ -240,13 +242,11 @@ class DeepspeedStrategy(ABC):
             grad_accum_dtype=self.grad_accum_dtype,
             overlap_comm=self.overlap_comm,
             use_ds_universal_ckpt=self.use_ds_universal_ckpt,
+            deepcompile=self.deepcompile,
         )
 
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
         train_batch_size = self.train_batch_size
-        # corner case for ptx loss (backward twice)
-        if self.is_rlhf and is_actor and self.args.pretrain_data is not None:
-            train_batch_size *= 2
         ds_config["train_batch_size"] = train_batch_size * self.ring_attn_size
 
         return ds_config
@@ -263,7 +263,7 @@ class DeepspeedStrategy(ABC):
             config=ds_config,
             dist_init_required=True,
         )
-        if self.torch_compile:
+        if self.deepcompile:
             engine.compile()
         if is_actor:
             model.model = engine
@@ -273,7 +273,9 @@ class DeepspeedStrategy(ABC):
 
     def get_ds_eval_config(self, offload=False):
         # DS Config
-        ds_config = get_eval_ds_config(offload=offload, stage=self.stage if self.stage == 3 else 0, bf16=self.bf16)
+        ds_config = get_eval_ds_config(
+            offload=offload, stage=self.stage if self.stage == 3 else 0, bf16=self.bf16, deepcompile=self.deepcompile
+        )
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
         ds_config["train_batch_size"] = self.train_batch_size * self.ring_attn_size
 
@@ -420,9 +422,13 @@ class DeepspeedStrategy(ABC):
             print(*msg)
 
     def is_rank_0(self) -> bool:
+        if not dist.is_initialized():
+            return True
         return dist.get_rank() == 0
 
     def get_rank(self) -> int:
+        if not dist.is_initialized():
+            return 0
         return dist.get_rank()
 
     def save_ckpt(self, model, save_dir, tag=None, max_num=3, max_mem=1000, client_state={}, save_latest=True):

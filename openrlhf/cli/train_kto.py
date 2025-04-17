@@ -155,7 +155,7 @@ if __name__ == "__main__":
     parser.add_argument("--micro_train_batch_size", type=int, default=8, help="batch size per GPU")
     parser.add_argument("--train_batch_size", type=int, default=128, help="Global training batch size")
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
-    parser.add_argument("--torch_compile", action="store_true", default=False)
+    parser.add_argument("--deepcompile", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--full_determinism",
