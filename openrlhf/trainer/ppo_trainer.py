@@ -33,6 +33,7 @@ class PPOTrainer(ABC):
         critic_model_group: PPORayActorGroup,
         reward_model_group: PPORayActorGroup,
         reference_model_group: PPORayActorGroup,
+        vllm_engines=None,
         prompt_max_len: int = 120,
         dataloader_pin_memory: bool = True,
         **generate_kwargs,
@@ -48,6 +49,7 @@ class PPOTrainer(ABC):
         self.reward_model_group = reward_model_group
         self.reference_model_group = reference_model_group
         self.dataloader_pin_memory = dataloader_pin_memory
+        self.vllm_engines = vllm_engines
 
         self.prompt_max_len = prompt_max_len
         self.generate_kwargs = generate_kwargs

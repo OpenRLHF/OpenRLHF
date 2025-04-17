@@ -128,6 +128,7 @@ def train(args):
         critic_model,
         reward_model,
         ref_model,
+        vllm_engines,
         # generate kwargs
         do_sample=True,
         prompt_max_len=args.prompt_max_len,
