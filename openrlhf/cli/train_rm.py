@@ -169,7 +169,7 @@ if __name__ == "__main__":
     # DeepSpeed
     parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
-    parser.add_argument("--torch_compile", action="store_true", default=False)
+    parser.add_argument("--deepcompile", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--full_determinism",
