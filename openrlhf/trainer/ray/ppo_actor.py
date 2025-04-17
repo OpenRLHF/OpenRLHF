@@ -505,7 +505,8 @@ class ActorModelRayActor(BasePPORole):
     def offload_states(self):
         offload_deepspeed_states(self.actor.model)
 
-    def save_checkpoint(self, args, tag, client_states):
+    def save_checkpoint(self, tag, client_states):
+        args = self.strategy.args
         self.strategy.save_ckpt(
             self.actor.model,
             os.path.join(args.ckpt_path, "_actor"),

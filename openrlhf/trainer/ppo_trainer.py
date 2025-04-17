@@ -262,14 +262,10 @@ class PPOTrainer(ABC):
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
             ref = self.actor_model_group.async_run_method(
-                method_name="save_checkpoint", args=args, tag=tag, client_states=client_states
+                method_name="save_checkpoint", tag=tag, client_states=client_states
             )
             if self.critic_model_group is not None:
-                ref.append(
-                    self.critic_model_group.async_run_method(
-                        method_name="save_checkpoint", args=args, tag=tag, client_states=client_states
-                    )
-                )
+                ref.append(self.critic_model_group.async_run_method(method_name="save_checkpoint", tag=tag))
             ray.get(ref)
 
     def evaluate(self, eval_dataloader, global_step, temperature=0.6, n_samples_per_prompt=1):
