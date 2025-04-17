@@ -45,6 +45,7 @@ class CriticPPOTrainer(ABC):
         self.buffer_cpu_offload = buffer_cpu_offload
         self.value_clip = value_clip
         self.dataloader_pin_memory = dataloader_pin_memory
+        self.max_epochs = self, args.max_epochs
 
         self.replay_buffer = NaiveReplayBuffer(
             micro_train_batch_size, buffer_limit, buffer_cpu_offload, getattr(self.args, "packing_samples", False)
