@@ -152,7 +152,6 @@ def train(args):
     if args.critic_pretrain:
         # critic scheduler initialization depends on max_step, so we have to init critic after actor
         # TODO: use first reward model as critic model
-        max_steps = ray.get(actor_model._actor_handlers[0].max_steps.remote())
         refs.extend(critic_model.async_init_model_from_pretrained(strategy, args.critic_pretrain, max_steps))
         ray.get(refs)
 
