@@ -33,8 +33,8 @@ echo "IP Head: $ip_head"  &>> ${JOBLOG}
 
 echo "STARTING HEAD at $node_1"  &>> ${JOBLOG}
 srun --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" bash -c \
-&& pip install ray[default]==$RAY_VERSION \
-&& /root/.local/bin/ray start --head --node-ip-address=$ip --port=$port --block" &>> ${JOBLOG} &
+    "pip install ray[default]==$RAY_VERSION \
+    && /root/.local/bin/ray start --head --node-ip-address=$ip --port=$port --block" &>> ${JOBLOG} &
 sleep 10s
 
 worker_num=$((SLURM_JOB_NUM_NODES)) #number of nodes other than the head node
@@ -42,8 +42,8 @@ for ((i = 1; i < worker_num; i++)); do
 node_i=${nodes_array[$i]}
 echo "STARTING WORKER $i at $node_i"  &>> ${JOBLOG}
 srun --nodes=1 --ntasks=1 -w "$node_i" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" bash -c \
-    && pip install ray[default]==$RAY_VERSION \
-    && /root/.local/bin/ray start --address "$ip_head" --block" &>> ${JOBLOG} &
+    "pip install ray[default]==$RAY_VERSION \
+    && /root/.local/bin/ray start --address $ip_head --block" &>> ${JOBLOG} &
 sleep 1s;
 done
 
