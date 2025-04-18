@@ -322,7 +322,7 @@ if __name__ == "__main__":
         "--kl_estimator",
         type=str,
         default="k1",
-        choices=["k1", "k2", "k3"],
+        choices=["k1", "k2", "k3", "k3_off_policy"],
         help=(
             "In GRPO, k3 is utilized as the loss function, while k2, when used as the loss, is nearly equivalent to k1."
         ),
@@ -330,6 +330,9 @@ if __name__ == "__main__":
     parser.add_argument("--aux_loss_coef", type=float, default=0, help="MoE balancing loss")
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
     parser.add_argument("--reward_clip_range", type=float, nargs=2, default=(-10, 10), help="Reward clip range")
+    parser.add_argument(
+        "--token_level_loss", choices=["True", "False"], default="True", help="whether to use token level loss"
+    )
 
     # Reinforce
     parser.add_argument(
@@ -340,6 +343,12 @@ if __name__ == "__main__":
         help="Choose advantage estimation method: gae, reinforce, rloo, reinforce_baseline, group_norm, dr_grpo",
     )
     parser.add_argument("--use_kl_loss", action="store_true", default=False, help="whether to use KL loss from GRPO")
+    parser.add_argument(
+        "--use_kl_loss_important_sampling",
+        action="store_true",
+        default=False,
+        help="whether to use important sampling for KL loss from GRPO.",
+    )
     parser.add_argument(
         "--no_advantage_std_norm",
         action="store_true",

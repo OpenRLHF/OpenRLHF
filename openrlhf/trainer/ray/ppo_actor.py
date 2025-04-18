@@ -240,9 +240,18 @@ class ActorPPOTrainer(ABC):
                 )
             else:
                 kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=action_log_probs.device)
-            kl_mean = masked_mean(kl, experience.action_mask, dim=-1)
 
-            kl_loss = kl_mean.mean()
+            if self.args.use_kl_loss_important_sampling:
+                ratio = (action_log_probs - old_action_log_probs).exp()
+                surr1 = ratio * kl.detach()
+                surr2 = ratio.clamp(1 - self.actor_loss_fn.clip_eps, 1 + self.actor_loss_fn.clip_eps) * kl.detach()
+                kl = torch.max(surr1, surr2)
+
+            kl_loss = (
+                masked_mean(kl, experience.action_mask, dim=None)
+                if self.args.token_level_loss
+                else masked_mean(kl, experience.action_mask, dim=-1).mean()
+            )
             experience.info["kl"] = kl_loss.item()
         else:
             kl_loss = 0
