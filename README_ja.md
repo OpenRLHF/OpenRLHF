@@ -27,7 +27,7 @@
 
 <span>[ <a href="README.md">English</a> | <a href="README_zh.md">中文</a> | 日本語 ]</span>
 
-OpenRLHFは、Ray、vLLM、DeepSpeed、およびHuggingFace Transformersを基盤とした最初の高性能RLHFフレームワークです：
+OpenRLHFは、Ray、vLLM、ZeRO-3、およびHuggingFace Transformersを基盤とした最初の高性能RLHFフレームワークです：
 
 - **Rayベースの分散アーキテクチャ**  
   OpenRLHFは[Ray](https://github.com/ray-project/ray)を活用して効率的な分散スケジューリングを実現します。Actor、Reward、Reference、およびCriticモデルを異なるGPUに分散し、70Bパラメータまでのモデルのトレーニングをサポートします。  
@@ -45,6 +45,7 @@ OpenRLHFは、Ray、vLLM、DeepSpeed、およびHuggingFace Transformersを基�
 詳細は[スライド](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [技術報告](https://arxiv.org/abs/2405.11143) | [ドキュメント](https://openrlhf.readthedocs.io/)をご覧ください。
 
 ## ニュース
+- [2025/4] Clean OpenRLHF: シングルコントローラーと統合パッキングサンプルに基づくソースコードのリファクタリング
 - [2025/3] CMUの[2025年春の高度自然言語処理コース](https://cmu-l3.github.io/anlp-spring2025/)がOpenRLHFをRLHFフレームワークの教育事例として採用。
 - [2025/2] [Logic-RL](https://arxiv.org/abs/2502.14768) と [PRIME](https://arxiv.org/abs/2502.01456) は、REINFORCE++ が訓練の安定性において GRPO より優れ、PPO より高速であることを示した。
 - [2025/2] [LMM-R1](https://github.com/TideDra/lmm-r1) は OpenRLHF のフォークで、マルチモーダルタスクでの DeepSeek-R1 の再現のための高性能 RL インフラストラクチャを提供することを目的としています。
@@ -86,7 +87,7 @@ OpenRLHFを使用するには、まずDockerコンテナを起動し（**推奨*
 ```bash
 # Dockerコンテナを起動
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:24.07-py3 bash
-sudo pip uninstall xgboost transformer_engine flash_attn -y
+sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
 
 # pip install
 pip install openrlhf
@@ -254,13 +255,13 @@ ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
   --ref_num_nodes 1 \
-  --ref_num_gpus_per_node 2 \
+  --ref_num_gpus_per_node 8 \
   --reward_num_nodes 1 \
-  --reward_num_gpus_per_node 2 \
+  --reward_num_gpus_per_node 8 \
   --critic_num_nodes 1 \
-  --critic_num_gpus_per_node 2 \
+  --critic_num_gpus_per_node 8 \
   --actor_num_nodes 1 \
-  --actor_num_gpus_per_node 2 \
+  --actor_num_gpus_per_node 8 \
   --vllm_num_engines 4 \
   --vllm_tensor_parallel_size 2 \
   --colocate_all_models \
@@ -329,3 +330,94 @@ ray job submit --address="http://127.0.0.1:8265" \
 ### Reinforced Fine-tuning
 
 OpenRLHFは、便利で効率的なReinforced Fine-tuningをサポートしています。カスタム `reward_func` 関数を含む[ファイル](./examples/scripts/reward_func.py)を実装し、そのパスを `
+
+## パフォーマンス
+
+DSChatのパフォーマンスを最大限に最適化するために、Adamオフロード、報酬モデル（RM）と参照モデル（Ref）のオフロードなどの技術を採用し、推論段階でのマイクロバッチサイズを増やし、メモリ不足の問題を回避しました。LLaMA2のHybrid Engine（HE）を有効にするためにDSChatのバグも修正しました。最適化されたDSChatとOpenRLHFを使用して、1024プロンプトを1PPOエポックでトレーニングするのにかかる平均時間（秒）：
+
+| **サイズ** | **NVIDIA A800-80GB GPU** | **最適化されたDSChat（Hybrid Engine使用）** | **OpenRLHF** | **スピードアップ** |
+| :---: | :---: | :---: | :---: | :---: |
+| 7B | 16 | 855.09 | 471.11 | 1.82x |
+| 13B | 32 | 1528.93 | 608.93 | 2.5x |
+| 34B | 32 | 3634.98 | 1526.4 | 2.4x |
+| 70B | 32 | 10407.0 | 4488.53 | 2.3x |
+
+> [!NOTE]
+> データは古いものです。パフォーマンスチューニングセクションを参照して再テストしてください。
+
+### パフォーマンスチューニングガイド
+
+最適なパフォーマンスを実現するために、ノードの割り当てを `vLLM:Actor:Critic = 1:1:1` にすることをお勧めします。
+
+- 例えば、70Bモデルで48個のA100 GPUを使用する場合、vLLMエンジンに16個のA100 GPU、Actorモデルに16個のGPU、残りの16個のGPUをCriticモデルに割り当てることをお勧めします。
+- 十分なGPUメモリがある場合は、分散RLHFではなく、ハイブリッドエンジン `--colocate_all_models`、`--vllm_enable_sleep`、`--deepspeed_enable_sleep` を使用してください。
+- `--colocate_critic_reward`、`--colocate_actor_ref` オプションを有効にしてノードを統合します。
+- `rollout_micro_batch_size` を可能な限り増やし（vLLMエンジンのTPサイズを最小限に抑え）、トレーニングフェーズでは、より大きな `--micro_train_batch_size` が良く、`--packing_samples` を有効にします。
+- GPUメモリが十分にある場合は、`--adam_offload` を無効にし、`--overlap_comm` を有効にしてください。また、トレーニングを高速化するために `--deepcompile` を有効にします。
+- vLLMでは、`--vllm_sync_backend nccl` を使用してください。
+- `n_samples_per_prompts` > 1 の場合は、vLLM生成で [enable_prefix_caching](https://docs.vllm.ai/en/stable/automatic_prefix_caching/apc.html) を有効にします。
+- 大きなベースモデルの場合、OOMが発生した場合は、`--colocate_xxxx` オプションを使用しないでください。
+
+## OpenRLHFを使用している企業と組織
+
+- Google
+- ByteDance
+- Tencent
+- Alibaba
+- Baidu
+- China Telecom
+- Vivo
+- Allen AI
+- NexusFlow
+- Jülich Supercomputing Centre (JSC)
+- Berkeley Starling Team
+- M-A-P
+- ...
+
+## 参加方法
+
+**参加方法は？**
+
+1. janhu9527@gmail.com にメールを送るか、[GitHub Organization](https://github.com/OpenRLHF) に参加してください。以下の詳細を含めてください：
+   - お名前
+   - GitHubユーザー名
+   - 興味のある分野
+   - NLPやAIに関連するスキルと経験
+2. 公式GitHub [OpenRLHF ↗](https://github.com/OpenRLHF/OpenRLHF) プロジェクトページから参加することもできます。貢献への興味についてissueを作成するだけで、私たちが対応します。
+
+**何ができますか？**
+
+1. チームに参加してOpenRLHFプロジェクトの開発に参加する
+2. プルリクエストを提出してプロジェクトに貢献する
+3. ドキュメントの改善、バグの修正、新機能の作成を支援する
+4. プロジェクトを共有してコミュニティの成長を支援する
+
+## スポンサー
+
+スポンサーシップは、OpenRLHFの維持と改善に役立ちます。このプロジェクトが役立つと感じた場合は、[Open Collective ↗](https://opencollective.com/OpenRLHF) でスポンサーになることを検討してください。
+
+## スター履歴
+
+[![Star History Chart](https://api.star-history.com/svg?repos=OpenRLHF/OpenRLHF&type=Date)](https://star-history.com/#OpenRLHF/OpenRLHF&Date)
+
+## 貢献者
+
+すべての貢献者に感謝します！貢献したい場合は、プルリクエストを作成するか、issueを作成してください。
+
+<a href="https://github.com/OpenRLHF/OpenRLHF/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=OpenRLHF/OpenRLHF" />
+</a>
+
+## 引用
+```
+@article{hu2024openrlhf,
+  title={OpenRLHF: An Easy-to-use, Scalable and High-performance RLHF Framework},
+  author={Jian Hu and Xibin Wu and Zilin Zhu and Xianyu and Weixun Wang and Dehao Zhang and Yu Cao},
+  journal={arXiv preprint arXiv:2405.11143},
+  year={2024}
+}
+```
+
+______________________________________________________________________
+
+*OpenRLHF © 2025 OpenRLHF. All Rights Reserved.*

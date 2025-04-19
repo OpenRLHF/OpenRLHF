@@ -30,7 +30,7 @@
 
 <span>[ <a href="README.md">English</a> | 中文 | <a href="README_ja.md">日本語</a> ]</span>
 
-OpenRLHF 是第一个基于 Ray、vLLM、DeepSpeed 和 HuggingFace Transformers 构建的高性能 RLHF 框架，旨在让 RLHF 训练变得简单易用：
+OpenRLHF 是第一个基于 Ray、vLLM、ZeRO-3 和 HuggingFace Transformers 构建的高性能 RLHF 框架，旨在让 RLHF 训练变得简单易用：
 
 - **基于 Ray 的分布式架构**  
   OpenRLHF 利用 [Ray](https://github.com/ray-project/ray) 实现高效的分布式调度。它将 Actor、Reward、Reference 和 Critic 模型分布到不同的 GPU 上，支持高达 70B 参数模型的训练。  
