@@ -308,7 +308,6 @@ class PPORayActorGroup:
 
         Args:
             method_name (str): Name of the method to run
-            execute_batch (bool): Whether to execute the method on the batch of data.
             **kwargs: Keyword arguments for the method. Each value should be a list/tensor of the same length.
 
         Returns:

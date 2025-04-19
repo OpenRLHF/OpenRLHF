@@ -135,7 +135,7 @@ class CriticPPOTrainer(ABC):
         # status
         status = {
             "critic_loss": critic_loss.detach().item(),
-            "values": masked_mean(values, experience.action_mask).item(),
+            "values": masked_mean(values, experience.action_mask).detach().item(),
             "critic_lr": self.critic_scheduler.get_last_lr()[0],
         }
         return status
