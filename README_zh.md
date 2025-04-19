@@ -403,7 +403,7 @@ python -m openrlhf.cli.lora_combiner \
 - 当有足够的GPU内存时，使用 Hybrid Engine `--colocate_all_models` 和 `--vllm_enable_sleep` 以及 `--deepspeed_enable_sleep`，而不是分布式RLHF。
 - 启用 `--colocate_critic_reward`、`--colocate_actor_ref` 选项来合并节点。
 - 您应该尽可能增加 `rollout_micro_batch_size`（并最小化vLLM引擎的TP大小）。在训练阶段，更大的 `--micro_train_batch_size` 效果更好，并启用 `--packing_samples`。
-- 当有足够的GPU内存时，请禁用 `--adam_offload` 并启用 `--overlap_comm`。
+- 当有足够的GPU内存时，请禁用 `--adam_offload` 并启用 `--overlap_comm`。请启用 ``--deepcompile`` 来加速 deepspeed 训练.
 - 对于vLLM，请使用 `--vllm_sync_backend nccl` 
 - 当 `n_samples_per_prompts` > 1 时，在vLLM生成中启用 [enable_prefix_caching](https://docs.vllm.ai/en/stable/automatic_prefix_caching/apc.html)。
 - 对于大型基础模型，如果出现OOM，不要使用任何 `--colocate_xxxx` 选项。
