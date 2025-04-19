@@ -27,13 +27,20 @@
 
 <span>[ English | <a href="README_zh.md">中文</a> | <a href="README_ja.md">日本語</a> ]</span>
 
-OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Transformers:
+OpenRLHF is the first easy-to-use, high-performance RLHF framework built on Ray, vLLM, DeepSpeed and HuggingFace Transformers, designed to make RLHF training simple and accessible:
 
-- **Simple and easy to use**: OpenRLHF is one of the simplest high-performance RLHF libraries currently available, and seamlessly compatible with Huggingface models and datasets.
-- **High performance**: RLHF training spends 80% of the time on the sample generation stage. Thanks to the ability to use a large inference batch size with Ray and Packing Samples and vLLM generation acceleration, the performance of OpenRLHF 3~4x+ that of Optimized DeepSpeedChat with Hybrid Engine.
-- **Distributed RLHF**:  OpenRLHF distribute the Actor, Reward, Reference, and Critic models onto separate GPUs using Ray, while placing the Adam optimizer on the CPU. This enables full-scale fine-tuning of 70B+ models with multiple A100 80G GPUs and vLLM and 7B models across multiple 24GB RTX 4090 GPUs.
-- **Hybrid Engine**:  OpenRLHF also supports the hybrid engine, allowing all models and vLLM engines to share the GPUs to avoid GPU idling.
-- **PPO Implementation Optimization**: We integrated the implementation tricks for PPO to improve the training stability, referencing [Zhihu](https://zhuanlan.zhihu.com/p/622134699) and [Advanced Tricks for Training Large Language Models with Proximal Policy Optimization](https://hijkzzz.notion.site/rlhf-implementation-tricks?v=158d9a33ecc98132bf9e000c39227361).
+- **Distributed Architecture with Ray**  
+  OpenRLHF leverages [Ray](https://github.com/ray-project/ray) for efficient distributed scheduling. It separates the Actor, Reward, Reference, and Critic models across different GPUs, enabling scalable training for models up to 70B parameters.  
+  It also supports **Hybrid Engine** scheduling, allowing all models and vLLM engines to share GPU resources—minimizing idle time and maximizing GPU utilization.
+
+- **vLLM Inference Acceleration + AutoTP**  
+  RLHF training spends 80% of the time on the sample generation stage. Powered by [vLLM](https://github.com/vllm-project/vllm) and Auto Tensor Parallelism (AutoTP), OpenRLHF delivers high-throughput, memory-efficient samples generation. Native integration with HuggingFace Transformers ensures seamless and fast generation, making it the fastest RLHF framework available.
+
+- **Memory-Efficient Training with ZeRO-3**  
+  Built on [DeepSpeed's](https://github.com/deepspeedai/DeepSpeed) ZeRO-3 and [deepcompile](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/deepcompile/README.md), OpenRLHF enables large model training without heavyweight frameworks. It works directly with HuggingFace for easy loading and fine-tuning of pretrained models.
+
+- **Optimized PPO Implementation**  
+  Incorporates advanced PPO tricks inspired by practical guides and community best practices, enhancing training stability and reward quality in RLHF workflows.Referencing [Zhihu](https://zhuanlan.zhihu.com/p/622134699) and [Advanced Tricks for Training Large Language Models with Proximal Policy Optimization](https://hijkzzz.notion.site/rlhf-implementation-tricks?v=158d9a33ecc98132bf9e000c39227361).
 
 More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [Technical Report](https://arxiv.org/abs/2405.11143) | [Documents](https://openrlhf.readthedocs.io/)
 
@@ -72,24 +79,6 @@ More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csof
 - Logging support with Wandb (`--use_wandb`) and TensorBoard (`--use_tensorboard`).  
 - Checkpoint recovery functionality (`--load_checkpoint` and `--save_steps`).  
 - Provided multi-node training scripts, such as [DPO](./examples/scripts/train_llama_slurm.sh) and [Ray PPO](./examples/scripts/train_ppo_llama_ray_slurm.sh).
-
-
-### PPO Support Matrix
-
-| Feature | OpenRLHF | DSChat | CAIChat | TRL |
-| ------------- |:-------------:| :-------------:| :-------------:| :-------------:|
-| 70B+ Full Tuning with 16 A100-80GB      | ✅ | ❌ | ❌ | ❌ |
-| 7B Full Tuning with 4 RTX4090 | ✅      |    ❌ | ❌ | ❌ |
-| 34B DPO Full Tuning with 8 A100-80GB | ✅      |    ❌ | ❌ | ❌ |  
-| Inference Engine in PPO | ✅      |    ✅ | ❌ | ❌ |  
-| PPO Implementation Tricks | ✅      |    ❌ | ❌ | ✅ |
-| Support QLoRA | ✅      |    ❌ | ❌ | ✅ | 
-| Support Mixtral 8*7b | ✅      |    ❌ | ❌ | ❌ |  
-| Support Unmerged Actor-Critic | ✅     |   ✅ | ✅ | ❌ | 
-| Support Multiple Reward Models | ✅      |    ❌ | ❌ | ❌ |   
-| Support Huggingface Models | ✅      |    ✅ | ✅ | ✅ | 
-| Easy-to-use | ✅      |   ❌ (HybridEngine bugs) | ✅ | ✅ | 
-
 
 ## Quick Start
 

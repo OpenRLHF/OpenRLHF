@@ -30,13 +30,20 @@
 
 <span>[ <a href="README.md">English</a> | 中文 | <a href="README_ja.md">日本語</a> ]</span>
 
-OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 RLHF 框架：
+OpenRLHF 是第一个基于 Ray、vLLM、DeepSpeed 和 HuggingFace Transformers 构建的高性能 RLHF 框架，旨在让 RLHF 训练变得简单易用：
 
-- **简单易用**: OpenRLHF 是目前可用的最简单的高性能 RLHF 库之一，无缝兼容 Huggingface 模型和数据集。
-- **高性能**: RLHF 训练中 80% 的时间用于样本生成阶段。得益于使用 Ray, Packing Samples 以及 vLLM 生成加速的能力，OpenRLHF 的性能是极致优化的 DeepSpeedChat with Hybrid Engine 的3~4倍以上。
-- **分布式 RLHF**:  OpenRLHF 使用 Ray 将 Actor、Reward、Reference 和 Critic 模型分布到不同的 GPU 上，同时将 Adam 优化器放在 CPU 上。这使得使用多个 A100 80G GPU 和 vLLM 可以全面微调超过 70B+ 的模型 以及在多个 24GB RTX 4090 GPU 上微调 7B 模型。
-- **Hybrid Engine**: OpenRLHF 还支持 Hybrid engine，所有训练引擎和推理引擎共用 GPU 来避免资源闲置。
-- **PPO 实现技巧**: 我们集成了 PPO 的实现技巧以提高训练稳定性，详情参考 [知乎](https://zhuanlan.zhihu.com/p/622134699) 和 [Notion blog](https://hijkzzz.notion.site/rlhf-implementation-tricks?v=158d9a33ecc98132bf9e000c39227361).
+- **基于 Ray 的分布式架构**  
+  OpenRLHF 利用 [Ray](https://github.com/ray-project/ray) 实现高效的分布式调度。它将 Actor、Reward、Reference 和 Critic 模型分布到不同的 GPU 上，支持高达 70B 参数模型的训练。  
+  它还支持 **Hybrid Engine** 调度，允许所有模型和 vLLM 引擎共享 GPU 资源，最大限度地减少空闲时间并提高 GPU 利用率。
+
+- **vLLM 推理加速 + AutoTP**  
+  RLHF 训练中 80% 的时间都花在样本生成阶段。基于 [vLLM](https://github.com/vllm-project/vllm) 和自动张量并行 (AutoTP)，OpenRLHF 提供高吞吐量、内存高效的推理。与 HuggingFace Transformers 的原生集成确保了无缝且快速的生成，使其成为目前最快的 RLHF 框架。
+
+- **基于 ZeRO-3 的内存高效训练**  
+  基于 [DeepSpeed](https://github.com/deepspeedai/DeepSpeed) 的 ZeRO-3 和 [deepcompile](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/deepcompile/README.md)，OpenRLHF 无需重量级框架即可实现大模型训练。它直接与 HuggingFace 配合使用，方便加载和微调预训练模型。
+
+- **优化的 PPO 实现**  
+  集成了受实践指南和社区最佳实践启发的先进 PPO 技巧，提高了 RLHF 工作流程中的训练稳定性和奖励质量。参考 [知乎](https://zhuanlan.zhihu.com/p/622134699) 和 [Advanced Tricks for Training Large Language Models with Proximal Policy Optimization](https://hijkzzz.notion.site/rlhf-implementation-tricks?v=158d9a33ecc98132bf9e000c39227361)。
 
 更多细节请参考 [PPT](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [技术报告](https://arxiv.org/abs/2405.11143) | [使用文档](https://openrlhf.readthedocs.io/)
 
@@ -76,22 +83,6 @@ OpenRLHF 是一个基于 Ray、DeepSpeed 和 HF Transformers 构建的高性能 
 - 支持从检查点恢复训练（`--load_checkpoint` 和 `--save_steps`）。  
 - 提供了多节点训练脚本, 比如 [DPO](./examples/scripts/train_llama_slurm.sh) 和 [RLHF](./examples/scripts/train_ppo_llama_ray_slurm.sh)
 
-
-### PPO 支持矩阵
-
-| 特性 | OpenRLHF | DSChat | CAIChat | TRL |
-| ------------- |:-------------:| :-------------:| :-------------:| :-------------:| 
-| 使用 16 个 A100 完成 70B+ 全微调      | ✅ | ❌ | ❌ | ❌ ||
-| 使用 4 个 RTX4090 完成 7B 全微调 | ✅      |    ❌ | ❌ | ❌ | 
-| 使用 8 个 A100 完成 34B DPO 全微调 | ✅      |    ❌ | ❌ | ❌ |   
-| 支持推理引擎加速 | ✅      |    ✅ | ❌ | ❌ |  
-| PPO 实现技巧 | ✅      |    ❌ | ❌ | ✅ | 
-| 支持 QLoRA | ✅      |    ❌ | ❌ | ✅ | 
-| 支持 Mixtral 8*7b | ✅      |    ❌ | ❌ | ❌ | 
-| 支持未合并的 Actor-Critic | ✅     |   ✅ | ✅ | ❌ | 
-| 支持多个奖励模型 | ✅      |    ❌ | ❌ | ❌ |   
-| 支持 Huggingface 模型 | ✅      |    ✅ | ✅ | ✅ | 
-| 易于使用 | ✅      |   ❌ (HybridEngine bugs) | ✅ | ✅ | 
 
 ## 快速开始
 

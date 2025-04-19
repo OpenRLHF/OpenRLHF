@@ -27,13 +27,20 @@
 
 <span>[ <a href="README.md">English</a> | <a href="README_zh.md">中文</a> | 日本語 ]</span>
 
-OpenRLHFは、Ray、DeepSpeed、およびHF Transformersを基盤とした高性能なRLHFフレームワークです：
+OpenRLHFは、Ray、vLLM、DeepSpeed、およびHuggingFace Transformersを基盤とした最初の高性能RLHFフレームワークです：
 
-- **シンプルで使いやすい**: OpenRLHFは現在利用可能な最もシンプルな高性能RLHFライブラリの一つであり、Huggingfaceのモデルとデータセットとシームレスに互換性があります。
-- **高性能**: RLHFトレーニングの80％の時間はサンプル生成段階に費やされます。RayとPacking SamplesおよびvLLM生成加速の能力を活用することで、OpenRLHFのパフォーマンスはOptimized DeepSpeedChat with Hybrid Engineの3〜4倍以上です。
-- **分散RLHF**: OpenRLHFは、Actor、Reward、Reference、およびCriticモデルをRayを使用して別々のGPUに分散し、AdamオプティマイザをCPUに配置します。これにより、複数のA100 80G GPUとvLLMを使用して70B+モデルのフルスケールの微調整が可能になり、複数の24GB RTX 4090 GPUで7Bモデルを微調整できます。
-- **PPO実装の最適化**: トレーニングの安定性を向上させるために、PPOの実装トリックを統合しました。詳細は[Zhihu](https://zhuanlan.zhihu.com/p/622134699)および[Notionブログ](https://hijkzzz.notion.site/rlhf-implementation-tricks?v=158d9a33ecc98132bf9e000c39227361)を参照してください。
-- **Hybrid Engine**: OpenRLHFはHybrid Engineもサポートしており、すべてのトレーニングエンジンと推論エンジンがGPUを共有してリソースのアイドル状態を防ぎます。
+- **Rayベースの分散アーキテクチャ**  
+  OpenRLHFは[Ray](https://github.com/ray-project/ray)を活用して効率的な分散スケジューリングを実現します。Actor、Reward、Reference、およびCriticモデルを異なるGPUに分散し、70Bパラメータまでのモデルのトレーニングをサポートします。  
+  また、**Hybrid Engine**スケジューリングもサポートしており、すべてのモデルとvLLMエンジンがGPUリソースを共有し、アイドル時間を最小限に抑え、GPU利用率を最大化します。
+
+- **vLLM 推論加速 + AutoTP**  
+  RLHF トレーニングの 80% の時間はサンプル生成段階に費やされます。[vLLM](https://github.com/vllm-project/vllm) と Auto Tensor Parallelism (AutoTP) を活用し、OpenRLHF は高スループットでメモリ効率の良いサンプル生成を実現します。HuggingFace Transformers とのネイティブ統合により、シームレスで高速な生成を保証し、現在最も高速な RLHF フレームワークとなっています。
+
+- **ZeRO-3ベースのメモリ効率の良いトレーニング**  
+  [DeepSpeed](https://github.com/deepspeedai/DeepSpeed)のZeRO-3と[deepcompile](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/deepcompile/README.md)を基盤とし、OpenRLHFは重量級フレームワークなしで大規模モデルのトレーニングを可能にします。HuggingFaceと直接連携し、事前学習済みモデルの簡単なロードと微調整を実現します。
+
+- **最適化されたPPO実装**  
+  実践ガイドとコミュニティのベストプラクティスに基づいた高度なPPOテクニックを統合し、RLHFワークフローのトレーニング安定性と報酬品質を向上させます。[Zhihu](https://zhuanlan.zhihu.com/p/622134699)と[Advanced Tricks for Training Large Language Models with Proximal Policy Optimization](https://hijkzzz.notion.site/rlhf-implementation-tricks?v=158d9a33ecc98132bf9e000c39227361)を参照。
 
 詳細は[スライド](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [技術報告](https://arxiv.org/abs/2405.11143) | [ドキュメント](https://openrlhf.readthedocs.io/)をご覧ください。
 
@@ -69,22 +76,6 @@ OpenRLHFは、Ray、DeepSpeed、およびHF Transformersを基盤とした高性
 - Wandb（`--use_wandb`）およびTensorBoard（`--use_tensorboard`）によるログ記録のサポート。
 - チェックポイントの回復機能（`--load_checkpoint`および`--save_steps`）。
 - [DPO](./examples/scripts/train_llama_slurm.sh)および[Ray PPO](./examples/scripts/train_ppo_llama_ray_slurm.sh)などのマルチノードトレーニングスクリプトを提供。
-
-### PPOサポートマトリックス
-
-| 特徴 | OpenRLHF | DSChat | CAIChat | TRL |
-| ------------- |:-------------:| :-------------:| :-------------:| :-------------:|
-| 16 A100-80GBで70B+のフルチューニング      | ✅ | ❌ | ❌ | ❌ |
-| 4 RTX4090で7Bのフルチューニング | ✅      |    ❌ | ❌ | ❌ |
-| 8 A100-80GBで34B DPOのフルチューニング | ✅      |    ❌ | ❌ | ❌ |  
-| PPOでの推論エンジンのサポート | ✅      |    ✅ | ❌ | ❌ |  
-| PPO実装のトリック | ✅      |    ❌ | ❌ | ✅ |
-| QLoRAのサポート | ✅      |    ❌ | ❌ | ✅ | 
-| Mixtral 8*7bのサポート | ✅      |    ❌ | ❌ | ❌ |  
-| 未結合のActor-Criticのサポート | ✅     |   ✅ | ✅ | ❌ | 
-| 複数の報酬モデルのサポート | ✅      |    ❌ | ❌ | ❌ |   
-| Huggingfaceモデルのサポート | ✅      |    ✅ | ✅ | ✅ | 
-| 使いやすさ | ✅      |   ❌ (HybridEngineのバグ) | ✅ | ✅ | 
 
 ## クイックスタート
 
