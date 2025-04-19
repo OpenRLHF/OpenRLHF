@@ -52,7 +52,6 @@ class ActorPPOTrainer(ABC):
 
         Args:
             vllm_engines (List, optional): vllm engines for text generation, if not specified, generate text by actor model directly. Defaults to None.
-            critic_train_remote (bool, optional): whether this actor should triger corresponding critic model training. Defaults to False.
         """
         self.strategy = strategy
         self.args = strategy.args
@@ -445,6 +444,7 @@ class ActorModelRayActor(BasePPORole):
             ema_model=self.ema_model,
             actor_optim=self.actor_optim,
             actor_scheduler=self.actor_scheduler,
+            micro_train_batch_size=args.micro_train_batch_size,
             tokenizer=self.tokenizer,
             eps_clip=args.eps_clip,
             ema_beta=args.ema_beta,
@@ -452,7 +452,7 @@ class ActorModelRayActor(BasePPORole):
         )
 
     def fit(self, kl_ctl: float = 0):
-        """Train critic model with the replay buffer."""
+        """Train actor model with the replay buffer."""
         torch.cuda.empty_cache()
         self.actor.train()
         status = self.trainer.ppo_train(kl_ctl)
