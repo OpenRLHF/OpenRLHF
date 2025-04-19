@@ -27,7 +27,7 @@
 
 <span>[ English | <a href="README_zh.md">中文</a> | <a href="README_ja.md">日本語</a> ]</span>
 
-OpenRLHF is the first easy-to-use, high-performance RLHF framework built on Ray, vLLM, DeepSpeed and HuggingFace Transformers, designed to make RLHF training simple and accessible:
+OpenRLHF is the first easy-to-use, high-performance open-source RLHF framework built on Ray, vLLM, ZeRO-3 and HuggingFace Transformers, designed to make RLHF training simple and accessible:
 
 - **Distributed Architecture with Ray**  
   OpenRLHF leverages [Ray](https://github.com/ray-project/ray) for efficient distributed scheduling. It separates the Actor, Reward, Reference, and Critic models across different GPUs, enabling scalable training for models up to 70B parameters.  
