@@ -5,6 +5,7 @@ import platform
 from datetime import datetime
 from setuptools import find_packages, setup
 from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
+import sys
 
 _build_mode = os.getenv("OPENRLHF_BUILD_MODE", "")
 
