@@ -77,6 +77,9 @@ class ActorPPOTrainer(ABC):
             micro_train_batch_size, buffer_limit, buffer_cpu_offload, getattr(self.args, "packing_samples", False)
         )
 
+        if self.args.entropy_loss_coef > 1e-8:
+            self.entropy_loss_fn = torch.compile(compute_entropy)
+
         # Init torch group for weights sync
         backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
         self.use_cuda_ipc = False
@@ -244,7 +247,7 @@ class ActorPPOTrainer(ABC):
             loss += output.aux_loss * self.args.aux_loss_coef
         # entropy loss
         if self.args.entropy_loss_coef > 1e-8:
-            entropy_loss = compute_entropy(output.logits[:, -experience.action_mask.shape[1] :])
+            entropy_loss = self.entropy_loss_fn(output.logits[:, -experience.action_mask.shape[1] :])
             entropy_loss = masked_mean(entropy_loss, experience.action_mask)
             loss -= entropy_loss * self.args.entropy_loss_coef
 
