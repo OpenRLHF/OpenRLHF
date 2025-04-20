@@ -214,7 +214,6 @@ class ActorPPOTrainer(ABC):
             return_output=True,
             ring_attn_group=self.strategy.ring_attn_group,
             packed_seq_lens=packed_seq_lens,
-            allgather_logits=self.args.entropy_loss_coef > 1e-8,
         )
 
         # loss function
