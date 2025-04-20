@@ -179,7 +179,6 @@ class NaiveReplayBuffer(ABC):
         if self.cpu_offload:
             experience.to_device(torch.device("cpu"))
         items = split_experience_batch(experience)
-        items = remove_padding_in_sequences(items)
         self.items.extend(items)
         if self.limit > 0:
             samples_to_remove = len(self.items) - self.limit
