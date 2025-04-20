@@ -387,8 +387,7 @@ class RemoteExperienceMaker(ABC):
                 )
             else:
                 kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
-
-            kl_mean = masked_mean(kl, None, dim=-1)
+            kl_mean = masked_mean(kl, samples.action_mask, dim=-1)
 
             sequences = samples.sequences
             attention_mask = samples.attention_mask

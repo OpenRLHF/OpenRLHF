@@ -14,7 +14,7 @@ from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
 from openrlhf.models import Actor, PolicyLoss
-from openrlhf.models.utils import compute_approx_kl, masked_mean
+from openrlhf.models.utils import compute_approx_kl, compute_entropy, masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
@@ -163,31 +163,22 @@ class ActorPPOTrainer(ABC):
             for experience in pbar:
                 experience.to_device(device)
                 status = self.training_step(experience, kl_ctl)
+                status["kl"] *= status["response_length"]
+                status = self.strategy.all_reduce(status)
+                status["kl"] /= status["response_length"]
 
-                # for DP
-                # weighted mean for kl
-                if "kl" in status:
-                    status["kl"] *= status["response_length"]
-                    status = self.strategy.all_reduce(status)
-                    status["kl"] /= status["response_length"]
+                short_status = {
+                    "act_loss": status["policy_loss"],
+                    "reward": status["reward"],
+                    "return": status["return"],
+                    "gen_len": status["response_length"],
+                    "tot_len": status["total_length"],
+                    "kl": status["kl"],
+                    "act_lr": status["actor_lr"],
+                }
 
-                short_status = {}
-
-                if "policy_loss" in status:
-                    short_status = {
-                        "pg": status["policy_loss"],
-                        "rm": status["reward"],
-                        "ret": status["return"],
-                        "glen": status["response_length"],
-                        "tlen": status["total_length"],
-                        "kl": status["kl"],
-                        "act_lr": status["actor_lr"],
-                    }
-
-                if "critic_loss" in status:
-                    short_status["cri"] = status["critic_loss"]
-                    short_status["vals"] = status["values"]
-                    short_status["cri_lr"] = status["critic_lr"]
+                if "entropy_loss" in status:
+                    short_status["ent_loss"] = status["entropy_loss"]
 
                 status_list.append(status)
                 pbar.set_postfix(short_status)
@@ -220,6 +211,7 @@ class ActorPPOTrainer(ABC):
             return_output=True,
             ring_attn_group=self.strategy.ring_attn_group,
             packed_seq_lens=packed_seq_lens,
+            allgather_logits=self.args.entropy_loss_coef > 1e-8,
         )
 
         # loss function
@@ -246,20 +238,25 @@ class ActorPPOTrainer(ABC):
         else:
             kl_loss = 0
 
+        loss = actor_loss + kl_loss * kl_ctl
         # mixtral
         if self.aux_loss:
-            aux_loss = output.aux_loss
-        else:
-            aux_loss = 0
-        loss = actor_loss + aux_loss * self.args.aux_loss_coef + kl_loss * kl_ctl
-        self.strategy.backward(loss, self.actor, self.actor_optim)
+            loss += output.aux_loss * self.args.aux_loss_coef
+        # entropy loss
+        if self.args.entropy_loss_coef > 1e-8:
+            entropy_loss = compute_entropy(output.logits[:, -experience.action_mask.shape[1] :])
+            entropy_loss = masked_mean(entropy_loss, experience.action_mask)
+            loss -= entropy_loss * self.args.entropy_loss_coef
 
+        self.strategy.backward(loss, self.actor, self.actor_optim)
         self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
         if self.ema_model:
             self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
 
         # status
         status = {"policy_loss": actor_loss.detach().item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}
+        if self.args.entropy_loss_coef > 1e-8:
+            status["entropy_loss"] = entropy_loss.detach().item()
         for k, v in experience.info.items():
             if k == "kl":
                 status[k] = (
