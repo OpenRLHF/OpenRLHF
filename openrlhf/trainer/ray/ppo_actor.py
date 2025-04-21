@@ -241,7 +241,7 @@ class ActorPPOTrainer(ABC):
             loss += output.aux_loss * self.args.aux_loss_coef
         # entropy loss
         if self.args.entropy_loss_coef > 1e-8:
-            entropy_loss = masked_mean(output.entropy[:, -experience.action_mask.shape[1]], experience.action_mask)
+            entropy_loss = masked_mean(output.entropy[:, -experience.action_mask.shape[1] :], experience.action_mask)
             loss -= entropy_loss * self.args.entropy_loss_coef
 
         self.strategy.backward(loss, self.actor, self.actor_optim)
