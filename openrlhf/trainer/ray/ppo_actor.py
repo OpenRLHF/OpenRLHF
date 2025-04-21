@@ -231,9 +231,7 @@ class ActorPPOTrainer(ABC):
                 )
             else:
                 kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=action_log_probs.device)
-            kl_loss = masked_mean(kl, experience.action_mask, dim=None)
-
-            experience.info["kl"] = kl_loss.item()
+            kl_loss = masked_mean(kl, experience.action_mask)
         else:
             kl_loss = 0
 
@@ -255,6 +253,8 @@ class ActorPPOTrainer(ABC):
         status = {"policy_loss": actor_loss.detach().item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}
         if self.args.entropy_loss_coef > 1e-8:
             status["entropy_loss"] = entropy_loss.detach().item()
+        if self.args.use_kl_loss:
+            status["kl_loss"] = kl_loss.detach().item()
         for k, v in experience.info.items():
             status[k] = v.mean().item()
         return status
