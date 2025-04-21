@@ -197,8 +197,10 @@ class Actor(nn.Module):
         output["logits"] = output["logits"].to(torch.float32)
 
         if return_entropy:
+            assert return_output
             entropy = compute_entropy(output["logits"])
-            entropy = gather_and_pad_tensor(entropy, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
+            if self.packing_samples:
+                entropy = gather_and_pad_tensor(entropy, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
             setattr(output, "entropy", entropy[:, :-1])
 
         return_action_log_probs = action_mask is not None
