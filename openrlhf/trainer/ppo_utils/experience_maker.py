@@ -361,6 +361,7 @@ class RemoteExperienceMaker(ABC):
         )
 
         # Wait for all remote calls to complete and flatten the results
+        # Note: the results duplicated ring_attn_size times
         action_log_probs_list = sum(ray.get(action_log_probs_ref)[:: args.ring_attn_size], [])
         base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref)[:: args.ring_attn_size], [])
         value_list = sum(ray.get(value_ref)[:: args.ring_attn_size], [])
