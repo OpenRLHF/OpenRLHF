@@ -14,7 +14,7 @@ from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
 from openrlhf.models import Actor, PolicyLoss
-from openrlhf.models.utils import compute_approx_kl, compute_entropy, masked_mean
+from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
@@ -76,9 +76,6 @@ class ActorPPOTrainer(ABC):
         self.replay_buffer = NaiveReplayBuffer(
             micro_train_batch_size, buffer_limit, buffer_cpu_offload, getattr(self.args, "packing_samples", False)
         )
-
-        if self.args.entropy_loss_coef > 1e-8:
-            self.entropy_loss_fn = torch.compile(compute_entropy)
 
         # Init torch group for weights sync
         backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
@@ -214,6 +211,7 @@ class ActorPPOTrainer(ABC):
             return_output=True,
             ring_attn_group=self.strategy.ring_attn_group,
             packed_seq_lens=packed_seq_lens,
+            return_entropy=self.args.entropy_loss_coef > 1e-8,
         )
 
         # loss function
@@ -246,8 +244,7 @@ class ActorPPOTrainer(ABC):
             loss += output.aux_loss * self.args.aux_loss_coef
         # entropy loss
         if self.args.entropy_loss_coef > 1e-8:
-            entropy_loss = self.entropy_loss_fn(output.logits[:, -experience.action_mask.shape[1] - 1 : -1])
-            entropy_loss = masked_mean(entropy_loss, experience.action_mask)
+            entropy_loss = masked_mean(output.entropy, experience.action_mask)
             loss -= entropy_loss * self.args.entropy_loss_coef
 
         self.strategy.backward(loss, self.actor, self.actor_optim)
@@ -260,12 +257,7 @@ class ActorPPOTrainer(ABC):
         if self.args.entropy_loss_coef > 1e-8:
             status["entropy_loss"] = entropy_loss.detach().item()
         for k, v in experience.info.items():
-            if k == "kl":
-                status[k] = (
-                    (v * experience.info["response_length"]).sum() / experience.info["response_length"].sum()
-                ).item()
-            else:
-                status[k] = v.mean().item()
+            status[k] = v.mean().item()
         return status
 
     def _broadcast_to_vllm(self):
