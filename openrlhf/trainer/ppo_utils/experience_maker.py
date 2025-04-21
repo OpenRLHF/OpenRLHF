@@ -262,7 +262,6 @@ class RemoteExperienceMaker(ABC):
         device = "cpu"
         experiences = []
 
-        # TODO(gzpan): Support dynamic batch later
         # Split samples into smaller batches for batched actor/critic/reward/ref forward pass
         samples_list = rollout_samples.split(args.micro_rollout_batch_size)
 
@@ -273,35 +272,6 @@ class RemoteExperienceMaker(ABC):
         action_mask_list = [s.action_mask for s in samples_list]
         prompts_list = [p for s in samples_list for p in s.prompts]
         labels_list = [l for s in samples_list for l in s.labels]
-
-        # Batch call initial model
-        if self.initial_model_group is not None:
-            base_action_log_probs_ref = self.initial_model_group.async_run_method_batch(
-                method_name="forward",
-                sequences=sequences_list,
-                action_mask=action_mask_list,
-                attention_mask=attention_mask_list,
-            )
-
-            if args.colocate_actor_ref or args.colocate_all_models:
-                ray.get(base_action_log_probs_ref)
-                ray.get(self.initial_model_group.async_run_method(method_name="empty_cache"))
-        else:
-            base_action_log_probs_ref = ray.put([[None]] * (len(samples_list) * args.ring_attn_size))
-
-        # Batch call critic model
-        if self.critic_model_group is not None:
-            value_ref = self.critic_model_group.async_run_method_batch(
-                method_name="forward",
-                sequences=sequences_list,
-                action_mask=action_mask_list,
-                attention_mask=attention_mask_list,
-            )
-            if args.colocate_critic_reward or args.colocate_all_models:
-                ray.get(value_ref)
-                ray.get(self.critic_model_group.async_run_method(method_name="empty_cache"))
-        else:
-            value_ref = ray.put([[None]] * (len(samples_list) * args.ring_attn_size))
 
         # Batch call reward model
         r_refs = None
@@ -314,7 +284,7 @@ class RemoteExperienceMaker(ABC):
             )
         else:
             queries_list = sum(
-                [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in sequences_list], []
+                [self.tokenizer.batch_decode(seq, skip_special_tokens=True) for seq in sequences_list], []
             )
 
             if self.custom_reward_func:
@@ -348,6 +318,7 @@ class RemoteExperienceMaker(ABC):
                     )
                     r_refs.append(r)
 
+        # Sync to avoid GPU OOM when colocate models
         if args.colocate_all_models and not self.remote_rm_url:
             ray.get(r_refs)
             ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
@@ -359,6 +330,44 @@ class RemoteExperienceMaker(ABC):
             action_mask=action_mask_list,
             attention_mask=attention_mask_list,
         )
+
+        # Sync to avoid GPU OOM when colocate models
+        if args.colocate_all_models or args.colocate_actor_ref:
+            ray.get(action_log_probs_ref)
+            ray.get(self.actor_model_group.async_run_method(method_name="empty_cache"))
+
+        # Batch call critic model
+        if self.critic_model_group is not None:
+            if args.colocate_critic_reward and not self.remote_rm_url:
+                ray.get(r_refs)
+                ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
+
+            value_ref = self.critic_model_group.async_run_method_batch(
+                method_name="forward",
+                sequences=sequences_list,
+                action_mask=action_mask_list,
+                attention_mask=attention_mask_list,
+            )
+            if args.colocate_all_models or args.colocate_critic_reward:
+                ray.get(value_ref)
+                ray.get(self.critic_model_group.async_run_method(method_name="empty_cache"))
+        else:
+            value_ref = ray.put([[None]] * (len(samples_list) * args.ring_attn_size))
+
+        # Batch call initial model
+        if self.initial_model_group is not None:
+            base_action_log_probs_ref = self.initial_model_group.async_run_method_batch(
+                method_name="forward",
+                sequences=sequences_list,
+                action_mask=action_mask_list,
+                attention_mask=attention_mask_list,
+            )
+
+            if args.colocate_all_models or args.colocate_actor_ref:
+                ray.get(base_action_log_probs_ref)
+                ray.get(self.initial_model_group.async_run_method(method_name="empty_cache"))
+        else:
+            base_action_log_probs_ref = ray.put([[None]] * (len(samples_list) * args.ring_attn_size))
 
         # Wait for all remote calls to complete and flatten the results
         # Note: the results duplicated ring_attn_size times
@@ -378,10 +387,6 @@ class RemoteExperienceMaker(ABC):
             == len(value_list)
             == len(rewards_list)
         )
-
-        # Avoid CUDA OOM when colocate models
-        if args.colocate_actor_ref or args.colocate_all_models:
-            ray.get(self.actor_model_group.async_run_method(method_name="empty_cache"))
 
         # Process results for each sample
         for i, (samples, action_log_probs, base_action_log_probs, value, rewards) in enumerate(
