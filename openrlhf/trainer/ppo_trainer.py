@@ -301,7 +301,7 @@ class PPOTrainer(ABC):
             generate_kwargs["temperature"] = temperature
             generate_kwargs["n_samples_per_prompt"] = n_samples_per_prompt
             samples = self.experience_maker.generate_samples(all_prompts, all_labels, **generate_kwargs)
-            queries_list = [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in samples.sequences]
+            queries_list = self.tokenizer.batch_decode(samples.sequences, skip_special_tokens=False)
 
             # duplicate prompts and labels for each sample
             all_prompts = sum([[prompt] * n_samples_per_prompt for prompt in all_prompts], [])
