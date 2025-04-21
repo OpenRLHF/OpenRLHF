@@ -372,7 +372,13 @@ class RemoteExperienceMaker(ABC):
         else:
             rewards_list = torch.cat(rewards_list, dim=0).chunk(len(samples_list))
 
-        assert len(action_log_probs_list) == len(base_action_log_probs_list) == len(value_list) == len(rewards_list)
+        assert (
+            len(samples_list)
+            == len(action_log_probs_list)
+            == len(base_action_log_probs_list)
+            == len(value_list)
+            == len(rewards_list)
+        )
 
         # Avoid CUDA OOM when colocate models
         if args.colocate_actor_ref or args.colocate_all_models:
