@@ -287,7 +287,7 @@ class RemoteExperienceMaker(ABC):
                 ray.get(base_action_log_probs_ref)
                 ray.get(self.initial_model_group.async_run_method(method_name="empty_cache"))
         else:
-            base_action_log_probs_ref = ray.put([[None]] * len(samples_list))
+            base_action_log_probs_ref = ray.put([[None]] * (len(samples_list) * args.ring_attn_size))
 
         # Batch call critic model
         if self.critic_model_group is not None:
@@ -301,7 +301,7 @@ class RemoteExperienceMaker(ABC):
                 ray.get(value_ref)
                 ray.get(self.critic_model_group.async_run_method(method_name="empty_cache"))
         else:
-            value_ref = ray.put([[None]] * len(samples_list))
+            value_ref = ray.put([[None]] * (len(samples_list) * args.ring_attn_size))
 
         # Batch call reward model
         r_refs = None
@@ -370,6 +370,8 @@ class RemoteExperienceMaker(ABC):
             rewards_list = sum(rewards_list[:: args.ring_attn_size], [])
         else:
             rewards_list = torch.cat(rewards_list, dim=0).chunk(len(samples_list))
+
+        assert len(action_log_probs_list) == len(base_action_log_probs_list) == len(value_list) == len(rewards_list)
 
         # Avoid CUDA OOM when colocate models
         if args.colocate_actor_ref or args.colocate_all_models:
