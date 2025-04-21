@@ -284,7 +284,7 @@ class RemoteExperienceMaker(ABC):
             )
         else:
             queries_list = sum(
-                [self.tokenizer.batch_decode(seq, skip_special_tokens=True) for seq in sequences_list], []
+                [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in sequences_list], []
             )
 
             if self.custom_reward_func:
