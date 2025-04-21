@@ -328,6 +328,7 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument("--aux_loss_coef", type=float, default=0, help="MoE balancing loss")
+    parser.add_argument("--entropy_loss_coef", type=float, default=0, help="Entropy loss coef")
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
     parser.add_argument("--reward_clip_range", type=float, nargs=2, default=(-10, 10), help="Reward clip range")
 
@@ -453,6 +454,11 @@ if __name__ == "__main__":
     else:
         if args.kl_estimator not in ["k1"]:
             print(f"Recommend setting {args.kl_estimator} to 'k1' when not using KL as a loss.")
+
+    assert (
+        args.n_samples_per_prompt * args.rollout_batch_size // args.micro_rollout_batch_size
+        >= args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size
+    ), "The number of sample batches must be greater than or equal to the effective number of actor processes."
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub

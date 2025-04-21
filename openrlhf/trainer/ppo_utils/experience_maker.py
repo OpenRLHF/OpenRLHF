@@ -287,7 +287,7 @@ class RemoteExperienceMaker(ABC):
                 ray.get(base_action_log_probs_ref)
                 ray.get(self.initial_model_group.async_run_method(method_name="empty_cache"))
         else:
-            base_action_log_probs_ref = ray.put([[None]] * len(samples_list))
+            base_action_log_probs_ref = ray.put([[None]] * (len(samples_list) * args.ring_attn_size))
 
         # Batch call critic model
         if self.critic_model_group is not None:
@@ -301,7 +301,7 @@ class RemoteExperienceMaker(ABC):
                 ray.get(value_ref)
                 ray.get(self.critic_model_group.async_run_method(method_name="empty_cache"))
         else:
-            value_ref = ray.put([[None]] * len(samples_list))
+            value_ref = ray.put([[None]] * (len(samples_list) * args.ring_attn_size))
 
         # Batch call reward model
         r_refs = None
@@ -361,15 +361,23 @@ class RemoteExperienceMaker(ABC):
         )
 
         # Wait for all remote calls to complete and flatten the results
+        # Note: the results duplicated ring_attn_size times
         action_log_probs_list = sum(ray.get(action_log_probs_ref)[:: args.ring_attn_size], [])
         base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref)[:: args.ring_attn_size], [])
         value_list = sum(ray.get(value_ref)[:: args.ring_attn_size], [])
         rewards_list = ray.get(r_refs)
-
         if self.remote_rm_url is None:
             rewards_list = sum(rewards_list[:: args.ring_attn_size], [])
         else:
             rewards_list = torch.cat(rewards_list, dim=0).chunk(len(samples_list))
+
+        assert (
+            len(samples_list)
+            == len(action_log_probs_list)
+            == len(base_action_log_probs_list)
+            == len(value_list)
+            == len(rewards_list)
+        )
 
         # Avoid CUDA OOM when colocate models
         if args.colocate_actor_ref or args.colocate_all_models:
@@ -387,8 +395,7 @@ class RemoteExperienceMaker(ABC):
                 )
             else:
                 kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
-
-            kl_mean = masked_mean(kl, None, dim=-1)
+            kl_mean = masked_mean(kl, samples.action_mask, dim=-1)
 
             sequences = samples.sequences
             attention_mask = samples.attention_mask

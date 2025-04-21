@@ -122,6 +122,12 @@ def masked_normalize(tensor: torch.Tensor, mask: torch.Tensor, dim: int = 1, eps
     return mean_centered * var.clamp(min=eps).rsqrt()
 
 
+def compute_entropy(logits: torch.Tensor):
+    pd = torch.nn.functional.softmax(logits, dim=-1)
+    entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)
+    return entropy
+
+
 def process_sequences(sequences: torch.Tensor, input_len, eos_token_id, pad_token_id):
     """
     Process generated sequences to create attention masks and action masks.

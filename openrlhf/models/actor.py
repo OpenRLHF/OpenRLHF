@@ -9,7 +9,9 @@ from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
-from .utils import log_probs_from_logits, process_sequences
+from .utils import compute_entropy, log_probs_from_logits, process_sequences
+
+compute_entropy = torch.compile(compute_entropy)
 
 
 class Actor(nn.Module):
@@ -174,6 +176,7 @@ class Actor(nn.Module):
         return_logprobs=False,
         ring_attn_group: Optional[dist.ProcessGroup] = None,
         packed_seq_lens: Optional[list[int]] = None,
+        return_entropy=False,
     ) -> torch.Tensor:
         """Returns action log probs"""
         batch, seqlen = sequences.size()
@@ -192,6 +195,13 @@ class Actor(nn.Module):
         output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids)
         # https://github.com/OpenRLHF/OpenRLHF/pull/634
         output["logits"] = output["logits"].to(torch.float32)
+
+        if return_entropy:
+            assert return_output
+            entropy = compute_entropy(output["logits"])
+            if self.packing_samples:
+                entropy = gather_and_pad_tensor(entropy, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
+            setattr(output, "entropy", entropy[:, :-1])
 
         return_action_log_probs = action_mask is not None
         if not return_action_log_probs and not return_logprobs:
