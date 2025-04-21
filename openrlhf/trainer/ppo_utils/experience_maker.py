@@ -366,7 +366,6 @@ class RemoteExperienceMaker(ABC):
         base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref)[:: args.ring_attn_size], [])
         value_list = sum(ray.get(value_ref)[:: args.ring_attn_size], [])
         rewards_list = ray.get(r_refs)
-
         if self.remote_rm_url is None:
             rewards_list = sum(rewards_list[:: args.ring_attn_size], [])
         else:
