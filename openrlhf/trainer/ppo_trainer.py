@@ -254,8 +254,13 @@ class PPOTrainer(ABC):
                 }
                 # Add generated samples to wandb using Table
                 if "generated_samples" in logs_dict:
-                    self.generated_samples_table.add_data(global_step, logs_dict["generated_samples"])
-                    logs["train/generated_samples"] = self.generated_samples_table
+                    # https://github.com/wandb/wandb/issues/2981#issuecomment-1997445737
+                    new_table = self._wandb.Table(
+                        columns=self.generated_samples_table.columns, data=self.generated_samples_table.data
+                    )
+                    new_table.add_data(global_step, logs_dict["generated_samples"])
+                    logs["train/generated_samples"] = new_table
+                    self.generated_samples_table = new_table
                 self._wandb.log(logs)
             # TensorBoard
             elif self._tensorboard is not None:
