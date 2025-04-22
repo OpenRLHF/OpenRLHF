@@ -352,7 +352,8 @@ class PPOTrainer(ABC):
 
                 # Calculate pass@k and pass@1
                 prompt_rewards = rewards[i]
-                global_metrics[datasource][f"pass{n_samples_per_prompt}"] += prompt_rewards.max().float().item()
+                if n_samples_per_prompt > 1:
+                    global_metrics[datasource][f"pass{n_samples_per_prompt}"] += prompt_rewards.max().float().item()
                 global_metrics[datasource]["pass1"] += prompt_rewards.mean().float().item()
                 global_metrics[datasource]["count"] += 1
 
