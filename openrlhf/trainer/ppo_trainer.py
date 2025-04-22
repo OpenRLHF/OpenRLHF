@@ -107,7 +107,7 @@ class PPOTrainer(ABC):
             wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
             wandb.define_metric("eval/epoch")
             wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
-            self.generated_samples_table = wandb.Table(columns=["Global Step", "Generated Sample", "Reward"])
+            self.generated_samples_table = wandb.Table(columns=["global_step", "text", "reward"])
 
         # Initialize TensorBoard writer if wandb is not available
         if self.strategy.args.use_tensorboard and self._wandb is None:
@@ -268,7 +268,7 @@ class PPOTrainer(ABC):
                     if k == "generated_samples":
                         # Record generated samples in TensorBoard using simple text format
                         text, reward = v
-                        formatted_text = f"Sample:\n{text}\n\nReward: {reward:.1f}"
+                        formatted_text = f"Sample:\n{text}\n\nReward: {reward:.4f}"
                         self._tensorboard.add_text("train/generated_samples", formatted_text, global_step)
                     else:
                         self._tensorboard.add_scalar(f"train/{k}", v, global_step)
