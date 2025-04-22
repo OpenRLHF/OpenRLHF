@@ -87,6 +87,7 @@ class PPOTrainer(ABC):
         # wandb/tensorboard setting
         self._wandb = None
         self._tensorboard = None
+        self.generated_samples_table = None
         if self.strategy.args.use_wandb:
             import wandb
 
@@ -106,6 +107,7 @@ class PPOTrainer(ABC):
             wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
             wandb.define_metric("eval/epoch")
             wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
+            self.generated_samples_table = wandb.Table(columns=["Global step", "Generated Sample"])
 
         # Initialize TensorBoard writer if wandb is not available
         if self.strategy.args.use_tensorboard and self._wandb is None:
@@ -158,15 +160,15 @@ class PPOTrainer(ABC):
             pbar = tqdm(
                 range(self.prompts_dataloader.__len__()),
                 desc=f"Episode [{episode + 1}/{args.num_episodes}]",
-                disable=not self.strategy.is_rank_0(),
+                disable=False,
             )
 
             for _, rand_prompts, labels in self.prompts_dataloader:
                 experiences = self.experience_maker.make_experience_list(rand_prompts, labels, **self.generate_kwargs)
-                output = self.tokenizer.batch_decode(
+                sample0 = self.tokenizer.batch_decode(
                     experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True
                 )
-                self.strategy.print(output)
+                print(sample0)
                 refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences)
                 if self.critic_model_group is not None:
                     refs.extend(
@@ -180,6 +182,8 @@ class PPOTrainer(ABC):
                     self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
                 pbar.set_postfix(status)
 
+                # Add generated samples to status dictionary
+                status["generated_samples"] = sample0[0]
                 # logs/checkpoints
                 client_states = {"consumed_samples": steps * args.rollout_batch_size}
                 self.save_logs_and_checkpoints(args, steps, pbar, status, client_states)
@@ -187,9 +191,9 @@ class PPOTrainer(ABC):
                 pbar.update()
                 steps = steps + 1
 
-        if self._wandb is not None and self.strategy.is_rank_0():
+        if self._wandb is not None:
             self._wandb.finish()
-        if self._tensorboard is not None and self.strategy.is_rank_0():
+        if self._tensorboard is not None:
             self._tensorboard.close()
 
     def ppo_train(self, global_steps):
@@ -240,7 +244,7 @@ class PPOTrainer(ABC):
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         if global_step % args.logging_steps == 0:
             # wandb
-            if self._wandb is not None and self.strategy.is_rank_0():
+            if self._wandb is not None:
                 logs = {
                     "train/%s" % k: v
                     for k, v in {
@@ -248,11 +252,19 @@ class PPOTrainer(ABC):
                         "global_step": global_step,
                     }.items()
                 }
+                # Add generated samples to wandb using Table
+                if "generated_samples" in logs_dict:
+                    self.generated_samples_table.add_data(global_step, logs_dict["generated_samples"])
+                    logs["train/generated_samples"] = self.generated_samples_table
                 self._wandb.log(logs)
             # TensorBoard
-            elif self._tensorboard is not None and self.strategy.is_rank_0():
+            elif self._tensorboard is not None:
                 for k, v in logs_dict.items():
-                    self._tensorboard.add_scalar(f"train/{k}", v, global_step)
+                    if k == "generated_samples":
+                        # Record generated samples in TensorBoard using text type
+                        self._tensorboard.add_text("train/generated_samples", v, global_step)
+                    else:
+                        self._tensorboard.add_scalar(f"train/{k}", v, global_step)
 
         # TODO: Add evaluation mechanism for PPO
         if global_step % args.eval_steps == 0 and self.eval_dataloader and len(self.eval_dataloader) > 0:
@@ -378,9 +390,8 @@ class PPOTrainer(ABC):
 
         end_time = time.time()
         duration = end_time - start_time
-        if self.strategy.is_rank_0():
-            time_str = str(timedelta(seconds=duration)).split(".")[0]
-            logger.info(f"✨ Evaluation completed in {time_str}")
+        time_str = str(timedelta(seconds=duration)).split(".")[0]
+        logger.info(f"✨ Evaluation completed in {time_str}")
 
     def prepare_datasets(self):
         args = self.args
