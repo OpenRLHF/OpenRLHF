@@ -107,7 +107,7 @@ class PPOTrainer(ABC):
             wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
             wandb.define_metric("eval/epoch")
             wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
-            self.generated_samples_table = wandb.Table(columns=["Global step", "Generated Sample"])
+            self.generated_samples_table = wandb.Table(columns=["Global Step", "Generated Sample", "Reward"])
 
         # Initialize TensorBoard writer if wandb is not available
         if self.strategy.args.use_tensorboard and self._wandb is None:
@@ -183,7 +183,7 @@ class PPOTrainer(ABC):
                 pbar.set_postfix(status)
 
                 # Add generated samples to status dictionary
-                status["generated_samples"] = sample0[0]
+                status["generated_samples"] = [sample0[0], experiences[0].info["reward"][0]]
                 # logs/checkpoints
                 client_states = {"consumed_samples": steps * args.rollout_batch_size}
                 self.save_logs_and_checkpoints(args, steps, pbar, status, client_states)
@@ -245,6 +245,15 @@ class PPOTrainer(ABC):
         if global_step % args.logging_steps == 0:
             # wandb
             if self._wandb is not None:
+                # Add generated samples to wandb using Table
+                if "generated_samples" in logs_dict:
+                    # https://github.com/wandb/wandb/issues/2981#issuecomment-1997445737
+                    new_table = self._wandb.Table(
+                        columns=self.generated_samples_table.columns, data=self.generated_samples_table.data
+                    )
+                    new_table.add_data(global_step, *logs_dict.pop("generated_samples"))
+                    self.generated_samples_table = new_table
+                    self._wandb.log({"train/generated_samples": new_table})
                 logs = {
                     "train/%s" % k: v
                     for k, v in {
@@ -252,22 +261,15 @@ class PPOTrainer(ABC):
                         "global_step": global_step,
                     }.items()
                 }
-                # Add generated samples to wandb using Table
-                if "generated_samples" in logs_dict:
-                    # https://github.com/wandb/wandb/issues/2981#issuecomment-1997445737
-                    new_table = self._wandb.Table(
-                        columns=self.generated_samples_table.columns, data=self.generated_samples_table.data
-                    )
-                    new_table.add_data(global_step, logs_dict["generated_samples"])
-                    logs["train/generated_samples"] = new_table
-                    self.generated_samples_table = new_table
                 self._wandb.log(logs)
             # TensorBoard
             elif self._tensorboard is not None:
                 for k, v in logs_dict.items():
                     if k == "generated_samples":
-                        # Record generated samples in TensorBoard using text type
-                        self._tensorboard.add_text("train/generated_samples", v, global_step)
+                        # Record generated samples in TensorBoard using simple text format
+                        text, reward = v
+                        formatted_text = f"Sample:\n{text}\n\nReward: {reward:.1f}"
+                        self._tensorboard.add_text("train/generated_samples", formatted_text, global_step)
                     else:
                         self._tensorboard.add_scalar(f"train/{k}", v, global_step)
 
