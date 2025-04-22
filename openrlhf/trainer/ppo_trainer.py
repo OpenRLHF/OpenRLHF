@@ -438,7 +438,13 @@ class PPOTrainer(ABC):
 
         self.prompts_dataloader = prompts_dataloader
         self.eval_dataloader = eval_dataloader
-        self.max_steps = len(prompts_dataset) * args.n_samples_per_prompt // args.train_batch_size * args.num_episodes * args.max_epochs
+        self.max_steps = (
+            len(prompts_dataset)
+            * args.n_samples_per_prompt
+            // args.train_batch_size
+            * args.num_episodes
+            * args.max_epochs
+        )
 
     def get_max_steps(self):
         return self.max_steps
