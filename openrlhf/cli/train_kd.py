@@ -57,6 +57,7 @@ def train(args):
         strategy,
         args.seed,
         max_count=args.max_samples,
+        dataset_split=args.dataset_split,
     )
 
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
@@ -81,6 +82,7 @@ def train(args):
             args.eval_dataset,
             None,  # No probability sampling for eval datasets
             strategy,
+            dataset_split=args.eval_split,
         )
         eval_dataset = SFTDataset(
             eval_data,
@@ -208,7 +210,9 @@ if __name__ == "__main__":
     # Custom dataset
     parser.add_argument("--dataset", type=str, default=None, help="Path to the training dataset")
     parser.add_argument("--dataset_probs", type=str, default=None, help="Sampling probabilities for training datasets")
-    parser.add_argument("--eval_dataset", type=str, default=None, help="Paths to the evaluation datasets")
+    parser.add_argument("--eval_dataset", type=str, default=None, help="Path to the evaluation dataset")
+    parser.add_argument("--dataset_split", type=str, default="train")
+    parser.add_argument("--eval_split", type=str, default="test")
     parser.add_argument("--max_samples", type=int, default=1000000, help="Maximum number of samples to use")
 
     parser.add_argument("--input_key", type=str, default="input", help="JSON dataset key")

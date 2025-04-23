@@ -49,6 +49,7 @@ def train(args):
         strategy,
         args.seed,
         max_count=args.max_samples,
+        dataset_split=args.dataset_split,
     )
 
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
@@ -75,6 +76,7 @@ def train(args):
             args.eval_dataset,
             None,  # No probability sampling for eval datasets
             strategy,
+            dataset_split=args.eval_split,
         )
     else:
         # Used for calculating mean/std for reward normalization
@@ -227,8 +229,12 @@ if __name__ == "__main__":
     parser.add_argument("--packing_samples", action="store_true", default=False)
 
     # Custom dataset
-    parser.add_argument("--dataset", type=str, default=None)
-    parser.add_argument("--dataset_probs", type=str, default="1.0", help="sampling probs for datasets")
+    parser.add_argument("--dataset", type=str, default=None, help="Path to the training dataset")
+    parser.add_argument("--dataset_probs", type=str, default=None, help="Sampling probabilities for training datasets")
+    parser.add_argument("--eval_dataset", type=str, default=None, help="Path to the evaluation dataset")
+    parser.add_argument("--dataset_split", type=str, default="train")
+    parser.add_argument("--eval_split", type=str, default="train")
+    parser.add_argument("--max_samples", type=int, default=1000000, help="Maximum number of samples to use")
     parser.add_argument("--prompt_key", type=str, default=None)
     parser.add_argument("--chosen_key", type=str, default="chosen")
     parser.add_argument("--rejected_key", type=str, default="rejected")
@@ -237,8 +243,6 @@ if __name__ == "__main__":
         "--apply_chat_template", action="store_true", default=False, help="Use HF tokenizer chat template"
     )
     parser.add_argument("--tokenizer_chat_template", type=str, default=None)
-    parser.add_argument("--max_samples", type=int, default=1e8, help="Max number of samples")
-    parser.add_argument("--eval_dataset", type=str, default=None, help="Path to the evaluation dataset")
     parser.add_argument("--max_len", type=int, default=512)
 
     # wandb parameters
