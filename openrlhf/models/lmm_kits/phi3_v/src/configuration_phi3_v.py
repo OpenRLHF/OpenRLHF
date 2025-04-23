@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-""" Phi-3-V model configuration"""
+"""Phi-3-V model configuration"""
 
 
 from transformers.configuration_utils import PretrainedConfig
@@ -96,7 +96,7 @@ class Phi3VConfig(PretrainedConfig):
         sliding_window (`int`, *optional*):
             Sliding window attention window size. If `None`, no sliding window is applied.
         embd_layer (`str`, *optional*, defaults to `"default"`):
-            The embedding layer to use. Can be either `"default"` or `"image"`. "default" uses the standard embedding for text. 
+            The embedding layer to use. Can be either `"default"` or `"image"`. "default" uses the standard embedding for text.
 
     Example:
 
@@ -167,7 +167,6 @@ class Phi3VConfig(PretrainedConfig):
         self._rope_scaling_validation()
         self.sliding_window = sliding_window
         self.embd_layer = embd_layer
-
 
         super().__init__(
             bos_token_id=bos_token_id,

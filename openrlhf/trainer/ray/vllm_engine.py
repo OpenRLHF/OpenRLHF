@@ -119,7 +119,7 @@ def create_vllm_engines(
     shared_pg=None,
     gpu_memory_utilization=None,
     vllm_enable_sleep=False,
-    **engine_kwargs
+    **engine_kwargs,
 ):
     import vllm
 
@@ -174,7 +174,7 @@ def create_vllm_engines(
                 num_gpus=0.2 if use_hybrid_engine else 1,
                 enable_sleep_mode=vllm_enable_sleep,
                 noset_visible_devices=noset_visible_devices,
-                **engine_kwargs
+                **engine_kwargs,
             )
         )
 

@@ -5,15 +5,19 @@ import torch
 import torch.nn as nn
 from peft import LoraConfig, get_peft_model
 from peft.tuners.lora import LoraLayer
-from transformers import BitsAndBytesConfig, AutoConfig
+from transformers import AutoConfig, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
+from openrlhf.models.lmm_kits.base.data_processor import MMInputs
+from openrlhf.models.lmm_kits.utils import get_generation_cls
 from openrlhf.utils.logging_utils import init_logger
 
-from .ring_attn_utils import set_hacked_position_ids, clear_hacked_position_ids
-from openrlhf.models.lmm_kits.utils import get_generation_cls
-from openrlhf.models.lmm_kits.base.data_processor import MMInputs
-from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
+from .ring_attn_utils import (
+    clear_hacked_position_ids,
+    gather_and_pad_tensor,
+    set_hacked_position_ids,
+    unpad_and_slice_tensor,
+)
 
 logger = init_logger(__name__)
 
@@ -70,10 +74,11 @@ def get_llm_for_sequence_regression(
     ), f"invalid model_type: {model_type}, should be critic or reward."
 
     base_class = get_generation_cls(model_name_or_path)
-    from transformers.models.auto.configuration_auto import CONFIG_MAPPING
     from transformers.configuration_utils import PretrainedConfig
+    from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+
     base_model_type = PretrainedConfig.from_pretrained(model_name_or_path).model_type
-    config = AutoConfig.from_pretrained(model_name_or_path,trust_remote_code= base_model_type not in CONFIG_MAPPING)
+    config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=base_model_type not in CONFIG_MAPPING)
     config.normalize_reward = normalize_reward
     config._attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
 
@@ -202,20 +207,32 @@ def _get_reward_model(base_llm_model, value_head_prefix="score", packing_samples
             eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
             forward_attention_mask = attention_mask
             if self.packing_samples:
-                packed_position_ids = super().get_position_ids(input_ids,attention_mask=attention_mask,packing=True, **visual_inputs.emb_inputs)
-                input_ids, hacked_position_ids, _, ring_attn_pad_len, indices, inputs_embeds, split_position_ids = unpad_and_slice_tensor(
-                    input_ids, attention_mask, ring_attn_group, inputs_embeds, packed_position_ids
+                packed_position_ids = super().get_position_ids(
+                    input_ids, attention_mask=attention_mask, packing=True, **visual_inputs.emb_inputs
                 )
-                position_ids = super().offset_split_position_ids(split_position_ids, hacked_position_ids) # this is true position_ids
-                #position_ids is directly hacked into flash_attn_forward to distinguish between different sequences
+                input_ids, hacked_position_ids, _, ring_attn_pad_len, indices, inputs_embeds, split_position_ids = (
+                    unpad_and_slice_tensor(
+                        input_ids, attention_mask, ring_attn_group, inputs_embeds, packed_position_ids
+                    )
+                )
+                position_ids = super().offset_split_position_ids(
+                    split_position_ids, hacked_position_ids
+                )  # this is true position_ids
+                # position_ids is directly hacked into flash_attn_forward to distinguish between different sequences
                 set_hacked_position_ids(hacked_position_ids)
                 forward_attention_mask = None
             else:
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
-                position_ids = super().get_position_ids(input_ids,attention_mask=attention_mask,packing=False, **visual_inputs.emb_inputs)
+                position_ids = super().get_position_ids(
+                    input_ids, attention_mask=attention_mask, packing=False, **visual_inputs.emb_inputs
+                )
 
             outputs = super().forward(
-                inputs_embeds=inputs_embeds, attention_mask=forward_attention_mask, position_ids=position_ids,output_hidden_states=True, **visual_inputs.forward_inputs
+                inputs_embeds=inputs_embeds,
+                attention_mask=forward_attention_mask,
+                position_ids=position_ids,
+                output_hidden_states=True,
+                **visual_inputs.forward_inputs,
             )
             clear_hacked_position_ids()
             if "last_hidden_state" in outputs:
@@ -276,20 +293,32 @@ def _get_critic_model(base_llm_model, value_head_prefix="score", packing_samples
             batch, seqlen = input_ids.size()
             forward_attention_mask = attention_mask
             if self.packing_samples:
-                packed_position_ids = super().get_position_ids(input_ids,attention_mask=attention_mask,packing=True, **visual_inputs.emb_inputs)
-                input_ids, hacked_position_ids, _, ring_attn_pad_len, indices, inputs_embeds, split_position_ids = unpad_and_slice_tensor(
-                    input_ids, attention_mask, ring_attn_group, inputs_embeds, packed_position_ids
+                packed_position_ids = super().get_position_ids(
+                    input_ids, attention_mask=attention_mask, packing=True, **visual_inputs.emb_inputs
                 )
-                position_ids = super().offset_split_position_ids(split_position_ids, hacked_position_ids) # this is true position_ids
-                #position_ids is directly hacked into flash_attn_forward to distinguish between different sequences
+                input_ids, hacked_position_ids, _, ring_attn_pad_len, indices, inputs_embeds, split_position_ids = (
+                    unpad_and_slice_tensor(
+                        input_ids, attention_mask, ring_attn_group, inputs_embeds, packed_position_ids
+                    )
+                )
+                position_ids = super().offset_split_position_ids(
+                    split_position_ids, hacked_position_ids
+                )  # this is true position_ids
+                # position_ids is directly hacked into flash_attn_forward to distinguish between different sequences
                 set_hacked_position_ids(hacked_position_ids)
                 forward_attention_mask = None
             else:
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
-                position_ids = super().get_position_ids(input_ids,attention_mask=attention_mask,packing=False, **visual_inputs.emb_inputs)
+                position_ids = super().get_position_ids(
+                    input_ids, attention_mask=attention_mask, packing=False, **visual_inputs.emb_inputs
+                )
 
             outputs = super().forward(
-                inputs_embeds=inputs_embeds, attention_mask=forward_attention_mask, position_ids=position_ids,output_hidden_states=True, **visual_inputs.forward_inputs
+                inputs_embeds=inputs_embeds,
+                attention_mask=forward_attention_mask,
+                position_ids=position_ids,
+                output_hidden_states=True,
+                **visual_inputs.forward_inputs,
             )
             clear_hacked_position_ids()
 

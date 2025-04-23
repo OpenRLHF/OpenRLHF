@@ -1,7 +1,8 @@
-from typing import List, Dict
+from typing import Dict, List
 
 import torch
 from qwen_vl_utils import process_vision_info
+
 from ..base.data_processor import BaseDataProcessor, MMInputs
 
 
@@ -18,9 +19,7 @@ class Qwen2_5_VLDataProcessor(BaseDataProcessor):
     ) -> MMInputs:
         messages = self._format_messages(messages)
         processor = self.processor
-        texts = processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
+        texts = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         image_inputs, video_inputs = process_vision_info(messages)
 
         batch = processor(
@@ -34,8 +33,8 @@ class Qwen2_5_VLDataProcessor(BaseDataProcessor):
             return_tensors=return_tensors,
         )
         emb_inputs, extra_info = self._split_input_dict(batch)
-        return MMInputs(emb_inputs=emb_inputs,extra_info=extra_info).to(device)
-    
+        return MMInputs(emb_inputs=emb_inputs, extra_info=extra_info).to(device)
+
     def _split_input_dict(self, input_dict: Dict) -> tuple[Dict, Dict]:
         extra_info = {}
         if "input_ids" in input_dict:
@@ -49,7 +48,7 @@ class Qwen2_5_VLDataProcessor(BaseDataProcessor):
         batch = {}
         # collect all keys
         for inp in inputs:
-            batch.update({k:None for k,v in inp.items() if v is not None})
+            batch.update({k: None for k, v in inp.items() if v is not None})
         for k in batch.keys():
             if k in ["input_ids", "attention_mask"]:
                 batch[k] = torch.stack([inp[k] for inp in inputs if k in inp], dim=0)
@@ -60,7 +59,7 @@ class Qwen2_5_VLDataProcessor(BaseDataProcessor):
                 raise ValueError(f"Unknown key {k} for Qwen2VLDataProcessor")
 
         emb_inputs, extra_info = self._split_input_dict(batch)
-        return MMInputs(emb_inputs=emb_inputs,extra_info=extra_info)
+        return MMInputs(emb_inputs=emb_inputs, extra_info=extra_info)
 
     def split_input_batch(self, batch: MMInputs) -> List[MMInputs]:
         batch_size = len(batch["input_ids"])
@@ -74,12 +73,8 @@ class Qwen2_5_VLDataProcessor(BaseDataProcessor):
                 for i in range(batch_size):
                     batch_kwargs[i][k] = None
 
-        if "pixel_values" in keys and (
-            "input_ids" not in keys or "image_grid_thw" not in keys
-        ):
-            raise ValueError(
-                "Cannot split batch with pixel_values without input_ids and image_grid_thw"
-            )
+        if "pixel_values" in keys and ("input_ids" not in keys or "image_grid_thw" not in keys):
+            raise ValueError("Cannot split batch with pixel_values without input_ids and image_grid_thw")
         if "image_grid_thw" in keys and ("input_ids" not in keys):
             raise ValueError("Cannot split batch with image_grid_thw without input_ids")
         for k in ["input_ids", "attention_mask"]:
@@ -123,9 +118,10 @@ class Qwen2_5_VLDataProcessor(BaseDataProcessor):
         mm_inputs_list = []
         for b in batch_kwargs:
             emb_inputs, extra_info = self._split_input_dict(b)
-            mm_inputs_list.append(MMInputs(emb_inputs=emb_inputs,extra_info=extra_info))
+            mm_inputs_list.append(MMInputs(emb_inputs=emb_inputs, extra_info=extra_info))
         return mm_inputs_list
-    
+
+
 DataProcessor = Qwen2_5_VLDataProcessor
 
 __all__ = ["DataProcessor"]

@@ -8,10 +8,15 @@ from peft.tuners.lora import LoraLayer
 from transformers import BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
-from .ring_attn_utils import set_hacked_position_ids, clear_hacked_position_ids
-from openrlhf.models.lmm_kits.utils import get_generation_cls, hack_peft_model
 from openrlhf.models.lmm_kits.base.data_processor import MMInputs
-from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
+from openrlhf.models.lmm_kits.utils import get_generation_cls, hack_peft_model
+
+from .ring_attn_utils import (
+    clear_hacked_position_ids,
+    gather_and_pad_tensor,
+    set_hacked_position_ids,
+    unpad_and_slice_tensor,
+)
 from .utils import compute_entropy, log_probs_from_logits, process_sequences
 
 compute_entropy = torch.compile(compute_entropy)
@@ -191,20 +196,37 @@ class Actor(nn.Module):
         batch, seqlen = sequences.size()
         foward_attention_mask = attention_mask
         if self.packing_samples:
-            packed_position_ids = self.model.get_position_ids(sequences, attention_mask=attention_mask, packing=True, **visual_inputs.emb_inputs)
-            sequences, hacked_position_ids, rolled_sequences, ring_attn_pad_len, indices, inputs_embeds, split_position_ids = unpad_and_slice_tensor(
-                sequences, attention_mask, ring_attn_group, inputs_embeds, packed_position_ids
+            packed_position_ids = self.model.get_position_ids(
+                sequences, attention_mask=attention_mask, packing=True, **visual_inputs.emb_inputs
             )
-            position_ids = self.model.offset_split_position_ids(split_position_ids, hacked_position_ids) # this is true position_ids
-            #position_ids is directly hacked into flash_attn_forward to distinguish between different sequences
+            (
+                sequences,
+                hacked_position_ids,
+                rolled_sequences,
+                ring_attn_pad_len,
+                indices,
+                inputs_embeds,
+                split_position_ids,
+            ) = unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group, inputs_embeds, packed_position_ids)
+            position_ids = self.model.offset_split_position_ids(
+                split_position_ids, hacked_position_ids
+            )  # this is true position_ids
+            # position_ids is directly hacked into flash_attn_forward to distinguish between different sequences
             foward_attention_mask = None
             set_hacked_position_ids(hacked_position_ids)
         else:
             # https://github.com/OpenRLHF/OpenRLHF/issues/217
             rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
-            position_ids = self.model.get_position_ids(sequences, attention_mask=attention_mask, packing=False, **visual_inputs.emb_inputs)
+            position_ids = self.model.get_position_ids(
+                sequences, attention_mask=attention_mask, packing=False, **visual_inputs.emb_inputs
+            )
 
-        output = self.model(inputs_embeds=inputs_embeds, attention_mask=foward_attention_mask, position_ids=position_ids, **visual_inputs.forward_inputs)
+        output = self.model(
+            inputs_embeds=inputs_embeds,
+            attention_mask=foward_attention_mask,
+            position_ids=position_ids,
+            **visual_inputs.forward_inputs,
+        )
         clear_hacked_position_ids()
         # https://github.com/OpenRLHF/OpenRLHF/pull/634
         output["logits"] = output["logits"].to(torch.float32)

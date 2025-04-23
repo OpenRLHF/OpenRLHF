@@ -1,29 +1,27 @@
-from contextlib import ExitStack
-import itertools
 import math
 import os
 import socket
 from abc import ABC
+from contextlib import ExitStack
 from typing import Dict, List, Optional, Union
 
 import deepspeed
 import ray
 import torch
 import torch.distributed
+from peft.peft_model import PeftModel
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
 from openrlhf.models import Actor, PolicyLoss
+from openrlhf.models.lmm_kits.base.data_processor import MMInputs
+from openrlhf.models.lmm_kits.utils import get_data_processor
 from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
-from openrlhf.utils import get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
-from openrlhf.models.lmm_kits.utils import get_data_processor
-from openrlhf.models.lmm_kits.base.data_processor import MMInputs
-from peft.peft_model import PeftModel
 from openrlhf.utils.distributed_util import init_process_group, torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.logging_utils import init_logger
 
@@ -80,8 +78,13 @@ class ActorPPOTrainer(ABC):
         self.aux_loss = self.args.aux_loss_coef > 1e-8
 
         self.replay_buffer = NaiveReplayBuffer(
-            micro_train_batch_size, self.data_processor, buffer_limit, buffer_cpu_offload, getattr(self.args, "packing_samples", False), False
-        ) # Dynamic sampling is controlled by the single controller. We don't need to store extra buffers here.
+            micro_train_batch_size,
+            self.data_processor,
+            buffer_limit,
+            buffer_cpu_offload,
+            getattr(self.args, "packing_samples", False),
+            False,
+        )  # Dynamic sampling is controlled by the single controller. We don't need to store extra buffers here.
 
         # Init torch group for weights sync
         backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
@@ -266,34 +269,38 @@ class ActorPPOTrainer(ABC):
             status[k] = v.mean().item()
         return status
 
-    def _get_leaf_modules(self,model,use_lora):
+    def _get_leaf_modules(self, model, use_lora):
         leaf_modules = []
-        lora_module_keyword = ["lora_","base_layer"]
+        lora_module_keyword = ["lora_", "base_layer"]
+
         class IsoParamWrapper:
             """
             Some modules may have isolated parameters that are not in submodules.
             This class wraps such parameters in a module so that they can be treated uniformly.
             """
+
             def __init__(self, name, parameter):
                 self.name = name
                 self.parameter = parameter
 
-            def named_parameters(self,prefix=None):
+            def named_parameters(self, prefix=None):
                 # self.name is already the full name. No need to add prefix
-                return [(self.name,self.parameter)]
+                return [(self.name, self.parameter)]
 
-        for name,module in model.named_modules():
-            if len(list(module.children())) == 0 or (use_lora and hasattr(module,"base_layer")):
-                leaf_modules.append((name,module))
+        for name, module in model.named_modules():
+            if len(list(module.children())) == 0 or (use_lora and hasattr(module, "base_layer")):
+                leaf_modules.append((name, module))
             else:
-                #find isolated parameter
-                for pname, p in module.named_parameters(recurse=False,prefix=name):
-                    leaf_modules.append((pname,IsoParamWrapper(pname,p)))
+                # find isolated parameter
+                for pname, p in module.named_parameters(recurse=False, prefix=name):
+                    leaf_modules.append((pname, IsoParamWrapper(pname, p)))
         if use_lora:
-            leaf_modules = [(n,m) for n,m in leaf_modules if not any([keyword in n for keyword in lora_module_keyword])]
+            leaf_modules = [
+                (n, m) for n, m in leaf_modules if not any([keyword in n for keyword in lora_module_keyword])
+            ]
         return leaf_modules
 
-    def _broadcast_module(self,module,prefix=None,empty_cache=False,need_gather=False):
+    def _broadcast_module(self, module, prefix=None, empty_cache=False, need_gather=False):
         count, num_params = 0, len(list(module.named_parameters()))
         for name, param in module.named_parameters(prefix=prefix):
             # broadcast
@@ -305,7 +312,10 @@ class ActorPPOTrainer(ABC):
                     shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
                     refs = [
                         engine.update_weight.remote(
-                            name, dtype=param.dtype, shape=shape, empty_cache=empty_cache and count==num_params,
+                            name,
+                            dtype=param.dtype,
+                            shape=shape,
+                            empty_cache=empty_cache and count == num_params,
                         )
                         for engine in self.vllm_engines
                     ]
@@ -345,7 +355,7 @@ class ActorPPOTrainer(ABC):
                                 dtype=param.dtype,
                                 shape=shape,
                                 ipc_handles=ipc_handles,
-                                empty_cache=empty_cache and count==num_params,
+                                empty_cache=empty_cache and count == num_params,
                             )
                             for engine in self.vllm_engines
                         ]
@@ -368,26 +378,28 @@ class ActorPPOTrainer(ABC):
             model = lora_model.model
             use_lora = True
 
-        leaf_modules = self._get_leaf_modules(model,use_lora) # parameters of leaf_modules should not overlap
+        leaf_modules = self._get_leaf_modules(model, use_lora)  # parameters of leaf_modules should not overlap
         count, num_modules = 0, len(leaf_modules)
-        for key,module in leaf_modules:
+        for key, module in leaf_modules:
             count += 1
             with ExitStack() as stack:
                 need_gather = self.strategy.args.zero_stage == 3
                 module_name = key.split(".")[-1]
                 raw_module = module
                 if use_lora and hasattr(raw_module, "base_layer"):
-                    #This is a lora module
-                    stack.enter_context(deepspeed.zero.GatheredParameters(raw_module.parameters(), enabled=need_gather))
+                    # This is a lora module
+                    stack.enter_context(
+                        deepspeed.zero.GatheredParameters(raw_module.parameters(), enabled=need_gather)
+                    )
                     raw_module.merge(safe_merge=True)
                     # we don't really replace the module, but we utilize _replace_module to get the merged module
-                    fake_parent = type('FakeParent',(),{})()
+                    fake_parent = type("FakeParent", (), {})()
                     lora_model._replace_module(fake_parent, module_name, raw_module.get_base_layer(), raw_module)
                     module = getattr(fake_parent, module_name)
                     need_gather = False
                     stack.callback(raw_module.unmerge)
 
-                self._broadcast_module(module, prefix=key, empty_cache=count==num_modules,need_gather=need_gather)
+                self._broadcast_module(module, prefix=key, empty_cache=count == num_modules, need_gather=need_gather)
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)
@@ -430,7 +442,7 @@ class ActorModelRayActor(BasePPORole):
         strategy.print(actor)
 
         # configure tokenizer
-        
+
         self.data_processor = get_data_processor(
             pretrain, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer
         )
@@ -552,8 +564,8 @@ class ActorModelRayActor(BasePPORole):
     def broadcast_to_vllm(self):
         self.trainer._broadcast_to_vllm()
 
-    def get_attr(self,key:str):
-        return getattr(self,key)
+    def get_attr(self, key: str):
+        return getattr(self, key)
 
     def append(self, experience: Experience):
         self.trainer.replay_buffer.append(experience)

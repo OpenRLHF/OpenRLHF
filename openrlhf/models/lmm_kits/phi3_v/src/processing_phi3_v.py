@@ -20,7 +20,6 @@ import re
 from typing import List, Optional, Union
 
 import torch
-
 import transformers
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.image_utils import ImageInput
@@ -28,13 +27,12 @@ from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PaddingStrategy, TextInput, TruncationStrategy
 from transformers.utils import TensorType
 
-
 """Image processor class for Phi3-V."""
 
 from typing import List, Optional, Union
 
 import numpy as np
-
+from transformers import AutoImageProcessor
 from transformers.image_processing_utils import BaseImageProcessor, BatchFeature
 from transformers.image_transforms import (
     convert_to_rgb,
@@ -48,8 +46,6 @@ from transformers.image_utils import (
 )
 from transformers.utils import TensorType, is_vision_available, logging
 
-from transformers import AutoImageProcessor
-
 logger = logging.get_logger(__name__)
 
 
@@ -59,26 +55,31 @@ if is_vision_available():
 import torch
 import torchvision
 
+
 def padding_336(b):
     width, height = b.size
     tar = int(np.ceil(height / 336) * 336)
-    top_padding = int((tar - height)/2)
+    top_padding = int((tar - height) / 2)
     bottom_padding = tar - height - top_padding
     left_padding = 0
     right_padding = 0
-    b = torchvision.transforms.functional.pad(b, [left_padding, top_padding, right_padding, bottom_padding], fill=[255,255,255])
+    b = torchvision.transforms.functional.pad(
+        b, [left_padding, top_padding, right_padding, bottom_padding], fill=[255, 255, 255]
+    )
 
     return b
 
-def calc_padded_size(width, height, padding_unit=336):  
-    target_height = int(np.ceil(height / padding_unit) * padding_unit)  
-    top_padding = int((target_height - height) / 2)  
-    bottom_padding = target_height - height - top_padding  
-    left_padding = 0  
-    right_padding = 0  
-    padded_width = width + left_padding + right_padding  
-    padded_height = height + top_padding + bottom_padding  
-    return padded_width, padded_height  
+
+def calc_padded_size(width, height, padding_unit=336):
+    target_height = int(np.ceil(height / padding_unit) * padding_unit)
+    top_padding = int((target_height - height) / 2)
+    bottom_padding = target_height - height - top_padding
+    left_padding = 0
+    right_padding = 0
+    padded_width = width + left_padding + right_padding
+    padded_height = height + top_padding + bottom_padding
+    return padded_width, padded_height
+
 
 def HD_transform(img, hd_num=16):
     width, height = img.size
@@ -87,15 +88,18 @@ def HD_transform(img, hd_num=16):
         img = img.transpose(Image.TRANSPOSE)
         trans = True
         width, height = img.size
-    ratio = (width/ height)
+    ratio = width / height
     scale = 1
-    while scale*np.ceil(scale/ratio) <= hd_num:
+    while scale * np.ceil(scale / ratio) <= hd_num:
         scale += 1
     scale -= 1
     new_w = int(scale * 336)
     new_h = int(new_w / ratio)
 
-    img = torchvision.transforms.functional.resize(img, [new_h, new_w],)
+    img = torchvision.transforms.functional.resize(
+        img,
+        [new_h, new_w],
+    )
     img = padding_336(img)
     width, height = img.size
     if trans:
@@ -103,27 +107,29 @@ def HD_transform(img, hd_num=16):
 
     return img
 
-def calc_hd_transform_size(width, height, hd_num=16):  
-    transposed = False  
-    if width < height:  
-        width, height = height, width  
-        transposed = True  
-  
-    ratio = width / height  
-    scale = 1  
-    while scale * np.ceil(scale / ratio) <= hd_num:  
-        scale += 1  
-    scale -= 1  
-  
-    new_width = int(scale * 336)  
-    new_height = int(new_width / ratio)  
-  
-    padded_width, padded_height = calc_padded_size(new_width, new_height)  
-      
-    if transposed:  
-        padded_width, padded_height = padded_height, padded_width  
-  
-    return padded_width, padded_height  
+
+def calc_hd_transform_size(width, height, hd_num=16):
+    transposed = False
+    if width < height:
+        width, height = height, width
+        transposed = True
+
+    ratio = width / height
+    scale = 1
+    while scale * np.ceil(scale / ratio) <= hd_num:
+        scale += 1
+    scale -= 1
+
+    new_width = int(scale * 336)
+    new_height = int(new_width / ratio)
+
+    padded_width, padded_height = calc_padded_size(new_width, new_height)
+
+    if transposed:
+        padded_width, padded_height = padded_height, padded_width
+
+    return padded_width, padded_height
+
 
 def pad_to_max_num_crops_tensor(images, max_crops=5):
     """
@@ -168,12 +174,9 @@ class Phi3VImageProcessor(BaseImageProcessor):
         self.image_mean = image_mean if image_mean is not None else OPENAI_CLIP_MEAN
         self.image_std = image_std if image_std is not None else OPENAI_CLIP_STD
         self.do_convert_rgb = do_convert_rgb
-    
-    def calc_num_image_tokens(
-            self, 
-            images: ImageInput 
-    ):
-        """ Calculate the number of image tokens for each image.
+
+    def calc_num_image_tokens(self, images: ImageInput):
+        """Calculate the number of image tokens for each image.
         Args:
             images (`ImageInput`):
                 Image to preprocess. Expects a single or batch of images with pixel values ranging from 0 to 255. If
@@ -187,11 +190,11 @@ class Phi3VImageProcessor(BaseImageProcessor):
                 "torch.Tensor, tf.Tensor or jax.ndarray."
             )
 
-        images = [image.convert('RGB') for image in images]
+        images = [image.convert("RGB") for image in images]
         # (H, W, C)
-        elems = [HD_transform(im, hd_num = self.num_crops) for im in images] 
+        elems = [HD_transform(im, hd_num=self.num_crops) for im in images]
         shapes = [[im.size[1], im.size[0]] for im in elems]
-        num_img_tokens = [int((h//336*w//336+1)*144 + 1 + (h//336+1)*12) for h, w in shapes]
+        num_img_tokens = [int((h // 336 * w // 336 + 1) * 144 + 1 + (h // 336 + 1) * 12) for h, w in shapes]
         return num_img_tokens
 
     def calc_num_image_tokens_from_image_size(self, width, height):
@@ -201,8 +204,8 @@ class Phi3VImageProcessor(BaseImageProcessor):
             width (`int`): Width of the image.
             height (`int`): Height of the image.
         """
-        new_width, new_height = calc_hd_transform_size(width, height, hd_num=self.num_crops)  
-        num_img_tokens = int((new_height // 336 * new_width // 336 + 1) * 144 + 1 + (new_height // 336 + 1) * 12)  
+        new_width, new_height = calc_hd_transform_size(width, height, hd_num=self.num_crops)
+        num_img_tokens = int((new_height // 336 * new_width // 336 + 1) * 144 + 1 + (new_height // 336 + 1) * 12)
         return num_img_tokens
 
     def preprocess(
@@ -249,47 +252,60 @@ class Phi3VImageProcessor(BaseImageProcessor):
             images = [convert_to_rgb(image) for image in images]
 
         image_sizes = []
-        img_processor = torchvision.transforms.Compose([
-            torchvision.transforms.ToTensor(),
-            torchvision.transforms.Normalize(image_mean, image_std)
-        ])
+        img_processor = torchvision.transforms.Compose(
+            [torchvision.transforms.ToTensor(), torchvision.transforms.Normalize(image_mean, image_std)]
+        )
 
         # PIL images
         # HD_transform pad images to size of multiiply of 336, 336
         # convert to RGB first
-        images = [image.convert('RGB') for image in images]
-        elems = [HD_transform(im, hd_num = self.num_crops) for im in images] 
+        images = [image.convert("RGB") for image in images]
+        elems = [HD_transform(im, hd_num=self.num_crops) for im in images]
         # tensor transform and normalize
         hd_images = [img_processor(im) for im in elems]
-        # create global image 
-        global_image = [torch.nn.functional.interpolate(im.unsqueeze(0).float(), size=(336, 336), mode='bicubic',).to(im.dtype) for im in hd_images]
+        # create global image
+        global_image = [
+            torch.nn.functional.interpolate(
+                im.unsqueeze(0).float(),
+                size=(336, 336),
+                mode="bicubic",
+            ).to(im.dtype)
+            for im in hd_images
+        ]
 
         # [(3, h, w)], where h, w is multiple of 336
         shapes = [[im.size(1), im.size(2)] for im in hd_images]
-        num_img_tokens = [int(((h//336)*(w//336)+1)*144 + 1 + (h//336+1)*12) for h, w in shapes]
+        num_img_tokens = [int(((h // 336) * (w // 336) + 1) * 144 + 1 + (h // 336 + 1) * 12) for h, w in shapes]
         # reshape to channel dimension -> (num_images, num_crops, 3, 336, 336)
         # (1, 3, h//336, 336, w//336, 336) -> (1, h//336, w//336, 3, 336, 336) -> (h//336*w//336, 3, 336, 336)
-        hd_images_reshape = [im.reshape(1, 3, h//336, 336, w//336, 336).permute(0,2,4,1,3,5).reshape(-1, 3, 336, 336).contiguous() for im, (h, w) in zip(hd_images, shapes)]
+        hd_images_reshape = [
+            im.reshape(1, 3, h // 336, 336, w // 336, 336)
+            .permute(0, 2, 4, 1, 3, 5)
+            .reshape(-1, 3, 336, 336)
+            .contiguous()
+            for im, (h, w) in zip(hd_images, shapes)
+        ]
         # concat global image and local image
-        hd_images_reshape = [torch.cat([_global_image] + [_im], dim=0) for _global_image, _im in zip(global_image, hd_images_reshape)]
+        hd_images_reshape = [
+            torch.cat([_global_image] + [_im], dim=0) for _global_image, _im in zip(global_image, hd_images_reshape)
+        ]
 
         # pad to max_num_crops
-        image_transformed = [pad_to_max_num_crops_tensor(im, self.num_crops+1) for im in hd_images_reshape]
+        image_transformed = [pad_to_max_num_crops_tensor(im, self.num_crops + 1) for im in hd_images_reshape]
         image_transformed = torch.stack(image_transformed, dim=0)
         image_sizes = [torch.LongTensor(_shapes) for _shapes in shapes]
         padded_images = image_transformed
         image_sizes = shapes
 
-        data = {"pixel_values": padded_images, 
-                "image_sizes": image_sizes,
-                "num_img_tokens": num_img_tokens
-                }
+        data = {"pixel_values": padded_images, "image_sizes": image_sizes, "num_img_tokens": num_img_tokens}
 
         return BatchFeature(data=data, tensor_type=return_tensors)
 
+
 AutoImageProcessor.register("Phi3VImageProcessor", Phi3VImageProcessor)
 
-transformers.Phi3VImageProcessor = Phi3VImageProcessor 
+transformers.Phi3VImageProcessor = Phi3VImageProcessor
+
 
 class Phi3VProcessor(ProcessorMixin):
     r"""
@@ -375,20 +391,27 @@ class Phi3VProcessor(ProcessorMixin):
             image_inputs = self.image_processor(images, return_tensors=return_tensors)
         else:
             image_inputs = {}
-        inputs = self._convert_images_texts_to_inputs(image_inputs, text, padding=padding, truncation=truncation, max_length=max_length, return_tensors=return_tensors)
+        inputs = self._convert_images_texts_to_inputs(
+            image_inputs,
+            text,
+            padding=padding,
+            truncation=truncation,
+            max_length=max_length,
+            return_tensors=return_tensors,
+        )
         return inputs
 
     def calc_num_image_tokens(self, images: ImageInput):
-        """ Calculate the number of image tokens for each image.
+        """Calculate the number of image tokens for each image.
         Args:
             images (`ImageInput`):
                 Image to preprocess. Expects a single or batch of images with pixel values ranging from 0 to 255. If
                 passing in images with pixel values between 0 and 1, set `do_rescale=False`.
         """
         return self.image_processor.calc_num_image_tokens(images)
-        
+
     def calc_num_image_tokens_from_image_size(self, width, height):
-        """ Calculate the number of image token for an image with given width and height.
+        """Calculate the number of image token for an image with given width and height.
         Args:
             width (`int`):
                 Width of the image.
@@ -396,42 +419,51 @@ class Phi3VProcessor(ProcessorMixin):
                 Height of the image.
         """
         return self.image_processor.calc_num_image_tokens_from_image_size(width, height)
-    
-    
-    @property 
+
+    @property
     def special_image_token_id(self):
         return self.tokenizer.convert_tokens_to_ids(self.special_image_token)
 
     def get_special_image_token_id(self):
         return self.tokenizer.convert_tokens_to_ids(self.special_image_token)
-    
-    def _convert_images_texts_to_inputs(self, images, texts, padding=False, truncation=None, max_length=None, return_tensors=None):
+
+    def _convert_images_texts_to_inputs(
+        self, images, texts, padding=False, truncation=None, max_length=None, return_tensors=None
+    ):
 
         if not len(images):
-            model_inputs = self.tokenizer(texts, return_tensors=return_tensors, padding=padding, truncation=truncation, max_length=max_length)
+            model_inputs = self.tokenizer(
+                texts, return_tensors=return_tensors, padding=padding, truncation=truncation, max_length=max_length
+            )
             return BatchFeature(data={**model_inputs})
 
         pattern = r"<\|image_\d+\|>"
         prompt_chunks_batch = [re.split(pattern, text) for text in texts]
-        prompt_chunks_tokenized = [[self.tokenizer(chunk).input_ids for chunk in chunks] for chunks in prompt_chunks_batch]
+        prompt_chunks_tokenized = [
+            [self.tokenizer(chunk).input_ids for chunk in chunks] for chunks in prompt_chunks_batch
+        ]
 
-        if 'num_img_tokens' in images:
-            num_img_tokens = images['num_img_tokens']
+        if "num_img_tokens" in images:
+            num_img_tokens = images["num_img_tokens"]
         else:
-            assert 'num_crops' in images, 'num_crops must be provided in images if num_img_tokens is not provided'
-            num_crops = images['num_crops']
-            num_img_tokens = [_num_crops * self.num_img_tokens for _num_crops in num_crops] 
+            assert "num_crops" in images, "num_crops must be provided in images if num_img_tokens is not provided"
+            num_crops = images["num_crops"]
+            num_img_tokens = [_num_crops * self.num_img_tokens for _num_crops in num_crops]
 
-        images, image_sizes = images['pixel_values'], images['image_sizes']
+        images, image_sizes = images["pixel_values"], images["image_sizes"]
 
         image_tags_batch = [re.findall(pattern, text) for text in texts]
-        image_ids_batch = [[int(s.split("|")[1].split("_")[-1]) for s in image_tags] for image_tags in image_tags_batch]
+        image_ids_batch = [
+            [int(s.split("|")[1].split("_")[-1]) for s in image_tags] for image_tags in image_tags_batch
+        ]
 
         image_ids_pad_batch = []
         for image_ids in image_ids_batch:
             unique_image_ids = sorted(list(set(image_ids)))
-            assert unique_image_ids == list(range(1, len(unique_image_ids)+1)), f"image_ids must start from 1, and must be continuous int, e.g. [1, 2, 3], cannot be {unique_image_ids}"
-            image_ids_pad = [[-iid] * num_img_tokens[iid-1] for iid in image_ids]
+            assert unique_image_ids == list(
+                range(1, len(unique_image_ids) + 1)
+            ), f"image_ids must start from 1, and must be continuous int, e.g. [1, 2, 3], cannot be {unique_image_ids}"
+            image_ids_pad = [[-iid] * num_img_tokens[iid - 1] for iid in image_ids]
             image_ids_pad_batch.append(image_ids_pad)
 
         def insert_separator(X, sep_list):
@@ -447,19 +479,25 @@ class Phi3VProcessor(ProcessorMixin):
             input_ids_batch.append(input_ids)
 
         input_ids_batch = [torch.tensor(input_ids, dtype=torch.long) for input_ids in input_ids_batch]
-        
+
         if padding:
-            input_ids_batch = torch.nn.utils.rnn.pad_sequence(input_ids_batch, batch_first=True, padding_value=self.tokenizer.pad_token_id)
-        
+            input_ids_batch = torch.nn.utils.rnn.pad_sequence(
+                input_ids_batch, batch_first=True, padding_value=self.tokenizer.pad_token_id
+            )
+
         if truncation and max_length is not None:
             input_ids_batch = [input_ids[:max_length] for input_ids in input_ids_batch]
-        
-        attention_mask_batch = [(input_ids > -1000000).to(torch.long) for input_ids in input_ids_batch]
-        return BatchFeature(data={"input_ids": [i.tolist() for i in input_ids_batch],
-                                  "attention_mask": [i.tolist() for i in attention_mask_batch],
-                                  "pixel_values": images, 
-                                  "image_sizes": image_sizes},tensor_type=return_tensors)
 
+        attention_mask_batch = [(input_ids > -1000000).to(torch.long) for input_ids in input_ids_batch]
+        return BatchFeature(
+            data={
+                "input_ids": [i.tolist() for i in input_ids_batch],
+                "attention_mask": [i.tolist() for i in attention_mask_batch],
+                "pixel_values": images,
+                "image_sizes": image_sizes,
+            },
+            tensor_type=return_tensors,
+        )
 
     # Copied from transformers.models.clip.processing_clip.CLIPProcessor.batch_decode with CLIP->Llama
     def batch_decode(self, *args, **kwargs):

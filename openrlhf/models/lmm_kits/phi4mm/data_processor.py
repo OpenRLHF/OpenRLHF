@@ -1,6 +1,9 @@
-from typing import List, Dict, Union
-from ..base.data_processor import BaseDataProcessor, MMInputs
+from typing import Dict, List, Union
+
 import torch
+
+from ..base.data_processor import BaseDataProcessor, MMInputs
+
 
 class Phi4MMDataProcessor(BaseDataProcessor):
     def __call__(
@@ -25,7 +28,7 @@ class Phi4MMDataProcessor(BaseDataProcessor):
             return_tensors=return_tensors,
         )
         emb_inputs, extra_info, forward_inputs = self._split_input_dict(batch)
-        return MMInputs(emb_inputs=emb_inputs,extra_info=extra_info,forward_inputs=forward_inputs).to(device)
+        return MMInputs(emb_inputs=emb_inputs, extra_info=extra_info, forward_inputs=forward_inputs).to(device)
 
     def _split_input_dict(self, input_dict: Dict) -> tuple[Dict, Dict, Dict]:
         extra_info = {}
@@ -37,7 +40,7 @@ class Phi4MMDataProcessor(BaseDataProcessor):
         if "input_mode" in input_dict:
             forward_inputs["input_mode"] = input_dict.pop("input_mode")
         return input_dict, extra_info, forward_inputs
-    
+
     def apply_chat_template(
         self,
         messages: Union[Dict, List[str], str],
@@ -52,7 +55,7 @@ class Phi4MMDataProcessor(BaseDataProcessor):
 
     def _convert_message_format(self, messages: List[List[Dict]]) -> List[List[Dict]]:
         converted_messages = []
-        
+
         for message in messages:
             new_message = []
             image_counter = 1
@@ -62,8 +65,8 @@ class Phi4MMDataProcessor(BaseDataProcessor):
 
                 # Process the content to combine text and images
                 processed_content = ""
-                
-                if isinstance(content,list):
+
+                if isinstance(content, list):
                     for content_item in content:
                         if content_item["type"] == "text":
                             processed_content += content_item["text"]
@@ -83,8 +86,8 @@ class Phi4MMDataProcessor(BaseDataProcessor):
         batch = {}
         # collect all keys
         for inp in inputs:
-            batch.update({k:None for k,v in inp.items() if v is not None})
-        
+            batch.update({k: None for k, v in inp.items() if v is not None})
+
         if "input_image_embeds" in batch.keys():
             max_crops = max([inp["input_image_embeds"].size(1) for inp in inputs if "input_image_embeds" in inp])
 
@@ -98,7 +101,7 @@ class Phi4MMDataProcessor(BaseDataProcessor):
                 if batch[k][0] > 1:
                     raise ValueError("Only vision mode and text mode are supported")
             elif k == "input_image_embeds":
-                #first dimension is image number, second dimension is crop number
+                # first dimension is image number, second dimension is crop number
                 batch_list = []
                 for inp in inputs:
                     batch_list.extend(list(inp[k]))
@@ -108,15 +111,17 @@ class Phi4MMDataProcessor(BaseDataProcessor):
                 batch_list = []
                 for inp in inputs:
                     batch_list.extend(list(inp[k]))
-                batch_list = [self.processor.image_processor.pad_mask_to_max_num_crops(mask, max_crops) for mask in batch_list]
+                batch_list = [
+                    self.processor.image_processor.pad_mask_to_max_num_crops(mask, max_crops) for mask in batch_list
+                ]
                 batch[k] = torch.stack(batch_list, dim=0)
             else:
                 # concat all items in a batch in the first dimension
                 batch[k] = torch.cat([inp[k] for inp in inputs if k in inp], dim=0)
 
         emb_inputs, extra_info, forward_inputs = self._split_input_dict(batch)
-        return MMInputs(emb_inputs=emb_inputs,extra_info=extra_info,forward_inputs=forward_inputs)
-    
+        return MMInputs(emb_inputs=emb_inputs, extra_info=extra_info, forward_inputs=forward_inputs)
+
     def split_input_batch(self, batch: MMInputs) -> List[MMInputs]:
         batch_size = len(batch["input_ids"])
         batch_kwargs = [{} for _ in range(batch_size)]
@@ -131,7 +136,7 @@ class Phi4MMDataProcessor(BaseDataProcessor):
 
         if "input_image_embeds" in keys and ("input_ids" not in keys or "num_img_tokens" not in keys):
             raise ValueError("Cannot split batch with pixel_values without input_ids and num_img_tokens")
-        
+
         for k in ["input_ids", "attention_mask"]:
             if k in keys:
                 vals = batch[k]
@@ -140,7 +145,7 @@ class Phi4MMDataProcessor(BaseDataProcessor):
                 assert batch_size == len(vals)
                 for i, v in enumerate(vals):
                     batch_kwargs[i][k] = v
-        #fill input mode
+        # fill input mode
         for i in range(batch_size):
             batch_kwargs[i]["input_mode"] = torch.tensor([0], dtype=torch.long)
 
@@ -157,7 +162,7 @@ class Phi4MMDataProcessor(BaseDataProcessor):
 
             num_img_tokens_per_image = num_img_tokens
             # Split pixel values and image sizes for each sample. Each sample can have multiple images.
-            image_token_id = 200010 #vllm use 200010 as image token
+            image_token_id = 200010  # vllm use 200010 as image token
             for i in range(batch_size):
                 input_ids_i = batch_kwargs[i]["input_ids"]
                 if not isinstance(input_ids_i, torch.Tensor):
@@ -197,8 +202,11 @@ class Phi4MMDataProcessor(BaseDataProcessor):
         mm_inputs_list = []
         for b in batch_kwargs:
             emb_inputs, extra_info, forward_inputs = self._split_input_dict(b)
-            mm_inputs_list.append(MMInputs(emb_inputs=emb_inputs,extra_info=extra_info,forward_inputs=forward_inputs))
+            mm_inputs_list.append(
+                MMInputs(emb_inputs=emb_inputs, extra_info=extra_info, forward_inputs=forward_inputs)
+            )
         return mm_inputs_list
+
 
 DataProcessor = Phi4MMDataProcessor
 

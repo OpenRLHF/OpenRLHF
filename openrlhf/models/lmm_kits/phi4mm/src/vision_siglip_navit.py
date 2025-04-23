@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Siglip model configuration"""
+"""Siglip model configuration"""
 
 import os
 from typing import Union
@@ -279,6 +279,7 @@ class SiglipConfig(PretrainedConfig):
         """
 
         return cls(text_config=text_config.to_dict(), vision_config=vision_config.to_dict(), **kwargs)
+
 
 # coding=utf-8
 # Copyright 2024 Google AI and The HuggingFace Team. All rights reserved.
@@ -568,7 +569,6 @@ class SiglipVisionEmbeddings(nn.Module):
         self.num_positions = self.num_patches
 
         self.position_embedding = nn.Embedding(self.num_positions, self.embed_dim)
-
 
     def forward(self, pixel_values: torch.FloatTensor, patch_attention_mask: torch.BoolTensor) -> torch.Tensor:
         batch_size = pixel_values.size(0)
@@ -1376,7 +1376,7 @@ class SiglipVisionTransformer(nn.Module):
         # So when the `patch_attention_mask` is full of 1s (i.e. attending to the whole sequence),
         # avoiding passing the attention_mask, which is equivalent to attending to the full sequence
         if not torch.any(~patch_attention_mask):
-            attention_mask=None
+            attention_mask = None
         else:
             attention_mask = (
                 _prepare_4d_attention_mask(patch_attention_mask, hidden_states.dtype)

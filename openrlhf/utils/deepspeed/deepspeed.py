@@ -109,7 +109,7 @@ class DeepspeedStrategy(ABC):
                     (i + 1) * self.ring_attn_size,
                 )
             )
-            group = dist.new_group(ranks=ring_attn_ranks, backend="nccl",timeout=timedelta(minutes=60))
+            group = dist.new_group(ranks=ring_attn_ranks, backend="nccl", timeout=timedelta(minutes=60))
             if dist.get_rank() in ring_attn_ranks:
                 set_ring_attn_group(group)
                 self.ring_attn_rank = dist.get_rank(group=group)
@@ -348,10 +348,12 @@ class DeepspeedStrategy(ABC):
             # corner case for tie_word_embeddings, such as Qwen2-0.5B
             if getattr(model_to_save.config, "tie_word_embeddings", False) and "lm_head.weight" in state_dict_keys:
                 state_dict_keys.remove("lm_head.weight")
-            
+
             # corner case for phi3_v
-            if getattr(model_to_save.config, "model_type", None) == "phi3_v" \
-                  and "model.vision_embed_tokens.wte.weight" in state_dict_keys:
+            if (
+                getattr(model_to_save.config, "model_type", None) == "phi3_v"
+                and "model.vision_embed_tokens.wte.weight" in state_dict_keys
+            ):
                 state_dict_keys.remove("model.vision_embed_tokens.wte.weight")
 
             assert state_dict_keys.issubset(

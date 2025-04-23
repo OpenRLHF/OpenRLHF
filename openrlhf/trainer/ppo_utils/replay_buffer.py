@@ -6,9 +6,10 @@ from typing import List, Optional
 import torch
 import torch.nn.functional as F
 
+from openrlhf.models.lmm_kits.base.data_processor import BaseDataProcessor, MMInputs
 
 from .experience_maker import Experience
-from openrlhf.models.lmm_kits.base.data_processor import BaseDataProcessor, MMInputs
+
 
 @dataclass
 class BufferItem:
@@ -64,13 +65,12 @@ def split_experience_batch(experience: Experience, data_processor: Optional[Base
         assert batch_size == len(vals)
         for i, v in enumerate(vals):
             batch_kwargs[i][key] = v
-    
+
     visual_inputs_batch = experience.visual_inputs
-    visual_inputs_batch.extra_info['input_ids'] = experience.sequences
+    visual_inputs_batch.extra_info["input_ids"] = experience.sequences
     visual_inputs_chunks = data_processor.split_input_batch(visual_inputs_batch)
     for i, visual_inputs in enumerate(visual_inputs_chunks):
         batch_kwargs[i]["visual_inputs"] = visual_inputs
-
 
     for i in range(batch_size):
         batch_kwargs[i]["info"] = {}
@@ -98,7 +98,9 @@ def zero_pad_sequences(sequences: List[torch.Tensor], side: str = "left") -> tor
     return torch.stack(padded_sequences, dim=0)
 
 
-def make_experience_batch(items: List[BufferItem], data_processor: Optional[BaseDataProcessor], packing_samples=False) -> Experience:
+def make_experience_batch(
+    items: List[BufferItem], data_processor: Optional[BaseDataProcessor], packing_samples=False
+) -> Experience:
     kwargs = {}
     keys = (
         "sequences",
@@ -119,11 +121,11 @@ def make_experience_batch(items: List[BufferItem], data_processor: Optional[Base
     for key in items[0].info.keys():
         vals = torch.tensor([item.info[key] for item in items])
         kwargs["info"][key] = vals
-    
+
     for input_ids, attention_mask, item in zip(kwargs["sequences"], kwargs["attention_mask"], items):
-        item.visual_inputs.extra_info['input_ids'] = input_ids
-        item.visual_inputs.extra_info['attention_mask'] = attention_mask
-    
+        item.visual_inputs.extra_info["input_ids"] = input_ids
+        item.visual_inputs.extra_info["attention_mask"] = attention_mask
+
     kwargs["visual_inputs"] = data_processor.make_input_batch([item.visual_inputs for item in items])
     return Experience(**kwargs)
 
@@ -177,14 +179,14 @@ class NaiveReplayBuffer(ABC):
     """
 
     def __init__(
-        self, 
-        sample_batch_size: int, 
-        data_processor: Optional[BaseDataProcessor] = None, 
-        limit: int = 0, 
-        cpu_offload: bool = True, 
+        self,
+        sample_batch_size: int,
+        data_processor: Optional[BaseDataProcessor] = None,
+        limit: int = 0,
+        cpu_offload: bool = True,
         packing_samples: bool = False,
         store_extra_buffers: bool = False,
-        device: Optional[str] = None
+        device: Optional[str] = None,
     ) -> None:
         super().__init__()
         self.sample_batch_size = sample_batch_size
@@ -221,9 +223,9 @@ class NaiveReplayBuffer(ABC):
     def clear(self) -> None:
         self.items.clear()
         if self.store_extra_buffers:
-            self.items.extend(self.extra_buffers[:self.limit])
-            #TODO: whether to drop too old buffers?
-            self.extra_buffers = self.extra_buffers[self.limit:]
+            self.items.extend(self.extra_buffers[: self.limit])
+            # TODO: whether to drop too old buffers?
+            self.extra_buffers = self.extra_buffers[self.limit :]
 
     @torch.no_grad()
     def sample(self) -> Experience:
@@ -245,6 +247,6 @@ class NaiveReplayBuffer(ABC):
 
     def set_limit(self, limit: int) -> None:
         self.limit = limit
-    
+
     def full(self) -> bool:
         return len(self.items) >= self.limit

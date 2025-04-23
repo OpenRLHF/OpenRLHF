@@ -1,10 +1,9 @@
-import os
 import time
 from abc import ABC
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import List, Optional, Tuple, Union, Dict
+from typing import List, Optional, Tuple, Union
 
 import ray
 import torch
@@ -159,7 +158,9 @@ class Samples:
             sample.total_length = sample.attention_mask.float().sum(dim=-1)
             sample.prompts = self.prompts[i * split_size : (i + 1) * split_size]
             sample.labels = self.labels[i * split_size : (i + 1) * split_size]
-            sample.visual_inputs = data_processor.make_input_batch(self.visual_inputs[i * split_size : (i + 1) * split_size])
+            sample.visual_inputs = data_processor.make_input_batch(
+                self.visual_inputs[i * split_size : (i + 1) * split_size]
+            )
             sample_list.append(sample)
         return sample_list
 
@@ -177,7 +178,7 @@ class RemoteExperienceMaker(ABC):
         kl_controller,
         strategy=None,
         remote_rm_url: Union[list[str], str] = None,
-        custom_experience_filter:str=None,
+        custom_experience_filter: str = None,
         vllm_engines: List = None,
         packing_samples=False,
         **kwargs,
@@ -209,7 +210,7 @@ class RemoteExperienceMaker(ABC):
             reward_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(reward_module)
             self.custom_reward_func = ray.remote(reward_module.reward_func)
-        
+
         self.custom_experience_filter = None
         if custom_experience_filter:
             if not custom_experience_filter.endswith(".py"):
@@ -458,7 +459,7 @@ class RemoteExperienceMaker(ABC):
         - rewards: List of rewards
         """
         if self.custom_experience_filter:
-            experiences = self.custom_experience_filter(self,experiences)
+            experiences = self.custom_experience_filter(self, experiences)
 
         args = self.strategy.args
 
@@ -681,15 +682,15 @@ class RemoteExperienceMaker(ABC):
             if messages:
                 prompts = self.data_processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
                 images = [self.data_processor.get_images_from_messages(m) for m in messages]
-                vllm_inputs = [{
+                vllm_inputs = [
+                    {
                         "prompt": p,
-                        "multi_modal_data":{"image": imgs} if imgs else None,
-                        "mm_processor_kwargs": kwargs["processor_kwargs"]
-                    } for p, imgs in zip(prompts,images)]
-                refs.append(
-                    llm.add_requests.remote(0, sampling_params=sampling_params, vllm_vision_input=vllm_inputs)
-                )
-
+                        "multi_modal_data": {"image": imgs} if imgs else None,
+                        "mm_processor_kwargs": kwargs["processor_kwargs"],
+                    }
+                    for p, imgs in zip(prompts, images)
+                ]
+                refs.append(llm.add_requests.remote(0, sampling_params=sampling_params, vllm_vision_input=vllm_inputs))
 
         ray.get(refs)
 

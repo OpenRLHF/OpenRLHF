@@ -61,7 +61,7 @@ def train(args):
             pg if args.colocate_all_models else None,
             args.vllm_gpu_memory_utilization,
             args.vllm_enable_sleep,
-            limit_mm_per_prompt=args.limit_mm_per_prompt
+            limit_mm_per_prompt=args.limit_mm_per_prompt,
         )
 
     actor_model = PPORayActorGroup(
@@ -232,7 +232,9 @@ if __name__ == "__main__":
         default=0.95,
         help="vLLM gpu_memory_utilization",
     )
-    parser.add_argument("--limit_mm_per_prompt", type=str, default=None, help="Limit the number of multimodal inputs per prompt")
+    parser.add_argument(
+        "--limit_mm_per_prompt", type=str, default=None, help="Limit the number of multimodal inputs per prompt"
+    )
 
     # Checkpoints
     parser.add_argument("--eval_steps", type=int, default=-1)
@@ -287,10 +289,20 @@ if __name__ == "__main__":
     # PPO
     parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--num_episodes", type=int, default=1)
-    parser.add_argument("--max_global_steps", type=int, default=None, help="Max global steps for PPO training. This will override num_episodes if set. Useful for dynamic sampling, which needs multiple rollouts for one training stage.")
+    parser.add_argument(
+        "--max_global_steps",
+        type=int,
+        default=None,
+        help="Max global steps for PPO training. This will override num_episodes if set. Useful for dynamic sampling, which needs multiple rollouts for one training stage.",
+    )
     parser.add_argument("--rollout_batch_size", type=int, default=1024)
     parser.add_argument("--micro_rollout_batch_size", type=int, default=8)
-    parser.add_argument("--store_extra_buffers", action="store_true", default=False, help="Store extra buffers in replay buffer for oversampling.")
+    parser.add_argument(
+        "--store_extra_buffers",
+        action="store_true",
+        default=False,
+        help="Store extra buffers in replay buffer for oversampling.",
+    )
     parser.add_argument("--max_epochs", type=int, default=1)
     parser.add_argument("--prompt_max_len", type=int, default=1024, help="Max tokens for each prompt")
     parser.add_argument("--generate_max_len", type=int, default=1024, help="Max tokens to generate in PPO")
@@ -339,7 +351,12 @@ if __name__ == "__main__":
     parser.add_argument("--entropy_loss_coef", type=float, default=0, help="Entropy loss coef")
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
     parser.add_argument("--reward_clip_range", type=float, nargs=2, default=(-10, 10), help="Reward clip range")
-    parser.add_argument("--processor_kwargs",type=str,default=None,help="Processor kwargs. Should be a json string. There are always two keys: min_pixels and max_pixels, which are the minimum and maximum number of pixels for the image. If not provided, the default values are 4*28*28 and 16384*28*28 respectively.")
+    parser.add_argument(
+        "--processor_kwargs",
+        type=str,
+        default=None,
+        help="Processor kwargs. Should be a json string. There are always two keys: min_pixels and max_pixels, which are the minimum and maximum number of pixels for the image. If not provided, the default values are 4*28*28 and 16384*28*28 respectively.",
+    )
     # Reinforce
     parser.add_argument(
         "--advantage_estimator",
@@ -475,9 +492,10 @@ if __name__ == "__main__":
 
         # Patch hub to download models from modelscope to speed up.
         patch_hub()
-    
+
     if args.processor_kwargs:
         import json
+
         args.processor_kwargs = json.loads(args.processor_kwargs)
         # We use process_vision_info of qwen_vl_utils to get the image inputs for all model,
         # To be compatible with Qwen2VLImageProcessor, we always set the min_pixels and max_pixels for the processor
@@ -485,9 +503,10 @@ if __name__ == "__main__":
         args.processor_kwargs["max_pixels"] = args.processor_kwargs.get("max_pixels", 16384 * 28 * 28)
     else:
         args.processor_kwargs = {"min_pixels": 4 * 28 * 28, "max_pixels": 16384 * 28 * 28}
-    
+
     if args.limit_mm_per_prompt:
         import json
+
         try:
             args.limit_mm_per_prompt = json.loads(args.limit_mm_per_prompt)
         except json.JSONDecodeError:
@@ -495,6 +514,10 @@ if __name__ == "__main__":
 
     if args.apply_chat_template:
         import warnings
-        warnings.warn("The --apply_chat_template option will be deprecated in the future. The prompt will be required to be a json string strictly. And DataProcessor will always apply chat-template during training.",FutureWarning)
+
+        warnings.warn(
+            "The --apply_chat_template option will be deprecated in the future. The prompt will be required to be a json string strictly. And DataProcessor will always apply chat-template during training.",
+            FutureWarning,
+        )
 
     train(args)

@@ -5,15 +5,14 @@ from typing import Dict, Optional, Type
 
 import ray
 import torch
-import torch.distributed as dist
 from ray.util.placement_group import PlacementGroup, placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from tqdm import tqdm
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
+from openrlhf.models.lmm_kits.base.data_processor import MMInputs
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
 from openrlhf.utils.deepspeed import DeepspeedStrategy
-from openrlhf.models.lmm_kits.base.data_processor import MMInputs
 
 
 class DistributedTorchRayActor:

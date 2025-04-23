@@ -6,6 +6,7 @@ einops
 flash-attn==2.7.4.post1
 isort
 jsonlines
+loguru
 loralib
 optimum
 optree>=0.13.0
@@ -16,11 +17,10 @@ qwen_vl_utils
 ray[default]==2.43.0
 tensorboard
 torch
-torchvision
 torchmetrics
+torchvision
 tqdm
 transformers==4.51.3
 transformers_stream_generator
 wandb
 wheel
-loguru

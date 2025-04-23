@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-""" PyTorch Phi-3-V model."""
+"""PyTorch Phi-3-V model."""
 
 import inspect
 import math
@@ -25,7 +25,6 @@ import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
@@ -44,6 +43,7 @@ from transformers.utils import (
     logging,
     replace_return_docstrings,
 )
+
 from .configuration_phi3_v import Phi3VConfig
 
 try:
@@ -57,9 +57,9 @@ except ImportError:
 import torch
 from torch import nn
 from transformers import CLIPVisionConfig, CLIPVisionModel, PretrainedConfig
+from transformers.modeling_flash_attention_utils import _flash_attention_forward
 from transformers.models.clip.modeling_clip import CLIPAttention
 from transformers.utils import logging
-from transformers.modeling_flash_attention_utils import _flash_attention_forward
 
 logger = logging.get_logger(__name__)
 
@@ -67,26 +67,28 @@ logger = logging.get_logger(__name__)
 MAX_INPUT_ID = int(1e9)
 IMAGE_TOKEN_ID = 32044
 CLIP_VIT_LARGE_PATCH14_336_CONFIG = CLIPVisionConfig(
-  attention_dropout=0.0,
-  dropout=0.0,
-  hidden_act="quick_gelu",
-  hidden_size=1024,
-  image_size=336,
-  initializer_factor=1.0,
-  initializer_range=0.02,
-  intermediate_size=4096,
-  layer_norm_eps=1e-05,
-  num_attention_heads=16,
-  num_channels=3,
-  num_hidden_layers=24,
-  patch_size=14,
-  projection_dim=768
+    attention_dropout=0.0,
+    dropout=0.0,
+    hidden_act="quick_gelu",
+    hidden_size=1024,
+    image_size=336,
+    initializer_factor=1.0,
+    initializer_range=0.02,
+    intermediate_size=4096,
+    layer_norm_eps=1e-05,
+    num_attention_heads=16,
+    num_channels=3,
+    num_hidden_layers=24,
+    patch_size=14,
+    projection_dim=768,
 )
+
 
 class CLIPAttentionFA2(CLIPAttention):
     """Add flash attention 2 to CLIPAttention. (This is only used in the vision encoder)"""
 
-    def forward(self,
+    def forward(
+        self,
         hidden_states,
         attention_mask=None,
         causal_attention_mask=None,
@@ -123,82 +125,83 @@ class Phi3ImageEmbedding(nn.Module):
         super().__init__()
 
         # n_embed or hidden_size
-        hidden_size = config.n_embd if hasattr(config, 'n_embd') else config.hidden_size
-        if hasattr(config, 'embd_pdrop') or hasattr(config, 'embed_pdrop'):
-            embd_drop = config.embd_pdrop if hasattr(config, 'embd_pdrop') else config.embed_pdrop
+        hidden_size = config.n_embd if hasattr(config, "n_embd") else config.hidden_size
+        if hasattr(config, "embd_pdrop") or hasattr(config, "embed_pdrop"):
+            embd_drop = config.embd_pdrop if hasattr(config, "embd_pdrop") else config.embed_pdrop
             self.drop = nn.Dropout(embd_drop)
         else:
             self.drop = None
 
         self.wte = wte
 
-        if isinstance(config.img_processor, dict) and config.img_processor.get('name', None) == 'clip_vision_model':
-            assert 'model_name' in config.img_processor, 'model_name must be provided for CLIPVisionModel'
-            assert 'image_dim_out' in config.img_processor, 'image_dim_out must be provided for CLIPVisionModel'
-            assert 'num_img_tokens' in config.img_processor, 'num_img_tokens must be provided for CLIPVisionModel'
-            assert config.img_processor['model_name'] == 'openai/clip-vit-large-patch14-336'
+        if isinstance(config.img_processor, dict) and config.img_processor.get("name", None) == "clip_vision_model":
+            assert "model_name" in config.img_processor, "model_name must be provided for CLIPVisionModel"
+            assert "image_dim_out" in config.img_processor, "image_dim_out must be provided for CLIPVisionModel"
+            assert "num_img_tokens" in config.img_processor, "num_img_tokens must be provided for CLIPVisionModel"
+            assert config.img_processor["model_name"] == "openai/clip-vit-large-patch14-336"
             clip_config = CLIP_VIT_LARGE_PATCH14_336_CONFIG
             self.img_processor = CLIPVisionModel(clip_config)
-            image_dim_out = config.img_processor['image_dim_out']
-            self.num_img_tokens = config.img_processor['num_img_tokens']
+            image_dim_out = config.img_processor["image_dim_out"]
+            self.num_img_tokens = config.img_processor["num_img_tokens"]
 
             # FA2 in CLIP
-            if config._attn_implementation == 'flash_attention_2':
+            if config._attn_implementation == "flash_attention_2":
                 for layer in self.img_processor.vision_model.encoder.layers:
                     clip_fa2 = CLIPAttentionFA2(clip_config)
                     del layer.self_attn
                     layer.self_attn = clip_fa2
         else:
-            raise NotImplementedError(f'img_processor = {config.img_processor}, not implemented')
+            raise NotImplementedError(f"img_processor = {config.img_processor}, not implemented")
 
         self.image_dim_out = image_dim_out
         self.img_sizes = None
 
         # global_gn and sub_gn for hd transform, serves as line separator
-        self.use_hd_transform = kwargs.get('use_hd_transform', False)
-        self.with_learnable_separator = kwargs.get('with_learnable_separator', False)
-        self.hd_transform_order = kwargs.get('hd_transform_order', 'glb_sub')
+        self.use_hd_transform = kwargs.get("use_hd_transform", False)
+        self.with_learnable_separator = kwargs.get("with_learnable_separator", False)
+        self.hd_transform_order = kwargs.get("hd_transform_order", "glb_sub")
         # with_hd_transform and with_learnable_separator should have same value
-        assert self.use_hd_transform == self.with_learnable_separator, 'use_hd_transform and with_learnable_separator should have same value'
+        assert (
+            self.use_hd_transform == self.with_learnable_separator
+        ), "use_hd_transform and with_learnable_separator should have same value"
         if self.with_learnable_separator:
-            assert self.use_hd_transform, 'learnable separator is only for hd transform'
+            assert self.use_hd_transform, "learnable separator is only for hd transform"
             # 1024 * 4, merge spatial to channel dimension
             self.glb_GN = nn.Parameter(torch.zeros([1, 1, self.image_dim_out * 4]))
             self.sub_GN = nn.Parameter(torch.zeros([1, 1, 1, self.image_dim_out * 4]))
-            logger.info(f'learnable separator enabled for hd transform, hd_transform_order = {self.hd_transform_order}')
+            logger.info(
+                f"learnable separator enabled for hd transform, hd_transform_order = {self.hd_transform_order}"
+            )
 
-        projection_cls = kwargs.get('projection_cls', 'linear')
-        if projection_cls == 'linear':
+        projection_cls = kwargs.get("projection_cls", "linear")
+        if projection_cls == "linear":
             self.img_projection = nn.Linear(image_dim_out, hidden_size)
-        elif projection_cls == 'mlp' and self.use_hd_transform:
+        elif projection_cls == "mlp" and self.use_hd_transform:
             dim_projection = hidden_size
             depth = 2
             layers = [nn.Linear(image_dim_out * 4, dim_projection)]
             for _ in range(1, depth):
-                layers.extend([nn.GELU(),
-                                nn.Linear(dim_projection, dim_projection)])
+                layers.extend([nn.GELU(), nn.Linear(dim_projection, dim_projection)])
             self.img_projection = nn.Sequential(*layers)
-        elif projection_cls == 'mlp':
+        elif projection_cls == "mlp":
             dim_projection = hidden_size
             depth = 2
             layers = [nn.Linear(image_dim_out, dim_projection)]
             for _ in range(1, depth):
-                layers.extend([nn.GELU(),
-                                nn.Linear(dim_projection, dim_projection)])
+                layers.extend([nn.GELU(), nn.Linear(dim_projection, dim_projection)])
             self.img_projection = nn.Sequential(*layers)
         else:
-            raise NotImplementedError(f'projection_cls = {projection_cls}, not implemented')
+            raise NotImplementedError(f"projection_cls = {projection_cls}, not implemented")
 
         self.vocab_size = config.vocab_size
         self.img_features = None
 
         if isinstance(config.img_processor, dict):
-            self.layer_idx = config.img_processor.get('layer_idx', -2)
-            self.type_feature = config.img_processor.get('type_feature', 'patch')
+            self.layer_idx = config.img_processor.get("layer_idx", -2)
+            self.type_feature = config.img_processor.get("type_feature", "patch")
         else:
             self.layer_idx = -2
-            self.type_feature = 'patch'
-
+            self.type_feature = "patch"
 
     def set_img_features(self, img_features: torch.FloatTensor) -> None:
         self.img_features = img_features
@@ -226,7 +229,9 @@ class Phi3ImageEmbedding(nn.Module):
         input_ids = input_ids.view(-1, input_shape[-1])
 
         # positions for image tokens
-        positions = torch.nonzero(((input_ids < 0) & (input_ids > -MAX_INPUT_ID)) | (input_ids == IMAGE_TOKEN_ID), as_tuple=True)
+        positions = torch.nonzero(
+            ((input_ids < 0) & (input_ids > -MAX_INPUT_ID)) | (input_ids == IMAGE_TOKEN_ID), as_tuple=True
+        )
         has_image = len(positions[0].tolist()) > 0
         input_ids = input_ids.clamp_min(0).clamp_max(self.vocab_size).detach()
         hidden_states = self.wte(input_ids)
@@ -239,17 +244,15 @@ class Phi3ImageEmbedding(nn.Module):
                 num_images, num_crops, -1, self.image_dim_out
             )
             image_features_proj = self.hd_feature_transform(img_features, image_sizes)
-            hidden_states = hidden_states.index_put(
-                positions, image_features_proj, accumulate=False
-            )
+            hidden_states = hidden_states.index_put(positions, image_features_proj, accumulate=False)
         else:
-            fake_pixel_values = torch.randn((1, 2, 3, 336, 336),device=hidden_states.device,dtype=hidden_states.dtype)
-            fake_image_sizes = torch.tensor([[336, 336]],device=hidden_states.device,dtype=torch.int32)
-            img_features = self.get_img_features(fake_pixel_values.flatten(0, 1)).reshape(
-                1,2,-1,self.image_dim_out
+            fake_pixel_values = torch.randn(
+                (1, 2, 3, 336, 336), device=hidden_states.device, dtype=hidden_states.dtype
             )
+            fake_image_sizes = torch.tensor([[336, 336]], device=hidden_states.device, dtype=torch.int32)
+            img_features = self.get_img_features(fake_pixel_values.flatten(0, 1)).reshape(1, 2, -1, self.image_dim_out)
             image_features_proj = self.hd_feature_transform(img_features, fake_image_sizes)
-            hidden_states = hidden_states + 0*image_features_proj.mean()
+            hidden_states = hidden_states + 0 * image_features_proj.mean()
         if self.drop is not None:
             hidden_states = self.drop(hidden_states)
         return hidden_states
@@ -258,9 +261,7 @@ class Phi3ImageEmbedding(nn.Module):
         """
         image_features: (num_images, num_crops+1, 24*24, 1024)
         """
-        assert (
-            self.hd_transform_order == 'sub_glb'
-        ), f'hd_transform_order `{self.hd_transform_order}` not implemented'
+        assert self.hd_transform_order == "sub_glb", f"hd_transform_order `{self.hd_transform_order}` not implemented"
         if isinstance(self.img_projection, nn.Sequential):
             target_device = self.img_projection[0].bias.device
             target_dtype = self.img_projection[0].bias.dtype
@@ -285,9 +286,7 @@ class Phi3ImageEmbedding(nn.Module):
             # NOTE: real num_crops is padded
             # (num_crops, 24*24, 1024)
             sub_image_features = image_features[i, 1 : 1 + num_crops]
-            sub_image_features_hd = self.reshape_hd_patches_2x2merge(
-                sub_image_features, h_crop, w_crop
-            )
+            sub_image_features_hd = self.reshape_hd_patches_2x2merge(sub_image_features, h_crop, w_crop)
             sub_image_features_hd_newline = self.add_image_newline(sub_image_features_hd)
 
             # [sub features, separator, global features]
@@ -319,13 +318,9 @@ class Phi3ImageEmbedding(nn.Module):
             .reshape(N, H // 2, 2, H // 2, 2, C)  # N, 12, 2, 12, 2, 1024
             .permute(0, 1, 3, 2, 4, 5)  # N, 12, 12, 2, 2, 1024
             .reshape(N, -1, 4 * C)  # N, 144, 4096
-            .reshape(
-                num_images, h_crop, w_crop, H // 2, H // 2, -1
-            )  # n_img, h_crop, w_crop, 12, 12, 4096
+            .reshape(num_images, h_crop, w_crop, H // 2, H // 2, -1)  # n_img, h_crop, w_crop, 12, 12, 4096
             .permute(0, 1, 3, 2, 4, 5)  # n_img, h_crop, 12, w_crop, 12, 4096
-            .reshape(
-                num_images, h_crop * H // 2, w_crop * H // 2, 4 * C
-            )  # n_img, h_crop*12, w_crop*12, 4096
+            .reshape(num_images, h_crop * H // 2, w_crop * H // 2, 4 * C)  # n_img, h_crop*12, w_crop*12, 4096
         )
 
         # alternative implementation using einops
@@ -359,9 +354,9 @@ class Phi3ImageEmbedding(nn.Module):
         num_images, h, w, hid_dim = image_features_hd.shape
         # add the newline token to the HD image feature patches
         newline_embeddings = self.sub_GN.expand(num_images, h, -1, -1)  # (n_img, h, 1, hid_dim)
-        image_features_hd_newline = torch.cat(
-            [image_features_hd, newline_embeddings], dim=2
-        ).reshape(num_images, -1, hid_dim)
+        image_features_hd_newline = torch.cat([image_features_hd, newline_embeddings], dim=2).reshape(
+            num_images, -1, hid_dim
+        )
         return image_features_hd_newline
 
 
@@ -878,7 +873,7 @@ class Phi3FlashAttention2(Phi3Attention):
             dropout=attn_dropout,
             is_causal=self.is_causal,
             use_top_left_mask=self._flash_attn_uses_top_left_mask,
-            sliding_window=getattr(self.config, "sliding_window", None)
+            sliding_window=getattr(self.config, "sliding_window", None),
         )
 
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
@@ -1353,10 +1348,7 @@ class Phi3VModel(Phi3VPreTrainedModel):
         self.vision_embed_tokens = None
         if isinstance(config.embd_layer, dict):
             # vision embedding layer
-            embedding_config = {
-                'embedding_cls': config.embd_layer['embedding_cls'],
-                **config.embd_layer
-            }
+            embedding_config = {"embedding_cls": config.embd_layer["embedding_cls"], **config.embd_layer}
             self.vision_embed_tokens = Phi3ImageEmbedding(config, wte=self.embed_tokens, **embedding_config)
             # # set wte the same for vision embedding
             # self.vision_embed_tokens.wte.weight = self.embed_tokens.weight
@@ -1654,12 +1646,25 @@ class Phi3VForCausalLM(Phi3VPreTrainedModel):
 
     # Copied from transformers.models.persimmon.modeling_persimmon.PersimmonForCausalLM.prepare_inputs_for_generation
     def prepare_inputs_for_generation(
-        self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, pixel_values=None, image_sizes=None, **kwargs
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        image_sizes=None,
+        **kwargs,
     ):
         # When the first time input length reached long and short factor switching point, enforce re-compute cache
         # It will cause downside of slower at this single token position, however, better than current failure.
-        if past_key_values and self.config.rope_scaling and input_ids.shape[1] >= self.config.original_max_position_embeddings + 1:
-            past_length = past_key_values.seen_tokens if isinstance(past_key_values, Cache) else past_key_values[0][0].shape[2]
+        if (
+            past_key_values
+            and self.config.rope_scaling
+            and input_ids.shape[1] >= self.config.original_max_position_embeddings + 1
+        ):
+            past_length = (
+                past_key_values.seen_tokens if isinstance(past_key_values, Cache) else past_key_values[0][0].shape[2]
+            )
             if past_length <= self.config.original_max_position_embeddings:
                 past_key_values = None
 

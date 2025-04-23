@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-""" Phi-4-MM model configuration"""
+"""Phi-4-MM model configuration"""
 
 from transformers.configuration_utils import PretrainedConfig
 from transformers.utils import logging

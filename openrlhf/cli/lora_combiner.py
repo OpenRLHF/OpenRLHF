@@ -2,8 +2,9 @@ import argparse
 
 import torch
 from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, AutoConfig
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from openrlhf.models.lmm_kits.utils import get_generation_cls
+
 
 def apply_lora(model_name_or_path, lora_path, output_path, is_rm, bf16):
     print(f"Loading the base model from {model_name_or_path}")

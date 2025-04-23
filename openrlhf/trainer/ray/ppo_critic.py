@@ -11,10 +11,10 @@ from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
 from openrlhf.models import ValueLoss, get_llm_for_sequence_regression
+from openrlhf.models.lmm_kits.base.data_processor import MMInputs
+from openrlhf.models.lmm_kits.utils import get_data_processor
 from openrlhf.models.utils import masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
-from openrlhf.models.lmm_kits.utils import get_data_processor
-from openrlhf.models.lmm_kits.base.data_processor import MMInputs
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
 
@@ -52,8 +52,13 @@ class CriticPPOTrainer(ABC):
         self.max_epochs = self.args.max_epochs
 
         self.replay_buffer = NaiveReplayBuffer(
-            micro_train_batch_size, data_processor, buffer_limit, buffer_cpu_offload, getattr(self.args, "packing_samples", False), False
-        ) # Dynamic sampling is controlled by the single controller. We don't need to store extra buffers here.
+            micro_train_batch_size,
+            data_processor,
+            buffer_limit,
+            buffer_cpu_offload,
+            getattr(self.args, "packing_samples", False),
+            False,
+        )  # Dynamic sampling is controlled by the single controller. We don't need to store extra buffers here.
 
         self.critic_loss_fn = ValueLoss(value_clip)
 
@@ -241,7 +246,7 @@ class CriticModelRayActor(BasePPORole):
                 attention_mask.to(device),
                 ring_attn_group=self.strategy.ring_attn_group,
                 values_allgather=True,
-                visual_inputs=visual_inputs.to(device)
+                visual_inputs=visual_inputs.to(device),
             )
         self.critic.train()  # reset model state
         return value.to("cpu")
@@ -269,7 +274,6 @@ class CriticModelRayActor(BasePPORole):
             self.data_processor.processor,
             args.save_path + "_critic",
         )
-
 
     def save_checkpoint(self, tag):
         args = self.strategy.args

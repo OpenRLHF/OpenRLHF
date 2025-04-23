@@ -1,6 +1,9 @@
-from typing import List, Dict, Union
-from ..base.data_processor import BaseDataProcessor, MMInputs
+from typing import Dict, List, Union
+
 import torch
+
+from ..base.data_processor import BaseDataProcessor, MMInputs
+
 
 class Phi3_VDataProcessor(BaseDataProcessor):
     def __call__(
@@ -24,8 +27,8 @@ class Phi3_VDataProcessor(BaseDataProcessor):
             return_tensors=return_tensors,
         )
         emb_inputs, extra_info = self._split_input_dict(batch)
-        return MMInputs(emb_inputs=emb_inputs,extra_info=extra_info).to(device)
-    
+        return MMInputs(emb_inputs=emb_inputs, extra_info=extra_info).to(device)
+
     def _split_input_dict(self, input_dict: Dict) -> tuple[Dict, Dict]:
         extra_info = {}
         if "input_ids" in input_dict:
@@ -48,7 +51,7 @@ class Phi3_VDataProcessor(BaseDataProcessor):
 
     def _convert_message_format(self, messages: List[List[Dict]]) -> List[List[Dict]]:
         converted_messages = []
-        
+
         for message in messages:
             new_message = []
             image_counter = 1
@@ -58,8 +61,8 @@ class Phi3_VDataProcessor(BaseDataProcessor):
 
                 # Process the content to combine text and images
                 processed_content = ""
-                
-                if isinstance(content,list):
+
+                if isinstance(content, list):
                     for content_item in content:
                         if content_item["type"] == "text":
                             processed_content += content_item["text"]
@@ -79,7 +82,7 @@ class Phi3_VDataProcessor(BaseDataProcessor):
         batch = {}
         # collect all keys
         for inp in inputs:
-            batch.update({k:None for k,v in inp.items() if v is not None})
+            batch.update({k: None for k, v in inp.items() if v is not None})
         for k in batch.keys():
             if k in ["input_ids", "attention_mask"]:
                 batch[k] = torch.stack([inp[k] for inp in inputs if k in inp], dim=0)
@@ -90,8 +93,8 @@ class Phi3_VDataProcessor(BaseDataProcessor):
             else:
                 raise ValueError(f"Unknown key {k} for Phi3_VDataProcessor")
         emb_inputs, extra_info = self._split_input_dict(batch)
-        return MMInputs(emb_inputs=emb_inputs,extra_info=extra_info)
-    
+        return MMInputs(emb_inputs=emb_inputs, extra_info=extra_info)
+
     def split_input_batch(self, batch: MMInputs) -> List[MMInputs]:
         batch_size = len(batch["input_ids"])
         batch_kwargs = [{} for _ in range(batch_size)]
@@ -106,7 +109,7 @@ class Phi3_VDataProcessor(BaseDataProcessor):
 
         if "pixel_values" in keys and ("input_ids" not in keys or "image_sizes" not in keys):
             raise ValueError("Cannot split batch with pixel_values without input_ids and image_sizes")
-        
+
         for k in ["input_ids", "attention_mask"]:
             if k in keys:
                 vals = batch[k]
@@ -124,10 +127,14 @@ class Phi3_VDataProcessor(BaseDataProcessor):
             pixel_values = list(pixel_values)
             # Calculate number of image tokens for each image in the batch
             # copy from processing_phi3_v.py
-            num_img_tokens_per_image = [int(((h//336)*(w//336)+1)*144 + 1 + (h//336+1)*12) for h, w in image_sizes]
+            num_img_tokens_per_image = [
+                int(((h // 336) * (w // 336) + 1) * 144 + 1 + (h // 336 + 1) * 12) for h, w in image_sizes
+            ]
 
             # Split pixel values and image sizes for each sample. Each sample can have multiple images.
-            image_token_id = self.processor.tokenizer.encode("<|image|>", add_special_tokens=False)[0] #vllm use <|image|> as image token
+            image_token_id = self.processor.tokenizer.encode("<|image|>", add_special_tokens=False)[
+                0
+            ]  # vllm use <|image|> as image token
             for i in range(batch_size):
                 input_ids_i = batch_kwargs[i]["input_ids"]
                 if not isinstance(input_ids_i, torch.Tensor):
@@ -153,8 +160,9 @@ class Phi3_VDataProcessor(BaseDataProcessor):
         mm_inputs_list = []
         for b in batch_kwargs:
             emb_inputs, extra_info = self._split_input_dict(b)
-            mm_inputs_list.append(MMInputs(emb_inputs=emb_inputs,extra_info=extra_info))
+            mm_inputs_list.append(MMInputs(emb_inputs=emb_inputs, extra_info=extra_info))
         return mm_inputs_list
+
 
 DataProcessor = Phi3_VDataProcessor
 
