@@ -133,6 +133,8 @@ def train(args):
         reward_model,
         ref_model,
         vllm_engines,
+        prompt_split=args.prompt_split,
+        eval_split=args.eval_split,
         # generate kwargs
         do_sample=True,
         prompt_max_len=args.prompt_max_len,
@@ -375,7 +377,9 @@ if __name__ == "__main__":
         default=None,
         help="sampling probs for datasets",
     )
+    parser.add_argument("--prompt_split", type=str, default="train")
     parser.add_argument("--eval_dataset", type=str, default=None, help="Path to the evaluation dataset")
+    parser.add_argument("--eval_split", type=str, default="test")
     parser.add_argument("--eval_temperature", type=float, default=0.6, help="Temperature for evaluation")
     parser.add_argument(
         "--eval_n_samples_per_prompt", type=int, default=4, help="Number of samples per prompt for evaluation"

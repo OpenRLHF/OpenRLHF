@@ -37,6 +37,8 @@ class PPOTrainer(ABC):
         vllm_engines=None,
         prompt_max_len: int = 120,
         dataloader_pin_memory: bool = True,
+        prompt_split: str = "train",
+        eval_split: str = "test",
         **generate_kwargs,
     ) -> None:
         super().__init__()
@@ -51,6 +53,9 @@ class PPOTrainer(ABC):
         self.reference_model_group = reference_model_group
         self.dataloader_pin_memory = dataloader_pin_memory
         self.vllm_engines = vllm_engines
+
+        self.prompt_split = prompt_split
+        self.eval_split = eval_split
 
         self.prompt_max_len = prompt_max_len
         self.generate_kwargs = generate_kwargs
@@ -411,6 +416,7 @@ class PPOTrainer(ABC):
             strategy,
             args.seed,
             max_count=args.max_samples,
+            dataset_split=self.prompt_split,
         )
 
         # Create train dataset
@@ -429,6 +435,7 @@ class PPOTrainer(ABC):
                 args.eval_dataset,
                 None,  # No probability sampling for eval datasets
                 strategy,
+                dataset_split=self.eval_split,
             )
             eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
             eval_dataset = PromptDataset(eval_data, self.tokenizer, strategy, input_template=args.input_template)
