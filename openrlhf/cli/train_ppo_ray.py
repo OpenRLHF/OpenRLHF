@@ -493,5 +493,8 @@ if __name__ == "__main__":
         except json.JSONDecodeError:
             raise ValueError(f"Invalid Json string for --limit_mm_per_prompt: {args.limit_mm_per_prompt}")
 
+    if args.apply_chat_template:
+        import warnings
+        warnings.warn("The --apply_chat_template option will be deprecated in the future. The prompt will be required to be a json string strictly. And DataProcessor will always apply chat-template during training.",FutureWarning)
 
     train(args)

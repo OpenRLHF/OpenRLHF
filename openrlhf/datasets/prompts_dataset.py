@@ -1,13 +1,16 @@
 from torch.utils.data import Dataset
 from tqdm import tqdm
-
+import json
 
 def preprocess_data(data, input_template=None, input_key="input", label_key=None, apply_chat_template=None) -> str:
     if apply_chat_template:
         chat = data[input_key]
         if isinstance(chat, str):
             chat = [{"role": "user", "content": chat}]
-        prompt = apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
+        #prompt = apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
+        #TODO: apply_chat_template will be deprecated in the future. The prompt will be required to be a json string strictly.
+        # And DataProcessor will always apply chat-template during training.
+        prompt = json.dumps(chat,ensure_ascii=False)
     else:
         prompt = data[input_key]
         if input_template:
