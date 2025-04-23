@@ -62,7 +62,7 @@ def train(args):
         args.micro_train_batch_size,
         True,
         True,
-        train_dataset.packing_collate_fn if args.packing_samples else train_dataset.collate_fn,
+        train_dataset.collate_fn,
     )
 
     eval_dataset = None
@@ -79,7 +79,7 @@ def train(args):
             args.micro_train_batch_size,
             True,
             False,
-            eval_dataset.packing_collate_fn if args.packing_samples else eval_dataset.collate_fn,
+            eval_dataset.collate_fn,
         )
 
     # scheduler

@@ -327,7 +327,7 @@ class PRMLoss(nn.Module):
 
     def forward(self, inputs: torch.Tensor, logits: torch.Tensor, labels: torch.Tensor, *, return_acc: bool = False):
         placeholder_mask = inputs == self.placeholder_token_id
-        logits = logits[placeholder_mask]
+        logits = logits[placeholder_mask].squeeze(1)
         labels = labels[placeholder_mask]
 
         if labels.dtype == torch.float:

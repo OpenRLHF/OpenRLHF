@@ -1,7 +1,6 @@
 from typing import Callable
 
 import torch
-import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from openrlhf.utils.utils import convert_token_to_id
@@ -107,29 +106,3 @@ class ProcessRewardDataset(Dataset):
         input_masks = zero_pad_sequences(input_masks, side=padding_side)
         label_ids = zero_pad_sequences(label_ids, side=padding_side, value=self.tokenizer.pad_token_id)
         return input_ids, input_masks, label_ids
-
-    def packing_collate_fn(self, item_list):
-        input_ids = []
-        input_att_masks = []
-        input_seq_lens = []
-        label_ids = []
-        index = 1
-        for input_id, input_mask, label_id in item_list:
-            input_ids.append(input_id.flatten())
-            input_att_masks.append(torch.full_like(input_id.flatten(), index))
-            input_seq_lens.append(len(input_id.flatten()))
-
-            label_ids.append(label_id.flatten())
-            index += 1
-
-        packed_input_ids = torch.cat(input_ids, dim=0).unsqueeze(0)
-        packed_attention_masks = torch.cat(input_att_masks, dim=0).unsqueeze(0)
-        packed_seq_lens = input_seq_lens
-        packed_label_ids = torch.cat(label_ids, dim=0).unsqueeze(0)
-
-        if self.multiple_of > 1 and packed_input_ids.numel() % self.multiple_of != 0:
-            padding_len = self.multiple_of - (packed_input_ids.numel() % self.multiple_of)
-            packed_input_ids = F.pad(packed_input_ids, (0, padding_len), value=self.tokenizer.pad_token_id)
-            packed_attention_masks = F.pad(packed_attention_masks, (0, padding_len), value=0)
-
-        return packed_input_ids, packed_attention_masks, packed_seq_lens, packed_label_ids

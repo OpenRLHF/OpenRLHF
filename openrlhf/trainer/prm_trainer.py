@@ -122,24 +122,16 @@ class ProcessRewardModelTrainer(ABC):
             # train
             self.model.train()
             for data in self.train_dataloader:
-                if not self.packing_samples:
-                    inputs, attention_masks, labels = data
-                    inputs = inputs.to(torch.cuda.current_device())
-                    attention_mask = attention_masks.to(torch.cuda.current_device())
-                    labels = labels.to(torch.cuda.current_device())
-                    packed_seq_lens = None
-                else:
-                    inputs, attention_masks, packed_seq_lens, labels = data
-                    inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
-                    attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
-                    labels = labels.to(torch.cuda.current_device()).squeeze(1)
+                inputs, attention_masks, labels = data
+                inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
+                attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
+                labels = labels.to(torch.cuda.current_device()).squeeze(1)
 
                 output = self.model(
                     inputs,
                     attention_mask=attention_mask,
                     return_output=True,
-                    ring_attn_group=self.strategy.ring_attn_group,
-                    packed_seq_lens=packed_seq_lens,
+                    allgather_logits=True,
                 )
 
                 # mixtral
@@ -190,7 +182,7 @@ class ProcessRewardModelTrainer(ABC):
                 self._wandb.log(logs)
 
         # eval
-        if global_step % args.eval_steps == 0:
+        if self.eval_dataloader is not None and global_step % args.eval_steps == 0:
             self.evaluate(self.eval_dataloader, global_step)
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
@@ -213,24 +205,16 @@ class ProcessRewardModelTrainer(ABC):
             )
 
             for data in eval_dataloader:
-                if not self.packing_samples:
-                    inputs, attention_masks, labels = data
-                    inputs = inputs.to(torch.cuda.current_device())
-                    attention_mask = attention_masks.to(torch.cuda.current_device())
-                    labels = labels.to(torch.cuda.current_device())
-                    packed_seq_lens = None
-                else:
-                    inputs, attention_masks, packed_seq_lens, labels = data
-                    inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
-                    attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
-                    labels = labels.to(torch.cuda.current_device()).squeeze(1)
+                inputs, attention_masks, labels = data
+                inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
+                attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
+                labels = labels.to(torch.cuda.current_device()).squeeze(1)
 
                 output = self.model(
                     inputs,
                     attention_mask=attention_mask,
                     return_output=True,
-                    ring_attn_group=self.strategy.ring_attn_group,
-                    packed_seq_lens=packed_seq_lens,
+                    allgather_logits=True,
                 )
 
                 loss, acc = self.loss_fn(inputs, output.logits, labels, return_acc=True)
