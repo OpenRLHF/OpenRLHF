@@ -58,13 +58,14 @@ class DeepspeedStrategy(ABC):
         self.seed = seed
         self.full_determinism = full_determinism
         self.max_norm = max_norm
+
         self.adam_offload = getattr(args, "adam_offload", False)
         self.zpg = getattr(args, "zpg", 1)
+        self.use_ds_universal_ckpt = getattr(args, "use_ds_universal_ckpt", False)
         self.grad_accum_dtype = getattr(args, "grad_accum_dtype", None)
-        # overlap_comm
         self.overlap_comm = getattr(args, "overlap_comm", False)
         self.deepcompile = getattr(args, "deepcompile", False)
-        self.use_ds_universal_ckpt = getattr(args, "use_ds_universal_ckpt", False)
+        self.ds_tensor_parallel_size = getattr(args, "ds_tensor_parallel_size", 1)
 
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
@@ -245,6 +246,7 @@ class DeepspeedStrategy(ABC):
             overlap_comm=self.overlap_comm,
             use_ds_universal_ckpt=self.use_ds_universal_ckpt,
             deepcompile=self.deepcompile,
+            tensor_parallel_size=self.ds_tensor_parallel_size,
         )
 
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
@@ -276,7 +278,11 @@ class DeepspeedStrategy(ABC):
     def get_ds_eval_config(self, offload=False):
         # DS Config
         ds_config = get_eval_ds_config(
-            offload=offload, stage=self.stage if self.stage == 3 else 0, bf16=self.bf16, deepcompile=self.deepcompile
+            offload=offload,
+            stage=self.stage if self.stage == 3 else 0,
+            bf16=self.bf16,
+            deepcompile=self.deepcompile,
+            tensor_parallel_size=self.ds_tensor_parallel_size,
         )
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
         ds_config["train_batch_size"] = self.train_batch_size * self.ring_attn_size

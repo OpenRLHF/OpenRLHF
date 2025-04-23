@@ -12,6 +12,7 @@ def get_train_ds_config(
     overlap_comm=False,
     use_ds_universal_ckpt=False,
     deepcompile=False,
+    tensor_parallel_size=1,
 ):
     device = "cpu" if offload else "none"
     zero_opt_dict = {
@@ -54,6 +55,9 @@ def get_train_ds_config(
         "compile": {
             "deepcompile": deepcompile,
         },
+        "tensor_parallel": {
+            "autotp_size": tensor_parallel_size,
+        },
     }
 
 
@@ -62,6 +66,7 @@ def get_eval_ds_config(
     stage=0,
     bf16=True,
     deepcompile=False,
+    tensor_parallel_size=1,
 ):
     # At least for 0.16.6, DeepCompile hasn't support pure inference mode
     # https://github.com/deepspeedai/DeepSpeed/pull/7225
@@ -89,6 +94,9 @@ def get_eval_ds_config(
         "wall_clock_breakdown": False,
         "compile": {
             "deepcompile": deepcompile,
+        },
+        "tensor_parallel": {
+            "autotp_size": tensor_parallel_size,
         },
     }
 
