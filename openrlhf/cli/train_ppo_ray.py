@@ -339,9 +339,6 @@ if __name__ == "__main__":
     parser.add_argument("--entropy_loss_coef", type=float, default=0, help="Entropy loss coef")
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
     parser.add_argument("--reward_clip_range", type=float, nargs=2, default=(-10, 10), help="Reward clip range")
-    parser.add_argument("--freeze_prefix", type=str, nargs="+", default=None,
-        help="List of parameter name prefixes to freeze during training"
-    )
     parser.add_argument("--processor_kwargs",type=str,default=None,help="Processor kwargs. Should be a json string. There are always two keys: min_pixels and max_pixels, which are the minimum and maximum number of pixels for the image. If not provided, the default values are 4*28*28 and 16384*28*28 respectively.")
     # Reinforce
     parser.add_argument(

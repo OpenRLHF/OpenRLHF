@@ -428,16 +428,6 @@ class ActorModelRayActor(BasePPORole):
             use_liger_kernel=strategy.args.use_liger_kernel,
         )
         strategy.print(actor)
-        # Support freeze some parameter
-        if hasattr(strategy.args, "freeze_prefix") and strategy.args.freeze_prefix:
-            frozen_count = 0
-            total_params = 0
-            for name, param in actor.model.named_parameters():
-                total_params += 1
-                if any(name.startswith(prefix) for prefix in strategy.args.freeze_prefix):
-                    param.requires_grad = False
-                    frozen_count += 1
-            strategy.print(f"Froze {frozen_count}/{total_params} parameters based on prefixes: {strategy.args.freeze_prefix}")
 
         # configure tokenizer
         
