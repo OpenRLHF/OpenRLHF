@@ -1,13 +1,14 @@
+import os
 import time
 from abc import ABC
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, Dict
 
 import ray
 import torch
-
+from openrlhf.models.lmm_kits.base.data_processor import BaseDataProcessor, MMInputs
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean, process_sequences
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
 from openrlhf.utils.logging_utils import init_logger
@@ -58,6 +59,7 @@ class Experience:
     action_mask: Optional[torch.BoolTensor]
     info: Optional[dict]
     kl: Optional[torch.Tensor] = None
+    visual_inputs: Optional[MMInputs] = field(default_factory=MMInputs)
 
     @torch.no_grad()
     def to_device(self, device: torch.device):
@@ -71,6 +73,7 @@ class Experience:
         self.action_mask = to(self.action_mask, device)
         self.kl = to(self.kl, device)
         self.info = {key: to(value, device) for key, value in self.info.items()}
+        self.visual_inputs = self.visual_inputs.to(device)
         return self
 
     def pin_memory(self):
@@ -84,6 +87,7 @@ class Experience:
         self.action_mask = pin_memory(self.action_mask)
         self.kl = pin_memory(self.kl)
         self.info = {key: pin_memory(value) for key, value in self.info.items()}
+        self.visual_inputs = self.visual_inputs.pin_memory()
         return self
 
 
@@ -107,6 +111,7 @@ class Samples:
     response_length: (B,), the number of tokens in the response.
     total_length: (B,), the total number of tokens in the sequences.
     prompts: the prompts used to generate responses
+    visual_inputs: the visual input for vlm training
     """
 
     sequences: torch.Tensor
@@ -115,6 +120,7 @@ class Samples:
     response_length: torch.Tensor
     total_length: torch.Tensor
     prompts: list[str]
+    visual_inputs: list[MMInputs]
     labels: list[str]
 
     def __init__(
@@ -125,6 +131,7 @@ class Samples:
         response_length=None,
         total_length=None,
         prompts=None,
+        visual_inputs=None,
         labels=None,
         packed_seq_lens=None,
     ):
@@ -135,9 +142,10 @@ class Samples:
         self.total_length = total_length
         self.prompts = prompts or []
         self.labels = labels or []
+        self.visual_inputs = visual_inputs
         self.packed_seq_lens = packed_seq_lens
 
-    def split(self, split_size: int):
+    def split(self, split_size: int, data_processor: BaseDataProcessor):
         sequences_list = self.sequences.split(split_size, dim=0)
         attention_mask_list = self.attention_mask.split(split_size, dim=0)
         action_mask_list = self.action_mask.split(split_size, dim=0)
@@ -151,6 +159,7 @@ class Samples:
             sample.total_length = sample.attention_mask.float().sum(dim=-1)
             sample.prompts = self.prompts[i * split_size : (i + 1) * split_size]
             sample.labels = self.labels[i * split_size : (i + 1) * split_size]
+            sample.visual_inputs = data_processor.make_input_batch(self.visual_inputs[i * split_size : (i + 1) * split_size])
             sample_list.append(sample)
         return sample_list
 
@@ -163,10 +172,12 @@ class RemoteExperienceMaker(ABC):
         reward_model_group: PPORayActorGroup,
         initial_model_group: PPORayActorGroup,
         tokenizer,
+        data_processor: BaseDataProcessor,
         prompt_max_len: int,
         kl_controller,
         strategy=None,
         remote_rm_url: Union[list[str], str] = None,
+        custom_experience_filter:str=None,
         vllm_engines: List = None,
         packing_samples=False,
         **kwargs,
@@ -180,6 +191,7 @@ class RemoteExperienceMaker(ABC):
         self.reward_model_group = reward_model_group
         self.initial_model_group = initial_model_group
         self.tokenizer = tokenizer
+        self.data_processor = data_processor
         self.prompt_max_len = prompt_max_len
         self.kl_ctl = kl_controller
         self.strategy = strategy
@@ -197,26 +209,18 @@ class RemoteExperienceMaker(ABC):
             reward_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(reward_module)
             self.custom_reward_func = ray.remote(reward_module.reward_func)
+        
+        self.custom_experience_filter = None
+        if custom_experience_filter:
+            if not custom_experience_filter.endswith(".py"):
+                raise ValueError(f"custom_experience_filter must be a python file, got {custom_experience_filter}")
+            print(f"Loading custom `experience_filter(self,experience)` from {custom_experience_filter}")
+            import importlib.util
 
-    # tokenizer
-    def tokenize_fn(self, texts, max_length, padding=True, device=None):
-        if not padding:
-            # when padding is False, return tokenized texts as list
-            return self.tokenizer(
-                texts,
-                add_special_tokens=False,
-                max_length=max_length,
-                truncation=True,
-            )
-        batch = self.tokenizer(
-            texts,
-            return_tensors="pt",
-            add_special_tokens=False,
-            max_length=max_length,
-            padding=True,
-            truncation=True,
-        )
-        return {k: v.to(device) for k, v in batch.items()}
+            spec = importlib.util.spec_from_file_location("experience_filter", custom_experience_filter)
+            experience_filter_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(experience_filter_module)
+            self.custom_experience_filter = experience_filter_module.experience_filter
 
     @torch.no_grad()
     def make_experience_list(
@@ -263,7 +267,7 @@ class RemoteExperienceMaker(ABC):
         experiences = []
 
         # Split samples into smaller batches for batched actor/critic/reward/ref forward pass
-        samples_list = rollout_samples.split(args.micro_rollout_batch_size)
+        samples_list = rollout_samples.split(args.micro_rollout_batch_size, self.data_processor)
 
         # Extract all information from samples in one pass
         # Convert samples into lists of tensors and metadata for batch processing
@@ -272,6 +276,7 @@ class RemoteExperienceMaker(ABC):
         action_mask_list = [s.action_mask for s in samples_list]
         prompts_list = [p for s in samples_list for p in s.prompts]
         labels_list = [l for s in samples_list for l in s.labels]
+        visual_inputs_list = [s.visual_inputs for s in samples_list]
 
         # Batch call reward model
         r_refs = None
@@ -280,6 +285,7 @@ class RemoteExperienceMaker(ABC):
                 method_name="forward",
                 sequences=sequences_list,
                 attention_mask=attention_mask_list,
+                visual_inputs=visual_inputs_list,
                 pad_sequence=[True] * len(samples_list),
             )
         else:
@@ -329,6 +335,7 @@ class RemoteExperienceMaker(ABC):
             sequences=sequences_list,
             action_mask=action_mask_list,
             attention_mask=attention_mask_list,
+            visual_inputs=visual_inputs_list,
         )
 
         # Sync to avoid GPU OOM when colocate models
@@ -347,6 +354,7 @@ class RemoteExperienceMaker(ABC):
                 sequences=sequences_list,
                 action_mask=action_mask_list,
                 attention_mask=attention_mask_list,
+                visual_inputs=visual_inputs_list,
             )
             if args.colocate_all_models or args.colocate_critic_reward:
                 ray.get(value_ref)
@@ -361,6 +369,7 @@ class RemoteExperienceMaker(ABC):
                 sequences=sequences_list,
                 action_mask=action_mask_list,
                 attention_mask=attention_mask_list,
+                visual_inputs=visual_inputs_list,
             )
 
             if args.colocate_all_models or args.colocate_actor_ref:
@@ -426,6 +435,7 @@ class RemoteExperienceMaker(ABC):
                 samples.action_mask,
                 info,
                 kl,
+                visual_inputs=samples.visual_inputs,
             )
 
             experiences.append(experience)
@@ -447,6 +457,9 @@ class RemoteExperienceMaker(ABC):
         - experiences: List of Experience
         - rewards: List of rewards
         """
+        if self.custom_experience_filter:
+            experiences = self.custom_experience_filter(self,experiences)
+
         args = self.strategy.args
 
         # get rewards from experiences
@@ -658,14 +671,26 @@ class RemoteExperienceMaker(ABC):
         n_samples_per_prompt = kwargs.pop("n_samples_per_prompt", args.n_samples_per_prompt)
         all_prompts = sum([[prompt] * n_samples_per_prompt for prompt in all_prompts], [])
         all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
-        all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
+        batch_size = (len(all_prompts) + len(llms) - 1) // len(llms)
 
         # Distribute requests to engines and collect responses to outputs
         refs = []
-        batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
+        # For VLM
         for i, llm in enumerate(llms):
-            prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
-            refs.append(llm.add_requests.remote(0, sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
+            messages = all_prompts[i * batch_size : (i + 1) * batch_size]
+            if messages:
+                prompts = self.data_processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                images = [self.data_processor.get_images_from_messages(m) for m in messages]
+                vllm_inputs = [{
+                        "prompt": p,
+                        "multi_modal_data":{"image": imgs} if imgs else None,
+                        "mm_processor_kwargs": kwargs["processor_kwargs"]
+                    } for p, imgs in zip(prompts,images)]
+                refs.append(
+                    llm.add_requests.remote(0, sampling_params=sampling_params, vllm_vision_input=vllm_inputs)
+                )
+
+
         ray.get(refs)
 
         # Retrieve and combine results from all outputs
@@ -712,6 +737,8 @@ class RemoteExperienceMaker(ABC):
         response_length = action_mask.float().sum(dim=-1)
         total_length = attention_mask.float().sum(dim=-1)
 
+        visual_inputs = self.data_processor(all_prompts, self.prompt_max_len, device="cpu")
+        visual_inputs = self.data_processor.split_input_batch(visual_inputs)
         rollout_samples = Samples(
             sequences=sequences,
             attention_mask=attention_mask,
@@ -719,6 +746,7 @@ class RemoteExperienceMaker(ABC):
             response_length=response_length,
             total_length=total_length,
             prompts=all_prompts,
+            visual_inputs=visual_inputs,
             labels=all_labels,
         )
 

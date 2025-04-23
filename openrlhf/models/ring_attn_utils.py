@@ -85,7 +85,7 @@ def get_tensor_in_current_ring_attn_rank(tensors: list[torch.Tensor] | torch.Ten
     return output_tensors, ring_attn_pad_len
 
 
-def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
+def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group, *other_tensors):
     """
     Unpad and slice tensor for distributed training with ring attention.
 
@@ -111,6 +111,7 @@ def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
     Returns:
         tuple: Processed sequences and related tensors for ring attention
     """
+    original_shape = sequences.shape
     rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
     sequences, indices, cu_seqlens, _, _ = unpad_input(sequences.unsqueeze(-1), attention_mask)
     sequences = sequences.transpose(0, 1)  # (1, total_seqs)
@@ -123,14 +124,25 @@ def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
     position_ids = index_first_axis(rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(
         0, 1
     )  # (1, total_seqs)
+    other_tensors = list(other_tensors)
+    for i in range(len(other_tensors)):
+        t:torch.Tensor = other_tensors[i]
+        if not t.shape[:2] == original_shape[:2]:
+            raise ValueError(f"other_tensors[{i}] must have the shape: {original_shape}, got {t.shape}")
+        t = t.unsqueeze(-1) #(batch, seqlen, ..., 1)
+        t = index_first_axis(rearrange(t, "b s ... -> (b s) ..."), indices)
+        other_tensors[i] = rearrange(t, "... 1 -> 1 ... ") #(1, total_seqs, ...)
     ring_attn_pad_len = 0
     if ring_attn_group is not None:
-        (sequences, position_ids, rolled_sequences), ring_attn_pad_len = get_tensor_in_current_ring_attn_rank(
-            [sequences, position_ids, rolled_sequences], ring_attn_group, 0
+        local_indices = torch.arange(sequences.shape[1],device=sequences.device).unsqueeze(0) #(1, total_seqs)
+        (sequences, position_ids, rolled_sequences, local_indices), ring_attn_pad_len = get_tensor_in_current_ring_attn_rank(
+            [sequences, position_ids, rolled_sequences, local_indices], ring_attn_group, 0
         )
+        local_indices = local_indices.squeeze(0) #(local_seqs)
+        other_tensors = [index_first_axis(t.transpose(0,1), local_indices).transpose(0,1) for t in other_tensors]
         cu_seqlens[-1] += ring_attn_pad_len
         update_ring_attn_params(cu_seqlens)
-    return sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices
+    return sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices, *other_tensors
 
 
 def gather_and_pad_tensor(tensor, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen):
@@ -165,3 +177,29 @@ def gather_and_pad_tensor(tensor, ring_attn_group, ring_attn_pad_len, indices, b
             tensor = tensor[:, :-ring_attn_pad_len]
     tensor = pad_input(tensor.transpose(0, 1), indices, batch, seqlen).squeeze(-1)  # (batch, seqlen)
     return tensor
+
+HACKED_POSITION_IDS = None
+
+#Both ring and our hack substitute flash_attn. This func must be called after ring's substitue_hf_flash_attn.
+def substitute_ring_flash_attn():
+    import transformers
+    raw_flash_attention_forward = transformers.modeling_flash_attention_utils._flash_attention_forward
+    def _hacked_flash_attention_forward(*args,**kwargs):
+        global HACKED_POSITION_IDS
+        if HACKED_POSITION_IDS is not None:
+            kwargs['position_ids'] = HACKED_POSITION_IDS
+        return raw_flash_attention_forward(*args,**kwargs)
+
+    transformers.modeling_flash_attention_utils._flash_attention_forward = _hacked_flash_attention_forward
+
+def set_hacked_position_ids(position_ids):
+    global HACKED_POSITION_IDS
+    HACKED_POSITION_IDS = position_ids
+
+def clear_hacked_position_ids():
+    global HACKED_POSITION_IDS
+    HACKED_POSITION_IDS = None
+
+def get_hacked_position_ids():
+    global HACKED_POSITION_IDS
+    return HACKED_POSITION_IDS

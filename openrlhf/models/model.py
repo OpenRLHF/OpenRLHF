@@ -5,11 +5,14 @@ import torch
 import torch.nn as nn
 from peft import LoraConfig, get_peft_model
 from peft.tuners.lora import LoraLayer
-from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
+from transformers import BitsAndBytesConfig, AutoConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from openrlhf.utils.logging_utils import init_logger
 
+from .ring_attn_utils import set_hacked_position_ids, clear_hacked_position_ids
+from openrlhf.models.lmm_kits.utils import get_generation_cls
+from openrlhf.models.lmm_kits.base.data_processor import MMInputs
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
 
 logger = init_logger(__name__)
@@ -26,6 +29,7 @@ def get_llm_for_sequence_regression(
     lora_rank=0,
     lora_alpha=16,
     target_modules=None,
+    exclude_modules=None,
     lora_dropout=0,
     normalize_reward=False,
     use_flash_attention_2=False,
@@ -48,6 +52,7 @@ def get_llm_for_sequence_regression(
         lora_rank (int, optional): Rank for LoRA adaptation. Defaults to 0.
         lora_alpha (int, optional): Alpha parameter for LoRA. Defaults to 16.
         target_modules (list, optional): List of target modules for LoRA. Defaults to None.
+        exclude_modules (list, optional): List of modules to exclude from LoRA. Defaults to None.
         lora_dropout (float, optional): Dropout rate for LoRA layers. Defaults to 0.
         normalize_reward (bool, optional): Normalize reward values. Defaults to False.
         use_flash_attention_2 (bool, optional): Use Flash Attention 2.0. Defaults to False.
@@ -64,20 +69,21 @@ def get_llm_for_sequence_regression(
         model_type == "critic" or model_type == "reward"
     ), f"invalid model_type: {model_type}, should be critic or reward."
 
-    config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+    base_class = get_generation_cls(model_name_or_path)
+    from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+    from transformers.configuration_utils import PretrainedConfig
+    base_model_type = PretrainedConfig.from_pretrained(model_name_or_path).model_type
+    config = AutoConfig.from_pretrained(model_name_or_path,trust_remote_code= base_model_type not in CONFIG_MAPPING)
     config.normalize_reward = normalize_reward
     config._attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
 
     # Prioritize using the value_head_prefix in the model configuration.
     value_head_prefix = getattr(config, "value_head_prefix", value_head_prefix)
     logger.info(f"set value_head_prefix to `{value_head_prefix}`")
-
-    base_class = AutoModel._model_mapping[type(config)]
-    base_pretrained_class = base_class.__base__
     if model_type == "reward":
-        cls_class = _get_reward_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
+        cls_class = _get_reward_model(base_class, value_head_prefix, packing_samples)
     else:
-        cls_class = _get_critic_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
+        cls_class = _get_critic_model(base_class, value_head_prefix, packing_samples)
 
     # Note: dschf is defined in function scope to avoid global effects
     # https://huggingface.co/docs/transformers/main_classes/deepspeed#nontrainer-deepspeed-integration
@@ -100,7 +106,7 @@ def get_llm_for_sequence_regression(
     model = cls_class.from_pretrained(
         model_name_or_path,
         config=config,
-        trust_remote_code=True,
+        trust_remote_code=False,
         torch_dtype=torch.bfloat16 if bf16 else "auto",
         quantization_config=nf4_config,
         device_map=device_map,
@@ -110,10 +116,15 @@ def get_llm_for_sequence_regression(
     # LoRA
     if lora_rank > 0:
         model.enable_input_require_grads()
+        if isinstance(target_modules, list) and len(target_modules) == 1:
+            target_modules = target_modules[0]
+        if isinstance(exclude_modules, list) and len(exclude_modules) == 1:
+            exclude_modules = exclude_modules[0]
         lora_config = LoraConfig(
             r=lora_rank,
             lora_alpha=lora_alpha,
             target_modules=target_modules,
+            exclude_modules=exclude_modules,
             lora_dropout=lora_dropout,
             bias="none",
         )
@@ -154,13 +165,12 @@ def get_llm_for_sequence_regression(
     return model
 
 
-def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="score", packing_samples=False):
-    class RewardModel(base_pretrained_model):
+def _get_reward_model(base_llm_model, value_head_prefix="score", packing_samples=False):
+    class RewardModel(base_llm_model):
         supports_gradient_checkpointing = True
 
-        def __init__(self, config: AutoConfig):
+        def __init__(self, config):
             super().__init__(config)
-            setattr(self, self.base_model_prefix, base_llm_model(config))
 
             self.value_head_prefix = value_head_prefix
             setattr(self, value_head_prefix, nn.Linear(config.hidden_size, 1, bias=False))
@@ -185,24 +195,35 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             ring_attn_group=None,
             pad_sequence=False,
             packed_seq_lens=None,
+            visual_inputs: Optional[MMInputs] = None,
         ) -> torch.Tensor:
+            inputs_embeds = super().get_inputs_embeds(input_ids, **visual_inputs.emb_inputs)
             batch, seqlen = input_ids.size()
             eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
             forward_attention_mask = attention_mask
             if self.packing_samples:
-                input_ids, position_ids, _, ring_attn_pad_len, indices = unpad_and_slice_tensor(
-                    input_ids, attention_mask, ring_attn_group
+                packed_position_ids = super().get_position_ids(input_ids,attention_mask=attention_mask,packing=True, **visual_inputs.emb_inputs)
+                input_ids, hacked_position_ids, _, ring_attn_pad_len, indices, inputs_embeds, split_position_ids = unpad_and_slice_tensor(
+                    input_ids, attention_mask, ring_attn_group, inputs_embeds, packed_position_ids
                 )
+                position_ids = super().offset_split_position_ids(split_position_ids, hacked_position_ids) # this is true position_ids
+                #position_ids is directly hacked into flash_attn_forward to distinguish between different sequences
+                set_hacked_position_ids(hacked_position_ids)
                 forward_attention_mask = None
             else:
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
-                position_ids = attention_mask.long().cumsum(-1) - 1
-                position_ids.masked_fill_(attention_mask == 0, 1)
+                position_ids = super().get_position_ids(input_ids,attention_mask=attention_mask,packing=False, **visual_inputs.emb_inputs)
 
-            outputs = getattr(self, self.base_model_prefix)(
-                input_ids, attention_mask=forward_attention_mask, position_ids=position_ids
+            outputs = super().forward(
+                inputs_embeds=inputs_embeds, attention_mask=forward_attention_mask, position_ids=position_ids,output_hidden_states=True, **visual_inputs.forward_inputs
             )
-            last_hidden_states = outputs["last_hidden_state"]
+            clear_hacked_position_ids()
+            if "last_hidden_state" in outputs:
+                last_hidden_states = outputs["last_hidden_state"]
+            elif "hidden_states" in outputs:
+                last_hidden_states = outputs["hidden_states"][-1]
+            else:
+                raise ValueError("outputs should contain either last_hidden_state or hidden_states")
 
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
 
@@ -218,13 +239,12 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
     return RewardModel
 
 
-def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="score", packing_samples=False):
-    class CriticModel(base_pretrained_model):
+def _get_critic_model(base_llm_model, value_head_prefix="score", packing_samples=False):
+    class CriticModel(base_llm_model):
         supports_gradient_checkpointing = True
 
-        def __init__(self, config: AutoConfig):
+        def __init__(self, config):
             super().__init__(config)
-            setattr(self, self.base_model_prefix, base_llm_model(config))
 
             self.value_head_prefix = value_head_prefix
             setattr(self, value_head_prefix, nn.Linear(config.hidden_size, 1, bias=False))
@@ -250,28 +270,39 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             ring_attn_group=None,
             values_allgather=False,
             packed_seq_lens=None,
+            visual_inputs: Optional[MMInputs] = None,
         ) -> torch.Tensor:
+            inputs_embeds = super().get_inputs_embeds(input_ids, **visual_inputs.emb_inputs)
             batch, seqlen = input_ids.size()
             forward_attention_mask = attention_mask
             if self.packing_samples:
-                input_ids, position_ids, _, ring_attn_pad_len, indices = unpad_and_slice_tensor(
-                    input_ids, attention_mask, ring_attn_group
+                packed_position_ids = super().get_position_ids(input_ids,attention_mask=attention_mask,packing=True, **visual_inputs.emb_inputs)
+                input_ids, hacked_position_ids, _, ring_attn_pad_len, indices, inputs_embeds, split_position_ids = unpad_and_slice_tensor(
+                    input_ids, attention_mask, ring_attn_group, inputs_embeds, packed_position_ids
                 )
+                position_ids = super().offset_split_position_ids(split_position_ids, hacked_position_ids) # this is true position_ids
+                #position_ids is directly hacked into flash_attn_forward to distinguish between different sequences
+                set_hacked_position_ids(hacked_position_ids)
                 forward_attention_mask = None
             else:
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
-                position_ids = attention_mask.long().cumsum(-1) - 1
-                position_ids.masked_fill_(attention_mask == 0, 1)
+                position_ids = super().get_position_ids(input_ids,attention_mask=attention_mask,packing=False, **visual_inputs.emb_inputs)
 
-            outputs = getattr(self, self.base_model_prefix)(
-                input_ids, attention_mask=forward_attention_mask, position_ids=position_ids
+            outputs = super().forward(
+                inputs_embeds=inputs_embeds, attention_mask=forward_attention_mask, position_ids=position_ids,output_hidden_states=True, **visual_inputs.forward_inputs
             )
+            clear_hacked_position_ids()
 
             if action_mask is None:
                 assert return_output
                 return outputs
 
-            last_hidden_states = outputs["last_hidden_state"]
+            if "last_hidden_state" in outputs:
+                last_hidden_states = outputs["last_hidden_state"]
+            elif "hidden_states" in outputs:
+                last_hidden_states = outputs["hidden_states"][-1]
+            else:
+                raise ValueError("outputs should contain either last_hidden_state or hidden_states")
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)  # (1, total_seqs)
 
             if self.packing_samples:

@@ -5,6 +5,7 @@ from typing import Dict, Optional, Type
 
 import ray
 import torch
+import torch.distributed as dist
 from ray.util.placement_group import PlacementGroup, placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from tqdm import tqdm
@@ -12,6 +13,7 @@ from tqdm import tqdm
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
 from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.models.lmm_kits.base.data_processor import MMInputs
 
 
 class DistributedTorchRayActor:
@@ -129,6 +131,7 @@ class ReferenceModelRayActor(BasePPORole):
         attention_mask: Optional[torch.Tensor] = None,
         return_output=False,
         packed_seq_lens: Optional[list[int]] = None,
+        visual_inputs: Optional[MMInputs] = None,
     ) -> torch.Tensor:
         device = torch.cuda.current_device()
         with torch.no_grad():
@@ -138,6 +141,7 @@ class ReferenceModelRayActor(BasePPORole):
                 attention_mask.to(device),
                 ring_attn_group=self.strategy.ring_attn_group,
                 packed_seq_lens=packed_seq_lens,
+                visual_inputs=visual_inputs.to(device),
             )
         return log_probs.to("cpu")
 
@@ -173,6 +177,7 @@ class RewardModelRayActor(BasePPORole):
         attention_mask: Optional[torch.Tensor] = None,
         packed_seq_lens=None,
         pad_sequence=False,
+        visual_inputs: Optional[MMInputs] = None,
     ) -> torch.Tensor:
         device = torch.cuda.current_device()
         with torch.no_grad():
@@ -182,6 +187,7 @@ class RewardModelRayActor(BasePPORole):
                 ring_attn_group=self.strategy.ring_attn_group,
                 pad_sequence=True,
                 packed_seq_lens=packed_seq_lens,
+                visual_inputs=visual_inputs.to(device),
             )
         return reward.to("cpu")
 

@@ -6,15 +6,18 @@ from datetime import timedelta
 import ray
 import torch
 from tqdm import tqdm
-
+from torch.utils.data import DataLoader
 from openrlhf.datasets import PromptDataset
 from openrlhf.trainer.ppo_utils import AdaptiveKLController, FixedKLController
 from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
+from openrlhf.trainer.ppo_utils.replay_buffer import NaiveReplayBuffer
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
-from openrlhf.utils import blending_datasets, get_tokenizer
+from openrlhf.utils import blending_datasets
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
+
+from openrlhf.models.lmm_kits.utils import get_data_processor
 
 logger = init_logger(__name__)
 
@@ -45,8 +48,9 @@ class PPOTrainer(ABC):
 
         self.strategy = strategy
         self.args = strategy.args
-
-        self.tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not self.args.disable_fast_tokenizer)
+        self.data_processor = get_data_processor(pretrain, "left", strategy, use_fast=not self.args.disable_fast_tokenizer)
+        self.tokenizer = self.data_processor.tokenizer
+        self.processor = self.data_processor.processor
         self.actor_model_group = actor_model_group
         self.critic_model_group = critic_model_group
         self.reward_model_group = reward_model_group
@@ -62,6 +66,7 @@ class PPOTrainer(ABC):
 
         self.max_epochs = self.args.max_epochs
         self.remote_rm_url = self.args.remote_rm_url
+        self.custom_experience_filter = self.args.custom_experience_filter
         self.init_kl_coef = self.args.init_kl_coef
         self.kl_target = self.args.kl_target
         self.kl_horizon = self.args.kl_horizon
@@ -79,16 +84,28 @@ class PPOTrainer(ABC):
             self.reward_model_group,
             self.reference_model_group,
             self.tokenizer,
+            self.data_processor,
             self.prompt_max_len,
             self.kl_ctl,
             self.strategy,
             self.remote_rm_url,
+            self.custom_experience_filter,
             vllm_engines=self.vllm_engines,
             packing_samples=self.strategy.args.packing_samples,
         )
 
         self.prepare_datasets()
-
+        buffer_limit = self.prompts_dataloader.batch_size * self.args.n_samples_per_prompt
+        buffer_cpu_offload = True
+        self.replay_buffer = NaiveReplayBuffer(
+            1, 
+            self.data_processor, 
+            buffer_limit, 
+            buffer_cpu_offload, 
+            getattr(self.args, "packing_samples", False), 
+            self.args.store_extra_buffers, 
+            device='cpu'
+        ) # Control dynamic sampling.
         # wandb/tensorboard setting
         self._wandb = None
         self._tensorboard = None
@@ -153,36 +170,52 @@ class PPOTrainer(ABC):
                 batch_vllm_engine_call(self.vllm_engines, "sleep")
 
         # Restore step and start_epoch
-        consumed_samples = ray.get(self.actor_model_group.async_run_method(method_name="get_consumed_samples"))[0]
-        steps = consumed_samples // args.rollout_batch_size + 1
+        consumed_samples = ray.get(self.actor_model_group.async_run_method(method_name="get_attr",key="consumed_samples"))[0]
+        trained_steps = ray.get(self.actor_model_group.async_run_method(method_name="get_attr",key="trained_steps"))[0]
+        steps = trained_steps + 1
+        total_consumed_samples = consumed_samples
         start_episode = consumed_samples // args.rollout_batch_size // num_rollouts_per_episodes
         consumed_samples = consumed_samples % (num_rollouts_per_episodes * args.rollout_batch_size)
-
-        for episode in range(start_episode, args.num_episodes):
+        episode = start_episode
+        pbar = tqdm(
+            range(args.max_global_steps),
+            desc=f"Steps [Episode {episode+1}]",
+            disable=not self.strategy.is_rank_0(),
+            initial=steps-1,
+        )
+        while steps <= args.max_global_steps:
             self.prompts_dataloader.sampler.set_epoch(
                 episode, consumed_samples=0 if episode > start_episode else consumed_samples
             )
-            pbar = tqdm(
-                range(self.prompts_dataloader.__len__()),
-                desc=f"Episode [{episode + 1}/{args.num_episodes}]",
-                disable=False,
-            )
 
             for _, rand_prompts, labels in self.prompts_dataloader:
+                total_consumed_samples += len(rand_prompts)
                 experiences = self.experience_maker.make_experience_list(rand_prompts, labels, **self.generate_kwargs)
+                self.replay_buffer.extend(experiences)
+                if not self.replay_buffer.full():
+                    print(f"📌 Replay buffer space: {len(self.replay_buffer)}/{self.replay_buffer.limit}. Continue to sample more data.")
+                    continue
                 sample0 = self.tokenizer.batch_decode(
                     experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True
                 )
                 print(sample0)
-                refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences)
+                exp_dataloader = DataLoader(
+                    self.replay_buffer,
+                    batch_size=1, # bs=1 for fine-grained data chunking
+                    shuffle=False,
+                    collate_fn=self.replay_buffer.collate_fn,
+                )
+                refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=list(exp_dataloader))
                 if self.critic_model_group is not None:
                     refs.extend(
-                        self.critic_model_group.async_run_method_batch(method_name="append", experience=experiences)
+                        self.critic_model_group.async_run_method_batch(method_name="append", experience=list(exp_dataloader))
                     )
                 ray.get(refs)
 
                 status = self.ppo_train(steps)
-
+                self.replay_buffer.clear()
+                if args.store_extra_buffers:
+                    print(f"📌 Replay buffer space: {len(self.replay_buffer)}/{self.replay_buffer.limit}. Stored buffers are used after clearing.")
                 if "kl" in status:
                     self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
                 pbar.set_postfix(status)
@@ -190,11 +223,16 @@ class PPOTrainer(ABC):
                 # Add generated samples to status dictionary
                 status["generated_samples"] = [sample0[0], experiences[0].info["reward"][0]]
                 # logs/checkpoints
-                client_states = {"consumed_samples": steps * args.rollout_batch_size}
+                client_states = {"consumed_samples": total_consumed_samples, "trained_steps": steps}
                 self.save_logs_and_checkpoints(args, steps, pbar, status, client_states)
 
                 pbar.update()
                 steps = steps + 1
+                if steps > args.max_global_steps:
+                    break
+
+            episode = episode + 1
+            pbar.set_description(f"Steps [Episode {episode+1}]")
 
         if self._wandb is not None:
             self._wandb.finish()
@@ -445,13 +483,14 @@ class PPOTrainer(ABC):
 
         self.prompts_dataloader = prompts_dataloader
         self.eval_dataloader = eval_dataloader
-        self.max_steps = (
-            len(prompts_dataset)
-            * args.n_samples_per_prompt
-            // args.train_batch_size
-            * args.num_episodes
-            * args.max_epochs
-        )
+        if args.max_global_steps is None:
+            # If args.max_global_steps is not set, we use num_episodes to calculate max_steps
+            # For dynamic sampling, we need multiple rollouts for one training stage.
+            # In this case, max_steps is not the real training steps of actor model, and you should set args.max_global_steps explicitly.
+            self.max_steps = len(prompts_dataset) * args.n_samples_per_prompt // args.train_batch_size * args.max_epochs * args.num_episodes
+            args.max_global_steps = len(prompts_dataset) // args.rollout_batch_size * args.num_episodes
+        else:
+            self.max_steps = args.max_global_steps * args.rollout_batch_size * args.n_samples_per_prompt // args.train_batch_size * args.max_epochs
 
     def get_max_steps(self):
         return self.max_steps
