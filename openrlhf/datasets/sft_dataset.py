@@ -51,7 +51,6 @@ class SFTDataset(Dataset):
         input_template=None,
         pretrain_mode=False,
         num_processors=8,  # Specify the number of processors you want to use
-        multiple_of=1,
         multiturn=False,
     ) -> None:
         super().__init__()
@@ -59,7 +58,6 @@ class SFTDataset(Dataset):
         self.strategy = strategy
         self.pretrain_mode = pretrain_mode
         self.max_length = max_length
-        self.multiple_of = multiple_of
         self.multiturn = multiturn
 
         # chat template

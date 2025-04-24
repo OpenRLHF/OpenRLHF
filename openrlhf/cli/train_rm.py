@@ -59,7 +59,6 @@ def train(args):
         args.max_len,
         strategy,
         input_template=args.input_template,
-        multiple_of=args.ring_attn_size,
     )
 
     # prepare dataloader
@@ -88,7 +87,6 @@ def train(args):
         args.max_len,
         strategy,
         input_template=args.input_template,
-        multiple_of=args.ring_attn_size,
     )
     eval_dataloader = strategy.setup_dataloader(
         eval_dataset,
@@ -189,6 +187,7 @@ if __name__ == "__main__":
     parser.add_argument("--overlap_comm", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
+    parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed Tensor parallel size")
 
     # Models
     parser.add_argument("--pretrain", type=str, default=None)

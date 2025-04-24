@@ -269,63 +269,74 @@ class ActorPPOTrainer(ABC):
         torch.cuda.empty_cache()
         model = self.actor.model.module
         count, num_params = 0, len(list(model.named_parameters()))
+
+        def _broadcast_param(param, count, num_params):
+            use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
+            # Fire all vllm engines for broadcast
+            if torch.distributed.get_rank() == 0:
+                shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
+                refs = [
+                    engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
+                    for engine in self.vllm_engines
+                ]
+
+                if use_ray:
+                    import ray.util.collective as collective
+
+                    collective.broadcast(param.data, 0, group_name=self._model_update_group)
+                else:
+                    torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
+                ray.get(refs)
+
+        def _handle_cuda_ipc(param, count, num_params):
+            from torch.multiprocessing.reductions import reduce_tensor
+
+            weight = param.data.clone()
+            ipc_handle = reduce_tensor(weight)
+
+            ipc_handle = {get_physical_gpu_id(): ipc_handle}
+            ipc_handle_list = [None] * torch.distributed.get_world_size()
+            torch.distributed.all_gather_object(ipc_handle_list, ipc_handle)
+
+            if torch.distributed.get_rank() == 0:
+                ipc_handles = {}
+                for d in ipc_handle_list:
+                    ipc_handles.update(d)
+
+                shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
+                refs = [
+                    engine.update_weight_cuda_ipc.remote(
+                        name,
+                        dtype=param.dtype,
+                        shape=shape,
+                        ipc_handles=ipc_handles,
+                        empty_cache=count == num_params,
+                    )
+                    for engine in self.vllm_engines
+                ]
+                ray.get(refs)
+            torch_dist_barrier_and_cuda_sync()
+
         for name, param in model.named_parameters():
             count += 1  # empty_cache at last param
 
             # broadcast
             if not self.use_cuda_ipc:
-                use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
-                # Fire all vllm engines for broadcast
-                if torch.distributed.get_rank() == 0:
-                    shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
-                    refs = [
-                        engine.update_weight.remote(
-                            name, dtype=param.dtype, shape=shape, empty_cache=count == num_params
-                        )
-                        for engine in self.vllm_engines
-                    ]
-
                 # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
-                with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                    if torch.distributed.get_rank() == 0:
-                        if use_ray:
-                            import ray.util.collective as collective
-
-                            collective.broadcast(param.data, 0, group_name=self._model_update_group)
-                        else:
-                            torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
-                        ray.get(refs)
+                if self.strategy.args.ds_tensor_parallel_size > 1:
+                    with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
+                        _broadcast_param(param, count, num_params)
+                else:
+                    with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
+                        _broadcast_param(param, count, num_params)
             # CUDA IPC
             else:
-                from torch.multiprocessing.reductions import reduce_tensor
-
-                # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
-                with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                    weight = param.data.clone()
-                    ipc_handle = reduce_tensor(weight)
-
-                    ipc_handle = {get_physical_gpu_id(): ipc_handle}
-                    ipc_handle_list = [None] * torch.distributed.get_world_size()
-                    torch.distributed.all_gather_object(ipc_handle_list, ipc_handle)
-
-                    if torch.distributed.get_rank() == 0:
-                        ipc_handles = {}
-                        for d in ipc_handle_list:
-                            ipc_handles.update(d)
-
-                        shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
-                        refs = [
-                            engine.update_weight_cuda_ipc.remote(
-                                name,
-                                dtype=param.dtype,
-                                shape=shape,
-                                ipc_handles=ipc_handles,
-                                empty_cache=count == num_params,
-                            )
-                            for engine in self.vllm_engines
-                        ]
-                        ray.get(refs)
-                    torch_dist_barrier_and_cuda_sync()
+                if self.strategy.args.ds_tensor_parallel_size > 1:
+                    with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
+                        _handle_cuda_ipc(param, count, num_params)
+                else:
+                    with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
+                        _handle_cuda_ipc(param, count, num_params)
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)

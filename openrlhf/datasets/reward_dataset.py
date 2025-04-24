@@ -63,14 +63,12 @@ class RewardDataset(Dataset):
         input_template=None,
         is_dpo=False,
         num_processors=8,
-        multiple_of=1,
     ) -> None:
         super().__init__()
         self.is_dpo = is_dpo
         self.tokenizer = tokenizer
         self.strategy = strategy
         self.max_length = max_length
-        self.multiple_of = multiple_of
 
         # chat_template
         self.input_template = input_template

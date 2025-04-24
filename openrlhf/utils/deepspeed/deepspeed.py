@@ -14,13 +14,14 @@ import transformers.modeling_flash_attention_utils
 from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
 from peft import PeftModel, get_peft_model_state_dict
 from torch import distributed as dist
+from torch.distributed.device_mesh import init_device_mesh
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
 from openrlhf.models import Actor
 from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
 from openrlhf.utils.distributed_sampler import DistributedSampler
-
+from openrlhf.utils.distributed_util import torch_dist_barrier_and_cuda_sync
 from .deepspeed_utils import (
     _z3_params_to_fetch,
     get_eval_ds_config,
@@ -66,6 +67,7 @@ class DeepspeedStrategy(ABC):
         self.overlap_comm = getattr(args, "overlap_comm", False)
         self.deepcompile = getattr(args, "deepcompile", False)
         self.ds_tensor_parallel_size = getattr(args, "ds_tensor_parallel_size", 1)
+        self.ring_attn_size = getattr(self.args, "ring_attn_size", 1)
 
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
@@ -89,35 +91,37 @@ class DeepspeedStrategy(ABC):
 
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         deepspeed.init_distributed(timeout=timeout)
-        self.setup_ring_attn()
+
+        # mesh
         self.world_size = dist.get_world_size()
+        dp_size = self.world_size // self.ring_attn_size // self.ds_tensor_parallel_size
+        self.ds_device_mesh = init_device_mesh(
+            "cuda", (dp_size, self.ring_attn_size, self.ds_tensor_parallel_size), mesh_dim_names=("dp", "sp", "tp")
+        )
+        self.setup_ring_attn(self.ds_device_mesh)
+
         self.accumulated_gradient = (
-            self.train_batch_size * self.ring_attn_size // self.micro_train_batch_size // self.world_size
+            self.train_batch_size
+            * self.ring_attn_size
+            * self.ds_tensor_parallel_size
+            // self.micro_train_batch_size
+            // self.world_size
         )
 
-    def setup_ring_attn(self):
-        self.ring_attn_size = getattr(self.args, "ring_attn_size", 1)
+    def setup_ring_attn(self, ds_device_mesh):
         if self.ring_attn_size == 1:
             self.ring_attn_rank = 0
             return
 
-        ring_head_stride = getattr(self.args, "ring_head_stride", 1)
-        for i in range(dist.get_world_size() // self.ring_attn_size):
-            ring_attn_ranks = list(
-                range(
-                    i * self.ring_attn_size,
-                    (i + 1) * self.ring_attn_size,
-                )
-            )
-            group = dist.new_group(ranks=ring_attn_ranks, backend="nccl")
-            if dist.get_rank() in ring_attn_ranks:
-                set_ring_attn_group(group)
-                self.ring_attn_rank = dist.get_rank(group=group)
-                self.ring_attn_ranks = ring_attn_ranks
+        # get the group of the current device
+        group = ds_device_mesh["sp"].get_group()
+        self.ring_attn_rank = dist.get_rank(group=group)
+        set_ring_attn_group(group)
 
         from ring_flash_attn import substitute_hf_flash_attn
 
-        substitute_hf_flash_attn(self.ring_attn_group, ring_head_stride)
+        self.ring_head_stride = getattr(self.args, "ring_head_stride", 1)
+        substitute_hf_flash_attn(self.ring_attn_group, self.ring_head_stride)
 
     @property
     def ring_attn_group(self):
@@ -163,8 +167,9 @@ class DeepspeedStrategy(ABC):
         # DDP only mode, replay buffers on each rank are different.
         if sampler is None:
             if dist.is_initialized():
-                num_replicas = dist.get_world_size() // self.ring_attn_size
-                rank = dist.get_rank() // self.ring_attn_size
+                dp_group = self.ds_device_mesh["dp"].get_group()
+                num_replicas = dist.get_world_size(group=dp_group)
+                rank = dist.get_rank(group=dp_group)
             else:
                 num_replicas = 1
                 rank = 0
@@ -216,6 +221,15 @@ class DeepspeedStrategy(ABC):
         is_actor = isinstance(model, Actor)
         ds_config = self.get_ds_train_config(is_actor)
 
+        if self.ds_tensor_parallel_size > 1:
+            tp_model = deepspeed.tp_model_init(
+                model=model.model if is_actor else model, tp_size=self.ds_tensor_parallel_size, dtype=torch.bfloat16
+            )
+            if is_actor:
+                model.model = tp_model
+            else:
+                model = tp_model
+
         engine, optim, _, scheduler = deepspeed.initialize(
             model=model.model if is_actor else model,
             optimizer=optim,
@@ -260,6 +274,15 @@ class DeepspeedStrategy(ABC):
             return model
         is_actor = isinstance(model, Actor)
         ds_config = self.get_ds_eval_config(offload=getattr(model, "_offload", False))
+
+        if self.ds_tensor_parallel_size > 1:
+            tp_model = deepspeed.tp_model_init(
+                model=model.model if is_actor else model, tp_size=self.ds_tensor_parallel_size, dtype=torch.bfloat16
+            )
+            if is_actor:
+                model.model = tp_model
+            else:
+                model = tp_model
 
         engine, *_ = deepspeed.initialize(
             model=model.model if is_actor else model,
@@ -327,25 +350,14 @@ class DeepspeedStrategy(ABC):
         model_to_save = self._unwrap_model(model)
 
         # gather parameters
-        output_state_dict = {}
-        for k, v in model_to_save.named_parameters():
-            # only gather z3 params
-            params_to_fetch = _z3_params_to_fetch([v])
-            with deepspeed.zero.GatheredParameters(params_to_fetch, enabled=len(params_to_fetch) > 0):
-                vv = v.data.cpu()
-                if self.is_rank_0():
-                    output_state_dict[k] = vv
+        output_state_dict = (
+            model.model._consolidated_16bit_state_dict()
+            if isinstance(model, Actor)
+            else model._consolidated_16bit_state_dict()
+        )
 
         if self.is_rank_0():
             state_dict = model_to_save.state_dict()
-
-            # copy named_buffers with `persistent=True`
-            for k, v in model_to_save.named_buffers():
-                if k not in state_dict:
-                    continue
-                vv = v.data.cpu()
-                output_state_dict[k] = vv
-
             state_dict_keys = set(state_dict.keys())
             output_state_dict_keys = set(output_state_dict.keys())
 
@@ -360,7 +372,7 @@ class DeepspeedStrategy(ABC):
             # only save peft weights https://github.com/microsoft/DeepSpeed/issues/4295
             if isinstance(model_to_save, PeftModel):
                 model_to_save.save_pretrained(output_dir, **kwargs)
-                if self.stage == 3:
+                if self.ds_tensor_parallel_size > 1 or self.stage == 3:
                     torch.save(
                         get_peft_model_state_dict(model_to_save, output_state_dict),
                         os.path.join(output_dir, "adapter_model.bin"),
@@ -378,14 +390,7 @@ class DeepspeedStrategy(ABC):
             # save tokenizer
             tokenizer.save_pretrained(output_dir)
 
-            # for models not in AutoModel, copy python module files
-            train_from_model_path = model_to_save.config._name_or_path
-            if os.path.exists(train_from_model_path):
-                for filename in os.listdir(train_from_model_path):
-                    if filename.endswith(".py"):
-                        shutil.copy(os.path.join(train_from_model_path, filename), os.path.join(output_dir, filename))
-        dist.barrier()
-        torch.cuda.synchronize()
+        torch_dist_barrier_and_cuda_sync()
 
     def all_reduce(self, data, op="mean"):
         assert op in ("mean", "max", "sum")
