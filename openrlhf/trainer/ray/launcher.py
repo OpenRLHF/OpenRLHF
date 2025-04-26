@@ -64,7 +64,7 @@ class BasePPORole(DistributedTorchRayActor):
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
-    def execute_batch(self, method_name: str, **kwargs):
+    def execute_batch(self, method_name: str, kwargs):
         """Process input data by calling specified function for each item in the lists.
 
         Args:
@@ -339,20 +339,27 @@ class PPORayActorGroup:
         if total_length % effective_actors != 0:
             chunk_size += 1
 
-        refs = []
+        # Pre-compute all chunks and create references for each chunk
+        chunk_refs = []
         for i in range(0, total_length, chunk_size):
-            # Prepare chunked data
             chunk_kwargs = {}
             for key, value in kwargs.items():
                 chunk_kwargs[key] = value[i : i + chunk_size]
+            # Create reference for each chunk
+            chunk_ref = ray.put(chunk_kwargs)
+            chunk_refs.append(chunk_ref)
 
-            # Calculate which ring group should handle this chunk
-            ring_group_idx = (i // chunk_size) % effective_actors
+        # Process chunks in parallel
+        refs = []
+        for chunk_idx in range(len(chunk_refs)):
+            # Calculate actor group for this chunk
+            actor_group_idx = chunk_idx % effective_actors
 
-            # Send the same chunk to all actors in the ring group
+            # Process all actors in the same ring/tensor parallel group
             for j in range(self.ring_attn_size):
-                actor_idx = ring_group_idx * self.ring_attn_size + j
+                actor_idx = actor_group_idx * self.ring_attn_size + j
                 actor = self._actor_handlers[actor_idx]
-                refs.append(actor.execute_batch.remote(method_name, **chunk_kwargs))
+                # Send only the reference to the specific chunk
+                refs.append(actor.execute_batch.remote(method_name, chunk_refs[chunk_idx]))
 
         return refs
