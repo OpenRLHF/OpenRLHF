@@ -69,6 +69,9 @@ class DeepspeedStrategy(ABC):
         self.ds_tensor_parallel_size = getattr(args, "ds_tensor_parallel_size", 1)
         self.ring_attn_size = getattr(self.args, "ring_attn_size", 1)
 
+        if self.ds_tensor_parallel_size > 1:
+            assert deepspeed.version >= "0.16.4", "DeepSpeed version must be >= 0.16.4 for tensor parallel training"
+
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
 
