@@ -18,7 +18,7 @@ from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
 from openrlhf.models import Actor
-from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
+from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group, substitute_ring_flash_attn
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 from .deepspeed_utils import (
@@ -98,6 +98,7 @@ class DeepspeedStrategy(ABC):
         self.ring_attn_size = getattr(self.args, "ring_attn_size", 1)
         if self.ring_attn_size == 1:
             self.ring_attn_rank = 0
+            substitute_ring_flash_attn()
             return
 
         ring_head_stride = getattr(self.args, "ring_head_stride", 1)
@@ -108,7 +109,7 @@ class DeepspeedStrategy(ABC):
                     (i + 1) * self.ring_attn_size,
                 )
             )
-            group = dist.new_group(ranks=ring_attn_ranks, backend="nccl")
+            group = dist.new_group(ranks=ring_attn_ranks, backend="nccl", timeout=timedelta(minutes=60))
             if dist.get_rank() in ring_attn_ranks:
                 set_ring_attn_group(group)
                 self.ring_attn_rank = dist.get_rank(group=group)
@@ -117,6 +118,7 @@ class DeepspeedStrategy(ABC):
         from ring_flash_attn import substitute_hf_flash_attn
 
         substitute_hf_flash_attn(self.ring_attn_group, ring_head_stride)
+        substitute_ring_flash_attn()
 
     @property
     def ring_attn_group(self):
@@ -346,6 +348,13 @@ class DeepspeedStrategy(ABC):
             # corner case for tie_word_embeddings, such as Qwen2-0.5B
             if getattr(model_to_save.config, "tie_word_embeddings", False) and "lm_head.weight" in state_dict_keys:
                 state_dict_keys.remove("lm_head.weight")
+
+            # corner case for phi3_v
+            if (
+                getattr(model_to_save.config, "model_type", None) == "phi3_v"
+                and "model.vision_embed_tokens.wte.weight" in state_dict_keys
+            ):
+                state_dict_keys.remove("model.vision_embed_tokens.wte.weight")
 
             assert state_dict_keys.issubset(
                 output_state_dict_keys

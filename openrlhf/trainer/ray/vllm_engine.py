@@ -6,7 +6,6 @@ from typing import Any, List
 import ray
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-from vllm.inputs import TokensPrompt
 
 from openrlhf.utils.logging_utils import init_logger
 
@@ -80,19 +79,19 @@ class LLMRayActor:
     def wake_up(self):
         self.llm.wake_up()
 
-    def add_requests(self, actor_rank, *, sampling_params, prompt_token_ids):
+    def add_requests(self, actor_rank, *, sampling_params, vllm_vision_input):
         """
         Save the requests from actors and generate responses when all actors have sent their requests
         """
-        self.requests[actor_rank] = prompt_token_ids
+        self.requests[actor_rank] = vllm_vision_input
         num_requests = []
-        requests: list[TokensPrompt] = []
+        requests = []
         for actor_rank, request in self.requests.items():
             num_requests.append((actor_rank, len(request)))
             for r in request:
-                requests.append(TokensPrompt(prompt_token_ids=r))
+                requests.append(r)
 
-        responses = self.llm.generate(prompts=requests, sampling_params=sampling_params)
+        responses = self.llm.generate(requests, sampling_params=sampling_params)
         offset = 0
         self.responses = {}
         for actor_rank, num in num_requests:
@@ -120,6 +119,7 @@ def create_vllm_engines(
     shared_pg=None,
     gpu_memory_utilization=None,
     vllm_enable_sleep=False,
+    **engine_kwargs,
 ):
     import vllm
 
@@ -174,6 +174,7 @@ def create_vllm_engines(
                 num_gpus=0.2 if use_hybrid_engine else 1,
                 enable_sleep_mode=vllm_enable_sleep,
                 noset_visible_devices=noset_visible_devices,
+                **engine_kwargs,
             )
         )
 
