@@ -8,8 +8,8 @@ from typing import List, Optional, Tuple, Union
 import ray
 import torch
 
+from openrlhf.datasets.utils import zero_pad_sequences
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean, process_sequences
-from openrlhf.trainer.ppo_utils.replay_buffer import zero_pad_sequences
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
