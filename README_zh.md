@@ -37,8 +37,8 @@ OpenRLHF 是第一个基于 Ray、vLLM、ZeRO-3 和 HuggingFace Transformers 构
   它还支持 **Hybrid Engine** 调度，允许所有模型和 vLLM 引擎共享 GPU 资源，最大限度地减少空闲时间并提高 GPU 利用率。
 - **vLLM 推理加速 + AutoTP**  
   RLHF 训练中 80% 的时间都花在样本生成阶段。基于 [vLLM](https://github.com/vllm-project/vllm) 和自动张量并行 (AutoTP)，OpenRLHF 提供高吞吐量、内存高效的推理。与 HuggingFace Transformers 的原生集成确保了无缝且快速的生成，使其成为目前最快的 RLHF 框架。
-- **基于 ZeRO-3 的内存高效训练**  
-  基于 [DeepSpeed](https://github.com/deepspeedai/DeepSpeed) 的 ZeRO-3 和 [deepcompile](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/deepcompile/README.md)，OpenRLHF 无需重量级框架即可实现大模型训练。它直接与 HuggingFace 配合使用，方便加载和微调预训练模型。
+- **基于 ZeRO-3 / AuoTP 的内存高效训练**  
+  基于 [DeepSpeed](https://github.com/deepspeedai/DeepSpeed) 的 ZeRO-3, [deepcompile](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/deepcompile/README.md) 以及 [AutoTP](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/huggingface-tp/README.md)，OpenRLHF 无需重量级框架即可实现大模型训练。它直接与 HuggingFace 配合使用，方便加载和微调预训练模型。
 - **优化的 PPO 实现**  
   集成了受实践指南和社区最佳实践启发的先进 PPO 技巧，提高了 RLHF 工作流程中的训练稳定性和奖励质量。参考 [知乎](https://zhuanlan.zhihu.com/p/622134699) 和 [Advanced Tricks for Training Large Language Models with Proximal Policy Optimization](https://hijkzzz.notion.site/rlhf-implementation-tricks?v=158d9a33ecc98132bf9e000c39227361)。
 
