@@ -354,11 +354,16 @@ class DeepspeedStrategy(ABC):
         model_to_save = self._unwrap_model(model)
 
         # gather parameters
-        output_state_dict = (
-            model.model._consolidated_16bit_state_dict()
-            if isinstance(model, Actor)
-            else model._consolidated_16bit_state_dict()
-        )
+        if self.args.zero_stage > 2 or self.args.ds_tensor_parallel_size > 1:
+            output_state_dict = (
+                model.model._consolidated_16bit_state_dict()
+                if isinstance(model, Actor)
+                else model._consolidated_16bit_state_dict()
+            )
+        else:
+            from deepspeed.checkpoint.utils import clone_tensors_for_torch_save
+
+            output_state_dict = clone_tensors_for_torch_save(model_to_save.state_dict())
 
         if self.is_rank_0():
             state_dict = model_to_save.state_dict()
