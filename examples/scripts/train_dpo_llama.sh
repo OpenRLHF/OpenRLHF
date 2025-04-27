@@ -21,6 +21,7 @@ openrlhf.cli.train_dpo \
    --rejected_key rejected \
    --flash_attn \
    --load_checkpoint \
+   --packing_samples \
    --gradient_checkpointing
 EOF
     # --use_wandb [WANDB_TOKENS] or True (use wandb login command)

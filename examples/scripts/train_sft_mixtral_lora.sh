@@ -22,6 +22,7 @@ openrlhf.cli.train_sft \
     --learning_rate 5e-6 \
     --lora_rank 64 \
     --lora_alpha 64 \
+    --packing_samples \
     --aux_loss_coef 0.001
 EOF
 
