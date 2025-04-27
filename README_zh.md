@@ -63,6 +63,7 @@ OpenRLHF 是第一个基于 Ray、vLLM、ZeRO-3 和 HuggingFace Transformers 构
 - 支持对 [超过 700 亿参数的模型](./examples/scripts/train_ppo_llama_ray_70b.sh) 进行完整的 RLHF 微调。  
 - 支持基于 Ray 和 Hybrid Engine 的 [PPO](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh) 和 [REINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh) (`--colocate_all_models`, `--vllm_enable_sleep` and `--vllm_gpu_memory_utilization 0.5`)
 - [Ray-based Reinforced Finetuning](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
+- 支持 [DeepSpeed AutoTP 训练](https://www.deepspeed.ai/tutorials/automatic-tensor-parallelism/) (`--ds_tensor_parallel_size`)
 - 集成 vLLM，加速 RLHF 任务中的样本生成（`--vllm_num_engines`）。  
 - 支持多个奖励模型（`--reward_pretrain model1,model2...`）和远程奖励模型（`--remote_rm_url`）。  
 - 实现 [DPO（直接偏好优化）/IPO/cDPO](./examples/scripts/train_dpo_llama.sh) 和 [Kahneman-Tversky Optimization（KTO）](./examples/scripts/train_kto_llama.sh)。  
@@ -380,31 +381,31 @@ python -m openrlhf.cli.lora_combiner \
 ```
 
 ## 性能
-我们通过启用Adam卸载、奖励模型(RM)和参考模型(Ref)卸载等技术,尽可能优化了DSChat的性能,从而在推理阶段增加小批量大小并避免内存不足问题。我们甚至修复了DSChat中的一些bug,以启用LLaMA2的混合引擎(HE)。使用优化后的DSChat和OpenRLHF训练1024个提示需要1个PPO轮次的平均时间(秒)如下:
 
-| **Size** | **NVIDIA A800 GPUs** | **Optimized DSChat (with  Hybrid Engine)** | **OpenRLHF** | **Speedup** |
+我们通过启用 Adam offload、奖励模型（RM）和参考模型（Ref）offload 等技术，最大限度地优化了 DSChat 的性能，以增加推理阶段的微批次大小并避免内存不足问题。我们甚至修复了 DSChat 中的一些错误，为 LLaMA2 启用了 Hybrid Engine（HE）。使用优化后的 DSChat 和 OpenRLHF 训练 1024 个提示的 1 个 PPO epoch 所需的平均时间（秒）：
+
+| **大小** | **NVIDIA A800-80GB GPUs** | **优化后的 DSChat (带 Hybrid Engine)** | **OpenRLHF** | **加速比** |
 | :---: | :---: | :---: | :---: | :---: |
 | 7B | 16 | 855.09 | 471.11 | 1.82x |
 | 13B | 32 | 1528.93 | 608.93 | 2.5x |
 | 34B | 32 | 3634.98 | 1526.4 | 2.4x |
 | 70B | 32 | 10407.0 | 4488.53 | 2.3x |
 
-
 > [!NOTE]
-> 数据已经过时; 请参考后面的调优指南重新测试
+> 这些数据已经过时，请参考性能调优部分进行重新测试。
 
-## 调优指南
+### 性能调优指南
 
-为了获得最佳性能，我们建议按照 `vLLM:Actor:Critic = 1:1:1` 的比例分配节点。
+为了获得最佳性能，我们建议按 `vLLM:Actor:Critic = 1:1:1` 的比例分配节点。
 
-- 例如，对于使用48个A100 GPU的70B模型，建议分配16个A100 GPU给vLLM引擎，16个GPU给Actor模型，剩余16个GPU给Critic模型。
-- 当有足够的GPU内存时，使用 Hybrid Engine `--colocate_all_models` 和 `--vllm_enable_sleep` 以及 `--deepspeed_enable_sleep`，而不是分布式RLHF。
+- 例如，对于 70B 模型和 48 个 A100 GPU，建议将 16 个 A100 GPU 分配给 vLLM 引擎，16 个 GPU 分配给 Actor 模型，剩余的 16 个 GPU 分配给 Critic 模型。
+- 当有足够的 GPU 内存时，使用 hybrid engine `--colocate_all_models` 和 `--vllm_enable_sleep` 以及 `--deepspeed_enable_sleep`，而不是分布式 RLHF。
 - 启用 `--colocate_critic_reward`、`--colocate_actor_ref` 选项来合并节点。
-- 您应该尽可能增加 `rollout_micro_batch_size`（并最小化vLLM引擎的TP大小）。在训练阶段，更大的 `--micro_train_batch_size` 效果更好，并启用 `--packing_samples`。
-- 当有足够的GPU内存时，请禁用 `--adam_offload` 并启用 `--overlap_comm`。请启用 ``--deepcompile`` 来加速 deepspeed 训练.
-- 对于vLLM，请使用 `--vllm_sync_backend nccl` 
-- 当 `n_samples_per_prompts` > 1 时，在vLLM生成中启用 [enable_prefix_caching](https://docs.vllm.ai/en/stable/automatic_prefix_caching/apc.html)。
-- 对于大型基础模型，如果出现OOM，不要使用任何 `--colocate_xxxx` 选项。
+- 应该尽可能增加 `rollout_micro_batch_size`（并最小化 vLLM 引擎的 TP 大小）。在训练阶段，较大的 `--micro_train_batch_size` 更好，并启用 `--packing_samples`。
+- 当有足够的 GPU 内存时，请禁用 `--adam_offload` 并启用 `--overlap_comm`。同时启用 `--deepcompile` 来加速训练。
+- 对于 vLLM，请使用 `--vllm_sync_backend nccl`
+- 当 `n_samples_per_prompts` > 1 时，在 vLLM 生成中启用 [enable_prefix_caching](https://docs.vllm.ai/en/stable/automatic_prefix_caching/apc.html)。
+- 对于大型基础模型，如果发生 OOM，不要使用任何 `--colocate_xxxx` 选项。
 
 
 ## 使用 OpenRLHF 的公司和组织

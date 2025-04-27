@@ -42,6 +42,7 @@ OpenRLHFは、Ray、vLLM、ZeRO-3、およびHuggingFace Transformersを基盤�
 詳細は[スライド](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [技術報告](https://arxiv.org/abs/2405.11143) | [ドキュメント](https://openrlhf.readthedocs.io/)をご覧ください。
 
 ## ニュース
+- [2025/4] ブログ記事 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html) を公開
 - [2025/4] Clean OpenRLHF: シングルコントローラーと統合パッキングサンプルに基づくソースコードのリファクタリング
 - [2025/3] CMUの[2025年春の高度自然言語処理コース](https://cmu-l3.github.io/anlp-spring2025/)がOpenRLHFをRLHFフレームワークの教育事例として採用。
 - [2025/2] [Logic-RL](https://arxiv.org/abs/2502.14768) と [PRIME](https://arxiv.org/abs/2502.01456) は、REINFORCE++ が訓練の安定性において GRPO より優れ、PPO より高速であることを示した。
@@ -56,6 +57,7 @@ OpenRLHFは、Ray、vLLM、ZeRO-3、およびHuggingFace Transformersを基盤�
 - Rayに基づく分散[ PPO](./examples/scripts/train_ppo_llama_ray.sh)および[EINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray.sh)の実装。
 - [Ray-based Reinforced Finetuning](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
 - RayとHybrid Engineに基づく[PPO](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh)および[REINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh)のサポート (`--colocate_all_models`, `--vllm_enable_sleep` and `--vllm_gpu_memory_utilization 0.5`)
+- [DeepSpeed AutoTP トレーニング](https://www.deepspeed.ai/tutorials/automatic-tensor-parallelism/)のサポート (`--ds_tensor_parallel_size`)
 - [70億以上のパラメータを持つモデル](./examples/scripts/train_ppo_llama_ray_70b.sh)の完全なRLHF微調整のサポート。
 - RLHFタスクでの生成を加速するためのvLLMの統合（`--vllm_num_engines`）。
 - 複数の報酬モデル（`--reward_pretrain model1,model2...`）およびリモート報酬モデル（`--remote_rm_url`）のサポート。
@@ -330,9 +332,9 @@ OpenRLHFは、便利で効率的なReinforced Fine-tuningをサポートして�
 
 ## パフォーマンス
 
-DSChatのパフォーマンスを最大限に最適化するために、Adamオフロード、報酬モデル（RM）と参照モデル（Ref）のオフロードなどの技術を採用し、推論段階でのマイクロバッチサイズを増やし、メモリ不足の問題を回避しました。LLaMA2のHybrid Engine（HE）を有効にするためにDSChatのバグも修正しました。最適化されたDSChatとOpenRLHFを使用して、1024プロンプトを1PPOエポックでトレーニングするのにかかる平均時間（秒）：
+Adam offload、報酬モデル（RM）および参照モデル（Ref）のoffloadなどの技術を活用することで、DSChatのパフォーマンスを最大限に最適化し、推論段階でのマイクロバッチサイズを増やし、メモリ不足の問題を回避しました。また、DSChatのいくつかのバグを修正し、LLaMA2のHybrid Engine（HE）を有効にしました。最適化されたDSChatとOpenRLHFを使用して1024個のプロンプトを1つのPPO epochでトレーニングするのに必要な平均時間（秒）：
 
-| **サイズ** | **NVIDIA A800-80GB GPU** | **最適化されたDSChat（Hybrid Engine使用）** | **OpenRLHF** | **スピードアップ** |
+| **サイズ** | **NVIDIA A800-80GB GPUs** | **最適化されたDSChat（Hybrid Engine付き）** | **OpenRLHF** | **スピードアップ** |
 | :---: | :---: | :---: | :---: | :---: |
 | 7B | 16 | 855.09 | 471.11 | 1.82x |
 | 13B | 32 | 1528.93 | 608.93 | 2.5x |
@@ -340,20 +342,20 @@ DSChatのパフォーマンスを最大限に最適化するために、Adamオ�
 | 70B | 32 | 10407.0 | 4488.53 | 2.3x |
 
 > [!NOTE]
-> データは古いものです。パフォーマンスチューニングセクションを参照して再テストしてください。
+> このデータは古いものです。パフォーマンスチューニングセクションを参照して再テストしてください。
 
 ### パフォーマンスチューニングガイド
 
-最適なパフォーマンスを実現するために、ノードの割り当てを `vLLM:Actor:Critic = 1:1:1` にすることをお勧めします。
+最適なパフォーマンスを得るために、ノードを `vLLM:Actor:Critic = 1:1:1` の比率で割り当てることをお勧めします。
 
-- 例えば、70Bモデルで48個のA100 GPUを使用する場合、vLLMエンジンに16個のA100 GPU、Actorモデルに16個のGPU、残りの16個のGPUをCriticモデルに割り当てることをお勧めします。
-- 十分なGPUメモリがある場合は、分散RLHFではなく、ハイブリッドエンジン `--colocate_all_models`、`--vllm_enable_sleep`、`--deepspeed_enable_sleep` を使用してください。
+- 例えば、70Bモデルと48個のA100 GPUの場合、16個のA100 GPUをvLLMエンジンに、16個のGPUをActorモデルに、残りの16個のGPUをCriticモデルに割り当てることをお勧めします。
+- GPUメモリが十分にある場合は、分散RLHFではなく、hybrid engine `--colocate_all_models` と `--vllm_enable_sleep` および `--deepspeed_enable_sleep` を使用してください。
 - `--colocate_critic_reward`、`--colocate_actor_ref` オプションを有効にしてノードを統合します。
-- `rollout_micro_batch_size` を可能な限り増やし（vLLMエンジンのTPサイズを最小限に抑え）、トレーニングフェーズでは、より大きな `--micro_train_batch_size` が良く、`--packing_samples` を有効にします。
-- GPUメモリが十分にある場合は、`--adam_offload` を無効にし、`--overlap_comm` を有効にしてください。また、トレーニングを高速化するために `--deepcompile` を有効にします。
-- vLLMでは、`--vllm_sync_backend nccl` を使用してください。
-- `n_samples_per_prompts` > 1 の場合は、vLLM生成で [enable_prefix_caching](https://docs.vllm.ai/en/stable/automatic_prefix_caching/apc.html) を有効にします。
-- 大きなベースモデルの場合、OOMが発生した場合は、`--colocate_xxxx` オプションを使用しないでください。
+- `rollout_micro_batch_size` を可能な限り増やし（vLLMエンジンのTPサイズを最小化）、トレーニングフェーズでは `--micro_train_batch_size` を大きくし、`--packing_samples` を有効にしてください。
+- GPUメモリが十分にある場合は、`--adam_offload` を無効にし、`--overlap_comm` を有効にしてください。また、`--deepcompile` を有効にしてトレーニングを高速化してください。
+- vLLMには `--vllm_sync_backend nccl` を使用してください。
+- `n_samples_per_prompts` > 1 の場合は、vLLM生成で [enable_prefix_caching](https://docs.vllm.ai/en/stable/automatic_prefix_caching/apc.html) を有効にしてください。
+- 大規模なベースモデルの場合、OOMが発生した場合は、`--colocate_xxxx` オプションを使用しないでください。
 
 ## OpenRLHFを使用している企業と組織
 

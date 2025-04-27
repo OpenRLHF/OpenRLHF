@@ -57,11 +57,11 @@ More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csof
 ## Features
 
 - Distributed [PPO](./examples/scripts/train_ppo_llama_ray.sh) and [REINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray.sh) implementations based on Ray.  
-- [Ray-based Reinforced Finetuning](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
 - Support Ray-based [PPO](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh) and [REINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh) using Hybrid Engine  (`--colocate_all_models`, `--vllm_enable_sleep` and `--vllm_gpu_memory_utilization 0.5`)
+- [Ray-based Reinforced Finetuning](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
+- Support [DeepSpeed AutoTP training](https://www.deepspeed.ai/tutorials/automatic-tensor-parallelism/) (`--ds_tensor_parallel_size`)
 - Full RLHF fine-tuning support for models with [over 70 billion parameters](./examples/scripts/train_ppo_llama_ray_70b.sh).  
 - Integration with vLLM for accelerated generation in RLHF tasks (`--vllm_num_engines`).  
-- Support for multiple reward models (`--reward_pretrain model1,model2...`) and remote reward models (`--remote_rm_url`).  
 - Implementation of [DPO (Direct Preference Optimization)/IPO/cDPO](./examples/scripts/train_dpo_llama.sh) and [Kahneman-Tversky Optimization (KTO)](./examples/scripts/train_kto_llama.sh).  
 - Support for [Iterative DPO](./examples/scripts/train_iterative_dpo_llama.sh) ([GitHub: Online-RLHF](https://github.com/RLHFlow/Online-RLHF)).  
 - Support for [Rejection Sampling](./examples/scripts/train_rejection_sampling_llama.sh).  
