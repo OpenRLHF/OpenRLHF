@@ -9,6 +9,7 @@ import ray
 import torch
 
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean, process_sequences
+from openrlhf.trainer.ppo_utils.replay_buffer import zero_pad_sequences
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
@@ -520,8 +521,8 @@ class RemoteExperienceMaker(ABC):
                 all_advantages.append(exp.advantages)
                 all_action_masks.append(exp.action_mask)
 
-            advantages_vector = torch.cat(all_advantages).float().flatten()
-            action_masks_vector = torch.cat(all_action_masks).flatten()
+            advantages_vector = zero_pad_sequences(all_advantages).float().flatten()
+            action_masks_vector = zero_pad_sequences(all_action_masks).flatten()
             num_actions = action_masks_vector.sum()
 
             # mean
