@@ -269,7 +269,7 @@ class DeepspeedStrategy(ABC):
 
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
         train_batch_size = self.train_batch_size
-        ds_config["train_batch_size"] = train_batch_size * self.ring_attn_size
+        ds_config["train_batch_size"] = train_batch_size * self.ring_attn_size * self.ds_tensor_parallel_size
 
         return ds_config
 
@@ -312,7 +312,9 @@ class DeepspeedStrategy(ABC):
             tensor_parallel_size=self.ds_tensor_parallel_size,
         )
         ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
-        ds_config["train_batch_size"] = self.train_batch_size * self.ring_attn_size
+        ds_config["train_batch_size"] = (
+            self.train_batch_size * self.ring_attn_size * self.ds_tensor_parallel_size.ds_tensor_parallel_size
+        )
 
         return ds_config
 
