@@ -61,7 +61,6 @@ def train(args):
         strategy,
         pretrain_mode=args.pretrain_mode,
         input_template=args.input_template,
-        multiple_of=args.ring_attn_size,
         multiturn=args.multiturn,
     )
     # prepare dataloader
@@ -88,7 +87,6 @@ def train(args):
             strategy,
             pretrain_mode=args.pretrain_mode,
             input_template=args.input_template,
-            multiple_of=args.ring_attn_size,
             multiturn=args.multiturn,
         )
         eval_dataloader = strategy.setup_dataloader(
@@ -185,6 +183,7 @@ if __name__ == "__main__":
     parser.add_argument("--overlap_comm", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
+    parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed Tensor parallel size")
 
     # SFT
     parser.add_argument("--max_epochs", type=int, default=2)

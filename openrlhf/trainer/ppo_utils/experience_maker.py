@@ -352,7 +352,7 @@ class RemoteExperienceMaker(ABC):
                 ray.get(value_ref)
                 ray.get(self.critic_model_group.async_run_method(method_name="empty_cache"))
         else:
-            value_ref = ray.put([[None]] * (len(samples_list) * args.ring_attn_size))
+            value_ref = ray.put([[None]] * (len(samples_list) * args.ring_attn_size * args.ds_tensor_parallel_size))
 
         # Batch call initial model
         if self.initial_model_group is not None:
@@ -367,16 +367,19 @@ class RemoteExperienceMaker(ABC):
                 ray.get(base_action_log_probs_ref)
                 ray.get(self.initial_model_group.async_run_method(method_name="empty_cache"))
         else:
-            base_action_log_probs_ref = ray.put([[None]] * (len(samples_list) * args.ring_attn_size))
+            base_action_log_probs_ref = ray.put(
+                [[None]] * (len(samples_list) * args.ring_attn_size * args.ds_tensor_parallel_size)
+            )
 
         # Wait for all remote calls to complete and flatten the results
-        # Note: the results duplicated ring_attn_size times
-        action_log_probs_list = sum(ray.get(action_log_probs_ref)[:: args.ring_attn_size], [])
-        base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref)[:: args.ring_attn_size], [])
-        value_list = sum(ray.get(value_ref)[:: args.ring_attn_size], [])
+        # Note: the results duplicated ring_attn_size * ds_tensor_parallel_size times
+        duplicate_factor = args.ring_attn_size * args.ds_tensor_parallel_size
+        action_log_probs_list = sum(ray.get(action_log_probs_ref)[::duplicate_factor], [])
+        base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref)[::duplicate_factor], [])
+        value_list = sum(ray.get(value_ref)[::duplicate_factor], [])
         rewards_list = ray.get(r_refs)
         if self.remote_rm_url is None:
-            rewards_list = sum(rewards_list[:: args.ring_attn_size], [])
+            rewards_list = sum(rewards_list[::duplicate_factor], [])
         else:
             rewards_list = torch.cat(rewards_list, dim=0).chunk(len(samples_list))
 
@@ -386,7 +389,7 @@ class RemoteExperienceMaker(ABC):
             == len(base_action_log_probs_list)
             == len(value_list)
             == len(rewards_list)
-        )
+        ), f"len(samples_list): {len(samples_list)}, len(action_log_probs_list): {len(action_log_probs_list)}, len(base_action_log_probs_list): {len(base_action_log_probs_list)}, len(value_list): {len(value_list)}, len(rewards_list): {len(rewards_list)}"
 
         # Process results for each sample
         for i, (samples, action_log_probs, base_action_log_probs, value, rewards) in enumerate(

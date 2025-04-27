@@ -69,7 +69,7 @@ def train(args):
         ActorModelRayActor,
         pg=pg,
         num_gpus_per_actor=0.2 if pg else 1,
-        ring_attn_size=args.ring_attn_size,
+        duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
     )
 
     if args.init_kl_coef <= 0:
@@ -81,7 +81,7 @@ def train(args):
             ReferenceModelRayActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            ring_attn_size=args.ring_attn_size,
+            duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
         )
 
     if not args.colocate_all_models:
@@ -105,7 +105,7 @@ def train(args):
             CriticModelRayActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            ring_attn_size=args.ring_attn_size,
+            duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
         )
     else:
         critic_model = None
@@ -119,7 +119,7 @@ def train(args):
             RewardModelRayActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            ring_attn_size=args.ring_attn_size,
+            duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
         )
     else:
         reward_model = None
@@ -269,6 +269,7 @@ if __name__ == "__main__":
         default=False,
         help="Enable sleep mode for deepspeed when using --colocate_all_models",
     )
+    parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed tensor parallel size")
 
     # packing samples using Flash Attention2
     parser.add_argument("--packing_samples", action="store_true", default=False)
