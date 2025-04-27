@@ -64,7 +64,7 @@ class BasePPORole(DistributedTorchRayActor):
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
-    def execute_batch(self, method_name: str, kwargs):
+    def execute_batch(self, method_name: str, all_data, start_idx, end_idx):
         """Process input data by calling specified function for each item in the lists.
 
         Args:
@@ -76,6 +76,7 @@ class BasePPORole(DistributedTorchRayActor):
         """
 
         # Get the first parameter to determine list length
+        kwargs = {key: value[start_idx:end_idx] for key, value in all_data.items()}
         first_param = next(iter(kwargs.values()))
         list_length = len(first_param)
 
@@ -340,27 +341,17 @@ class PPORayActorGroup:
         if total_length % effective_actors != 0:
             chunk_size += 1
 
-        # Pre-compute all chunks and create references for each chunk
-        chunk_refs = []
-        for i in range(0, total_length, chunk_size):
-            chunk_kwargs = {}
-            for key, value in kwargs.items():
-                chunk_kwargs[key] = value[i : i + chunk_size]
-            # Create reference for each chunk
-            chunk_ref = ray.put(chunk_kwargs)
-            chunk_refs.append(chunk_ref)
+        all_data_ref = ray.put(kwargs)
 
-        # Process chunks in parallel
         refs = []
-        for chunk_idx in range(len(chunk_refs)):
-            # Calculate actor group for this chunk
-            actor_group_idx = chunk_idx % effective_actors
+        for chunk_idx in range(effective_actors):
+            start_idx = chunk_idx * chunk_size
+            end_idx = min((chunk_idx + 1) * chunk_size, total_length)
 
-            # Process all actors in the same ring/tensor parallel group
             for j in range(self.duplicate_actors):
-                actor_idx = actor_group_idx * self.duplicate_actors + j
+                actor_idx = chunk_idx * self.duplicate_actors + j
                 actor = self._actor_handlers[actor_idx]
-                # Send only the reference to the specific chunk
-                refs.append(actor.execute_batch.remote(method_name, chunk_refs[chunk_idx]))
+
+                refs.append(actor.execute_batch.remote(method_name, all_data_ref, start_idx, end_idx))
 
         return refs

@@ -251,19 +251,16 @@ class RemoteExperienceMaker(ABC):
         return experiences
 
     @torch.no_grad()
-    def make_experience(self, rollout_samples: Samples) -> List[Experience]:
+    def make_experience(self, samples_list: List[Samples]) -> List[Experience]:
         """
         Turn samples into experience by calculating logprobs, values, rewards, and kl divergence.
         """
         start_time = time.time()
-        logger.info(f"🚀 Starting experience making with {len(rollout_samples.sequences)} batches")
+        logger.info(f"🚀 Starting experience making with {len(samples_list[0].sequences) * len(samples_list)} batches")
 
         args = self.strategy.args
         device = "cpu"
         experiences = []
-
-        # Split samples into smaller batches for batched actor/critic/reward/ref forward pass
-        samples_list = rollout_samples.split(args.micro_rollout_batch_size)
 
         # Extract all information from samples in one pass
         # Convert samples into lists of tensors and metadata for batch processing
@@ -638,10 +635,10 @@ class RemoteExperienceMaker(ABC):
         return self._generate_vllm(all_prompts, all_labels, **generate_kwargs)
 
     @torch.no_grad()
-    def _generate_with_hf(self, all_prompts: List[str], all_labels, **generate_kwargs) -> Samples:
+    def _generate_with_hf(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Samples]:
         raise NotImplementedError("HF generation is not implemented yet")
 
-    def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> Samples:
+    def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> List[Samples]:
         from vllm import SamplingParams
 
         llms = self.vllm_engines
@@ -677,52 +674,51 @@ class RemoteExperienceMaker(ABC):
             all_output_refs.append(llm.get_responses.remote(0))
         all_outputs = sum(ray.get(all_output_refs), [])
 
-        #
-        # NOTE: concat all outputs to following format:
-        #
-        # | [PAD] [PAD] token token token | token token [EOS] [PAD] |
-        # | token token token token token | token token [EOS] [PAD] |
-        # | [PAD] [PAD] [PAD] token token | token token token [EOS] |
-        # |<---------- prompt ----------->|<-------- answer ------->|
-        max_input_len, max_output_len = 0, 0
-        for output in all_outputs:
-            max_input_len = max(max_input_len, len(output.prompt_token_ids))
-            max_output_len = max(max_output_len, len(output.outputs[0].token_ids))
-
         pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
-        sequences = []
-        for output in all_outputs:
-            # left padding input
-            # TODO(gzpan): check if trunc input to max_input_len?
-            input_len = len(output.prompt_token_ids)
-            input_ids = [pad_token_id] * (max_input_len - input_len) + list(output.prompt_token_ids)
 
-            # right padding output
-            # TODO(gzpan): check if trunc output to max_output_len?
-            output_len = len(output.outputs[0].token_ids)
-            output_ids = list(output.outputs[0].token_ids) + [pad_token_id] * (max_output_len - output_len)
+        # Group outputs by micro_rollout_batch_size
+        samples_list = []
+        for i in range(0, len(all_outputs), args.micro_rollout_batch_size):
+            batch_outputs = all_outputs[i : i + args.micro_rollout_batch_size]
+            batch_prompts = all_prompts[i : i + args.micro_rollout_batch_size]
+            batch_labels = all_labels[i : i + args.micro_rollout_batch_size]
 
-            # concat input and output
-            sequences.append(input_ids + output_ids)
+            # Calculate max lengths for this batch only
+            batch_max_input_len = max(len(output.prompt_token_ids) for output in batch_outputs)
+            batch_max_output_len = max(len(output.outputs[0].token_ids) for output in batch_outputs)
 
-        sequences = torch.tensor(sequences)
-        sequences, attention_mask, action_mask = process_sequences(
-            sequences, max_input_len, eos_token_id, pad_token_id
-        )
-        sequences = sequences.to("cpu")
-        attention_mask = attention_mask.to("cpu")
-        action_mask = action_mask.to("cpu")
-        response_length = action_mask.float().sum(dim=-1)
-        total_length = attention_mask.float().sum(dim=-1)
+            sequences = []
+            for output in batch_outputs:
+                # left padding input
+                input_len = len(output.prompt_token_ids)
+                input_ids = [pad_token_id] * (batch_max_input_len - input_len) + list(output.prompt_token_ids)
 
-        rollout_samples = Samples(
-            sequences=sequences,
-            attention_mask=attention_mask,
-            action_mask=action_mask,
-            response_length=response_length,
-            total_length=total_length,
-            prompts=all_prompts,
-            labels=all_labels,
-        )
+                # right padding output
+                output_len = len(output.outputs[0].token_ids)
+                output_ids = list(output.outputs[0].token_ids) + [pad_token_id] * (batch_max_output_len - output_len)
 
-        return rollout_samples
+                # concat input and output
+                sequences.append(input_ids + output_ids)
+
+            sequences = torch.tensor(sequences)
+            sequences, attention_mask, action_mask = process_sequences(
+                sequences, batch_max_input_len, eos_token_id, pad_token_id
+            )
+            sequences = sequences.to("cpu")
+            attention_mask = attention_mask.to("cpu")
+            action_mask = action_mask.to("cpu")
+            response_length = action_mask.float().sum(dim=-1)
+            total_length = attention_mask.float().sum(dim=-1)
+
+            rollout_samples = Samples(
+                sequences=sequences,
+                attention_mask=attention_mask,
+                action_mask=action_mask,
+                response_length=response_length,
+                total_length=total_length,
+                prompts=batch_prompts,
+                labels=batch_labels,
+            )
+            samples_list.append(rollout_samples)
+
+        return samples_list
