@@ -137,7 +137,7 @@ def remove_padding_in_sequences(items):
     return items
 
 
-def balance_experiences(experiences, args):
+def balance_experiences(experiences, args, ds_tp=1):
     """
     Balance experience accross dp
     Example:
@@ -152,9 +152,7 @@ def balance_experiences(experiences, args):
     items_all.sort(key=lambda x: x.info["total_length"], reverse=True)
 
     # split experience into chunks
-    effective_num = (
-        args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size // args.ds_tensor_parallel_size
-    )
+    effective_num = args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size // ds_tp
     split_items = [items_all[i : i + effective_num] for i in range(0, len(items_all), effective_num)]
     half = len(split_items) // 2
     first_half = split_items[:half]
@@ -244,12 +242,12 @@ class NaiveReplayBuffer(ABC):
         experience = make_experience_batch(batch, self.packing_samples)
         return experience
 
-    def setup_dynamic_batch(self, strategy):
+    def setup_dynamic_batch(self, strategy, ds_tp: int = 1) -> None:
         args = strategy.args
         sample_lengths = [sample.info["total_length"].item() for sample in self.items]
 
         world_size = dist.get_world_size()
-        dp_size = world_size // args.ring_attn_size // args.ds_tensor_parallel_size
+        dp_size = world_size // args.ring_attn_size // ds_tp
         local_train_batch_size = args.train_batch_size // dp_size
         num_steps = args.rollout_batch_size * args.n_samples_per_prompt // args.train_batch_size
 
@@ -262,7 +260,7 @@ class NaiveReplayBuffer(ABC):
                     sample_lengths[start:end],
                     args.train_max_tokens_per_gpu,
                     args.ring_attn_size,
-                    args.ds_tensor_parallel_size,
+                    ds_tp,
                 )
             )
 

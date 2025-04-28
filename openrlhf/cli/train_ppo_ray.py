@@ -79,7 +79,7 @@ def train(args):
         PolicyModelActor,
         pg=pg,
         num_gpus_per_actor=0.2 if pg else 1,
-        duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
+        duplicate_actors=args.ring_attn_size * args.actor_tensor_parallel_size,
     )
 
     if args.init_kl_coef <= 0:
@@ -91,7 +91,7 @@ def train(args):
             ReferenceModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
+            duplicate_actors=args.ring_attn_size * args.ref_tensor_parallel_size,
         )
 
     if not args.colocate_all_models:
@@ -115,7 +115,7 @@ def train(args):
             CriticModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
+            duplicate_actors=args.ring_attn_size * args.critic_tensor_parallel_size,
         )
     else:
         critic_model = None
@@ -129,7 +129,7 @@ def train(args):
             RewardModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
+            duplicate_actors=args.ring_attn_size * args.reward_tensor_parallel_size,
         )
     else:
         reward_model = None
@@ -289,6 +289,30 @@ if __name__ == "__main__":
     )
     parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed tensor parallel size")
 
+    parser.add_argument(
+        "--actor_tensor_parallel_size",
+        type=int,
+        default=0,
+        help="tensor parallel size of DeepSpeed actor model (override)",
+    )
+    parser.add_argument(
+        "--ref_tensor_parallel_size",
+        type=int,
+        default=0,
+        help="tensor parallel size of DeepSpeed reference model (override)",
+    )
+    parser.add_argument(
+        "--critic_tensor_parallel_size",
+        type=int,
+        default=0,
+        help="tensor parallel size of DeepSpeed critic model (override)",
+    )
+    parser.add_argument(
+        "--reward_tensor_parallel_size",
+        type=int,
+        default=0,
+        help="tensor parallel size of DeepSpeed reward model (override)",
+    )
     # packing samples using Flash Attention2
     parser.add_argument("--packing_samples", action="store_true", default=False)
 
@@ -479,6 +503,25 @@ if __name__ == "__main__":
     if args.advantage_estimator in ["rloo", "reinforce_baseline", "group_norm"]:
         assert args.n_samples_per_prompt > 1, f"{args.advantage_estimator} requires n_samples_per_prompt > 1"
 
+    if args.actor_tensor_parallel_size <= 0:
+        args.actor_tensor_parallel_size = args.ds_tensor_parallel_size
+    if args.ref_tensor_parallel_size <= 0:
+        args.ref_tensor_parallel_size = args.ds_tensor_parallel_size
+    if args.critic_tensor_parallel_size <= 0:
+        args.critic_tensor_parallel_size = args.ds_tensor_parallel_size
+    if args.reward_tensor_parallel_size <= 0:
+        args.reward_tensor_parallel_size = args.ds_tensor_parallel_size
+
+    if (
+        args.actor_tensor_parallel_size > 1
+        or args.ref_tensor_parallel_size > 1
+        or (args.critic_tensor_parallel_size > 1 or args.reward_tensor_parallel_size > 1)
+    ):
+        import deepspeed
+
+        assert deepspeed.version >= "0.16.4", "DeepSpeed version must be >= 0.16.4 for tensor parallel training"
+        assert args.bf16, "BF16 is required for tensor parallel training"
+
     if args.remote_rm_url:
         args.remote_rm_url = args.remote_rm_url.split(",")
 
@@ -548,7 +591,10 @@ if __name__ == "__main__":
 
     assert (
         args.n_samples_per_prompt * args.rollout_batch_size // args.micro_rollout_batch_size
-        >= args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size // args.ds_tensor_parallel_size
+        >= args.actor_num_nodes
+        * args.actor_num_gpus_per_node
+        // args.ring_attn_size
+        // args.actor_tensor_parallel_size
     ), "The number of sample batches must be greater than or equal to the effective number of actor processes."
 
     if args.use_ms:
