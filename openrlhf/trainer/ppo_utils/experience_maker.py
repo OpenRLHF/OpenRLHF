@@ -334,6 +334,12 @@ class RemoteExperienceMaker(ABC):
             ray.get(action_log_probs_ref)
             ray.get(self.actor_model_group.async_run_method(method_name="empty_cache"))
 
+        # Note: the results duplicated ring_attn_size * ds_tensor_parallel_size times
+        actor_duplicate_factor = args.ring_attn_size * args.actor_tensor_parallel_size
+        ref_duplicate_factor = args.ring_attn_size * args.ref_tensor_parallel_size
+        critic_duplicate_factor = args.ring_attn_size * args.critic_tensor_parallel_size
+        reward_duplicate_factor = args.ring_attn_size * args.reward_tensor_parallel_size
+
         # Batch call critic model
         if self.critic_model_group is not None:
             if args.colocate_critic_reward and not self.remote_rm_url:
@@ -350,7 +356,7 @@ class RemoteExperienceMaker(ABC):
                 ray.get(value_ref)
                 ray.get(self.critic_model_group.async_run_method(method_name="empty_cache"))
         else:
-            value_ref = ray.put([[None]] * (len(samples_list) * args.ring_attn_size * args.ds_tensor_parallel_size))
+            value_ref = ray.put([[None]] * (len(samples_list) * critic_duplicate_factor))
 
         # Batch call initial model
         if self.initial_model_group is not None:
@@ -365,19 +371,15 @@ class RemoteExperienceMaker(ABC):
                 ray.get(base_action_log_probs_ref)
                 ray.get(self.initial_model_group.async_run_method(method_name="empty_cache"))
         else:
-            base_action_log_probs_ref = ray.put(
-                [[None]] * (len(samples_list) * args.ring_attn_size * args.ds_tensor_parallel_size)
-            )
+            base_action_log_probs_ref = ray.put([[None]] * (len(samples_list) * ref_duplicate_factor))
 
         # Wait for all remote calls to complete and flatten the results
-        # Note: the results duplicated ring_attn_size * ds_tensor_parallel_size times
-        duplicate_factor = args.ring_attn_size * args.ds_tensor_parallel_size
-        action_log_probs_list = sum(ray.get(action_log_probs_ref)[::duplicate_factor], [])
-        base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref)[::duplicate_factor], [])
-        value_list = sum(ray.get(value_ref)[::duplicate_factor], [])
+        action_log_probs_list = sum(ray.get(action_log_probs_ref)[::actor_duplicate_factor], [])
+        base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref)[::ref_duplicate_factor], [])
+        value_list = sum(ray.get(value_ref)[::critic_duplicate_factor], [])
         rewards_list = ray.get(r_refs)
         if self.remote_rm_url is None:
-            rewards_list = sum(rewards_list[::duplicate_factor], [])
+            rewards_list = sum(rewards_list[::reward_duplicate_factor], [])
         else:
             rewards_list = torch.cat(rewards_list, dim=0).chunk(len(samples_list))
 

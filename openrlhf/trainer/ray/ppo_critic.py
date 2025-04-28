@@ -158,7 +158,7 @@ class CriticModelRayActor(BasePPORole):
             lora_alpha=strategy.args.lora_alpha,
             target_modules=strategy.args.target_modules,
             lora_dropout=strategy.args.lora_dropout,
-            ds_config=strategy.get_ds_train_config(is_actor=False),
+            ds_config=strategy.get_ds_train_config(ds_tp=strategy.args.critic_tensor_parallel_size),
             value_head_prefix=strategy.args.value_head_prefix,
             init_value_head=strategy.args.pretrain == strategy.args.critic_pretrain,
             packing_samples=strategy.args.packing_samples,
@@ -195,6 +195,7 @@ class CriticModelRayActor(BasePPORole):
         # prepare models/optimizers...
         self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare(
             (critic, critic_optim, critic_scheduler),
+            ds_tp=strategy.args.critic_tensor_parallel_size,
             is_rlhf=True,
         )
 
