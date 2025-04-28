@@ -21,6 +21,7 @@ from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
 from openrlhf.utils.distributed_util import init_process_group, torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.logging_utils import init_logger
+from openrlhf import ACCELERATOR_TYPE
 
 from ..ppo_utils import NaiveReplayBuffer
 
@@ -78,7 +79,11 @@ class ActorPPOTrainer(ABC):
         )
 
         # Init torch group for weights sync
-        backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
+        if ACCELERATOR_TYPE == "GPU":
+            backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
+        elif ACCELERATOR_TYPE == "NPU":
+            backend = "hccl"
+
         self.use_cuda_ipc = False
         if backend == "nccl" and self.strategy.args.colocate_all_models:
             self.use_cuda_ipc = True
@@ -344,7 +349,7 @@ class ActorPPOTrainer(ABC):
         torch_dist_barrier_and_cuda_sync()
 
 
-@ray.remote(num_gpus=1)
+@ray.remote
 class ActorModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps, vllm_engines):
         args = strategy.args

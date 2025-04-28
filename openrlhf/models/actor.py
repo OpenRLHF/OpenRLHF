@@ -8,10 +8,12 @@ from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
+from openrlhf import ACCELERATOR_TYPE
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
 from .utils import compute_entropy, log_probs_from_logits, process_sequences
 
-compute_entropy = torch.compile(compute_entropy)
+if ACCELERATOR_TYPE == "GPU":
+    compute_entropy = torch.compile(compute_entropy)
 
 
 class Actor(nn.Module):

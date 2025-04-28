@@ -12,6 +12,7 @@ from tqdm import tqdm
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
 from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf import ACCELERATOR_TYPE
 
 
 class DistributedTorchRayActor:
@@ -33,7 +34,8 @@ class DistributedTorchRayActor:
         # environment variable for each actor, unless
         # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES is set, so
         # set local rank to 0 when the flag is not applicable.
-        os.environ["LOCAL_RANK"] = str(ray.get_gpu_ids()[0]) if ray_noset_visible_devices() else "0"
+        os.environ["LOCAL_RANK"] = str(ray.get_runtime_context().get_accelerator_ids()[ACCELERATOR_TYPE][0]) \
+            if ray_noset_visible_devices() else "0"
 
     @staticmethod
     def _get_current_node_ip():
@@ -101,7 +103,7 @@ class BasePPORole(DistributedTorchRayActor):
         return results
 
 
-@ray.remote(num_gpus=1)
+@ray.remote
 class ReferenceModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
         self._setup_distributed(strategy)
@@ -143,7 +145,7 @@ class ReferenceModelRayActor(BasePPORole):
         return log_probs.to("cpu")
 
 
-@ray.remote(num_gpus=1)
+@ray.remote
 class RewardModelRayActor(BasePPORole):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
         self._setup_distributed(strategy)
@@ -219,18 +221,22 @@ class PPORayActorGroup:
         # duplicate actors is ring_attn_size * tensor_parallel_size
         self.duplicate_actors = duplicate_actors
 
-        # custom resources, see https://docs.ray.io/en/latest/ray-core/scheduling/resources.html
-        self._resources = resources
-        self._num_resources_per_node = num_resources_per_node
-
-        self._initiate_actors(pg, num_gpus_per_actor)
+        if ACCELERATOR_TYPE == "GPU":
+            # custom resources, see https://docs.ray.io/en/latest/ray-core/scheduling/resources.html
+            self._resources = resources
+            self._num_resources_per_node = num_resources_per_node
+            self._initiate_actors(pg, num_gpus_per_actor)
+        elif ACCELERATOR_TYPE == "NPU":
+            self._resources = {ACCELERATOR_TYPE: num_gpus_per_actor}
+            self._num_resources_per_node = num_gpus_per_actor
+            self._initiate_actors(pg, 0)
 
     def _initiate_actors(self, pg, num_gpus_per_actor):
         world_size = self._num_nodes * self._num_gpus_per_node
 
         # Use placement group to lock resources for models of same type
         if self._num_gpus_per_node > 1 and pg is None:
-            bundles = [{"GPU": 1, "CPU": 1} for _ in range(self._num_nodes * self._num_gpus_per_node)]
+            bundles = [{ACCELERATOR_TYPE: 1, "CPU": 1} for _ in range(self._num_nodes * self._num_gpus_per_node)]
             if self._resources:
                 resources_name = list(self._resources.keys())[0]
                 for i in range(len(bundles)):

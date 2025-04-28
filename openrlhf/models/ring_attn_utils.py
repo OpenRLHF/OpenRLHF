@@ -1,7 +1,15 @@
 import torch
 import torch.distributed as dist
-from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
-from flash_attn.utils.distributed import all_gather
+from openrlhf import ACCELERATOR_TYPE
+
+if ACCELERATOR_TYPE == "GPU":
+    from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
+    from flash_attn.utils.distributed import all_gather
+elif ACCELERATOR_TYPE == "NPU":
+    from transformers.integrations.npu_flash_attention import index_first_axis, pad_input, unpad_input
+    from einops import rearrange
+    from ring_attn_ascend.distributed import all_gather
+
 
 RING_ATTN_GROUP = None
 
@@ -49,7 +57,10 @@ def update_ring_attn_params(cu_seqlens):
     """
     assert RING_ATTN_GROUP is not None
 
-    from ring_flash_attn import update_ring_flash_attn_params
+    if ACCELERATOR_TYPE == "GPU":
+        from ring_flash_attn import update_ring_flash_attn_params
+    elif ACCELERATOR_TYPE == "NPU":
+        from ring_attn_ascend import update_ring_flash_attn_params
 
     update_ring_flash_attn_params(cu_seqlens, RING_ATTN_GROUP)
 
