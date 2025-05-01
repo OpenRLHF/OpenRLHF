@@ -622,7 +622,7 @@ class RemoteExperienceMaker(ABC):
         return returns
 
     @torch.no_grad()
-    def generate_samples(self, all_prompts: List[str], all_labels, **generate_kwargs) -> Samples:
+    def generate_samples(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Samples]:
         """
         Generate samples and return in batches.
 
