@@ -38,6 +38,7 @@ class RewardModelTrainer(ABC):
         max_norm=0.5,
         max_epochs: int = 2,
         loss="sigmoid",
+        disable_ds_ckpt=False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -50,7 +51,7 @@ class RewardModelTrainer(ABC):
         self.optimizer = optim
         self.tokenizer = tokenizer
         self.args = strategy.args
-
+        self.disable_ds_ckpt = disable_ds_ckpt
         if loss == "sigmoid":
             self.loss_fn = PairWiseLoss()
             self.strategy.print("LogSigmoid Loss")
