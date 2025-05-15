@@ -53,6 +53,12 @@ def train(args):
                 f"and {args.vllm_num_engines * args.vllm_tensor_parallel_size}"
             )
 
+        # AsyncLLMRayActor is used for agent
+        if args.agent_path:
+            from openrlhf.trainer.ray.async_vllm_engine import AsyncLLMRayActor as LLMRayActor
+        else:
+            from openrlhf.trainer.ray.vllm_engine import LLMRayActor
+
         vllm_engines = create_vllm_engines(
             args.vllm_num_engines,
             args.vllm_tensor_parallel_size,
@@ -65,6 +71,7 @@ def train(args):
             pg if args.colocate_all_models else None,
             args.vllm_gpu_memory_utilization,
             args.vllm_enable_sleep,
+            LLMRayActor,
         )
 
     actor_model = PPORayActorGroup(
@@ -396,6 +403,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--apply_chat_template", action="store_true", default=False, help="Use HF tokenizer chat template"
     )
+    parser.add_argument("--agent_path", type=str, default=None, help="Agent script path")
 
     # wandb parameters
     parser.add_argument("--use_wandb", type=str, default=None)
