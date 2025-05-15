@@ -20,6 +20,12 @@ class AsyncLLMRayActor(LLMRayActor):
                     logger.info(f"Importing tool {tool_name} from {tool_dir}")
                     self.tools[tool_name] = getattr(module, "step")
 
+        # Initialize result queue for streaming completed results
+        self.result_queue = asyncio.Queue()
+        self.tasks = []
+        self.total_tasks = 0
+
+        # Initialize super class
         super().__init__(*args, **kwargs)
 
     def _init_vllm_engine(self, *args, **kwargs):
@@ -57,12 +63,7 @@ class AsyncLLMRayActor(LLMRayActor):
         """
         Process requests from rank0 and generate responses with multiple agent interactions.
         Each prompt will go through multiple steps of interaction using the step function.
-
-        Args:
-            sampling_params: Parameters for sampling
-            prompts: List of initial prompts
-            tools_types: List of tool types for each prompt
-            max_steps: Maximum number of interaction steps for each prompt
+        Results are streamed back as each tool completes its execution.
         """
         from vllm.utils import random_uuid
 
@@ -93,22 +94,39 @@ class AsyncLLMRayActor(LLMRayActor):
                 if done:
                     break
 
-            # Store the final response with interaction history
-            final_response = {
-                "prompt": prompt,
-                "states": state,
-                "reward": total_reward,
-            }
-            self.response_queues.put(final_response)
+            # Store the final response when tool execution is complete
+            final_response = {"prompt": prompt, "state": state, "reward": total_reward}
+            await self.result_queue.put(final_response)
 
-        # Create tasks for all tool executions
-        tasks = [execute_tool(prompt, tool_name) for prompt, tool_name in zip(prompts, tool_names)]
+        # Create and start tasks for all tool executions
+        for prompt, tool_name in zip(prompts, tool_names):
+            task = asyncio.create_task(execute_tool(prompt, tool_name))
+            self.tasks.append(task)
 
+    async def get_responses_async(self):
+        """
+        Asynchronously get the next completed tool result from the queue.
+        Returns: The next available completed tool result, or None if no result is available within timeout.
+        """
+        try:
+            return await asyncio.wait_for(self.result_queue.get(), timeout=0.5)
+        except asyncio.TimeoutError:
+            return None
+
+    async def get_responses_sync(self):
+        """
+        Synchronously get all completed tool results from the queue.
+        Waits for all tasks to complete before returning results.
+        Returns: List of all completed tool results.
+        """
         # Wait for all tasks to complete
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*self.tasks)
 
-    def get_responses(self):
-        """
-        Return the responses for the actor with the given rank
-        """
-        return self.response_queues.get()
+        # Get all results from the queue
+        results = []
+        while not self.result_queue.empty():
+            try:
+                results.append(self.result_queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        return results
