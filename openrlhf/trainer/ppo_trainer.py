@@ -9,7 +9,6 @@ from tqdm import tqdm
 
 from openrlhf.datasets import PromptDataset
 from openrlhf.trainer.ppo_utils import AdaptiveKLController, FixedKLController
-from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
 from openrlhf.utils import blending_datasets, get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
@@ -72,6 +71,14 @@ class PPOTrainer(ABC):
             self.kl_ctl = AdaptiveKLController(self.init_kl_coef, self.kl_target, self.kl_horizon)
         else:
             self.kl_ctl = FixedKLController(self.init_kl_coef)
+
+        # RemoteExperienceMakerAsync is used for agent
+        if self.args.agent_path:
+            from openrlhf.trainer.ppo_utils.experience_maker_async import (
+                RemoteExperienceMakerAsync as RemoteExperienceMaker,
+            )
+        else:
+            from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
 
         self.experience_maker = RemoteExperienceMaker(
             self.actor_model_group,
