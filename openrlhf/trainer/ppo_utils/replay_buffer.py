@@ -116,40 +116,25 @@ def make_experience_batch(items: List[BufferItem], packing_samples=False) -> Exp
 
 def remove_padding_in_sequences(items):
     for item in items:
-        seq, act_log_prob, base_act_log_prob, value, ret, adv, att_mask, act_mask = (
-            item.sequences,
-            item.action_log_probs,
-            item.base_action_log_probs,
-            item.values,
-            item.returns,
-            item.advantages,
-            item.attention_mask,
-            item.action_mask,
-        )
-        right_pad = (1 - act_mask.long()).sum()
+        # Calculate right padding using attention_mask
+        right_pad = (item.attention_mask == 0).sum()
         right_pad = None if right_pad == 0 else -right_pad
 
-        # left_pad for seq and att_mask
-        left_pad = att_mask.long().argmax()
-        (
-            item.sequences,
-            item.action_log_probs,
-            item.base_action_log_probs,
-            item.values,
-            item.returns,
-            item.advantages,
-            item.attention_mask,
-            item.action_mask,
-        ) = (
-            seq[left_pad:right_pad],
-            act_log_prob[:right_pad],
-            base_act_log_prob[:right_pad] if item.base_action_log_probs is not None else None,
-            value[:right_pad] if item.values is not None else None,
-            ret[:right_pad],
-            adv[:right_pad],
-            att_mask[left_pad:right_pad],
-            act_mask[:right_pad],
-        )
+        # Remove right padding for all tensors
+        for key in [
+            "sequences",
+            "action_log_probs",
+            "base_action_log_probs",
+            "values",
+            "returns",
+            "advantages",
+            "attention_mask",
+            "action_mask",
+        ]:
+            value = getattr(item, key)
+            if value is not None:
+                setattr(item, key, value[:right_pad])
+
     return items
 
 
