@@ -275,50 +275,57 @@ class RemoteExperienceMaker(ABC):
         prompts_list = [p for s in samples_list for p in s.prompts]
         labels_list = [l for s in samples_list for l in s.labels]
 
-        # Batch call reward model
-        r_refs = None
-        if not self.remote_rm_url:
-            r_refs = self.reward_model_group.async_run_method_batch(
-                method_name="forward",
-                sequences=sequences_list,
-                attention_mask=attention_mask_list,
-                pad_sequence=[True] * len(samples_list),
-            )
+        # Get rewards from samples, such as agent rewards
+        rewards_list = [s.rewards for s in samples_list]
+        if rewards_list[0]:
+            rewards_list = sum(rewards_list, [])
+            r_refs = ray.put(rewards_list)
+            self.remote_rm_url = "dummy"
         else:
-            queries_list = sum(
-                [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in sequences_list], []
-            )
-
-            if self.custom_reward_func:
-                # Let Ray automatically distribute the workload across available resources
-                batch_size = self.strategy.args.micro_rollout_batch_size
-                num_chunks = (len(queries_list) + batch_size - 1) // batch_size
-                r_refs = []
-                for i in range(num_chunks):
-                    start_idx = i * batch_size
-                    end_idx = min((i + 1) * batch_size, len(queries_list))
-                    r = self.custom_reward_func.remote(
-                        queries_list[start_idx:end_idx],
-                        prompts_list[start_idx:end_idx],
-                        labels_list[start_idx:end_idx],
-                    )
-                    r_refs.append(r)
+            # Batch call reward model
+            r_refs = None
+            if not self.remote_rm_url:
+                r_refs = self.reward_model_group.async_run_method_batch(
+                    method_name="forward",
+                    sequences=sequences_list,
+                    attention_mask=attention_mask_list,
+                    pad_sequence=[True] * len(samples_list),
+                )
             else:
-                # Distribute data across different remote reward function servers
-                num_servers = len(self.remote_rm_url)
-                batch_size = (len(queries_list) + num_servers - 1) // num_servers
-                r_refs = []
-                for i in range(num_servers):
-                    start_idx = i * batch_size
-                    end_idx = min((i + 1) * batch_size, len(queries_list))
-                    rm = self.remote_rm_url[i]
-                    r = remote_rm_fn_ray.remote(
-                        rm,
-                        queries=queries_list[start_idx:end_idx],
-                        prompts=prompts_list[start_idx:end_idx],
-                        labels=labels_list[start_idx:end_idx],
-                    )
-                    r_refs.append(r)
+                queries_list = sum(
+                    [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in sequences_list], []
+                )
+
+                if self.custom_reward_func:
+                    # Let Ray automatically distribute the workload across available resources
+                    batch_size = self.strategy.args.micro_rollout_batch_size
+                    num_chunks = (len(queries_list) + batch_size - 1) // batch_size
+                    r_refs = []
+                    for i in range(num_chunks):
+                        start_idx = i * batch_size
+                        end_idx = min((i + 1) * batch_size, len(queries_list))
+                        r = self.custom_reward_func.remote(
+                            queries_list[start_idx:end_idx],
+                            prompts_list[start_idx:end_idx],
+                            labels_list[start_idx:end_idx],
+                        )
+                        r_refs.append(r)
+                else:
+                    # Distribute data across different remote reward function servers
+                    num_servers = len(self.remote_rm_url)
+                    batch_size = (len(queries_list) + num_servers - 1) // num_servers
+                    r_refs = []
+                    for i in range(num_servers):
+                        start_idx = i * batch_size
+                        end_idx = min((i + 1) * batch_size, len(queries_list))
+                        rm = self.remote_rm_url[i]
+                        r = remote_rm_fn_ray.remote(
+                            rm,
+                            queries=queries_list[start_idx:end_idx],
+                            prompts=prompts_list[start_idx:end_idx],
+                            labels=labels_list[start_idx:end_idx],
+                        )
+                        r_refs.append(r)
 
         # Sync to avoid GPU OOM when colocate models
         if args.colocate_all_models and not self.remote_rm_url:
