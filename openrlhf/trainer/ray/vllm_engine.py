@@ -113,6 +113,7 @@ def create_vllm_engines(
     shared_pg=None,
     gpu_memory_utilization=None,
     vllm_enable_sleep=False,
+    llm_actor_cls=LLMRayActor,
 ):
     import vllm
 
@@ -146,7 +147,7 @@ def create_vllm_engines(
         )
 
         vllm_engines.append(
-            LLMRayActor.options(
+            llm_actor_cls.options(
                 num_cpus=num_gpus,
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
