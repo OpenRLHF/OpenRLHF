@@ -9,7 +9,7 @@ import ray
 import torch
 
 from openrlhf.datasets.utils import zero_pad_sequences
-from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean, process_sequences
+from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
@@ -117,6 +117,7 @@ class Samples:
     total_length: torch.Tensor
     prompts: list[str]
     labels: list[str]
+    rewards: list[float]
 
     def __init__(
         self,
@@ -127,6 +128,7 @@ class Samples:
         total_length=None,
         prompts=None,
         labels=None,
+        rewards=None,
         packed_seq_lens=None,
     ):
         self.sequences = sequences
@@ -136,6 +138,7 @@ class Samples:
         self.total_length = total_length
         self.prompts = prompts or []
         self.labels = labels or []
+        self.rewards = rewards or []
         self.packed_seq_lens = packed_seq_lens
 
     def split(self, split_size: int):
@@ -152,6 +155,7 @@ class Samples:
             sample.total_length = sample.attention_mask.float().sum(dim=-1)
             sample.prompts = self.prompts[i * split_size : (i + 1) * split_size]
             sample.labels = self.labels[i * split_size : (i + 1) * split_size]
+            sample.rewards = self.rewards[i * split_size : (i + 1) * split_size] if self.rewards else []
             sample_list.append(sample)
         return sample_list
 
@@ -684,27 +688,32 @@ class RemoteExperienceMaker(ABC):
             batch_prompts = all_prompts[i : i + args.micro_rollout_batch_size]
             batch_labels = all_labels[i : i + args.micro_rollout_batch_size]
 
-            # Calculate max lengths for this batch only
-            batch_max_input_len = max(len(output.prompt_token_ids) for output in batch_outputs)
-            batch_max_output_len = max(len(output.outputs[0].token_ids) for output in batch_outputs)
+            # Calculate max length for this batch
+            batch_max_input_len = max(
+                len(output.prompt_token_ids) + len(output.outputs[0].token_ids) for output in batch_outputs
+            )
 
             sequences = []
+            attention_mask = []
             for output in batch_outputs:
-                # left padding input
-                input_len = len(output.prompt_token_ids)
-                input_ids = [pad_token_id] * (batch_max_input_len - input_len) + list(output.prompt_token_ids)
-
-                # right padding output
-                output_len = len(output.outputs[0].token_ids)
-                output_ids = list(output.outputs[0].token_ids) + [pad_token_id] * (batch_max_output_len - output_len)
-
-                # concat input and output
-                sequences.append(input_ids + output_ids)
+                # Concatenate prompt and output tokens
+                input_ids = list(output.prompt_token_ids) + list(output.outputs[0].token_ids)
+                # Right pad to max length
+                input_ids = input_ids + [pad_token_id] * (batch_max_input_len - len(input_ids))
+                sequences.append(input_ids)
+                attention_mask.append([1] * len(input_ids) + [0] * (batch_max_input_len - len(input_ids)))
 
             sequences = torch.tensor(sequences)
-            sequences, attention_mask, action_mask = process_sequences(
-                sequences, batch_max_input_len, eos_token_id, pad_token_id
-            )
+            attention_mask = torch.tensor(attention_mask)
+
+            # Create action mask based on output token positions
+            action_mask = torch.zeros_like(attention_mask)
+            for i, output in enumerate(batch_outputs):
+                # Mark positions after prompt as actions
+                action_mask[
+                    i, len(output.prompt_token_ids) : len(output.prompt_token_ids) + len(output.outputs[0].token_ids)
+                ] = 1
+
             sequences = sequences.to("cpu")
             attention_mask = attention_mask.to("cpu")
             action_mask = action_mask.to("cpu")
