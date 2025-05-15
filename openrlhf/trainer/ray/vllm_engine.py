@@ -1,12 +1,10 @@
 import os
 import queue
-from collections import defaultdict
 from typing import Any, List
 
 import ray
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-from vllm.inputs import TokensPrompt
 
 from openrlhf.utils.logging_utils import init_logger
 
@@ -48,7 +46,7 @@ class LLMRayActor:
 
         # Number of actors that will send prompt to this engine
         self.requests = {}
-        self.response_queues = defaultdict(queue.Queue)
+        self.response_queues = queue.Queue()
 
         import vllm
 
@@ -56,6 +54,11 @@ class LLMRayActor:
         if full_determinism or vllm.__version__ == "0.8.2":
             # https://github.com/vllm-project/vllm/blob/effc5d24fae10b29996256eb7a88668ff7941aed/examples/offline_inference/reproduciblity.py#L11
             os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+
+        self._init_vllm_engine(*args, **kwargs)
+
+    def _init_vllm_engine(self, *args, **kwargs):
+        import vllm
 
         self.llm = vllm.LLM(*args, **kwargs)
 
@@ -80,32 +83,22 @@ class LLMRayActor:
     def wake_up(self):
         self.llm.wake_up()
 
-    def add_requests(self, actor_rank, *, sampling_params, prompt_token_ids):
+    def add_requests(self, sampling_params, prompt_token_ids):
         """
-        Save the requests from actors and generate responses when all actors have sent their requests
+        Process requests from rank0 and generate responses.
+        Since only rank0 will send requests, we don't need to track actor ranks.
         """
-        self.requests[actor_rank] = prompt_token_ids
-        num_requests = []
-        requests: list[TokensPrompt] = []
-        for actor_rank, request in self.requests.items():
-            num_requests.append((actor_rank, len(request)))
-            for r in request:
-                requests.append(TokensPrompt(prompt_token_ids=r))
+        from vllm.inputs import TokensPrompt
 
+        requests = [TokensPrompt(prompt_token_ids=r) for r in prompt_token_ids]
         responses = self.llm.generate(prompts=requests, sampling_params=sampling_params)
-        offset = 0
-        self.responses = {}
-        for actor_rank, num in num_requests:
-            self.response_queues[actor_rank].put(responses[offset : offset + num])
-            offset += num
+        self.response_queues.put(responses)
 
-        self.requests = {}
-
-    def get_responses(self, actor_rank):
+    def get_responses(self):
         """
         Return the responses for the actor with the given rank
         """
-        return self.response_queues[actor_rank].get()
+        return self.response_queues.get()
 
 
 def create_vllm_engines(

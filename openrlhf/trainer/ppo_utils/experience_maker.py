@@ -666,13 +666,13 @@ class RemoteExperienceMaker(ABC):
         batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
         for i, llm in enumerate(llms):
             prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
-            refs.append(llm.add_requests.remote(0, sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
+            refs.append(llm.add_requests.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
         ray.get(refs)
 
         # Retrieve and combine results from all outputs
         all_output_refs = []
         for i, llm in enumerate(llms):
-            all_output_refs.append(llm.get_responses.remote(0))
+            all_output_refs.append(llm.get_responses.remote())
         all_outputs = sum(ray.get(all_output_refs), [])
 
         pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
