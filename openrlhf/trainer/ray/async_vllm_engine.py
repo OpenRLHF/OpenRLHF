@@ -85,7 +85,7 @@ class AsyncLLMRayActor(LLMRayActor):
             # Execute multiple steps of interaction
             for step_idx in range(max_steps):
                 # Execute tool asynchronously
-                action = generate_async_func(prompt, sampling_params)[0]
+                action = await generate_async_func(prompt, sampling_params)[0]
 
                 # Call step function to get reward and next state
                 reward, state, done, extra_info = step(state, action)
@@ -103,17 +103,7 @@ class AsyncLLMRayActor(LLMRayActor):
             task = asyncio.create_task(execute_tool(prompt, tool_name))
             self.tasks.append(task)
 
-    async def get_responses_async(self):
-        """
-        Asynchronously get the next completed tool result from the queue.
-        Returns: The next available completed tool result, or None if no result is available within timeout.
-        """
-        try:
-            return await asyncio.wait_for(self.result_queue.get(), timeout=0.5)
-        except asyncio.TimeoutError:
-            return None
-
-    async def get_responses_sync(self):
+    async def get_responses(self):
         """
         Synchronously get all completed tool results from the queue.
         Waits for all tasks to complete before returning results.
@@ -130,3 +120,13 @@ class AsyncLLMRayActor(LLMRayActor):
             except asyncio.QueueEmpty:
                 break
         return results
+
+    async def get_responses_async(self):
+        """
+        Asynchronously get the next completed tool result from the queue.
+        Returns: The next available completed tool result, or None if no result is available within timeout.
+        """
+        try:
+            return await asyncio.wait_for(self.result_queue.get(), timeout=0.5)
+        except asyncio.TimeoutError:
+            return None
