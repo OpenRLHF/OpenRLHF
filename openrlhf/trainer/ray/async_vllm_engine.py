@@ -1,29 +1,28 @@
 import asyncio
-import importlib
-import os
 
 import ray
 
-from .vllm_engine import LLMRayActor, logger
+from .vllm_engine import LLMRayActor
 
 
 @ray.remote
 class AsyncLLMRayActor(LLMRayActor):
     def __init__(self, *args, **kwargs):
-        tool_dir = kwargs.pop("tool_dir")
-        self.tools = {}
-        for tool_name in os.listdir(tool_dir):
-            if tool_name.endswith(".py"):
-                tool_name = tool_name[:-3]
-                module = importlib.import_module(f"{tool_dir}.{tool_name}")
-                if hasattr(module, "step"):
-                    logger.info(f"Importing tool {tool_name} from {tool_dir}")
-                    self.tools[tool_name] = getattr(module, "step")
+        # Load agent for step function
+        agent_path = kwargs.pop("agent_path")
+        self.agent_step = None
+        if agent_path.endswith(".py"):
+            print(f"Loading agent from {agent_path}")
+            import importlib.util
+
+            spec = importlib.util.spec_from_file_location("step", agent_path)
+            agent_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(agent_module)
+            self.agent_step = ray.remote(agent_module.step)
 
         # Initialize result queue for streaming completed results
         self.result_queue = asyncio.Queue()
         self.tasks = []
-        self.total_tasks = 0
 
         # Initialize super class
         super().__init__(*args, **kwargs)
@@ -59,11 +58,11 @@ class AsyncLLMRayActor(LLMRayActor):
     async def wake_up(self):
         await self.llm.wake_up()
 
-    async def add_requests_tool(self, sampling_params, prompts, tool_names, max_steps=1000):
+    async def add_requests_agent(self, sampling_params, prompts, labels, max_steps=10000):
         """
         Process requests from rank0 and generate responses with multiple agent interactions.
         Each prompt will go through multiple steps of interaction using the step function.
-        Results are streamed back as each tool completes its execution.
+        Results are streamed back as each agent completes its execution.
         """
         from vllm.utils import random_uuid
 
@@ -76,38 +75,39 @@ class AsyncLLMRayActor(LLMRayActor):
                 final_output = request_output.outputs
             return final_output
 
-        async def execute_tool(prompt, tool_name):
+        async def execute_agent(prompt, label):
             # Initialize states and actions for the current prompt
-            step = self.tools[tool_name]
             state = prompt
+            action_ranges = []
             total_reward = 0
 
             # Execute multiple steps of interaction
             for step_idx in range(max_steps):
-                # Execute tool asynchronously
+                # Execute agent asynchronously
                 action = await generate_async_func(prompt, sampling_params)[0]
 
                 # Call step function to get reward and next state
-                reward, state, done, extra_info = step(state, action)
+                action_ranges.append((len(state), len(state) + len(action)))
+                reward, state, done, extra_info = await self.agent_step.remote(state, action, label)
                 total_reward += reward.item()
 
                 if done:
                     break
 
-            # Store the final response when tool execution is complete
-            final_response = {"prompt": prompt, "state": state, "reward": total_reward}
+            # Store the final response when agent execution is complete
+            final_response = {"prompt": prompt, "state": state, "reward": total_reward, "action_ranges": action_ranges}
             await self.result_queue.put(final_response)
 
-        # Create and start tasks for all tool executions
-        for prompt, tool_name in zip(prompts, tool_names):
-            task = asyncio.create_task(execute_tool(prompt, tool_name))
+        # Create and start tasks for all agent executions
+        for prompt, label in zip(prompts, labels):
+            task = asyncio.create_task(execute_agent(prompt, label))
             self.tasks.append(task)
 
     async def get_responses(self):
         """
-        Synchronously get all completed tool results from the queue.
+        Synchronously get all completed agent results from the queue.
         Waits for all tasks to complete before returning results.
-        Returns: List of all completed tool results.
+        Returns: List of all completed agent results.
         """
         # Wait for all tasks to complete
         await asyncio.gather(*self.tasks)
@@ -123,8 +123,8 @@ class AsyncLLMRayActor(LLMRayActor):
 
     async def get_responses_async(self):
         """
-        Asynchronously get the next completed tool result from the queue.
-        Returns: The next available completed tool result, or None if no result is available within timeout.
+        Asynchronously get the next completed agent result from the queue.
+        Returns: The next available completed agent result, or None if no result is available within timeout.
         """
         try:
             return await asyncio.wait_for(self.result_queue.get(), timeout=0.5)

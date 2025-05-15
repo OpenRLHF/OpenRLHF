@@ -3,12 +3,13 @@ from typing import Any, Dict, Tuple
 import torch
 
 
-def step(state, action, **kwargs) -> Tuple[float, Dict[str, Any], bool]:
+async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], bool]:
     """Executes one step of verification and returns a random reward using torch.rand
 
     Args:
         state: The prompt/input expression
         action: Mathematical expression to verify
+        label: Used to identify the agent / pass extra info
 
     Returns:
         Tuple[float, Dict[str, Any], bool]: (random_reward, next_state, done)
@@ -19,7 +20,7 @@ def step(state, action, **kwargs) -> Tuple[float, Dict[str, Any], bool]:
     reward = torch.rand(1)
 
     # Update state
-    next_state = None
+    next_state = state + action
 
     # End after verification
     done = True
