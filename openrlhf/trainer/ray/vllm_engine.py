@@ -20,7 +20,6 @@ def get_all_env_variables():
     return os.environ
 
 
-@ray.remote
 class LLMRayActor:
 
     def __init__(self, *args, bundle_indices: list = None, **kwargs):
@@ -149,11 +148,13 @@ def create_vllm_engines(
         )
 
         vllm_engines.append(
-            llm_actor_cls.options(
+            ray.remote(llm_actor_cls)
+            .options(
                 num_cpus=num_gpus,
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
-            ).remote(
+            )
+            .remote(
                 model=pretrain,
                 enforce_eager=enforce_eager,
                 worker_extension_cls="openrlhf.trainer.ray.vllm_worker_wrap.WorkerWrap",

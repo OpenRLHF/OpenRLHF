@@ -22,7 +22,6 @@ class AgentInstance:
         return self.agent_step(state, action, label)
 
 
-@ray.remote
 class LLMRayActorAsync(LLMRayActor):
     def __init__(self, *args, **kwargs):
         # Load agent for step function
