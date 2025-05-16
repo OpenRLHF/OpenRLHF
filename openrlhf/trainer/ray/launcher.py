@@ -110,7 +110,9 @@ class ReferenceModelRayActor(BasePPORole):
             use_flash_attention_2=strategy.args.flash_attn,
             bf16=strategy.args.bf16,
             load_in_4bit=strategy.args.load_in_4bit,
-            ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
+            ds_config=strategy.get_ds_eval_config(
+                ds_tp=strategy.args.ref_tensor_parallel_size, offload=strategy.args.ref_reward_offload
+            ),
             packing_samples=strategy.args.packing_samples,
             temperature=strategy.args.temperature,
             use_liger_kernel=strategy.args.use_liger_kernel,
@@ -120,7 +122,7 @@ class ReferenceModelRayActor(BasePPORole):
         if strategy.args.ref_reward_offload:
             model._offload = True
 
-        self.model = self.strategy.prepare(model, is_rlhf=True)
+        self.model = self.strategy.prepare(model, ds_tp=strategy.args.ref_tensor_parallel_size, is_rlhf=True)
         self.model.eval()
 
     def forward(
@@ -154,7 +156,9 @@ class RewardModelRayActor(BasePPORole):
             use_flash_attention_2=strategy.args.flash_attn,
             bf16=strategy.args.bf16,
             load_in_4bit=strategy.args.load_in_4bit,
-            ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
+            ds_config=strategy.get_ds_eval_config(
+                ds_tp=strategy.args.reward_tensor_parallel_size, offload=strategy.args.ref_reward_offload
+            ),
             value_head_prefix=strategy.args.value_head_prefix,
             packing_samples=strategy.args.packing_samples,
         )
@@ -165,7 +169,7 @@ class RewardModelRayActor(BasePPORole):
         if strategy.args.ref_reward_offload:
             model._offload = True
 
-        self.model = self.strategy.prepare(model, is_rlhf=True)
+        self.model = self.strategy.prepare(model, ds_tp=strategy.args.reward_tensor_parallel_size, is_rlhf=True)
         self.model.eval()
 
     def forward(

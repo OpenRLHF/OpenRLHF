@@ -27,7 +27,7 @@ def train(args):
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
         target_modules=args.target_modules,
-        ds_config=strategy.get_ds_train_config(is_actor=True),
+        ds_config=strategy.get_ds_train_config(ds_tp=strategy.args.ds_tensor_parallel_size),
         packing_samples=args.packing_samples,
         use_liger_kernel=args.use_liger_kernel,
     )
@@ -42,7 +42,9 @@ def train(args):
         use_flash_attention_2=args.flash_attn,
         bf16=args.bf16,
         load_in_4bit=args.load_in_4bit,
-        ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
+        ds_config=strategy.get_ds_eval_config(
+            ds_tp=strategy.args.actor_tensor_parallel_size, offload=args.ref_offload
+        ),
         packing_samples=args.packing_samples,
     )
     if args.ref_offload:
@@ -125,7 +127,9 @@ def train(args):
     )
 
     # strategy prepare
-    ((model, optim, scheduler), ref_model) = strategy.prepare((model, optim, scheduler), ref_model)
+    (model, optim, scheduler) = strategy.prepare(
+        (model, optim, scheduler), ds_tp=strategy.args.ds_tensor_parallel_size
+    )
 
     # load checkpoint
     consumed_samples = 0
@@ -274,6 +278,12 @@ if __name__ == "__main__":
     parser.add_argument("--use_ms", action="store_true", default=False)
 
     args = parser.parse_args()
+
+    if args.ds_tensor_parallel_size > 1:
+        import deepspeed
+
+        assert deepspeed.version >= "0.16.4", "DeepSpeed version must be >= 0.16.4 for tensor parallel training"
+        assert args.bf16, "BF16 is required for tensor parallel training"
 
     if args.ref_pretrain is None or args.ref_pretrain == "":
         args.ref_pretrain = args.pretrain
