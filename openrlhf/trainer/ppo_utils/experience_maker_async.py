@@ -88,7 +88,7 @@ class RemoteExperienceMakerAsync(RemoteExperienceMaker):
                     # Tokenize state
                     state_tokens = self.tokenizer(output["state"], add_special_tokens=False, return_tensors="pt")[
                         "input_ids"
-                    ]
+                    ][0]
                     tokenized_states.append(state_tokens.tolist())
 
                     # Convert action ranges to token indices
@@ -97,11 +97,11 @@ class RemoteExperienceMakerAsync(RemoteExperienceMaker):
                         # Get token indices for the entire state up to end
                         full_tokens = self.tokenizer(
                             output["state"][:end], add_special_tokens=False, return_tensors="pt"
-                        )["input_ids"]
+                        )["input_ids"][0]
                         # Get token indices for the entire state up to start
                         start_tokens = self.tokenizer(
                             output["state"][:start], add_special_tokens=False, return_tensors="pt"
-                        )["input_ids"]
+                        )["input_ids"][0]
                         # Calculate token indices
                         ranges.append((len(start_tokens), len(full_tokens)))
                     tokenized_ranges.append(ranges)
@@ -111,11 +111,15 @@ class RemoteExperienceMakerAsync(RemoteExperienceMaker):
 
                 sequences = []
                 attention_mask = []
-                for state_tokens in tokenized_states:
+                for i, state_tokens in enumerate(tokenized_states):
                     # Add padding to input and output
                     input_ids = state_tokens + [pad_token_id] * (batch_max_input_len - len(state_tokens))
                     sequences.append(input_ids)
                     attention_mask.append([1] * len(state_tokens) + [0] * (batch_max_input_len - len(state_tokens)))
+
+                for i, seq in enumerate(sequences):
+                    if len(seq) != batch_max_input_len:
+                        print(f"Error: Sequence {i} has length {len(seq)}, expected {batch_max_input_len}")
 
                 sequences = torch.tensor(sequences)
                 attention_mask = torch.tensor(attention_mask)
