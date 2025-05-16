@@ -429,6 +429,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Validate arguments
+    if args.agent_path:
+        args.remote_rm_url = "agent"
+
     if args.advantage_estimator not in ["gae"]:
         args.critic_pretrain = None
     elif args.critic_pretrain is None:

@@ -280,7 +280,6 @@ class RemoteExperienceMaker(ABC):
         if rewards_list[0]:
             rewards_list = sum(rewards_list, [])
             r_refs = ray.put(rewards_list)
-            self.remote_rm_url = "dummy"
         else:
             # Batch call reward model
             r_refs = None
