@@ -1,11 +1,13 @@
+import random
 from typing import Any, Dict, Tuple
 
 import torch
 
 step_idx = 0
+max_steps = random.randint(0, 2)
 
 
-# A 2-step random environment
+# A n-step random environment
 async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], bool]:
     """Executes one step of verification and returns a random reward using torch.rand
 
@@ -17,14 +19,14 @@ async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], b
     Returns:
         Tuple[float, Dict[str, Any], bool]: (random_reward, next_state, done)
     """
-    global step_idx
-    # print(f"step_idx: {step_idx}, state: {state}, action: {action}")
+    global step_idx, max_steps
+    print(f"step_idx: {step_idx}, max_steps: {max_steps}")
 
     # Update state
     next_state = state + action
 
     # End after verification
-    if step_idx >= 1:
+    if step_idx >= max_steps:
         done = True
         # Generate a random reward using torch.rand
         reward = torch.rand(1)
