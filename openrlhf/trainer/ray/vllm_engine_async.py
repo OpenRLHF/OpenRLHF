@@ -18,8 +18,8 @@ class AgentInstance:
         else:
             raise ValueError("Agent path must be a Python file")
 
-    def step(self, state, action, label):
-        return self.agent_step(state, action, label)
+    async def step(self, state, action, label):
+        return await self.agent_step(state, action, label)
 
 
 class LLMRayActorAsync(LLMRayActor):
@@ -109,7 +109,7 @@ class LLMRayActorAsync(LLMRayActor):
                 # Call step function to get reward and next state
                 action_ranges.append((len(state), len(state) + len(action)))
                 # Use asyncio.to_thread to make Ray remote call non-blocking
-                result = await asyncio.wait(agent_instance.step.remote(state, action, label))
+                result = await agent_instance.step.remote(state, action, label)
                 reward, state, done, extra_info = result
                 total_reward += reward.item()
 
