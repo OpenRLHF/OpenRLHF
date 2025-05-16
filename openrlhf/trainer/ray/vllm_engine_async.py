@@ -23,7 +23,7 @@ class AgentInstance:
 
 
 class LLMRayActorAsync(LLMRayActor):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, bundle_indices: list = None, **kwargs):
         # Load agent for step function
         self.agent_func_path = kwargs.pop("agent_func_path")
 
@@ -32,7 +32,7 @@ class LLMRayActorAsync(LLMRayActor):
         self.tasks = []
 
         # Initialize super class
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, bundle_indices=bundle_indices, **kwargs)
 
     def _init_vllm_engine(self, *args, **kwargs):
         import vllm
