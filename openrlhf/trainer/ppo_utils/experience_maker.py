@@ -278,7 +278,7 @@ class RemoteExperienceMaker(ABC):
         # Get rewards from samples, such as agent rewards
         rewards_list = [s.rewards for s in samples_list]
         if rewards_list[0]:
-            rewards_list = sum(rewards_list, [])
+            rewards_list = [torch.tensor(s.rewards) for s in samples_list]
             r_refs = ray.put(rewards_list)
         else:
             # Batch call reward model
