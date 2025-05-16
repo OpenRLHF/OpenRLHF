@@ -6,19 +6,27 @@ from .vllm_engine import LLMRayActor
 
 
 @ray.remote
-class AsyncLLMRayActor(LLMRayActor):
-    def __init__(self, *args, **kwargs):
-        # Load agent for step function
-        agent_path = kwargs.pop("agent_path")
-        self.agent_step = None
+class AgentInstance:
+    def __init__(self, agent_path):
         if agent_path.endswith(".py"):
-            print(f"Loading agent from {agent_path}")
             import importlib.util
 
             spec = importlib.util.spec_from_file_location("step", agent_path)
             agent_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(agent_module)
-            self.agent_step = ray.remote(agent_module.step)
+            self.step = agent_module.step
+        else:
+            raise ValueError("Agent path must be a Python file")
+
+    def step(self, state, action, label):
+        return self.step(state, action, label)
+
+
+@ray.remote
+class LLMRayActorAsync(LLMRayActor):
+    def __init__(self, *args, **kwargs):
+        # Load agent for step function
+        self.agent_path = kwargs.pop("agent_path")
 
         # Initialize result queue for streaming completed results
         self.result_queue = asyncio.Queue()
@@ -76,6 +84,9 @@ class AsyncLLMRayActor(LLMRayActor):
             return final_output
 
         async def execute_agent(prompt, label):
+            # Create a unique agent instance for this prompt
+            agent_instance = AgentInstance.remote(self.agent_path)
+
             # Initialize states and actions for the current prompt
             state = prompt
             action_ranges = []
@@ -88,7 +99,7 @@ class AsyncLLMRayActor(LLMRayActor):
 
                 # Call step function to get reward and next state
                 action_ranges.append((len(state), len(state) + len(action)))
-                reward, state, done, extra_info = await self.agent_step.remote(state, action, label)
+                reward, state, done, extra_info = await agent_instance.step.remote(state, action, label)
                 total_reward += reward.item()
 
                 if done:

@@ -53,9 +53,9 @@ def train(args):
                 f"and {args.vllm_num_engines * args.vllm_tensor_parallel_size}"
             )
 
-        # AsyncLLMRayActor is used for agent
+        # LLMRayActorAsync is used for agent
         if args.agent_path:
-            from openrlhf.trainer.ray.async_vllm_engine import AsyncLLMRayActor as LLMRayActor
+            from openrlhf.trainer.ray.vllm_engine_async import LLMRayActorAsync as LLMRayActor
         else:
             from openrlhf.trainer.ray.vllm_engine import LLMRayActor
 
@@ -72,6 +72,7 @@ def train(args):
             args.vllm_gpu_memory_utilization,
             args.vllm_enable_sleep,
             LLMRayActor,
+            args.agent_path,
         )
 
     actor_model = PPORayActorGroup(

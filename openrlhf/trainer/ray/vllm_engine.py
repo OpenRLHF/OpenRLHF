@@ -114,6 +114,7 @@ def create_vllm_engines(
     gpu_memory_utilization=None,
     vllm_enable_sleep=False,
     llm_actor_cls=LLMRayActor,
+    agent_path=None,
 ):
     import vllm
 
@@ -168,6 +169,7 @@ def create_vllm_engines(
                 num_gpus=0.2 if use_hybrid_engine else 1,
                 enable_sleep_mode=vllm_enable_sleep,
                 noset_visible_devices=noset_visible_devices,
+                agent_path=agent_path,
             )
         )
 
