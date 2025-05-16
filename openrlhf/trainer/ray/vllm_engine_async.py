@@ -125,7 +125,7 @@ class LLMRayActorAsync(LLMRayActor):
             await self.result_queue.put(final_response)
 
         # Create semaphore to control concurrent task execution
-        num_tasks = 256
+        num_tasks = 128
         semaphore = asyncio.Semaphore(num_tasks)
 
         async def execute_agent_with_semaphore(prompt, label, sampling_params):
