@@ -68,7 +68,7 @@ class RemoteExperienceMakerAsync(RemoteExperienceMaker):
         for i, output in enumerate(all_outputs):
             current_batch.append(output)
             current_batch_prompts.append(output["prompt"])
-            current_batch_labels.append(output.get("label", None))
+            current_batch_labels.append(output["label"])
             current_batch_rewards.append(output["reward"])
 
             # Process batch when it's full or we're at the last output
@@ -89,9 +89,7 @@ class RemoteExperienceMakerAsync(RemoteExperienceMaker):
                         # Get token indices for the entire state up to start
                         start_tokens = self.tokenizer.encode(output["state"][:start], add_special_tokens=False)
                         # Calculate token indices
-                        token_start = len(start_tokens)
-                        token_end = len(full_tokens)
-                        ranges.append((token_start, token_end))
+                        ranges.append((len(start_tokens), len(full_tokens)))
                     tokenized_ranges.append(ranges)
 
                 # Calculate max length using tokenized states

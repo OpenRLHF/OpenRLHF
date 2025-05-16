@@ -95,7 +95,7 @@ class LLMRayActorAsync(LLMRayActor):
             # Execute multiple steps of interaction
             for step_idx in range(max_steps):
                 # Execute agent asynchronously
-                action = await generate_async_func(prompt, sampling_params)[0]
+                action = await generate_async_func([prompt], sampling_params)[0]
 
                 # Call step function to get reward and next state
                 action_ranges.append((len(state), len(state) + len(action)))
@@ -106,7 +106,13 @@ class LLMRayActorAsync(LLMRayActor):
                     break
 
             # Store the final response when agent execution is complete
-            final_response = {"prompt": prompt, "state": state, "reward": total_reward, "action_ranges": action_ranges}
+            final_response = {
+                "prompt": prompt,
+                "label": label,
+                "state": state,
+                "reward": total_reward,
+                "action_ranges": action_ranges,
+            }
             await self.result_queue.put(final_response)
 
         # Create and start tasks for all agent executions
