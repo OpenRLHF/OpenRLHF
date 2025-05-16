@@ -101,15 +101,16 @@ class LLMRayActorAsync(LLMRayActor):
                 if sampling_params.max_tokens <= 0:
                     break
 
-                # Execute agent asynchronously
+                # Generate response asynchronously
                 request_output = await generate_async_func(state, sampling_params)
                 action = request_output.outputs[0].text
+                action_ranges.append((len(state), len(state) + len(action)))
+                # Next sampling budget
                 sampling_params.max_tokens = max_length - (
                     len(request_output.prompt_token_ids) + len(request_output.outputs[0].token_ids)
                 )
 
                 # Call step function to get reward and next state
-                action_ranges.append((len(state), len(state) + len(action)))
                 # Use asyncio.to_thread to make Ray remote call non-blocking
                 result = await agent_instance.step.remote(state, action, label)
                 reward, state, done, extra_info = result
