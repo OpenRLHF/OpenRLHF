@@ -14,12 +14,12 @@ class AgentInstance:
             spec = importlib.util.spec_from_file_location("step", agent_path)
             agent_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(agent_module)
-            self.step = agent_module.step
+            self.agent_step = agent_module.step
         else:
             raise ValueError("Agent path must be a Python file")
 
     def step(self, state, action, label):
-        return self.step(state, action, label)
+        return self.agent_step(state, action, label)
 
 
 @ray.remote
