@@ -83,6 +83,7 @@ class LLMRayActorAsync(LLMRayActor):
         async def generate_async_func(prompts, sampling_params):
             request_id = random_uuid()
             results_generator = self.llm.generate(prompts, sampling_params, request_id)
+            final_output = None
             async for request_output in results_generator:
                 final_output = request_output
             return final_output
