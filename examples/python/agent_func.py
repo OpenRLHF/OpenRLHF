@@ -22,17 +22,17 @@ async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], b
     global step_idx, max_steps
     print(f"step_idx: {step_idx}, max_steps: {max_steps}")
 
-    # Update state
-    next_state = state + action
-
     # End after verification
     if step_idx >= max_steps:
         done = True
         # Generate a random reward using torch.rand
         reward = torch.rand(1)
+        next_state = state + action + " The answer is correct. <|endoftext|>"
     else:
         done = False
         reward = torch.tensor(0)
+        # Update state
+        next_state = state + action + " The answer is not correct, please try again."
     step_idx += 1
 
     # Extra info
