@@ -24,7 +24,7 @@ def get_all_env_variables():
 class LLMRayActor:
 
     def __init__(self, *args, bundle_indices: list = None, **kwargs):
-        kwargs.pop("agent_path", None)
+        kwargs.pop("agent_func_path", None)
         noset_visible_devices = kwargs.pop("noset_visible_devices")
         if kwargs.get("distributed_executor_backend") == "ray":
             # a hack to make the script work.
@@ -115,7 +115,7 @@ def create_vllm_engines(
     gpu_memory_utilization=None,
     vllm_enable_sleep=False,
     llm_actor_cls=LLMRayActor,
-    agent_path=None,
+    agent_func_path=None,
 ):
     import vllm
 
@@ -170,7 +170,7 @@ def create_vllm_engines(
                 num_gpus=0.2 if use_hybrid_engine else 1,
                 enable_sleep_mode=vllm_enable_sleep,
                 noset_visible_devices=noset_visible_devices,
-                agent_path=agent_path,
+                agent_func_path=agent_func_path,
             )
         )
 

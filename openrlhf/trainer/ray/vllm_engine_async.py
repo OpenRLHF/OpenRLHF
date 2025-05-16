@@ -7,11 +7,11 @@ from .vllm_engine import LLMRayActor
 
 @ray.remote
 class AgentInstance:
-    def __init__(self, agent_path):
-        if agent_path.endswith(".py"):
+    def __init__(self, agent_func_path):
+        if agent_func_path.endswith(".py"):
             import importlib.util
 
-            spec = importlib.util.spec_from_file_location("step", agent_path)
+            spec = importlib.util.spec_from_file_location("step", agent_func_path)
             agent_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(agent_module)
             self.agent_step = agent_module.step
@@ -26,7 +26,7 @@ class AgentInstance:
 class LLMRayActorAsync(LLMRayActor):
     def __init__(self, *args, **kwargs):
         # Load agent for step function
-        self.agent_path = kwargs.pop("agent_path")
+        self.agent_func_path = kwargs.pop("agent_func_path")
 
         # Initialize result queue for streaming completed results
         self.result_queue = asyncio.Queue()
@@ -94,7 +94,7 @@ class LLMRayActorAsync(LLMRayActor):
 
         async def execute_agent(prompt, label, sampling_params):
             # Create a unique agent instance for this prompt
-            agent_instance = AgentInstance.remote(self.agent_path)
+            agent_instance = AgentInstance.remote(self.agent_func_path)
 
             # Initialize states and actions for the current prompt
             state = prompt

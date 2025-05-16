@@ -54,7 +54,7 @@ def train(args):
             )
 
         # LLMRayActorAsync is used for agent
-        if args.agent_path:
+        if args.agent_func_path:
             from openrlhf.trainer.ray.vllm_engine_async import LLMRayActorAsync as LLMRayActor
         else:
             from openrlhf.trainer.ray.vllm_engine import LLMRayActor
@@ -72,7 +72,7 @@ def train(args):
             args.vllm_gpu_memory_utilization,
             args.vllm_enable_sleep,
             LLMRayActor,
-            args.agent_path,
+            args.agent_func_path,
         )
 
     actor_model = PPORayActorGroup(
@@ -404,7 +404,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--apply_chat_template", action="store_true", default=False, help="Use HF tokenizer chat template"
     )
-    parser.add_argument("--agent_path", type=str, default=None, help="Agent script path")
+    parser.add_argument("--agent_func_path", type=str, default=None, help="Agent script path")
 
     # wandb parameters
     parser.add_argument("--use_wandb", type=str, default=None)
@@ -429,7 +429,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Validate arguments
-    if args.agent_path:
+    if args.agent_func_path:
         args.remote_rm_url = "agent"
 
     if args.advantage_estimator not in ["gae"]:

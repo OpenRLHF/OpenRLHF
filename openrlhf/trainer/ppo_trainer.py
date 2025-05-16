@@ -73,7 +73,7 @@ class PPOTrainer(ABC):
             self.kl_ctl = FixedKLController(self.init_kl_coef)
 
         # RemoteExperienceMakerAsync is used for agent
-        if self.args.agent_path:
+        if self.args.agent_func_path:
             from openrlhf.trainer.ppo_utils.experience_maker_async import (
                 RemoteExperienceMakerAsync as RemoteExperienceMaker,
             )
