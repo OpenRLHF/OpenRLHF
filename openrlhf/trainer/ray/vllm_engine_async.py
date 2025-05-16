@@ -108,7 +108,9 @@ class LLMRayActorAsync(LLMRayActor):
 
                 # Call step function to get reward and next state
                 action_ranges.append((len(state), len(state) + len(action)))
-                reward, state, done, extra_info = await agent_instance.step.remote(state, action, label)
+                # Use asyncio.to_thread to make Ray remote call non-blocking
+                result = await asyncio.to_thread(lambda: ray.get(agent_instance.step.remote(state, action, label)))
+                reward, state, done, extra_info = result
                 total_reward += reward.item()
 
                 if done:
