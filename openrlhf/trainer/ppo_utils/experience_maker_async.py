@@ -153,5 +153,6 @@ class RemoteExperienceMakerAsync(RemoteExperienceMaker):
                 current_batch = []
                 current_batch_prompts = []
                 current_batch_labels = []
+                current_batch_rewards = []
 
         return samples_list

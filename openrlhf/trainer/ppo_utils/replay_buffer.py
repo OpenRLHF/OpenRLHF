@@ -60,7 +60,7 @@ def split_experience_batch(experience: Experience) -> List[BufferItem]:
         vals = value
         if isinstance(vals, torch.Tensor):
             vals = torch.unbind(vals)
-        assert batch_size == len(vals)
+        assert batch_size == len(vals), f"batch_size: {batch_size}, len(vals): {len(vals)}, key: {key}"
         for i, v in enumerate(vals):
             batch_kwargs[i][key] = v
 
@@ -68,7 +68,7 @@ def split_experience_batch(experience: Experience) -> List[BufferItem]:
         batch_kwargs[i]["info"] = {}
     for k, v in experience.info.items():
         vals = torch.unbind(v)
-        assert batch_size == len(vals)
+        assert batch_size == len(vals), f"batch_size: {batch_size}, len(vals): {len(vals)}, key: {k}"
         for i, vv in enumerate(vals):
             if isinstance(vv, torch.Tensor):
                 assert vv.numel() == 1, f"info[{k}] must be a scalar tensor, but got {vv.shape}"

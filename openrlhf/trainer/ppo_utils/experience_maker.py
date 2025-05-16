@@ -141,24 +141,6 @@ class Samples:
         self.rewards = rewards or []
         self.packed_seq_lens = packed_seq_lens
 
-    def split(self, split_size: int):
-        sequences_list = self.sequences.split(split_size, dim=0)
-        attention_mask_list = self.attention_mask.split(split_size, dim=0)
-        action_mask_list = self.action_mask.split(split_size, dim=0)
-        sample_list = []
-        for i, (seq, mask, action_mask) in enumerate(zip(sequences_list, attention_mask_list, action_mask_list)):
-            sample = Samples()
-            sample.sequences = seq
-            sample.attention_mask = mask
-            sample.action_mask = action_mask
-            sample.response_length = sample.action_mask.float().sum(dim=-1)
-            sample.total_length = sample.attention_mask.float().sum(dim=-1)
-            sample.prompts = self.prompts[i * split_size : (i + 1) * split_size]
-            sample.labels = self.labels[i * split_size : (i + 1) * split_size]
-            sample.rewards = self.rewards[i * split_size : (i + 1) * split_size] if self.rewards else []
-            sample_list.append(sample)
-        return sample_list
-
 
 class RemoteExperienceMaker(ABC):
     def __init__(
