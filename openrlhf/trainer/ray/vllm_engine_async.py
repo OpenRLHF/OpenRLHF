@@ -63,7 +63,7 @@ class LLMRayActorAsync(LLMRayActor):
     async def wake_up(self):
         await self.llm.wake_up()
 
-    async def add_requests(self, sampling_params, prompts, labels, max_length, max_steps=1024):
+    async def add_requests(self, sampling_params, prompts, labels, max_length, max_steps=10000):
         """
         Process requests from rank0 and generate responses with multiple agent interactions.
         Each prompt will go through multiple steps of interaction using the step function.
@@ -97,6 +97,10 @@ class LLMRayActorAsync(LLMRayActor):
 
             # Execute multiple steps of interaction
             for step_idx in range(max_steps):
+                # No budget to generate, break
+                if sampling_params.max_tokens <= 0:
+                    break
+
                 # Execute agent asynchronously
                 request_output = await generate_async_func(state, sampling_params)
                 action = request_output.outputs[0].text
