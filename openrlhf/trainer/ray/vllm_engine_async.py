@@ -103,7 +103,7 @@ class LLMRayActorAsync(LLMRayActor):
             # Execute multiple steps of interaction
             for step_idx in range(max_steps):
                 # Execute agent asynchronously
-                request_output = await generate_async_func([state], sampling_params)[0]
+                request_output = await generate_async_func([state], sampling_params)
                 action = request_output.outputs[0].text
                 sampling_params.max_tokens = max_length - (
                     len(request_output.prompt_token_ids) + len(request_output.outputs[0].token_ids)
