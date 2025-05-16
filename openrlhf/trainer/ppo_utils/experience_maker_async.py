@@ -43,7 +43,6 @@ class RemoteExperienceMakerAsync(RemoteExperienceMaker):
                     prompts=prompts,
                     labels=labels,
                     max_length=truncate_length,
-                    micro_rollout_batch_size=args.micro_rollout_batch_size,
                 )
             )
         ray.get(refs)
@@ -90,7 +89,7 @@ class RemoteExperienceMakerAsync(RemoteExperienceMaker):
                     state_tokens = self.tokenizer(output["state"], add_special_tokens=False, return_tensors="pt")[
                         "input_ids"
                     ]
-                    tokenized_states.append(state_tokens)
+                    tokenized_states.append(state_tokens.tolist())
 
                     # Convert action ranges to token indices
                     ranges = []
