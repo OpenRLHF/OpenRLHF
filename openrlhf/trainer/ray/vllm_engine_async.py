@@ -106,15 +106,14 @@ class LLMRayActorAsync(LLMRayActor):
                 # Execute agent asynchronously
                 request_output = await generate_async_func([state], sampling_params)[0]
                 action = request_output.outputs[0].text
+                sampling_params.max_tokens = max_length - (
+                    len(request_output.prompt_token_ids) + len(request_output.outputs[0].token_ids)
+                )
 
                 # Call step function to get reward and next state
                 action_ranges.append((len(state), len(state) + len(action)))
                 reward, state, done, extra_info = await agent_instance.step.remote(state, action, label)
                 total_reward += reward.item()
-
-                sampling_params.max_tokens = max_length - (
-                    len(request_output.outputs[0].token_ids) + len(request_output.prompt_token_ids)
-                )
 
                 if done:
                     break
