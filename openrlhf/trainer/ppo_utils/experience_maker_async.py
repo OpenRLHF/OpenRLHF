@@ -120,9 +120,10 @@ class RemoteExperienceMakerAsync(RemoteExperienceMaker):
                     for start, end in ranges:
                         action_mask[i, start:end] = 1
 
-                sequences = sequences.to("cpu")
-                attention_mask = attention_mask.to("cpu")
-                action_mask = action_mask.to("cpu")
+                truncate_length = self.prompt_max_len + kwargs.get("max_new_tokens", 1024)
+                sequences = sequences[:, :truncate_length].to("cpu")
+                attention_mask = attention_mask[:, :truncate_length].to("cpu")
+                action_mask = action_mask[:, 1 : truncate_length + 1].to("cpu")
                 response_length = action_mask.float().sum(dim=-1)
                 total_length = attention_mask.float().sum(dim=-1)
 

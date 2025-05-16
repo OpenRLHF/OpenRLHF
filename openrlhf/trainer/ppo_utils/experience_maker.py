@@ -722,7 +722,7 @@ class RemoteExperienceMaker(ABC):
 
             sequences = sequences.to("cpu")
             attention_mask = attention_mask.to("cpu")
-            action_mask = action_mask.to("cpu")
+            action_mask = action_mask[:, 1:].to("cpu")
             response_length = action_mask.float().sum(dim=-1)
             total_length = attention_mask.float().sum(dim=-1)
 
