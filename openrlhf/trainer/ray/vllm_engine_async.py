@@ -66,11 +66,18 @@ class LLMRayActorAsync(LLMRayActor):
     async def wake_up(self):
         await self.llm.wake_up()
 
-    async def add_requests(self, sampling_params, prompts, labels, max_steps=10000):
+    async def add_requests(self, sampling_params, prompts, labels, micro_rollout_batch_size=4, max_steps=10000):
         """
         Process requests from rank0 and generate responses with multiple agent interactions.
         Each prompt will go through multiple steps of interaction using the step function.
         Results are streamed back as each agent completes its execution.
+
+        Args:
+            sampling_params: Parameters for sampling
+            prompts: List of prompts to process
+            labels: List of labels corresponding to prompts
+            max_steps: Maximum number of interaction steps
+            micro_forward_batch_size: Number of prompts to process in each concurrent task
         """
         from vllm.utils import random_uuid
 
@@ -115,9 +122,19 @@ class LLMRayActorAsync(LLMRayActor):
             }
             await self.result_queue.put(final_response)
 
-        # Create and start tasks for all agent executions
+        # Calculate number of concurrent tasks based on total prompts and batch size
+        # Create semaphore to control concurrent task execution
+        num_tasks = len(prompts) // micro_rollout_batch_size
+        semaphore = asyncio.Semaphore(num_tasks)
+
+        async def execute_agent_with_semaphore(prompt, label):
+            # Use semaphore to control concurrent execution
+            async with semaphore:
+                return await execute_agent(prompt, label)
+
+        # Create and start tasks for all agent executions with controlled concurrency
         for prompt, label in zip(prompts, labels):
-            task = asyncio.create_task(execute_agent(prompt, label))
+            task = asyncio.create_task(execute_agent_with_semaphore(prompt, label))
             self.tasks.append(task)
 
     async def get_responses(self):

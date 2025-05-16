@@ -36,7 +36,14 @@ class RemoteExperienceMakerAsync(RemoteExperienceMaker):
         for i, llm in enumerate(llms):
             prompts = all_prompts[i * batch_size : (i + 1) * batch_size]
             labels = all_labels[i * batch_size : (i + 1) * batch_size]
-            refs.append(llm.add_requests.remote(sampling_params=sampling_params, prompts=prompts, labels=labels))
+            refs.append(
+                llm.add_requests.remote(
+                    sampling_params=sampling_params,
+                    prompts=prompts,
+                    labels=labels,
+                    micro_rollout_batch_size=args.micro_rollout_batch_size,
+                )
+            )
         ray.get(refs)
 
         # Retrieve and combine results from all outputs
