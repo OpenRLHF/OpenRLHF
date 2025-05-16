@@ -707,7 +707,9 @@ class RemoteExperienceMaker(ABC):
                 # Right pad to max length
                 input_ids = input_ids + [pad_token_id] * (batch_max_input_len - len(input_ids))
                 sequences.append(input_ids)
-                attention_mask.append([1] * len(input_ids) + [0] * (batch_max_input_len - len(input_ids)))
+                attention_mask.append(
+                    [1] * len(output.prompt_token_ids) + [0] * (batch_max_input_len - len(input_ids))
+                )
 
             sequences = torch.tensor(sequences)
             attention_mask = process_sequences(sequences, eos_token_id, pad_token_id)

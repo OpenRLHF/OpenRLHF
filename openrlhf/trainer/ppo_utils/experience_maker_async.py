@@ -87,16 +87,22 @@ class RemoteExperienceMakerAsync(RemoteExperienceMaker):
                 tokenized_ranges = []
                 for output in current_batch:
                     # Tokenize state
-                    state_tokens = self.tokenizer.encode(output["state"], add_special_tokens=False)
+                    state_tokens = self.tokenizer(output["state"], add_special_tokens=False, return_tensors="pt")[
+                        "input_ids"
+                    ]
                     tokenized_states.append(state_tokens)
 
                     # Convert action ranges to token indices
                     ranges = []
                     for start, end in output["action_ranges"]:
                         # Get token indices for the entire state up to end
-                        full_tokens = self.tokenizer.encode(output["state"][:end], add_special_tokens=False)
+                        full_tokens = self.tokenizer(
+                            output["state"][:end], add_special_tokens=False, return_tensors="pt"
+                        )["input_ids"]
                         # Get token indices for the entire state up to start
-                        start_tokens = self.tokenizer.encode(output["state"][:start], add_special_tokens=False)
+                        start_tokens = self.tokenizer(
+                            output["state"][:start], add_special_tokens=False, return_tensors="pt"
+                        )["input_ids"]
                         # Calculate token indices
                         ranges.append((len(start_tokens), len(full_tokens)))
                     tokenized_ranges.append(ranges)
