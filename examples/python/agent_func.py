@@ -18,7 +18,7 @@ async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], b
         Tuple[float, Dict[str, Any], bool]: (random_reward, next_state, done)
     """
     global step_idx
-    print(f"step_idx: {step_idx}, state: {state}, action: {action}")
+    # print(f"step_idx: {step_idx}, state: {state}, action: {action}")
 
     # Update state
     next_state = state + action
