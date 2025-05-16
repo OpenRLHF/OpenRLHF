@@ -24,6 +24,7 @@ class RemoteExperienceMakerAsync(RemoteExperienceMaker):
             min_tokens=kwargs.get("min_new_tokens", 1),
             skip_special_tokens=kwargs.get("skip_special_tokens", False),
         )
+        truncate_length = self.prompt_max_len + kwargs.get("max_new_tokens", 1024)
 
         # Expand prompt list based on the number of samples per prompt
         n_samples_per_prompt = kwargs.pop("n_samples_per_prompt", args.n_samples_per_prompt)
@@ -41,6 +42,7 @@ class RemoteExperienceMakerAsync(RemoteExperienceMaker):
                     sampling_params=sampling_params,
                     prompts=prompts,
                     labels=labels,
+                    max_length=truncate_length,
                     micro_rollout_batch_size=args.micro_rollout_batch_size,
                 )
             )
@@ -120,7 +122,6 @@ class RemoteExperienceMakerAsync(RemoteExperienceMaker):
                     for start, end in ranges:
                         action_mask[i, start:end] = 1
 
-                truncate_length = self.prompt_max_len + kwargs.get("max_new_tokens", 1024)
                 sequences = sequences[:, :truncate_length].to("cpu")
                 attention_mask = attention_mask[:, :truncate_length].to("cpu")
                 action_mask = action_mask[:, 1 : truncate_length + 1].to("cpu")

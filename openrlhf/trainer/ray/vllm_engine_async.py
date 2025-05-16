@@ -66,7 +66,9 @@ class LLMRayActorAsync(LLMRayActor):
     async def wake_up(self):
         await self.llm.wake_up()
 
-    async def add_requests(self, sampling_params, prompts, labels, micro_rollout_batch_size=4, max_steps=10000):
+    async def add_requests(
+        self, sampling_params, prompts, labels, max_length, micro_rollout_batch_size=4, max_steps=10000
+    ):
         """
         Process requests from rank0 and generate responses with multiple agent interactions.
         Each prompt will go through multiple steps of interaction using the step function.
@@ -87,10 +89,10 @@ class LLMRayActorAsync(LLMRayActor):
                 prompts=prompts, sampling_params=sampling_params, request_id=request_id
             )
             async for request_output in results_generator:
-                final_output = request_output.outputs
+                final_output = request_output
             return final_output
 
-        async def execute_agent(prompt, label):
+        async def execute_agent(prompt, label, sampling_params):
             # Create a unique agent instance for this prompt
             agent_instance = AgentInstance.remote(self.agent_path)
 
@@ -102,12 +104,17 @@ class LLMRayActorAsync(LLMRayActor):
             # Execute multiple steps of interaction
             for step_idx in range(max_steps):
                 # Execute agent asynchronously
-                action = await generate_async_func([state], sampling_params)[0]
+                request_output = await generate_async_func([state], sampling_params)[0]
+                action = request_output.outputs[0].text
 
                 # Call step function to get reward and next state
                 action_ranges.append((len(state), len(state) + len(action)))
                 reward, state, done, extra_info = await agent_instance.step.remote(state, action, label)
                 total_reward += reward.item()
+
+                sampling_params.max_tokens = max_length - (
+                    len(request_output.outputs[0].token_ids) + len(request_output.prompt_token_ids)
+                )
 
                 if done:
                     break
@@ -127,14 +134,16 @@ class LLMRayActorAsync(LLMRayActor):
         num_tasks = len(prompts) // micro_rollout_batch_size
         semaphore = asyncio.Semaphore(num_tasks)
 
-        async def execute_agent_with_semaphore(prompt, label):
+        async def execute_agent_with_semaphore(prompt, label, sampling_params):
             # Use semaphore to control concurrent execution
             async with semaphore:
-                return await execute_agent(prompt, label)
+                return await execute_agent(prompt, label, sampling_params)
 
         # Create and start tasks for all agent executions with controlled concurrency
+        import copy
+
         for prompt, label in zip(prompts, labels):
-            task = asyncio.create_task(execute_agent_with_semaphore(prompt, label))
+            task = asyncio.create_task(execute_agent_with_semaphore(prompt, label, copy.deepcopy(sampling_params)))
             self.tasks.append(task)
 
     async def get_responses(self):
