@@ -67,7 +67,7 @@ class LLMRayActorAsync(LLMRayActor):
         await self.llm.wake_up()
 
     async def add_requests(
-        self, sampling_params, prompts, labels, max_length, micro_rollout_batch_size=4, max_steps=10000
+        self, sampling_params, prompts, labels, max_length, micro_rollout_batch_size=4, max_steps=1024
     ):
         """
         Process requests from rank0 and generate responses with multiple agent interactions.
