@@ -117,7 +117,7 @@ def make_experience_batch(items: List[BufferItem], packing_samples=False) -> Exp
 def remove_padding_in_sequences(items):
     for item in items:
         # Calculate right padding using attention_mask
-        right_pad = (item.attention_mask == 0).sum()
+        right_pad = item.attention_mask.flip(0).argmax()
         right_pad = None if right_pad == 0 else -right_pad
 
         # Remove right padding for all tensors

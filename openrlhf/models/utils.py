@@ -126,3 +126,35 @@ def compute_entropy(logits: torch.Tensor):
     pd = torch.nn.functional.softmax(logits, dim=-1)
     entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)
     return entropy
+
+
+def process_sequences(sequences: torch.Tensor, eos_token_id, pad_token_id):
+    """
+    Process generated sequences to create attention masks and action masks.
+    Args:
+        sequences (torch.Tensor): Generated sequence tensor
+        input_len (int): Length of the input sequence
+        eos_token_id (int): Token ID for the end-of-sequence token
+        pad_token_id (int): Token ID for the padding token
+    Returns:
+        tuple: A tuple containing three elements:
+            - sequences: Original sequence
+            - attention_mask: Attention mask indicating valid token positions
+            - action_mask: Action mask indicating valid action token positions
+    """
+    # Create initial attention mask by marking positions that are neither EOS nor padding tokens
+    attention_mask = (sequences.ne(eos_token_id) & sequences.ne(pad_token_id)).to(dtype=torch.long)
+    seq_length = attention_mask.size(1)
+
+    # Find the position of the last valid token in each sequence
+    eos_indices = seq_length - attention_mask.long().fliplr().argmax(dim=1, keepdim=True).clamp(min=1)
+
+    # Handle cases where EOS tokens might appear in the middle of the prompt (for Llama3 and Qwen2 models)
+    # Find the position of the first valid token in each sequence
+    first_token_indices = attention_mask.long().argmax(dim=1, keepdim=True)
+    # Create position mask
+    mask = torch.arange(seq_length).unsqueeze(0).expand(sequences.size(0), -1).to(device=sequences.device)
+    # Generate final attention mask, keeping only positions between first and last valid tokens
+    attention_mask = (mask >= first_token_indices) & (mask <= eos_indices).to(dtype=torch.long)
+
+    return attention_mask
