@@ -364,6 +364,37 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 where the `label_key` parameter is used to pass additional sample information such as answer to the reward function.
 
+## Async RLHF & Agent RLHF
+
+OpenRLHF provides comprehensive support for both Asynchronous RLHF and Agent-based RLHF implementations. To utilize these features, simply include the `--async_train` and `--agent_func_path` parameters in your training configuration. 
+
+```python
+# agent_func.py
+step_idx = 0
+max_steps = 2
+
+async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], bool]:
+    global step_idx, max_steps
+    # End after verification
+    if step_idx >= max_steps:
+        done = True
+        # Generate a random reward using torch.rand
+        reward = torch.rand(1)
+        next_state = state + action + " The answer is correct. <|endoftext|>"
+    else:
+        done = False
+        reward = torch.tensor(0)
+        # Update state
+        next_state = state + action + " The answer is not correct, please try again: "
+    step_idx += 1
+
+    # Extra info
+    extra_info = {}
+    return reward, next_state, done, extra_info
+```
+
+You can also configure the maximum number of concurrent agents per vLLM engine by setting `export OPENRLHF_ASYNC_NUM_TASKS=128`. Additionally, you can control the degree of off-policy sampling by setting `export OPENRLHF_ASYNC_QUEUE_SIZE=3` in your environment.
+
 ### LoRA
 If you use `LoRA (Low-Rank Adaptation)`, `OpenRLHF` will not save the full weights by default instead of `LoRA Adapter`. To continue in your task normally, you should combine the `Adapter` with weights of your base model
 
