@@ -182,7 +182,8 @@ class PPOTrainerAsync:
 
         from ray.util.queue import Queue
 
-        self.queue = Queue()
+        # the max size is used to control the degree of off-policy
+        self.queue = Queue(maxsize=os.environ.get("OPENRLHF_ASYNC_QUEUE_SIZE", 3))
 
     def fit(
         self,
