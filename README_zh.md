@@ -46,6 +46,7 @@ OpenRLHF 是第一个基于 Ray、vLLM、ZeRO-3 和 HuggingFace Transformers 构
 
 
 ## 新闻  
+- [2025/5] OpenRLHF 0.8.0 支持 [Async Pipeline RLHF](./examples/scripts/train_reinforce_llama_ray_async.sh) (`--async_train`) 和 [Async Agent RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)(`--agent_func_path`)
 - [2025/4] 发布博客 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html)
 - [2025/4] Clean OpenRLHF: 基于 Single Controller 和 Unified Packing Samples 重构了源码
 - [2025/3] CMU的[2025春季高级自然语言处理课程](https://cmu-l3.github.io/anlp-spring2025/)使用OpenRLHF作为RLHF框架教学案例。
@@ -367,9 +368,42 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 其中 `label_key` 参数用于向奖励函数传递额外的样本信息比如答案。
 
+### Async RLHF & Agent RLHF
 
-### 使用 LoRA
-如果您使用了 `LoRA (Low-Rank Adaptation)`，默认保存下来的文件**并非**完整模型权重，而是 `LoRA Adapter`，若想按完整权重的方式进行后续任务，您需要将 `Adapter` 与训练前的模型权重进行合并
+OpenRLHF 提供了对异步 RLHF 和基于代理的 RLHF 实现的全面支持。要使用这些功能，只需在训练配置中包含 `--async_train` 和 `--agent_func_path` 参数即可。
+
+```python
+# agent_func.py
+step_idx = 0
+max_steps = 2
+
+async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], bool]:
+    global step_idx, max_steps
+    # 验证后结束
+    if step_idx >= max_steps:
+        done = True
+        # 使用 torch.rand 生成随机奖励
+        reward = torch.rand(1)
+        next_state = state + action + " The answer is correct. <|endoftext|>"
+    else:
+        done = False
+        reward = torch.tensor(0)
+        # 更新状态
+        next_state = state + action + " The answer is not correct, please try again: "
+    step_idx += 1
+
+    # 额外信息
+    extra_info = {}
+    return reward, next_state, done, extra_info
+```
+
+您还可以通过设置 `export OPENRLHF_ASYNC_NUM_TASKS=128` 来配置每个 vLLM 引擎的最大并发代理数。
+此外，您可以通过在环境中设置 `export OPENRLHF_ASYNC_QUEUE_SIZE=3`（此参数控制缓冲区最多可以存储多少批数据）来控制离策略采样的程度。
+
+> [!NOTE] OpenRLHF 的 Agent RLHF 也支持 Hybrid Engine 训练（请删除 `--async_train` 并启用 `--colocate_all_models`）
+
+### LoRA
+如果您使用 `LoRA (Low-Rank Adaptation)`，`OpenRLHF` 默认不会保存完整的权重，而是保存 `LoRA Adapter`。要正常继续您的任务，您需要将 `Adapter` 与基础模型的权重合并
 
 ```bash
 python -m openrlhf.cli.lora_combiner \

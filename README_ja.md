@@ -42,6 +42,7 @@ OpenRLHFは、Ray、vLLM、ZeRO-3、およびHuggingFace Transformersを基盤�
 詳細は[スライド](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [技術報告](https://arxiv.org/abs/2405.11143) | [ドキュメント](https://openrlhf.readthedocs.io/)をご覧ください。
 
 ## ニュース
+- [2025/5] OpenRLHF 0.8.0 は [Async Pipeline RLHF](./examples/scripts/train_reinforce_llama_ray_async.sh) (`--async_train`) と [Async Agent RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)(`--agent_func_path`) をサポート
 - [2025/4] ブログ記事 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html) を公開
 - [2025/4] Clean OpenRLHF: シングルコントローラーと統合パッキングサンプルに基づくソースコードのリファクタリング
 - [2025/3] CMUの[2025年春の高度自然言語処理コース](https://cmu-l3.github.io/anlp-spring2025/)がOpenRLHFをRLHFフレームワークの教育事例として採用。
@@ -328,7 +329,77 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 ### Reinforced Fine-tuning
 
-OpenRLHFは、便利で効率的なReinforced Fine-tuningをサポートしています。カスタム `reward_func` 関数を含む[ファイル](./examples/scripts/reward_func.py)を実装し、そのパスを `
+OpenRLHFは、便利で効率的なReinforced Fine-tuningをサポートしています。カスタム `reward_func` 関数を含む[ファイル](./examples/scripts/reward_func.py)を実装し、そのパスを `remote_rm_url` パラメータに渡すだけです。例えば：
+
+```python
+# reward_func.py
+import torch
+
+def reward_func(queries, prompts, labels):
+    # queries は prompts + responses
+    # labels は answers
+    print(queries)
+    return torch.randn(len(queries))
+```
+
+そして、以下のように設定するだけです：
+
+```shell 
+ray job submit --address="http://127.0.0.1:8265" \
+  --runtime-env-json='{"working_dir": "/openrlhf"}' \
+  -- python3 -m openrlhf.cli.train_ppo_ray \
+  ...
+  --remote_rm_url /path/to/reward_func.py \
+  --label_key answer
+```
+
+ここで、`label_key` パラメータは、答えなどの追加のサンプル情報を報酬関数に渡すために使用されます。
+
+### Async RLHF & Agent RLHF
+
+OpenRLHFは、非同期RLHFとエージェントベースのRLHF実装の両方を包括的にサポートしています。これらの機能を使用するには、トレーニング設定に`--async_train`と`--agent_func_path`パラメータを含めるだけです。
+
+```python
+# agent_func.py
+step_idx = 0
+max_steps = 2
+
+async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], bool]:
+    global step_idx, max_steps
+    # 検証後に終了
+    if step_idx >= max_steps:
+        done = True
+        # torch.randを使用してランダムな報酬を生成
+        reward = torch.rand(1)
+        next_state = state + action + " The answer is correct. <|endoftext|>"
+    else:
+        done = False
+        reward = torch.tensor(0)
+        # 状態を更新
+        next_state = state + action + " The answer is not correct, please try again: "
+    step_idx += 1
+
+    # 追加情報
+    extra_info = {}
+    return reward, next_state, done, extra_info
+```
+
+また、`export OPENRLHF_ASYNC_NUM_TASKS=128`を設定することで、vLLMエンジンごとの最大同時エージェント数を設定できます。
+さらに、環境で`export OPENRLHF_ASYNC_QUEUE_SIZE=3`（このパラメータはバッファに最大何バッチのデータを保存できるかを制御します）を設定することで、オフポリシーサンプリングの程度を制御できます。
+
+> [!NOTE] OpenRLHFのAgent RLHFはHybrid Engineトレーニングもサポートしています（`--async_train`を削除し、`--colocate_all_models`を有効にしてください）
+
+### LoRA
+`LoRA (Low-Rank Adaptation)`を使用する場合、`OpenRLHF`はデフォルトで完全な重みを保存せず、代わりに`LoRA Adapter`を保存します。タスクを正常に続行するには、`Adapter`をベースモデルの重みと結合する必要があります
+
+```bash
+python -m openrlhf.cli.lora_combiner \
+    --model_path meta-llama/Meta-Llama-3-8B \
+    --lora_path ./checkpoint/llama3-8b-rm \
+    --output_path ./checkpoint/llama-3-8b-rm-combined \
+    --is_rm \
+    --bf16
+```
 
 ## パフォーマンス
 

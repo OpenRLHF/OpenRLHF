@@ -396,6 +396,8 @@ async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], b
 You can also configure the maximum number of concurrent agents per vLLM engine by setting `export OPENRLHF_ASYNC_NUM_TASKS=128`. 
 Additionally, you can control the degree of off-policy sampling by setting `export OPENRLHF_ASYNC_QUEUE_SIZE=3` (this parameter controls how many batches of data can be stored in the buffer at most) in your environment.
 
+> [!NOTE] OpenRLHF's Agent RLHF also supports Hybrid Engine training (Please remove `--async_train` ans enable `--colocate_all_models`)
+
 ### LoRA
 If you use `LoRA (Low-Rank Adaptation)`, `OpenRLHF` will not save the full weights by default instead of `LoRA Adapter`. To continue in your task normally, you should combine the `Adapter` with weights of your base model
 
