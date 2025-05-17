@@ -113,8 +113,7 @@ class SamplesGeneratorAsync(SamplesGenerator):
                 attention_mask = []
                 for i, state_tokens in enumerate(tokenized_states):
                     # Add padding to input and output
-                    input_ids = state_tokens + [pad_token_id] * (batch_max_input_len - len(state_tokens))
-                    sequences.append(input_ids)
+                    sequences.append(state_tokens + [pad_token_id] * (batch_max_input_len - len(state_tokens)))
                     attention_mask.append([1] * len(state_tokens) + [0] * (batch_max_input_len - len(state_tokens)))
 
                 for i, seq in enumerate(sequences):
