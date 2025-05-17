@@ -178,6 +178,10 @@ def create_vllm_engines(
     if vllm_enable_sleep:
         batch_vllm_engine_call(vllm_engines, "sleep")
 
+    import time
+
+    time.sleep(120)
+
     return vllm_engines
 
 
