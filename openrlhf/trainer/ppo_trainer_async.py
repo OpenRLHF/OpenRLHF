@@ -47,6 +47,9 @@ class GenerateSamplesActor(BasePPOTrainer):
                 pbar.update()
         queue.put("done")
 
+    def get_prompts_dataloader_len(self):
+        return self.prompts_dataloader.__len__()
+
 
 @ray.remote
 class TrainingActor(BasePPOTrainer):
@@ -112,9 +115,6 @@ class TrainingActor(BasePPOTrainer):
             self._wandb.finish()
         if self._tensorboard is not None:
             self._tensorboard.close()
-
-    def get_prompts_dataloader_len(self):
-        return self.prompts_dataloader.__len__()
 
 
 @ray.remote
