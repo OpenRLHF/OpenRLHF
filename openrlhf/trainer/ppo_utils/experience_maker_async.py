@@ -60,6 +60,7 @@ class SamplesGeneratorAsync(SamplesGenerator):
             prompt_groups.setdefault(prompt, []).append(output)
 
         # Reorder outputs to keep same prompts together
+        # This is very important for REINFORCE++-baseline/GRPO/RLOO
         all_outputs = []
         for prompt in prompt_groups.keys():
             all_outputs.extend(prompt_groups[prompt])
