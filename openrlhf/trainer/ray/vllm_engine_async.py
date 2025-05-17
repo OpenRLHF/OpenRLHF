@@ -23,8 +23,13 @@ class AgentInstance:
         return await self.agent_step(state, action, label)
 
 
+@ray.remote
 class LLMRayActorAsync(BaseLLMRayActor):
     def __init__(self, *args, bundle_indices: list = None, **kwargs):
+        # Set up event loop for the actor
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+
         self.agent_func_path = kwargs.pop("agent_func_path")
 
         # Initialize super class
@@ -37,7 +42,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
 
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
-        # asyncio.run(self.llm.is_sleeping())
+        self.loop.run_until_complete(self.llm.is_sleeping())
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray):
         return self.llm.engine.model_executor.collective_rpc(
@@ -57,10 +62,10 @@ class LLMRayActorAsync(BaseLLMRayActor):
         self.llm.engine.reset_prefix_cache()
 
     def sleep(self, level=1):
-        asyncio.run(self.llm.sleep(level=level))
+        self.loop.run_until_complete(self.llm.sleep(level=level))
 
     def wake_up(self):
-        asyncio.run(self.llm.wake_up())
+        self.loop.run_until_complete(self.llm.wake_up())
 
     async def add_requests(self, sampling_params, prompts, labels, max_length, max_steps=10000):
         """
@@ -85,65 +90,64 @@ class LLMRayActorAsync(BaseLLMRayActor):
                 final_output = request_output
             return final_output
 
-        async def execute_agent(prompt, label, sampling_params):
-            # Create a unique agent instance for this prompt
-            agent_instance = AgentInstance.remote(self.agent_func_path)
-
-            # Initialize states and actions for the current prompt
-            state = prompt
-            action_ranges = []
-            total_reward = 0
-
-            # Execute multiple steps of interaction
-            for step_idx in range(max_steps):
-                # No budget to generate, break
-                if sampling_params.max_tokens <= 0:
-                    break
-
-                # Generate response asynchronously
-                request_output = await vllm_generate_async(state, sampling_params)
-                action = request_output.outputs[0].text
-                action_ranges.append((len(state), len(state) + len(action)))
-                # Next sampling budget
-                sampling_params.max_tokens = max_length - (
-                    len(request_output.prompt_token_ids) + len(request_output.outputs[0].token_ids)
-                )
-
-                # Call step function to get reward and next state
-                # Use asyncio.to_thread to make Ray remote call non-blocking
-                result = await agent_instance.step.remote(state, action, label)
-                reward, state, done, extra_info = result
-                total_reward += reward.item()
-
-                if done:
-                    break
-
-            # Store the final response when agent execution is complete
-            final_response = {
-                "prompt": prompt,
-                "label": label,
-                "state": state,
-                "reward": total_reward,
-                "action_ranges": action_ranges,
-            }
-            await self.result_queue.put(final_response)
-
         # Create semaphore to control concurrent task execution
         NUM_TASKS = os.environ.get("OPENRLHF_ASYNC_NUM_TASKS", 128)
         semaphore = asyncio.Semaphore(NUM_TASKS)
 
-        async def execute_agent_with_semaphore(prompt, label, sampling_params):
-            # Use semaphore to control concurrent execution
+        async def execute_agent(prompt, label, sampling_params):
             async with semaphore:
-                return await execute_agent(prompt, label, sampling_params)
+                # Create a unique agent instance for this prompt
+                agent_instance = AgentInstance.remote(self.agent_func_path)
+
+                # Initialize states and actions for the current prompt
+                state = prompt
+                action_ranges = []
+                total_reward = 0
+
+                # Execute multiple steps of interaction
+                for step_idx in range(max_steps):
+                    # No budget to generate, break
+                    if sampling_params.max_tokens <= 0:
+                        break
+
+                    # Generate response asynchronously
+                    request_output = await vllm_generate_async(state, sampling_params)
+                    action = request_output.outputs[0].text
+                    action_ranges.append((len(state), len(state) + len(action)))
+                    # Next sampling budget
+                    sampling_params.max_tokens = max_length - (
+                        len(request_output.prompt_token_ids) + len(request_output.outputs[0].token_ids)
+                    )
+
+                    # Call step function to get reward and next state
+                    # Use asyncio.to_thread to make Ray remote call non-blocking
+                    result = await agent_instance.step.remote(state, action, label)
+                    reward, state, done, extra_info = result
+                    total_reward += reward.item()
+
+                    if done:
+                        break
+
+                ray.kill(agent_instance)
+
+                # Store the final response when agent execution is complete
+                final_response = {
+                    "prompt": prompt,
+                    "label": label,
+                    "state": state,
+                    "reward": total_reward,
+                    "action_ranges": action_ranges,
+                }
+                await self.result_queue.put(final_response)
 
         # Create and start tasks for all agent executions with controlled concurrency
         import copy
 
         tasks = []
         for prompt, label in zip(prompts, labels):
-            tasks.append(execute_agent_with_semaphore(prompt, label, copy.deepcopy(sampling_params)))
+            tasks.append(execute_agent(prompt, label, copy.deepcopy(sampling_params)))
 
+        # Run the async code using the class's event loop
         await asyncio.gather(*tasks)
 
     async def get_responses(self):
@@ -152,12 +156,11 @@ class LLMRayActorAsync(BaseLLMRayActor):
         Waits for all tasks to complete before returning results.
         Returns: List of all completed agent results.
         """
-
         # Get all results from the queue
         results = []
         while not self.result_queue.empty():
             try:
-                results.append(self.result_queue.get_nowait())
+                results.append(await self.result_queue.get())
             except asyncio.QueueEmpty:
                 break
         return results
