@@ -113,6 +113,9 @@ class TrainingActor(BasePPOTrainer):
         if self._tensorboard is not None:
             self._tensorboard.close()
 
+    def get_prompts_dataloader_len(self):
+        return self.prompts_dataloader.__len__()
+
 
 @ray.remote
 class PPOTrainerAsync:
@@ -186,8 +189,7 @@ class PPOTrainerAsync:
     ) -> None:
         args = self.args
 
-        # Load datasets
-        num_rollouts_per_episodes = len(self.prompts_dataloader)
+        num_rollouts_per_episodes = ray.get(self.generator_actor.get_prompts_dataloader_len.remote())
 
         # get eval and save steps
         if args.eval_steps == -1:
