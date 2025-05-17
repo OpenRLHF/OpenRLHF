@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 import ray
@@ -13,9 +14,49 @@ from openrlhf.utils.logging_utils import init_logger
 logger = init_logger(__name__)
 
 
+@ray.remote(num_cpus=0)
+class SignalActor:
+    def __init__(self):
+        self.generating_event = asyncio.Event()
+        self.update_weights_event = asyncio.Event()
+        self.generating_event.set()  # Initially allow generation
+        self.update_weights_event.set()  # Initially allow weight updates
+
+    async def wait_generating(self):
+        """Wait for generation to be allowed."""
+        return await self.generating_event.wait()
+
+    async def wait_update_weights(self):
+        """Wait for weight update to be allowed."""
+        return await self.update_weights_event.wait()
+
+    def set_generating(self, allow_generating):
+        """Set generation state.
+
+        Args:
+            is_generating: True to allow generation, False to block it
+        """
+        if allow_generating:
+            self.generating_event.set()
+        else:
+            self.generating_event.clear()
+
+    def set_update_weights(self, allow_updating):
+        """Set weight update state.
+
+        Args:
+            is_updating: True to allow weight updates, False to block it
+        """
+        if allow_updating:
+            self.update_weights_event.set()
+        else:
+            self.update_weights_event.clear()
+
+
 @ray.remote
 class GenerateSamplesActor(BasePPOTrainer):
     def __init__(self, *args, **kwargs):
+        self.signal_actor = kwargs.pop("signal_actor")
         super().__init__(*args, **kwargs)
 
         self.samples_generator = self.generator_cls(
@@ -24,7 +65,6 @@ class GenerateSamplesActor(BasePPOTrainer):
             self.tokenizer,
             self.prompt_max_len,
         )
-
         self.prepare_datasets()
 
     def generate_samples(self, prompts, labels, **generate_kwargs):
@@ -42,7 +82,17 @@ class GenerateSamplesActor(BasePPOTrainer):
             )
 
             for _, rand_prompts, labels in self.prompts_dataloader:
+                # Wait for generation to be allowed
+                ray.get(self.signal_actor.wait_generating.remote())
+                # Block weight updates
+                ray.get(self.signal_actor.set_update_weights.remote(False))
+
+                # Generate samples
                 rollout_samples = self.generate_samples(rand_prompts, labels, **self.generate_kwargs)
+
+                # Allow weight updates after generation is done
+                ray.get(self.signal_actor.set_update_weights.remote(True))
+
                 queue.put(rollout_samples)
                 pbar.update()
         queue.put("done")
@@ -54,6 +104,7 @@ class GenerateSamplesActor(BasePPOTrainer):
 @ray.remote
 class TrainingActor(BasePPOTrainer):
     def __init__(self, *args, **kwargs):
+        self.signal_actor = kwargs.pop("signal_actor")
         super().__init__(*args, **kwargs)
 
         if self.kl_target:
@@ -72,9 +123,20 @@ class TrainingActor(BasePPOTrainer):
         )
 
         self._init_wandb()
-
-        # TODO: OpenRLHF does not support evaluation in async mode
         self.eval_dataloader = None
+
+    def _update_weights_to_vllm(self):
+        if self.vllm_engines is not None:
+            # Block generation
+            ray.get(self.signal_actor.set_generating.remote(False))
+            # Wait for weight updates to be allowed
+            ray.get(self.signal_actor.wait_update_weights.remote())
+
+            # Perform weight update
+            ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
+
+            # Allow generation
+            ray.get(self.signal_actor.set_generating.remote(True))
 
     def fit(self, queue, steps, pbar_steps):
         args = self.args
@@ -122,11 +184,6 @@ class TrainingActor(BasePPOTrainer):
 
 @ray.remote
 class PPOTrainerAsync:
-    """
-    Async Trainer for Proximal Policy Optimization (PPO) / REINFORCE++ / GRPO / RLOO and their variants.
-    Single Controller with Multiple ActorGroups
-    """
-
     def __init__(
         self,
         pretrain: str,
@@ -153,6 +210,9 @@ class PPOTrainerAsync:
         self.vllm_engines = vllm_engines
         self.prompt_max_len = prompt_max_len
 
+        # Create signal actor for synchronization
+        self.signal_actor = SignalActor.remote()
+
         self.generator_actor = GenerateSamplesActor.remote(
             pretrain,
             strategy,
@@ -165,6 +225,7 @@ class PPOTrainerAsync:
             dataloader_pin_memory,
             prompt_split,
             eval_split,
+            signal_actor=self.signal_actor,
             **generate_kwargs,
         )
 
@@ -187,6 +248,7 @@ class PPOTrainerAsync:
             dataloader_pin_memory,
             prompt_split,
             eval_split,
+            signal_actor=self.signal_actor,
             **generate_kwargs,
         )
 
@@ -195,26 +257,13 @@ class PPOTrainerAsync:
         # the max size is used to control the degree of off-policy
         self.queue = Queue(maxsize=os.environ.get("OPENRLHF_ASYNC_QUEUE_SIZE", 3))
 
-    def fit(
-        self,
-    ) -> None:
+    def fit(self) -> None:
         args = self.args
 
-        # broadcast init checkpoint to vllm
+        # Update initial weights to vLLM engines
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path) and not self.vllm_engines is None:
-            # vLLM wakeup when vllm_enable_sleep
-            if self.strategy.args.vllm_enable_sleep:
-                from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
-
-                batch_vllm_engine_call(self.vllm_engines, "wake_up")
-
-            ref = self.actor_model_group.async_run_method(method_name="broadcast_to_vllm")
-            ray.get(ref)
-
-            # vLLM offload when vllm_enable_sleep
-            if self.strategy.args.vllm_enable_sleep:
-                batch_vllm_engine_call(self.vllm_engines, "sleep")
+            ray.get(self.trainer_actor._update_weights_to_vllm.remote())
 
         # Restore step and start_epoch
         consumed_samples = ray.get(self.actor_model_group.async_run_method(method_name="get_consumed_samples"))[0]

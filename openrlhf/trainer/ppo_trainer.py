@@ -139,21 +139,24 @@ class BasePPOTrainer(ABC):
 
             # 4. broadcast weights to vllm engines
             if self.vllm_engines is not None:
-                if self.strategy.args.vllm_enable_sleep:
-                    from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
-
-                    batch_vllm_engine_call(self.vllm_engines, "wake_up")
-
-                ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
-
-                if self.strategy.args.vllm_enable_sleep:
-                    batch_vllm_engine_call(self.vllm_engines, "sleep")
+                self._broadcast_to_vllm()
 
         # 5. wait remote critic model training done
         if self.critic_model_group and not self.strategy.args.colocate_all_models:
             status.update(ray.get(critic_status_ref)[0])
 
         return status
+
+    def _broadcast_to_vllm(self):
+        if self.strategy.args.vllm_enable_sleep:
+            from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
+
+            batch_vllm_engine_call(self.vllm_engines, "wake_up")
+
+        ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
+
+        if self.strategy.args.vllm_enable_sleep:
+            batch_vllm_engine_call(self.vllm_engines, "sleep")
 
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         if global_step % args.logging_steps == 0:
@@ -445,18 +448,7 @@ class PPOTrainer(BasePPOTrainer):
         # broadcast init checkpoint to vllm
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path) and not self.vllm_engines is None:
-            # vLLM wakeup when vllm_enable_sleep
-            if self.strategy.args.vllm_enable_sleep:
-                from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
-
-                batch_vllm_engine_call(self.vllm_engines, "wake_up")
-
-            ref = self.actor_model_group.async_run_method(method_name="broadcast_to_vllm")
-            ray.get(ref)
-
-            # vLLM offload when vllm_enable_sleep
-            if self.strategy.args.vllm_enable_sleep:
-                batch_vllm_engine_call(self.vllm_engines, "sleep")
+            self._broadcast_to_vllm()
 
         # Restore step and start_epoch
         consumed_samples = ray.get(self.actor_model_group.async_run_method(method_name="get_consumed_samples"))[0]
