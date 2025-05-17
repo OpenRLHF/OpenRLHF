@@ -9,7 +9,6 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from openrlhf.utils.logging_utils import init_logger
 
 from .utils import get_bundle_indices, ray_noset_visible_devices
-from .vllm_engine_async import LLMRayActorAsync
 
 logger = init_logger(__name__)
 
@@ -176,13 +175,13 @@ def create_vllm_engines(
             )
         )
 
-    if vllm_enable_sleep:
-        batch_vllm_engine_call(vllm_engines, "sleep")
-
-    if llm_actor_cls == LLMRayActorAsync and use_hybrid_engine:
+    if llm_actor_cls is not LLMRayActor and use_hybrid_engine:
         import time
 
-        time.sleep(120)
+        time.sleep(60)
+
+    if vllm_enable_sleep:
+        batch_vllm_engine_call(vllm_engines, "sleep")
 
     return vllm_engines
 
