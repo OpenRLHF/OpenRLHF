@@ -473,7 +473,6 @@ if __name__ == "__main__":
         args.vllm_enable_sleep = False
 
     if args.colocate_all_models:
-        assert not args.agent_func_path, "Agent RLHF is not supported with colocate_all_models."
         assert not args.async_train, "Async RLHF is not supported with colocate_all_models."
 
     if args.eval_dataset:
