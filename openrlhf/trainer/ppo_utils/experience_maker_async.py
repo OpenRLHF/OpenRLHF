@@ -133,7 +133,7 @@ class SamplesGeneratorAsync(SamplesGenerator):
 
                 sequences = sequences[:, :truncate_length].to("cpu")
                 attention_mask = attention_mask[:, :truncate_length].to("cpu")
-                action_mask = action_mask[:, 1 : truncate_length + 1].to("cpu")
+                action_mask = action_mask[:, 1:truncate_length].to("cpu")
                 response_length = action_mask.float().sum(dim=-1)
                 total_length = attention_mask.float().sum(dim=-1)
 
