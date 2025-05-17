@@ -177,10 +177,9 @@ class PPOTrainerAsync:
             **generate_kwargs,
         )
 
-        self.queue = ray.util.queue.Queue()
+        from ray.util.queue import Queue
 
-    def __del__(self):
-        self.queue.shutdown()
+        self.queue = Queue()
 
     def fit(
         self,
@@ -223,3 +222,6 @@ class PPOTrainerAsync:
         generator_actor_ref = self.generator_actor.fit.remote(start_episode, consumed_samples, self.queue)
         trainer_actor_ref = self.trainer_actor.fit.remote(self.queue, steps, pbar_steps)
         ray.get([generator_actor_ref, trainer_actor_ref])
+
+    def get_max_steps(self):
+        return self.generator_actor.get_max_steps.remote()
