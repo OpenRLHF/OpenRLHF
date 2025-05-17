@@ -4,7 +4,6 @@ from datetime import datetime
 import ray
 from ray.util.placement_group import placement_group
 
-from openrlhf.trainer.ppo_trainer import PPOTrainer
 from openrlhf.trainer.ray import (
     PPORayActorGroup,
     ReferenceModelRayActor,
@@ -53,7 +52,6 @@ def train(args):
                 f"and {args.vllm_num_engines * args.vllm_tensor_parallel_size}"
             )
 
-        # LLMRayActorAsync is used for agent
         if args.agent_func_path:
             from openrlhf.trainer.ray.vllm_engine_async import LLMRayActorAsync as LLMRayActor
         else:
@@ -136,6 +134,11 @@ def train(args):
     else:
         reward_model = None
 
+    if args.async_train:
+        from openrlhf.trainer.ppo_trainer_async import PPOTrainerAsync as PPOTrainer
+    else:
+        from openrlhf.trainer.ppo_trainer import PPOTrainer
+
     # init PPO trainer (Single controller)
     ppo_trainer = PPOTrainer.remote(
         args.pretrain,
@@ -216,7 +219,7 @@ if __name__ == "__main__":
         help="whether to colocate all models (including vLLM engines), if true, they will share same gpus.",
     )
 
-    # optional vLLM for text generation
+    # vLLM for text generation
     parser.add_argument(
         "--vllm_num_engines", type=int, default=None, help="number of vLLM Engines, set to 0 to disable vLLM"
     )
@@ -242,6 +245,9 @@ if __name__ == "__main__":
         default=0.95,
         help="vLLM gpu_memory_utilization",
     )
+
+    # Async training using ray
+    parser.add_argument("--async_train", action="store_true", default=False, help="Enable async training")
 
     # Checkpoints
     parser.add_argument("--eval_steps", type=int, default=-1)
@@ -347,7 +353,7 @@ if __name__ == "__main__":
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
     parser.add_argument("--reward_clip_range", type=float, nargs=2, default=(-10, 10), help="Reward clip range")
 
-    # Reinforce
+    # Reinforce/GRPO, etc
     parser.add_argument(
         "--advantage_estimator",
         type=str,
@@ -381,6 +387,7 @@ if __name__ == "__main__":
     parser.add_argument("--critic_pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--value_head_prefix", type=str, default="score")
     parser.add_argument("--ref_reward_offload", action="store_true", default=False)
+    parser.add_argument("--agent_func_path", type=str, default=None, help="Agent script path")
 
     # Custom dataset
     parser.add_argument("--prompt_data", type=str, default=None, help="HF dataset name or path")
@@ -404,7 +411,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--apply_chat_template", action="store_true", default=False, help="Use HF tokenizer chat template"
     )
-    parser.add_argument("--agent_func_path", type=str, default=None, help="Agent script path")
 
     # wandb parameters
     parser.add_argument("--use_wandb", type=str, default=None)
@@ -465,6 +471,10 @@ if __name__ == "__main__":
     if args.vllm_enable_sleep and not args.colocate_all_models:
         print("Set args.vllm_enable_sleep to False when args.colocate_all_models is disabled.")
         args.vllm_enable_sleep = False
+
+    if args.colocate_all_models:
+        assert not args.agent_func_path, "Agent RLHF is not supported with colocate_all_models."
+        assert not args.async_train, "Async RLHF is not supported with colocate_all_models."
 
     if args.eval_dataset:
         assert args.remote_rm_url, "`--eval_dataset` is only supported with `--remote_rm_url`."

@@ -142,50 +142,37 @@ class Samples:
         self.packed_seq_lens = packed_seq_lens
 
 
-class RemoteExperienceMaker(ABC):
-    def __init__(
-        self,
-        actor_model_group: PPORayActorGroup,
-        critic_model_group: PPORayActorGroup,
-        reward_model_group: PPORayActorGroup,
-        initial_model_group: PPORayActorGroup,
-        tokenizer,
-        prompt_max_len: int,
-        kl_controller,
-        strategy=None,
-        remote_rm_url: Union[list[str], str] = None,
-        vllm_engines: List = None,
-        packing_samples=False,
-        **kwargs,
-    ):
-        super().__init__()
-
+class SamplesGenerator:
+    def __init__(self, vllm_engines, strategy, tokenizer, prompt_max_len):
         self.vllm_engines = vllm_engines
-        self.packing_samples = packing_samples
-        self.actor_model_group = actor_model_group
-        self.critic_model_group = critic_model_group
-        self.reward_model_group = reward_model_group
-        self.initial_model_group = initial_model_group
+        self.strategy = strategy
         self.tokenizer = tokenizer
         self.prompt_max_len = prompt_max_len
-        self.kl_ctl = kl_controller
-        self.strategy = strategy
-        self.advantage_estimator = strategy.args.advantage_estimator
-        self.args = strategy.args
 
-        # custom reward func for reinforced finetuning
-        self.custom_reward_func = None
-        self.remote_rm_url = [remote_rm_url] if isinstance(remote_rm_url, str) else remote_rm_url
-        if remote_rm_url and remote_rm_url[0].endswith(".py"):
-            print(f"Loading custom `reward_func(queries, prompts, labels)` from {remote_rm_url[0]}")
-            import importlib.util
+    @torch.no_grad()
+    def generate_samples(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Samples]:
+        """
+        Generate samples and return in batches.
 
-            spec = importlib.util.spec_from_file_location("reward_func", remote_rm_url[0])
-            reward_module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(reward_module)
-            self.custom_reward_func = ray.remote(reward_module.reward_func)
+        When not using vllm, we will fallback to the default implementation,
+        in which actor will be used to generate samples.
+        """
+        # vLLM wakeup when vllm_enable_sleep
+        if self.strategy.args.vllm_enable_sleep:
+            from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 
-    # tokenizer
+            batch_vllm_engine_call(self.vllm_engines, "wake_up")
+
+        rollout_samples = self._generate_vllm(all_prompts, all_labels, **generate_kwargs)
+
+        # vLLM offload when vllm_enable_sleep
+        if self.strategy.args.vllm_enable_sleep:
+            batch_vllm_engine_call(self.vllm_engines, "sleep")
+
+        return rollout_samples
+
+        # tokenizer
+
     def tokenize_fn(self, texts, max_length, padding=True, device=None):
         if not padding:
             # when padding is False, return tokenized texts as list
@@ -205,10 +192,136 @@ class RemoteExperienceMaker(ABC):
         )
         return {k: v.to(device) for k, v in batch.items()}
 
+    def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> List[Samples]:
+        from vllm import SamplingParams
+
+        llms = self.vllm_engines
+        args = self.strategy.args
+
+        sampling_params = SamplingParams(
+            temperature=kwargs.get("temperature", 1.0),
+            top_p=kwargs.get("top_p", 1.0),
+            top_k=kwargs.get("top_k", -1),
+            max_tokens=kwargs.get("max_new_tokens", 1024),
+            min_tokens=kwargs.get("min_new_tokens", 1),
+            skip_special_tokens=kwargs.get("skip_special_tokens", False),
+            include_stop_str_in_output=True,
+        )
+
+        # Expand prompt list based on the number of samples per prompt
+        n_samples_per_prompt = kwargs.pop("n_samples_per_prompt", args.n_samples_per_prompt)
+        all_prompts = sum([[prompt] * n_samples_per_prompt for prompt in all_prompts], [])
+        all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
+        all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
+
+        # Distribute requests to engines and collect responses to outputs
+        refs = []
+        batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
+        for i, llm in enumerate(llms):
+            prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
+            refs.append(llm.add_requests.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
+        ray.get(refs)
+
+        # Retrieve and combine results from all outputs
+        all_output_refs = []
+        for i, llm in enumerate(llms):
+            all_output_refs.append(llm.get_responses.remote())
+        all_outputs = sum(ray.get(all_output_refs), [])
+
+        pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
+
+        # Group outputs by micro_rollout_batch_size
+        samples_list = []
+        for i in range(0, len(all_outputs), args.micro_rollout_batch_size):
+            batch_outputs = all_outputs[i : i + args.micro_rollout_batch_size]
+            batch_prompts = all_prompts[i : i + args.micro_rollout_batch_size]
+            batch_labels = all_labels[i : i + args.micro_rollout_batch_size]
+
+            # Calculate max length for this batch
+            batch_max_input_len = max(
+                len(output.prompt_token_ids) + len(output.outputs[0].token_ids) for output in batch_outputs
+            )
+
+            sequences = []
+            attention_mask = []
+            for output in batch_outputs:
+                # Concatenate prompt and output tokens
+                input_ids = list(output.prompt_token_ids) + list(output.outputs[0].token_ids)
+                # Right pad to max length
+                input_ids = input_ids + [pad_token_id] * (batch_max_input_len - len(input_ids))
+                sequences.append(input_ids)
+                attention_mask.append(
+                    [1] * len(output.prompt_token_ids) + [0] * (batch_max_input_len - len(input_ids))
+                )
+
+            sequences = torch.tensor(sequences)
+            attention_mask = process_sequences(sequences, eos_token_id, pad_token_id)
+
+            # Create action mask based on output token positions
+            action_mask = torch.zeros_like(attention_mask)
+            for i, output in enumerate(batch_outputs):
+                # Mark positions after prompt as actions
+                action_mask[
+                    i, len(output.prompt_token_ids) : len(output.prompt_token_ids) + len(output.outputs[0].token_ids)
+                ] = 1
+
+            sequences = sequences.to("cpu")
+            attention_mask = attention_mask.to("cpu")
+            action_mask = action_mask[:, 1:].to("cpu")
+            response_length = action_mask.float().sum(dim=-1)
+            total_length = attention_mask.float().sum(dim=-1)
+
+            rollout_samples = Samples(
+                sequences=sequences,
+                attention_mask=attention_mask,
+                action_mask=action_mask,
+                response_length=response_length,
+                total_length=total_length,
+                prompts=batch_prompts,
+                labels=batch_labels,
+            )
+            samples_list.append(rollout_samples)
+
+        return samples_list
+
+
+class RemoteExperienceMaker(ABC):
+    def __init__(
+        self,
+        actor_model_group: PPORayActorGroup,
+        critic_model_group: PPORayActorGroup,
+        reward_model_group: PPORayActorGroup,
+        initial_model_group: PPORayActorGroup,
+        kl_controller,
+        strategy=None,
+        remote_rm_url: Union[list[str], str] = None,
+        **kwargs,
+    ):
+        super().__init__()
+
+        self.actor_model_group = actor_model_group
+        self.critic_model_group = critic_model_group
+        self.reward_model_group = reward_model_group
+        self.initial_model_group = initial_model_group
+        self.kl_ctl = kl_controller
+        self.strategy = strategy
+        self.advantage_estimator = strategy.args.advantage_estimator
+        self.args = strategy.args
+
+        # custom reward func for reinforced finetuning
+        self.custom_reward_func = None
+        self.remote_rm_url = [remote_rm_url] if isinstance(remote_rm_url, str) else remote_rm_url
+        if remote_rm_url and remote_rm_url[0].endswith(".py"):
+            print(f"Loading custom `reward_func(queries, prompts, labels)` from {remote_rm_url[0]}")
+            import importlib.util
+
+            spec = importlib.util.spec_from_file_location("reward_func", remote_rm_url[0])
+            reward_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(reward_module)
+            self.custom_reward_func = ray.remote(reward_module.reward_func)
+
     @torch.no_grad()
-    def make_experience_list(
-        self, all_prompts: Union[str, List[str]], all_labels, **generate_kwargs
-    ) -> List[Experience]:
+    def make_experience_list(self, rollout_samples) -> List[Experience]:
         """
         Make a list of experience with the micro_rollout_batch_size.
 
@@ -216,20 +329,6 @@ class RemoteExperienceMaker(ABC):
         Then, if we need certain processing for the rewards or do certain filtering, we can process the rollout as a whole.
         After that, we will calculate the advantages and returns for each experience.
         """
-        args = self.strategy.args
-
-        # vLLM wakeup when vllm_enable_sleep
-        if self.strategy.args.vllm_enable_sleep:
-            from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
-
-            batch_vllm_engine_call(self.vllm_engines, "wake_up")
-
-        rollout_samples = self.generate_samples(all_prompts, all_labels, **generate_kwargs)
-
-        # vLLM offload when vllm_enable_sleep
-        if self.strategy.args.vllm_enable_sleep:
-            batch_vllm_engine_call(self.vllm_engines, "sleep")
-
         # Make experiences (models forward: logprobs, values, rewards, and kl divergence)
         experiences = self.make_experience(rollout_samples)
 
@@ -612,113 +711,3 @@ class RemoteExperienceMaker(ABC):
             returns[:, t] = cumulative_return
 
         return returns
-
-    @torch.no_grad()
-    def generate_samples(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Samples]:
-        """
-        Generate samples and return in batches.
-
-        When not using vllm, we will fallback to the default implementation,
-        in which actor will be used to generate samples.
-        """
-        if self.vllm_engines is None:
-            return self._generate_with_hf(all_prompts, all_labels, **generate_kwargs)
-
-        # vLLM generation
-        return self._generate_vllm(all_prompts, all_labels, **generate_kwargs)
-
-    @torch.no_grad()
-    def _generate_with_hf(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Samples]:
-        raise NotImplementedError("HF generation is not implemented yet")
-
-    def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> List[Samples]:
-        from vllm import SamplingParams
-
-        llms = self.vllm_engines
-        args = self.strategy.args
-
-        sampling_params = SamplingParams(
-            temperature=kwargs.get("temperature", 1.0),
-            top_p=kwargs.get("top_p", 1.0),
-            top_k=kwargs.get("top_k", -1),
-            max_tokens=kwargs.get("max_new_tokens", 1024),
-            min_tokens=kwargs.get("min_new_tokens", 1),
-            skip_special_tokens=kwargs.get("skip_special_tokens", False),
-            include_stop_str_in_output=True,
-        )
-
-        # Expand prompt list based on the number of samples per prompt
-        n_samples_per_prompt = kwargs.pop("n_samples_per_prompt", args.n_samples_per_prompt)
-        all_prompts = sum([[prompt] * n_samples_per_prompt for prompt in all_prompts], [])
-        all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
-        all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
-
-        # Distribute requests to engines and collect responses to outputs
-        refs = []
-        batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
-        for i, llm in enumerate(llms):
-            prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
-            refs.append(llm.add_requests.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
-        ray.get(refs)
-
-        # Retrieve and combine results from all outputs
-        all_output_refs = []
-        for i, llm in enumerate(llms):
-            all_output_refs.append(llm.get_responses.remote())
-        all_outputs = sum(ray.get(all_output_refs), [])
-
-        pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
-
-        # Group outputs by micro_rollout_batch_size
-        samples_list = []
-        for i in range(0, len(all_outputs), args.micro_rollout_batch_size):
-            batch_outputs = all_outputs[i : i + args.micro_rollout_batch_size]
-            batch_prompts = all_prompts[i : i + args.micro_rollout_batch_size]
-            batch_labels = all_labels[i : i + args.micro_rollout_batch_size]
-
-            # Calculate max length for this batch
-            batch_max_input_len = max(
-                len(output.prompt_token_ids) + len(output.outputs[0].token_ids) for output in batch_outputs
-            )
-
-            sequences = []
-            attention_mask = []
-            for output in batch_outputs:
-                # Concatenate prompt and output tokens
-                input_ids = list(output.prompt_token_ids) + list(output.outputs[0].token_ids)
-                # Right pad to max length
-                input_ids = input_ids + [pad_token_id] * (batch_max_input_len - len(input_ids))
-                sequences.append(input_ids)
-                attention_mask.append(
-                    [1] * len(output.prompt_token_ids) + [0] * (batch_max_input_len - len(input_ids))
-                )
-
-            sequences = torch.tensor(sequences)
-            attention_mask = process_sequences(sequences, eos_token_id, pad_token_id)
-
-            # Create action mask based on output token positions
-            action_mask = torch.zeros_like(attention_mask)
-            for i, output in enumerate(batch_outputs):
-                # Mark positions after prompt as actions
-                action_mask[
-                    i, len(output.prompt_token_ids) : len(output.prompt_token_ids) + len(output.outputs[0].token_ids)
-                ] = 1
-
-            sequences = sequences.to("cpu")
-            attention_mask = attention_mask.to("cpu")
-            action_mask = action_mask[:, 1:].to("cpu")
-            response_length = action_mask.float().sum(dim=-1)
-            total_length = attention_mask.float().sum(dim=-1)
-
-            rollout_samples = Samples(
-                sequences=sequences,
-                attention_mask=attention_mask,
-                action_mask=action_mask,
-                response_length=response_length,
-                total_length=total_length,
-                prompts=batch_prompts,
-                labels=batch_labels,
-            )
-            samples_list.append(rollout_samples)
-
-        return samples_list

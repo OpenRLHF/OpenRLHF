@@ -1,4 +1,5 @@
 import asyncio
+import os
 
 import ray
 
@@ -78,7 +79,7 @@ class LLMRayActorAsync(LLMRayActor):
         """
         from vllm.utils import random_uuid
 
-        async def generate_async_func(prompts, sampling_params):
+        async def vllm_generate_async(prompts, sampling_params):
             request_id = random_uuid()
             results_generator = self.llm.generate(prompts, sampling_params, request_id)
             final_output = None
@@ -102,7 +103,7 @@ class LLMRayActorAsync(LLMRayActor):
                     break
 
                 # Generate response asynchronously
-                request_output = await generate_async_func(state, sampling_params)
+                request_output = await vllm_generate_async(state, sampling_params)
                 action = request_output.outputs[0].text
                 action_ranges.append((len(state), len(state) + len(action)))
                 # Next sampling budget
@@ -130,8 +131,8 @@ class LLMRayActorAsync(LLMRayActor):
             await self.result_queue.put(final_response)
 
         # Create semaphore to control concurrent task execution
-        num_tasks = 128
-        semaphore = asyncio.Semaphore(num_tasks)
+        NUM_TASKS = os.environ.get("OPENRLHF_ASYNC_NUM_TASKS", 128)
+        semaphore = asyncio.Semaphore(NUM_TASKS)
 
         async def execute_agent_with_semaphore(prompt, label, sampling_params):
             # Use semaphore to control concurrent execution
@@ -162,13 +163,3 @@ class LLMRayActorAsync(LLMRayActor):
             except asyncio.QueueEmpty:
                 break
         return results
-
-    async def get_responses_async(self):
-        """
-        Asynchronously get the next completed agent result from the queue.
-        Returns: The next available completed agent result, or None if no result is available within timeout.
-        """
-        try:
-            return await asyncio.wait_for(self.result_queue.get(), timeout=0.5)
-        except asyncio.TimeoutError:
-            return None

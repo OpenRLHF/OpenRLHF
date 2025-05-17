@@ -3,10 +3,10 @@ from typing import List
 import ray
 import torch
 
-from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker, Samples
+from openrlhf.trainer.ppo_utils.experience_maker import Samples, SamplesGenerator
 
 
-class RemoteExperienceMakerAsync(RemoteExperienceMaker):
+class SamplesGeneratorAsync(SamplesGenerator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
