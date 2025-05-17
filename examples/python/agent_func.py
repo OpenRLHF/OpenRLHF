@@ -32,7 +32,7 @@ async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], b
         done = False
         reward = torch.tensor(0)
         # Update state
-        next_state = state + action + " The answer is not correct, please try again."
+        next_state = state + action + " The answer is not correct, please try again: "
     step_idx += 1
 
     # Extra info
