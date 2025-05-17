@@ -58,11 +58,11 @@ class LLMRayActorAsync(LLMRayActor):
     def reset_prefix_cache(self):
         self.llm.engine.reset_prefix_cache()
 
-    async def sleep(self, level=1):
-        await self.llm.sleep(level=level)
+    def sleep(self, level=1):
+        asyncio.run(self.llm.sleep(level=level))
 
-    async def wake_up(self):
-        await self.llm.wake_up()
+    def wake_up(self):
+        asyncio.run(self.llm.wake_up())
 
     async def add_requests(self, sampling_params, prompts, labels, max_length, max_steps=10000):
         """
