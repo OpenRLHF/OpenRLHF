@@ -9,7 +9,7 @@ import ray
 import torch
 
 from openrlhf.datasets.utils import zero_pad_sequences
-from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean, process_sequences
+from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
@@ -255,7 +255,7 @@ class SamplesGenerator:
                 )
 
             sequences = torch.tensor(sequences)
-            attention_mask = process_sequences(sequences, eos_token_id, pad_token_id)
+            attention_mask = torch.tensor(attention_mask)
 
             # Create action mask based on output token positions
             action_mask = torch.zeros_like(attention_mask)
