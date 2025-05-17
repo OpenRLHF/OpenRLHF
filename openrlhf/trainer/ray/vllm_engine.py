@@ -20,8 +20,7 @@ def get_all_env_variables():
     return os.environ
 
 
-class LLMRayActor:
-
+class BaseLLMRayActor:
     def __init__(self, *args, bundle_indices: list = None, **kwargs):
         kwargs.pop("agent_func_path", None)
         noset_visible_devices = kwargs.pop("noset_visible_devices")
@@ -55,12 +54,16 @@ class LLMRayActor:
             # https://github.com/vllm-project/vllm/blob/effc5d24fae10b29996256eb7a88668ff7941aed/examples/offline_inference/reproduciblity.py#L11
             os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 
-        self._init_vllm_engine(*args, **kwargs)
+        self.kwargs = kwargs
 
-    def _init_vllm_engine(self, *args, **kwargs):
+
+class LLMRayActor(BaseLLMRayActor):
+    def __init__(self, *args, bundle_indices: list = None, **kwargs):
+        super().__init__(*args, bundle_indices=bundle_indices, **kwargs)
+
         import vllm
 
-        self.llm = vllm.LLM(*args, **kwargs)
+        self.llm = vllm.LLM(*args, **self.kwargs)
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray):
         return self.llm.collective_rpc(
@@ -174,11 +177,6 @@ def create_vllm_engines(
                 agent_func_path=agent_func_path,
             )
         )
-
-    if llm_actor_cls is not LLMRayActor and use_hybrid_engine:
-        import time
-
-        time.sleep(60)
 
     if vllm_enable_sleep:
         batch_vllm_engine_call(vllm_engines, "sleep")

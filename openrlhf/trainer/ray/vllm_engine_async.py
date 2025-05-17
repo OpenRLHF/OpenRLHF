@@ -3,7 +3,7 @@ import os
 
 import ray
 
-from .vllm_engine import LLMRayActor
+from .vllm_engine import BaseLLMRayActor
 
 
 @ray.remote
@@ -23,23 +23,22 @@ class AgentInstance:
         return await self.agent_step(state, action, label)
 
 
-class LLMRayActorAsync(LLMRayActor):
+class LLMRayActorAsync(BaseLLMRayActor):
     def __init__(self, *args, bundle_indices: list = None, **kwargs):
-        # Load agent for step function
         self.agent_func_path = kwargs.pop("agent_func_path")
+
+        # Initialize super class
+        super().__init__(*args, bundle_indices=bundle_indices, **kwargs)
 
         # Initialize result queue for streaming completed results
         self.result_queue = asyncio.Queue()
         self.tasks = []
 
-        # Initialize super class
-        super().__init__(*args, bundle_indices=bundle_indices, **kwargs)
-
-    def _init_vllm_engine(self, *args, **kwargs):
         import vllm
 
-        engine_args = vllm.AsyncEngineArgs(*args, **kwargs)
+        engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
+        asyncio.run(self.llm.is_sleeping())
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray):
         return self.llm.engine.model_executor.collective_rpc(
@@ -64,7 +63,7 @@ class LLMRayActorAsync(LLMRayActor):
     def wake_up(self):
         asyncio.run(self.llm.wake_up())
 
-    async def add_requests(self, sampling_params, prompts, labels, max_length, max_steps=10000):
+    def add_requests(self, sampling_params, prompts, labels, max_length, max_steps=10000):
         """
         Process requests from rank0 and generate responses with multiple agent interactions.
         Each prompt will go through multiple steps of interaction using the step function.
@@ -146,15 +145,14 @@ class LLMRayActorAsync(LLMRayActor):
             task = asyncio.create_task(execute_agent_with_semaphore(prompt, label, copy.deepcopy(sampling_params)))
             self.tasks.append(task)
 
-    async def get_responses(self):
+        asyncio.gather(*self.tasks)
+
+    def get_responses(self):
         """
         Synchronously get all completed agent results from the queue.
         Waits for all tasks to complete before returning results.
         Returns: List of all completed agent results.
         """
-        # Wait for all tasks to complete
-        await asyncio.gather(*self.tasks)
-
         # Get all results from the queue
         results = []
         while not self.result_queue.empty():
