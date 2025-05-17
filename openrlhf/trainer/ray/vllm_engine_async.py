@@ -41,6 +41,10 @@ class LLMRayActorAsync(LLMRayActor):
         engine_args = vllm.AsyncEngineArgs(*args, **kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
 
+        import time
+
+        time.sleep(60)
+
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray):
         return self.llm.engine.model_executor.collective_rpc(
             "init_process_group",
@@ -58,11 +62,11 @@ class LLMRayActorAsync(LLMRayActor):
     def reset_prefix_cache(self):
         self.llm.engine.reset_prefix_cache()
 
-    def sleep(self, level=1):
-        return asyncio.run(self.llm.sleep(level=level))
+    async def sleep(self, level=1):
+        return await self.llm.sleep(level=level)
 
-    def wake_up(self):
-        return asyncio.run(self.llm.wake_up())
+    async def wake_up(self):
+        return await self.llm.wake_up()
 
     async def add_requests(self, sampling_params, prompts, labels, max_length, max_steps=10000):
         """
