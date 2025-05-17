@@ -1,5 +1,6 @@
 import asyncio
 import os
+import threading
 
 import ray
 
@@ -42,7 +43,25 @@ class LLMRayActorAsync(BaseLLMRayActor):
 
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
-        self.loop.run_until_complete(self.llm.is_sleeping())
+
+        # Create an event for initialization synchronization
+        self.init_event = threading.Event()
+
+        # Create a separate thread for is_sleeping check
+        def run_is_sleeping():
+            sleep_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(sleep_loop)
+            sleep_loop.run_until_complete(self.llm.is_sleeping())
+            sleep_loop.close()
+            # Signal that initialization is complete
+            self.init_event.set()
+
+        sleep_thread = threading.Thread(target=run_is_sleeping)
+        sleep_thread.daemon = True
+        sleep_thread.start()
+
+        # Wait for initialization to complete
+        self.init_event.wait()
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray):
         return self.llm.engine.model_executor.collective_rpc(
@@ -80,15 +99,6 @@ class LLMRayActorAsync(BaseLLMRayActor):
             max_steps: Maximum number of interaction steps
             micro_forward_batch_size: Number of prompts to process in each concurrent task
         """
-        from vllm.utils import random_uuid
-
-        async def vllm_generate_async(prompts, sampling_params):
-            request_id = random_uuid()
-            results_generator = self.llm.generate(prompts, sampling_params, request_id)
-            final_output = None
-            async for request_output in results_generator:
-                final_output = request_output
-            return final_output
 
         # Create semaphore to control concurrent task execution
         NUM_TASKS = os.environ.get("OPENRLHF_ASYNC_NUM_TASKS", 128)
@@ -111,7 +121,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
                         break
 
                     # Generate response asynchronously
-                    request_output = await vllm_generate_async(state, sampling_params)
+                    request_output = await self.generate_async(state, sampling_params)
                     action = request_output.outputs[0].text
                     action_ranges.append((len(state), len(state) + len(action)))
                     # Next sampling budget
@@ -149,6 +159,16 @@ class LLMRayActorAsync(BaseLLMRayActor):
 
         # Run the async code using the class's event loop
         await asyncio.gather(*tasks)
+
+    async def generate_async(self, prompts, sampling_params):
+        from vllm.utils import random_uuid
+
+        request_id = random_uuid()
+        results_generator = self.llm.generate(prompts, sampling_params, request_id)
+        final_output = None
+        async for request_output in results_generator:
+            final_output = request_output
+        return final_output
 
     async def get_responses(self):
         """
