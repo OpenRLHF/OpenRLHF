@@ -32,7 +32,6 @@ class LLMRayActorAsync(BaseLLMRayActor):
 
         # Initialize result queue for streaming completed results
         self.result_queue = asyncio.Queue()
-        self.tasks = []
 
         import vllm
 
@@ -141,11 +140,11 @@ class LLMRayActorAsync(BaseLLMRayActor):
         # Create and start tasks for all agent executions with controlled concurrency
         import copy
 
+        tasks = []
         for prompt, label in zip(prompts, labels):
-            task = asyncio.create_task(execute_agent_with_semaphore(prompt, label, copy.deepcopy(sampling_params)))
-            self.tasks.append(task)
+            tasks.append(execute_agent_with_semaphore(prompt, label, copy.deepcopy(sampling_params)))
 
-        asyncio.gather(*self.tasks)
+        asyncio.run(asyncio.gather(*tasks))
 
     def get_responses(self):
         """
@@ -153,6 +152,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
         Waits for all tasks to complete before returning results.
         Returns: List of all completed agent results.
         """
+
         # Get all results from the queue
         results = []
         while not self.result_queue.empty():
