@@ -73,6 +73,9 @@ class TrainingActor(BasePPOTrainer):
 
         self._init_wandb()
 
+        # TODO: OpenRLHF does not support evaluation in async mode
+        self.eval_dataloader = None
+
     def fit(self, queue, steps, pbar_steps):
         args = self.args
         pbar = tqdm(

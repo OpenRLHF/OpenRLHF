@@ -62,6 +62,10 @@ class BasePPOTrainer(ABC):
 
         self.freezing_actor_steps = getattr(self.args, "freezing_actor_steps", -1)
 
+        self.prompts_dataloader = None
+        self.eval_dataloader = None
+        self.max_steps = None
+
         if self.args.agent_func_path:
             from openrlhf.trainer.ppo_utils.experience_maker_async import SamplesGeneratorAsync as SamplesGenerator
         else:
