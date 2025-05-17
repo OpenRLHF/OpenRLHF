@@ -118,8 +118,9 @@ class SamplesGeneratorAsync(SamplesGenerator):
                     attention_mask.append([1] * len(state_tokens) + [0] * (batch_max_input_len - len(state_tokens)))
 
                 for i, seq in enumerate(sequences):
-                    if len(seq) != batch_max_input_len:
-                        print(f"Error: Sequence {i} has length {len(seq)}, expected {batch_max_input_len}")
+                    assert (
+                        len(seq) == batch_max_input_len
+                    ), f"Error: Sequence {i} has length {len(seq)}, expected {batch_max_input_len}"
 
                 sequences = torch.tensor(sequences)
                 attention_mask = torch.tensor(attention_mask)
