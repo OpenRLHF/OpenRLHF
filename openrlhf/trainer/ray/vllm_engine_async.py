@@ -37,7 +37,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
 
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
-        asyncio.run(self.llm.is_sleeping())
+        # asyncio.run(self.llm.is_sleeping())
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray):
         return self.llm.engine.model_executor.collective_rpc(
@@ -62,7 +62,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
     def wake_up(self):
         asyncio.run(self.llm.wake_up())
 
-    def add_requests(self, sampling_params, prompts, labels, max_length, max_steps=10000):
+    async def add_requests(self, sampling_params, prompts, labels, max_length, max_steps=10000):
         """
         Process requests from rank0 and generate responses with multiple agent interactions.
         Each prompt will go through multiple steps of interaction using the step function.
@@ -144,9 +144,9 @@ class LLMRayActorAsync(BaseLLMRayActor):
         for prompt, label in zip(prompts, labels):
             tasks.append(execute_agent_with_semaphore(prompt, label, copy.deepcopy(sampling_params)))
 
-        asyncio.run(asyncio.gather(*tasks))
+        await asyncio.gather(*tasks)
 
-    def get_responses(self):
+    async def get_responses(self):
         """
         Synchronously get all completed agent results from the queue.
         Waits for all tasks to complete before returning results.
