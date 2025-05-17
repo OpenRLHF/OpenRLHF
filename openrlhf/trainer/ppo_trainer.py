@@ -432,7 +432,7 @@ class PPOTrainer(BasePPOTrainer):
 
         # get eval and save steps
         self.num_rollouts_per_episodes = len(self.prompts_dataloader)
-        if self.get_max_stepsargs.eval_steps == -1:
+        if self.args.eval_steps == -1:
             self.args.eval_steps = self.num_rollouts_per_episodes  # Evaluate once per epoch
         if self.args.save_steps == -1:
             self.args.save_steps = float("inf")  # do not save ckpt
