@@ -168,6 +168,13 @@ class PPOTrainerAsync:
             **generate_kwargs,
         )
 
+        # get eval and save steps
+        self.num_rollouts_per_episodes = ray.get(self.generator_actor.get_prompts_dataloader_len.remote())
+        if self.args.eval_steps == -1:
+            self.args.eval_steps = self.num_rollouts_per_episodes  # Evaluate once per epoch
+        if self.args.save_steps == -1:
+            self.args.save_steps = float("inf")  # do not save ckpt
+
         self.trainer_actor = TrainingActor.remote(
             pretrain,
             strategy,
@@ -193,14 +200,6 @@ class PPOTrainerAsync:
     ) -> None:
         args = self.args
 
-        num_rollouts_per_episodes = ray.get(self.generator_actor.get_prompts_dataloader_len.remote())
-
-        # get eval and save steps
-        if args.eval_steps == -1:
-            args.eval_steps = num_rollouts_per_episodes  # Evaluate once per epoch
-        if args.save_steps == -1:
-            args.save_steps = float("inf")  # do not save ckpt
-
         # broadcast init checkpoint to vllm
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path) and not self.vllm_engines is None:
@@ -220,9 +219,9 @@ class PPOTrainerAsync:
         # Restore step and start_epoch
         consumed_samples = ray.get(self.actor_model_group.async_run_method(method_name="get_consumed_samples"))[0]
         steps = consumed_samples // args.rollout_batch_size + 1
-        start_episode = consumed_samples // args.rollout_batch_size // num_rollouts_per_episodes
-        consumed_samples = consumed_samples % (num_rollouts_per_episodes * args.rollout_batch_size)
-        pbar_steps = num_rollouts_per_episodes * args.num_episodes - steps
+        start_episode = consumed_samples // args.rollout_batch_size // self.num_rollouts_per_episodes
+        consumed_samples = consumed_samples % (self.num_rollouts_per_episodes * args.rollout_batch_size)
+        pbar_steps = self.num_rollouts_per_episodes * args.num_episodes - steps
 
         # Launch async training
         generator_actor_ref = self.generator_actor.fit.remote(start_episode, consumed_samples, self.queue)

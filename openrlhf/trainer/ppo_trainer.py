@@ -430,19 +430,17 @@ class PPOTrainer(BasePPOTrainer):
         self.prepare_datasets()
         self._init_wandb()
 
+        # get eval and save steps
+        self.num_rollouts_per_episodes = len(self.prompts_dataloader)
+        if self.get_max_stepsargs.eval_steps == -1:
+            self.args.eval_steps = self.num_rollouts_per_episodes  # Evaluate once per epoch
+        if self.args.save_steps == -1:
+            self.args.save_steps = float("inf")  # do not save ckpt
+
     def fit(
         self,
     ) -> None:
         args = self.args
-
-        # Load datasets
-        num_rollouts_per_episodes = len(self.prompts_dataloader)
-
-        # get eval and save steps
-        if args.eval_steps == -1:
-            args.eval_steps = num_rollouts_per_episodes  # Evaluate once per epoch
-        if args.save_steps == -1:
-            args.save_steps = float("inf")  # do not save ckpt
 
         # broadcast init checkpoint to vllm
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
@@ -463,8 +461,8 @@ class PPOTrainer(BasePPOTrainer):
         # Restore step and start_epoch
         consumed_samples = ray.get(self.actor_model_group.async_run_method(method_name="get_consumed_samples"))[0]
         steps = consumed_samples // args.rollout_batch_size + 1
-        start_episode = consumed_samples // args.rollout_batch_size // num_rollouts_per_episodes
-        consumed_samples = consumed_samples % (num_rollouts_per_episodes * args.rollout_batch_size)
+        start_episode = consumed_samples // args.rollout_batch_size // self.num_rollouts_per_episodes
+        consumed_samples = consumed_samples % (self.num_rollouts_per_episodes * args.rollout_batch_size)
 
         for episode in range(start_episode, args.num_episodes):
             self.prompts_dataloader.sampler.set_epoch(
