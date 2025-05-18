@@ -245,8 +245,8 @@ class BasePPOTrainer(ABC):
             )
 
             # duplicate prompts and labels for each sample
-            all_prompts = sum([[prompt] * n_samples_per_prompt for prompt in all_prompts], [])
-            all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
+            all_prompts = sum([s.prompts for s in samples_list], [])
+            all_labels = sum([s.labels for s in samples_list], [])
 
             # Get rewards from samples, such as agent rewards
             rewards_list = [s.rewards for s in samples_list]
