@@ -401,7 +401,7 @@ async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], b
 此外，您可以通过在环境中设置 `export OPENRLHF_ASYNC_QUEUE_SIZE=1`（此参数控制缓冲区最多可以存储多少批数据）来控制离策略采样的程度。
 
 > [!NOTE] 
-> OpenRLHF的Agent RLHF也支持混合引擎训练。要启用此功能，请移除`--async_train`标志并启用`--colocate_all_models`。
+> OpenRLHF的Agent RLHF也支持混合引擎训练。要启用此功能，请移除`--async_train`并启用`--colocate_all_models` 和 `export VLLM_USE_V1=1`。
 
 > [!WARNING] 
 > 异步训练可能会影响训练稳定性. 推荐优先考虑同步训练和 Hybrid Engine。
