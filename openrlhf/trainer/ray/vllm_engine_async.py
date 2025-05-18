@@ -34,6 +34,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
         # Initialize result queue for streaming completed results
         self.result_queue = asyncio.Queue()
 
+        os.environ["VLLM_USE_V1"] = "1"
         import vllm
 
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
