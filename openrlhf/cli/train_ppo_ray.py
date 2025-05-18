@@ -42,7 +42,7 @@ def train(args):
     vllm_engines = None
     if args.vllm_num_engines is not None and args.vllm_num_engines > 0:
         max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
-        if args.colocate_all_models:
+        if args.colocate_all_models and not args.async_train:
             assert (
                 args.actor_num_nodes * args.actor_num_gpus_per_node
                 == args.vllm_num_engines * args.vllm_tensor_parallel_size
@@ -66,7 +66,7 @@ def train(args):
             args.enable_prefix_caching,
             args.enforce_eager,
             max_len,
-            pg if args.colocate_all_models else None,
+            pg if args.colocate_all_models and not args.async_train else None,
             args.vllm_gpu_memory_utilization,
             args.vllm_enable_sleep,
             LLMRayActor,
@@ -472,8 +472,11 @@ if __name__ == "__main__":
         print("Set args.vllm_enable_sleep to False when args.colocate_all_models is disabled.")
         args.vllm_enable_sleep = False
 
-    if args.colocate_all_models:
-        assert not args.async_train, "Async RLHF is not supported with colocate_all_models."
+    if args.colocate_all_models and args.async_train:
+        print("[Warning] Using --colocate_all_models in async RLHF only colocates DeepSpeed models.")
+
+    if args.async_train:
+        assert not args.vllm_enable_sleep, "Async RLHF is not supported with --vllm_enable_sleep."
 
     if args.eval_dataset:
         assert args.remote_rm_url, "`--eval_dataset` is only supported with `--remote_rm_url`."
