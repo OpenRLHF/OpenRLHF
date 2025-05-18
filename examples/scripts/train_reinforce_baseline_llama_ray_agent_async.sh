@@ -6,18 +6,19 @@ ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{"working_dir": "/openrlhf"}' \
    -- python3 -m openrlhf.cli.train_ppo_ray \
    --ref_num_nodes 1 \
-   --ref_num_gpus_per_node 1 \
+   --ref_num_gpus_per_node 6 \
    --actor_num_nodes 1 \
-   --actor_num_gpus_per_node 4 \
+   --actor_num_gpus_per_node 6 \
    --vllm_num_engines 2 \
    --vllm_tensor_parallel_size 1 \
+   --colocate_all_models \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
    --agent_func_path /openrlhf/examples/python/agent_func.py \
    --save_path /openrlhf/examples/test_scripts/checkpoint/llama3-8b-rlhf \
    --micro_train_batch_size 16 \
-   --train_batch_size 128 \
+   --train_batch_size 192 \
    --micro_rollout_batch_size 32 \
-   --rollout_batch_size 128 \
+   --rollout_batch_size 192 \
    --n_samples_per_prompt 8 \
    --max_epochs 1 \
    --prompt_max_len 1024 \
@@ -40,6 +41,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --save_steps -1 \
    --async_train \
    --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf
+
+# --colocate_all_models with --async_train only merge the deepspeed models, not the vllm engines
 
 # You could also try
 #   --use_kl_loss \
