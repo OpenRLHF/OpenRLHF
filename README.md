@@ -397,7 +397,7 @@ You can also configure the maximum number of concurrent agents per vLLM engine b
 Additionally, you can control the degree of off-policy sampling by setting `export OPENRLHF_ASYNC_QUEUE_SIZE=1` (this parameter controls how many batches of data can be stored in the buffer at most) in your environment.
 
 > [!NOTE] 
-> OpenRLHF's Agent RLHF also supports Hybrid Engine training. To enable this feature, please remove the `--async_train` flag and enable `--colocate_all_models`. Additionally, set `export PYTORCH_NVML_BASED_CUDA_CHECK=1` and `export VLLM_USE_V1=1`.
+> OpenRLHF's Agent RLHF also supports Hybrid Engine training. To enable this feature, please remove the `--async_train` flag and enable `--colocate_all_models`.
 
 > [!WARNING] 
 > Asynchronous training may affect the training stability. It is recommended to prioritize using Hybrid Engine or synchronous training mode.
@@ -433,6 +433,7 @@ We optimized DSChat's performance to the greatest extent possible by employing t
 To achieve optimal performance, we recommend allocating nodes `vLLM:Actor:Critic = 1:1:1`. 
 
 - For example, for a 70B model with 48 A100 GPUs, it is advised to allocate 16 A100 GPUs to the vLLM Engine, 16 GPUs to the Actor model, and the remaining 16 GPUs to the Critic model. 
+- Enable asynchronous training `--async_train` when the convergence of the RL algorithm meets requirements.
 - Using hybrid engine `--colocate_all_models` and `--vllm_enable_sleep` and `--deepspeed_enable_sleep` rather than distributed RLHF when there are enough GPU memory.
 - Enable the `--colocate_critic_reward`, `--colocate_actor_ref` options to merge nodes.  
 - You should increase the `rollout_micro_batch_size` (and minimize the TP size of vLLM engine) as much as possible. During the training phase, a larger `--micro_train_batch_size` is better and enable `--packing_samples`.

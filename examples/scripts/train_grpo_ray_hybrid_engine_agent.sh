@@ -1,9 +1,5 @@
 set -x
 
-# Required for Hybrid Engine + Async LLM engine
-export PYTORCH_NVML_BASED_CUDA_CHECK=1
-export VLLM_USE_V1=1
-
 python3 -m openrlhf.cli.train_ppo_ray \
    --ref_num_nodes 1 \
    --ref_num_gpus_per_node 8 \
