@@ -385,7 +385,7 @@ async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], b
 ```
 
 また、`export OPENRLHF_ASYNC_NUM_TASKS=128`を設定することで、vLLMエンジンごとの最大同時エージェント数を設定できます。
-さらに、環境で`export OPENRLHF_ASYNC_QUEUE_SIZE=3`（このパラメータはバッファに最大何バッチのデータを保存できるかを制御します）を設定することで、オフポリシーサンプリングの程度を制御できます。
+さらに、環境で`export OPENRLHF_ASYNC_QUEUE_SIZE=1`（このパラメータはバッファに最大何バッチのデータを保存できるかを制御します）を設定することで、オフポリシーサンプリングの程度を制御できます。
 
 > [!注意] OpenRLHFのAgent RLHFはハイブリッドエンジン学習もサポートしています。この機能を有効にするには、`--async_train`フラグを削除し、`--colocate_all_models`を有効にしてください。また、`PYTORCH_NVML_BASED_CUDA_CHECK=1`と`export VLLM_USE_V1=1`を設定してください。
 
