@@ -40,22 +40,24 @@ class LLMRayActorAsync(BaseLLMRayActor):
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
         await self.llm.is_sleeping()
 
-    def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray):
-        return self.llm.engine.model_executor.collective_rpc(
+    async def init_process_group(
+        self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray
+    ):
+        return await self.llm.collective_rpc(
             "init_process_group",
             args=(master_address, master_port, rank_offset, world_size, group_name, backend, use_ray),
         )
 
-    def update_weight(self, name, dtype, shape, empty_cache=False):
-        return self.llm.engine.model_executor.collective_rpc("update_weight", args=(name, dtype, shape, empty_cache))
+    async def update_weight(self, name, dtype, shape, empty_cache=False):
+        return await self.llm.collective_rpc("update_weight", args=(name, dtype, shape, empty_cache))
 
-    def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handles, empty_cache=False):
-        return self.llm.engine.model_executor.collective_rpc(
+    async def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handles, empty_cache=False):
+        return await self.llm.collective_rpc(
             "update_weight_cuda_ipc", args=(name, dtype, shape, ipc_handles, empty_cache)
         )
 
-    def reset_prefix_cache(self):
-        self.llm.engine.reset_prefix_cache()
+    async def reset_prefix_cache(self):
+        await self.llm.reset_prefix_cache()
 
     async def sleep(self, level=1):
         await self.llm.sleep(level=level)
