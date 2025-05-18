@@ -25,7 +25,7 @@ class AgentInstance:
 
 @ray.remote
 class LLMRayActorAsync(BaseLLMRayActor):
-    def __init__(self, *args, bundle_indices: list = None, **kwargs):
+    async def __init__(self, *args, bundle_indices: list = None, **kwargs):
         self.agent_func_path = kwargs.pop("agent_func_path")
 
         # Initialize super class
@@ -38,6 +38,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
 
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
+        await self.llm.is_sleeping()
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray):
         return self.llm.engine.model_executor.collective_rpc(
