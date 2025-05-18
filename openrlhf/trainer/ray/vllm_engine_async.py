@@ -24,6 +24,11 @@ class AgentInstance:
 
 
 @ray.remote
+def get_tokenize_text_len(text, tokenizer):
+    return len(tokenizer(text, add_special_tokens=False, return_tensors="pt")["input_ids"][0])
+
+
+@ray.remote
 class LLMRayActorAsync(BaseLLMRayActor):
     async def __init__(self, *args, bundle_indices: list = None, **kwargs):
         self.agent_func_path = kwargs.pop("agent_func_path")
@@ -66,7 +71,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
     async def wake_up(self):
         await self.llm.wake_up()
 
-    async def add_requests(self, sampling_params, prompts, labels, max_length, max_steps=10000):
+    async def add_requests(self, sampling_params, prompts, labels, max_length, hf_tokenizer=None, max_steps=10000):
         """
         Process requests from rank0 and generate responses with multiple agent interactions.
         Each prompt will go through multiple steps of interaction using the step function.
@@ -96,6 +101,11 @@ class LLMRayActorAsync(BaseLLMRayActor):
 
                 # Execute multiple steps of interaction
                 for step_idx in range(max_steps):
+                    # Next sampling budget
+                    state_tokens_len = len(
+                        hf_tokenizer(state, add_special_tokens=False, return_tensors="pt")["input_ids"][0]
+                    )
+                    sampling_params.max_tokens = max_length - state_tokens_len
                     # No budget to generate, break
                     if sampling_params.max_tokens <= 0:
                         break
@@ -104,10 +114,6 @@ class LLMRayActorAsync(BaseLLMRayActor):
                     request_output = await self.generate_async(state, sampling_params)
                     action = request_output.outputs[0].text
                     action_ranges.append((len(state), len(state) + len(action)))
-                    # Next sampling budget
-                    sampling_params.max_tokens = max_length - (
-                        len(request_output.prompt_token_ids) + len(request_output.outputs[0].token_ids)
-                    )
 
                     # Call step function to get reward and next state
                     # Use asyncio.to_thread to make Ray remote call non-blocking

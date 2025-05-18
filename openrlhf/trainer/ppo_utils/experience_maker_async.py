@@ -43,6 +43,7 @@ class SamplesGeneratorAsync(SamplesGenerator):
                     prompts=prompts,
                     labels=labels,
                     max_length=truncate_length,
+                    hf_tokenizer=self.tokenizer,
                 )
             )
         ray.get(refs)
