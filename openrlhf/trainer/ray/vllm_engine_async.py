@@ -42,6 +42,8 @@ class LLMRayActorAsync(BaseLLMRayActor):
         os.environ["VLLM_USE_V1"] = "1"
         import vllm
 
+        assert vllm.__version__ > "0.8.5", "Asyn VLLM version must be greater than 0.8.5"
+
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
         await self.llm.is_sleeping()
