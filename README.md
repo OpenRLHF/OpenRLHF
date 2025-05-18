@@ -397,7 +397,7 @@ You can also configure the maximum number of concurrent agents per vLLM engine b
 Additionally, you can control the degree of off-policy sampling by setting `export OPENRLHF_ASYNC_QUEUE_SIZE=1` (this parameter controls how many batches of data can be stored in the buffer at most) in your environment.
 
 > [!NOTE] 
-> OpenRLHF's Agent RLHF also supports Hybrid Engine training. To enable this feature, please remove the `--async_train` flag and enable `--colocate_all_models`, `export VLLM_USE_V1=1`.
+> OpenRLHF's Agent RLHF also supports Hybrid Engine training. To enable this feature, please remove the `--async_train` flag and enable `--colocate_all_models`.
 
 > [!WARNING] 
 > Asynchronous training may affect the training stability. It is recommended to prioritize using Hybrid Engine or synchronous training mode.
