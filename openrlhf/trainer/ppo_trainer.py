@@ -19,13 +19,7 @@ from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
 logger = init_logger(__name__)
 
 
-@ray.remote
-class PPOTrainer(ABC):
-    """
-    Trainer for Proximal Policy Optimization (PPO) / REINFORCE++ / GRPO / RLOO and their variants.
-    Single Controller with Multiple ActorGroups
-    """
-
+class BasePPOTrainer(ABC):
     def __init__(
         self,
         pretrain: str,
@@ -68,27 +62,18 @@ class PPOTrainer(ABC):
 
         self.freezing_actor_steps = getattr(self.args, "freezing_actor_steps", -1)
 
-        if self.kl_target:
-            self.kl_ctl = AdaptiveKLController(self.init_kl_coef, self.kl_target, self.kl_horizon)
+        self.prompts_dataloader = None
+        self.eval_dataloader = None
+        self.max_steps = None
+
+        if self.args.agent_func_path:
+            from openrlhf.trainer.ppo_utils.experience_maker_async import SamplesGeneratorAsync as SamplesGenerator
         else:
-            self.kl_ctl = FixedKLController(self.init_kl_coef)
+            from openrlhf.trainer.ppo_utils.experience_maker import SamplesGenerator
 
-        self.experience_maker = RemoteExperienceMaker(
-            self.actor_model_group,
-            self.critic_model_group,
-            self.reward_model_group,
-            self.reference_model_group,
-            self.tokenizer,
-            self.prompt_max_len,
-            self.kl_ctl,
-            self.strategy,
-            self.remote_rm_url,
-            vllm_engines=self.vllm_engines,
-            packing_samples=self.strategy.args.packing_samples,
-        )
+        self.generator_cls = SamplesGenerator
 
-        self.prepare_datasets()
-
+    def _init_wandb(self):
         # wandb/tensorboard setting
         self._wandb = None
         self._tensorboard = None
@@ -122,84 +107,8 @@ class PPOTrainer(ABC):
             log_dir = os.path.join(self.strategy.args.use_tensorboard, self.strategy.args.wandb_run_name)
             self._tensorboard = SummaryWriter(log_dir=log_dir)
 
-    def fit(
-        self,
-    ) -> None:
-        args = self.args
-
-        # Load datasets
-        num_rollouts_per_episodes = len(self.prompts_dataloader)
-
-        # get eval and save steps
-        if args.eval_steps == -1:
-            args.eval_steps = num_rollouts_per_episodes  # Evaluate once per epoch
-        if args.save_steps == -1:
-            args.save_steps = float("inf")  # do not save ckpt
-
-        # broadcast init checkpoint to vllm
-        ckpt_path = os.path.join(args.ckpt_path, "_actor")
-        if args.load_checkpoint and os.path.exists(ckpt_path) and not self.vllm_engines is None:
-            # vLLM wakeup when vllm_enable_sleep
-            if self.strategy.args.vllm_enable_sleep:
-                from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
-
-                batch_vllm_engine_call(self.vllm_engines, "wake_up")
-
-            ref = self.actor_model_group.async_run_method(method_name="broadcast_to_vllm")
-            ray.get(ref)
-
-            # vLLM offload when vllm_enable_sleep
-            if self.strategy.args.vllm_enable_sleep:
-                batch_vllm_engine_call(self.vllm_engines, "sleep")
-
-        # Restore step and start_epoch
-        consumed_samples = ray.get(self.actor_model_group.async_run_method(method_name="get_consumed_samples"))[0]
-        steps = consumed_samples // args.rollout_batch_size + 1
-        start_episode = consumed_samples // args.rollout_batch_size // num_rollouts_per_episodes
-        consumed_samples = consumed_samples % (num_rollouts_per_episodes * args.rollout_batch_size)
-
-        for episode in range(start_episode, args.num_episodes):
-            self.prompts_dataloader.sampler.set_epoch(
-                episode, consumed_samples=0 if episode > start_episode else consumed_samples
-            )
-            pbar = tqdm(
-                range(self.prompts_dataloader.__len__()),
-                desc=f"Episode [{episode + 1}/{args.num_episodes}]",
-                disable=False,
-            )
-
-            for _, rand_prompts, labels in self.prompts_dataloader:
-                experiences = self.experience_maker.make_experience_list(rand_prompts, labels, **self.generate_kwargs)
-                sample0 = self.tokenizer.batch_decode(
-                    experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True
-                )
-                print(sample0)
-                refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences)
-                if self.critic_model_group is not None:
-                    refs.extend(
-                        self.critic_model_group.async_run_method_batch(method_name="append", experience=experiences)
-                    )
-                ray.get(refs)
-
-                status = self.ppo_train(steps)
-
-                if "kl" in status:
-                    self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
-                pbar.set_postfix(status)
-
-                # Add generated samples to status dictionary
-                status["generated_samples"] = [sample0[0], experiences[0].info["reward"][0]]
-                # logs/checkpoints
-                client_states = {"consumed_samples": steps * args.rollout_batch_size}
-                self.save_logs_and_checkpoints(args, steps, pbar, status, client_states)
-
-                pbar.update()
-                steps = steps + 1
-
-        if self._wandb is not None:
-            self._wandb.finish()
-        if self._tensorboard is not None:
-            self._tensorboard.close()
+    def fit(self):
+        raise NotImplementedError("fit method is not implemented")
 
     def ppo_train(self, global_steps):
         status = {}
@@ -230,21 +139,24 @@ class PPOTrainer(ABC):
 
             # 4. broadcast weights to vllm engines
             if self.vllm_engines is not None:
-                if self.strategy.args.vllm_enable_sleep:
-                    from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
-
-                    batch_vllm_engine_call(self.vllm_engines, "wake_up")
-
-                ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
-
-                if self.strategy.args.vllm_enable_sleep:
-                    batch_vllm_engine_call(self.vllm_engines, "sleep")
+                self._broadcast_to_vllm()
 
         # 5. wait remote critic model training done
         if self.critic_model_group and not self.strategy.args.colocate_all_models:
             status.update(ray.get(critic_status_ref)[0])
 
         return status
+
+    def _broadcast_to_vllm(self):
+        if self.strategy.args.vllm_enable_sleep:
+            from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
+
+            batch_vllm_engine_call(self.vllm_engines, "wake_up")
+
+        ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
+
+        if self.strategy.args.vllm_enable_sleep:
+            batch_vllm_engine_call(self.vllm_engines, "sleep")
 
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         if global_step % args.logging_steps == 0:
@@ -457,3 +369,133 @@ class PPOTrainer(ABC):
 
     def get_max_steps(self):
         return self.max_steps
+
+
+@ray.remote
+class PPOTrainer(BasePPOTrainer):
+    """
+    Trainer for Proximal Policy Optimization (PPO) / REINFORCE++ / GRPO / RLOO and their variants.
+    Single Controller with Multiple ActorGroups
+    """
+
+    def __init__(
+        self,
+        pretrain: str,
+        strategy: DeepspeedStrategy,
+        actor_model_group: PPORayActorGroup,
+        critic_model_group: PPORayActorGroup,
+        reward_model_group: PPORayActorGroup,
+        reference_model_group: PPORayActorGroup,
+        vllm_engines=None,
+        prompt_max_len: int = 120,
+        dataloader_pin_memory: bool = True,
+        prompt_split: str = "train",
+        eval_split: str = "test",
+        **generate_kwargs,
+    ) -> None:
+        super().__init__(
+            pretrain,
+            strategy,
+            actor_model_group,
+            critic_model_group,
+            reward_model_group,
+            reference_model_group,
+            vllm_engines,
+            prompt_max_len,
+            dataloader_pin_memory,
+            prompt_split,
+            eval_split,
+            **generate_kwargs,
+        )
+
+        if self.kl_target:
+            self.kl_ctl = AdaptiveKLController(self.init_kl_coef, self.kl_target, self.kl_horizon)
+        else:
+            self.kl_ctl = FixedKLController(self.init_kl_coef)
+
+        self.samples_generator = self.generator_cls(
+            self.vllm_engines,
+            self.strategy,
+            self.tokenizer,
+            self.prompt_max_len,
+        )
+
+        self.experience_maker = RemoteExperienceMaker(
+            self.actor_model_group,
+            self.critic_model_group,
+            self.reward_model_group,
+            self.reference_model_group,
+            self.kl_ctl,
+            self.strategy,
+            self.remote_rm_url,
+        )
+
+        self.prepare_datasets()
+        self._init_wandb()
+
+        # get eval and save steps
+        self.num_rollouts_per_episodes = len(self.prompts_dataloader)
+        if self.args.eval_steps == -1:
+            self.args.eval_steps = self.num_rollouts_per_episodes  # Evaluate once per epoch
+        if self.args.save_steps == -1:
+            self.args.save_steps = float("inf")  # do not save ckpt
+
+    def fit(
+        self,
+    ) -> None:
+        args = self.args
+
+        # broadcast init checkpoint to vllm
+        ckpt_path = os.path.join(args.ckpt_path, "_actor")
+        if args.load_checkpoint and os.path.exists(ckpt_path) and not self.vllm_engines is None:
+            self._broadcast_to_vllm()
+
+        # Restore step and start_epoch
+        consumed_samples = ray.get(self.actor_model_group.async_run_method(method_name="get_consumed_samples"))[0]
+        steps = consumed_samples // args.rollout_batch_size + 1
+        start_episode = consumed_samples // args.rollout_batch_size // self.num_rollouts_per_episodes
+        consumed_samples = consumed_samples % (self.num_rollouts_per_episodes * args.rollout_batch_size)
+
+        for episode in range(start_episode, args.num_episodes):
+            self.prompts_dataloader.sampler.set_epoch(
+                episode, consumed_samples=0 if episode > start_episode else consumed_samples
+            )
+            pbar = tqdm(
+                range(self.prompts_dataloader.__len__()),
+                desc=f"Episode [{episode + 1}/{args.num_episodes}]",
+                disable=False,
+            )
+
+            for _, rand_prompts, labels in self.prompts_dataloader:
+                rollout_samples = self.samples_generator.generate_samples(rand_prompts, labels, **self.generate_kwargs)
+                experiences = self.experience_maker.make_experience_list(rollout_samples)
+                sample0 = self.tokenizer.batch_decode(
+                    experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True
+                )
+                print(sample0)
+                refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences)
+                if self.critic_model_group is not None:
+                    refs.extend(
+                        self.critic_model_group.async_run_method_batch(method_name="append", experience=experiences)
+                    )
+                ray.get(refs)
+
+                status = self.ppo_train(steps)
+
+                if "kl" in status:
+                    self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
+                pbar.set_postfix(status)
+
+                # Add generated samples to status dictionary
+                status["generated_samples"] = [sample0[0], experiences[0].info["reward"][0]]
+                # logs/checkpoints
+                client_states = {"consumed_samples": steps * args.rollout_batch_size}
+                self.save_logs_and_checkpoints(args, steps, pbar, status, client_states)
+
+                pbar.update()
+                steps = steps + 1
+
+        if self._wandb is not None:
+            self._wandb.finish()
+        if self._tensorboard is not None:
+            self._tensorboard.close()

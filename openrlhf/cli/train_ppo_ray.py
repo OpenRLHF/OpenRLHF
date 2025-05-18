@@ -4,7 +4,6 @@ from datetime import datetime
 import ray
 from ray.util.placement_group import placement_group
 
-from openrlhf.trainer.ppo_trainer import PPOTrainer
 from openrlhf.trainer.ray import (
     PPORayActorGroup,
     ReferenceModelRayActor,
@@ -43,7 +42,7 @@ def train(args):
     vllm_engines = None
     if args.vllm_num_engines is not None and args.vllm_num_engines > 0:
         max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
-        if args.colocate_all_models:
+        if args.colocate_all_models and not args.async_train:
             assert (
                 args.actor_num_nodes * args.actor_num_gpus_per_node
                 == args.vllm_num_engines * args.vllm_tensor_parallel_size
@@ -52,6 +51,11 @@ def train(args):
                 f"vllm_num_engines * vllm_tensor_parallel_size, got {args.actor_num_nodes * args.actor_num_gpus_per_node} "
                 f"and {args.vllm_num_engines * args.vllm_tensor_parallel_size}"
             )
+
+        if args.agent_func_path:
+            from openrlhf.trainer.ray.vllm_engine_async import LLMRayActorAsync as LLMRayActor
+        else:
+            from openrlhf.trainer.ray.vllm_engine import LLMRayActor
 
         vllm_engines = create_vllm_engines(
             args.vllm_num_engines,
@@ -62,9 +66,11 @@ def train(args):
             args.enable_prefix_caching,
             args.enforce_eager,
             max_len,
-            pg if args.colocate_all_models else None,
+            pg if args.colocate_all_models and not args.async_train else None,
             args.vllm_gpu_memory_utilization,
             args.vllm_enable_sleep,
+            LLMRayActor,
+            args.agent_func_path,
         )
 
     actor_model = PPORayActorGroup(
@@ -127,6 +133,11 @@ def train(args):
         )
     else:
         reward_model = None
+
+    if args.async_train:
+        from openrlhf.trainer.ppo_trainer_async import PPOTrainerAsync as PPOTrainer
+    else:
+        from openrlhf.trainer.ppo_trainer import PPOTrainer
 
     # init PPO trainer (Single controller)
     ppo_trainer = PPOTrainer.remote(
@@ -208,7 +219,7 @@ if __name__ == "__main__":
         help="whether to colocate all models (including vLLM engines), if true, they will share same gpus.",
     )
 
-    # optional vLLM for text generation
+    # vLLM for text generation
     parser.add_argument(
         "--vllm_num_engines", type=int, default=None, help="number of vLLM Engines, set to 0 to disable vLLM"
     )
@@ -234,6 +245,9 @@ if __name__ == "__main__":
         default=0.95,
         help="vLLM gpu_memory_utilization",
     )
+
+    # Async training using ray
+    parser.add_argument("--async_train", action="store_true", default=False, help="Enable async training")
 
     # Checkpoints
     parser.add_argument("--eval_steps", type=int, default=-1)
@@ -339,7 +353,7 @@ if __name__ == "__main__":
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
     parser.add_argument("--reward_clip_range", type=float, nargs=2, default=(-10, 10), help="Reward clip range")
 
-    # Reinforce
+    # Reinforce/GRPO, etc
     parser.add_argument(
         "--advantage_estimator",
         type=str,
@@ -373,6 +387,7 @@ if __name__ == "__main__":
     parser.add_argument("--critic_pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--value_head_prefix", type=str, default="score")
     parser.add_argument("--ref_reward_offload", action="store_true", default=False)
+    parser.add_argument("--agent_func_path", type=str, default=None, help="Agent script path")
 
     # Custom dataset
     parser.add_argument("--prompt_data", type=str, default=None, help="HF dataset name or path")
@@ -420,6 +435,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Validate arguments
+    if args.agent_func_path:
+        args.remote_rm_url = "agent"
+
     if args.advantage_estimator not in ["gae"]:
         args.critic_pretrain = None
     elif args.critic_pretrain is None:
@@ -453,6 +471,12 @@ if __name__ == "__main__":
     if args.vllm_enable_sleep and not args.colocate_all_models:
         print("Set args.vllm_enable_sleep to False when args.colocate_all_models is disabled.")
         args.vllm_enable_sleep = False
+
+    if args.colocate_all_models and args.async_train:
+        print("[Warning] Using --colocate_all_models in async RLHF only colocates DeepSpeed models.")
+
+    if args.async_train:
+        assert not args.vllm_enable_sleep, "Async RLHF is not supported with --vllm_enable_sleep."
 
     if args.eval_dataset:
         assert args.remote_rm_url, "`--eval_dataset` is only supported with `--remote_rm_url`."
