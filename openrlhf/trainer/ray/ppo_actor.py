@@ -80,7 +80,7 @@ class ActorPPOTrainer(ABC):
         # Init torch group for weights sync
         backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
         self.use_cuda_ipc = False
-        if backend == "nccl" and self.strategy.args.colocate_all_models:
+        if backend == "nccl" and self.args.colocate_all_models and not self.args.async_train:
             self.use_cuda_ipc = True
 
         # Create torch group with deepspeed rank 0 and all vllm ranks
