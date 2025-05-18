@@ -15,9 +15,9 @@ ray job submit --address="http://127.0.0.1:8265" \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
    --agent_func_path /openrlhf/examples/python/agent_func.py \
    --save_path /openrlhf/examples/test_scripts/checkpoint/llama3-8b-rlhf \
-   --micro_train_batch_size 16 \
+   --micro_train_batch_size 8 \
    --train_batch_size 192 \
-   --micro_rollout_batch_size 32 \
+   --micro_rollout_batch_size 16 \
    --rollout_batch_size 192 \
    --n_samples_per_prompt 8 \
    --max_epochs 1 \
@@ -35,7 +35,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --input_key context_messages \
    --apply_chat_template \
    --normalize_reward \
-   --adam_offload \
    --gradient_checkpointing \
    --packing_samples \
    --save_steps -1 \
