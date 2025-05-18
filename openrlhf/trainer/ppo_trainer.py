@@ -66,6 +66,9 @@ class BasePPOTrainer(ABC):
         self.eval_dataloader = None
         self.max_steps = None
 
+        self.samples_generator = None
+        self.experience_maker = None
+
         if self.args.agent_func_path:
             from openrlhf.trainer.ppo_utils.experience_maker_async import SamplesGeneratorAsync as SamplesGenerator
         else:
@@ -236,7 +239,7 @@ class BasePPOTrainer(ABC):
             generate_kwargs = self.generate_kwargs.copy()
             generate_kwargs["temperature"] = temperature
             generate_kwargs["n_samples_per_prompt"] = n_samples_per_prompt
-            samples_list = self.experience_maker.generate_samples(all_prompts, all_labels, **generate_kwargs)
+            samples_list = self.samples_generator.generate_samples(all_prompts, all_labels, **generate_kwargs)
             queries_list = sum(
                 [self.tokenizer.batch_decode(s.sequences, skip_special_tokens=False) for s in samples_list], []
             )
@@ -245,8 +248,12 @@ class BasePPOTrainer(ABC):
             all_prompts = sum([[prompt] * n_samples_per_prompt for prompt in all_prompts], [])
             all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
 
-            # Calculate rewards
-            if self.experience_maker.custom_reward_func:
+            # Get rewards from samples, such as agent rewards
+            rewards_list = [s.rewards for s in samples_list]
+            if rewards_list[0]:
+                rewards_list = [torch.tensor(s.rewards) for s in samples_list]
+                r_refs = ray.put(rewards_list)
+            elif self.experience_maker.custom_reward_func:
                 # Let Ray automatically distribute the workload across available resources
                 batch_size = self.strategy.args.micro_rollout_batch_size
                 num_chunks = (len(queries_list) + batch_size - 1) // batch_size
