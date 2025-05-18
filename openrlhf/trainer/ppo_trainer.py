@@ -228,12 +228,14 @@ class BasePPOTrainer(ABC):
             # First collect all prompts and labels
             all_prompts = []
             all_labels = []
-            all_datasources = []
+            prompt_to_datasource = {}  # Dictionary to store mapping between prompts and their data sources
 
             for datasources, prompts, labels in eval_dataloader:
                 all_prompts.extend(prompts)
                 all_labels.extend(labels)
-                all_datasources.extend(datasources)
+                # Create mapping for each prompt to its corresponding data source
+                for prompt, datasource in zip(prompts, datasources):
+                    prompt_to_datasource[prompt] = datasource
 
             # Generate samples and calculate rewards
             generate_kwargs = self.generate_kwargs.copy()
@@ -291,15 +293,23 @@ class BasePPOTrainer(ABC):
             # Collect local statistics for each data source
             global_metrics = {}  # {datasource: {"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}}
 
-            for i, datasource in enumerate(all_datasources):
+            # Process rewards in chunks of n_samples_per_prompt
+            num_prompts = len(all_prompts) // n_samples_per_prompt
+            for i in range(num_prompts):
+                # Get the original prompt (first one in the chunk)
+                original_prompt = all_prompts[i * n_samples_per_prompt]
+                datasource = prompt_to_datasource[original_prompt]  # Get corresponding data source using the mapping
+
                 if datasource not in global_metrics:
                     global_metrics[datasource] = {f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}
 
+                # Get rewards for this chunk
+                chunk_rewards = rewards[i]
+
                 # Calculate pass@k and pass@1
-                prompt_rewards = rewards[i]
                 if n_samples_per_prompt > 1:
-                    global_metrics[datasource][f"pass{n_samples_per_prompt}"] += prompt_rewards.max().float().item()
-                global_metrics[datasource]["pass1"] += prompt_rewards.mean().float().item()
+                    global_metrics[datasource][f"pass{n_samples_per_prompt}"] += chunk_rewards.max().float().item()
+                global_metrics[datasource]["pass1"] += chunk_rewards.mean().float().item()
                 global_metrics[datasource]["count"] += 1
 
             # Calculate global averages
