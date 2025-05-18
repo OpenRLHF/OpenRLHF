@@ -1,5 +1,9 @@
 set -x
 
+# Required for Hybrid Engine + Async LLM engine
+export PYTORCH_NVML_BASED_CUDA_CHECK=1
+export VLLM_USE_V1=1
+
 python3 -m openrlhf.cli.train_ppo_ray \
    --ref_num_nodes 1 \
    --ref_num_gpus_per_node 8 \
@@ -19,9 +23,9 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
    --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
    --save_hf_ckpt \
-   --micro_train_batch_size 4 \
+   --micro_train_batch_size 8 \
    --train_batch_size 128 \
-   --micro_rollout_batch_size 8 \
+   --micro_rollout_batch_size 16 \
    --rollout_batch_size 128 \
    --n_samples_per_prompt 8 \
    --max_epochs 1 \
