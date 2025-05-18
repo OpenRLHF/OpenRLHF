@@ -46,7 +46,7 @@ OpenRLHF 是第一个基于 Ray、vLLM、ZeRO-3 和 HuggingFace Transformers 构
 
 
 ## 新闻  
-- [2025/5] OpenRLHF 0.8.0 支持 [Async Pipeline RLHF](./examples/scripts/train_reinforce_llama_ray_async.sh) (`--async_train`) 和 [Async Agent RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)(`--agent_func_path`)
+- [2025/5] OpenRLHF 0.8.0 支持 [Async Pipeline RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh) (`--async_train`) 和 [Async Agent RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)(`--agent_func_path`)
 - [2025/4] 发布博客 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html)
 - [2025/4] Clean OpenRLHF: 基于 Single Controller 和 Unified Packing Samples 重构了源码
 - [2025/3] CMU的[2025春季高级自然语言处理课程](https://cmu-l3.github.io/anlp-spring2025/)使用OpenRLHF作为RLHF框架教学案例。

@@ -42,7 +42,7 @@ OpenRLHFは、Ray、vLLM、ZeRO-3、およびHuggingFace Transformersを基盤�
 詳細は[スライド](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [技術報告](https://arxiv.org/abs/2405.11143) | [ドキュメント](https://openrlhf.readthedocs.io/)をご覧ください。
 
 ## ニュース
-- [2025/5] OpenRLHF 0.8.0 は [Async Pipeline RLHF](./examples/scripts/train_reinforce_llama_ray_async.sh) (`--async_train`) と [Async Agent RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)(`--agent_func_path`) をサポート
+- [2025/5] OpenRLHF 0.8.0 は [Async Pipeline RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh) (`--async_train`) と [Async Agent RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)(`--agent_func_path`) をサポート
 - [2025/4] ブログ記事 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html) を公開
 - [2025/4] Clean OpenRLHF: シングルコントローラーと統合パッキングサンプルに基づくソースコードのリファクタリング
 - [2025/3] CMUの[2025年春の高度自然言語処理コース](https://cmu-l3.github.io/anlp-spring2025/)がOpenRLHFをRLHFフレームワークの教育事例として採用。
