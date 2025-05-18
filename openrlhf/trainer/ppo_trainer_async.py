@@ -125,7 +125,7 @@ class TrainingActor(BasePPOTrainer):
         self._init_wandb()
         self.eval_dataloader = None
 
-    def _update_weights_to_vllm(self):
+    def _broadcast_to_vllm(self):
         if self.vllm_engines is not None:
             # Block generation
             ray.get(self.signal_actor.set_generating.remote(False))
@@ -263,7 +263,7 @@ class PPOTrainerAsync:
         # Update initial weights to vLLM engines
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path) and not self.vllm_engines is None:
-            ray.get(self.trainer_actor._update_weights_to_vllm.remote())
+            ray.get(self.trainer_actor._broadcast_to_vllm.remote())
 
         # Restore step and start_epoch
         consumed_samples = ray.get(self.actor_model_group.async_run_method(method_name="get_consumed_samples"))[0]
