@@ -26,10 +26,6 @@ class AgentInstance:
 @ray.remote
 class LLMRayActorAsync(BaseLLMRayActor):
     def __init__(self, *args, bundle_indices: list = None, **kwargs):
-        # Set up event loop for the actor
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
-
         self.agent_func_path = kwargs.pop("agent_func_path")
 
         # Initialize super class
@@ -60,11 +56,11 @@ class LLMRayActorAsync(BaseLLMRayActor):
     def reset_prefix_cache(self):
         self.llm.engine.reset_prefix_cache()
 
-    def sleep(self, level=1):
-        self.llm.engine.sleep(level=level)
+    async def sleep(self, level=1):
+        await self.llm.sleep(level=level)
 
-    def wake_up(self):
-        self.llm.engine.wake_up()
+    async def wake_up(self):
+        await self.llm.wake_up()
 
     async def add_requests(self, sampling_params, prompts, labels, max_length, max_steps=10000):
         """
