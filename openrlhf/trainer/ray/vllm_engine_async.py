@@ -1,6 +1,5 @@
 import asyncio
 import os
-import threading
 
 import ray
 
@@ -43,25 +42,6 @@ class LLMRayActorAsync(BaseLLMRayActor):
 
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
-
-        # Create an event for initialization synchronization
-        self.init_event = threading.Event()
-
-        # Create a separate thread for is_sleeping check
-        def run_is_sleeping():
-            sleep_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(sleep_loop)
-            sleep_loop.run_until_complete(self.llm.is_sleeping())
-            sleep_loop.close()
-            # Signal that initialization is complete
-            self.init_event.set()
-
-        sleep_thread = threading.Thread(target=run_is_sleeping)
-        sleep_thread.daemon = True
-        sleep_thread.start()
-
-        # Wait for initialization to complete
-        self.init_event.wait()
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray):
         return self.llm.engine.model_executor.collective_rpc(
