@@ -515,10 +515,10 @@ class PPOTrainer(BasePPOTrainer):
                     self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
 
                 # Add generated samples to status dictionary
-                status["generated_samples"] = [sample0[0], experiences[0].info["reward"][0]]
                 if self.args.dynamic_filtering:
                     status["dynamic_filtering_pass_rate"] = pass_rate
                 logger.info(f"✨ Global step {steps}: {status}")
+                status["generated_samples"] = [sample0[0], experiences[0].info["reward"][0]]
 
                 # logs/checkpoints
                 client_states = {
