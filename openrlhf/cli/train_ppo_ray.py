@@ -503,7 +503,7 @@ if __name__ == "__main__":
 
     if args.dynamic_filtering:
         assert (
-            args.reward_clip_range[0] < args.reward_clip_range[1]
+            args.dynamic_filtering_reward_range[0] < args.dynamic_filtering_reward_range[1]
         ), "reward_clip_range[0] must be less than reward_clip_range[1]"
         assert (
             args.remote_rm_url or args.agent_func_path
