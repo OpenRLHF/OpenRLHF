@@ -7,7 +7,7 @@ from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import ProcessRewardDataset
 from openrlhf.models import Actor
-from openrlhf.trainer import ProcessRewardModelTrainer
+from openrlhf.trainer.prm_trainer import ProcessRewardModelTrainer
 from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
 

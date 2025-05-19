@@ -4,11 +4,11 @@ from datetime import datetime
 import ray
 from ray.util.placement_group import placement_group
 
-from openrlhf.trainer.ray import (
+from openrlhf.trainer.ray import create_vllm_engines
+from openrlhf.trainer.ray.launcher import (
     PPORayActorGroup,
     ReferenceModelRayActor,
     RewardModelRayActor,
-    create_vllm_engines,
 )
 from openrlhf.trainer.ray.ppo_actor import ActorModelRayActor
 from openrlhf.trainer.ray.ppo_critic import CriticModelRayActor

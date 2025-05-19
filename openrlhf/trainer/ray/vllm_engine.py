@@ -23,7 +23,7 @@ def get_all_env_variables():
 class BaseLLMRayActor:
     def __init__(self, *args, bundle_indices: list = None, **kwargs):
         kwargs.pop("agent_func_path", None)
-        noset_visible_devices = kwargs.pop("noset_visible_devices")
+        noset_visible_devices = ray_noset_visible_devices()
         if kwargs.get("distributed_executor_backend") == "ray":
             # a hack to make the script work.
             # stop ray from manipulating *_VISIBLE_DEVICES
@@ -123,7 +123,6 @@ def create_vllm_engines(
     assert vllm.__version__ > "0.8.2", "OpenRLHF only supports vllm > 0.8.2"
 
     vllm_engines = []
-    noset_visible_devices = ray_noset_visible_devices(ray.get(get_all_env_variables.remote()))
     distributed_executor_backend = "uni" if tensor_parallel_size == 1 else "ray"
     use_hybrid_engine = shared_pg is not None
     num_gpus = int(tensor_parallel_size == 1)
@@ -170,7 +169,6 @@ def create_vllm_engines(
                 bundle_indices=bundle_indices,
                 num_gpus=0.2 if use_hybrid_engine else 1,
                 enable_sleep_mode=vllm_enable_sleep,
-                noset_visible_devices=noset_visible_devices,
                 agent_func_path=agent_func_path,
             )
         )
