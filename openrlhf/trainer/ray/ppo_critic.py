@@ -58,10 +58,11 @@ class CriticPPOTrainer(ABC):
 
     def ppo_train(self):
         # replay buffer may be empty at first, we should rebuild at each training
+        not_shuffle = self.strategy.ring_attn_group is not None or self.args.ds_tensor_parallel_size > 1
         dataloader = DataLoader(
             self.replay_buffer,
             batch_size=self.replay_buffer.sample_batch_size,
-            shuffle=False if self.strategy.ring_attn_group is not None else True,
+            shuffle=not not_shuffle,
             drop_last=True,
             pin_memory=self.dataloader_pin_memory,
             collate_fn=self.replay_buffer.collate_fn,
