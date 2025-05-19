@@ -306,11 +306,12 @@ class PPOTrainerAsync:
 
         # Update initial weights to vLLM engines
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
-        if args.load_checkpoint and os.path.exists(ckpt_path) and not self.vllm_engines is None:
-            ray.get(self.trainer_actor._broadcast_to_vllm.remote())
+        if args.load_checkpoint and os.path.exists(ckpt_path):
             checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
                 0
             ]
+            logger.info(f"checkpoint_states: {checkpoint_states}")
+            ray.get(self.trainer_actor._broadcast_to_vllm.remote())
         else:
             checkpoint_states = {"global_step": 1, "episode": 0, "data_loader_state_dict": {}}
 

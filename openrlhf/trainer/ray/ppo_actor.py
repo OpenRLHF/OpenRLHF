@@ -432,7 +432,6 @@ class ActorModelRayActor(BasePPORole):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
             _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
             self.checkpoint_states = states
-            strategy.print(f"checkpoint_states: {self.checkpoint_states}")
 
         # initial offload
         if strategy.args.deepspeed_enable_sleep:
