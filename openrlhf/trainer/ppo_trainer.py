@@ -401,7 +401,7 @@ class PPOTrainer(BasePPOTrainer):
         if self.args.remote_rm_url and not self.args.remote_rm_url[0] == "agent":
             from openrlhf.utils.remote_rm_utils import RemoteRewardModel
 
-            self.remote_reward_model = RemoteRewardModel(self.args, self.remote_rm_url)
+            self.remote_reward_model = RemoteRewardModel.remote(self.args, self.remote_rm_url)
 
         self.samples_generator = self.generator_cls(
             self.vllm_engines,
