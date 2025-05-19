@@ -16,7 +16,7 @@ from peft import PeftModel, get_peft_model_state_dict
 from torch import distributed as dist
 from torch.distributed.device_mesh import init_device_mesh
 from torch.optim import Optimizer
-from torch.utils.data import DataLoader
+from torchdata.stateful_dataloader import StatefulDataLoader
 
 from openrlhf.models import Actor
 from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
@@ -169,14 +169,11 @@ class DeepspeedStrategy(ABC):
         consumed_samples=0,
     ):
         # DDP only mode, replay buffers on each rank are different.
-        if sampler is None:
-            if dist.is_initialized():
-                dp_group = self.ds_device_mesh["dp"].get_group()
-                num_replicas = dist.get_world_size(group=dp_group)
-                rank = dist.get_rank(group=dp_group)
-            else:
-                num_replicas = 1
-                rank = 0
+        if sampler is None and dist.is_initialized():
+            dp_group = self.ds_device_mesh["dp"].get_group()
+            num_replicas = dist.get_world_size(group=dp_group)
+            rank = dist.get_rank(group=dp_group)
+
             sampler = DistributedSampler(
                 replay_buffer,
                 num_replicas=num_replicas,
@@ -187,11 +184,12 @@ class DeepspeedStrategy(ABC):
                 consumed_samples=consumed_samples,
             )
 
-        return DataLoader(
+        return StatefulDataLoader(
             replay_buffer,
             batch_size=batch_size,
             sampler=sampler,
             drop_last=drop_last,
+            shuffle=shuffle if sampler is None else False,
             collate_fn=collate_fn,
             pin_memory=pin_memory,
         )

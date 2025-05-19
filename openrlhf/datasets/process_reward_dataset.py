@@ -3,8 +3,7 @@ from typing import Callable
 import torch
 from torch.utils.data import Dataset
 
-from openrlhf.utils.utils import convert_token_to_id
-from .utils import zero_pad_sequences
+from openrlhf.utils.utils import convert_token_to_id, zero_pad_sequences
 
 
 class ProcessRewardDataset(Dataset):

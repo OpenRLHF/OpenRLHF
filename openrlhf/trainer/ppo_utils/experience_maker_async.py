@@ -82,7 +82,7 @@ class SamplesGeneratorAsync(SamplesGenerator):
             current_batch_rewards.append(output["reward"])
 
             # Process batch when it's full or we're at the last output
-            if len(current_batch) == args.micro_rollout_batch_size or i == len(all_outputs) - 1:
+            if len(current_batch) == n_samples_per_prompt or i == len(all_outputs) - 1:
                 # Tokenize all states first
                 tokenized_states = []
                 tokenized_ranges = []
@@ -117,11 +117,6 @@ class SamplesGeneratorAsync(SamplesGenerator):
                     # Add padding to input and output
                     sequences.append(state_tokens + [pad_token_id] * (batch_max_input_len - len(state_tokens)))
                     attention_mask.append([1] * len(state_tokens) + [0] * (batch_max_input_len - len(state_tokens)))
-
-                for i, seq in enumerate(sequences):
-                    assert (
-                        len(seq) == batch_max_input_len
-                    ), f"Error: Sequence {i} has length {len(seq)}, expected {batch_max_input_len}"
 
                 sequences = torch.tensor(sequences)
                 attention_mask = torch.tensor(attention_mask)

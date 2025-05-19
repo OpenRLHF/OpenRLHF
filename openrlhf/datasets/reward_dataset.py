@@ -2,7 +2,8 @@ from typing import Callable
 
 from torch.utils.data import Dataset
 
-from .utils import exist_and_not_none, zero_pad_sequences
+from openrlhf.datasets.utils import exist_and_not_none
+from openrlhf.utils.utils import zero_pad_sequences
 
 
 def preprocess_data(

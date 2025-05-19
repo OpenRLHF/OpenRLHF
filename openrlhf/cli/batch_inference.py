@@ -9,8 +9,9 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from openrlhf.datasets import PromptDataset, SFTDataset
+from openrlhf.datasets.utils import blending_datasets
 from openrlhf.models import Actor, get_llm_for_sequence_regression
-from openrlhf.utils import blending_datasets, get_processor, get_strategy, get_tokenizer
+from openrlhf.utils import get_processor, get_strategy, get_tokenizer
 
 
 def batch_generate_vllm(args):
