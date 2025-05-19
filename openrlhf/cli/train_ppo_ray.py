@@ -429,7 +429,7 @@ if __name__ == "__main__":
     # Dynamic filtering
     parser.add_argument("--dynamic_filtering", action="store_true", default=False, help="Enable dynamic filtering")
     parser.add_argument(
-        "--dynamic_filtering_reward_range", nargs=2, default=(0.0, 1.0), help="Dynamic filtering rewards range"
+        "--dynamic_filtering_reward_range", nargs=2, default=(0, 1), help="Dynamic filtering rewards range"
     )
 
     # TensorBoard parameters

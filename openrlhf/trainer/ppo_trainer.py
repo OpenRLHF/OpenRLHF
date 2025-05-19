@@ -473,16 +473,16 @@ class PPOTrainer(BasePPOTrainer):
                     number_of_samples += len(rollout_samples)
                     for samples in rollout_samples:
                         # Get rewards for each sample in the batch
-                        reward = torch.mean(torch.tensor(samples.rewards)).item()
+                        reward = torch.mean(torch.tensor(samples.rewards, dtype=torch.float32)).item()
                         # Create a mask to identify samples with rewards within the specified range
-                        in_range = (reward > self.args.dynamic_filtering_reward_range[0] + 1e-6) & (
+                        in_range = (reward > self.args.dynamic_filtering_reward_range[0] + 1e-6) and (
                             reward < self.args.dynamic_filtering_reward_range[1] - 1e-6
                         )
                         if in_range:
                             filtered_samples.append(samples)
 
                     # continue sampling if the number of samples is less than rollout_batch_size
-                    if len(rollout_samples) < self.args.rollout_batch_size:
+                    if len(filtered_samples) < self.args.rollout_batch_size:
                         continue
                     rollout_samples = filtered_samples[: self.args.rollout_batch_size]
 
