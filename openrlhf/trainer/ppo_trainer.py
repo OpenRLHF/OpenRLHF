@@ -470,22 +470,27 @@ class PPOTrainer(BasePPOTrainer):
                 pbar.update()
 
                 # dynamic filtering
+                pass_rate = None
                 if self.args.dynamic_filtering:
                     number_of_samples += len(rollout_samples)
-                    for samples in rollout_samples:
-                        # Get rewards for each sample in the batch
-                        reward = torch.mean(torch.tensor(samples.rewards, dtype=torch.float32)).item()
-                        # Create a mask to identify samples with rewards within the specified range
-                        in_range = (reward > self.args.dynamic_filtering_reward_range[0] + 1e-6) and (
-                            reward < self.args.dynamic_filtering_reward_range[1] - 1e-6
-                        )
-                        if in_range:
-                            filtered_samples.append(samples)
+                    # Group individual samples into batches of n_samples size
+                    for i in range(0, len(rollout_samples), self.args.n_samples_per_prompt):
+                        batch_samples = rollout_samples[i : i + self.args.n_samples_per_prompt]
+                        if len(batch_samples) < self.args.n_samples_per_prompt:
+                            continue
 
-                    # continue sampling if the number of samples is less than rollout_batch_size
-                    if len(filtered_samples) < self.args.rollout_batch_size:
+                        # Calculate average reward for this batch of samples
+                        avg_reward = sum(sample.rewards[0] for sample in batch_samples) / len(batch_samples)
+
+                        # Check if average reward is within the specified range
+                        min_reward, max_reward = self.args.dynamic_filtering_reward_range
+                        if min_reward + 1e-6 < avg_reward < max_reward - 1e-6:
+                            filtered_samples.extend(batch_samples)
+
+                    # Continue sampling if filtered samples are insufficient
+                    if len(filtered_samples) / self.args.n_samples_per_prompt < self.args.rollout_batch_size:
                         logger.info(
-                            f"filtered_samples {len(filtered_samples)} < rollout_batch_size {self.args.rollout_batch_size}, continue sampling"
+                            f"filtered_samples {len(filtered_samples) / self.args.n_samples_per_prompt} < rollout_batch_size {self.args.rollout_batch_size}, continue sampling"
                         )
                         continue
 
@@ -493,7 +498,7 @@ class PPOTrainer(BasePPOTrainer):
                     logger.info(
                         f"Dynamic filtering pass rate: {pass_rate:.2f}% ({len(filtered_samples)}/{number_of_samples})"
                     )
-                    rollout_samples = filtered_samples[: self.args.rollout_batch_size]
+                    rollout_samples = filtered_samples[: self.args.rollout_batch_size * self.args.n_samples_per_prompt]
                     filtered_samples = []
                     number_of_samples = 0
 

@@ -68,88 +68,56 @@ class SamplesGeneratorAsync(SamplesGenerator):
 
         pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
 
-        # Process outputs in batches while maintaining prompt groups
+        # Process outputs one by one
         samples_list = []
-        current_batch = []
-        current_batch_prompts = []
-        current_batch_labels = []
-        current_batch_rewards = []
+        for output in all_outputs:
+            # Tokenize state
+            state_tokens = self.tokenizer(output["state"], add_special_tokens=False, return_tensors="pt")["input_ids"][
+                0
+            ]
+            tokenized_state = state_tokens.tolist()
 
-        for i, output in enumerate(all_outputs):
-            current_batch.append(output)
-            current_batch_prompts.append(output["prompt"])
-            current_batch_labels.append(output["label"])
-            current_batch_rewards.append(output["reward"])
+            # Convert action ranges to token indices
+            tokenized_ranges = []
+            for start, end in output["action_ranges"]:
+                # Get token indices for the entire state up to end
+                full_tokens = self.tokenizer(output["state"][:end], add_special_tokens=False, return_tensors="pt")[
+                    "input_ids"
+                ][0]
+                # Get token indices for the entire state up to start
+                start_tokens = self.tokenizer(output["state"][:start], add_special_tokens=False, return_tensors="pt")[
+                    "input_ids"
+                ][0]
+                # Calculate token indices
+                tokenized_ranges.append((len(start_tokens), len(full_tokens)))
 
-            # Process batch when it's full or we're at the last output
-            if len(current_batch) == n_samples_per_prompt or i == len(all_outputs) - 1:
-                # Tokenize all states first
-                tokenized_states = []
-                tokenized_ranges = []
-                for output in current_batch:
-                    # Tokenize state
-                    state_tokens = self.tokenizer(output["state"], add_special_tokens=False, return_tensors="pt")[
-                        "input_ids"
-                    ][0]
-                    tokenized_states.append(state_tokens.tolist())
+            # Create tensors
+            sequences = torch.tensor([tokenized_state])
+            attention_mask = torch.tensor([[1] * len(tokenized_state)])
 
-                    # Convert action ranges to token indices
-                    ranges = []
-                    for start, end in output["action_ranges"]:
-                        # Get token indices for the entire state up to end
-                        full_tokens = self.tokenizer(
-                            output["state"][:end], add_special_tokens=False, return_tensors="pt"
-                        )["input_ids"][0]
-                        # Get token indices for the entire state up to start
-                        start_tokens = self.tokenizer(
-                            output["state"][:start], add_special_tokens=False, return_tensors="pt"
-                        )["input_ids"][0]
-                        # Calculate token indices
-                        ranges.append((len(start_tokens), len(full_tokens)))
-                    tokenized_ranges.append(ranges)
+            # Create action mask based on tokenized action_ranges
+            action_mask = torch.zeros_like(attention_mask)
+            # Mark action positions in the mask
+            for start, end in tokenized_ranges:
+                action_mask[0, start:end] = 1
 
-                # Calculate max length using tokenized states
-                batch_max_input_len = max(len(tokens) for tokens in tokenized_states)
+            # Apply length limit
+            sequences = sequences[:, :truncate_length].to("cpu")
+            attention_mask = attention_mask[:, :truncate_length].to("cpu")
+            action_mask = action_mask[:, 1:truncate_length].to("cpu")
+            response_length = action_mask.float().sum(dim=-1)
+            total_length = attention_mask.float().sum(dim=-1)
 
-                sequences = []
-                attention_mask = []
-                for i, state_tokens in enumerate(tokenized_states):
-                    # Add padding to input and output
-                    sequences.append(state_tokens + [pad_token_id] * (batch_max_input_len - len(state_tokens)))
-                    attention_mask.append([1] * len(state_tokens) + [0] * (batch_max_input_len - len(state_tokens)))
-
-                sequences = torch.tensor(sequences)
-                attention_mask = torch.tensor(attention_mask)
-
-                # Create action mask based on tokenized action_ranges
-                action_mask = torch.zeros_like(attention_mask)
-                for i, ranges in enumerate(tokenized_ranges):
-                    # Mark action positions in the mask
-                    for start, end in ranges:
-                        action_mask[i, start:end] = 1
-
-                sequences = sequences[:, :truncate_length].to("cpu")
-                attention_mask = attention_mask[:, :truncate_length].to("cpu")
-                action_mask = action_mask[:, 1:truncate_length].to("cpu")
-                response_length = action_mask.float().sum(dim=-1)
-                total_length = attention_mask.float().sum(dim=-1)
-
-                rollout_samples = Samples(
-                    sequences=sequences,
-                    attention_mask=attention_mask,
-                    action_mask=action_mask,
-                    response_length=response_length,
-                    total_length=total_length,
-                    prompts=current_batch_prompts,
-                    labels=current_batch_labels,
-                    rewards=current_batch_rewards,
-                )
-                samples_list.append(rollout_samples)
-
-                # Reset batch
-                current_batch = []
-                current_batch_prompts = []
-                current_batch_labels = []
-                current_batch_rewards = []
+            rollout_samples = Samples(
+                sequences=sequences,
+                attention_mask=attention_mask,
+                action_mask=action_mask,
+                response_length=response_length,
+                total_length=total_length,
+                prompts=[output["prompt"]],
+                labels=[output["label"]],
+                rewards=[output["reward"]],
+            )
+            samples_list.append(rollout_samples)
 
         return samples_list

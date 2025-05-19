@@ -282,35 +282,25 @@ class SamplesGenerator:
 
         # Group outputs by n_samples_per_prompt
         samples_list = []
-        for i in range(0, len(all_outputs), n_samples_per_prompt):
-            batch_outputs = all_outputs[i : i + n_samples_per_prompt]
-            batch_prompts = all_prompts[i : i + n_samples_per_prompt]
-            batch_labels = all_labels[i : i + n_samples_per_prompt]
+        for i in range(len(all_outputs)):
+            output = all_outputs[i]
+            prompt = all_prompts[i]
+            label = all_labels[i]
 
-            # Calculate max length for this batch
-            batch_max_input_len = max(
-                len(output.prompt_token_ids) + len(output.outputs[0].token_ids) for output in batch_outputs
-            )
+            # Concatenate prompt and output tokens
+            input_ids = list(output.prompt_token_ids) + list(output.outputs[0].token_ids)
+            # Create attention mask
+            attention_mask = [1] * len(input_ids)
 
-            sequences = []
-            attention_mask = []
-            for output in batch_outputs:
-                # Concatenate prompt and output tokens
-                input_ids = list(output.prompt_token_ids) + list(output.outputs[0].token_ids)
-                # Right pad to max length
-                sequences.append(input_ids + [pad_token_id] * (batch_max_input_len - len(input_ids)))
-                attention_mask.append([1] * len(input_ids) + [0] * (batch_max_input_len - len(input_ids)))
-
-            sequences = torch.tensor(sequences)
-            attention_mask = torch.tensor(attention_mask)
+            sequences = torch.tensor([input_ids])
+            attention_mask = torch.tensor([attention_mask])
 
             # Create action mask based on output token positions
             action_mask = torch.zeros_like(attention_mask)
-            for i, output in enumerate(batch_outputs):
-                # Mark positions after prompt as actions
-                action_mask[
-                    i, len(output.prompt_token_ids) : len(output.prompt_token_ids) + len(output.outputs[0].token_ids)
-                ] = 1
+            # Mark positions after prompt as actions
+            action_mask[
+                0, len(output.prompt_token_ids) : len(output.prompt_token_ids) + len(output.outputs[0].token_ids)
+            ] = 1
 
             sequences = sequences.to("cpu")
             attention_mask = attention_mask.to("cpu")
@@ -324,8 +314,8 @@ class SamplesGenerator:
                 action_mask=action_mask,
                 response_length=response_length,
                 total_length=total_length,
-                prompts=batch_prompts,
-                labels=batch_labels,
+                prompts=[prompt],
+                labels=[label],
             )
             samples_list.append(rollout_samples)
 
