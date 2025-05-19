@@ -93,4 +93,4 @@ class RemoteRewardModel:
                 )
                 r_refs.append(r)
 
-        return r_refs
+        return ray.get(r_refs)
