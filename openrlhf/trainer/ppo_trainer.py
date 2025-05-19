@@ -483,13 +483,16 @@ class PPOTrainer(BasePPOTrainer):
 
                     # continue sampling if the number of samples is less than rollout_batch_size
                     if len(filtered_samples) < self.args.rollout_batch_size:
+                        logger.info(
+                            f"filtered_samples {len(filtered_samples)} < rollout_batch_size {self.args.rollout_batch_size}, continue sampling"
+                        )
                         continue
-                    rollout_samples = filtered_samples[: self.args.rollout_batch_size]
 
                     pass_rate = len(filtered_samples) / number_of_samples * 100
                     logger.info(
                         f"Dynamic filtering pass rate: {pass_rate:.2f}% ({len(filtered_samples)}/{number_of_samples})"
                     )
+                    rollout_samples = filtered_samples[: self.args.rollout_batch_size]
                     filtered_samples = []
                     number_of_samples = 0
 
