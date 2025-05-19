@@ -343,7 +343,7 @@ class SamplesGenerator:
             rewards_list = torch.cat(rewards_list, dim=0).chunk(len(samples_list))
 
             for i, samples in enumerate(samples_list):
-                samples.rewards = rewards_list[i]
+                samples.rewards = rewards_list[i].tolist()
 
         return samples_list
 
