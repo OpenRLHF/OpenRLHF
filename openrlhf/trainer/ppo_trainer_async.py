@@ -193,7 +193,6 @@ class TrainingActor(BasePPOTrainer):
             ray.get(refs)
 
             status = self.ppo_train(steps)
-            logger.info(f"✨ Global step {steps}: {status}")
 
             if "kl" in status:
                 self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
@@ -202,6 +201,7 @@ class TrainingActor(BasePPOTrainer):
             status["generated_samples"] = [sample0[0], experiences[0].info["reward"][0]]
             if self.args.dynamic_filtering:
                 status["dynamic_filtering_pass_rate"] = pass_rate
+            logger.info(f"✨ Global step {steps}: {status}")
 
             # logs/checkpoints
             client_states = {
