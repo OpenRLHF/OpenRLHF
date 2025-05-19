@@ -313,10 +313,10 @@ class PPOTrainerAsync:
             logger.info(f"checkpoint_states: {checkpoint_states}")
             ray.get(self.trainer_actor._broadcast_to_vllm.remote())
         else:
-            checkpoint_states = {"global_step": 1, "episode": 0, "data_loader_state_dict": {}}
+            checkpoint_states = {"global_step": 0, "episode": 0, "data_loader_state_dict": {}}
 
         # Restore step and start_epoch
-        steps = checkpoint_states["global_step"]
+        steps = checkpoint_states["global_step"] + 1
         episode = checkpoint_states["episode"]
         data_loader_state_dict = checkpoint_states["data_loader_state_dict"]
 
