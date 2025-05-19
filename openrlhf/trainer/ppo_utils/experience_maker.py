@@ -380,7 +380,7 @@ class RemoteExperienceMaker(ABC):
         # Each batch of samples will be scheduled to a effective Ray Actor (i.e, a DP rank)
         # TODO: balance the number of tokens of each batch for better performance
         samples_list = []
-        batch_size = self.args.micro_rollout_batch_size // self.args.n_samples_per_prompt
+        batch_size = self.args.micro_rollout_batch_size
         for i in range(0, len(rollout_samples), batch_size):
             concat_samples = Samples.concat_samples(rollout_samples[i : i + batch_size], self.tokenizer.pad_token_id)
             samples_list.append(concat_samples)
