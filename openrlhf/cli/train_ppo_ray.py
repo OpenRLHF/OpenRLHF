@@ -501,6 +501,17 @@ if __name__ == "__main__":
     if not args.vllm_generate_batch_size:
         args.vllm_generate_batch_size = args.rollout_batch_size
 
+    if args.dynamic_filtering:
+        assert (
+            args.reward_clip_range[0] < args.reward_clip_range[1]
+        ), "reward_clip_range[0] must be less than reward_clip_range[1]"
+        assert (
+            args.remote_rm_url or args.agent_func_path
+        ), "remote_rm_url or agent_func_path must be specified when using dynamic filtering"
+        assert (
+            args.n_samples_per_prompt > 1
+        ), "n_samples_per_prompt must be greater than 1 when using dynamic filtering"
+
     assert (
         args.n_samples_per_prompt * args.rollout_batch_size // args.micro_rollout_batch_size
         >= args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size // args.ds_tensor_parallel_size
