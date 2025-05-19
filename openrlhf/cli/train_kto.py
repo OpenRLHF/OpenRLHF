@@ -7,7 +7,7 @@ from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import UnpairedPreferenceDataset
 from openrlhf.models import Actor
-from openrlhf.trainer import KTOTrainer
+from openrlhf.trainer.kto_trainer import KTOTrainer
 from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
 
 
