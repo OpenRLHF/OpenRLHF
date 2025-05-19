@@ -2,6 +2,7 @@ import asyncio
 import os
 
 import ray
+import torch
 from tqdm import tqdm
 
 from openrlhf.trainer.ppo_trainer import BasePPOTrainer
@@ -70,17 +71,19 @@ class GenerateSamplesActor(BasePPOTrainer):
     def generate_samples(self, prompts, labels, **generate_kwargs):
         return self.samples_generator.generate_samples(prompts, labels, **generate_kwargs)
 
-    def fit(self, start_episode, consumed_samples, queue):
+    def fit(self, start_episode, queue, data_loader_state_dict, remote_reward_model=None):
+        if data_loader_state_dict:
+            self.prompts_dataloader.load_state_dict(data_loader_state_dict)
+
         for episode in range(start_episode, self.args.num_episodes):
-            self.prompts_dataloader.sampler.set_epoch(
-                episode, consumed_samples=0 if episode > start_episode else consumed_samples
-            )
             pbar = tqdm(
                 range(self.prompts_dataloader.__len__()),
                 desc=f"Generate Episode [{episode + 1}/{self.args.num_episodes}]",
                 disable=False,
             )
 
+            filtered_samples = []
+            number_of_samples = 0
             for _, rand_prompts, labels in self.prompts_dataloader:
                 # Wait for generation to be allowed
                 ray.get(self.signal_actor.wait_generating.remote())
@@ -88,23 +91,51 @@ class GenerateSamplesActor(BasePPOTrainer):
                 ray.get(self.signal_actor.set_update_weights.remote(False))
 
                 # Generate samples
-                rollout_samples = self.generate_samples(rand_prompts, labels, **self.generate_kwargs)
+                # remote_reward_model is used to get rewards for dynamic sampling
+                rollout_samples = self.generate_samples(
+                    rand_prompts, labels, remote_reward_model=remote_reward_model, **self.generate_kwargs
+                )
 
                 # Allow weight updates after generation is done
                 ray.get(self.signal_actor.set_update_weights.remote(True))
 
-                queue.put(rollout_samples)
                 pbar.update()
-        queue.put("done")
 
-    def get_prompts_dataloader_len(self):
-        return self.prompts_dataloader.__len__()
+                # dynamic filtering
+                pass_rate = None
+                if self.args.dynamic_filtering:
+                    number_of_samples += len(rollout_samples)
+                    for samples in rollout_samples:
+                        # Get rewards for each sample in the batch
+                        reward = torch.mean(torch.tensor(samples.rewards)).item()
+                        # Create a mask to identify samples with rewards within the specified range
+                        in_range = (reward > self.args.dynamic_filtering_reward_range[0] + 1e-6) & (
+                            reward < self.args.dynamic_filtering_reward_range[1] - 1e-6
+                        )
+                        if in_range:
+                            filtered_samples.append(samples)
+
+                    # continue sampling if the number of samples is less than rollout_batch_size
+                    if len(rollout_samples) < self.args.rollout_batch_size:
+                        continue
+                    rollout_samples = filtered_samples[: self.args.rollout_batch_size]
+
+                    pass_rate = len(filtered_samples) / number_of_samples * 100
+                    logger.info(
+                        f"Dynamic filtering pass rate: {pass_rate:.2f}% ({len(filtered_samples)}/{number_of_samples})"
+                    )
+                    filtered_samples = []
+                    number_of_samples = 0
+
+                queue.put((rollout_samples, episode, self.prompts_dataloader.state_dict(), pass_rate))
+        queue.put("done")
 
 
 @ray.remote
 class TrainingActor(BasePPOTrainer):
     def __init__(self, *args, **kwargs):
         self.signal_actor = kwargs.pop("signal_actor")
+        self.remote_reward_model = kwargs.pop("remote_reward_model")
         super().__init__(*args, **kwargs)
 
         if self.kl_target:
@@ -119,7 +150,8 @@ class TrainingActor(BasePPOTrainer):
             self.reference_model_group,
             self.kl_ctl,
             self.strategy,
-            self.remote_rm_url,
+            self.tokenizer,
+            remote_reward_model=self.remote_reward_model,
         )
 
         self._init_wandb()
@@ -138,20 +170,16 @@ class TrainingActor(BasePPOTrainer):
             # Allow generation
             ray.get(self.signal_actor.set_generating.remote(True))
 
-    def fit(self, queue, steps, pbar_steps):
+    def fit(self, queue, steps):
         args = self.args
-        pbar = tqdm(
-            range(pbar_steps),
-            desc=f"Training Process",
-            disable=False,
-        )
 
         while True:
-            rollout_samples = queue.get()
-            if rollout_samples == "done":
+            output = queue.get()
+            if output == "done":
                 break
+            rollout_samples, episode, data_loader_state_dict, pass_rate = output
 
-            experiences = self.experience_maker.make_experience_list(rollout_samples)
+            experiences = self.experience_maker.make_experience_batch(rollout_samples)
             sample0 = self.tokenizer.batch_decode(experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True)
             print(sample0)
             refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences)
@@ -162,18 +190,24 @@ class TrainingActor(BasePPOTrainer):
             ray.get(refs)
 
             status = self.ppo_train(steps)
+            logger.info(f"✨ Global step {steps}: {status}")
 
             if "kl" in status:
                 self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
-            pbar.set_postfix(status)
 
             # Add generated samples to status dictionary
             status["generated_samples"] = [sample0[0], experiences[0].info["reward"][0]]
-            # logs/checkpoints
-            client_states = {"consumed_samples": steps * args.rollout_batch_size}
-            self.save_logs_and_checkpoints(args, steps, pbar, status, client_states)
+            if self.args.dynamic_filtering:
+                status["dynamic_filtering_pass_rate"] = pass_rate
 
-            pbar.update()
+            # logs/checkpoints
+            client_states = {
+                "global_step": steps,
+                "episode": episode,
+                "data_loader_state_dict": data_loader_state_dict,
+            }
+            self.save_logs_and_checkpoints(args, steps, None, status, client_states)
+
             steps = steps + 1
 
         if self._wandb is not None:
@@ -213,6 +247,13 @@ class PPOTrainerAsync:
         # Create signal actor for synchronization
         self.signal_actor = SignalActor.remote()
 
+        if self.args.remote_rm_url and not self.args.remote_rm_url[0] == "agent":
+            from openrlhf.utils.remote_rm_utils import RemoteRewardModel
+
+            self.remote_reward_model = RemoteRewardModel(self.args, self.remote_rm_url)
+        else:
+            self.remote_reward_model = None
+
         self.generator_actor = GenerateSamplesActor.remote(
             pretrain,
             strategy,
@@ -230,9 +271,8 @@ class PPOTrainerAsync:
         )
 
         # get eval and save steps
-        self.num_rollouts_per_episodes = ray.get(self.generator_actor.get_prompts_dataloader_len.remote())
         if self.args.eval_steps == -1:
-            self.args.eval_steps = self.num_rollouts_per_episodes  # Evaluate once per epoch
+            self.args.eval_steps = float("inf")  # do not evaluate
         if self.args.save_steps == -1:
             self.args.save_steps = float("inf")  # do not save ckpt
 
@@ -249,6 +289,7 @@ class PPOTrainerAsync:
             prompt_split,
             eval_split,
             signal_actor=self.signal_actor,
+            remote_reward_model=self.remote_reward_model,
             **generate_kwargs,
         )
 
@@ -264,17 +305,23 @@ class PPOTrainerAsync:
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path) and not self.vllm_engines is None:
             ray.get(self.trainer_actor._broadcast_to_vllm.remote())
+            checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
+                0
+            ]
+        else:
+            checkpoint_states = {"global_step": 1, "episode": 0, "data_loader_state_dict": {}}
 
         # Restore step and start_epoch
-        consumed_samples = ray.get(self.actor_model_group.async_run_method(method_name="get_consumed_samples"))[0]
-        steps = consumed_samples // args.rollout_batch_size + 1
-        start_episode = consumed_samples // args.rollout_batch_size // self.num_rollouts_per_episodes
-        consumed_samples = consumed_samples % (self.num_rollouts_per_episodes * args.rollout_batch_size)
-        pbar_steps = self.num_rollouts_per_episodes * args.num_episodes - steps
+        steps = checkpoint_states["global_step"]
+        episode = checkpoint_states["episode"]
+        data_loader_state_dict = checkpoint_states["data_loader_state_dict"]
 
         # Launch async training
-        generator_actor_ref = self.generator_actor.fit.remote(start_episode, consumed_samples, self.queue)
-        trainer_actor_ref = self.trainer_actor.fit.remote(self.queue, steps, pbar_steps)
+        remote_reward_model = self.remote_reward_model if self.args.dynamic_filtering else None
+        generator_actor_ref = self.generator_actor.fit.remote(
+            episode, self.queue, data_loader_state_dict, remote_reward_model
+        )
+        trainer_actor_ref = self.trainer_actor.fit.remote(self.queue, steps)
         ray.get([generator_actor_ref, trainer_actor_ref])
 
     def get_max_steps(self):

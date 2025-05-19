@@ -425,13 +425,13 @@ class ActorModelRayActor(BasePPORole):
             self.ema_model = None
 
         # load checkpoint
-        self.consumed_samples = 0
+        self.checkpoint_states = {}
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
             _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
-            self.consumed_samples = states["consumed_samples"]
-            strategy.print(f"consumed_samples: {self.consumed_samples}")
+            self.checkpoint_states = states
+            strategy.print(f"checkpoint_states: {self.checkpoint_states}")
 
         # initial offload
         if strategy.args.deepspeed_enable_sleep:
@@ -494,8 +494,8 @@ class ActorModelRayActor(BasePPORole):
     def broadcast_to_vllm(self):
         self.trainer._broadcast_to_vllm()
 
-    def get_consumed_samples(self):
-        return self.consumed_samples
+    def get_checkpoint_states(self):
+        return self.checkpoint_states
 
     def append(self, experience: Experience):
         self.trainer.replay_buffer.append(experience)

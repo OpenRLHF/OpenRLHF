@@ -302,7 +302,10 @@ if __name__ == "__main__":
     # PPO
     parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--num_episodes", type=int, default=1)
-    parser.add_argument("--rollout_batch_size", type=int, default=1024)
+    parser.add_argument("--rollout_batch_size", type=int, default=1024, help="Batch size for make experience")
+    parser.add_argument(
+        "--vllm_generate_batch_size", type=int, default=None, help="Batch size for vLLM generating samples"
+    )
     parser.add_argument("--micro_rollout_batch_size", type=int, default=8)
     parser.add_argument("--max_epochs", type=int, default=1)
     parser.add_argument("--prompt_max_len", type=int, default=1024, help="Max tokens for each prompt")
@@ -423,6 +426,12 @@ if __name__ == "__main__":
         default="ppo_%s" % datetime.now().strftime("%m%dT%H:%M"),
     )
 
+    # Dynamic filtering
+    parser.add_argument("--dynamic_filtering", action="store_true", default=False, help="Enable dynamic filtering")
+    parser.add_argument(
+        "--dynamic_filtering_reward_range", nargs=2, default=(0.0, 1.0), help="Dynamic filtering rewards range"
+    )
+
     # TensorBoard parameters
     parser.add_argument("--use_tensorboard", type=str, default=None, help="TensorBoard logging path")
 
@@ -488,9 +497,13 @@ if __name__ == "__main__":
         if args.kl_estimator not in ["k1"]:
             print(f"Recommend setting {args.kl_estimator} to 'k1' when not using KL as a loss.")
 
+    # Set vLLM generate_batch_size to rollout_batch_size if not specified
+    if not args.vllm_generate_batch_size:
+        args.vllm_generate_batch_size = args.rollout_batch_size
+
     assert (
         args.n_samples_per_prompt * args.rollout_batch_size // args.micro_rollout_batch_size
-        >= args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size
+        >= args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size // args.ds_tensor_parallel_size
     ), "The number of sample batches must be greater than or equal to the effective number of actor processes."
 
     if args.use_ms:

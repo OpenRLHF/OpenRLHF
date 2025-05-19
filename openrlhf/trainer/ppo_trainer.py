@@ -8,13 +8,13 @@ import torch
 from tqdm import tqdm
 
 from openrlhf.datasets import PromptDataset
+from openrlhf.datasets.utils import blending_datasets
 from openrlhf.trainer.ppo_utils import AdaptiveKLController, FixedKLController
 from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
-from openrlhf.utils import blending_datasets, get_tokenizer
+from openrlhf.utils import get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.logging_utils import init_logger
-from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
 
 logger = init_logger(__name__)
 
@@ -62,12 +62,14 @@ class BasePPOTrainer(ABC):
 
         self.freezing_actor_steps = getattr(self.args, "freezing_actor_steps", -1)
 
+        # Init dummy variables
         self.prompts_dataloader = None
         self.eval_dataloader = None
         self.max_steps = None
 
         self.samples_generator = None
         self.experience_maker = None
+        self.remote_reward_model = None
 
         if self.args.agent_func_path:
             from openrlhf.trainer.ppo_utils.experience_maker_async import SamplesGeneratorAsync as SamplesGenerator
@@ -241,54 +243,20 @@ class BasePPOTrainer(ABC):
             generate_kwargs = self.generate_kwargs.copy()
             generate_kwargs["temperature"] = temperature
             generate_kwargs["n_samples_per_prompt"] = n_samples_per_prompt
-            samples_list = self.samples_generator.generate_samples(all_prompts, all_labels, **generate_kwargs)
-            queries_list = sum(
-                [self.tokenizer.batch_decode(s.sequences, skip_special_tokens=False) for s in samples_list], []
+            samples_list = self.samples_generator.generate_samples(
+                all_prompts, all_labels, remote_reward_model=self.remote_reward_model, **generate_kwargs
             )
 
             # duplicate prompts and labels for each sample
             all_prompts = sum([s.prompts for s in samples_list], [])
             all_labels = sum([s.labels for s in samples_list], [])
 
-            # Get rewards from samples, such as agent rewards
-            rewards_list = [s.rewards for s in samples_list]
-            if rewards_list[0]:
-                rewards_list = [torch.tensor(s.rewards) for s in samples_list]
-                r_refs = ray.put(rewards_list)
-            elif self.experience_maker.custom_reward_func:
-                # Let Ray automatically distribute the workload across available resources
-                batch_size = self.strategy.args.micro_rollout_batch_size
-                num_chunks = (len(queries_list) + batch_size - 1) // batch_size
-                r_refs = []
-                for i in range(num_chunks):
-                    start_idx = i * batch_size
-                    end_idx = min((i + 1) * batch_size, len(queries_list))
-                    r = self.experience_maker.custom_reward_func.remote(
-                        queries_list[start_idx:end_idx],
-                        all_prompts[start_idx:end_idx],
-                        all_labels[start_idx:end_idx],
-                    )
-                    r_refs.append(r)
-            else:
-                # Distribute data across different remote reward function servers
-                num_servers = len(self.remote_rm_url)
-                batch_size = (len(queries_list) + num_servers - 1) // num_servers
-                r_refs = []
-                for i in range(num_servers):
-                    start_idx = i * batch_size
-                    end_idx = min((i + 1) * batch_size, len(queries_list))
-                    rm = self.remote_rm_url[i]
-                    r = remote_rm_fn_ray.remote(
-                        rm,
-                        queries=queries_list[start_idx:end_idx],
-                        prompts=all_prompts[start_idx:end_idx],
-                        labels=all_labels[start_idx:end_idx],
-                    )
-                    r_refs.append(r)
-
+            # Get rewards from samples, such as agent rewards or remote reward models
+            rewards_list = []
+            for samples in samples_list:
+                rewards_list.append(samples.rewards)
             # Reshape rewards to (num_prompts, n_samples_per_prompt)
-            rewards = ray.get(r_refs)
-            rewards = torch.cat(rewards, dim=0).reshape(-1, n_samples_per_prompt)
+            rewards = torch.cat(rewards_list, dim=0).reshape(-1, n_samples_per_prompt)
 
             # Collect local statistics for each data source
             global_metrics = {}  # {datasource: {"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}}
@@ -355,7 +323,7 @@ class BasePPOTrainer(ABC):
         prompts_dataset = PromptDataset(train_data, self.tokenizer, strategy, input_template=args.input_template)
         prompts_dataloader = strategy.setup_dataloader(
             prompts_dataset,
-            args.rollout_batch_size,
+            args.vllm_generate_batch_size,
             True,
             True,
         )
@@ -430,6 +398,11 @@ class PPOTrainer(BasePPOTrainer):
         else:
             self.kl_ctl = FixedKLController(self.init_kl_coef)
 
+        if self.args.remote_rm_url and not self.args.remote_rm_url[0] == "agent":
+            from openrlhf.utils.remote_rm_utils import RemoteRewardModel
+
+            self.remote_reward_model = RemoteRewardModel(self.args, self.remote_rm_url)
+
         self.samples_generator = self.generator_cls(
             self.vllm_engines,
             self.strategy,
@@ -444,16 +417,16 @@ class PPOTrainer(BasePPOTrainer):
             self.reference_model_group,
             self.kl_ctl,
             self.strategy,
-            self.remote_rm_url,
+            self.tokenizer,
+            remote_reward_model=self.remote_reward_model,
         )
 
         self.prepare_datasets()
         self._init_wandb()
 
         # get eval and save steps
-        self.num_rollouts_per_episodes = len(self.prompts_dataloader)
         if self.args.eval_steps == -1:
-            self.args.eval_steps = self.num_rollouts_per_episodes  # Evaluate once per epoch
+            self.args.eval_steps = float("inf")  # do not evaluate
         if self.args.save_steps == -1:
             self.args.save_steps = float("inf")  # do not save ckpt
 
@@ -466,26 +439,61 @@ class PPOTrainer(BasePPOTrainer):
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path) and not self.vllm_engines is None:
             self._broadcast_to_vllm()
+            checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
+                0
+            ]
+        else:
+            checkpoint_states = {"global_step": 1, "episode": 0, "data_loader_state_dict": {}}
 
         # Restore step and start_epoch
-        consumed_samples = ray.get(self.actor_model_group.async_run_method(method_name="get_consumed_samples"))[0]
-        steps = consumed_samples // args.rollout_batch_size + 1
-        start_episode = consumed_samples // args.rollout_batch_size // self.num_rollouts_per_episodes
-        consumed_samples = consumed_samples % (self.num_rollouts_per_episodes * args.rollout_batch_size)
+        steps = checkpoint_states["global_step"]
+        episode = checkpoint_states["episode"]
+        data_loader_state_dict = checkpoint_states["data_loader_state_dict"]
+        if data_loader_state_dict:
+            self.prompts_dataloader.load_state_dict(data_loader_state_dict)
 
-        for episode in range(start_episode, args.num_episodes):
-            self.prompts_dataloader.sampler.set_epoch(
-                episode, consumed_samples=0 if episode > start_episode else consumed_samples
-            )
+        for episode in range(episode, args.num_episodes):
             pbar = tqdm(
                 range(self.prompts_dataloader.__len__()),
                 desc=f"Episode [{episode + 1}/{args.num_episodes}]",
                 disable=False,
             )
 
+            filtered_samples = []
+            number_of_samples = 0
             for _, rand_prompts, labels in self.prompts_dataloader:
-                rollout_samples = self.samples_generator.generate_samples(rand_prompts, labels, **self.generate_kwargs)
-                experiences = self.experience_maker.make_experience_list(rollout_samples)
+                remote_reward_model = self.remote_reward_model if self.args.dynamic_filtering else None
+                rollout_samples = self.samples_generator.generate_samples(
+                    rand_prompts, labels, remote_reward_model=remote_reward_model, **self.generate_kwargs
+                )
+                pbar.update()
+
+                # dynamic filtering
+                if self.args.dynamic_filtering:
+                    number_of_samples += len(rollout_samples)
+                    for samples in rollout_samples:
+                        # Get rewards for each sample in the batch
+                        reward = torch.mean(torch.tensor(samples.rewards)).item()
+                        # Create a mask to identify samples with rewards within the specified range
+                        in_range = (reward > self.args.dynamic_filtering_reward_range[0] + 1e-6) & (
+                            reward < self.args.dynamic_filtering_reward_range[1] - 1e-6
+                        )
+                        if in_range:
+                            filtered_samples.append(samples)
+
+                    # continue sampling if the number of samples is less than rollout_batch_size
+                    if len(rollout_samples) < self.args.rollout_batch_size:
+                        continue
+                    rollout_samples = filtered_samples[: self.args.rollout_batch_size]
+
+                    pass_rate = len(filtered_samples) / number_of_samples * 100
+                    logger.info(
+                        f"Dynamic filtering pass rate: {pass_rate:.2f}% ({len(filtered_samples)}/{number_of_samples})"
+                    )
+                    filtered_samples = []
+                    number_of_samples = 0
+
+                experiences = self.experience_maker.make_experience_batch(rollout_samples)
                 sample0 = self.tokenizer.batch_decode(
                     experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True
                 )
@@ -505,11 +513,17 @@ class PPOTrainer(BasePPOTrainer):
 
                 # Add generated samples to status dictionary
                 status["generated_samples"] = [sample0[0], experiences[0].info["reward"][0]]
+                if self.args.dynamic_filtering:
+                    status["dynamic_filtering_pass_rate"] = pass_rate
+
                 # logs/checkpoints
-                client_states = {"consumed_samples": steps * args.rollout_batch_size}
+                client_states = {
+                    "global_step": steps,
+                    "episode": episode,
+                    "data_loader_state_dict": self.prompts_dataloader.state_dict(),
+                }
                 self.save_logs_and_checkpoints(args, steps, pbar, status, client_states)
 
-                pbar.update()
                 steps = steps + 1
 
         if self._wandb is not None:

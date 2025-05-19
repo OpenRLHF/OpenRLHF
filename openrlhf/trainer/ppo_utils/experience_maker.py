@@ -7,12 +7,11 @@ from typing import List, Optional, Tuple, Union
 
 import ray
 import torch
+import torch.nn.functional as F
 
-from openrlhf.datasets.utils import zero_pad_sequences
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
 from openrlhf.utils.logging_utils import init_logger
-from openrlhf.utils.remote_rm_utils import remote_rm_fn_ray
 
 logger = init_logger(__name__)
 
@@ -27,6 +26,17 @@ def pin_memory(tensor: Union[torch.Tensor, list[torch.Tensor]]):
     if isinstance(tensor, list):
         return [pin_memory(t) for t in tensor]
     return tensor.pin_memory() if isinstance(tensor, torch.Tensor) else tensor
+
+
+def zero_pad_sequences(sequences, side: str = "left", value=0):
+    assert side in ("left", "right")
+    max_len = max(seq.size(-1) for seq in sequences)
+    padded_sequences = []
+    for seq in sequences:
+        pad_len = max_len - seq.size(-1)
+        padding = (pad_len, 0) if side == "left" else (0, pad_len)
+        padded_sequences.append(F.pad(seq, padding, value=value))
+    return torch.cat(padded_sequences, dim=0)
 
 
 @dataclass
@@ -141,11 +151,51 @@ class Samples:
         self.rewards = rewards or []
         self.packed_seq_lens = packed_seq_lens
 
+    @staticmethod
+    def concat_samples(samples_list: List["Samples"], pad_token_id) -> "Samples":
+        """Concatenate multiple samples into one large sample.
+
+        Args:
+            samples_list: List of Samples to concatenate
+
+        Returns:
+            A new Samples instance containing all the concatenated data
+        """
+        if not samples_list:
+            return Samples()
+
+        # Concatenate tensor attributes with padding
+        sequences = zero_pad_sequences([s.sequences for s in samples_list], side="right", value=pad_token_id)
+        attention_mask = zero_pad_sequences([s.attention_mask for s in samples_list], side="right", value=0)
+        action_mask = zero_pad_sequences([s.action_mask for s in samples_list], side="right", value=0)
+
+        # Calculate response_length and total_length from masks
+        response_length = action_mask.float().sum(dim=-1)
+        total_length = attention_mask.float().sum(dim=-1)
+
+        # Concatenate list attributes
+        prompts = sum([s.prompts for s in samples_list], [])
+        labels = sum([s.labels for s in samples_list], [])
+        rewards = sum([s.rewards for s in samples_list], [])
+
+        return Samples(
+            sequences=sequences,
+            attention_mask=attention_mask,
+            action_mask=action_mask,
+            response_length=response_length,
+            total_length=total_length,
+            prompts=prompts,
+            labels=labels,
+            rewards=rewards,
+            packed_seq_lens=None,
+        )
+
 
 class SamplesGenerator:
     def __init__(self, vllm_engines, strategy, tokenizer, prompt_max_len):
-        self.vllm_engines = vllm_engines
         self.strategy = strategy
+        self.args = strategy.args
+        self.vllm_engines = vllm_engines
         self.tokenizer = tokenizer
         self.prompt_max_len = prompt_max_len
 
@@ -230,12 +280,12 @@ class SamplesGenerator:
 
         pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
 
-        # Group outputs by micro_rollout_batch_size
+        # Group outputs by n_samples_per_prompt
         samples_list = []
-        for i in range(0, len(all_outputs), args.micro_rollout_batch_size):
-            batch_outputs = all_outputs[i : i + args.micro_rollout_batch_size]
-            batch_prompts = all_prompts[i : i + args.micro_rollout_batch_size]
-            batch_labels = all_labels[i : i + args.micro_rollout_batch_size]
+        for i in range(0, len(all_outputs), n_samples_per_prompt):
+            batch_outputs = all_outputs[i : i + n_samples_per_prompt]
+            batch_prompts = all_prompts[i : i + n_samples_per_prompt]
+            batch_labels = all_labels[i : i + n_samples_per_prompt]
 
             # Calculate max length for this batch
             batch_max_input_len = max(
@@ -279,6 +329,22 @@ class SamplesGenerator:
             )
             samples_list.append(rollout_samples)
 
+        # Get rewards from remote reward models
+        # This is required by dynamic sampling
+        remote_reward_model = kwargs.get("remote_reward_model", None)
+        if remote_reward_model:
+            all_queries = sum(
+                [self.tokenizer.batch_decode(s.sequences, skip_special_tokens=False) for s in samples_list], []
+            )
+            all_prompts = sum([s.prompts for s in samples_list], [])
+            all_labels = sum([s.labels for s in samples_list], [])
+
+            rewards_list = ray.get(remote_reward_model.get_rewards.remote(all_queries, all_prompts, all_labels))
+            rewards_list = torch.cat(rewards_list, dim=0).chunk(len(samples_list))
+
+            for i, samples in enumerate(samples_list):
+                samples.rewards = rewards_list[i]
+
         return samples_list
 
 
@@ -291,7 +357,8 @@ class RemoteExperienceMaker(ABC):
         initial_model_group: PPORayActorGroup,
         kl_controller,
         strategy=None,
-        remote_rm_url: Union[list[str], str] = None,
+        tokenizer=None,
+        remote_reward_model=None,
         **kwargs,
     ):
         super().__init__()
@@ -305,20 +372,13 @@ class RemoteExperienceMaker(ABC):
         self.advantage_estimator = strategy.args.advantage_estimator
         self.args = strategy.args
 
-        # custom reward func for reinforced finetuning
-        self.custom_reward_func = None
-        self.remote_rm_url = [remote_rm_url] if isinstance(remote_rm_url, str) else remote_rm_url
-        if remote_rm_url and remote_rm_url[0].endswith(".py"):
-            print(f"Loading custom `reward_func(queries, prompts, labels)` from {remote_rm_url[0]}")
-            import importlib.util
-
-            spec = importlib.util.spec_from_file_location("reward_func", remote_rm_url[0])
-            reward_module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(reward_module)
-            self.custom_reward_func = ray.remote(reward_module.reward_func)
+        # remote_rm_url indicates that the remote reward model is agent enviroment, remote http server or custom reward func
+        self.remote_rm_url = self.args.remote_rm_url
+        self.remote_reward_model = remote_reward_model
+        self.tokenizer = tokenizer
 
     @torch.no_grad()
-    def make_experience_list(self, rollout_samples) -> List[Experience]:
+    def make_experience_batch(self, rollout_samples) -> List[Experience]:
         """
         Make a list of experience with the micro_rollout_batch_size.
 
@@ -326,8 +386,17 @@ class RemoteExperienceMaker(ABC):
         Then, if we need certain processing for the rewards or do certain filtering, we can process the rollout as a whole.
         After that, we will calculate the advantages and returns for each experience.
         """
+        # Concat the samples into micro_rollout_batch_size
+        # Each batch of samples will be scheduled to a effective Ray Actor (i.e, a DP rank)
+        # TODO: balance the number of tokens of each batch for better performance
+        samples_list = []
+        batch_size = self.args.micro_rollout_batch_size // self.args.n_samples_per_prompt
+        for i in range(0, len(rollout_samples), batch_size):
+            concat_samples = Samples.concat_samples(rollout_samples[i : i + batch_size], self.tokenizer.pad_token_id)
+            samples_list.append(concat_samples)
+
         # Make experiences (models forward: logprobs, values, rewards, and kl divergence)
-        experiences = self.make_experience(rollout_samples)
+        experiences = self.make_experience(samples_list)
 
         # Process experiences (reward shaping, etc.)
         experiences = self.compute_advantages_and_returns(experiences)
@@ -339,7 +408,7 @@ class RemoteExperienceMaker(ABC):
         Turn samples into experience by calculating logprobs, values, rewards, and kl divergence.
         """
         start_time = time.time()
-        logger.info(f"🚀 Starting experience making with {len(samples_list[0].sequences) * len(samples_list)} batches")
+        logger.info(f"🚀 Starting experience making with {len(samples_list[0].sequences) * len(samples_list)} samples")
 
         args = self.strategy.args
         device = "cpu"
@@ -350,59 +419,27 @@ class RemoteExperienceMaker(ABC):
         sequences_list = [s.sequences for s in samples_list]
         attention_mask_list = [s.attention_mask for s in samples_list]
         action_mask_list = [s.action_mask for s in samples_list]
-        prompts_list = [p for s in samples_list for p in s.prompts]
-        labels_list = [l for s in samples_list for l in s.labels]
 
-        # Get rewards from samples, such as agent rewards
-        rewards_list = [s.rewards for s in samples_list]
-        if rewards_list[0]:
+        # Get rewards from samples, such as rewards from agent's environment
+        if samples_list[0].rewards:
+            rewards_list = [s.rewards for s in samples_list]
             rewards_list = [torch.tensor(s.rewards) for s in samples_list]
             r_refs = ray.put(rewards_list)
+        elif self.remote_rm_url:
+            queries_list = sum(
+                [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in sequences_list], []
+            )
+            prompts_list = sum([s.prompts for s in samples_list], [])
+            labels_list = sum([s.labels for s in samples_list], [])
+            r_refs = self.remote_reward_model.get_rewards.remote(queries_list, prompts_list, labels_list)
         else:
             # Batch call reward model
-            r_refs = None
-            if not self.remote_rm_url:
-                r_refs = self.reward_model_group.async_run_method_batch(
-                    method_name="forward",
-                    sequences=sequences_list,
-                    attention_mask=attention_mask_list,
-                    pad_sequence=[True] * len(samples_list),
-                )
-            else:
-                queries_list = sum(
-                    [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in sequences_list], []
-                )
-
-                if self.custom_reward_func:
-                    # Let Ray automatically distribute the workload across available resources
-                    batch_size = self.strategy.args.micro_rollout_batch_size
-                    num_chunks = (len(queries_list) + batch_size - 1) // batch_size
-                    r_refs = []
-                    for i in range(num_chunks):
-                        start_idx = i * batch_size
-                        end_idx = min((i + 1) * batch_size, len(queries_list))
-                        r = self.custom_reward_func.remote(
-                            queries_list[start_idx:end_idx],
-                            prompts_list[start_idx:end_idx],
-                            labels_list[start_idx:end_idx],
-                        )
-                        r_refs.append(r)
-                else:
-                    # Distribute data across different remote reward function servers
-                    num_servers = len(self.remote_rm_url)
-                    batch_size = (len(queries_list) + num_servers - 1) // num_servers
-                    r_refs = []
-                    for i in range(num_servers):
-                        start_idx = i * batch_size
-                        end_idx = min((i + 1) * batch_size, len(queries_list))
-                        rm = self.remote_rm_url[i]
-                        r = remote_rm_fn_ray.remote(
-                            rm,
-                            queries=queries_list[start_idx:end_idx],
-                            prompts=prompts_list[start_idx:end_idx],
-                            labels=labels_list[start_idx:end_idx],
-                        )
-                        r_refs.append(r)
+            r_refs = self.reward_model_group.async_run_method_batch(
+                method_name="forward",
+                sequences=sequences_list,
+                attention_mask=attention_mask_list,
+                pad_sequence=[True] * len(samples_list),
+            )
 
         # Sync to avoid GPU OOM when colocate models
         if args.colocate_all_models and not self.remote_rm_url:
@@ -606,11 +643,11 @@ class RemoteExperienceMaker(ABC):
             all_advantages = []
             all_action_masks = []
             for exp in experiences:
-                all_advantages.append(exp.advantages)
-                all_action_masks.append(exp.action_mask)
+                all_advantages.append(exp.advantages.flatten())
+                all_action_masks.append(exp.action_mask.flatten())
 
-            advantages_vector = zero_pad_sequences(all_advantages).float().flatten()
-            action_masks_vector = zero_pad_sequences(all_action_masks).flatten()
+            advantages_vector = torch.cat(all_advantages, dim=0).float()
+            action_masks_vector = torch.cat(all_action_masks, dim=0)
             num_actions = action_masks_vector.sum()
 
             # mean

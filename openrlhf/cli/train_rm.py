@@ -6,9 +6,10 @@ from datetime import datetime
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import RewardDataset
+from openrlhf.datasets.utils import blending_datasets
 from openrlhf.models import get_llm_for_sequence_regression
 from openrlhf.trainer.rm_trainer import RewardModelTrainer
-from openrlhf.utils import blending_datasets, get_strategy, get_tokenizer
+from openrlhf.utils import get_strategy, get_tokenizer
 
 
 def train(args):
