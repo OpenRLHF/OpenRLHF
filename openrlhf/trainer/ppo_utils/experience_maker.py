@@ -7,7 +7,6 @@ from typing import List, Optional, Tuple, Union
 
 import ray
 import torch
-import torch.nn.functional as F
 
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
