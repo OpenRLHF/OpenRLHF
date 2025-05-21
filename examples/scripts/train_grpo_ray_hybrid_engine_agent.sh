@@ -15,7 +15,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --kl_estimator k3 \
    --advantage_estimator group_norm \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-   --agent_func_path /openrlhf/examples/python/agent.py \
+   --agent_func_path /openrlhf/examples/python/agent_func.py \
    --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
    --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
    --save_hf_ckpt \
