@@ -92,7 +92,7 @@ def make_experience_batch(items: List[BufferItem], packing_samples=False) -> Exp
     )
     for key in keys:
         vals = [getattr(item, key) for item in items]
-        vals = zero_pad_sequences(vals, "right") if vals[0] is not None else None
+        vals = zero_pad_sequences(vals, "right", stack=True) if vals[0] is not None else None
         kwargs[key] = vals
 
     kwargs["info"] = {}

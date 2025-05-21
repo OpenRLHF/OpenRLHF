@@ -44,7 +44,9 @@ def convert_token_to_id(token, tokenizer):
         raise ValueError("token should be int or str")
 
 
-def zero_pad_sequences(sequences: List[torch.Tensor], side: str = "left", value: int = 0) -> torch.Tensor:
+def zero_pad_sequences(
+    sequences: List[torch.Tensor], side: str = "left", value: int = 0, stack: bool = False
+) -> torch.Tensor:
     assert side in ("left", "right")
     max_len = max(seq.size(-1) for seq in sequences)
     padded_sequences = []
@@ -52,4 +54,7 @@ def zero_pad_sequences(sequences: List[torch.Tensor], side: str = "left", value:
         pad_len = max_len - seq.size(-1)
         padding = (pad_len, 0) if side == "left" else (0, pad_len)
         padded_sequences.append(F.pad(seq, padding, value=value))
-    return torch.cat(padded_sequences, dim=0)
+    if stack:
+        return torch.stack(padded_sequences, dim=0)
+    else:
+        return torch.cat(padded_sequences, dim=0)
