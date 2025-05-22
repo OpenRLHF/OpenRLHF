@@ -246,6 +246,7 @@ class SamplesGenerator:
             skip_special_tokens=kwargs.get("skip_special_tokens", False),
             include_stop_str_in_output=True,
         )
+        truncate_length = self.prompt_max_len + kwargs.get("max_new_tokens", 1024)
 
         # Expand prompt list based on the number of samples per prompt
         n_samples_per_prompt = kwargs.pop("n_samples_per_prompt", args.n_samples_per_prompt)
@@ -278,6 +279,8 @@ class SamplesGenerator:
 
             # Concatenate prompt and output tokens
             input_ids = list(output.prompt_token_ids) + list(output.outputs[0].token_ids)
+            if input_ids[-1] != eos_token_id:
+                input_ids.append(eos_token_id)
             # Create attention mask
             attention_mask = [1] * len(input_ids)
 
@@ -291,9 +294,9 @@ class SamplesGenerator:
                 0, len(output.prompt_token_ids) : len(output.prompt_token_ids) + len(output.outputs[0].token_ids)
             ] = 1
 
-            sequences = sequences.to("cpu")
-            attention_mask = attention_mask.to("cpu")
-            action_mask = action_mask[:, 1:].to("cpu")
+            sequences = sequences[:, :truncate_length].to("cpu")
+            attention_mask = attention_mask[:, :truncate_length].to("cpu")
+            action_mask = action_mask[:, 1:truncate_length].to("cpu")
             response_length = action_mask.float().sum(dim=-1)
             total_length = attention_mask.float().sum(dim=-1)
 

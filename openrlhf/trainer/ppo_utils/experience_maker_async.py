@@ -76,6 +76,8 @@ class SamplesGeneratorAsync(SamplesGenerator):
                 0
             ]
             tokenized_state = state_tokens.tolist()
+            if state_tokens[-1] != eos_token_id:
+                tokenized_state.append(eos_token_id)
 
             # Convert action ranges to token indices
             tokenized_ranges = []
@@ -90,6 +92,8 @@ class SamplesGeneratorAsync(SamplesGenerator):
                 ][0]
                 # Calculate token indices
                 tokenized_ranges.append((len(start_tokens), len(full_tokens)))
+            if state_tokens[-1] != eos_token_id:
+                tokenized_ranges[-1] = (tokenized_ranges[-1][0], tokenized_ranges[-1][1] + 1)
 
             # Create tensors
             sequences = torch.tensor([tokenized_state])
