@@ -353,3 +353,235 @@ class PRMLoss(nn.Module):
             labels = labels.argmax(dim=-1)
         acc = (logits.argmax(dim=-1) == labels).float().mean()
         return loss, acc
+
+
+class DisCOHelper:
+    @staticmethod
+    def calculate_scores(
+        log_probs: torch.Tensor, old_log_probs: torch.Tensor, scoring_func: str, action_mask: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """
+        Calculates scores s_theta(o, q) based on the chosen scoring function.
+        log_probs: Log probabilities from the current policy.
+        old_log_probs: Log probabilities from the old policy (for l_ratio).
+        scoring_func: 'log_l' for log-likelihood, 'l_ratio' for likelihood ratio.
+        action_mask: Mask for valid actions.
+        """
+        if scoring_func == "log_l":
+            # s_theta(o,q) = log_pi_theta(o|q)
+            # Sum log_probs over the sequence length, considering the action_mask
+            if action_mask is not None:
+                return (log_probs * action_mask).sum(dim=-1) / action_mask.sum(dim=-1)
+            else:
+                return log_probs.sum(dim=-1)
+        elif scoring_func == "l_ratio":
+            # s_theta(o,q) = pi_theta(o|q) / pi_old(o|q)
+            # Ratio of probabilities (exp of log_probs difference)
+            # Sum over the sequence length is not appropriate here as per original DisCO paper,
+            # it's a ratio of full sequence probabilities.
+            # However, in practice, using sum of log_probs (average) is more stable.
+            # For this implementation, we'll use the sum of log_probs for stability,
+            # effectively (log_probs - old_log_probs).exp().mean(dim=-1) if we were to average ratios
+            # or (log_probs.sum - old_log_probs.sum).exp() for product of ratios.
+            # The paper implies product of ratios, so exp(sum(log_probs) - sum(old_log_probs)).
+            # Let's stick to the definition s_theta(o,q) = log pi_theta(o|q) for log_l
+            # and s_theta(o,q) = log (pi_theta(o|q) / pi_old(o|q)) for l_ratio for numerical stability
+            # This means for l_ratio, score = sum(log_probs) - sum(old_log_probs)
+            current_seq_log_probs = (log_probs * action_mask).sum(dim=-1) if action_mask is not None else log_probs.sum(dim=-1)
+            old_seq_log_probs = (old_log_probs * action_mask).sum(dim=-1) if action_mask is not None else old_log_probs.sum(dim=-1)
+            return current_seq_log_probs - old_seq_log_probs # log (pi_theta / pi_old)
+        else:
+            raise ValueError(f"Unknown scoring_func: {scoring_func}")
+
+    @staticmethod
+    def calculate_kl_penalty(
+        log_probs: torch.Tensor, old_log_probs: torch.Tensor, beta: float, delta: float, action_mask: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Calculates the KL divergence D_KL(pi_old || pi_theta) and the penalty term.
+        KL divergence is E_pi_old[log(pi_old / pi_theta)].
+        Penalty is beta * [KL - delta]_+^2.
+
+        log_probs: Log probabilities from the current policy pi_theta.
+        old_log_probs: Log probabilities from the old policy pi_old.
+        beta: Penalty coefficient.
+        delta: KL divergence threshold.
+        action_mask: Mask for valid actions.
+        """
+        # KL divergence: E_pi_old[log(pi_old / pi_theta)] = E_pi_old[old_log_probs - log_probs]
+        # We approximate the expectation with the sample mean.
+        # Note: The order is important for the gradient calculation.
+        # log_ratio = old_log_probs - log_probs
+        # kl_div_samples = log_ratio
+        # kl_div = masked_mean(kl_div_samples, action_mask, dim=None) # element-wise mean
+
+        # Per-sequence KL: sum_t (old_log_probs_t - log_probs_t)
+        # Average KL over batch
+        kl_div_per_sequence = (old_log_probs - log_probs) # D_KL(pi_old || pi_theta) for each token
+        if action_mask is not None:
+            kl_div = masked_mean(kl_div_per_sequence, action_mask, dim=None)
+            # Sum over seq dim, then mean over batch dim if action_mask is per token
+            # kl_div_sequences = (kl_div_per_sequence * action_mask).sum(dim=-1) / action_mask.sum(dim=-1).clamp(min=1)
+            # kl_div = kl_div_sequences.mean()
+
+        else:
+            # kl_div_sequences = kl_div_per_sequence.sum(dim=-1)
+            # kl_div = kl_div_sequences.mean()
+            kl_div = kl_div_per_sequence.mean()
+
+
+        # Penalty term: beta * [KL - delta]_+^2
+        # The gradient of the penalty term is 2 * beta * [KL - delta]_+ * nabla(KL)
+        # Since KL = mean(old_log_probs - log_probs), nabla(KL) w.r.t log_probs is -1/N
+        # The loss is J - penalty, so we subtract the penalty.
+        # For gradient ascent, we want grad(J) - grad(penalty).
+        # grad(penalty) = 2 * beta * max(0, kl_div - delta) * (-1/N) with respect to log_probs(theta)
+        # So, -grad(penalty) = 2 * beta * max(0, kl_div - delta) * (1/N)
+        # This will be handled by autograd. We just need to compute the penalty value.
+        penalty_factor = torch.relu(kl_div - delta)
+        penalty = beta * (penalty_factor**2)
+        return penalty, kl_div.detach() # Detach KL for stats, penalty has grads
+
+
+class DisCOBasicLoss(nn.Module):
+    """
+    DisCO-b Loss: J1 objective - KL penalty
+    J1 = E_{q ~ D, o ~ pi_old(·|q), r(o,q)=1} [s_theta(o,q)] - E_{q ~ D, o' ~ pi_old(·|q), r(o',q)=0} [s_theta(o',q)]
+    Assuming l(s) = s for the difference.
+    """
+
+    def __init__(self, beta: float, delta: float, disco_scoring_func: str = "log_l"):
+        super().__init__()
+        self.beta = beta
+        self.delta = delta
+        self.disco_scoring_func = disco_scoring_func
+
+    def forward(
+        self,
+        log_probs: torch.Tensor, # log_probs from current policy pi_theta(o|q)
+        old_log_probs: torch.Tensor, # log_probs from old policy pi_old(o|q)
+        rewards: torch.Tensor, # Binary rewards (1 for positive, 0 for negative)
+        action_mask: Optional[torch.Tensor] = None, # Mask for valid actions in sequences
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        log_probs: (batch_size, seq_len)
+        old_log_probs: (batch_size, seq_len)
+        rewards: (batch_size,) indicating positive (1) or negative (0) samples
+        action_mask: (batch_size, seq_len)
+        """
+        scores = DisCOHelper.calculate_scores(log_probs, old_log_probs, self.disco_scoring_func, action_mask)
+        # scores shape: (batch_size,)
+
+        positive_mask = (rewards == 1)
+        negative_mask = (rewards == 0)
+
+        # Ensure there are positive and negative samples to avoid division by zero or NaN
+        if not positive_mask.any() or not negative_mask.any():
+            # If one set is empty, J1 objective is ill-defined or zero.
+            # Return zero objective and only KL penalty.
+            # Or, if only one type exists, the objective might be considered as just that part.
+            # For simplicity, if we don't have both, let objective be 0.
+            # This case should ideally be handled by the sampler ensuring diverse batches.
+            j1_objective = torch.tensor(0.0, device=scores.device, dtype=scores.dtype)
+            # Still calculate penalty if possible
+            penalty, kl_div = DisCOHelper.calculate_kl_penalty(
+                log_probs, old_log_probs, self.beta, self.delta, action_mask
+            )
+            # Loss = Objective - Penalty. For maximization, we negate this: Penalty - Objective
+            loss = penalty - j1_objective # Negative sign because we want to maximize J1
+            return loss, kl_div, j1_objective.detach(), penalty.detach()
+
+
+        s_positive = scores[positive_mask]
+        s_negative = scores[negative_mask]
+
+        # J1 = E[s_theta(o,q) | r=1] - E[s_theta(o',q) | r=0]
+        # Approximated by mean of scores for positive and negative samples
+        mean_s_positive = s_positive.mean() if s_positive.numel() > 0 else torch.tensor(0.0, device=scores.device)
+        mean_s_negative = s_negative.mean() if s_negative.numel() > 0 else torch.tensor(0.0, device=scores.device)
+
+        j1_objective = mean_s_positive - mean_s_negative
+
+        # KL divergence penalty
+        penalty, kl_div = DisCOHelper.calculate_kl_penalty(
+            log_probs, old_log_probs, self.beta, self.delta, action_mask
+        )
+
+        # The paper aims to MAXIMIZE J - penalty.
+        # Standard PyTorch optimizers MINIMIZE loss. So, loss = -(J - penalty) = penalty - J.
+        loss = penalty - j1_objective
+
+        return loss, kl_div.detach(), j1_objective.detach(), penalty.detach()
+
+
+class DisCOLoss(nn.Module):
+    """
+    DisCO Loss (DRO): J2 objective - KL penalty
+    J2 = E_{q ~ D, o ~ pi_old(·|q), r(o,q)=1} [s_theta(o,q)] - tau * log E_{q ~ D, o' ~ pi_old(·|q), r(o',q)=0} [exp(s_theta(o',q)/tau)]
+    """
+
+    def __init__(self, beta: float, delta: float, tau: float, disco_scoring_func: str = "log_l"):
+        super().__init__()
+        self.beta = beta
+        self.delta = delta
+        self.tau = tau
+        self.disco_scoring_func = disco_scoring_func
+        if self.tau <= 0:
+            raise ValueError("tau must be positive for DisCOLoss.")
+
+    def forward(
+        self,
+        log_probs: torch.Tensor, # log_probs from current policy pi_theta(o|q)
+        old_log_probs: torch.Tensor, # log_probs from old policy pi_old(o|q)
+        rewards: torch.Tensor, # Binary rewards (1 for positive, 0 for negative)
+        action_mask: Optional[torch.Tensor] = None, # Mask for valid actions in sequences
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        log_probs: (batch_size, seq_len)
+        old_log_probs: (batch_size, seq_len)
+        rewards: (batch_size,) indicating positive (1) or negative (0) samples
+        action_mask: (batch_size, seq_len)
+        """
+        scores = DisCOHelper.calculate_scores(log_probs, old_log_probs, self.disco_scoring_func, action_mask)
+        # scores shape: (batch_size,)
+
+        positive_mask = (rewards == 1)
+        negative_mask = (rewards == 0)
+
+        # Ensure there are positive and negative samples
+        if not positive_mask.any() or not negative_mask.any():
+            # If one set is empty, J2 objective is ill-defined or zero.
+            j2_objective = torch.tensor(0.0, device=scores.device, dtype=scores.dtype)
+            penalty, kl_div = DisCOHelper.calculate_kl_penalty(
+                log_probs, old_log_probs, self.beta, self.delta, action_mask
+            )
+            loss = penalty - j2_objective
+            return loss, kl_div, j2_objective.detach(), penalty.detach()
+
+        s_positive = scores[positive_mask]
+        s_negative = scores[negative_mask]
+
+        # Mean of scores for positive samples
+        mean_s_positive = s_positive.mean() if s_positive.numel() > 0 else torch.tensor(0.0, device=scores.device)
+
+        # For negative samples: tau * log E [exp(s_theta(o',q)/tau)]
+        # Approximated by tau * logmeanexp(s_negative / tau)
+        # logmeanexp(x) = log( (1/N) * sum(exp(x_i)) ) = logsumexp(x) - log(N)
+        if s_negative.numel() > 0:
+            # logsumexp provides numerical stability
+            dro_term_negative = self.tau * (torch.logsumexp(s_negative / self.tau, dim=0) - torch.log(torch.tensor(s_negative.numel(), device=scores.device, dtype=self.tau.dtype if isinstance(self.tau, torch.Tensor) else torch.float)))
+        else:
+            dro_term_negative = torch.tensor(0.0, device=scores.device, dtype=scores.dtype)
+
+
+        j2_objective = mean_s_positive - dro_term_negative
+
+        # KL divergence penalty
+        penalty, kl_div = DisCOHelper.calculate_kl_penalty(
+            log_probs, old_log_probs, self.beta, self.delta, action_mask
+        )
+
+        # Maximize J2 - penalty => Minimize penalty - J2
+        loss = penalty - j2_objective
+
+        return loss, kl_div.detach(), j2_objective.detach(), penalty.detach()

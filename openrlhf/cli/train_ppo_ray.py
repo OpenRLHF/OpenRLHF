@@ -356,6 +356,46 @@ if __name__ == "__main__":
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
     parser.add_argument("--reward_clip_range", type=float, nargs=2, default=(-10, 10), help="Reward clip range")
 
+    # DisCO arguments
+    parser.add_argument(
+        "--disco_type",
+        type=str,
+        default="disco_b",
+        choices=["disco_b", "disco"],
+        help="DisCO type: disco_b (basic) or disco (DRO)",
+    )
+    parser.add_argument(
+        "--disco_beta",
+        type=float,
+        default=0.1,
+        help="Penalty parameter beta for the KL divergence constraint in DisCO",
+    )
+    parser.add_argument(
+        "--disco_delta",
+        type=float,
+        default=0.1,
+        help="Trust region radius delta for the KL divergence constraint in DisCO",
+    )
+    parser.add_argument(
+        "--disco_tau",
+        type=float,
+        default=0.1,
+        help="Hyperparameter tau for the DisCO (DRO) objective",
+    )
+    parser.add_argument(
+        "--disco_scoring_func",
+        type=str,
+        default="log_l",
+        choices=["log_l", "l_ratio"],
+        help="DisCO scoring function: log_l (log-likelihood) or l_ratio (likelihood ratio)",
+    )
+    parser.add_argument(
+        "--disco_reward_threshold",
+        type=float,
+        default=None,
+        help="Threshold to convert continuous reward model output to binary {0,1} for partitioning positive/negative samples. If None, uses the median of rewards.",
+    )
+
     # Reinforce/GRPO, etc
     parser.add_argument(
         "--advantage_estimator",

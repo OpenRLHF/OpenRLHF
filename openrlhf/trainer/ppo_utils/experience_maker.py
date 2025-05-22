@@ -515,10 +515,35 @@ class RemoteExperienceMaker(ABC):
 
             info = {
                 "kl": kl_mean,
-                "reward": rewards,
+                "reward": rewards, # This 'rewards' is the per-token reward output from reward model/remote RM, potentially after some processing like KL penalty.
+                                 # For DisCO binary rewards, we need the original per-sequence reward *before* KL penalty.
+                                 # This is available in `rewards_list[i]` which corresponds to the i-th sample group.
                 "response_length": samples.response_length,
                 "total_length": samples.total_length,
             }
+
+            # Add binary rewards for DisCO based on per-sequence continuous rewards
+            # `rewards_list[i]` contains the per-sequence continuous rewards for the i-th sample group.
+            # Shape of rewards_list[i] is (micro_rollout_batch_size,) which is samples.sequences.size(0)
+            current_sequence_rewards = rewards_list[i].to(action_log_probs.device) # Ensure device consistency
+
+            if self.args.advantage_estimator == "disco_b" or self.args.advantage_estimator == "disco":
+                if self.args.disco_reward_threshold is not None:
+                    threshold = self.args.disco_reward_threshold
+                else:
+                    # Calculate median of current batch's *sequence* rewards
+                    if current_sequence_rewards.numel() > 0:
+                        threshold = torch.median(current_sequence_rewards)
+                    else:
+                        # Handle case with no rewards (e.g., if batch is empty or all rewards are NaN)
+                        threshold = 0.0 # Default threshold if no rewards or empty
+                binary_rewards_for_batch = (current_sequence_rewards >= threshold).float()
+                info["binary_rewards"] = binary_rewards_for_batch
+            else:
+                # If not DisCO, create a placeholder.
+                # The size should match the batch size of this specific experience part.
+                info["binary_rewards"] = torch.empty(sequences.size(0), device=sequences.device, dtype=torch.float).fill_(-1.0) # Fill with a value indicating not used
+
 
             experience = Experience(
                 sequences,

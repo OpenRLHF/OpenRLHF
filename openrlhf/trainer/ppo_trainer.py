@@ -60,6 +60,14 @@ class BasePPOTrainer(ABC):
         self.kl_target = self.args.kl_target
         self.kl_horizon = self.args.kl_horizon
 
+        # DisCO arguments
+        self.disco_type = self.args.disco_type
+        self.disco_beta = self.args.disco_beta
+        self.disco_delta = self.args.disco_delta
+        self.disco_tau = self.args.disco_tau
+        self.disco_scoring_func = self.args.disco_scoring_func
+        self.disco_reward_threshold = self.args.disco_reward_threshold
+
         self.freezing_actor_steps = getattr(self.args, "freezing_actor_steps", -1)
 
         # Init dummy variables
