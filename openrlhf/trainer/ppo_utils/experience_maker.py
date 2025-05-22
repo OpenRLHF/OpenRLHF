@@ -279,7 +279,7 @@ class SamplesGenerator:
 
             # Concatenate prompt and output tokens
             input_ids = list(output.prompt_token_ids) + list(output.outputs[0].token_ids)
-            if input_ids[-1] != eos_token_id:
+            if output.outputs[0].token_ids[-1] != eos_token_id:
                 input_ids.append(eos_token_id)
             # Create attention mask
             attention_mask = [1] * len(input_ids)
@@ -290,9 +290,8 @@ class SamplesGenerator:
             # Create action mask based on output token positions
             action_mask = torch.zeros_like(attention_mask)
             # Mark positions after prompt as actions
-            action_mask[
-                0, len(output.prompt_token_ids) : len(output.prompt_token_ids) + len(output.outputs[0].token_ids)
-            ] = 1
+            action_length = len(output.outputs[0].token_ids) + int(output.outputs[0].token_ids[-1] != eos_token_id)
+            action_mask[0, len(output.prompt_token_ids) : len(output.prompt_token_ids) + action_length] = 1
 
             sequences = sequences[:, :truncate_length].to("cpu")
             attention_mask = attention_mask[:, :truncate_length].to("cpu")
