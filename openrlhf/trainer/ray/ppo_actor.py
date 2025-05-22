@@ -226,7 +226,10 @@ class ActorPPOTrainer(ABC):
         )
 
         if self.args.advantage_estimator == "disco_b" or self.args.advantage_estimator == "disco":
-            from openrlhf.models.loss import DisCOBasicLoss, DisCOLoss # Import here to avoid circular dependency issues at module load time
+            from openrlhf.models.loss import (  # Import here to avoid circular dependency issues at module load time
+                DisCOBasicLoss,
+                DisCOLoss,
+            )
 
             # DisCO Loss calculation
             # For DisCO, old_log_probs are from the behavior policy (experience.action_log_probs)
@@ -243,7 +246,7 @@ class ActorPPOTrainer(ABC):
                     )
             elif self.args.advantage_estimator == "disco":
                 if self.disco_loss_fn is None or not isinstance(self.disco_loss_fn, DisCOLoss):
-                     self.disco_loss_fn = DisCOLoss(
+                    self.disco_loss_fn = DisCOLoss(
                         beta=self.args.disco_beta,
                         delta=self.args.disco_delta,
                         tau=self.args.disco_tau,
@@ -256,29 +259,29 @@ class ActorPPOTrainer(ABC):
             action_mask_device = experience.action_mask.to(action_log_probs.device)
 
             actor_loss, kl_div, disco_objective, disco_penalty = self.disco_loss_fn(
-                log_probs=action_log_probs, # current policy log probs
-                old_log_probs=old_action_log_probs_device, # behavior policy log probs
-                rewards=binary_rewards_device, # binary rewards {0,1}
+                log_probs=action_log_probs,  # current policy log probs
+                old_log_probs=old_action_log_probs_device,  # behavior policy log probs
+                rewards=binary_rewards_device,  # binary rewards {0,1}
                 action_mask=action_mask_device,
             )
-            loss = actor_loss # This is already penalty - J_objective
-            
+            loss = actor_loss  # This is already penalty - J_objective
+
             # Update status for logging
             status = {
-                "actor_loss": actor_loss.item(), # This is the main loss for DisCO
+                "actor_loss": actor_loss.item(),  # This is the main loss for DisCO
                 "kl_div": kl_div.item(),
                 "disco_objective": disco_objective.item(),
                 "disco_penalty": disco_penalty.item(),
                 "actor_lr": self.actor_scheduler.get_last_lr()[0],
             }
             # Add original continuous reward mean for reference if needed
-            if "reward" in experience.info: # original continuous rewards (per-token from RM)
-                 status["original_reward_mean"] = experience.info["reward"].mean().item()
+            if "reward" in experience.info:  # original continuous rewards (per-token from RM)
+                status["original_reward_mean"] = experience.info["reward"].mean().item()
 
-        else: # Standard PPO
+        else:  # Standard PPO
             actor_loss = self.actor_loss_fn(
                 action_log_probs,
-                old_action_log_probs, # These are from behavior policy for PPO PolicyLoss
+                old_action_log_probs,  # These are from behavior policy for PPO PolicyLoss
                 advantages,
                 action_mask=experience.action_mask,
             )
@@ -287,42 +290,43 @@ class ActorPPOTrainer(ABC):
                 # For PPO KL-regularized, base_action_log_probs are from the initial reference model (SFT)
                 if self.args.init_kl_coef > 0 and base_action_log_probs is not None:
                     kl = compute_approx_kl(
-                        action_log_probs, # current policy
-                        base_action_log_probs, # SFT reference policy
+                        action_log_probs,  # current policy
+                        base_action_log_probs,  # SFT reference policy
                         kl_estimator=self.args.kl_estimator,
                     )
                     kl_loss = masked_mean(kl, experience.action_mask)
-                    experience.info["kl"] = kl_loss.detach() # PPO KL with SFT
+                    experience.info["kl"] = kl_loss.detach()  # PPO KL with SFT
                 else:
                     kl_loss = 0
-                    experience.info["kl"] = torch.zeros_like(actor_loss) 
+                    experience.info["kl"] = torch.zeros_like(actor_loss)
             else:
                 kl_loss = 0
                 experience.info["kl"] = torch.zeros_like(actor_loss)
 
-
-            loss = actor_loss + kl_loss * kl_ctl # PPO loss + KL penalty (if use_kl_loss)
+            loss = actor_loss + kl_loss * kl_ctl  # PPO loss + KL penalty (if use_kl_loss)
             status = {"policy_loss": actor_loss.detach().item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}
-
 
         # Common losses for both PPO and DisCO (optional based on args)
         # Mixtral aux loss
-        if self.aux_loss and hasattr(output, 'aux_loss'): # output might not exist if DisCO path taken and actor() wasn't called for output
-            if not (self.args.advantage_estimator == "disco_b" or self.args.advantage_estimator == "disco"): # only add if not DisCO or re-evaluate if needed
-                 # For DisCO, 'output' from actor call is already available
-                 pass
+        if self.aux_loss and hasattr(
+            output, "aux_loss"
+        ):  # output might not exist if DisCO path taken and actor() wasn't called for output
+            if not (
+                self.args.advantage_estimator == "disco_b" or self.args.advantage_estimator == "disco"
+            ):  # only add if not DisCO or re-evaluate if needed
+                # For DisCO, 'output' from actor call is already available
+                pass
             loss += output.aux_loss * self.args.aux_loss_coef
             status["aux_loss"] = output.aux_loss.item()
 
         # Entropy loss
-        if self.args.entropy_loss_coef > 1e-8 and hasattr(output, 'entropy'):
+        if self.args.entropy_loss_coef > 1e-8 and hasattr(output, "entropy"):
             if not (self.args.advantage_estimator == "disco_b" or self.args.advantage_estimator == "disco"):
-                 # For DisCO, 'output' from actor call is already available
-                 pass
+                # For DisCO, 'output' from actor call is already available
+                pass
             entropy_loss = masked_mean(output.entropy[:, -experience.action_mask.shape[1] :], experience.action_mask)
-            loss -= entropy_loss * self.args.entropy_loss_coef # Subtract entropy bonus
+            loss -= entropy_loss * self.args.entropy_loss_coef  # Subtract entropy bonus
             status["entropy_loss"] = entropy_loss.detach().item()
-
 
         self.strategy.backward(loss, self.actor, self.actor_optim)
         self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
@@ -332,20 +336,20 @@ class ActorPPOTrainer(ABC):
         # Populate common status fields from experience.info
         # These are calculated in RemoteExperienceMaker and should be available
         for k, v in experience.info.items():
-            if k not in status and hasattr(v, 'mean'): # Avoid overwriting disco specific logs or non-tensor info
+            if k not in status and hasattr(v, "mean"):  # Avoid overwriting disco specific logs or non-tensor info
                 status[k] = v.mean().item()
             elif k not in status:
-                 status[k] = v # if not a tensor with mean
+                status[k] = v  # if not a tensor with mean
 
         # Ensure essential PPO metrics are present if not DisCO, or fill with placeholder
         if not (self.args.advantage_estimator == "disco_b" or self.args.advantage_estimator == "disco"):
-            if "policy_loss" not in status: # Should be there from PPO path
-                 status["policy_loss"] = 0.0
-            if "kl" not in status: # PPO KL with SFT model
-                 status["kl"] = 0.0 # Should be filled by experience.info["kl"]
-        else: # DisCO specific logging already handled
+            if "policy_loss" not in status:  # Should be there from PPO path
+                status["policy_loss"] = 0.0
+            if "kl" not in status:  # PPO KL with SFT model
+                status["kl"] = 0.0  # Should be filled by experience.info["kl"]
+        else:  # DisCO specific logging already handled
             pass
-            
+
         return status
 
     def _broadcast_to_vllm(self):

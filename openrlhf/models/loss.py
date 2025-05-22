@@ -358,7 +358,10 @@ class PRMLoss(nn.Module):
 class DisCOHelper:
     @staticmethod
     def calculate_scores(
-        log_probs: torch.Tensor, old_log_probs: torch.Tensor, scoring_func: str, action_mask: Optional[torch.Tensor] = None
+        log_probs: torch.Tensor,
+        old_log_probs: torch.Tensor,
+        scoring_func: str,
+        action_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Calculates scores s_theta(o, q) based on the chosen scoring function.
@@ -387,15 +390,23 @@ class DisCOHelper:
             # Let's stick to the definition s_theta(o,q) = log pi_theta(o|q) for log_l
             # and s_theta(o,q) = log (pi_theta(o|q) / pi_old(o|q)) for l_ratio for numerical stability
             # This means for l_ratio, score = sum(log_probs) - sum(old_log_probs)
-            current_seq_log_probs = (log_probs * action_mask).sum(dim=-1) if action_mask is not None else log_probs.sum(dim=-1)
-            old_seq_log_probs = (old_log_probs * action_mask).sum(dim=-1) if action_mask is not None else old_log_probs.sum(dim=-1)
-            return current_seq_log_probs - old_seq_log_probs # log (pi_theta / pi_old)
+            current_seq_log_probs = (
+                (log_probs * action_mask).sum(dim=-1) if action_mask is not None else log_probs.sum(dim=-1)
+            )
+            old_seq_log_probs = (
+                (old_log_probs * action_mask).sum(dim=-1) if action_mask is not None else old_log_probs.sum(dim=-1)
+            )
+            return current_seq_log_probs - old_seq_log_probs  # log (pi_theta / pi_old)
         else:
             raise ValueError(f"Unknown scoring_func: {scoring_func}")
 
     @staticmethod
     def calculate_kl_penalty(
-        log_probs: torch.Tensor, old_log_probs: torch.Tensor, beta: float, delta: float, action_mask: Optional[torch.Tensor] = None
+        log_probs: torch.Tensor,
+        old_log_probs: torch.Tensor,
+        beta: float,
+        delta: float,
+        action_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Calculates the KL divergence D_KL(pi_old || pi_theta) and the penalty term.
@@ -417,7 +428,7 @@ class DisCOHelper:
 
         # Per-sequence KL: sum_t (old_log_probs_t - log_probs_t)
         # Average KL over batch
-        kl_div_per_sequence = (old_log_probs - log_probs) # D_KL(pi_old || pi_theta) for each token
+        kl_div_per_sequence = old_log_probs - log_probs  # D_KL(pi_old || pi_theta) for each token
         if action_mask is not None:
             kl_div = masked_mean(kl_div_per_sequence, action_mask, dim=None)
             # Sum over seq dim, then mean over batch dim if action_mask is per token
@@ -429,7 +440,6 @@ class DisCOHelper:
             # kl_div = kl_div_sequences.mean()
             kl_div = kl_div_per_sequence.mean()
 
-
         # Penalty term: beta * [KL - delta]_+^2
         # The gradient of the penalty term is 2 * beta * [KL - delta]_+ * nabla(KL)
         # Since KL = mean(old_log_probs - log_probs), nabla(KL) w.r.t log_probs is -1/N
@@ -440,7 +450,7 @@ class DisCOHelper:
         # This will be handled by autograd. We just need to compute the penalty value.
         penalty_factor = torch.relu(kl_div - delta)
         penalty = beta * (penalty_factor**2)
-        return penalty, kl_div.detach() # Detach KL for stats, penalty has grads
+        return penalty, kl_div.detach()  # Detach KL for stats, penalty has grads
 
 
 class DisCOBasicLoss(nn.Module):
@@ -458,10 +468,10 @@ class DisCOBasicLoss(nn.Module):
 
     def forward(
         self,
-        log_probs: torch.Tensor, # log_probs from current policy pi_theta(o|q)
-        old_log_probs: torch.Tensor, # log_probs from old policy pi_old(o|q)
-        rewards: torch.Tensor, # Binary rewards (1 for positive, 0 for negative)
-        action_mask: Optional[torch.Tensor] = None, # Mask for valid actions in sequences
+        log_probs: torch.Tensor,  # log_probs from current policy pi_theta(o|q)
+        old_log_probs: torch.Tensor,  # log_probs from old policy pi_old(o|q)
+        rewards: torch.Tensor,  # Binary rewards (1 for positive, 0 for negative)
+        action_mask: Optional[torch.Tensor] = None,  # Mask for valid actions in sequences
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         log_probs: (batch_size, seq_len)
@@ -472,8 +482,8 @@ class DisCOBasicLoss(nn.Module):
         scores = DisCOHelper.calculate_scores(log_probs, old_log_probs, self.disco_scoring_func, action_mask)
         # scores shape: (batch_size,)
 
-        positive_mask = (rewards == 1)
-        negative_mask = (rewards == 0)
+        positive_mask = rewards == 1
+        negative_mask = rewards == 0
 
         # Ensure there are positive and negative samples to avoid division by zero or NaN
         if not positive_mask.any() or not negative_mask.any():
@@ -488,9 +498,8 @@ class DisCOBasicLoss(nn.Module):
                 log_probs, old_log_probs, self.beta, self.delta, action_mask
             )
             # Loss = Objective - Penalty. For maximization, we negate this: Penalty - Objective
-            loss = penalty - j1_objective # Negative sign because we want to maximize J1
+            loss = penalty - j1_objective  # Negative sign because we want to maximize J1
             return loss, kl_div, j1_objective.detach(), penalty.detach()
-
 
         s_positive = scores[positive_mask]
         s_negative = scores[negative_mask]
@@ -531,10 +540,10 @@ class DisCOLoss(nn.Module):
 
     def forward(
         self,
-        log_probs: torch.Tensor, # log_probs from current policy pi_theta(o|q)
-        old_log_probs: torch.Tensor, # log_probs from old policy pi_old(o|q)
-        rewards: torch.Tensor, # Binary rewards (1 for positive, 0 for negative)
-        action_mask: Optional[torch.Tensor] = None, # Mask for valid actions in sequences
+        log_probs: torch.Tensor,  # log_probs from current policy pi_theta(o|q)
+        old_log_probs: torch.Tensor,  # log_probs from old policy pi_old(o|q)
+        rewards: torch.Tensor,  # Binary rewards (1 for positive, 0 for negative)
+        action_mask: Optional[torch.Tensor] = None,  # Mask for valid actions in sequences
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         log_probs: (batch_size, seq_len)
@@ -545,8 +554,8 @@ class DisCOLoss(nn.Module):
         scores = DisCOHelper.calculate_scores(log_probs, old_log_probs, self.disco_scoring_func, action_mask)
         # scores shape: (batch_size,)
 
-        positive_mask = (rewards == 1)
-        negative_mask = (rewards == 0)
+        positive_mask = rewards == 1
+        negative_mask = rewards == 0
 
         # Ensure there are positive and negative samples
         if not positive_mask.any() or not negative_mask.any():
@@ -569,10 +578,18 @@ class DisCOLoss(nn.Module):
         # logmeanexp(x) = log( (1/N) * sum(exp(x_i)) ) = logsumexp(x) - log(N)
         if s_negative.numel() > 0:
             # logsumexp provides numerical stability
-            dro_term_negative = self.tau * (torch.logsumexp(s_negative / self.tau, dim=0) - torch.log(torch.tensor(s_negative.numel(), device=scores.device, dtype=self.tau.dtype if isinstance(self.tau, torch.Tensor) else torch.float)))
+            dro_term_negative = self.tau * (
+                torch.logsumexp(s_negative / self.tau, dim=0)
+                - torch.log(
+                    torch.tensor(
+                        s_negative.numel(),
+                        device=scores.device,
+                        dtype=self.tau.dtype if isinstance(self.tau, torch.Tensor) else torch.float,
+                    )
+                )
+            )
         else:
             dro_term_negative = torch.tensor(0.0, device=scores.device, dtype=scores.dtype)
-
 
         j2_objective = mean_s_positive - dro_term_negative
 
