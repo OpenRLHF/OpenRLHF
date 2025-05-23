@@ -223,7 +223,7 @@ class SFTDataset(Dataset):
             attention_masks.append(attention_mask)
             loss_masks.append(loss_mask)
 
-        input_ids = zero_pad_sequences(input_ids, "right", self.tokenizer.pad_token_id)
+        input_ids = zero_pad_sequences(input_ids, "right")
         attention_masks = zero_pad_sequences(attention_masks, "right")
         loss_masks = zero_pad_sequences(loss_masks, "right")
         return input_ids, attention_masks, loss_masks
