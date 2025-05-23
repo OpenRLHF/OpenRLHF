@@ -41,6 +41,8 @@ class KDTrainer(ABC):
         batch_size: int = 1,
         max_epochs: int = 2,
         tokenizer=None,
+        save_hf_ckpt: bool = False,
+        disable_ds_ckpt: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -56,6 +58,8 @@ class KDTrainer(ABC):
         self.tokenizer = tokenizer
         self.optimizer = optim
         self.args = strategy.args
+        self.disable_ds_ckpt = disable_ds_ckpt
+        self.save_hf_ckpt = save_hf_ckpt
 
         self.loss_fn = GPTLMLoss()
         self.kd_loss = KDLoss()
