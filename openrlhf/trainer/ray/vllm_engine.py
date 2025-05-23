@@ -148,7 +148,7 @@ def create_vllm_engines(
 
     for i in range(num_engines):
         bundle_indices = None
-        if tensor_parallel_size > 1:
+        if ACCELERATOR_TYPE == "GPU" and tensor_parallel_size > 1:
             bundle_indices = get_bundle_indices(shared_pg, i, tensor_parallel_size)
 
         scheduling_strategy = PlacementGroupSchedulingStrategy(
