@@ -124,10 +124,11 @@ class KDTrainer(ABC):
             # train
             self.model.train()
             self.teacher_model.eval()
-            for prompts_id_len, inputs, attention_masks, _ in self.train_dataloader:
+            for inputs, attention_masks, loss_masks in self.train_dataloader:
                 inputs = inputs.squeeze(1).to(torch.cuda.current_device())
                 attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
                 output = self.model(inputs, attention_mask=attention_mask, return_output=True)
+                prompts_id_len = (loss_masks != 0).int().argmax(dim=-1).squeeze(-1)
 
                 # loss function
                 labels = torch.where(
