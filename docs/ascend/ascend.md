@@ -144,7 +144,7 @@ Mean Error=\frac{\sum^N_{i=1}|loss_i^{npu}-loss_i^{gpu}|}{N}\times 100 \%
 
 ### 进展
 
-已支持的算法仅在下表提供的版本进行过测试。
+已支持的算法仅在下表提供的版本进行过测试。当前默认使用 vLLM V0 引擎进行验证。
 
 | 算法                             | 进展           | 与GPU误差 | torch 版本 | torch_npu 版本 | CANN 版本 | 详细结果                                                     |
 | -------------------------------- | -------------- | --------- | ---------- | -------------- | --------- | ------------------------------------------------------------ |
@@ -153,13 +153,11 @@ Mean Error=\frac{\sum^N_{i=1}|loss_i^{npu}-loss_i^{gpu}|}{N}\times 100 \%
 | KTO                              | 已支持         | 0.37%     | 2.3.1      | 2.3.1.post2    | 8.0.RC3   | [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2642104300) |
 | RM                               | 已支持         | 0.85%     | 2.3.1      | 2.3.1.post2    | 8.0.RC3   | [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2642104300) |
 | PRM                              | 已支持         | 1.61%     | 2.3.1      | 2.3.1.post2    | 8.0.RC3   | [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2642104300) |
-| PPO                              | 精度测试中     |           | 2.5.1      | 2.5.1          | 8.1.RC1   |                                                                                   |
+| PPO                              | 精度测试中     |           | 2.5.1      | 2.5.1          | 8.1.RC1   |                                                              |
 | REINFORCE++                      | 已支持         | 1.94%     | 2.5.1      | 2.5.1          | 8.1.RC1   | [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2735138695) |
-| REINFORCE++<br/>(vLLM V1引擎)    | 已支持         | 1.99%     | 2.5.1      | 2.5.1          | 8.1.RC1   | [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2903104059)  |
-| REINFORCE++<br/>(Ring Attention) | 已支持，待优化 | 4.95%     | 2.5.1      | 2.5.1          | 8.1.RC1   |  [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2903104059) |
-| GRPO                             | 已支持         | 0.61%     | 2.5.1      | 2.5.1          | 8.1.RC1   | [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2764993841) |
-| GRPO <br>(vLLM V1引擎)           | 已支持         | 1.10%     | 2.5.1      | 2.5.1          | 8.1.RC1   |  [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2903104059)|
-
+| REINFORCE++<br/>(vLLM V1引擎)    | 已支持         | 1.99%     | 2.5.1      | 2.5.1          | 8.1.RC1   | [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2903104059) |
+| REINFORCE++<br/>(Ring Attention) | 已支持，待优化 | 4.95%     | 2.5.1      | 2.5.1          | 8.1.RC1   | [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2903104059) |
+| GRPO                             | 已支持         | 1.10%     | 2.5.1      | 2.5.1          | 8.1.RC1   | [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2903104059) |
 
 ## 常见问题
 
