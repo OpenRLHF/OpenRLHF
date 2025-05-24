@@ -7,6 +7,7 @@ from typing import List, Optional, Tuple, Union
 
 import ray
 import torch
+import torch.distributed as dist
 
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
@@ -371,10 +372,42 @@ class RemoteExperienceMaker(ABC):
         # Each batch of samples will be scheduled to a effective Ray Actor (i.e, a DP rank)
         # TODO: balance the number of tokens of each batch for better performance
         samples_list = []
-        batch_size = self.args.micro_rollout_batch_size
-        for i in range(0, len(rollout_samples), batch_size):
-            concat_samples = Samples.concat_samples(rollout_samples[i : i + batch_size], self.tokenizer.pad_token_id)
-            samples_list.append(concat_samples)
+        # balance the number of tokens of each batch for better performance
+        if self.args.use_dynamic_batch_size:
+            dp_size = dist.get_world_size(group=self.strategy.ds_device_mesh["dp"].get_group())
+
+            # calculate token count for each sample and sort by token count
+            sample_token_counts = []
+            for sample in rollout_samples:
+                token_count = sample.total_length.sum().item()
+                sample_token_counts.append((token_count, sample))
+
+            # Sort samples by token count in descending order
+            sample_token_counts.sort(key=lambda x: x[0], reverse=True)
+
+            # Initialize batches
+            batches = [[] for _ in range(dp_size)]
+            batch_token_counts = [0] * dp_size
+
+            # Assign samples to batches
+            for token_count, sample in sample_token_counts:
+                # Find the batch with minimum tokens
+                min_batch_idx = batch_token_counts.index(min(batch_token_counts))
+                batches[min_batch_idx].append(sample)
+                batch_token_counts[min_batch_idx] += token_count
+
+            # Concatenate samples in each batch
+            for batch in batches:
+                if batch:
+                    concat_samples = Samples.concat_samples(batch, self.tokenizer.pad_token_id)
+                    samples_list.append(concat_samples)
+        else:
+            batch_size = self.args.micro_rollout_batch_size
+            for i in range(0, len(rollout_samples), batch_size):
+                concat_samples = Samples.concat_samples(
+                    rollout_samples[i : i + batch_size], self.tokenizer.pad_token_id
+                )
+                samples_list.append(concat_samples)
 
         # Make experiences (models forward: logprobs, values, rewards, and kl divergence)
         experiences = self.make_experience(samples_list)

@@ -13,7 +13,7 @@ from transformers.trainer import get_scheduler
 from openrlhf.models import ValueLoss, get_llm_for_sequence_regression
 from openrlhf.models.utils import masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
-from openrlhf.utils import get_tokenizer
+from openrlhf.utils import dynamic_split_batches, get_tokenizer, unpad_dynamic_batches
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
 
@@ -229,16 +229,43 @@ class CriticModelRayActor(BasePPORole):
         """Generates critic values."""
         device = torch.cuda.current_device()
         self.critic.eval()
+
+        if self.args.use_dynamic_batch_size:
+            # Split into batches
+            batches = dynamic_split_batches(attention_mask, self.args.rollout_max_tokens, device)
+
+            # Process each batch
+            all_values = []
+            for batch_indices in batches:
+                batch_sequences = sequences[batch_indices]
+                batch_action_mask = action_mask[batch_indices]
+                batch_attention_mask = attention_mask[batch_indices]
+
+                with torch.no_grad():
+                    batch_values = self.critic(
+                        batch_sequences.to(device),
+                        batch_action_mask.to(device),
+                        batch_attention_mask.to(device),
+                        ring_attn_group=self.strategy.ring_attn_group,
+                    )
+                all_values.append(batch_values)
+
+            # Combine results and remove padding
+            values = torch.cat(all_values, dim=0)
+            values = unpad_dynamic_batches(values, len(sequences), batches)
+
+            self.critic.train()  # reset model state
+            return values.to("cpu")
+
         with torch.no_grad():
-            value = self.critic(
+            values = self.critic(
                 sequences.to(device),
                 action_mask.to(device),
                 attention_mask.to(device),
                 ring_attn_group=self.strategy.ring_attn_group,
-                values_allgather=True,
             )
         self.critic.train()  # reset model state
-        return value.to("cpu")
+        return values.to("cpu")
 
     def append(self, experience):
         """Append experience to replay buffer."""

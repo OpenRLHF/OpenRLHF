@@ -1,7 +1,7 @@
 import logging
 import os
 import socket
-from typing import Dict, Optional, Type
+from typing import Dict, Optional, Type, Union
 
 import ray
 import torch
@@ -10,8 +10,9 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from tqdm import tqdm
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
-from openrlhf.trainer.ray.utils import ray_noset_visible_devices
 from openrlhf.utils.deepspeed import DeepspeedStrategy
+
+from .utils import dynamic_split_batches, ray_noset_visible_devices, unpad_dynamic_batches
 
 
 class DistributedTorchRayActor:
@@ -126,21 +127,50 @@ class ReferenceModelRayActor(BasePPORole):
     def forward(
         self,
         sequences: torch.LongTensor,
-        action_mask: Optional[torch.Tensor] = None,
+        action_mask: Optional[Union[int, list[int]]] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        return_output=False,
-        packed_seq_lens: Optional[list[int]] = None,
+        packed_seq_lens=None,
     ) -> torch.Tensor:
+        """Generates reference/reward values."""
         device = torch.cuda.current_device()
+        self.model.eval()
+
+        if self.args.use_dynamic_batch_size:
+            # Split into batches
+            batches = dynamic_split_batches(attention_mask, self.args.rollout_max_tokens, device)
+
+            # Process each batch
+            all_values = []
+            for batch_indices in batches:
+                batch_sequences = sequences[batch_indices]
+                batch_action_mask = action_mask[batch_indices]
+                batch_attention_mask = attention_mask[batch_indices]
+
+                with torch.no_grad():
+                    batch_values = self.model(
+                        batch_sequences.to(device),
+                        batch_action_mask.to(device),
+                        batch_attention_mask.to(device),
+                        ring_attn_group=self.strategy.ring_attn_group,
+                    )
+                all_values.append(batch_values)
+
+            # Combine results and remove padding
+            values = torch.cat(all_values, dim=0)
+            values = unpad_dynamic_batches(values, len(sequences), batches)
+
+            self.model.train()  # reset model state
+            return values.to("cpu")
+
         with torch.no_grad():
-            log_probs = self.model(
+            values = self.model(
                 sequences.to(device),
                 action_mask.to(device),
                 attention_mask.to(device),
                 ring_attn_group=self.strategy.ring_attn_group,
-                packed_seq_lens=packed_seq_lens,
             )
-        return log_probs.to("cpu")
+        self.model.train()  # reset model state
+        return values.to("cpu")
 
 
 @ray.remote(num_gpus=1)

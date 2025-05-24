@@ -1,4 +1,8 @@
 import os
+from typing import List, Optional
+
+import torch
+import torch.distributed
 
 
 # Address https://github.com/ray-project/ray/issues/51117
@@ -46,3 +50,78 @@ def get_physical_gpu_id():
     device = torch.cuda.current_device()
     props = torch.cuda.get_device_properties(device)
     return str(props.uuid)
+
+
+def dynamic_split_batches(attention_mask: torch.Tensor, max_tokens: int, device: torch.device) -> List[List[int]]:
+    """Split samples into batches based on token counts and sync across ranks.
+
+    Args:
+        attention_mask: Attention mask tensor of shape [batch_size, seq_len]
+        max_tokens: Maximum tokens per batch
+        device: Device to process on
+
+    Returns:
+        List of batch indices, where each batch's total tokens <= max_tokens
+    """
+    # Calculate token counts and split batches
+    token_counts = attention_mask.sum(dim=1)
+    batches = []
+    current_batch = []
+    current_tokens = 0
+
+    for i, count in enumerate(token_counts):
+        if current_tokens + count > max_tokens and current_batch:
+            batches.append(current_batch)
+            current_batch = [i]
+            current_tokens = count
+        else:
+            current_batch.append(i)
+            current_tokens += count
+
+    if current_batch:
+        batches.append(current_batch)
+
+    # Sync batch counts across ranks
+    if torch.distributed.is_initialized():
+        batch_counts = torch.tensor([len(batches)], device=device)
+        torch.distributed.all_reduce(batch_counts, op=torch.distributed.ReduceOp.MAX)
+        max_batches = batch_counts.item()
+
+        # Pad batches if necessary
+        while len(batches) < max_batches:
+            batches.append([0])  # Use first sample as padding
+
+        torch.distributed.barrier()
+
+    return batches
+
+
+def unpad_dynamic_batches(
+    results: torch.Tensor, original_length: int, batch_indices: Optional[List[List[int]]] = None
+) -> torch.Tensor:
+    """Remove padding from results of dynamic batch processing.
+
+    Args:
+        results: Combined results from all batches
+        original_length: Original number of samples before splitting
+        batch_indices: List of batch indices used for splitting
+
+    Returns:
+        Tensor with padding removed and original order restored
+    """
+    if batch_indices is None:
+        # If no batch_indices provided, just remove padding
+        return results[:original_length]
+
+    # Create a tensor to store results in original order
+    ordered_results = torch.zeros_like(results[:original_length])
+
+    # Restore original order using batch_indices
+    current_idx = 0
+    for batch in batch_indices:
+        for idx in batch:
+            if idx < original_length:  # Skip padding indices
+                ordered_results[idx] = results[current_idx]
+            current_idx += 1
+
+    return ordered_results

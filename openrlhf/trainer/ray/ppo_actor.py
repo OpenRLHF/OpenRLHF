@@ -27,7 +27,7 @@ from ..ppo_utils import NaiveReplayBuffer
 logger = init_logger(__name__)
 
 from .launcher import BasePPORole
-from .utils import get_physical_gpu_id
+from .utils import dynamic_split_batches, get_physical_gpu_id, unpad_dynamic_batches
 
 
 class ActorPPOTrainer(ABC):
@@ -486,6 +486,34 @@ class ActorModelRayActor(BasePPORole):
         """Generates actor values."""
         device = torch.cuda.current_device()
         self.actor.eval()
+
+        if self.args.use_dynamic_batch_size:
+            # Split into batches
+            batches = dynamic_split_batches(attention_mask, self.args.rollout_max_tokens, device)
+
+            # Process each batch
+            all_log_probs = []
+            for batch_indices in batches:
+                batch_sequences = sequences[batch_indices]
+                batch_action_mask = action_mask[batch_indices]
+                batch_attention_mask = attention_mask[batch_indices]
+
+                with torch.no_grad():
+                    batch_log_probs = self.actor(
+                        batch_sequences.to(device),
+                        batch_action_mask.to(device),
+                        batch_attention_mask.to(device),
+                        ring_attn_group=self.strategy.ring_attn_group,
+                    )
+                all_log_probs.append(batch_log_probs)
+
+            # Combine results and remove padding
+            action_log_probs = torch.cat(all_log_probs, dim=0)
+            action_log_probs = unpad_dynamic_batches(action_log_probs, len(sequences), batches)
+
+            self.actor.train()  # reset model state
+            return action_log_probs.to("cpu")
+
         with torch.no_grad():
             action_log_probs = self.actor(
                 sequences.to(device),
