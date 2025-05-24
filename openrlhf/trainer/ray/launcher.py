@@ -131,7 +131,7 @@ class ReferenceModelRayActor(BasePPORole):
         attention_mask: Optional[torch.Tensor] = None,
         packed_seq_lens=None,
     ) -> torch.Tensor:
-        """Generates reference/reward values."""
+        """Generates reference values."""
         device = torch.cuda.current_device()
         self.model.eval()
 
