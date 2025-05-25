@@ -307,6 +307,11 @@ if __name__ == "__main__":
         "--vllm_generate_batch_size", type=int, default=None, help="Batch size for vLLM generating samples"
     )
     parser.add_argument("--micro_rollout_batch_size", type=int, default=8)
+    parser.add_argument("--micro_train_batch_size", type=int, default=4, help="batch size per GPU")
+    parser.add_argument("--train_batch_size", type=int, default=128, help="Global training batch size")
+    parser.add_argument("--use_dynamic_batch_size", action="store_true", default=False)
+    parser.add_argument("--rollout_max_tokens", type=int, default=32768)
+    parser.add_argument("--train_max_tokens", type=int, default=16384)
     parser.add_argument("--max_epochs", type=int, default=1)
     parser.add_argument("--prompt_max_len", type=int, default=1024, help="Max tokens for each prompt")
     parser.add_argument("--generate_max_len", type=int, default=1024, help="Max tokens to generate in PPO")
@@ -320,8 +325,6 @@ if __name__ == "__main__":
     parser.add_argument("--value_clip", type=float, default=0.5, help="PPO value clip range")
     parser.add_argument("--lambd", type=float, default=1, help="PPO GAE lambd")
     parser.add_argument("--gamma", type=float, default=1, help="PPO GAE gamma")
-    parser.add_argument("--micro_train_batch_size", type=int, default=4, help="batch size per GPU")
-    parser.add_argument("--train_batch_size", type=int, default=128, help="Global training batch size")
     parser.add_argument("--normalize_reward", action="store_true", default=False, help="Enable Reward Normazation")
     parser.add_argument("--top_p", type=float, default=1.0)
     parser.add_argument("--temperature", type=float, default=1.0)
@@ -448,9 +451,6 @@ if __name__ == "__main__":
     if args.eps_clip_low_high is None:
         args.eps_clip_low_high = (args.eps_clip, args.eps_clip)
 
-    if args.agent_func_path:
-        args.remote_rm_url = "agent"
-
     if args.advantage_estimator not in ["gae"]:
         args.critic_pretrain = None
     elif args.critic_pretrain is None:
@@ -461,6 +461,9 @@ if __name__ == "__main__":
 
     if args.advantage_estimator in ["rloo", "reinforce_baseline", "group_norm"]:
         assert args.n_samples_per_prompt > 1, f"{args.advantage_estimator} requires n_samples_per_prompt > 1"
+
+    if args.agent_func_path:
+        args.remote_rm_url = "agent"
 
     if args.remote_rm_url:
         args.remote_rm_url = args.remote_rm_url.split(",")
@@ -516,10 +519,21 @@ if __name__ == "__main__":
             args.n_samples_per_prompt > 1
         ), "n_samples_per_prompt must be greater than 1 when using dynamic filtering"
 
-    assert (
-        args.n_samples_per_prompt * args.rollout_batch_size // args.micro_rollout_batch_size
-        >= args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size // args.ds_tensor_parallel_size
-    ), "The number of sample batches must be greater than or equal to the effective number of actor processes."
+    if args.use_dynamic_batch_size:
+        assert (
+            args.rollout_max_tokens >= args.prompt_max_len + args.generate_max_len
+        ), "rollout_max_tokens must be greater than or equal to prompt_max_len + generate_max_len"
+        assert (
+            args.train_max_tokens >= args.prompt_max_len + args.generate_max_len
+        ), "train_max_tokens must be greater than or equal to prompt_max_len + generate_max_len"
+    else:
+        assert (
+            args.n_samples_per_prompt * args.rollout_batch_size // args.micro_rollout_batch_size
+            >= args.actor_num_nodes
+            * args.actor_num_gpus_per_node
+            // args.ring_attn_size
+            // args.ds_tensor_parallel_size
+        ), "The number of sample batches must be greater than or equal to the effective number of actor processes."
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub

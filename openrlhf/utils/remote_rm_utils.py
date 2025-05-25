@@ -1,4 +1,6 @@
+import os
 import time
+
 import ray
 import requests
 import torch
@@ -64,8 +66,9 @@ class RemoteRewardModel:
     def get_rewards(self, queries_list, prompts_list, labels_list):
         if self.custom_reward_func:
             # Let Ray automatically distribute the workload across available resources
-            batch_size = self.args.micro_rollout_batch_size
-            num_chunks = (len(queries_list) + batch_size - 1) // batch_size
+            num_chunks = os.environ.get("OPENRLHF_REWARD_NUM_TASKS", 128)
+            batch_size = (len(queries_list) + num_chunks - 1) // num_chunks
+            assert batch_size > 0, f"sample size is less than OPENRLHF_REWARD_NUM_TASKS"
             r_refs = []
             for i in range(num_chunks):
                 start_idx = i * batch_size

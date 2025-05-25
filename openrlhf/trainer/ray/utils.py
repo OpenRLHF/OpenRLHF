@@ -1,4 +1,8 @@
 import os
+from typing import List
+
+import torch
+import torch.distributed
 
 
 # Address https://github.com/ray-project/ray/issues/51117
@@ -46,3 +50,73 @@ def get_physical_gpu_id():
     device = torch.cuda.current_device()
     props = torch.cuda.get_device_properties(device)
     return str(props.uuid)
+
+
+def dynamic_split_batches(
+    attention_mask: List[torch.Tensor], max_tokens: int, device: torch.device
+) -> List[List[int]]:
+    """Split samples into batches based on token counts and sync across ranks.
+
+    Args:
+        attention_mask: List of attention mask tensors
+        max_tokens: Maximum tokens per batch
+        device: Device to process on
+
+    Returns:
+        List of batch indices, where each batch's total tokens <= max_tokens
+    """
+    # Calculate token counts and split batches
+    token_counts = [tensor.sum().item() for tensor in attention_mask]
+    batches = []
+    current_batch = []
+    current_tokens = 0
+
+    for i, count in enumerate(token_counts):
+        if current_tokens + count > max_tokens and current_batch:
+            batches.append(current_batch)
+            current_batch = [i]
+            current_tokens = count
+        else:
+            current_batch.append(i)
+            current_tokens += count
+
+    if current_batch:
+        batches.append(current_batch)
+
+    # Sync batch counts across ranks
+    if torch.distributed.is_initialized():
+        batch_counts = torch.tensor([len(batches)], device=device)
+        torch.distributed.all_reduce(batch_counts, op=torch.distributed.ReduceOp.MAX)
+        max_batches = batch_counts.item()
+
+        # Pad batches if necessary
+        while len(batches) < max_batches:
+            batches.append([0])  # Use first sample as padding
+
+        torch.distributed.barrier()
+
+    return batches
+
+
+def unpad_dynamic_batches(
+    results: List[torch.Tensor], batch_indices: List[List[int]], total_length: int
+) -> List[torch.Tensor]:
+    """Unpad results from dynamic batches back to original order.
+
+    Args:
+        results (List[torch.Tensor]): List of results from each batch
+        batch_indices (List[List[int]]): List of batch indices for each batch
+        total_length (int): Total number of original sequences
+
+    Returns:
+        List[torch.Tensor]: Results in original order
+    """
+    # Initialize ordered results with None
+    ordered_results = [None] * total_length
+
+    # Fill in results in original order
+    for batch_result, indices in zip(results, batch_indices):
+        for result, idx in zip(batch_result, indices):
+            ordered_results[idx] = result
+
+    return ordered_results
