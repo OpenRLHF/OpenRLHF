@@ -561,29 +561,38 @@ class RemoteExperienceMaker(ABC):
         for i, (experience, action_log_probs, base_action_log_probs, value, rewards) in enumerate(
             zip(experiences_list, action_log_probs_list, base_action_log_probs_list, value_list, rewards_list)
         ):
-            if (self.initial_model_group is not None) and (not args.use_kl_loss):
-                kl = compute_approx_kl(
-                    action_log_probs,
-                    base_action_log_probs,
-                    kl_estimator=self.strategy.args.kl_estimator,
-                )
-            else:
-                kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
-            kl_mean = masked_mean(kl, experience.action_mask, dim=-1)
-
-            info = {
-                "kl": kl_mean,
-                "reward": rewards,
-                "response_length": experience.response_length,
-                "total_length": experience.total_length,
-            }
-
-            # Update experience with new information
+            # Calculate KL divergence for each item
             experience.action_log_probs = action_log_probs
             experience.base_action_log_probs = base_action_log_probs
             experience.values = value
-            experience.kl = kl
             experience.rewards = rewards
+
+            kl_list = []
+            info = {"kl": [], "reward": [], "response_length": [], "total_length": []}
+
+            for j in range(len(action_log_probs)):
+                # Calculate KL
+                if (self.initial_model_group is not None) and (not args.use_kl_loss):
+                    kl = compute_approx_kl(
+                        action_log_probs[j],
+                        base_action_log_probs[j],
+                        kl_estimator=self.strategy.args.kl_estimator,
+                    )
+                else:
+                    kl = torch.zeros_like(action_log_probs[j], dtype=action_log_probs[j].dtype, device=device)
+
+                kl_list.append(kl)
+
+                # Calculate KL mean for info
+                kl_mean = masked_mean(kl, experience.action_mask[j], dim=-1)
+
+                # Append values to info lists
+                info["kl"].append(kl_mean)
+                info["reward"].append(rewards[j])
+                info["response_length"].append(experience.response_length[j])
+                info["total_length"].append(experience.total_length[j])
+
+            experience.kl = kl_list
             experience.info = info
 
         end_time = time.time()
