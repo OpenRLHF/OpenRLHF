@@ -1,5 +1,5 @@
 import os
-from typing import List, Optional
+from typing import List
 
 import torch
 import torch.distributed
@@ -99,32 +99,24 @@ def dynamic_split_batches(
 
 
 def unpad_dynamic_batches(
-    results: List[torch.Tensor], original_length: int, batch_indices: Optional[List[List[int]]] = None
+    results: List[torch.Tensor], batch_indices: List[List[int]], total_length: int
 ) -> List[torch.Tensor]:
-    """Remove padding from results of dynamic batch processing.
+    """Unpad results from dynamic batches back to original order.
 
     Args:
-        results: List of combined results from all batches
-        original_length: Original number of samples before splitting
-        batch_indices: List of batch indices used for splitting
+        results (List[torch.Tensor]): List of results from each batch
+        batch_indices (List[List[int]]): List of batch indices for each batch
+        total_length (int): Total number of original sequences
 
     Returns:
-        List of tensors with padding removed and original order restored
+        List[torch.Tensor]: Results in original order
     """
-    if batch_indices is None:
-        # If no batch_indices provided, just remove padding
-        return [result[:original_length] for result in results]
+    # Initialize ordered results with None
+    ordered_results = [None] * total_length
 
-    # Create a tensor to store results in original order
-    ordered_results = [torch.zeros_like(result[:original_length]) for result in results]
-
-    # Restore original order using batch_indices
-    current_idx = 0
-    for batch in batch_indices:
-        for idx in batch:
-            if idx < original_length:  # Skip padding indices
-                for i, result in enumerate(results):
-                    ordered_results[i][idx] = result[current_idx]
-            current_idx += 1
+    # Fill in results in original order
+    for batch_result, indices in zip(results, batch_indices):
+        for result, idx in zip(batch_result, indices):
+            ordered_results[idx] = result
 
     return ordered_results
