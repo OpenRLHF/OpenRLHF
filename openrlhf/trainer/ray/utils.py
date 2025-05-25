@@ -52,11 +52,13 @@ def get_physical_gpu_id():
     return str(props.uuid)
 
 
-def dynamic_split_batches(attention_mask: torch.Tensor, max_tokens: int, device: torch.device) -> List[List[int]]:
+def dynamic_split_batches(
+    attention_mask: List[torch.Tensor], max_tokens: int, device: torch.device
+) -> List[List[int]]:
     """Split samples into batches based on token counts and sync across ranks.
 
     Args:
-        attention_mask: Attention mask tensor of shape [batch_size, seq_len]
+        attention_mask: List of attention mask tensors
         max_tokens: Maximum tokens per batch
         device: Device to process on
 
@@ -64,7 +66,7 @@ def dynamic_split_batches(attention_mask: torch.Tensor, max_tokens: int, device:
         List of batch indices, where each batch's total tokens <= max_tokens
     """
     # Calculate token counts and split batches
-    token_counts = attention_mask.sum(dim=1)
+    token_counts = [tensor.sum().item() for tensor in attention_mask]
     batches = []
     current_batch = []
     current_tokens = 0
@@ -97,31 +99,32 @@ def dynamic_split_batches(attention_mask: torch.Tensor, max_tokens: int, device:
 
 
 def unpad_dynamic_batches(
-    results: torch.Tensor, original_length: int, batch_indices: Optional[List[List[int]]] = None
-) -> torch.Tensor:
+    results: List[torch.Tensor], original_length: int, batch_indices: Optional[List[List[int]]] = None
+) -> List[torch.Tensor]:
     """Remove padding from results of dynamic batch processing.
 
     Args:
-        results: Combined results from all batches
+        results: List of combined results from all batches
         original_length: Original number of samples before splitting
         batch_indices: List of batch indices used for splitting
 
     Returns:
-        Tensor with padding removed and original order restored
+        List of tensors with padding removed and original order restored
     """
     if batch_indices is None:
         # If no batch_indices provided, just remove padding
-        return results[:original_length]
+        return [result[:original_length] for result in results]
 
     # Create a tensor to store results in original order
-    ordered_results = torch.zeros_like(results[:original_length])
+    ordered_results = [torch.zeros_like(result[:original_length]) for result in results]
 
     # Restore original order using batch_indices
     current_idx = 0
     for batch in batch_indices:
         for idx in batch:
             if idx < original_length:  # Skip padding indices
-                ordered_results[idx] = results[current_idx]
+                for i, result in enumerate(results):
+                    ordered_results[i][idx] = result[current_idx]
             current_idx += 1
 
     return ordered_results

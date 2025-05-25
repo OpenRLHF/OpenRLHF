@@ -1,7 +1,7 @@
 import logging
 import os
 import socket
-from typing import Dict, Optional, Type, Union
+from typing import Dict, List, Optional, Type
 
 import ray
 import torch
@@ -11,8 +11,9 @@ from tqdm import tqdm
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils.utils import zero_pad_sequences
 
-from .utils import dynamic_split_batches, ray_noset_visible_devices, unpad_dynamic_batches
+from .utils import dynamic_split_batches, ray_noset_visible_devices
 
 
 class DistributedTorchRayActor:
@@ -126,51 +127,62 @@ class ReferenceModelRayActor(BasePPORole):
 
     def forward(
         self,
-        sequences: torch.LongTensor,
-        action_mask: Optional[Union[int, list[int]]] = None,
-        attention_mask: Optional[torch.Tensor] = None,
+        sequences: List[torch.Tensor],
+        action_mask: List[torch.Tensor],
+        attention_mask: List[torch.Tensor],
         packed_seq_lens=None,
-    ) -> torch.Tensor:
+    ) -> List[torch.Tensor]:
         """Generates reference values."""
         device = torch.cuda.current_device()
         self.model.eval()
+
+        from openrlhf.utils.utils import zero_pad_sequences
 
         if self.args.use_dynamic_batch_size:
             # Split into batches
             batches = dynamic_split_batches(attention_mask, self.args.rollout_max_tokens, device)
 
             # Process each batch
-            all_values = []
+            all_log_probs = []
             for batch_indices in batches:
-                batch_sequences = sequences[batch_indices]
-                batch_action_mask = action_mask[batch_indices]
-                batch_attention_mask = attention_mask[batch_indices]
+                batch_sequences = zero_pad_sequences(
+                    [sequences[i] for i in batch_indices], "right", value=self.tokenizer.pad_token_id, stack=True
+                )
+                batch_action_mask = zero_pad_sequences(
+                    [action_mask[i] for i in batch_indices], "right", value=0, stack=True
+                )
+                batch_attention_mask = zero_pad_sequences(
+                    [attention_mask[i] for i in batch_indices], "right", value=0, stack=True
+                )
 
                 with torch.no_grad():
-                    batch_values = self.model(
+                    batch_log_probs = self.model(
                         batch_sequences.to(device),
                         batch_action_mask.to(device),
                         batch_attention_mask.to(device),
                         ring_attn_group=self.strategy.ring_attn_group,
                     )
-                all_values.append(batch_values)
+                # Unpad each batch result
+                batch_log_probs = [tensor[: len(action_mask[i])] for i, tensor in zip(batch_indices, batch_log_probs)]
+                all_log_probs.extend(batch_log_probs)
+        else:
+            # Non-dynamic batch path
+            padded_sequences = zero_pad_sequences(sequences, "right", value=self.tokenizer.pad_token_id, stack=True)
+            padded_action_mask = zero_pad_sequences(action_mask, "right", value=0, stack=True)
+            padded_attention_mask = zero_pad_sequences(attention_mask, "right", value=0, stack=True)
 
-            # Combine results and remove padding
-            values = torch.cat(all_values, dim=0)
-            values = unpad_dynamic_batches(values, len(sequences), batches)
+            with torch.no_grad():
+                log_probs = self.model(
+                    padded_sequences.to(device),
+                    padded_action_mask.to(device),
+                    padded_attention_mask.to(device),
+                    ring_attn_group=self.strategy.ring_attn_group,
+                )
+            # Unpad results
+            all_log_probs = [tensor[: len(mask)] for tensor, mask in zip(log_probs, action_mask)]
 
-            self.model.train()  # reset model state
-            return values.to("cpu")
-
-        with torch.no_grad():
-            values = self.model(
-                sequences.to(device),
-                action_mask.to(device),
-                attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
-            )
         self.model.train()  # reset model state
-        return values.to("cpu")
+        return [tensor.to("cpu") for tensor in all_log_probs]
 
 
 @ray.remote(num_gpus=1)
@@ -200,21 +212,57 @@ class RewardModelRayActor(BasePPORole):
 
     def forward(
         self,
-        sequences: torch.LongTensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        sequences: List[torch.Tensor],
+        attention_mask: Optional[List[torch.Tensor]] = None,
         packed_seq_lens=None,
         pad_sequence=False,
-    ) -> torch.Tensor:
+    ) -> List[torch.Tensor]:
         device = torch.cuda.current_device()
-        with torch.no_grad():
-            reward = self.model(
-                sequences.to(device),
-                attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
-                pad_sequence=True,
-                packed_seq_lens=packed_seq_lens,
-            )
-        return reward.to("cpu")
+        self.model.eval()
+
+        if self.args.use_dynamic_batch_size:
+            # Split into batches
+            batches = dynamic_split_batches(attention_mask, self.args.rollout_max_tokens, device)
+
+            # Process each batch
+            all_rewards = []
+            for batch_indices in batches:
+                batch_sequences = zero_pad_sequences(
+                    [sequences[i] for i in batch_indices], "right", value=self.tokenizer.pad_token_id, stack=True
+                )
+                batch_attention_mask = zero_pad_sequences(
+                    [attention_mask[i] for i in batch_indices], "right", value=0, stack=True
+                )
+
+                with torch.no_grad():
+                    batch_rewards = self.model(
+                        batch_sequences.to(device),
+                        batch_attention_mask.to(device),
+                        ring_attn_group=self.strategy.ring_attn_group,
+                        pad_sequence=True,
+                        packed_seq_lens=packed_seq_lens,
+                    )
+                # Unpad each batch result
+                batch_rewards = [tensor[: len(sequences[i])] for i, tensor in zip(batch_indices, batch_rewards)]
+                all_rewards.extend(batch_rewards)
+        else:
+            # Non-dynamic batch path
+            sequences = zero_pad_sequences(sequences, "right", value=self.tokenizer.pad_token_id, stack=True)
+            attention_mask = zero_pad_sequences(attention_mask, "right", value=0, stack=True)
+
+            with torch.no_grad():
+                rewards = self.model(
+                    sequences.to(device),
+                    attention_mask.to(device),
+                    ring_attn_group=self.strategy.ring_attn_group,
+                    pad_sequence=True,
+                    packed_seq_lens=packed_seq_lens,
+                )
+            # Unpad results
+            all_rewards = [tensor[: len(seq)] for tensor, seq in zip(rewards, sequences)]
+
+        self.model.train()  # reset model state
+        return [tensor.to("cpu") for tensor in all_rewards]
 
 
 class PPORayActorGroup:

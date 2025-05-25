@@ -1,7 +1,7 @@
 import math
 import os
 from abc import ABC
-from typing import Dict, Optional, Union
+from typing import Dict, List
 
 import ray
 import torch
@@ -13,12 +13,14 @@ from transformers.trainer import get_scheduler
 from openrlhf.models import ValueLoss, get_llm_for_sequence_regression
 from openrlhf.models.utils import masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
-from openrlhf.utils import dynamic_split_batches, get_tokenizer, unpad_dynamic_batches
+from openrlhf.utils import get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
+from openrlhf.utils.utils import zero_pad_sequences
 
 from ..ppo_utils import NaiveReplayBuffer
 from .launcher import BasePPORole
+from .utils import dynamic_split_batches
 
 
 class CriticPPOTrainer(ABC):
@@ -221,11 +223,11 @@ class CriticModelRayActor(BasePPORole):
 
     def forward(
         self,
-        sequences: torch.LongTensor,
-        action_mask: Optional[Union[int, list[int]]] = None,
-        attention_mask: Optional[torch.Tensor] = None,
+        sequences: List[torch.Tensor],
+        action_mask: List[torch.Tensor],
+        attention_mask: List[torch.Tensor],
         packed_seq_lens=None,
-    ) -> torch.Tensor:
+    ) -> List[torch.Tensor]:
         """Generates critic values."""
         device = torch.cuda.current_device()
         self.critic.eval()
@@ -237,9 +239,15 @@ class CriticModelRayActor(BasePPORole):
             # Process each batch
             all_values = []
             for batch_indices in batches:
-                batch_sequences = sequences[batch_indices]
-                batch_action_mask = action_mask[batch_indices]
-                batch_attention_mask = attention_mask[batch_indices]
+                batch_sequences = zero_pad_sequences(
+                    [sequences[i] for i in batch_indices], "right", value=self.tokenizer.pad_token_id, stack=True
+                )
+                batch_action_mask = zero_pad_sequences(
+                    [action_mask[i] for i in batch_indices], "right", value=0, stack=True
+                )
+                batch_attention_mask = zero_pad_sequences(
+                    [attention_mask[i] for i in batch_indices], "right", value=0, stack=True
+                )
 
                 with torch.no_grad():
                     batch_values = self.critic(
@@ -248,24 +256,27 @@ class CriticModelRayActor(BasePPORole):
                         batch_attention_mask.to(device),
                         ring_attn_group=self.strategy.ring_attn_group,
                     )
-                all_values.append(batch_values)
+                # Unpad each batch result
+                batch_values = [tensor[: len(action_mask[i])] for i, tensor in zip(batch_indices, batch_values)]
+                all_values.extend(batch_values)
+        else:
+            # Non-dynamic batch path
+            padded_sequences = zero_pad_sequences(sequences, "right", value=self.tokenizer.pad_token_id, stack=True)
+            padded_action_mask = zero_pad_sequences(action_mask, "right", value=0, stack=True)
+            padded_attention_mask = zero_pad_sequences(attention_mask, "right", value=0, stack=True)
 
-            # Combine results and remove padding
-            values = torch.cat(all_values, dim=0)
-            values = unpad_dynamic_batches(values, len(sequences), batches)
+            with torch.no_grad():
+                values = self.critic(
+                    padded_sequences.to(device),
+                    padded_action_mask.to(device),
+                    padded_attention_mask.to(device),
+                    ring_attn_group=self.strategy.ring_attn_group,
+                )
+            # Unpad results
+            all_values = [tensor[: len(mask)] for tensor, mask in zip(values, action_mask)]
 
-            self.critic.train()  # reset model state
-            return values.to("cpu")
-
-        with torch.no_grad():
-            values = self.critic(
-                sequences.to(device),
-                action_mask.to(device),
-                attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
-            )
         self.critic.train()  # reset model state
-        return values.to("cpu")
+        return [tensor.to("cpu") for tensor in all_values]
 
     def append(self, experience):
         """Append experience to replay buffer."""

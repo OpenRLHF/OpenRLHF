@@ -2,7 +2,7 @@ import math
 import os
 import socket
 from abc import ABC
-from typing import Dict, List, Optional, Union
+from typing import Dict, List
 
 import deepspeed
 import ray
@@ -27,7 +27,7 @@ from ..ppo_utils import NaiveReplayBuffer
 logger = init_logger(__name__)
 
 from .launcher import BasePPORole
-from .utils import dynamic_split_batches, get_physical_gpu_id, unpad_dynamic_batches
+from .utils import dynamic_split_batches, get_physical_gpu_id
 
 
 class ActorPPOTrainer(ABC):
@@ -478,14 +478,16 @@ class ActorModelRayActor(BasePPORole):
 
     def forward(
         self,
-        sequences: torch.LongTensor,
-        action_mask: Optional[Union[int, list[int]]] = None,
-        attention_mask: Optional[torch.Tensor] = None,
+        sequences: List[torch.Tensor],
+        action_mask: List[torch.Tensor],
+        attention_mask: List[torch.Tensor],
         packed_seq_lens=None,
-    ) -> torch.Tensor:
+    ) -> List[torch.Tensor]:
         """Generates actor values."""
         device = torch.cuda.current_device()
         self.actor.eval()
+
+        from openrlhf.utils.utils import zero_pad_sequences
 
         if self.args.use_dynamic_batch_size:
             # Split into batches
@@ -494,9 +496,15 @@ class ActorModelRayActor(BasePPORole):
             # Process each batch
             all_log_probs = []
             for batch_indices in batches:
-                batch_sequences = sequences[batch_indices]
-                batch_action_mask = action_mask[batch_indices]
-                batch_attention_mask = attention_mask[batch_indices]
+                batch_sequences = zero_pad_sequences(
+                    [sequences[i] for i in batch_indices], "right", value=self.tokenizer.pad_token_id, stack=True
+                )
+                batch_action_mask = zero_pad_sequences(
+                    [action_mask[i] for i in batch_indices], "right", value=0, stack=True
+                )
+                batch_attention_mask = zero_pad_sequences(
+                    [attention_mask[i] for i in batch_indices], "right", value=0, stack=True
+                )
 
                 with torch.no_grad():
                     batch_log_probs = self.actor(
@@ -505,24 +513,27 @@ class ActorModelRayActor(BasePPORole):
                         batch_attention_mask.to(device),
                         ring_attn_group=self.strategy.ring_attn_group,
                     )
-                all_log_probs.append(batch_log_probs)
+                # Unpad each batch result
+                batch_log_probs = [tensor[: len(action_mask[i])] for i, tensor in zip(batch_indices, batch_log_probs)]
+                all_log_probs.extend(batch_log_probs)
+        else:
+            # Non-dynamic batch path
+            padded_sequences = zero_pad_sequences(sequences, "right", value=self.tokenizer.pad_token_id, stack=True)
+            padded_action_mask = zero_pad_sequences(action_mask, "right", value=0, stack=True)
+            padded_attention_mask = zero_pad_sequences(attention_mask, "right", value=0, stack=True)
 
-            # Combine results and remove padding
-            action_log_probs = torch.cat(all_log_probs, dim=0)
-            action_log_probs = unpad_dynamic_batches(action_log_probs, len(sequences), batches)
+            with torch.no_grad():
+                log_probs = self.actor(
+                    padded_sequences.to(device),
+                    padded_action_mask.to(device),
+                    padded_attention_mask.to(device),
+                    ring_attn_group=self.strategy.ring_attn_group,
+                )
+            # Unpad results
+            all_log_probs = [tensor[: len(mask)] for tensor, mask in zip(log_probs, action_mask)]
 
-            self.actor.train()  # reset model state
-            return action_log_probs.to("cpu")
-
-        with torch.no_grad():
-            action_log_probs = self.actor(
-                sequences.to(device),
-                action_mask.to(device),
-                attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
-            )
         self.actor.train()  # reset model state
-        return action_log_probs.to("cpu")
+        return [tensor.to("cpu") for tensor in all_log_probs]
 
     def broadcast_to_vllm(self):
         self.trainer._broadcast_to_vllm()
