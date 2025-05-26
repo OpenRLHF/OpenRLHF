@@ -174,7 +174,9 @@ def train(args):
 
     if args.critic_pretrain and args.save_value_network:
         ray.get(critic_model.async_save_model())
-
+    
+    # temp solution: Avoid main process disappeared error on Ascend NPU
+    ray.shutdown()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
