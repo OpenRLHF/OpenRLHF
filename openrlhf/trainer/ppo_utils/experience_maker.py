@@ -31,23 +31,18 @@ def pin_memory(tensor: Union[torch.Tensor, list[torch.Tensor]]):
 @dataclass
 class Experience:
     """Experience is a batch of data for RLHF training.
-    All fields are stored as tensors, where tensor fields are stored as tensors.
-    Left padding for sequences is applied.
 
     Shapes of each tensor:
     sequences: (B, S)
-    action_log_probs: (B, A)
-    base_action_log_probs: (B, A)
-    values: (B, A)
-    returns: (B, A)
-    advantages: (B, A)
     attention_mask: (B, S)
     action_mask: (B, A)
-    response_length: (B,)
-    total_length: (B,)
-    kl: (B, A)
-
-    "A" is the number of actions.
+    action_log_probs: (B, S)
+    base_action_log_probs: (B, S)
+    values: (B, S)
+    returns: (B, S)
+    advantages: (B, S)
+    kl: (B, S)
+    info: dict[str, list]
     """
 
     sequences: torch.Tensor = None
@@ -79,8 +74,6 @@ class Experience:
         advantages=None,
         attention_mask=None,
         action_mask=None,
-        response_length=None,
-        total_length=None,
         kl=None,
         prompts=None,
         labels=None,
@@ -95,8 +88,6 @@ class Experience:
         self.advantages = advantages
         self.attention_mask = attention_mask
         self.action_mask = action_mask
-        self.response_length = response_length
-        self.total_length = total_length
         self.kl = kl
         self.prompts = prompts or []
         self.labels = labels or []
