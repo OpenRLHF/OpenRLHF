@@ -223,6 +223,7 @@ def update_samples_with_rewards(rewards_info, samples_list):
         samples.rewards = rewards_list[i]
         samples.scores = scores_list[i]
         samples.info["scores"] = scores_list[i]
+        samples.info["rewards"] = rewards_list[i]
         if "extra_logs" in rewards_info[0]:
             for key, values in merged_logs.items():
                 samples.info[key] = values[i]
@@ -471,11 +472,9 @@ class RemoteExperienceMaker(ABC):
         attention_mask_list = [s.attention_mask for s in samples_list]
         action_mask_list = [s.action_mask for s in samples_list]
 
-        # Get rewards from samples, such as rewards from agent's environment
+        # The rewards are already filled in the samples_list, such as the agent's environment rewards
         if samples_list[0].rewards:
-            rewards_list = [s.rewards for s in samples_list]
-            rewards_list = [torch.tensor(s.rewards) for s in samples_list]
-            r_refs = ray.put(rewards_list)
+            pass
         elif self.remote_rm_url:
             queries_list = sum(
                 [
@@ -557,12 +556,15 @@ class RemoteExperienceMaker(ABC):
         value_list = sum(ray.get(value_ref)[::duplicate_factor], [])
 
         # Process rewards based on source
-        if not samples_list[0].rewards and self.remote_rm_url:
+        if samples_list[0].rewards:
+            pass
+        elif self.remote_rm_url:
             # Get rewards info from remote model
             rewards_info = ray.get(r_refs)
             # Process rewards and scores
             update_samples_with_rewards(rewards_info, samples_list)
         else:
+            # Reward Model
             rewards_list = sum(ray.get(r_refs)[::duplicate_factor], [])
             for i, samples in enumerate(samples_list):
                 samples.rewards = rewards_list[i]
