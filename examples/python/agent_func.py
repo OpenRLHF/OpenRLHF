@@ -50,10 +50,10 @@ async def step(state, action, label, **kwargs) -> Dict[str, Any]:
     step_idx += 1
 
     return {
-        "rewards": reward,
-        "scores": reward,
-        "next_state": next_state,
-        "done": done,
-        "sampling_params": kwargs.get("sampling_params", None),
-        "extra_logs": {"dummy_scores": reward},
+        "rewards": reward,  # Rewards for advantage calculation
+        "scores": reward,  # Scores for dynamic filtering (0-1 reward)
+        "next_state": next_state,  # The updated state for vLLM in next step
+        "done": done,  # Boolean indicating if the episode is complete
+        "sampling_params": kwargs.get("sampling_params", None),  # Parameters for vLLM sampling in next step
+        "extra_logs": {"dummy_scores": reward},  # Additional logging information
     }

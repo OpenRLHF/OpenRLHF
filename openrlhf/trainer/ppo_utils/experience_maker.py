@@ -197,7 +197,7 @@ class Experience:
         return Experience(**result)
 
 
-def process_rewards_info(rewards_info, samples_list):
+def update_samples_with_rewards(rewards_info, samples_list):
     """Process rewards info and update samples with rewards, scores and extra logs.
 
     Args:
@@ -227,7 +227,7 @@ def process_rewards_info(rewards_info, samples_list):
             for key, values in merged_logs.items():
                 samples.info[key] = values[i]
 
-    return rewards_list, scores_list, merged_logs
+    return samples_list
 
 
 class SamplesGenerator:
@@ -393,7 +393,7 @@ class SamplesGenerator:
             # Get rewards info from remote model
             rewards_info = ray.get(remote_reward_model.get_rewards.remote(all_queries, all_prompts, all_labels))
             # Process rewards and scores
-            process_rewards_info(rewards_info, samples_list)
+            update_samples_with_rewards(rewards_info, samples_list)
 
         return samples_list
 
@@ -561,7 +561,7 @@ class RemoteExperienceMaker(ABC):
             # Get rewards info from remote model
             rewards_info = ray.get(r_refs)
             # Process rewards and scores
-            rewards_list, _, _ = process_rewards_info(rewards_info, samples_list)
+            update_samples_with_rewards(rewards_info, samples_list)
         else:
             rewards_list = sum(ray.get(r_refs)[::duplicate_factor], [])
             for i, samples in enumerate(samples_list):
@@ -569,12 +569,8 @@ class RemoteExperienceMaker(ABC):
                 samples.info["rewards"] = rewards_list[i]
 
         assert (
-            len(samples_list)
-            == len(action_log_probs_list)
-            == len(base_action_log_probs_list)
-            == len(value_list)
-            == len(rewards_list)
-        ), f"len(samples_list): {len(samples_list)}, len(action_log_probs_list): {len(action_log_probs_list)}, len(base_action_log_probs_list): {len(base_action_log_probs_list)}, len(value_list): {len(value_list)}, len(rewards_list): {len(rewards_list)}"
+            len(samples_list) == len(action_log_probs_list) == len(base_action_log_probs_list) == len(value_list)
+        ), f"len(samples_list): {len(samples_list)}, len(action_log_probs_list): {len(action_log_probs_list)}, len(base_action_log_probs_list): {len(base_action_log_probs_list)}, len(value_list): {len(value_list)}"
 
         # Process results for each sample
         for i, (samples, action_log_probs, base_action_log_probs, value) in enumerate(
