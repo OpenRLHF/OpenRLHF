@@ -58,8 +58,8 @@ class Experience:
 
     prompts: list[str] = None
     labels: list[str] = None
-    rewards: torch.Tensor = None
-    scores: torch.Tensor = None
+    rewards: torch.Tensor = None  # used for advantage calculation
+    scores: torch.Tensor = None  # 0-1 reward used for dynamic sampling
 
     # the info field is used to store additional information
     # all the fields in the info will be logged to the tensorboard/wandb
