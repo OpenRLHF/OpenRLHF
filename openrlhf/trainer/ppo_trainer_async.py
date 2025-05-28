@@ -59,6 +59,7 @@ class GenerateSamplesActor(BasePPOTrainer):
     def __init__(self, *args, **kwargs):
         self.signal_actor = kwargs.pop("signal_actor")
         super().__init__(*args, **kwargs)
+        self.log_counter = 0  # Counter for log interval
 
         self.samples_generator = self.generator_cls(
             self.vllm_engines,
@@ -88,7 +89,10 @@ class GenerateSamplesActor(BasePPOTrainer):
                 # Wait until queue is not full
                 # To support 1-step off-policy training
                 while queue.full():
-                    logger.info("Queue is full, waiting for training to consume samples...")
+                    self.log_counter += 1
+                    if self.log_counter >= 10:  # Print log every 10 seconds
+                        logger.info("Queue is full, waiting for training to consume samples...")
+                        self.log_counter = 0
                     time.sleep(1)  # Wait for 1 second before checking again
 
                 # Wait for generation to be allowed
