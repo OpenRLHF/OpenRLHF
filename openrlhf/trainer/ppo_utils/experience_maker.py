@@ -377,6 +377,7 @@ class SamplesGenerator:
             samples_list.append(rollout_samples)
 
         # Get rewards from remote reward models if needed
+        # This is required by dynamic sampling
         remote_reward_model = kwargs.get("remote_reward_model", None)
         if remote_reward_model:
             all_queries = sum(
@@ -550,6 +551,8 @@ class RemoteExperienceMaker(ABC):
             )
 
         # Wait for all remote calls to complete and flatten the results
+        # Note: the results duplicated ring_attn_size * ds_tensor_parallel_size times
+        # This is because the actors in ring group and tp group will return the same output
         duplicate_factor = args.ring_attn_size * args.ds_tensor_parallel_size
         action_log_probs_list = sum(ray.get(action_log_probs_ref)[::duplicate_factor], [])
         base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref)[::duplicate_factor], [])
