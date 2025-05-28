@@ -580,7 +580,7 @@ class RemoteExperienceMaker(ABC):
         args = self.strategy.args
 
         # get rewards from experiences
-        rewards = [experience.info["reward"] for experience in experiences]
+        rewards = [experience.rewards for experience in experiences]
         rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt)
 
         # log group reward std
