@@ -162,6 +162,8 @@ class Experience:
                     result[key].append(value)
             # Merge all values for each key at once
             return {key: Experience._merge_item(values, pad_value) for key, values in result.items()}
+        elif items[0] is None:
+            return None
         else:
             raise ValueError(f"Unsupported type: {type(items[0])}")
 
