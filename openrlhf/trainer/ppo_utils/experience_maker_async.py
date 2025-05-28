@@ -120,6 +120,8 @@ class SamplesGeneratorAsync(SamplesGenerator):
                 "response_length": torch.tensor([response_length]),
                 "total_length": torch.tensor([total_length]),
                 "response_clip_ratio": torch.tensor([is_clipped]),
+                "reward": torch.tensor([output["reward"]]),
+                "score": torch.tensor([output["scores"]]),
             }
 
             # Process extra_logs
@@ -133,8 +135,8 @@ class SamplesGeneratorAsync(SamplesGenerator):
                 action_mask=action_mask.unsqueeze(0),
                 prompts=[output["prompt"]],
                 labels=[output["label"]],
-                rewards=[output["reward"]],
-                scores=[output["scores"]],
+                rewards=torch.tensor([output["reward"]]),
+                scores=torch.tensor([output["scores"]]),
                 info=info,
             )
             experiences_list.append(experience)

@@ -225,8 +225,8 @@ def update_samples_with_rewards(rewards_info, samples_list):
     for i, samples in enumerate(samples_list):
         samples.rewards = rewards_list[i]
         samples.scores = scores_list[i]
-        samples.info["scores"] = scores_list[i]
-        samples.info["rewards"] = rewards_list[i]
+        samples.info["score"] = scores_list[i]
+        samples.info["reward"] = rewards_list[i]
         if "extra_logs" in rewards_info[0]:
             for key, values in merged_logs.items():
                 samples.info[key] = values[i]
@@ -574,7 +574,7 @@ class RemoteExperienceMaker(ABC):
             rewards_list = sum(ray.get(r_refs)[::duplicate_factor], [])
             for i, samples in enumerate(samples_list):
                 samples.rewards = rewards_list[i]
-                samples.info["rewards"] = rewards_list[i]
+                samples.info["reward"] = rewards_list[i]
 
         assert (
             len(samples_list) == len(action_log_probs_list) == len(base_action_log_probs_list) == len(value_list)
