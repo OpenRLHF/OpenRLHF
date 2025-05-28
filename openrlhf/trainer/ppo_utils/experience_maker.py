@@ -315,9 +315,9 @@ class SamplesGenerator:
             total_length = attention_mask.float().sum()
 
             info = {
-                "response_length": response_length,
-                "total_length": total_length,
-                "length_clip_ratio": torch.tensor(response_length + 1 == max_response_length),
+                "response_length": torch.tensor([response_length]),
+                "total_length": torch.tensor([total_length]),
+                "length_clip_ratio": torch.tensor([response_length + 1 == max_response_length]),
             }
 
             rollout_samples = Experience(
