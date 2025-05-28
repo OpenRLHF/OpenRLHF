@@ -114,7 +114,7 @@ class SamplesGeneratorAsync(SamplesGenerator):
             ones_indices = torch.where(action_mask)[0]
             response_length = (ones_indices[-1] - ones_indices[0] + 1).item() if len(ones_indices) else 0
             total_length = attention_mask.float().sum()
-            is_clipped = total_length == truncate_length
+            is_clipped = total_length >= truncate_length
 
             info = {
                 "response_length": torch.tensor([response_length]),
