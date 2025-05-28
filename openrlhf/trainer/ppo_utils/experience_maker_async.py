@@ -122,6 +122,11 @@ class SamplesGeneratorAsync(SamplesGenerator):
                 "response_clip_ratio": torch.tensor([is_clipped]),
             }
 
+            # Process extra_logs
+            extra_logs = output.get("extra_logs", {})
+            for key, value in extra_logs.items():
+                info[key] = torch.tensor([value.item()])
+
             experience = Experience(
                 sequences=sequences.unsqueeze(0),
                 attention_mask=attention_mask.unsqueeze(0),
@@ -129,6 +134,7 @@ class SamplesGeneratorAsync(SamplesGenerator):
                 prompts=[output["prompt"]],
                 labels=[output["label"]],
                 rewards=[output["reward"]],
+                scores=[output["scores"]],
                 info=info,
             )
             experiences_list.append(experience)

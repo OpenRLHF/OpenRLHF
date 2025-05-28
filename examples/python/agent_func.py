@@ -37,6 +37,10 @@ async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], b
 
     # Extra info
     # We can update vLLM sampling params for next step here
-    extra_info = {"sampling_params": kwargs.get("sampling_params", None)}
+    # extra_logs is used to log the info into wandb (in last step)
+    extra_info = {"sampling_params": kwargs.get("sampling_params", None), "extra_logs": {"dummy_scores": reward}}
 
+    # rewards is used the calculate the advantage (with format reward)
+    # scores is used in dynamic filtering (0-1 reward)
+    reward = {"rewards": reward, "scores": reward}
     return reward, next_state, done, extra_info

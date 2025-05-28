@@ -58,7 +58,8 @@ class Experience:
 
     prompts: list[str] = None
     labels: list[str] = None
-    rewards: list[float] = None
+    rewards: torch.Tensor = None
+    scores: torch.Tensor = None
 
     # the info field is used to store additional information
     # all the fields in the info will be logged to the tensorboard/wandb
@@ -78,6 +79,7 @@ class Experience:
         prompts=None,
         labels=None,
         rewards=None,
+        scores=None,
         info=None,
     ):
         self.sequences = sequences
@@ -92,6 +94,7 @@ class Experience:
         self.prompts = prompts or []
         self.labels = labels or []
         self.rewards = rewards or []
+        self.scores = scores or []
         self.info = info or []
 
     @torch.no_grad()
@@ -194,6 +197,39 @@ class Experience:
         return Experience(**result)
 
 
+def process_rewards_info(rewards_info, samples_list):
+    """Process rewards info and update samples with rewards, scores and extra logs.
+
+    Args:
+        rewards_info: List of reward information dictionaries
+        samples_list: List of Experience objects to update
+    """
+    # Process rewards and scores
+    rewards_list = torch.cat([info["rewards"] for info in rewards_info], dim=0).chunk(len(samples_list))
+    scores_list = torch.cat([info["scores"] for info in rewards_info], dim=0).chunk(len(samples_list))
+
+    # Process extra_logs if present
+    if "extra_logs" in rewards_info[0]:
+        # Merge all extra_logs tensors first
+        merged_logs = {
+            key: torch.cat([logs[key] for logs in [info["extra_logs"] for info in rewards_info]], dim=0).chunk(
+                len(samples_list)
+            )
+            for key in rewards_info[0]["extra_logs"].keys()
+        }
+
+    # Update samples with rewards, scores and extra logs
+    for i, samples in enumerate(samples_list):
+        samples.rewards = rewards_list[i]
+        samples.scores = scores_list[i]
+        samples.info["scores"] = scores_list[i]
+        if "extra_logs" in rewards_info[0]:
+            for key, values in merged_logs.items():
+                samples.info[key] = values[i]
+
+    return rewards_list, scores_list, merged_logs
+
+
 class SamplesGenerator:
     def __init__(self, vllm_engines, strategy, tokenizer, prompt_max_len):
         self.strategy = strategy
@@ -246,11 +282,22 @@ class SamplesGenerator:
         return {k: v.to(device) for k, v in batch.items()}
 
     def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> List[Experience]:
+        """Generate samples using vLLM engine.
+
+        Args:
+            all_prompts: List of prompts to generate from
+            all_labels: List of labels corresponding to prompts
+            **kwargs: Additional arguments for generation
+
+        Returns:
+            List of Experience objects containing generated samples
+        """
         from vllm import SamplingParams
 
         llms = self.vllm_engines
         args = self.strategy.args
 
+        # Set up sampling parameters
         sampling_params = SamplingParams(
             temperature=kwargs.get("temperature", 1.0),
             top_p=kwargs.get("top_p", 1.0),
@@ -269,7 +316,7 @@ class SamplesGenerator:
         all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
         all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
 
-        # Distribute requests to engines and collect responses to outputs
+        # Distribute requests to engines and collect responses
         refs = []
         batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
         for i, llm in enumerate(llms):
@@ -285,7 +332,7 @@ class SamplesGenerator:
 
         pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
 
-        # Group outputs by n_samples_per_prompt
+        # Process outputs into Experience objects
         samples_list = []
         for i in range(len(all_outputs)):
             output = all_outputs[i]
@@ -296,7 +343,6 @@ class SamplesGenerator:
             input_ids = list(output.prompt_token_ids) + list(output.outputs[0].token_ids)
             if output.outputs[0].token_ids[-1] != eos_token_id:
                 input_ids.append(eos_token_id)
-            # Create attention mask
             attention_mask = [1] * len(input_ids)
 
             sequences = torch.tensor(input_ids)
@@ -304,7 +350,6 @@ class SamplesGenerator:
 
             # Create action mask based on output token positions
             action_mask = torch.zeros_like(attention_mask)
-            # Mark positions after prompt as actions
             response_length = len(output.outputs[0].token_ids) + int(output.outputs[0].token_ids[-1] != eos_token_id)
             action_mask[len(output.prompt_token_ids) : len(output.prompt_token_ids) + response_length] = 1
 
@@ -330,8 +375,7 @@ class SamplesGenerator:
             )
             samples_list.append(rollout_samples)
 
-        # Get rewards from remote reward models
-        # This is required by dynamic sampling
+        # Get rewards from remote reward models if needed
         remote_reward_model = kwargs.get("remote_reward_model", None)
         if remote_reward_model:
             all_queries = sum(
@@ -346,11 +390,10 @@ class SamplesGenerator:
             all_prompts = sum([s.prompts for s in samples_list], [])
             all_labels = sum([s.labels for s in samples_list], [])
 
-            rewards_list = ray.get(remote_reward_model.get_rewards.remote(all_queries, all_prompts, all_labels))
-            rewards_list = torch.cat(rewards_list, dim=0).chunk(len(samples_list))
-
-            for i, samples in enumerate(samples_list):
-                samples.rewards = rewards_list[i].tolist()
+            # Get rewards info from remote model
+            rewards_info = ray.get(remote_reward_model.get_rewards.remote(all_queries, all_prompts, all_labels))
+            # Process rewards and scores
+            process_rewards_info(rewards_info, samples_list)
 
         return samples_list
 
@@ -443,6 +486,7 @@ class RemoteExperienceMaker(ABC):
             )
             prompts_list = sum([s.prompts for s in samples_list], [])
             labels_list = sum([s.labels for s in samples_list], [])
+            # Keep the remote call asynchronous
             r_refs = self.remote_reward_model.get_rewards.remote(queries_list, prompts_list, labels_list)
         else:
             # Batch call reward model
@@ -507,17 +551,22 @@ class RemoteExperienceMaker(ABC):
             )
 
         # Wait for all remote calls to complete and flatten the results
-        # Note: the results duplicated ring_attn_size * ds_tensor_parallel_size times
-        # This is because the actors in ring group and tp group will return the same output
         duplicate_factor = args.ring_attn_size * args.ds_tensor_parallel_size
         action_log_probs_list = sum(ray.get(action_log_probs_ref)[::duplicate_factor], [])
         base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref)[::duplicate_factor], [])
         value_list = sum(ray.get(value_ref)[::duplicate_factor], [])
-        rewards_list = ray.get(r_refs)
-        if self.remote_rm_url is None:
-            rewards_list = sum(rewards_list[::duplicate_factor], [])
+
+        # Process rewards based on source
+        if not samples_list[0].rewards and self.remote_rm_url:
+            # Get rewards info from remote model
+            rewards_info = ray.get(r_refs)
+            # Process rewards and scores
+            rewards_list, _, _ = process_rewards_info(rewards_info, samples_list)
         else:
-            rewards_list = torch.cat(rewards_list, dim=0).chunk(len(samples_list))
+            rewards_list = sum(ray.get(r_refs)[::duplicate_factor], [])
+            for i, samples in enumerate(samples_list):
+                samples.rewards = rewards_list[i]
+                samples.info["rewards"] = rewards_list[i]
 
         assert (
             len(samples_list)
@@ -528,8 +577,8 @@ class RemoteExperienceMaker(ABC):
         ), f"len(samples_list): {len(samples_list)}, len(action_log_probs_list): {len(action_log_probs_list)}, len(base_action_log_probs_list): {len(base_action_log_probs_list)}, len(value_list): {len(value_list)}, len(rewards_list): {len(rewards_list)}"
 
         # Process results for each sample
-        for i, (samples, action_log_probs, base_action_log_probs, value, rewards) in enumerate(
-            zip(samples_list, action_log_probs_list, base_action_log_probs_list, value_list, rewards_list)
+        for i, (samples, action_log_probs, base_action_log_probs, value) in enumerate(
+            zip(samples_list, action_log_probs_list, base_action_log_probs_list, value_list)
         ):
             if (self.initial_model_group is not None) and (not args.use_kl_loss):
                 kl = compute_approx_kl(
@@ -548,7 +597,6 @@ class RemoteExperienceMaker(ABC):
             samples.info.update(
                 {
                     "kl": kl_mean,
-                    "reward": rewards,
                 }
             )
 
@@ -556,7 +604,6 @@ class RemoteExperienceMaker(ABC):
             samples.base_action_log_probs = base_action_log_probs
             samples.values = value
             samples.kl = kl
-            samples.rewards = rewards
 
         end_time = time.time()
         duration = end_time - start_time

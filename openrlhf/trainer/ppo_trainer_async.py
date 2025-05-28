@@ -121,7 +121,7 @@ class GenerateSamplesActor(BasePPOTrainer):
                             continue
 
                         # Calculate average reward for this batch of samples
-                        avg_reward = sum(sample.rewards[0] for sample in batch_samples) / len(batch_samples)
+                        avg_reward = sum(sample.scores[0] for sample in batch_samples) / len(batch_samples)
 
                         # Check if average reward is within the specified range
                         min_reward, max_reward = self.args.dynamic_filtering_reward_range
