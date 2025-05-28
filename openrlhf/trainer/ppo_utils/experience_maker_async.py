@@ -3,14 +3,14 @@ from typing import List
 import ray
 import torch
 
-from openrlhf.trainer.ppo_utils.experience_maker import Samples, SamplesGenerator
+from openrlhf.trainer.ppo_utils.experience_maker import Experience, SamplesGenerator
 
 
 class SamplesGeneratorAsync(SamplesGenerator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> List[Samples]:
+    def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> List[Experience]:
         from vllm import SamplingParams
 
         llms = self.vllm_engines
@@ -69,7 +69,7 @@ class SamplesGeneratorAsync(SamplesGenerator):
         pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
 
         # Process outputs one by one
-        samples_list = []
+        experiences_list = []
         for output in all_outputs:
             # Tokenize state
             state_tokens = self.tokenizer(output["state"], add_special_tokens=False, return_tensors="pt")["input_ids"][
@@ -96,32 +96,37 @@ class SamplesGeneratorAsync(SamplesGenerator):
                 tokenized_ranges[-1] = (tokenized_ranges[-1][0], tokenized_ranges[-1][1] + 1)
 
             # Create tensors
-            sequences = torch.tensor([tokenized_state])
-            attention_mask = torch.tensor([[1] * len(tokenized_state)])
+            sequences = torch.tensor(tokenized_state)
+            attention_mask = torch.tensor([1] * len(tokenized_state))
 
             # Create action mask based on tokenized action_ranges
             action_mask = torch.zeros_like(attention_mask)
             # Mark action positions in the mask
             for start, end in tokenized_ranges:
-                action_mask[0, start:end] = 1
+                action_mask[start:end] = 1
 
             # Apply length limit
-            sequences = sequences[:, :truncate_length].to("cpu")
-            attention_mask = attention_mask[:, :truncate_length].to("cpu")
-            action_mask = action_mask[:, 1:truncate_length].to("cpu")
-            response_length = action_mask.float().sum(dim=-1)
-            total_length = attention_mask.float().sum(dim=-1)
+            sequences = sequences[:truncate_length].to("cpu")
+            attention_mask = attention_mask[:truncate_length].to("cpu")
+            action_mask = action_mask[1:truncate_length].to("cpu")
+            response_length = action_mask.float().sum().item()
+            total_length = attention_mask.float().sum().item()
 
-            rollout_samples = Samples(
-                sequences=sequences,
-                attention_mask=attention_mask,
-                action_mask=action_mask,
-                response_length=response_length,
-                total_length=total_length,
+            info = {
+                "response_length": response_length,
+                "total_length": total_length,
+                "length_clip_ratio": total_length == truncate_length,
+            }
+
+            experience = Experience(
+                sequences=sequences.unsqueeze(0),
+                attention_mask=attention_mask.unsqueeze(0),
+                action_mask=action_mask.unsqueeze(0),
                 prompts=[output["prompt"]],
                 labels=[output["label"]],
                 rewards=[output["reward"]],
+                info=info,
             )
-            samples_list.append(rollout_samples)
+            experiences_list.append(experience)
 
-        return samples_list
+        return experiences_list

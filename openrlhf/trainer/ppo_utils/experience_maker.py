@@ -1,9 +1,9 @@
 import time
 from abc import ABC
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import timedelta
-from typing import List, Optional, Tuple, Union
+from typing import List, Tuple, Union
 
 import ray
 import torch
@@ -30,8 +30,8 @@ def pin_memory(tensor: Union[torch.Tensor, list[torch.Tensor]]):
 
 @dataclass
 class Experience:
-    """Experience is a batch of data.
-    These data should have the the sequence length and number of actions.
+    """Experience is a batch of data for RLHF training.
+    All fields are stored as tensors, where tensor fields are stored as tensors.
     Left padding for sequences is applied.
 
     Shapes of each tensor:
@@ -43,141 +43,165 @@ class Experience:
     advantages: (B, A)
     attention_mask: (B, S)
     action_mask: (B, A)
+    response_length: (B,)
+    total_length: (B,)
     kl: (B, A)
 
     "A" is the number of actions.
     """
 
-    sequences: torch.Tensor
-    action_log_probs: torch.Tensor
-    base_action_log_probs: torch.Tensor
-    values: torch.Tensor
-    returns: Optional[torch.Tensor]
-    advantages: Optional[torch.Tensor]
-    attention_mask: Optional[torch.LongTensor]
-    action_mask: Optional[torch.BoolTensor]
-    info: Optional[dict]
-    kl: Optional[torch.Tensor] = None
+    sequences: torch.Tensor = None
+    attention_mask: torch.LongTensor = None
+    action_mask: torch.BoolTensor = None
 
-    @torch.no_grad()
-    def to_device(self, device: torch.device):
-        self.sequences = to(self.sequences, device)
-        self.action_log_probs = to(self.action_log_probs, device)
-        self.base_action_log_probs = to(self.base_action_log_probs, device)
-        self.returns = to(self.returns, device)
-        self.advantages = to(self.advantages, device)
-        self.values = to(self.values, device)
-        self.attention_mask = to(self.attention_mask, device)
-        self.action_mask = to(self.action_mask, device)
-        self.kl = to(self.kl, device)
-        self.info = {key: to(value, device) for key, value in self.info.items()}
-        return self
+    action_log_probs: torch.Tensor = None
+    base_action_log_probs: torch.Tensor = None
+    values: torch.Tensor = None
+    returns: torch.Tensor = None
+    advantages: torch.Tensor = None
+    kl: torch.Tensor = None
 
-    def pin_memory(self):
-        self.sequences = pin_memory(self.sequences)
-        self.action_log_probs = pin_memory(self.action_log_probs)
-        self.base_action_log_probs = pin_memory(self.base_action_log_probs)
-        self.returns = pin_memory(self.returns)
-        self.advantages = pin_memory(self.advantages)
-        self.values = pin_memory(self.values)
-        self.attention_mask = pin_memory(self.attention_mask)
-        self.action_mask = pin_memory(self.action_mask)
-        self.kl = pin_memory(self.kl)
-        self.info = {key: pin_memory(value) for key, value in self.info.items()}
-        return self
+    prompts: list[str] = None
+    labels: list[str] = None
+    rewards: list[float] = None
 
-
-@dataclass
-class Samples:
-    """Samples is a batch of data.
-    There can be 2 formats to store the samples, batched or packed.
-    The batched format means padding is applied to the sequences, while the packed format
-    will concatenate the prompt and response without padding.
-
-    Shapes of each tensor, when 2 shapes are shown, the first one is for batched format
-        and the second one is for packed format:
-    sequences: (B, S) or (1, total_length), the tokens of both prompt and response.
-    attention_mask: (B, S) or (1, total_length), the attention mask for sequences.
-    action_mask: (B, A) or None, the action (response) mask to show which part of the
-        sequence is the response. When the samples are packed, this is None.
-        When the samples are not packed, we will use action_mask, so this is an int to
-        show the size of action_mask. Otherwise, this is a tensor to show the number of
-        actions for each sample.
-    packed_seq_lens: None or (B,), the length of each sample in the packed samples.
-    response_length: (B,), the number of tokens in the response.
-    total_length: (B,), the total number of tokens in the sequences.
-    prompts: the prompts used to generate responses
-    """
-
-    sequences: torch.Tensor
-    attention_mask: Optional[torch.LongTensor]
-    action_mask: Optional[torch.BoolTensor]
-    response_length: torch.Tensor
-    total_length: torch.Tensor
-    prompts: list[str]
-    labels: list[str]
-    rewards: list[float]
+    # the info field is used to store additional information
+    # all the fields in the info will be logged to the tensorboard/wandb
+    info: dict[str, list] = None
 
     def __init__(
         self,
         sequences=None,
+        action_log_probs=None,
+        base_action_log_probs=None,
+        values=None,
+        returns=None,
+        advantages=None,
         attention_mask=None,
         action_mask=None,
         response_length=None,
         total_length=None,
+        kl=None,
         prompts=None,
         labels=None,
         rewards=None,
-        packed_seq_lens=None,
+        info=None,
     ):
         self.sequences = sequences
+        self.action_log_probs = action_log_probs
+        self.base_action_log_probs = base_action_log_probs
+        self.values = values
+        self.returns = returns
+        self.advantages = advantages
         self.attention_mask = attention_mask
         self.action_mask = action_mask
         self.response_length = response_length
         self.total_length = total_length
+        self.kl = kl
         self.prompts = prompts or []
         self.labels = labels or []
         self.rewards = rewards or []
-        self.packed_seq_lens = packed_seq_lens
+        self.info = info or []
+
+    @torch.no_grad()
+    def to_device(self, device: torch.device):
+        """Move all tensor fields to the specified device."""
+        for field, value in self.__dict__.items():
+            if isinstance(value, dict):
+                setattr(self, field, {key: to(val, device) for key, val in value.items()})
+            else:
+                setattr(self, field, to(value, device))
+
+        return self
+
+    def pin_memory(self):
+        """Pin memory for all tensor fields."""
+        for field, value in self.__dict__.items():
+            if isinstance(value, dict):
+                setattr(self, field, {key: pin_memory(val) for key, val in value.items()})
+            else:
+                setattr(self, field, pin_memory(value))
+
+        return self
 
     @staticmethod
-    def concat_samples(samples_list: List["Samples"], pad_token_id) -> "Samples":
-        """Concatenate multiple samples into one large sample.
+    def select(experiences: List["Experience"], fields: List[str]) -> List["Experience"]:
+        """Select specific fields from a list of Experience instances to create new Experience instances.
 
         Args:
-            samples_list: List of Samples to concatenate
+            experiences: List of Experience instances
+            fields: List of field names to select
 
         Returns:
-            A new Samples instance containing all the concatenated data
+            A list of new Experience instances containing only the selected fields
         """
-        if not samples_list:
-            return Samples()
+        new_experiences = []
+        for exp in experiences:
+            new_exp = Experience()
+            for field in fields:
+                if hasattr(exp, field):
+                    setattr(new_exp, field, getattr(exp, field))
+            new_experiences.append(new_exp)
+        return new_experiences
 
-        # Concatenate tensor attributes with padding
-        sequences = zero_pad_sequences([s.sequences for s in samples_list], side="right", value=pad_token_id)
-        attention_mask = zero_pad_sequences([s.attention_mask for s in samples_list], side="right", value=0)
-        action_mask = zero_pad_sequences([s.action_mask for s in samples_list], side="right", value=0)
+    @staticmethod
+    def _merge_item(items: List, pad_value: int = 0) -> Union[torch.Tensor, list, dict, Any]:
+        """Merge a list of items into a single item.
+        Recursively merge tensors, lists and dicts.
+        For tensors, use zero_pad_sequences to merge sequences of different lengths.
 
-        # Calculate response_length and total_length from masks
-        response_length = action_mask.float().sum(dim=-1)
-        total_length = attention_mask.float().sum(dim=-1)
+        Args:
+            items: List of items to merge
+            pad_value: Value used for padding tensors
+        """
+        if not items:
+            return None
 
-        # Concatenate list attributes
-        prompts = sum([s.prompts for s in samples_list], [])
-        labels = sum([s.labels for s in samples_list], [])
-        rewards = sum([s.rewards for s in samples_list], [])
+        if isinstance(items[0], torch.Tensor):
+            return zero_pad_sequences(items, side="right", value=pad_value)
+        elif isinstance(items[0], list):
+            return sum(items, [])
+        elif isinstance(items[0], dict):
+            result = {}
+            # Collect all values for each key
+            for d in items:
+                for key, value in d.items():
+                    if key not in result:
+                        result[key] = []
+                    result[key].append(value)
+            # Merge all values for each key at once
+            return {key: Experience._merge_item(values, pad_value) for key, values in result.items()}
+        else:
+            raise ValueError(f"Unsupported type: {type(items[0])}")
 
-        return Samples(
-            sequences=sequences,
-            attention_mask=attention_mask,
-            action_mask=action_mask,
-            response_length=response_length,
-            total_length=total_length,
-            prompts=prompts,
-            labels=labels,
-            rewards=rewards,
-            packed_seq_lens=None,
-        )
+    @staticmethod
+    def concat_experiences(experiences_list: List["Experience"], pad_token_id) -> "Experience":
+        """Concatenate multiple experiences into one large experience.
+
+        Args:
+            experiences_list: List of Experience to concatenate
+            pad_token_id: Token id used for padding sequences
+
+        Returns:
+            A new Experience instance containing all the concatenated data
+        """
+        if not experiences_list:
+            return Experience()
+
+        # Get all field names from the dataclass
+        field_names = [f.name for f in fields(Experience)]
+
+        # Create result dictionary
+        result = {}
+
+        # Merge all fields
+        for field in field_names:
+            values = [getattr(e, field) for e in experiences_list]
+            # Use pad_token_id for sequences field, 0 for others
+            pad_value = pad_token_id if field == "sequences" else 0
+            result[field] = Experience._merge_item(values, pad_value)
+
+        return Experience(**result)
 
 
 class SamplesGenerator:
@@ -189,7 +213,7 @@ class SamplesGenerator:
         self.prompt_max_len = prompt_max_len
 
     @torch.no_grad()
-    def generate_samples(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Samples]:
+    def generate_samples(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Experience]:
         """
         Generate samples and return in batches.
 
@@ -231,7 +255,7 @@ class SamplesGenerator:
         )
         return {k: v.to(device) for k, v in batch.items()}
 
-    def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> List[Samples]:
+    def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> List[Experience]:
         from vllm import SamplingParams
 
         llms = self.vllm_engines
@@ -246,7 +270,8 @@ class SamplesGenerator:
             skip_special_tokens=kwargs.get("skip_special_tokens", False),
             include_stop_str_in_output=True,
         )
-        truncate_length = self.prompt_max_len + kwargs.get("max_new_tokens", 1024)
+        max_response_length = kwargs.get("max_new_tokens", 1024)
+        truncate_length = self.prompt_max_len + max_response_length
 
         # Expand prompt list based on the number of samples per prompt
         n_samples_per_prompt = kwargs.pop("n_samples_per_prompt", args.n_samples_per_prompt)
@@ -284,29 +309,34 @@ class SamplesGenerator:
             # Create attention mask
             attention_mask = [1] * len(input_ids)
 
-            sequences = torch.tensor([input_ids])
-            attention_mask = torch.tensor([attention_mask])
+            sequences = torch.tensor(input_ids)
+            attention_mask = torch.tensor(attention_mask)
 
             # Create action mask based on output token positions
             action_mask = torch.zeros_like(attention_mask)
             # Mark positions after prompt as actions
             action_length = len(output.outputs[0].token_ids) + int(output.outputs[0].token_ids[-1] != eos_token_id)
-            action_mask[0, len(output.prompt_token_ids) : len(output.prompt_token_ids) + action_length] = 1
+            action_mask[len(output.prompt_token_ids) : len(output.prompt_token_ids) + action_length] = 1
 
-            sequences = sequences[:, :truncate_length].to("cpu")
-            attention_mask = attention_mask[:, :truncate_length].to("cpu")
-            action_mask = action_mask[:, 1:truncate_length].to("cpu")
-            response_length = action_mask.float().sum(dim=-1)
-            total_length = attention_mask.float().sum(dim=-1)
+            sequences = sequences[:truncate_length].to("cpu")
+            attention_mask = attention_mask[:truncate_length].to("cpu")
+            action_mask = action_mask[1:truncate_length].to("cpu")
+            response_length = action_mask.float().sum().item()
+            total_length = attention_mask.float().sum().item()
 
-            rollout_samples = Samples(
-                sequences=sequences,
-                attention_mask=attention_mask,
-                action_mask=action_mask,
-                response_length=response_length,
-                total_length=total_length,
+            info = {
+                "response_length": response_length,
+                "total_length": total_length,
+                "length_clip_ratio": response_length == max_response_length,
+            }
+
+            rollout_samples = Experience(
+                sequences=sequences.unsqueeze(0),
+                attention_mask=attention_mask.unsqueeze(0),
+                action_mask=action_mask.unsqueeze(0),
                 prompts=[prompt],
                 labels=[label],
+                info=info,
             )
             samples_list.append(rollout_samples)
 
@@ -315,7 +345,7 @@ class SamplesGenerator:
         remote_reward_model = kwargs.get("remote_reward_model", None)
         if remote_reward_model:
             all_queries = sum(
-                [self.tokenizer.batch_decode(s.sequences, skip_special_tokens=False) for s in samples_list], []
+                [self.tokenizer.batch_decode(s.sequences[0], skip_special_tokens=False) for s in samples_list], []
             )
             all_prompts = sum([s.prompts for s in samples_list], [])
             all_labels = sum([s.labels for s in samples_list], [])
@@ -373,7 +403,9 @@ class RemoteExperienceMaker(ABC):
         samples_list = []
         batch_size = self.args.micro_rollout_batch_size
         for i in range(0, len(rollout_samples), batch_size):
-            concat_samples = Samples.concat_samples(rollout_samples[i : i + batch_size], self.tokenizer.pad_token_id)
+            concat_samples = Experience.concat_experiences(
+                rollout_samples[i : i + batch_size], self.tokenizer.pad_token_id
+            )
             samples_list.append(concat_samples)
 
         # Make experiences (models forward: logprobs, values, rewards, and kl divergence)
@@ -384,7 +416,7 @@ class RemoteExperienceMaker(ABC):
         return experiences
 
     @torch.no_grad()
-    def make_experience(self, samples_list: List[Samples]) -> List[Experience]:
+    def make_experience(self, samples_list: List[Experience]) -> List[Experience]:
         """
         Turn samples into experience by calculating logprobs, values, rewards, and kl divergence.
         """
@@ -509,39 +541,30 @@ class RemoteExperienceMaker(ABC):
                 kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
             kl_mean = masked_mean(kl, samples.action_mask, dim=-1)
 
-            sequences = samples.sequences
-            attention_mask = samples.attention_mask
-
             if not args.use_kl_loss:
                 base_action_log_probs = None
 
-            info = {
-                "kl": kl_mean,
-                "reward": rewards,
-                "response_length": samples.response_length,
-                "total_length": samples.total_length,
-            }
-
-            experience = Experience(
-                sequences,
-                action_log_probs,
-                base_action_log_probs,
-                value,
-                None,
-                None,
-                attention_mask,
-                samples.action_mask,
-                info,
-                kl,
+            # Update experience with new information
+            samples.info.update(
+                {
+                    "kl": kl_mean,
+                    "reward": rewards,
+                    "response_length": samples.response_length,
+                    "total_length": samples.total_length,
+                }
             )
 
-            experiences.append(experience)
+            samples.action_log_probs = action_log_probs
+            samples.base_action_log_probs = base_action_log_probs
+            samples.values = value
+            samples.kl = kl
+            samples.rewards = rewards
 
         end_time = time.time()
         duration = end_time - start_time
         time_str = str(timedelta(seconds=duration)).split(".")[0]
         logger.info(f"✨ Experience making completed in {time_str}")
-        return experiences
+        return samples_list
 
     @torch.no_grad()
     def compute_advantages_and_returns(
@@ -558,23 +581,30 @@ class RemoteExperienceMaker(ABC):
 
         # get rewards from experiences
         rewards = [experience.info["reward"] for experience in experiences]
+        rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt)
+
+        # log group reward std
+        if args.n_samples_per_prompt > 1:
+            group_reward_stds = (
+                rewards.std(-1, keepdim=True).repeat(1, args.n_samples_per_prompt).reshape(-1).chunk(len(experiences))
+            )
+            for experience, group_reward_std in zip(experiences, group_reward_stds):
+                experience.info["reward_std"] = group_reward_std
 
         # reward shaping
         if args.advantage_estimator == "rloo":
-            rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt)
             baseline = (rewards.sum(-1, keepdim=True) - rewards) / (args.n_samples_per_prompt - 1)
             rewards = rewards - baseline
-            rewards = rewards.reshape(-1).chunk(len(experiences))
         elif args.advantage_estimator in ["reinforce_baseline", "dr_grpo"]:
             # REINFORCE++-baseline and Dr. GRPO removed the `/std` in GRPO as `/ std` is not needed in RL variance reduction theory.
             # And `k3 KL` has a larger variance than `k1 KL` under a categorical distribution.
             rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt)
             rewards = rewards - rewards.mean(-1, keepdim=True)
-            rewards = rewards.reshape(-1).chunk(len(experiences))
         elif args.advantage_estimator == "group_norm":
             rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt)
             rewards = (rewards - rewards.mean(-1, keepdim=True)) / (rewards.std(-1, keepdim=True) + 1e-9)
-            rewards = rewards.reshape(-1).chunk(len(experiences))
+
+        rewards = rewards.reshape(-1).chunk(len(experiences))
 
         # calculate return and advantages
         for experience, reward in zip(experiences, rewards):
