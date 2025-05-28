@@ -313,9 +313,9 @@ class SamplesGenerator:
             total_length = attention_mask.float().sum().item()
 
             info = {
-                "response_length": response_length,
-                "total_length": total_length,
-                "length_clip_ratio": response_length == max_response_length,
+                "response_length": [response_length],
+                "total_length": [total_length],
+                "length_clip_ratio": [response_length == max_response_length],
             }
 
             rollout_samples = Experience(

@@ -117,9 +117,9 @@ class SamplesGeneratorAsync(SamplesGenerator):
             total_length = attention_mask.float().sum().item()
 
             info = {
-                "response_length": response_length,
-                "total_length": total_length,
-                "length_clip_ratio": total_length == truncate_length,
+                "response_length": [response_length],
+                "total_length": [total_length],
+                "length_clip_ratio": [total_length == truncate_length],
             }
 
             experience = Experience(
