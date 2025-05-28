@@ -1,6 +1,6 @@
 import random
 from abc import ABC
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import List, Optional
 
 import torch
@@ -38,67 +38,75 @@ class BufferItem:
 
 
 def split_experience_batch(experience: Experience) -> List[BufferItem]:
+    """Split a batch of experiences into individual BufferItems."""
     batch_size = len(experience.sequences)
-    batch_kwargs = [{} for _ in range(batch_size)]
-    keys = (
-        "sequences",
-        "action_log_probs",
-        "base_action_log_probs",
-        "values",
-        "returns",
-        "advantages",
-        "attention_mask",
-        "action_mask",
-    )
+    # Get fields from BufferItem, excluding 'info'
+    keys = tuple(field.name for field in fields(BufferItem) if field.name != "info")
+
+    # Validate batch size for all attributes
     for key in keys:
         value = getattr(experience, key)
-        if value is None:
-            for i in range(batch_size):
-                batch_kwargs[i][key] = None
-            continue
-        vals = value
-        if isinstance(vals, torch.Tensor):
-            vals = torch.unbind(vals)
-        assert batch_size == len(vals), f"batch_size: {batch_size}, len(vals): {len(vals)}, key: {key}"
-        for i, v in enumerate(vals):
-            batch_kwargs[i][key] = v
+        if value is not None:
+            if isinstance(value, (torch.Tensor, list)):
+                if len(value) != batch_size:
+                    raise ValueError(f"Size of {key} ({len(value)}) does not match batch_size ({batch_size})")
 
+    items = []
     for i in range(batch_size):
-        batch_kwargs[i]["info"] = {}
-    for k, v in experience.info.items():
-        vals = torch.unbind(v)
-        assert batch_size == len(vals), f"batch_size: {batch_size}, len(vals): {len(vals)}, key: {k}"
-        for i, vv in enumerate(vals):
-            if isinstance(vv, torch.Tensor):
-                assert vv.numel() == 1, f"info[{k}] must be a scalar tensor, but got {vv.shape}"
-                vv = vv.item()
-            batch_kwargs[i]["info"][k] = vv
+        # Process main attributes
+        item = {key: (getattr(experience, key)[i] if getattr(experience, key) is not None else None) for key in keys}
 
-    items = [BufferItem(**kwargs) for kwargs in batch_kwargs]
+        # Process info dictionary
+        item["info"] = {}
+        for k, v in experience.info.items():
+            if isinstance(v, (torch.Tensor, list)):
+                if len(v) != batch_size:
+                    raise ValueError(f"Size of info[{k}] ({len(v)}) does not match batch_size ({batch_size})")
+                item["info"][k] = v[i]
+            else:
+                raise TypeError(f"Unsupported type for info[{k}]: {type(v)}")
+
+        items.append(BufferItem(**item))
+
     return items
 
 
 def make_experience_batch(items: List[BufferItem], packing_samples=False) -> Experience:
-    kwargs = {}
-    keys = (
-        "sequences",
-        "action_log_probs",
-        "base_action_log_probs",
-        "values",
-        "returns",
-        "advantages",
-        "attention_mask",
-        "action_mask",
-    )
-    for key in keys:
-        vals = [getattr(item, key) for item in items]
-        vals = zero_pad_sequences(vals, "right", stack=True) if vals[0] is not None else None
-        kwargs[key] = vals
+    """Combine individual BufferItems into a batch of experiences."""
+    if not items:
+        raise ValueError("Empty items list")
 
+    # Get fields from BufferItem, excluding 'info'
+    keys = tuple(field.name for field in fields(BufferItem) if field.name != "info")
+
+    # Process main attributes
+    kwargs = {
+        key: (
+            zero_pad_sequences([getattr(item, key) for item in items], "right", stack=True)
+            if getattr(items[0], key) is not None
+            else None
+        )
+        for key in keys
+    }
+
+    # Process info dictionary
     kwargs["info"] = {}
     for key in items[0].info.keys():
-        vals = torch.tensor([item.info[key] for item in items])
-        kwargs["info"][key] = vals
+        values = [item.info[key] for item in items]
+        if not values:
+            continue
+
+        # Validate all items have the same type
+        first_type = type(values[0])
+        if not all(isinstance(v, first_type) for v in values):
+            raise TypeError(f"Inconsistent types in info[{key}]")
+
+        # Convert to tensor if all values are numeric
+        if all(isinstance(v, (int, float)) for v in values):
+            kwargs["info"][key] = torch.tensor(values)
+        else:
+            kwargs["info"][key] = values
+
     return Experience(**kwargs)
 
 
