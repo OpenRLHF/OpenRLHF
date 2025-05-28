@@ -62,7 +62,7 @@ class Experience:
 
     # the info field is used to store additional information
     # all the fields in the info will be logged to the tensorboard/wandb
-    info: dict[str, list] = None
+    info: dict[str, torch.Tensor] = None
 
     def __init__(
         self,
