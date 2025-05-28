@@ -260,7 +260,12 @@ class ActorPPOTrainer(ABC):
         if self.args.entropy_loss_coef > 1e-8:
             status["entropy_loss"] = entropy_loss.detach().item()
         for k, v in experience.info.items():
-            status[k] = v.mean().item()
+            if isinstance(v, list):
+                status[k] = torch.tensor(v).mean().item()
+            elif isinstance(v, torch.Tensor):
+                status[k] = v.mean().item()
+            else:
+                status[k] = v
         return status
 
     def _broadcast_to_vllm(self):
