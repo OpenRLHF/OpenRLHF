@@ -219,12 +219,13 @@ class ActorPPOTrainer(ABC):
         )
 
         # loss function
-        actor_loss = self.actor_loss_fn(
+        actor_loss, clip_ratio = self.actor_loss_fn(
             action_log_probs,
             old_action_log_probs,
             advantages,
             action_mask=experience.action_mask,
         )
+        experience.info["ppo_clip_ratio"] = clip_ratio.detach()
 
         if self.args.use_kl_loss:
             if self.args.init_kl_coef > 0:
@@ -258,8 +259,13 @@ class ActorPPOTrainer(ABC):
         status = {"policy_loss": actor_loss.detach().item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}
         if self.args.entropy_loss_coef > 1e-8:
             status["entropy_loss"] = entropy_loss.detach().item()
+
+        # merge logs from info field
         for k, v in experience.info.items():
-            status[k] = v.mean().item()
+            if isinstance(v, list):
+                status[k] = torch.tensor(v, dtype=torch.float).mean().item()
+            elif isinstance(v, torch.Tensor):
+                status[k] = v.float().mean().item()
         return status
 
     def _broadcast_to_vllm(self):

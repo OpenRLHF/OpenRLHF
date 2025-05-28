@@ -99,7 +99,8 @@ class PolicyLoss(nn.Module):
             if self.token_level_loss
             else masked_mean(loss, action_mask, dim=-1).mean()
         )
-        return loss
+        clip_ratio = masked_mean(torch.lt(surr2, surr1).float(), action_mask, dim=None)
+        return loss, clip_ratio
 
 
 class ValueLoss(nn.Module):
