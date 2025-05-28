@@ -58,3 +58,19 @@ def zero_pad_sequences(
         return torch.stack(padded_sequences, dim=0)
     else:
         return torch.cat(padded_sequences, dim=0)
+
+
+def remove_pad_token(input_ids: torch.Tensor, attention_mask: torch.Tensor):
+    """Remove the pad token. Return tensors and not lists.
+
+    Args:
+        input_ids shape: [bs, seq_length]
+        attention_mask shape: [bs, seq_length]
+    Returns:
+        no_padding_batch(List[Tensor[int]]): contains the rmpad token ids per query.
+    """
+    no_padding_batch = []
+    for ids, mask in zip(input_ids, attention_mask):
+        # Fix for both left and right padding
+        no_padding_batch.append((ids[mask.bool()]))
+    return no_padding_batch

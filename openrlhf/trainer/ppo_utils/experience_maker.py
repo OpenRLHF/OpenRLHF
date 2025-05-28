@@ -11,7 +11,7 @@ import torch
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
 from openrlhf.trainer.ray.launcher import PPORayActorGroup
 from openrlhf.utils.logging_utils import init_logger
-from openrlhf.utils.utils import zero_pad_sequences
+from openrlhf.utils.utils import remove_pad_token, zero_pad_sequences
 
 logger = init_logger(__name__)
 
@@ -336,7 +336,13 @@ class SamplesGenerator:
         remote_reward_model = kwargs.get("remote_reward_model", None)
         if remote_reward_model:
             all_queries = sum(
-                [self.tokenizer.batch_decode(s.sequences[0], skip_special_tokens=False) for s in samples_list], []
+                [
+                    self.tokenizer.batch_decode(
+                        remove_pad_token(s.sequences[0], s.attention_mask[0]), skip_special_tokens=False
+                    )
+                    for s in samples_list
+                ],
+                [],
             )
             all_prompts = sum([s.prompts for s in samples_list], [])
             all_labels = sum([s.labels for s in samples_list], [])
@@ -431,7 +437,11 @@ class RemoteExperienceMaker(ABC):
             r_refs = ray.put(rewards_list)
         elif self.remote_rm_url:
             queries_list = sum(
-                [self.tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in sequences_list], []
+                [
+                    self.tokenizer.batch_decode(remove_pad_token(seq, attention_mask), skip_special_tokens=False)
+                    for seq, attention_mask in zip(sequences_list, attention_mask_list)
+                ],
+                [],
             )
             prompts_list = sum([s.prompts for s in samples_list], [])
             labels_list = sum([s.labels for s in samples_list], [])
