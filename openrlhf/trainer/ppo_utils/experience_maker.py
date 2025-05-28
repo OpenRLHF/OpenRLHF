@@ -588,7 +588,7 @@ class RemoteExperienceMaker(ABC):
                 rewards.std(-1, keepdim=True).repeat(1, args.n_samples_per_prompt).reshape(-1).chunk(len(experiences))
             )
             for experience, group_reward_std in zip(experiences, group_reward_stds):
-                experience.info["reward_std"] = group_reward_std
+                experience.info["group_reward_std"] = group_reward_std
 
         # reward shaping
         if args.advantage_estimator == "rloo":
