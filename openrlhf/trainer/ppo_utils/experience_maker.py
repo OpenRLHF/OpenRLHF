@@ -594,16 +594,11 @@ class RemoteExperienceMaker(ABC):
                 base_action_log_probs = None
 
             # Update experience with new information
-            samples.info.update(
-                {
-                    "kl": kl_mean,
-                }
-            )
-
             samples.action_log_probs = action_log_probs
             samples.base_action_log_probs = base_action_log_probs
             samples.values = value
             samples.kl = kl
+            samples.info["kl"] = kl_mean
 
         end_time = time.time()
         duration = end_time - start_time
