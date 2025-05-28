@@ -313,11 +313,12 @@ class SamplesGenerator:
             action_mask = action_mask[1:truncate_length].to("cpu")
             response_length = action_mask.float().sum()
             total_length = attention_mask.float().sum()
+            is_clipped = response_length + 1 == max_response_length
 
             info = {
                 "response_length": torch.tensor([response_length]),
                 "total_length": torch.tensor([total_length]),
-                "length_clip_ratio": torch.tensor([response_length + 1 == max_response_length]),
+                "length_clip_ratio": torch.tensor([is_clipped]),
             }
 
             rollout_samples = Experience(

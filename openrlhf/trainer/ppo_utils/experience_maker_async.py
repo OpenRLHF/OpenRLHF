@@ -110,16 +110,16 @@ class SamplesGeneratorAsync(SamplesGenerator):
             attention_mask = attention_mask[:truncate_length].to("cpu")
             action_mask = action_mask[1:truncate_length].to("cpu")
 
-            # Distance between first and last 1
-            ones = torch.where(action_mask)[0]
-            response_length = (ones[-1] - ones[0] + 1).item() if len(ones) else 0
-
+            # Calculate response length (distance between first and last 1)
+            ones_indices = torch.where(action_mask)[0]
+            response_length = (ones_indices[-1] - ones_indices[0] + 1).item() if len(ones_indices) else 0
             total_length = attention_mask.float().sum()
+            is_clipped = total_length == truncate_length
 
             info = {
                 "response_length": torch.tensor([response_length]),
                 "total_length": torch.tensor([total_length]),
-                "length_clip_ratio": torch.tensor([total_length == truncate_length]),
+                "length_clip_ratio": torch.tensor([is_clipped]),
             }
 
             experience = Experience(
