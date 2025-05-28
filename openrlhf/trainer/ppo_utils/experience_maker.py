@@ -338,7 +338,7 @@ class SamplesGenerator:
             all_queries = sum(
                 [
                     self.tokenizer.batch_decode(
-                        remove_pad_token(s.sequences[0], s.attention_mask[0]), skip_special_tokens=False
+                        remove_pad_token(s.sequences, s.attention_mask), skip_special_tokens=False
                     )
                     for s in samples_list
                 ],
@@ -422,7 +422,6 @@ class RemoteExperienceMaker(ABC):
 
         args = self.strategy.args
         device = "cpu"
-        experiences = []
 
         # Extract all information from samples in one pass
         # Convert samples into lists of tensors and metadata for batch processing
