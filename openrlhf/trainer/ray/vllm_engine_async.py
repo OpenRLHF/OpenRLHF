@@ -122,7 +122,10 @@ class LLMRayActorAsync(BaseLLMRayActor):
                     kwargs = {"sampling_params": sampling_params}
                     result = await agent_instance.step.remote(state, action, label, **kwargs)
                     total_reward += result["rewards"].item()
-                    final_scores = result["scores"].item()
+                    if "scores" in result:
+                        final_scores = result["scores"].item()
+                    else:
+                        final_scores = total_reward
                     state = result["next_state"]
                     done = result["done"]
                     extra_logs = result.get("extra_logs", {})
