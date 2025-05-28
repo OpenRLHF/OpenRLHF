@@ -584,7 +584,9 @@ class RemoteExperienceMaker(ABC):
 
         # log group reward std
         if args.n_samples_per_prompt > 1:
-            group_reward_stds = rewards.std(-1).chunk(len(experiences))
+            group_reward_stds = (
+                rewards.std(-1, keepdim=True).reshape(-1, args.n_samples_per_prompt).chunk(len(experiences))
+            )
             for experience, group_reward_std in zip(experiences, group_reward_stds):
                 experience.info["reward_std"] = group_reward_std
 
