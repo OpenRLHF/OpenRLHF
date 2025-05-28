@@ -109,7 +109,11 @@ class SamplesGeneratorAsync(SamplesGenerator):
             sequences = sequences[:truncate_length].to("cpu")
             attention_mask = attention_mask[:truncate_length].to("cpu")
             action_mask = action_mask[1:truncate_length].to("cpu")
-            response_length = action_mask.float().sum().item()
+
+            # Distance between first and last 1
+            ones = torch.where(action_mask)[0]
+            response_length = (ones[-1] - ones[0] + 1).item() if len(ones) else 0
+
             total_length = attention_mask.float().sum().item()
 
             info = {
