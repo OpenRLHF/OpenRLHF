@@ -121,13 +121,15 @@ class LLMRayActorAsync(BaseLLMRayActor):
                     # Use asyncio.to_thread to make Ray remote call non-blocking
                     kwargs = {"sampling_params": sampling_params}
                     result = await agent_instance.step.remote(state, action, label, **kwargs)
-                    reward_info, state, done, extra_info = result
-                    total_reward += reward_info["rewards"].item()
-                    final_scores = reward_info["scores"].item()
+                    total_reward += result["rewards"].item()
+                    final_scores = result["scores"].item()
+                    state = result["next_state"]
+                    done = result["done"]
+                    extra_logs = result.get("extra_logs", {})
 
                     # Get sampling params from the environment step
-                    if extra_info.get("sampling_params", None):
-                        sampling_params = extra_info["sampling_params"]
+                    if result.get("sampling_params", None):
+                        sampling_params = result["sampling_params"]
 
                     if done:
                         break
@@ -141,7 +143,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
                     "state": state,
                     "reward": total_reward,
                     "scores": final_scores,
-                    "extra_logs": extra_info.get("extra_logs", {}),
+                    "extra_logs": extra_logs,
                     "action_ranges": action_ranges,
                 }
                 await self.result_queue.put(final_response)
