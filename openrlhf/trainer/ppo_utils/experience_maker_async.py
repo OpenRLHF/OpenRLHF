@@ -119,7 +119,7 @@ class SamplesGeneratorAsync(SamplesGenerator):
             info = {
                 "response_length": torch.tensor([response_length]),
                 "total_length": torch.tensor([total_length]),
-                "length_clip_ratio": torch.tensor([is_clipped]),
+                "response_clip_ratio": torch.tensor([is_clipped]),
             }
 
             experience = Experience(
