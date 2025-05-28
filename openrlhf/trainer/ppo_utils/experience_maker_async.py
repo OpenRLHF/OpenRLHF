@@ -114,12 +114,12 @@ class SamplesGeneratorAsync(SamplesGenerator):
             ones = torch.where(action_mask)[0]
             response_length = (ones[-1] - ones[0] + 1).item() if len(ones) else 0
 
-            total_length = attention_mask.float().sum().item()
+            total_length = attention_mask.float().sum()
 
             info = {
-                "response_length": [response_length],
-                "total_length": [total_length],
-                "length_clip_ratio": [total_length == truncate_length],
+                "response_length": torch.tensor(response_length),
+                "total_length": total_length,
+                "length_clip_ratio": torch.tensor(total_length == truncate_length),
             }
 
             experience = Experience(

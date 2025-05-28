@@ -311,13 +311,13 @@ class SamplesGenerator:
             sequences = sequences[:truncate_length].to("cpu")
             attention_mask = attention_mask[:truncate_length].to("cpu")
             action_mask = action_mask[1:truncate_length].to("cpu")
-            response_length = action_mask.float().sum().item()
-            total_length = attention_mask.float().sum().item()
+            response_length = action_mask.float().sum()
+            total_length = attention_mask.float().sum()
 
             info = {
-                "response_length": [response_length],
-                "total_length": [total_length],
-                "length_clip_ratio": [response_length == max_response_length],
+                "response_length": response_length,
+                "total_length": total_length,
+                "length_clip_ratio": torch.tensor(response_length + 1 == max_response_length),
             }
 
             rollout_samples = Experience(
