@@ -260,6 +260,8 @@ class ActorPPOTrainer(ABC):
         if self.args.entropy_loss_coef > 1e-8:
             status["entropy_loss"] = entropy_loss.detach().item()
 
+        status["actor_grad_norm"] = self.actor.model.get_global_grad_norm()
+
         # merge logs from info field
         for k, v in experience.info.items():
             if isinstance(v, list):

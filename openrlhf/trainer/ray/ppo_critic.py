@@ -139,6 +139,8 @@ class CriticPPOTrainer(ABC):
             "values": masked_mean(values, experience.action_mask).detach().item(),
             "critic_lr": self.critic_scheduler.get_last_lr()[0],
         }
+
+        status["critic_grad_norm"] = self.critic.get_global_grad_norm()
         return status
 
 
