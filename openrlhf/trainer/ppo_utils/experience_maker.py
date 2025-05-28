@@ -145,9 +145,6 @@ class Experience:
             items: List of items to merge
             pad_value: Value used for padding tensors
         """
-        if not items:
-            return None
-
         if isinstance(items[0], torch.Tensor):
             return zero_pad_sequences(items, side="right", value=pad_value)
         elif isinstance(items[0], list):
