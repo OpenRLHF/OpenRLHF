@@ -160,7 +160,7 @@ class Experience:
             # Merge all values for each key at once
             return {key: Experience._merge_item(values, pad_value) for key, values in result.items()}
         else:
-            return items
+            raise ValueError(f"Unsupported type: {type(items[0])}")
 
     @staticmethod
     def concat_experiences(experiences_list: List["Experience"], pad_token_id) -> "Experience":
