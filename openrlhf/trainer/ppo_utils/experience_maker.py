@@ -3,7 +3,7 @@ from abc import ABC
 from copy import deepcopy
 from dataclasses import dataclass, fields
 from datetime import timedelta
-from typing import List, Tuple, Union
+from typing import Any, List, Tuple, Union
 
 import ray
 import torch
