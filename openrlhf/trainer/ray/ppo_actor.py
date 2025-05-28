@@ -266,8 +266,6 @@ class ActorPPOTrainer(ABC):
                 status[k] = torch.tensor(v, dtype=torch.float).mean().item()
             elif isinstance(v, torch.Tensor):
                 status[k] = v.float().mean().item()
-            else:
-                status[k] = v
         return status
 
     def _broadcast_to_vllm(self):
