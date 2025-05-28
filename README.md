@@ -348,7 +348,16 @@ def reward_func(queries, prompts, labels):
     # queries is prompts + responses
     # labels is answers
     print(queries)
-    return torch.randn(len(queries))
+
+    # Generate random rewards as an example
+    # In real applications, this should be replaced with actual reward calculation logic
+    reward = torch.randint(0, 2, (len(queries),)).float()
+
+    return {
+        "rewards": reward,  # Rewards for advantage calculation
+        "scores": reward,  # Scores for dynamic filtering (0-1 reward)
+        "extra_logs": {"dummy_scores": reward},  # Additional logging info for wandb
+    }
 ```
 
 then just set
@@ -388,9 +397,14 @@ async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], b
         next_state = state + action + " The answer is not correct, please try again: "
     step_idx += 1
 
-    # Extra info
-    extra_info = {}
-    return reward, next_state, done, extra_info
+    return {
+        "rewards": reward,  # Rewards for advantage calculation
+        "scores": reward,  # Scores for dynamic filtering (0-1 reward)
+        "next_state": next_state,  # The updated state for vLLM in next step
+        "done": done,  # Boolean indicating if the episode is complete
+        "sampling_params": kwargs.get("sampling_params", None),  # Parameters for vLLM sampling in next step
+        "extra_logs": {"dummy_scores": reward},  # Additional logging information
+    }
 ```
 
 You can also configure the maximum number of concurrent agents per vLLM engine by setting `export OPENRLHF_ASYNC_NUM_TASKS=128`. 
