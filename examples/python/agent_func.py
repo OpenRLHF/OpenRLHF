@@ -36,6 +36,7 @@ async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], b
     step_idx += 1
 
     # Extra info
-    extra_info = {}
+    # We can update vLLM sampling params for next step here
+    extra_info = {"sampling_params": kwargs.get("sampling_params", None)}
 
     return reward, next_state, done, extra_info

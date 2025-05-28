@@ -19,8 +19,8 @@ class AgentInstance:
         else:
             raise ValueError("Agent path must be a Python file")
 
-    async def step(self, state, action, label):
-        return await self.agent_step(state, action, label)
+    async def step(self, state, action, label, **kwargs):
+        return await self.agent_step(state, action, label, **kwargs)
 
 
 @ray.remote
@@ -84,7 +84,6 @@ class LLMRayActorAsync(BaseLLMRayActor):
             prompts: List of prompts to process
             labels: List of labels corresponding to prompts
             max_steps: Maximum number of interaction steps
-            micro_forward_batch_size: Number of prompts to process in each concurrent task
         """
 
         # Create semaphore to control concurrent task execution
@@ -119,9 +118,14 @@ class LLMRayActorAsync(BaseLLMRayActor):
 
                     # Call step function to get reward and next state
                     # Use asyncio.to_thread to make Ray remote call non-blocking
-                    result = await agent_instance.step.remote(state, action, label)
+                    kwargs = {"sampling_params": sampling_params}
+                    result = await agent_instance.step.remote(state, action, label, **kwargs)
                     reward, state, done, extra_info = result
                     total_reward += reward.item()
+
+                    # Get sampling params from the environment step
+                    if extra_info.get("sampling_params", None):
+                        sampling_params = extra_info["sampling_params"]
 
                     if done:
                         break
