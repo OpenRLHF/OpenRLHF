@@ -336,7 +336,7 @@ class SamplesGenerator:
         remote_reward_model = kwargs.get("remote_reward_model", None)
         if remote_reward_model:
             all_queries = sum(
-                [self.tokenizer.batch_decode(s.sequences, skip_special_tokens=False) for s in samples_list], []
+                [self.tokenizer.batch_decode(s.sequences[0], skip_special_tokens=False) for s in samples_list], []
             )
             all_prompts = sum([s.prompts for s in samples_list], [])
             all_labels = sum([s.labels for s in samples_list], [])
