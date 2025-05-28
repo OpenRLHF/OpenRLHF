@@ -263,9 +263,9 @@ class ActorPPOTrainer(ABC):
         # merge logs from info field
         for k, v in experience.info.items():
             if isinstance(v, list):
-                status[k] = torch.tensor(v).mean().item()
+                status[k] = torch.tensor(v, dtype=torch.float).mean().item()
             elif isinstance(v, torch.Tensor):
-                status[k] = v.mean().item()
+                status[k] = v.float().mean().item()
             else:
                 status[k] = v
         return status
