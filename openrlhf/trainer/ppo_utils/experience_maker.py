@@ -595,10 +595,8 @@ class RemoteExperienceMaker(ABC):
         elif args.advantage_estimator in ["reinforce_baseline", "dr_grpo"]:
             # REINFORCE++-baseline and Dr. GRPO removed the `/std` in GRPO as `/ std` is not needed in RL variance reduction theory.
             # And `k3 KL` has a larger variance than `k1 KL` under a categorical distribution.
-            rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt)
             rewards = rewards - rewards.mean(-1, keepdim=True)
         elif args.advantage_estimator == "group_norm":
-            rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt)
             rewards = (rewards - rewards.mean(-1, keepdim=True)) / (rewards.std(-1, keepdim=True) + 1e-9)
 
         rewards = rewards.reshape(-1).chunk(len(experiences))
