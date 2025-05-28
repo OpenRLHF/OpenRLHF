@@ -96,6 +96,8 @@ pip install openrlhf
 pip install openrlhf[vllm]
 # 最新のvLLMもサポートされています
 pip install openrlhf[vllm_latest]
+# vLLM、ring-flash-attention、およびLiger-Kernelをインストール
+pip install openrlhf[vllm,ring,liger]
 
 # 最新バージョンをpip install
 pip install git+https://github.com/OpenRLHF/OpenRLHF.git
@@ -327,19 +329,28 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 サポートされているアルゴリズムの起動スクリプトとドキュメントは[example/scripts](./examples/scripts/)および[Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)にあります。
 
-### Reinforced Fine-tuning
+### 強化学習によるファインチューニング (RFT)
 
-OpenRLHFは、便利で効率的なReinforced Fine-tuningをサポートしています。カスタム `reward_func` 関数を含む[ファイル](./examples/scripts/reward_func.py)を実装し、そのパスを `remote_rm_url` パラメータに渡すだけです。例えば：
+OpenRLHFは、便利で効率的な強化学習によるファインチューニングをサポートしています。カスタム`reward_func`関数を含む[ファイル](./examples/scripts/reward_func.py)を実装し、そのパスを`remote_rm_url`パラメータに渡すだけで済みます。例えば：
 
 ```python
 # reward_func.py
 import torch
 
 def reward_func(queries, prompts, labels):
-    # queries は prompts + responses
-    # labels は answers
+    # queriesはprompts + responses
+    # labelsはanswers
     print(queries)
-    return torch.randn(len(queries))
+
+    # 例としてランダムな報酬を生成
+    # 実際のアプリケーションでは、これを実際の報酬計算ロジックに置き換える必要があります
+    reward = torch.randint(0, 2, (len(queries),)).float()
+
+    return {
+        "rewards": reward,  # アドバンテージ計算用の報酬
+        "scores": reward,  # 動的フィルタリング用のスコア（0-1報酬）
+        "extra_logs": {"dummy_scores": reward},  # wandb用の追加ログ情報
+    }
 ```
 
 そして、以下のように設定するだけです：
@@ -353,9 +364,9 @@ ray job submit --address="http://127.0.0.1:8265" \
   --label_key answer
 ```
 
-ここで、`label_key` パラメータは、答えなどの追加のサンプル情報を報酬関数に渡すために使用されます。
+ここで、`label_key`パラメータは、答えなどの追加のサンプル情報を報酬関数に渡すために使用されます。
 
-### Async RLHF & Agent RLHF
+## 非同期RLHFとAgent RLHF
 
 OpenRLHFは、非同期RLHFとエージェントベースのRLHF実装の両方を包括的にサポートしています。これらの機能を使用するには、トレーニング設定に`--async_train`と`--agent_func_path`パラメータを含めるだけです。
 
@@ -379,19 +390,24 @@ async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], b
         next_state = state + action + " The answer is not correct, please try again: "
     step_idx += 1
 
-    # 追加情報
-    extra_info = {}
-    return reward, next_state, done, extra_info
+    return {
+        "rewards": reward,  # アドバンテージ計算用の報酬
+        "scores": reward,  # 動的フィルタリング用のスコア（0-1報酬）
+        "next_state": next_state,  # 次のステップのvLLMの更新状態
+        "done": done,  # エピソードが完了したかどうかを示すブール値
+        "sampling_params": kwargs.get("sampling_params", None),  # 次のステップのvLLMサンプリングのパラメータ
+        "extra_logs": {"dummy_scores": reward},  # 追加のログ情報
+    }
 ```
 
 また、`export OPENRLHF_ASYNC_NUM_TASKS=128`を設定することで、vLLMエンジンごとの最大同時エージェント数を設定できます。
-さらに、環境で`export OPENRLHF_ASYNC_QUEUE_SIZE=1`（このパラメータはバッファに最大何バッチのデータを保存できるかを制御します）を設定することで、オフポリシーサンプリングの程度を制御できます。
+さらに、環境で`export OPENRLHF_ASYNC_QUEUE_SIZE=1`（このパラメータはバッファに保存できるデータのバッチ数を制御します）を設定することで、オフポリシーサンプリングの程度を制御できます。
 
 > [!NOTE] 
-> OpenRLHFのAgent RLHFはハイブリッドエンジン学習もサポートしています。この機能を有効にするには、`--async_train`フラグを削除し、`--colocate_all_models`を有効にしてください。また、`PYTORCH_NVML_BASED_CUDA_CHECK=1`と`export VLLM_USE_V1=1`を設定してください。
+> OpenRLHFのAgent RLHFはハイブリッドエンジントレーニングもサポートしています。この機能を有効にするには、`--async_train`フラグを削除し、`--colocate_all_models`を有効にしてください。
 
 > [!WARNING] 
-> Asynchronous training may affect the training stability. It is recommended to prioritize using Hybrid Engine or synchronous training mode.
+> 非同期トレーニングはトレーニングの安定性に影響を与える可能性があります。ハイブリッドエンジンまたは同期トレーニングモードを優先することをお勧めします。
 
 ### LoRA
 `LoRA (Low-Rank Adaptation)`を使用する場合、`OpenRLHF`はデフォルトで完全な重みを保存せず、代わりに`LoRA Adapter`を保存します。タスクを正常に続行するには、`Adapter`をベースモデルの重みと結合する必要があります
