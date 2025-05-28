@@ -215,7 +215,7 @@ class ActorPPOTrainer(ABC):
             return_output=True,
             ring_attn_group=self.strategy.ring_attn_group,
             packed_seq_lens=packed_seq_lens,
-            return_entropy=self.args.entropy_loss_coef > 1e-8,
+            return_entropy=self.args.entropy_loss_coef is not None,
         )
 
         # loss function
@@ -246,9 +246,10 @@ class ActorPPOTrainer(ABC):
         if self.aux_loss:
             loss += output.aux_loss * self.args.aux_loss_coef
         # entropy loss
-        if self.args.entropy_loss_coef > 1e-8:
+        if self.args.entropy_loss_coef is not None:
             entropy_loss = masked_mean(output.entropy[:, -experience.action_mask.shape[1] :], experience.action_mask)
-            loss -= entropy_loss * self.args.entropy_loss_coef
+            if self.args.entropy_loss_coef != 0:
+                loss -= entropy_loss * self.args.entropy_loss_coef
 
         self.strategy.backward(loss, self.actor, self.actor_optim)
         self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
@@ -257,7 +258,7 @@ class ActorPPOTrainer(ABC):
 
         # status
         status = {"policy_loss": actor_loss.detach().item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}
-        if self.args.entropy_loss_coef > 1e-8:
+        if self.args.entropy_loss_coef is not None:
             status["entropy_loss"] = entropy_loss.detach().item()
 
         # merge logs from info field
