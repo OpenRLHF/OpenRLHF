@@ -305,15 +305,14 @@ class SamplesGenerator:
             # Create action mask based on output token positions
             action_mask = torch.zeros_like(attention_mask)
             # Mark positions after prompt as actions
-            action_length = len(output.outputs[0].token_ids) + int(output.outputs[0].token_ids[-1] != eos_token_id)
-            action_mask[len(output.prompt_token_ids) : len(output.prompt_token_ids) + action_length] = 1
+            response_length = len(output.outputs[0].token_ids) + int(output.outputs[0].token_ids[-1] != eos_token_id)
+            action_mask[len(output.prompt_token_ids) : len(output.prompt_token_ids) + response_length] = 1
 
             sequences = sequences[:truncate_length].to("cpu")
             attention_mask = attention_mask[:truncate_length].to("cpu")
             action_mask = action_mask[1:truncate_length].to("cpu")
-            response_length = action_mask.float().sum()
             total_length = attention_mask.float().sum()
-            is_clipped = response_length + 1 >= max_response_length
+            is_clipped = response_length >= max_response_length
 
             info = {
                 "response_length": torch.tensor([response_length]),
