@@ -93,8 +93,8 @@ class Experience:
         self.kl = kl
         self.prompts = prompts or []
         self.labels = labels or []
-        self.rewards = rewards or []
-        self.scores = scores or []
+        self.rewards = rewards
+        self.scores = scores
         self.info = info or []
 
     @torch.no_grad()
