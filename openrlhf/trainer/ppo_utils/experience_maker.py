@@ -477,7 +477,7 @@ class RemoteExperienceMaker(ABC):
         action_mask_list = [s.action_mask for s in samples_list]
 
         # The rewards are already filled in the samples_list, such as the agent's environment rewards
-        if samples_list[0].rewards:
+        if samples_list[0].rewards is not None:
             pass
         elif self.remote_rm_url:
             queries_list = sum(
@@ -562,7 +562,7 @@ class RemoteExperienceMaker(ABC):
         value_list = sum(ray.get(value_ref)[::duplicate_factor], [])
 
         # Process rewards based on source
-        if samples_list[0].rewards:
+        if samples_list[0].rewards is not None:
             pass
         elif self.remote_rm_url:
             # Get rewards info from remote model
