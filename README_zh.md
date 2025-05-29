@@ -103,6 +103,8 @@ pip install openrlhf
 pip install openrlhf[vllm]
 # 最新的 vLLM 也是支持的
 pip install openrlhf[vllm_latest]
+# 安装 vLLM、ring-flash-attention 和 Liger-Kernel
+pip install openrlhf[vllm,ring,liger]
 
 # pip install GitHub 上的最新版
 pip install git+https://github.com/OpenRLHF/OpenRLHF.git
@@ -341,19 +343,28 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 所有支持算法的启动脚本和文档在 [example/scripts](./examples/scripts/) 和 [Documents - Usage](https://openrlhf.readthedocs.io/en/latest/usage.html)
 
-### Reinforced Fine-tuning
+### 强化微调 (RFT)
 
-OpenRLHF 支持便捷高效的 Reinforced Fine-tuning。您只需要实现一个包含自定义 `reward_func` 函数的[文件](./examples/scripts/reward_func.py)并将其路径传递给 `remote_rm_url` 参数即可。例如：
+OpenRLHF支持便捷高效的强化微调。您只需要实现一个[包含自定义`reward_func`函数的文件](./examples/scripts/reward_func.py)并将其路径传递给`remote_rm_url`参数即可。例如：
 
 ```python
 # reward_func.py
 import torch
 
 def reward_func(queries, prompts, labels):
-    # queries 是 prompts + responses
-    # labels 是 answers
+    # queries是prompts + responses
+    # labels是answers
     print(queries)
-    return torch.randn(len(queries))
+
+    # 生成随机奖励作为示例
+    # 在实际应用中，这应该替换为实际的奖励计算逻辑
+    reward = torch.randint(0, 2, (len(queries),)).float()
+
+    return {
+        "rewards": reward,  # 用于优势计算的奖励
+        "scores": reward,  # 用于动态过滤的分数（0-1奖励）
+        "extra_logs": {"dummy_scores": reward},  # wandb的额外日志信息
+    }
 ```
 
 然后只需设置：
@@ -367,11 +378,11 @@ ray job submit --address="http://127.0.0.1:8265" \
   --label_key answer
 ```
 
-其中 `label_key` 参数用于向奖励函数传递额外的样本信息比如答案。
+其中`label_key`参数用于向奖励函数传递额外的样本信息，如答案。
 
-### Async RLHF & Agent RLHF
+## 异步RLHF和Agent RLHF
 
-OpenRLHF 提供了对异步 RLHF 和基于代理的 RLHF 实现的全面支持。要使用这些功能，只需在训练配置中包含 `--async_train` 和 `--agent_func_path` 参数即可。
+OpenRLHF为异步RLHF和基于Agent的RLHF实现提供了全面的支持。要使用这些功能，只需在训练配置中包含`--async_train`和`--agent_func_path`参数即可。
 
 ```python
 # agent_func.py
@@ -383,7 +394,7 @@ async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], b
     # 验证后结束
     if step_idx >= max_steps:
         done = True
-        # 使用 torch.rand 生成随机奖励
+        # 使用torch.rand生成随机奖励
         reward = torch.rand(1)
         next_state = state + action + " The answer is correct. <|endoftext|>"
     else:
@@ -393,19 +404,24 @@ async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], b
         next_state = state + action + " The answer is not correct, please try again: "
     step_idx += 1
 
-    # 额外信息
-    extra_info = {}
-    return reward, next_state, done, extra_info
+    return {
+        "rewards": reward,  # 用于优势计算的奖励
+        "scores": reward,  # 用于动态过滤的分数（0-1奖励）
+        "next_state": next_state,  # 下一步vLLM的更新状态
+        "done": done,  # 表示回合是否完成的布尔值
+        "sampling_params": kwargs.get("sampling_params", None),  # 下一步vLLM采样的参数
+        "extra_logs": {"dummy_scores": reward},  # 额外的日志信息
+    }
 ```
 
-您还可以通过设置 `export OPENRLHF_ASYNC_NUM_TASKS=128` 来配置每个 vLLM 引擎的最大并发代理数。
-此外，您可以通过在环境中设置 `export OPENRLHF_ASYNC_QUEUE_SIZE=1`（此参数控制缓冲区最多可以存储多少批数据）来控制离策略采样的程度。
+您还可以通过设置`export OPENRLHF_ASYNC_NUM_TASKS=128`来配置每个vLLM引擎的最大并发代理数。
+此外，您可以通过在环境中设置`export OPENRLHF_ASYNC_QUEUE_SIZE=1`（此参数控制缓冲区最多可以存储多少批数据）来控制离策略采样的程度。
 
 > [!NOTE] 
 > OpenRLHF的Agent RLHF也支持混合引擎训练。要启用此功能，请移除`--async_train`标志并启用`--colocate_all_models`。
 
 > [!WARNING] 
-> 异步训练可能会影响训练稳定性. 推荐优先考虑同步训练和 Hybrid Engine。
+> 异步训练可能会影响训练稳定性。建议优先使用混合引擎或同步训练模式。
 
 ### LoRA
 如果您使用 `LoRA (Low-Rank Adaptation)`，`OpenRLHF` 默认不会保存完整的权重，而是保存 `LoRA Adapter`。要正常继续您的任务，您需要将 `Adapter` 与基础模型的权重合并

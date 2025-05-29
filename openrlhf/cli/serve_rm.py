@@ -1,5 +1,4 @@
 import argparse
-import re
 
 import torch
 import uvicorn
@@ -13,18 +12,6 @@ from openrlhf.utils.logging_utils import init_logger
 logger = init_logger(__name__)
 
 
-def strip_sequence(text, pad_token, eos_token):
-    pad_token_escaped = re.escape(pad_token)
-    eos_token_escaped = re.escape(eos_token)
-
-    pattern = f"^({eos_token_escaped}|{pad_token_escaped})+"
-    text = re.sub(pattern, "", text)
-
-    pattern = f"({eos_token_escaped}|{pad_token_escaped})+$"
-    text = re.sub(pattern, "", text)
-    return text
-
-
 class RewardModelProxy:
     def __init__(self, args):
         self.reward_model = get_llm_for_sequence_regression(
@@ -36,6 +23,7 @@ class RewardModelProxy:
             load_in_4bit=args.load_in_4bit,
             value_head_prefix=args.value_head_prefix,
             device_map="auto",
+            packing_samples=args.packing_samples,
         )
         self.reward_model.eval()
 
@@ -51,12 +39,6 @@ class RewardModelProxy:
         else:
             batch_size = self.batch_size
 
-        # remove pad_token
-        for i in range(len(queries)):
-            queries[i] = (
-                strip_sequence(queries[i], self.tokenizer.pad_token, self.tokenizer.eos_token)
-                + self.tokenizer.eos_token
-            )
         logger.info(f"queries[0]: {queries[0]}")
 
         scores = []
@@ -99,6 +81,7 @@ if __name__ == "__main__":
     parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
     parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
+    parser.add_argument("--packing_samples", action="store_true", default=False)
     parser.add_argument("--batch_size", type=int, default=None)
 
     # ModelScope parameters
@@ -122,7 +105,7 @@ if __name__ == "__main__":
         queries = data.get("query")
         prompts = data.get("prompts")
         rewards = reward_model.get_reward(queries, prompts)
-        result = {"rewards": rewards}
+        result = {"rewards": rewards, "scores": rewards, "extra_logs": {"dummy_scores": rewards}}
         logger.info(f"Sent JSON: {result}")
         return JSONResponse(result)
 
