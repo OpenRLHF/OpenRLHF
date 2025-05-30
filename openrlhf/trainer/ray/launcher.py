@@ -173,7 +173,7 @@ class RewardModelRayActor(BasePPORole):
         sequences: torch.LongTensor,
         attention_mask: Optional[torch.Tensor] = None,
         packed_seq_lens=None,
-        pad_sequence=False,
+        pad_sequence=True,
     ) -> torch.Tensor:
         device = torch.cuda.current_device()
         with torch.no_grad():
@@ -181,7 +181,7 @@ class RewardModelRayActor(BasePPORole):
                 sequences.to(device),
                 attention_mask.to(device),
                 ring_attn_group=self.strategy.ring_attn_group,
-                pad_sequence=True,
+                pad_sequence=pad_sequence,
                 packed_seq_lens=packed_seq_lens,
             )
         return reward.to("cpu")
