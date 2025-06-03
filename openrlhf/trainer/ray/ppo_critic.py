@@ -18,7 +18,7 @@ from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
 
 from ..ppo_utils import NaiveReplayBuffer
-from .launcher import BasePPORole
+from .launcher import BaseModelActor
 
 
 class CriticPPOTrainer(ABC):
@@ -143,7 +143,7 @@ class CriticPPOTrainer(ABC):
 
 
 @ray.remote(num_gpus=1)
-class CriticModelRayActor(BasePPORole):
+class CriticModelActor(BaseModelActor):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps):
         args = strategy.args
 

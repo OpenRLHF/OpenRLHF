@@ -26,7 +26,7 @@ from ..ppo_utils import NaiveReplayBuffer
 
 logger = init_logger(__name__)
 
-from .launcher import BasePPORole
+from .launcher import BaseModelActor
 from .utils import get_physical_gpu_id
 
 
@@ -356,8 +356,8 @@ class ActorPPOTrainer(ABC):
 
 
 @ray.remote(num_gpus=1)
-class ActorModelRayActor(BasePPORole):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps, vllm_engines):
+class PolicyModelActor(BaseModelActor):
+    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps=None, vllm_engines=None):
         args = strategy.args
         self.save_hf_ckpt = args.save_hf_ckpt
         self.disable_ds_ckpt = args.disable_ds_ckpt

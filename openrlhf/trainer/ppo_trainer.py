@@ -11,7 +11,7 @@ from openrlhf.datasets import PromptDataset
 from openrlhf.datasets.utils import blending_datasets
 from openrlhf.trainer.ppo_utils import AdaptiveKLController, FixedKLController
 from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
-from openrlhf.trainer.ray.launcher import PPORayActorGroup
+from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.utils import get_tokenizer
@@ -24,10 +24,10 @@ class BasePPOTrainer(ABC):
         self,
         pretrain: str,
         strategy: DeepspeedStrategy,
-        actor_model_group: PPORayActorGroup,
-        critic_model_group: PPORayActorGroup,
-        reward_model_group: PPORayActorGroup,
-        reference_model_group: PPORayActorGroup,
+        actor_model_group: RayActorGroup,
+        critic_model_group: RayActorGroup,
+        reward_model_group: RayActorGroup,
+        reference_model_group: RayActorGroup,
         vllm_engines=None,
         prompt_max_len: int = 120,
         dataloader_pin_memory: bool = True,
@@ -367,10 +367,10 @@ class PPOTrainer(BasePPOTrainer):
         self,
         pretrain: str,
         strategy: DeepspeedStrategy,
-        actor_model_group: PPORayActorGroup,
-        critic_model_group: PPORayActorGroup,
-        reward_model_group: PPORayActorGroup,
-        reference_model_group: PPORayActorGroup,
+        actor_model_group: RayActorGroup,
+        critic_model_group: RayActorGroup,
+        reward_model_group: RayActorGroup,
+        reference_model_group: RayActorGroup,
         vllm_engines=None,
         prompt_max_len: int = 120,
         dataloader_pin_memory: bool = True,

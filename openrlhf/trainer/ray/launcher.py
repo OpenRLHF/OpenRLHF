@@ -14,7 +14,7 @@ from openrlhf.trainer.ray.utils import ray_noset_visible_devices
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 
 
-class DistributedTorchRayActor:
+class BaseDistributedActor:
     def __init__(self, world_size, rank, master_addr, master_port):
         logging.basicConfig(
             format="%(asctime)s %(levelname)-8s %(message)s",
@@ -51,7 +51,7 @@ class DistributedTorchRayActor:
         return self._master_addr, self._master_port
 
 
-class BasePPORole(DistributedTorchRayActor):
+class BaseModelActor(BaseDistributedActor):
     def _setup_distributed(self, strategy: DeepspeedStrategy):
         # configure strategy
         self.strategy = strategy
@@ -102,7 +102,7 @@ class BasePPORole(DistributedTorchRayActor):
 
 
 @ray.remote(num_gpus=1)
-class ReferenceModelRayActor(BasePPORole):
+class ReferenceModelActor(BaseModelActor):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
         self._setup_distributed(strategy)
         model = Actor(
@@ -144,7 +144,7 @@ class ReferenceModelRayActor(BasePPORole):
 
 
 @ray.remote(num_gpus=1)
-class RewardModelRayActor(BasePPORole):
+class RewardModelActor(BaseModelActor):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
         self._setup_distributed(strategy)
         model = get_llm_for_sequence_regression(
@@ -187,7 +187,7 @@ class RewardModelRayActor(BasePPORole):
         return reward.to("cpu")
 
 
-class PPORayActorGroup:
+class RayActorGroup:
     """
     A group of ray actors
     Functions start with 'async' should return list of object refs
@@ -195,7 +195,7 @@ class PPORayActorGroup:
     Args:
         num_nodes (int): Number of nodes for this actor group.
         num_gpus_per_node (int): Number of gpus for this actor group.
-        ray_actor_type (Type[BasePPORole]): PPO model type that this actor group serve on.
+        ray_actor_type (Type[BaseModelActor]): PPO model type that this actor group serve on.
         pg (PlacementGroup, optional): Placement group to schedule actor on.
             If none, create new placement group automatically. Defaults to None.
         num_gpus_per_actor (float, optional): Number of gpus allocated for each actor.
@@ -206,7 +206,7 @@ class PPORayActorGroup:
         self,
         num_nodes,
         num_gpus_per_node,
-        ray_actor_type: Type[BasePPORole],
+        ray_actor_type: Type[BaseModelActor],
         pg: PlacementGroup = None,
         num_gpus_per_actor=1,
         duplicate_actors: int = 1,
@@ -255,7 +255,7 @@ class PPORayActorGroup:
             ).remote(world_size, 0, None, None)
         self._actor_handlers = [master_actor]
 
-        # Create worker actors
+        # Create worker_actor
         if world_size > 1:
             master_addr, master_port = ray.get(master_actor.get_master_addr_port.remote())
             for rank in range(1, world_size):

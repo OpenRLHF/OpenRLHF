@@ -6,12 +6,12 @@ from ray.util.placement_group import placement_group
 
 from openrlhf.trainer.ray import create_vllm_engines
 from openrlhf.trainer.ray.launcher import (
-    PPORayActorGroup,
-    ReferenceModelRayActor,
-    RewardModelRayActor,
+    RayActorGroup,
+    ReferenceModelActor,
+    RewardModelActor,
 )
-from openrlhf.trainer.ray.ppo_actor import ActorModelRayActor
-from openrlhf.trainer.ray.ppo_critic import CriticModelRayActor
+from openrlhf.trainer.ray.ppo_actor import PolicyModelActor
+from openrlhf.trainer.ray.ppo_critic import CriticModelActor
 from openrlhf.utils import get_strategy
 
 
@@ -73,10 +73,10 @@ def train(args):
             args.agent_func_path,
         )
 
-    actor_model = PPORayActorGroup(
+    actor_model = RayActorGroup(
         args.actor_num_nodes,
         args.actor_num_gpus_per_node,
-        ActorModelRayActor,
+        PolicyModelActor,
         pg=pg,
         num_gpus_per_actor=0.2 if pg else 1,
         duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
@@ -85,10 +85,10 @@ def train(args):
     if args.init_kl_coef <= 0:
         ref_model = None
     else:
-        ref_model = PPORayActorGroup(
+        ref_model = RayActorGroup(
             args.ref_num_nodes,
             args.ref_num_gpus_per_node,
-            ReferenceModelRayActor,
+            ReferenceModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
             duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
@@ -109,10 +109,10 @@ def train(args):
         ray.get(pg.ready())
 
     if args.critic_pretrain:
-        critic_model = PPORayActorGroup(
+        critic_model = RayActorGroup(
             args.critic_num_nodes,
             args.critic_num_gpus_per_node,
-            CriticModelRayActor,
+            CriticModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
             duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
@@ -123,10 +123,10 @@ def train(args):
     # multiple reward models
     if not args.remote_rm_url:
         reward_pretrain = args.reward_pretrain
-        reward_model = PPORayActorGroup(
+        reward_model = RayActorGroup(
             args.reward_num_nodes,
             args.reward_num_gpus_per_node,
-            RewardModelRayActor,
+            RewardModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
             duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
