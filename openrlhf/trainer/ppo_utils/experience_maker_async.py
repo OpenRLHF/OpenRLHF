@@ -71,33 +71,33 @@ class SamplesGeneratorAsync(SamplesGenerator):
         # Process outputs one by one
         experiences_list = []
         for output in all_outputs:
-            # Tokenize state
-            state_tokens = self.tokenizer(output["state"], add_special_tokens=False, return_tensors="pt")["input_ids"][
-                0
-            ]
-            tokenized_state = state_tokens.tolist()
-            if state_tokens[-1] != eos_token_id:
-                tokenized_state.append(eos_token_id)
+            # Tokenize observation
+            observation_tokens = self.tokenizer(output["observation"], add_special_tokens=False, return_tensors="pt")[
+                "input_ids"
+            ][0]
+            tokenized_observation = observation_tokens.tolist()
+            if observation_tokens[-1] != eos_token_id:
+                tokenized_observation.append(eos_token_id)
 
             # Convert action ranges to token indices
             tokenized_ranges = []
             for start, end in output["action_ranges"]:
-                # Get token indices for the entire state up to end
-                full_tokens = self.tokenizer(output["state"][:end], add_special_tokens=False, return_tensors="pt")[
-                    "input_ids"
-                ][0]
-                # Get token indices for the entire state up to start
-                start_tokens = self.tokenizer(output["state"][:start], add_special_tokens=False, return_tensors="pt")[
-                    "input_ids"
-                ][0]
+                # Get token indices for the entire observation up to end
+                full_tokens = self.tokenizer(
+                    output["observation"][:end], add_special_tokens=False, return_tensors="pt"
+                )["input_ids"][0]
+                # Get token indices for the entire observation up to start
+                start_tokens = self.tokenizer(
+                    output["observation"][:start], add_special_tokens=False, return_tensors="pt"
+                )["input_ids"][0]
                 # Calculate token indices
                 tokenized_ranges.append((len(start_tokens), len(full_tokens)))
-            if state_tokens[-1] != eos_token_id:
+            if observation_tokens[-1] != eos_token_id:
                 tokenized_ranges[-1] = (tokenized_ranges[-1][0], tokenized_ranges[-1][1] + 1)
 
             # Create tensors
-            sequences = torch.tensor(tokenized_state)
-            attention_mask = torch.tensor([1] * len(tokenized_state))
+            sequences = torch.tensor(tokenized_observation)
+            attention_mask = torch.tensor([1] * len(tokenized_observation))
 
             # Create action mask based on tokenized action_ranges
             action_mask = torch.zeros_like(attention_mask)

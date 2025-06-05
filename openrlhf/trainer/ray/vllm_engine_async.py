@@ -19,8 +19,8 @@ class AgentInstance:
         else:
             raise ValueError("Agent path must be a Python file")
 
-    async def step(self, state, action, label, **kwargs):
-        return await self.agent_step(state, action, label, **kwargs)
+    async def step(self, observation, action, label, **kwargs):
+        return await self.agent_step(observation, action, label, **kwargs)
 
 
 @ray.remote
@@ -95,8 +95,8 @@ class LLMRayActorAsync(BaseLLMRayActor):
                 # Create a unique agent instance for this prompt
                 agent_instance = AgentInstance.remote(self.agent_func_path)
 
-                # Initialize states and actions for the current prompt
-                state = prompt
+                # Initialize observations and actions for the current prompt
+                observation = prompt
                 action_ranges = []
                 total_reward = 0
                 final_scores = 0
@@ -104,26 +104,26 @@ class LLMRayActorAsync(BaseLLMRayActor):
                 # Execute multiple steps of interaction
                 for step_idx in range(max_steps):
                     # Next sampling budget
-                    state_tokens_len = len(
-                        hf_tokenizer(state, add_special_tokens=False, return_tensors="pt")["input_ids"][0]
+                    observation_tokens_len = len(
+                        hf_tokenizer(observation, add_special_tokens=False, return_tensors="pt")["input_ids"][0]
                     )
-                    sampling_params.max_tokens = max_length - state_tokens_len
+                    sampling_params.max_tokens = max_length - observation_tokens_len
                     # No budget to generate, break
                     if sampling_params.max_tokens <= 0:
                         break
 
                     # Generate response asynchronously
-                    request_output = await self.generate_async(state, sampling_params)
+                    request_output = await self.generate_async(observation, sampling_params)
                     action = request_output.outputs[0].text
-                    action_ranges.append((len(state), len(state) + len(action)))
+                    action_ranges.append((len(observation), len(observation) + len(action)))
 
-                    # Call step function to get reward and next state
+                    # Call step function to get reward and next observation
                     # Use asyncio.to_thread to make Ray remote call non-blocking
                     kwargs = {"sampling_params": sampling_params}
-                    result = await agent_instance.step.remote(state, action, label, **kwargs)
+                    result = await agent_instance.step.remote(observation, action, label, **kwargs)
                     total_reward += result["rewards"].item()
                     final_scores = result.get("scores", total_reward)
-                    state = result["next_state"]
+                    observation = result["next_observation"]
                     done = result["done"]
                     extra_logs = result.get("extra_logs", {})
 
@@ -140,7 +140,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
                 final_response = {
                     "prompt": prompt,
                     "label": label,
-                    "state": state,
+                    "observation": observation,
                     "reward": total_reward,
                     "scores": final_scores,
                     "extra_logs": extra_logs,
