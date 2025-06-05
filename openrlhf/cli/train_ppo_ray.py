@@ -480,6 +480,11 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
+    if args.ring_attn_size > 1:
+        if not args.packing_samples:
+            print("[Warning] --ring_attn_size > 1 requires --packing_samples.")
+            args.packing_samples = True
+
     if args.packing_samples:
         if not args.flash_attn:
             print("[Warning] Please --flash_attn to accelerate when --packing_samples is enabled.")
