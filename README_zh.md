@@ -109,7 +109,7 @@ pip install openrlhf[vllm,ring,liger]
 
 # 安装兼容 PyTorch 2.7 的 flash-attn 2.7.4.post1
 # Example for Python 3.12, replace filename if using 3.10 or 3.11
-pip install https://github.com/Zarrac/my-pytorch-builds/releases/download/flash-attn-2.7.4.post1-cuda12.8/flash_attn-2.7.4.post1+pt270cu128cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+pip install https://github.com/OpenRLHF/flash-attn-2.7.4.post1-builds/releases/download/v0.1/flash_attn-2.7.4.post1+pt270cu128cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
 
 
 # pip install GitHub 上的最新版
