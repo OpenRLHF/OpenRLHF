@@ -67,7 +67,7 @@ def batch_generate_vllm(args):
 
     prompts_dataset = PromptDataset(prompts_data, tokenizer, dummy_strategy, input_template=args.input_template)
     prompts = []
-    for prompt, _ in prompts_dataset:
+    for _, prompt, _ in prompts_dataset:
         prompts.append(prompt)
 
     # Conditional SFT inference
@@ -149,7 +149,7 @@ def batch_generate(args):
     N = args.best_of_n
     output_dataset = []
 
-    for prompts, _ in pbar:
+    for _, prompts, _ in pbar:
         # Conditional SFT inference
         if args.enable_csft:
             for i in range(len(prompts)):
