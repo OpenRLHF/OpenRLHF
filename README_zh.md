@@ -94,18 +94,23 @@ OpenRLHF 是第一个基于 Ray、vLLM、ZeRO-3 和 HuggingFace Transformers 构
 
 ```bash
 # 启动 docker container
-docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:24.07-py3 bash
+docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:25.02-py3 bash
 sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
 
 # pip install
 pip install openrlhf
 
-# 如果你需要使用 vLLM 加速 (安装 vLLM 0.8.5.post1)
+# 如果你需要使用 vLLM 加速 (安装 vLLM 0.9.0.1)
 pip install openrlhf[vllm]
 # 最新的 vLLM 也是支持的
 pip install openrlhf[vllm_latest]
 # 安装 vLLM、ring-flash-attention 和 Liger-Kernel
 pip install openrlhf[vllm,ring,liger]
+
+# 安装兼容 PyTorch 2.7 的 flash-attn 2.7.4.post1
+# Example for Python 3.12, replace filename if using 3.10 or 3.11
+pip install https://github.com/Zarrac/my-pytorch-builds/releases/download/flash-attn-2.7.4.post1-cuda12.8/flash_attn-2.7.4.post1+pt270cu128cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+
 
 # pip install GitHub 上的最新版
 pip install git+https://github.com/OpenRLHF/OpenRLHF.git
@@ -117,7 +122,7 @@ pip install -e .
 ```
 
 > [!NOTE]
->我们推荐使用 vLLM 0.8.5.post1 及以上版本。
+>我们推荐使用 vLLM 0.9.0.1 及以上版本。
 >我们也提供了 [Dockerfiles for vLLM](./dockerfile/) 和 [Nvidia-Docker 一键安装脚本](./examples/scripts/nvidia_docker_install.sh)。
 
 ### 准备数据集

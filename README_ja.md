@@ -86,13 +86,13 @@ OpenRLHFを使用するには、まずDockerコンテナを起動し（**推奨*
 
 ```bash
 # Dockerコンテナを起動
-docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:24.07-py3 bash
+docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:25.02-py3 bash
 sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
 
 # pip install
 pip install openrlhf
 
-# vLLM加速を使用する場合（vLLM 0.8.5.post1をインストール）
+# vLLM加速を使用する場合（vLLM 0.9.0.1をインストール）
 pip install openrlhf[vllm]
 # 最新のvLLMもサポートされています
 pip install openrlhf[vllm_latest]
@@ -109,7 +109,7 @@ pip install -e .
 ```
 
 > [!NOTE]
->vLLM 0.8.5.post1以降の使用をお勧めします。
+>vLLM 0.9.0.1以降の使用をお勧めします。
 >また、[vLLM用のDockerfile](./dockerfile/)および[Nvidia-Dockerのワンクリックインストールスクリプト](./examples/scripts/nvidia_docker_install.sh)も提供しています。
 
 ### データセットの準備

@@ -74,8 +74,8 @@ setup(
     long_description_content_type="text/markdown",
     install_requires=_fetch_requirements("requirements.txt"),
     extras_require={
-        "vllm": ["vllm==0.8.5.post1"],
-        "vllm_latest": ["vllm>0.8.5.post1"],
+        "vllm": ["vllm==0.9.0.1"],
+        "vllm_latest": ["vllm>0.9.0.1"],
         "ring": ["ring_flash_attn"],
         "liger": ["liger_kernel"],
     },
