@@ -445,20 +445,6 @@ python -m openrlhf.cli.lora_combiner \
     --bf16
 ```
 
-## Performance
-
-We optimized DSChat's performance to the greatest extent possible by employing techniques such as enabling Adam offload, along with reward model (RM) and reference model (Ref) offload to increase the micro-batch size during the inference stage and avoid out-of-memory issues. We even fixed some bugs in DSChat to enable the Hybrid Engine (HE) for LLaMA2. The average time (seconds) it took to train 1024 prompts with 1 PPO epoch using the Optimized DSChat and OpenRLHF:
-
-| **Size** | **NVIDIA A800-80GB GPUs** | **Optimized DSChat (with  Hybrid Engine)** | **OpenRLHF** | **Speedup** |
-| :---: | :---: | :---: | :---: | :---: |
-| 7B | 16 | 855.09 | 471.11 | 1.82x |
-| 13B | 32 | 1528.93 | 608.93 | 2.5x |
-| 34B | 32 | 3634.98 | 1526.4 | 2.4x |
-| 70B | 32 | 10407.0 | 4488.53 | 2.3x |
-
-> [!NOTE]
-> The data is outdated; please refer to the performance tuning section for re-testing.
-
 ### Performance Tuning Guide
 
 To achieve optimal performance, we recommend allocating nodes `vLLM:Actor:Critic = 1:1:1`. 

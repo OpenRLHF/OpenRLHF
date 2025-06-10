@@ -54,6 +54,11 @@ class BaseLLMRayActor:
 
         self.kwargs = kwargs
 
+        import vllm
+
+        if vllm.__version__ >= "0.9.0":
+            os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
+
 
 @ray.remote
 class LLMRayActor(BaseLLMRayActor):

@@ -99,6 +99,12 @@ pip install openrlhf[vllm_latest]
 # vLLM、ring-flash-attention、およびLiger-Kernelをインストール
 pip install openrlhf[vllm,ring,liger]
 
+# Install flash-attn 2.7.4.post1 for PyTorch 2.7
+# Example for Python 3.12, replace filename if using 3.10 or 3.11
+pip install https://github.com/Zarrac/my-pytorch-builds/releases/download/flash-attn-2.7.4.post1-cuda12.8/flash_attn-2.7.4.post1+pt270cu128cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+
+
+
 # 最新バージョンをpip install
 pip install git+https://github.com/OpenRLHF/OpenRLHF.git
 
@@ -420,20 +426,6 @@ python -m openrlhf.cli.lora_combiner \
     --is_rm \
     --bf16
 ```
-
-## パフォーマンス
-
-Adam offload、報酬モデル（RM）および参照モデル（Ref）のoffloadなどの技術を活用することで、DSChatのパフォーマンスを最大限に最適化し、推論段階でのマイクロバッチサイズを増やし、メモリ不足の問題を回避しました。また、DSChatのいくつかのバグを修正し、LLaMA2のHybrid Engine（HE）を有効にしました。最適化されたDSChatとOpenRLHFを使用して1024個のプロンプトを1つのPPO epochでトレーニングするのに必要な平均時間（秒）：
-
-| **サイズ** | **NVIDIA A800-80GB GPUs** | **最適化されたDSChat（Hybrid Engine付き）** | **OpenRLHF** | **スピードアップ** |
-| :---: | :---: | :---: | :---: | :---: |
-| 7B | 16 | 855.09 | 471.11 | 1.82x |
-| 13B | 32 | 1528.93 | 608.93 | 2.5x |
-| 34B | 32 | 3634.98 | 1526.4 | 2.4x |
-| 70B | 32 | 10407.0 | 4488.53 | 2.3x |
-
-> [!NOTE]
-> このデータは古いものです。パフォーマンスチューニングセクションを参照して再テストしてください。
 
 ### パフォーマンスチューニングガイド
 

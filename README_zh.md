@@ -451,27 +451,13 @@ python -m openrlhf.cli.lora_combiner \
     --bf16
 ```
 
-## 性能
-
-我们通过启用 Adam offload、奖励模型（RM）和参考模型（Ref）offload 等技术，最大限度地优化了 DSChat 的性能，以增加推理阶段的微批次大小并避免内存不足问题。我们甚至修复了 DSChat 中的一些错误，为 LLaMA2 启用了 Hybrid Engine（HE）。使用优化后的 DSChat 和 OpenRLHF 训练 1024 个提示的 1 个 PPO epoch 所需的平均时间（秒）：
-
-| **大小** | **NVIDIA A800-80GB GPUs** | **优化后的 DSChat (带 Hybrid Engine)** | **OpenRLHF** | **加速比** |
-| :---: | :---: | :---: | :---: | :---: |
-| 7B | 16 | 855.09 | 471.11 | 1.82x |
-| 13B | 32 | 1528.93 | 608.93 | 2.5x |
-| 34B | 32 | 3634.98 | 1526.4 | 2.4x |
-| 70B | 32 | 10407.0 | 4488.53 | 2.3x |
-
-> [!NOTE]
-> 这些数据已经过时，请参考性能调优部分进行重新测试。
-
 ### 性能调优指南
 
 为了获得最佳性能，我们建议按 `vLLM:Actor:Critic = 1:1:1` 的比例分配节点。
 
 - 例如，对于 70B 模型和 48 个 A100 GPU，建议将 16 个 A100 GPU 分配给 vLLM 引擎，16 个 GPU 分配给 Actor 模型，剩余的 16 个 GPU 分配给 Critic 模型。
 - 当 RL 算法收敛性满足要求时请启用异步训练 `--async_train`。
-- 当有足够的 GPU 内存时，使用 hybrid engine `--colocate_all_models` 和 `--vllm_enable_sleep` 以及 `--deepspeed_enable_sleep`，而不是分布式 RLHF。
+- 当有足够的 GPU 内存时，使用 Hybrid engine `--colocate_all_models` 和 `--vllm_enable_sleep` 以及 `--deepspeed_enable_sleep`，而不是分布式 RLHF。
 - 启用 `--colocate_critic_reward`、`--colocate_actor_ref` 选项来合并节点。
 - 应该尽可能增加 `rollout_micro_batch_size`（并最小化 vLLM 引擎的 TP 大小）。在训练阶段，较大的 `--micro_train_batch_size` 更好，并启用 `--packing_samples`。
 - 当有足够的 GPU 内存时，请禁用 `--adam_offload` 并启用 `--overlap_comm`。同时启用 `--deepcompile` 来加速训练。
