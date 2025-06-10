@@ -10,7 +10,7 @@ jobs:
     # do not run in forks
     if: ${{ github.repository_owner == 'OpenRLHF' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch') }}
     name: build wheel and upload
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     strategy:
       matrix:
@@ -27,12 +27,10 @@ jobs:
 
     - name: Install CUDA ${{ matrix.cuda-version }}
       run: |
-        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
-        sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
-        sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/3bf863cc.pub
-        sudo add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/ /"
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+        sudo dpkg -i cuda-keyring_1.1-1_all.deb
         sudo apt-get update
-        sudo apt-get -y install cuda-${{ matrix.cuda-version }}
+        sudo apt-get -y install cuda-toolkit-${{ matrix.cuda-version }}
 
     - name: Set up CUDA environment variables
       run: |
