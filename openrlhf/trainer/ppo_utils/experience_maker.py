@@ -691,8 +691,8 @@ class RemoteExperienceMaker(ABC):
             # remove unnecessary info
             experience.kl = None
 
-        # Normalize advantages across all experiences
-        if self.args.advantage_estimator not in ["group_norm", "dr_grpo"]:
+        # Normalize advantages across all experiences for GAE, REINFORCE, and REINFORCE-baseline
+        if self.args.advantage_estimator in ["gae", "reinforce", "reinforce_baseline"]:
             all_advantages = []
             all_action_masks = []
             for exp in experiences:
