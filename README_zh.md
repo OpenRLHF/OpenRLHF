@@ -163,26 +163,6 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 "<s>[INST] Hello, how are you? [/INST]I'm doing great. How can I help you today?</s> [INST] I'd like to show off how chat templating works! [/INST]"
 ```
 
-如何指定训练和测试数据分区 ?
-
-你可以使用 `data_type@data_dir` 的方式指定, 比如下面的数据集可以设置为 `--dataset json@./data`
-
-```
-data
-├── test.jsonl
-└── train.jsonl
-```
-
-如何指定训练和测试数据分区 ?
-
-你可以使用 `data_type@data_dir` 的方式指定, 比如下面的数据集可以设置为 `--dataset json@./data`
-
-```
-data
-├── test.jsonl
-└── train.jsonl
-```
-
 如何指定测试数据集 ?
 
 请使用 ``--eval_dataset {name or path}`` 来设置测试数据集路径。

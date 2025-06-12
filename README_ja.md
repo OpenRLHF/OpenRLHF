@@ -158,16 +158,6 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 "<s>[INST] Hello, how are you? [/INST]I'm doing great. How can I help you today?</s> [INST] I'd like to show off how chat templating works! [/INST]"
 ```
 
-トレーニングとテストデータの分割を指定する方法は？
-
-`data_type@data_dir`の形式で指定できます。例えば、以下のようなデータセットは `--dataset json@./data` として設定できます：
-
-```
-data
-├── test.jsonl
-└── train.jsonl
-```
-
 テストデータセットの指定方法は？
 
 テストデータセットのパスは ``--eval_dataset {name or path}`` を使用して設定してください。
