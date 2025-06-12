@@ -48,6 +48,7 @@ OpenRLHF 是第一个基于 Ray、vLLM、ZeRO-3 和 HuggingFace Transformers 构
 
 ## 新闻  
 - [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) 使用了 REINFORCE++-baseline 训练它们的推理模型.
+- [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) 作为 OpenRLHF 的分支版本已发布。它通过集成集中式多智能体交互与分布式策略训练，专为使用 RL 训练基于 LLM 的多智能体系统而设计。
 - [2025/5] OpenRLHF 0.8.0 支持 [Async Pipeline RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh) (`--async_train`) 和 [Async Agent RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)(`--agent_func_path`)
 - [2025/4] 发布博客 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html)
 - [2025/4] Clean OpenRLHF: 基于 Single Controller 和 Unified Packing Samples 重构了源码
@@ -56,7 +57,7 @@ OpenRLHF 是第一个基于 Ray、vLLM、ZeRO-3 和 HuggingFace Transformers 构
 - [2025/2] [LMM-R1](https://github.com/TideDra/lmm-r1) 是 OpenRLHF 的一个分支，旨在为多模态任务上复现 DeepSeek-R1 提供高性能的 RL 基础设施。
 - [2025/2] MIT & Microsoft 提出了 [On the Emergence of Thinking in LLMs I: Searching for the Right Intuition](https://arxiv.org/pdf/2502.06773) 基于 OpenRLHF
 - [2025/1] 港科大复现了 [DeepSeek-R1-Zero and DeepSeek-R1 training on small models 使用 OpenRLHF](https://github.com/hkust-nlp/simpleRL-reason)
-- [2024/12] 我们"提出"了 😊 [REINFORCE++ 对齐算法](https://www.researchgate.net/publication/387487679_REINFORCE_A_SIMPLE_AND_EFFICIENT_APPROACH_FOR_ALIGNING_LARGE_LANGUAGE_MODELS).
+- [2024/12] 我们"提出"了 😊 [REINFORCE++: A Simple and Efficient Approach for Aligning Large Language Models](https://arxiv.org/abs/2501.03262).
 - [2024/12] 在 [Notion Blog](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05) 中，我们对 PPO、REINFORCE++、GRPO 和 RLOO 进行了分析。  
 - [2023/8] OpenRLHF 开启开源之旅. 
 
@@ -160,6 +161,16 @@ dataset = [{"input_key": [
 tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 
 "<s>[INST] Hello, how are you? [/INST]I'm doing great. How can I help you today?</s> [INST] I'd like to show off how chat templating works! [/INST]"
+```
+
+如何指定训练和测试数据分区 ?
+
+你可以使用 `data_type@data_dir` 的方式指定, 比如下面的数据集可以设置为 `--dataset json@./data`
+
+```
+data
+├── test.jsonl
+└── train.jsonl
 ```
 
 如何指定训练和测试数据分区 ?
@@ -534,12 +545,22 @@ python -m openrlhf.cli.lora_combiner \
 (2024/7) 我们的 GitHub 组织从 OpenLLMAI 迁移到了 OpenRLHF.
 
 ## 引用
+OpenRLHF
 ```
 @article{hu2024openrlhf,
   title={OpenRLHF: An Easy-to-use, Scalable and High-performance RLHF Framework},
   author={Jian Hu and Xibin Wu and Zilin Zhu and Xianyu and Weixun Wang and Dehao Zhang and Yu Cao},
   journal={arXiv preprint arXiv:2405.11143},
   year={2024}
+}
+```
+REINFORCE++-baseline
+```
+@article{hu2025reinforce++,
+  title={Reinforce++: A simple and efficient approach for aligning large language models},
+  author={Hu, Jian},
+  journal={arXiv preprint arXiv:2501.03262},
+  year={2025}
 }
 ```
 
