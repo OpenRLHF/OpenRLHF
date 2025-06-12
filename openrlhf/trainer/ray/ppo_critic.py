@@ -181,7 +181,7 @@ class CriticModelActor(BaseModelActor):
 
         # configure scheduler
         critic_scheduler = get_scheduler(
-            "cosine_with_min_lr",
+            args.lr_scheduler,
             critic_optim,
             num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
             num_training_steps=max_steps,
