@@ -102,7 +102,7 @@ def train(args):
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
 
     scheduler = get_scheduler(
-        "cosine_with_min_lr",
+        args.lr_scheduler,
         optim,
         num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
         num_training_steps=max_steps,
@@ -223,6 +223,7 @@ if __name__ == "__main__":
     parser.add_argument("--margin_loss", action="store_true", default=False)
     parser.add_argument("--learning_rate", type=float, default=9e-6)
     parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
+    parser.add_argument("--lr_scheduler", type=str, default="cosine_with_min_lr")
     parser.add_argument("--micro_train_batch_size", type=int, default=1)
     parser.add_argument("--train_batch_size", type=int, default=128, help="Global training batch size")
     parser.add_argument("--loss", type=str, default="sigmoid")
