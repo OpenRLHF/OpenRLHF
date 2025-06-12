@@ -527,12 +527,22 @@ Our project would like to thank [Netmind.AI](https://www.netmind.ai/) for the GP
 (2024/7) Our GitHub organization has changed from OpenLLMAI to OpenRLHF.
 
 ## Citation
+OpenRLHF
 ```
 @article{hu2024openrlhf,
   title={OpenRLHF: An Easy-to-use, Scalable and High-performance RLHF Framework},
   author={Jian Hu and Xibin Wu and Zilin Zhu and Xianyu and Weixun Wang and Dehao Zhang and Yu Cao},
   journal={arXiv preprint arXiv:2405.11143},
   year={2024}
+}
+```
+REINFORCE++-baseline
+```
+@article{hu2025reinforce++,
+  title={Reinforce++: A simple and efficient approach for aligning large language models},
+  author={Hu, Jian},
+  journal={arXiv preprint arXiv:2501.03262},
+  year={2025}
 }
 ```
 
