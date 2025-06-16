@@ -153,7 +153,7 @@ Mean Error=\frac{\sum^N_{i=1}|loss_i^{npu}-loss_i^{gpu}|}{N}\times 100 \%
 | KTO                              | 已支持         | 0.37%     | 2.3.1      | 2.3.1.post2    | 8.0.RC3   | [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2642104300) |
 | RM                               | 已支持         | 0.85%     | 2.3.1      | 2.3.1.post2    | 8.0.RC3   | [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2642104300) |
 | PRM                              | 已支持         | 1.61%     | 2.3.1      | 2.3.1.post2    | 8.0.RC3   | [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2642104300) |
-| PPO                              | 精度测试中     |           | 2.5.1      | 2.5.1          | 8.1.RC1   |                                                              |
+| PPO                              | 已支持         | 1.85%     | 2.5.1      | 2.5.1          | 8.1.RC1   | [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2974904427) |
 | REINFORCE++                      | 已支持         | 1.94%     | 2.5.1      | 2.5.1          | 8.1.RC1   | [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2735138695) |
 | REINFORCE++<br/>(vLLM V1引擎)    | 已支持         | 1.99%     | 2.5.1      | 2.5.1          | 8.1.RC1   | [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2903104059) |
 | REINFORCE++<br/>(Ring Attention) | 已支持，待优化 | 4.95%     | 2.5.1      | 2.5.1          | 8.1.RC1   | [测试结果](https://github.com/OpenRLHF/OpenRLHF/pull/605#issuecomment-2903104059) |
