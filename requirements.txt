@@ -3,7 +3,7 @@ bitsandbytes
 datasets
 deepspeed==0.17.1
 einops
-flash-attn==2.7.4.post1
+flash-attn==2.8.0.post2
 isort
 jsonlines
 loralib
