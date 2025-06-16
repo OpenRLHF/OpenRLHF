@@ -1,6 +1,7 @@
 from .actor import Actor
 from .loss import (
     DPOLoss,
+    DDPOLoss,
     GPTLMLoss,
     KDLoss,
     KTOLoss,
@@ -18,6 +19,7 @@ __all__ = [
     "Actor",
     "SFTLoss",
     "DPOLoss",
+    "DDPOLoss"
     "GPTLMLoss",
     "KDLoss",
     "KTOLoss",

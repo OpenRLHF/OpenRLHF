@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict
 
 import torch
 import torch.distributed as dist
@@ -200,6 +200,93 @@ class DPOLoss(nn.Module):
         rejected_rewards = self.beta * (policy_rejected_logps - reference_rejected_logps).detach()
 
         return loss, chosen_rewards, rejected_rewards
+
+
+# Dense Direct Preference Optimization Loss,
+# ref: cvpr2023 RLHF-V: Towards Trustworthy MLLMs via Behavior Alignment from Fine-grained Correctional Human Feedback
+class DDPOLoss(nn.Module):
+    def __init__(self, gamma):
+        super().__init__()
+        self.gamma = gamma
+    
+    def forward(self,
+                logits_policy: torch.Tensor,     # [2B, L, V]
+                logits_ref: torch.Tensor,        # [2B, L, V]
+                token_ids: torch.LongTensor,     # [2B, L]
+                attn_mask: torch.BoolTensor,     # [2B, L]
+                changed_mask: torch.BoolTensor,  # [B, L]
+                unchanged_mask: torch.BoolTensor,# [B, L]
+    ) -> torch.Tensor:
+        """
+        Compute Dense DPO loss for a batch, given precomputed changed/unchanged masks.
+
+        Args:
+            logits_policy:   [2B, L, V] interleaved chosen/rejected logits (policy).
+            logits_ref:      [2B, L, V] interleaved chosen/rejected logits (reference).
+            token_ids:       [2B, L] token IDs for both sequences.
+            attn_mask:       [2B, L] attention mask (1=real, 0=pad).
+            changed_mask:    [B, L] True for changed spans in chosen.
+            unchanged_mask:  [B, L] True for unchanged spans in chosen.
+            gamma:           weight for changed spans.
+
+        Returns:
+            Scalar DDPO loss.
+        """
+        B2, L, V = logits_policy.shape
+        B = B2 // 2
+
+        # Split chosen/rejected
+        lp_ch = logits_policy[:B]
+        lp_rj = logits_policy[B:]
+        lr_ch = logits_ref[:B]
+        lr_rj = logits_ref[B:]
+
+        ids_ch = token_ids[:B]
+        ids_rj = token_ids[B:]
+
+        mask_ch = attn_mask[:B]
+        mask_rj = attn_mask[B:]
+
+        # Compute log-probs
+        logp_pc = F.log_softmax(lp_ch, dim=-1)  # [B, L, V]
+        logp_pr = F.log_softmax(lp_rj, dim=-1)
+        logp_rc = F.log_softmax(lr_ch, dim=-1)
+        logp_rr = F.log_softmax(lr_rj, dim=-1)
+
+        # Gather the probabilities of the actual tokens
+        logp_pc = logp_pc.gather(2, ids_ch.unsqueeze(-1)).squeeze(-1)  # [B, L]
+        logp_pr = logp_pr.gather(2, ids_rj.unsqueeze(-1)).squeeze(-1)
+        logp_rc = logp_rc.gather(2, ids_ch.unsqueeze(-1)).squeeze(-1)
+        logp_rr = logp_rr.gather(2, ids_rj.unsqueeze(-1)).squeeze(-1)
+
+        # Mask out padding positions
+        logp_pc = logp_pc * mask_ch
+        logp_pr = logp_pr * mask_rj
+        logp_rc = logp_rc * mask_ch
+        logp_rr = logp_rr * mask_rj
+
+        # Sum over unchanged and changed spans
+        sum_u_pc = (logp_pc * unchanged_mask).sum(dim=1)
+        sum_c_pc = (logp_pc * changed_mask).sum(dim=1)
+        sum_u_pr = (logp_pr * unchanged_mask).sum(dim=1)
+        sum_c_pr = (logp_pr * changed_mask).sum(dim=1)
+        sum_u_rc = (logp_rc * unchanged_mask).sum(dim=1)
+        sum_c_rc = (logp_rc * changed_mask).sum(dim=1)
+        sum_u_rr = (logp_rr * unchanged_mask).sum(dim=1)
+        sum_c_rr = (logp_rr * changed_mask).sum(dim=1)
+
+        # Normalization N = |u| + gamma * |c|
+        Nu = unchanged_mask.sum(dim=1).float()
+        Nc = changed_mask.sum(dim=1).float()
+        N = Nu + self.gamma * Nc
+
+        # DPO logits and final loss
+        delta_p = (sum_u_pc + self.gamma * sum_c_pc) - (sum_u_pr + self.gamma * sum_c_pr)
+        delta_r = (sum_u_rc + self.gamma * sum_c_rc) - (sum_u_rr + self.gamma * sum_c_rr)
+        ddpo_logits = (delta_p - delta_r) / N
+
+        loss = -F.logsigmoid(ddpo_logits).mean()
+        return loss
 
 
 # Adapted from https://github.com/ContextualAI/HALOs/blob/ca9b7e3eeea220c0944ad8095d641da33f907a7e/trainers.py#L742

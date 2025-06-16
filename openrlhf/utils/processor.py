@@ -1,5 +1,8 @@
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
+from typing import List, Tuple, Dict
+from difflib import SequenceMatcher
 
 
 def reward_normalization(objs):
@@ -101,3 +104,39 @@ def get_processor(name):
         return PROCESSORS[name]
     else:
         raise ValueError(f"Processor {name} does not exist.")
+
+
+def get_changed_unchanged_mask(
+    chosen_tokens_batch: torch.Tensor,
+    rejected_tokens_batch: torch.Tensor,
+) -> Tuple[torch.BoolTensor, torch.BoolTensor]:
+    """
+    Compute boolean masks for changed and unchanged token indices in a batch,
+    optimized for tensor operations.
+
+    Args:
+        chosen_tokens_batch: List of token-id lists for 'chosen' responses, length B.
+        rejected_tokens_batch: List of token-id lists for 'rejected' responses, length B.
+
+    Returns:
+        changed_mask: BoolTensor of shape [B, L], True where chosen tokens were changed.
+        unchanged_mask: BoolTensor of shape [B, L], True where chosen tokens unchanged.
+    """
+    padded_seq_len = chosen_tokens_batch.shape[-1]
+    batch_size = chosen_tokens_batch.shape[0]
+    changed_mask = torch.zeros((batch_size, padded_seq_len), dtype=torch.bool)
+    unchanged_mask = torch.zeros((batch_size, padded_seq_len), dtype=torch.bool)
+
+    chosen_list = chosen_tokens_batch.tolist()
+    rejected_list = rejected_tokens_batch.tolist()
+    for b in range(batch_size):
+        lc = chosen_list[b]
+        lr = rejected_list[b]
+        mathcer = SequenceMatcher(None, lc, lr)
+        for tag, i1, i2, _, _ in mathcer.get_opcodes():
+            if tag == 'equal':
+                unchanged_mask[b, i1:i2] = True
+            else:
+                changed_mask[b, i1:i2] = True
+
+    return changed_mask, unchanged_mask
