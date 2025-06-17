@@ -222,7 +222,7 @@ class KDTrainer(ABC):
                 disable=not self.strategy.is_rank_0(),
             )
 
-            for inputs, attention_masks, loss_masks in self.eval_dataloader:
+            for inputs, attention_masks, loss_masks in eval_dataloader:
                 inputs = inputs.squeeze(1).to(torch.cuda.current_device())
                 attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
                 logits = self.model(inputs, attention_mask=attention_mask, return_output=True)["logits"]
