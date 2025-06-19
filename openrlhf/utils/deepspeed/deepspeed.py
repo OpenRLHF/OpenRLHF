@@ -364,8 +364,7 @@ class DeepspeedStrategy(ABC):
             output_state_dict = clone_tensors_for_torch_save(model_to_save.state_dict())
 
         if self.is_rank_0():
-            state_dict = model_to_save.state_dict()
-            state_dict_keys = set(state_dict.keys())
+            state_dict_keys = set(model_to_save.state_dict().keys())
             output_state_dict_keys = set(output_state_dict.keys())
 
             # corner case for tie_word_embeddings, such as Qwen2-0.5B
@@ -396,6 +395,12 @@ class DeepspeedStrategy(ABC):
             model_to_save.config.to_json_file(output_config_file)
             # save tokenizer
             tokenizer.save_pretrained(output_dir)
+
+        del output_state_dict
+        # Explicitly release memory
+        import gc
+
+        gc.collect()
 
         torch_dist_barrier_and_cuda_sync()
 
@@ -481,8 +486,13 @@ class DeepspeedStrategy(ABC):
                 else:
                     break
 
-        dist.barrier()
+        torch_dist_barrier_and_cuda_sync()
         model.save_checkpoint(save_dir, tag=tag, client_state=client_state, save_latest=save_latest)
+
+        # Explicitly release memory
+        import gc
+
+        gc.collect()
 
     def load_ckpt(
         self,
