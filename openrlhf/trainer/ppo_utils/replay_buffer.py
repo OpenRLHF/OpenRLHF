@@ -1,12 +1,15 @@
 import random
 from abc import ABC
 from dataclasses import dataclass, fields
-from typing import List, Optional
+from typing import List, Optional, Int
+
 
 import torch
+from torch import distributed as dist
 
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.utils.utils import zero_pad_sequences
+from openrlhf.utils.seqlen_balancing import  get_minimum_num_micro_batch_size, get_seqlen_balanced_partitions
 
 
 @dataclass
@@ -42,7 +45,7 @@ def split_experience_batch(experience: Experience) -> List[BufferItem]:
     batch_size = len(experience.sequences)
     # Get fields from BufferItem, excluding 'info'
     keys = tuple(field.name for field in fields(BufferItem) if field.name != "info")
-
+    experience.index = None  # TODO
     # Validate batch size for all attributes
     for key in keys:
         value = getattr(experience, key)
@@ -144,7 +147,7 @@ class NaiveReplayBuffer(ABC):
     """
 
     def __init__(
-        self, sample_batch_size: int, limit: int = 0, cpu_offload: bool = True, packing_samples: bool = False
+        self, sample_batch_size: int, limit: int = 0, cpu_offload: bool = True, packing_samples: bool = False, dynamic_batch: bool = False
     ) -> None:
         super().__init__()
         self.sample_batch_size = sample_batch_size
@@ -154,6 +157,10 @@ class NaiveReplayBuffer(ABC):
         self.packing_samples = packing_samples
         self.target_device = torch.device(f"cuda:{torch.cuda.current_device()}")
         self.items: List[BufferItem] = []
+        self.dynamic_batch = dynamic_batch
+        self.dynamic_indices: List[List[Int]] = []
+        self.num_microbatches: List[int] = []
+        self.local_train_batch_size: int = 0
 
     @torch.no_grad()
     def append(self, experience: Experience) -> None:
@@ -179,11 +186,50 @@ class NaiveReplayBuffer(ABC):
         return experience
 
     def __len__(self) -> int:
-        return len(self.items)
+        if self.dynamic_batch:
+            return len(self.dynamic_indices)
+        else:
+            return len(self.items)
 
     def __getitem__(self, idx: int) -> BufferItem:
+        if self.dynamic_batch:
+            batch = batch[0]
         return self.items[idx]
 
     def collate_fn(self, batch) -> Experience:
         experience = make_experience_batch(batch, self.packing_samples)
         return experience
+
+    def set_dynamic_batch(self, strategy):
+        args = strategy.args
+
+        world_size = dist.get_world_size()  # TODO, DP
+        local_train_batch_size = args.train_batch_size // world_size
+        num_steps = args.rollout_batch_size * args.n_samples_per_prompt // args.train_batch_size  # todo, ring、tp
+        sample_lengths = [sample.info['total_length'].item() for sample in self.items]
+
+        # split by train_batch_size
+        num_microbatches = []
+        for i in range(num_steps):
+            start, end = i * local_train_batch_size, (i + 1) * local_train_batch_size
+            num_microbatches.append(get_minimum_num_micro_batch_size(sample_lengths[start:end], args.max_tokens_per_gpu))  # [5, 3, 7, 2, 6] 10 -> len([10, 7, 6])=3
+
+        num_microbatches = torch.tensor(num_microbatches, dtype=torch.int, device=torch.cuda.current_device())
+        num_microbatches = strategy.all_reduce(num_microbatches, op='max')
+        num_microbatches = num_microbatches.tolist()  # [1, 1], return ?
+
+        # balance the number of mirobatches across steps
+        micro_batch_indices = []
+        for i, num_mbs in enumerate(num_microbatches):
+            start, end = i * local_train_batch_size, (i + 1) * local_train_batch_size
+            samples = sample_lengths[start:end]
+            partitions = get_seqlen_balanced_partitions(samples, num_mbs, equal_size=False)  # List[List[int]], index
+            for j in range(num_mbs):
+                for k in range(len(partitions[j])):
+                    partitions[j][k] += start
+            micro_batch_indices.extend(partitions)
+
+        self.dynamic_indices = micro_batch_indices
+        self.sample_batch_size = 1
+        self.num_microbatches = num_microbatches
+        self.local_train_batch_size = local_train_batch_size

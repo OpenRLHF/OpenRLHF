@@ -77,7 +77,7 @@ class ActorPPOTrainer(ABC):
         self.aux_loss = self.args.aux_loss_coef > 1e-8
 
         self.replay_buffer = NaiveReplayBuffer(
-            micro_train_batch_size, buffer_limit, buffer_cpu_offload, getattr(self.args, "packing_samples", False)
+            micro_train_batch_size, buffer_limit, buffer_cpu_offload, getattr(self.args, "packing_samples", False), self.args.use_dynamic_batch
         )
 
         # Init torch group for weights sync
@@ -145,6 +145,15 @@ class ActorPPOTrainer(ABC):
 
     def ppo_train(self, kl_ctl: float):
         # replay buffer may be empty at first, we should rebuild at each training
+        if self.args.use_dynamic_batch:
+            self.replay_buffer.set_dynamic_batch(self.strategy)
+            num_microbatches = self.replay_buffer.num_microbatches
+            num_microbatches_rest = []
+            for num in num_microbatches:
+                tmp = [0] * num
+                tmp[0] = num
+                num_microbatches_rest.extend(tmp)
+
         not_shuffle = self.strategy.ring_attn_group is not None or self.args.ds_tensor_parallel_size > 1
         dataloader = DataLoader(
             self.replay_buffer,
@@ -164,7 +173,13 @@ class ActorPPOTrainer(ABC):
                 desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
-            for experience in pbar:
+            for i, experience in enumerate(pbar):
+                if self.args.use_dynamic_batch:
+                    if num_microbatches_rest[i]:
+                        self.strategy.engine._config.train_micro_batch_size_per_gpu = 16
+                        self.strategy.engine.gradient_accumulation_steps = 1
+                        # TODO, raise error  self.gradient_accumulation_steps() == 0, TypeError: 'int' object is not callable
+
                 experience.to_device(device)
                 status = self.training_step(experience, kl_ctl)
                 status["kl"] *= status["response_length"]
@@ -250,6 +265,9 @@ class ActorPPOTrainer(ABC):
             entropy_loss = masked_mean(output.entropy[:, -experience.action_mask.shape[1] :], experience.action_mask)
             if self.args.entropy_loss_coef != 0:
                 loss -= entropy_loss * self.args.entropy_loss_coef
+
+        if self.args.use_dynamic_batch:
+            loss = loss * (len(sequences) / self.replay_buffer.local_train_batch_size)
 
         self.strategy.backward(loss, self.actor, self.actor_optim)
         self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")

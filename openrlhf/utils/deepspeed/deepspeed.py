@@ -76,6 +76,8 @@ class DeepspeedStrategy(ABC):
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
 
+        self.engine = None
+
     def setup_distributed(self, timeout=timedelta(minutes=60)) -> None:
         if self.full_determinism:
             transformers.enable_full_determinism(self.seed)
@@ -110,7 +112,7 @@ class DeepspeedStrategy(ABC):
             * self.ds_tensor_parallel_size
             // self.micro_train_batch_size
             // self.world_size
-        )
+        )  # TODO, how to modify in train loop?
 
     def setup_ring_attn(self, ds_device_mesh):
         if self.ring_attn_size == 1:
@@ -240,6 +242,8 @@ class DeepspeedStrategy(ABC):
             args={"local_rank": int(os.environ.get("LOCAL_RANK", "-1"))},
             dist_init_required=True,
         )
+        self.engine = engine
+
         if self.deepcompile:
             engine.compile()
         if is_actor:
@@ -265,7 +269,7 @@ class DeepspeedStrategy(ABC):
             tensor_parallel_size=self.ds_tensor_parallel_size,
         )
 
-        ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
+        ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size  # TODO, how to modify in train loop
         train_batch_size = self.train_batch_size
         ds_config["train_batch_size"] = train_batch_size * self.ring_attn_size * self.ds_tensor_parallel_size
 
