@@ -1,7 +1,7 @@
 accelerate
 bitsandbytes
 datasets
-deepspeed==0.17.1
+deepspeed==0.17.2
 einops
 flash-attn==2.8.0.post2
 isort
