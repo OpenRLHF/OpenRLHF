@@ -18,7 +18,7 @@ torch
 torchdata
 torchmetrics
 tqdm
-transformers==4.52.4
+transformers==4.53.1
 transformers_stream_generator
 wandb
 wheel
