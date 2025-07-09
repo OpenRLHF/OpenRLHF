@@ -8,28 +8,38 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=96
-#SBATCH --mem=512GB
+#SBATCH --mem=768GB
 #SBATCH --exclusive
 #SBATCH --time=0-10:00:00
-#SBATCH --partition=kempner_h100
+#SBATCH --partition=kempner_eng
 
 
 source ~/.bashrc
 conda deactivate
-conda activate openrlhf_202507
+#conda activate openrlhf_202507
+conda activate openrlhf_test
+
 
 module purge
 
-module load cuda/12.4.1-fasrc01
+#module load cuda/12.2.0-fasrc01 # cuda/12.4.1-fasrc01
 
+module load cuda/12.4.1-fasrc01
+#module load cuda/11.8.0-fasrc01
 module load gcc/12.2.0-fasrc01
 module load cmake/3.31.6-fasrc01
 module load cudnn
 
 #export LD_LIBRARY_PATH=/n/sw/helmod-rocky8/apps/Core/cuda/11.8.0-fasrc01/lib64:$LD_LIBRARY_PATH
+#export LD_LIBRARY_PATH=/n/sw/helmod-rocky8/apps/Core/cuda/11.8.0-fasrc01/cuda/lib64:$LD_LIBRARY_PATH
 export LD_LIBRARY_PATH=/n/sw/helmod-rocky8/apps/Core/cuda/12.4.1-fasrc01/cuda/lib64:$LD_LIBRARY_PATH
 
 export PYTHONPATH=/n/holylfs06/LABS/kempner_dev/Lab/nikhilanand/agents/AgentsOpenRLHF:$PYTHONPATH
+
+rm -r /n/home01/nikhilanand/.cache/vllm/torch_compile_cache
+export GLOO_SOCKET_IFNAME=$(ip -4 addr | awk '/inet/ && !/127.0.0.1/ {print $NF; exit}')
+echo "Using network interface for Gloo: $GLOO_SOCKET_IFNAME"
+
 
 
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
@@ -60,6 +70,19 @@ srun -N 1 -n 1 -w "$head_node" ray start --head --node-ip-address="$head_node_ip
 # wait for head node to start
 sleep 20
 
+export GLOO_SOCKET_IFNAME=$(ip -4 addr | awk '/inet/ && !/127.0.0.1/ {print $NF; exit}')
+echo "Using network interface for Gloo: $GLOO_SOCKET_IFNAME"
+
+# Explicitly use IPv4 for all distributed communication
+export NCCL_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME
+export MASTER_ADDR=$head_node_ip
+export HOSTNAME=$(hostname)
+# Force PyTorch to use IPv4
+export NCCL_IB_DISABLE=1
+export NCCL_SOCKET_FAMILY=IPv4
+# Disable localhost references in distributed communication
+export PYTORCH_NO_SPAWN_MULTIPROCESS=1
+
 # start ray on the rest of the nodes
 worker_num=$((SLURM_NNODES - 1))
 for (( i = 1; i <= worker_num; i++ )); do
@@ -84,12 +107,13 @@ srun --overlap -N 1 -n 1 -w "$head_node" ray job submit --address="http://127.0.
   -- python3 -m openrlhf.cli.train_ppo_ray \
   --ref_num_nodes 1 \
   --ref_num_gpus_per_node 4 \
+  --colocate_actor_ref \
   --actor_num_nodes 1 \
   --actor_num_gpus_per_node 4 \
   --pretrain /n/holylabs/LABS/kempner_dev/Users/nikhilanand/Llama-3-8B-Instruct-HF \
-  --remote_rm_url http://holygpu8a17101:5000/get_reward \
+  --remote_rm_url http://holygpu8a17101.rc.fas.harvard.edu:5000/get_reward \
   --save_path /n/netscratch/kempner_dev/Everyone/nikhilanand/openrlhf_logs_and_artifacts_202507 \
-  --vllm_num_engines 4 \
+  --vllm_num_engines 2 \
   --vllm_tensor_parallel_size 2 \
   --micro_train_batch_size 8 \
   --train_batch_size 128 \

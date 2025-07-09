@@ -79,7 +79,7 @@ class RewardModelProxy:
             #print(f"ANSWER: {answer}, PREDICTION: {prediction}, {verify(answer, prediction) * 1.0}", flush=True)
             scores.append(verify(answer, prediction) * 1.0)
         logger.info(f"scores: {scores}")
-        return scores
+        return torch.tensor(scores)
        
 
     
