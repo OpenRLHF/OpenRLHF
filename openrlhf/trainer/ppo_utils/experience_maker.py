@@ -310,6 +310,7 @@ class SamplesGenerator:
             min_tokens=kwargs.get("min_new_tokens", 1),
             skip_special_tokens=kwargs.get("skip_special_tokens", False),
             include_stop_str_in_output=True,
+            logprobs=1,  # Enable logprobs output
         )
         max_response_length = kwargs.get("max_new_tokens", 1024)
         truncate_length = self.prompt_max_len + max_response_length
@@ -357,6 +358,25 @@ class SamplesGenerator:
             response_length = len(output.outputs[0].token_ids) + int(output.outputs[0].token_ids[-1] != eos_token_id)
             action_mask[len(output.prompt_token_ids) : len(output.prompt_token_ids) + response_length] = 1
 
+            # Extract logprobs from vllm output (only when using vLLM logprobs)
+            if self.strategy.args.use_vllm_logprobs:
+                rollout_log_probs = []
+                response_ids = list(output.outputs[0].token_ids)
+                if hasattr(output.outputs[0], 'logprobs') and output.outputs[0].logprobs is not None:
+                    for i, logprob in enumerate(output.outputs[0].logprobs):
+                        rollout_log_probs.append(logprob[response_ids[i]].logprob)
+                
+                # Add logprobs for EOS token if it was added
+                if output.outputs[0].token_ids[-1] != eos_token_id:
+                    rollout_log_probs.append(0.0)  # Default logprob for added EOS token
+                
+                # Create full sequence logprobs (prompt + response)
+                full_logprobs = [0.0] * len(output.prompt_token_ids) + rollout_log_probs
+                rollout_log_probs_tensor = torch.tensor(full_logprobs, dtype=torch.float)
+                rollout_log_probs_tensor = rollout_log_probs_tensor[1:truncate_length].to("cpu")
+            else:
+                rollout_log_probs_tensor = None
+
             sequences = sequences[:truncate_length].to("cpu")
             attention_mask = attention_mask[:truncate_length].to("cpu")
             action_mask = action_mask[1:truncate_length].to("cpu")
@@ -373,6 +393,7 @@ class SamplesGenerator:
                 sequences=sequences.unsqueeze(0),
                 attention_mask=attention_mask.unsqueeze(0),
                 action_mask=action_mask.unsqueeze(0),
+                action_log_probs=rollout_log_probs_tensor.unsqueeze(0) if rollout_log_probs_tensor is not None else None,
                 prompts=[prompt],
                 labels=[label],
                 info=info,
@@ -505,18 +526,23 @@ class RemoteExperienceMaker(ABC):
             ray.get(r_refs)
             ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
 
-        # Batch call actor model
-        action_log_probs_ref = self.actor_model_group.async_run_method_batch(
-            method_name="forward",
-            sequences=sequences_list,
-            action_mask=action_mask_list,
-            attention_mask=attention_mask_list,
-        )
+        # Batch call actor model (skip if using vLLM logprobs)
+        if not args.use_vllm_logprobs:
+            action_log_probs_ref = self.actor_model_group.async_run_method_batch(
+                method_name="forward",
+                sequences=sequences_list,
+                action_mask=action_mask_list,
+                attention_mask=attention_mask_list,
+            )
 
-        # Sync to avoid GPU OOM when colocate models
-        if args.colocate_all_models or args.colocate_actor_ref:
-            ray.get(action_log_probs_ref)
-            ray.get(self.actor_model_group.async_run_method(method_name="empty_cache"))
+            # Sync to avoid GPU OOM when colocate models
+            if args.colocate_all_models or args.colocate_actor_ref:
+                ray.get(action_log_probs_ref)
+                ray.get(self.actor_model_group.async_run_method(method_name="empty_cache"))
+        else:
+            # When using vLLM logprobs, we don't need to call actor model
+            # Use the action_log_probs already set in samples
+            action_log_probs_ref = None
 
         # Batch call critic model
         if self.critic_model_group is not None:
@@ -557,7 +583,14 @@ class RemoteExperienceMaker(ABC):
         # Note: the results duplicated ring_attn_size * ds_tensor_parallel_size times
         # This is because the actors in ring group and tp group will return the same output
         duplicate_factor = args.ring_attn_size * args.ds_tensor_parallel_size
-        action_log_probs_list = sum(ray.get(action_log_probs_ref)[::duplicate_factor], [])
+        
+        # Handle action_log_probs - if using vLLM logprobs, action_log_probs_ref is None
+        if action_log_probs_ref is not None:
+            action_log_probs_list = sum(ray.get(action_log_probs_ref)[::duplicate_factor], [])
+        else:
+            # When using vLLM logprobs, use the action_log_probs already set in samples
+            action_log_probs_list = [s.action_log_probs for s in samples_list]
+            
         base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref)[::duplicate_factor], [])
         value_list = sum(ray.get(value_ref)[::duplicate_factor], [])
 

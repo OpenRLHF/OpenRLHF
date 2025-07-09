@@ -71,6 +71,7 @@ def train(args):
             args.vllm_enable_sleep,
             LLMRayActor,
             args.agent_func_path,
+            args.use_vllm_logprobs
         )
 
     actor_model = RayActorGroup(
@@ -244,6 +245,12 @@ if __name__ == "__main__":
         type=float,
         default=0.95,
         help="vLLM gpu_memory_utilization",
+    )
+    parser.add_argument(
+        "--use_vllm_logprobs",
+        action="store_true",
+        default=False,
+        help="Enable vLLM logprobs computation",
     )
 
     # Async training using ray
