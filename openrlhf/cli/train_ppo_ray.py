@@ -71,7 +71,7 @@ def train(args):
             args.vllm_enable_sleep,
             LLMRayActor,
             args.agent_func_path,
-            args.use_vllm_logprobs
+            args.use_vllm_logprobs,
         )
 
     actor_model = RayActorGroup(

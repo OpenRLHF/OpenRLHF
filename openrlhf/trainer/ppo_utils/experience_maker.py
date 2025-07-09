@@ -362,14 +362,14 @@ class SamplesGenerator:
             if self.strategy.args.use_vllm_logprobs:
                 rollout_log_probs = []
                 response_ids = list(output.outputs[0].token_ids)
-                if hasattr(output.outputs[0], 'logprobs') and output.outputs[0].logprobs is not None:
+                if hasattr(output.outputs[0], "logprobs") and output.outputs[0].logprobs is not None:
                     for i, logprob in enumerate(output.outputs[0].logprobs):
                         rollout_log_probs.append(logprob[response_ids[i]].logprob)
-                
+
                 # Add logprobs for EOS token if it was added
                 if output.outputs[0].token_ids[-1] != eos_token_id:
                     rollout_log_probs.append(0.0)  # Default logprob for added EOS token
-                
+
                 # Create full sequence logprobs (prompt + response)
                 full_logprobs = [0.0] * len(output.prompt_token_ids) + rollout_log_probs
                 rollout_log_probs_tensor = torch.tensor(full_logprobs, dtype=torch.float)
@@ -393,7 +393,9 @@ class SamplesGenerator:
                 sequences=sequences.unsqueeze(0),
                 attention_mask=attention_mask.unsqueeze(0),
                 action_mask=action_mask.unsqueeze(0),
-                action_log_probs=rollout_log_probs_tensor.unsqueeze(0) if rollout_log_probs_tensor is not None else None,
+                action_log_probs=(
+                    rollout_log_probs_tensor.unsqueeze(0) if rollout_log_probs_tensor is not None else None
+                ),
                 prompts=[prompt],
                 labels=[label],
                 info=info,
@@ -583,14 +585,14 @@ class RemoteExperienceMaker(ABC):
         # Note: the results duplicated ring_attn_size * ds_tensor_parallel_size times
         # This is because the actors in ring group and tp group will return the same output
         duplicate_factor = args.ring_attn_size * args.ds_tensor_parallel_size
-        
+
         # Handle action_log_probs - if using vLLM logprobs, action_log_probs_ref is None
         if action_log_probs_ref is not None:
             action_log_probs_list = sum(ray.get(action_log_probs_ref)[::duplicate_factor], [])
         else:
             # When using vLLM logprobs, use the action_log_probs already set in samples
             action_log_probs_list = [s.action_log_probs for s in samples_list]
-            
+
         base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref)[::duplicate_factor], [])
         value_list = sum(ray.get(value_ref)[::duplicate_factor], [])
 
