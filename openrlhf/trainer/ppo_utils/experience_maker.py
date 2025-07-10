@@ -310,7 +310,7 @@ class SamplesGenerator:
             min_tokens=kwargs.get("min_new_tokens", 1),
             skip_special_tokens=kwargs.get("skip_special_tokens", False),
             include_stop_str_in_output=True,
-            logprobs=1,  # Enable logprobs output
+            logprobs=1 if self.strategy.args.use_vllm_logprobs else None,  # Enable logprobs output conditionally
         )
         max_response_length = kwargs.get("max_new_tokens", 1024)
         truncate_length = self.prompt_max_len + max_response_length
