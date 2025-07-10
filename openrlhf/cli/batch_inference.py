@@ -1,21 +1,50 @@
 import argparse
+import multiprocessing as mp
 import os
-from datetime import timedelta
+from pathlib import Path
 
 import jsonlines
 import torch
-from torch import distributed as dist
-from tqdm import tqdm
+import yaml
 from transformers import AutoTokenizer
+from vllm import LLM, SamplingParams
+from vllm.inputs import TokensPrompt
 
-from openrlhf.datasets import PromptDataset, SFTDataset
+from openrlhf.datasets import PromptDataset
 from openrlhf.datasets.utils import blending_datasets
-from openrlhf.models import Actor, get_llm_for_sequence_regression
-from openrlhf.utils import get_processor, get_strategy, get_tokenizer
+
+try:
+    mp.set_start_method("spawn", force=True)
+except RuntimeError:
+    pass
+
+
+def load_config_from_yaml(config_path):
+    """Load configuration from YAML file."""
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+    return config
+
+
+def _worker_vllm_generate(
+    llm: LLM,
+    prompts: list,
+    metadatas: list,
+    sampling_params: SamplingParams,
+    save_prop: int = 10,
+    use_tqdm: bool = False,
+):
+    # Divide prompts into batches and yield
+    batch_size = max(1, len(prompts) // save_prop)
+    for i in range(0, len(prompts), batch_size):
+        batch_prompts = prompts[i : i + min(batch_size, len(prompts) - i)]
+        batch_metadatas = metadatas[i : i + min(batch_size, len(metadatas) - i)]
+        outputs = llm.generate(batch_prompts, sampling_params, use_tqdm=use_tqdm)
+        yield outputs, batch_metadatas
 
 
 def batch_generate_vllm(args):
-    from vllm import LLM, SamplingParams
+    N = args.best_of_n
 
     # configure strategy
     class Empty:
@@ -30,6 +59,20 @@ def batch_generate_vllm(args):
     tokenizer = AutoTokenizer.from_pretrained(args.pretrain, trust_remote_code=True)
 
     # configure model
+    kwargs = {}
+    is_mistral = (
+        "magistral" in args.pretrain.lower()
+        or "ministral" in args.pretrain.lower()
+        or "molstral" in args.pretrain.lower()
+        or "mistral" in args.pretrain.lower()
+    )
+    if is_mistral:
+        if "molstral" not in args.pretrain.lower():
+            kwargs = dict(
+                reasoning_parser="mistral", tokenizer_mode="mistral", config_format="mistral", load_format="mistral"
+            )
+        else:
+            kwargs = dict(tokenizer_mode="mistral")
     llm = LLM(
         model=args.pretrain,
         tensor_parallel_size=args.tp_size,
@@ -37,18 +80,12 @@ def batch_generate_vllm(args):
         seed=args.seed,
         max_num_seqs=args.max_num_seqs,
         enable_prefix_caching=args.enable_prefix_caching,
+        max_logprobs=256,
+        **kwargs,
     )
 
     # Create a sampling params object.
-    sampling_params = SamplingParams(
-        max_tokens=args.max_new_tokens,
-        top_p=args.top_p,
-        temperature=args.temperature,
-        repetition_penalty=args.repetition_penalty,
-        skip_special_tokens=False,
-        truncate_prompt_tokens=args.prompt_max_len,
-        include_stop_str_in_output=True,
-    )
+    skip_spe_toks = is_mistral
 
     prompts_data = blending_datasets(
         args.dataset,
@@ -65,10 +102,32 @@ def batch_generate_vllm(args):
         end_idx = start_idx + args.rollout_batch_size
         prompts_data = prompts_data.select(range(start_idx, min(end_idx, len(prompts_data))))
 
-    prompts_dataset = PromptDataset(prompts_data, tokenizer, dummy_strategy, input_template=args.input_template)
+    prompts_dataset = PromptDataset(
+        prompts_data, tokenizer, dummy_strategy, input_template=args.input_template, return_tokens=True
+    )
+    # if outpout path exists, open it and extract prompt_id to avoid duplicate generation
+    if os.path.exists(args.output_path + ".jsonl"):
+        existing_prompt_ids_count = {}
+        with jsonlines.open(args.output_path + ".jsonl", mode="r") as reader:
+            for obj in reader:
+                if "metadata" in obj and "prompt_id" in obj["metadata"]:
+                    prompt_id = obj["metadata"]["prompt_id"]
+                    if prompt_id not in existing_prompt_ids_count:
+                        existing_prompt_ids_count[prompt_id] = 0
+                    existing_prompt_ids_count[prompt_id] += 1
+        existing_prompt_ids = set([k for k, v in existing_prompt_ids_count.items() if v == N])
+
+        print(f"Found {len(existing_prompt_ids)} existing prompt_ids in {args.output_path + '.jsonl'}")
+        # filter prompts_dataset to remove existing prompt_ids
+        prompts_dataset = [
+            item for item in prompts_dataset if item[2].get("prompt_id", None) not in existing_prompt_ids
+        ]
+        print(f"{len(prompts_dataset)} prompts left after filtering existing prompt_ids")
     prompts = []
-    for _, prompt, _ in prompts_dataset:
-        prompts.append(prompt)
+    metadatas = []
+    for _, prompt, metadata in prompts_dataset:
+        prompts.append(TokensPrompt(prompt_token_ids=prompt))
+        metadatas.append(metadata)
 
     # Conditional SFT inference
     if args.enable_csft:
@@ -76,219 +135,50 @@ def batch_generate_vllm(args):
             prompts[i] += args.csft_prompt.strip() + " "
 
     # best of n
-    N = args.best_of_n
-    output_dataset = []
-
-    outputs = llm.generate(prompts * N, sampling_params)
-    for output in outputs:
-        prompt = output.prompt
-        output = output.outputs[0].text
-        output_dataset.append({"input": prompt, "output": output})
-
-    with jsonlines.open(args.output_path, mode="w") as writer:
-        writer.write_all(output_dataset)
-
-
-def batch_generate(args):
-    # configure strategy
-    strategy = get_strategy(args)
-    strategy.setup_distributed(timeout=timedelta(minutes=720))
-
-    # configure model
-    model = Actor(
-        args.pretrain,
-        use_flash_attention_2=args.flash_attn,
-        bf16=args.bf16,
-    )
-
-    # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
-
-    # prepare models
-    model = strategy.prepare(model)
-    model.eval()
-
-    # tokenizer
-    def tokenize_fn(texts):
-        batch = tokenizer(
-            texts,
-            return_tensors="pt",
-            add_special_tokens=False,
-            max_length=args.prompt_max_len,
-            padding=True,
-            truncation=True,
+    if "<end_of_turn>" in tokenizer.vocab:
+        stop_tokens_ids = [tokenizer.convert_tokens_to_ids("<end_of_turn>"), tokenizer.eos_token_id]
+        sampling_params = SamplingParams(
+            max_tokens=args.max_new_tokens,
+            top_p=args.top_p,
+            temperature=args.temperature,
+            repetition_penalty=args.repetition_penalty,
+            skip_special_tokens=skip_spe_toks,
+            truncate_prompt_tokens=args.prompt_max_len,
+            include_stop_str_in_output=True,
+            stop_token_ids=stop_tokens_ids,
+            n=N,
         )
-        return {k: v.to(torch.cuda.current_device()) for k, v in batch.items()}
-
-    prompts_data = blending_datasets(
-        args.dataset,
-        args.dataset_probs,
-        strategy,
-        args.seed,
-        max_count=args.max_samples,
-    )
-    if args.iter is None:
-        prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
     else:
-        # for iterative generation
-        start_idx = args.iter * args.rollout_batch_size
-        end_idx = start_idx + args.rollout_batch_size
-        prompts_data = prompts_data.select(range(start_idx, min(end_idx, len(prompts_data))))
-
-    prompts_dataset = PromptDataset(prompts_data, tokenizer, strategy, input_template=args.input_template)
-    prompts_dataloader = strategy.setup_dataloader(
-        prompts_dataset, args.micro_batch_size, True, False, drop_last=False
-    )
-    pbar = tqdm(
-        prompts_dataloader,
-        desc="Generating",
-        disable=not strategy.is_rank_0(),
-    )
-
-    dist.barrier()
-    N = args.best_of_n
-    output_dataset = []
-
-    for _, prompts, _ in pbar:
-        # Conditional SFT inference
-        if args.enable_csft:
-            for i in range(len(prompts)):
-                prompts[i] += args.csft_prompt.strip() + " "
-
-        inputs = tokenize_fn(prompts)
-        for _ in range(N):
-            outputs = model.model.generate(
-                **inputs,
-                use_cache=True,
-                max_new_tokens=args.max_new_tokens,
-                do_sample=not args.greedy_sampling,
-                top_p=args.top_p,
-                early_stopping=False,
-                num_beams=1,
-                temperature=args.temperature,
-                repetition_penalty=args.repetition_penalty,
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-            )
-            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            for prompt, output in zip(prompts, outputs):
-                output = output[len(prompt) :]
-                output_dataset.append({"input": prompt, "output": output})
-
-        dist.barrier()
-
-    with jsonlines.open(args.output_path + str(strategy.get_rank()), mode="w") as writer:
-        writer.write_all(output_dataset)
-
-    # wait unitl all processes generate done
-    dist.barrier()
-
-    # concate multiple output files in rank 0
-    if strategy.is_rank_0():
+        sampling_params = SamplingParams(
+            max_tokens=args.max_new_tokens,
+            top_p=args.top_p,
+            temperature=args.temperature,
+            repetition_penalty=args.repetition_penalty,
+            skip_special_tokens=skip_spe_toks,
+            truncate_prompt_tokens=args.prompt_max_len,
+            include_stop_str_in_output=True,
+            n=N,
+        )
+    for batched_outputs, batched_metadatas in _worker_vllm_generate(
+        llm, prompts, metadatas, sampling_params, save_prop=args.save_prop, use_tqdm=True
+    ):
         output_dataset = []
-        world_size = dist.get_world_size()
-        files = [args.output_path + str(rank) for rank in range(world_size)]
-        for file in files:
-            with jsonlines.open(file, mode="r") as reader:
-                for obj in reader:
-                    output_dataset.append(obj)
-            os.remove(file)
-
-        with jsonlines.open(args.output_path, mode="w") as writer:
-            writer.write_all(output_dataset)
-
-
-def batch_rm_inference(args):
-    # configure strategy
-    strategy = get_strategy(args)
-    strategy.setup_distributed(timeout=timedelta(minutes=180))
-
-    # configure model
-    # load huggingface model/config
-    model = get_llm_for_sequence_regression(
-        args.pretrain,
-        "reward",
-        normalize_reward=True,
-        use_flash_attention_2=args.flash_attn,
-        bf16=args.bf16,
-        value_head_prefix=args.value_head_prefix,
-    )
-
-    # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
-
-    # prepare models
-    model = strategy.prepare(model)
-    model.eval()
-
-    dataset = blending_datasets(
-        args.dataset,
-        args.dataset_probs,
-        strategy,
-        args.seed,
-        max_count=args.max_samples,
-    )
-    dataset = dataset.select(range(min(args.max_samples, len(dataset))))
-    dataset = SFTDataset(
-        dataset, tokenizer, args.max_len, strategy, pretrain_mode=False, input_template=args.input_template
-    )
-    dataloader = strategy.setup_dataloader(
-        dataset, args.micro_batch_size, True, False, dataset.collate_fn, drop_last=False
-    )
-    pbar = tqdm(
-        dataloader,
-        desc="Rewarding",
-        disable=not strategy.is_rank_0(),
-    )
-
-    dist.barrier()
-
-    output_dataset = []
-    with torch.no_grad():
-        for _, input_ids, attention_masks, info in pbar:
-            input_ids = input_ids.squeeze(1).to(torch.cuda.current_device())
-            attention_masks = attention_masks.squeeze(1).to(torch.cuda.current_device())
-            rewards = model(input_ids, attention_masks)
-            for prompt, output, reward in zip(info["input"], info["output"], rewards):
-                output_dataset.append({"input": prompt, "output": output, "reward": reward.item()})
-
-            dist.barrier()
-
-    os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
-    with jsonlines.open(args.output_path + str(strategy.get_rank()), mode="w") as writer:
-        writer.write_all(output_dataset)
-
-    # wait unitl all processes generate done
-    dist.barrier()
-
-    # concate multiple output files in rank 0
-    if strategy.is_rank_0():
-        output_dataset = []
-        world_size = dist.get_world_size()
-        files = [args.output_path + str(rank) for rank in range(world_size)]
-        for file in files:
-            with jsonlines.open(file, mode="r") as reader:
-                for obj in reader:
-                    output_dataset.append(obj)
-            # os.remove(file)
-
-        rewards = torch.tensor([obj["reward"] for obj in output_dataset])
-        print(f"Reward mean: {rewards.mean().item()}, std: {rewards.std().item()}")
-
-        if args.post_processor and args.post_processor != "null":
-            strategy.print(f"Use Processor {args.post_processor}, Reward Norm {args.normalize_reward}")
-            processor = get_processor(args.post_processor)
-            output_dataset = processor(args, output_dataset)
-
-        with jsonlines.open(args.output_path, mode="w") as writer:
+        for output, metadata in zip(batched_outputs, batched_metadatas):
+            prompt = output.prompt
+            for i in range(len(output.outputs)):
+                out_text = output.outputs[i].text
+                output_dataset.append({"input": prompt, "output": out_text, "metadata": metadata})
+        with jsonlines.open(args.output_path + ".jsonl", mode="a") as writer:
             writer.write_all(output_dataset)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default=None, help="Path to YAML config file")
     parser.add_argument(
         "--eval_task", type=str, default=None, help="Set to generate_vllm, generate (HF generate) or rm"
     )
+    parser.add_argument("--label_key", type=str, default=None, help="JSON dataset key")
     parser.add_argument("--zero_stage", type=int, default=0, help="DeepSpeed ZeRO Stage")
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed cli")
     parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16 for deepspeed")
@@ -336,6 +226,7 @@ if __name__ == "__main__":
         default=None,
         help="set to rs (Rejection Sampling), csft (Conditional SFT), iter_dpo (Iterative DPO) or None",
     )
+
     # For vllm
     parser.add_argument("--tp_size", type=int, default=torch.cuda.device_count())
     parser.add_argument("--max_num_seqs", type=int, default=256)
@@ -359,18 +250,47 @@ if __name__ == "__main__":
     # ModelScope parameters
     parser.add_argument("--use_ms", action="store_true", default=False)
 
+    parser.add_argument(
+        "--save_prop",
+        type=int,
+        default=10,
+        help="Proportion of generations to checkpoint during generation, e.g. save_prop=10 means saving every 1/10 generations",
+    )
+
     args = parser.parse_args()
+
+    # Load config from YAML file if provided
+    if args.config:
+        print(f"Loading configuration from: {args.config}")
+
+        if not os.path.exists(args.config):
+            raise FileNotFoundError(f"Config file not found: {args.config}")
+        yaml_config = load_config_from_yaml(args.config)
+
+        # Create a namespace object from the YAML config
+        config_args = argparse.Namespace(**yaml_config)
+
+        # Merge: CLI arguments override YAML config values
+        for key, value in vars(args).items():
+            if key == "config":
+                continue
+            if key not in yaml_config:
+                setattr(config_args, key, value)
+
+        args = config_args
+
+    # If output_path has {iter}, replace it with iter number
+    args.output_path = args.output_path.format(iter=args.iter if args.iter is not None else "final")
+    # Create all output Path
+    path = Path(args.output_path).parent
+    path.mkdir(parents=True, exist_ok=True)
+    print(f"Output will be saved to: {args.output_path}.jsonl")
+
     if args.eval_task and args.eval_task == "generate":
-        batch_generate(args)
+        raise NotImplementedError
     if args.eval_task and args.eval_task == "generate_vllm":
         batch_generate_vllm(args)
     elif args.eval_task and args.eval_task == "rm":
-        batch_rm_inference(args)
+        raise NotImplementedError
     else:
         print("Invalid or missing '--eval_task' argument. Please specify either 'generate' or 'rm'.")
-
-    if args.use_ms:
-        from modelscope.utils.hf_util import patch_hub
-
-        # Patch hub to download models from modelscope to speed up.
-        patch_hub()

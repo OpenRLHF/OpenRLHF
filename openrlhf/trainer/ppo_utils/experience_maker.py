@@ -57,7 +57,7 @@ class Experience:
     kl: torch.Tensor = None
 
     prompts: list[str] = None
-    labels: list[str] = None
+    metadata: dict[str, Any] = None
     rewards: torch.Tensor = None  # used for advantage calculation
     scores: torch.Tensor = None  # 0-1 reward used for dynamic sampling
 
@@ -77,7 +77,6 @@ class Experience:
         action_mask=None,
         kl=None,
         prompts=None,
-        labels=None,
         rewards=None,
         scores=None,
         info=None,
@@ -92,7 +91,6 @@ class Experience:
         self.action_mask = action_mask
         self.kl = kl
         self.prompts = prompts or []
-        self.labels = labels or []
         self.rewards = rewards
         self.scores = scores
         self.info = info or []
@@ -243,7 +241,9 @@ class SamplesGenerator:
         self.prompt_max_len = prompt_max_len
 
     @torch.no_grad()
-    def generate_samples(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Experience]:
+    def generate_samples(
+        self, all_prompts: List[str], all_metadata: List[dict[str, Any]], **generate_kwargs
+    ) -> List[Experience]:
         """
         Generate samples and return in batches.
 
@@ -256,7 +256,7 @@ class SamplesGenerator:
 
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
-        rollout_samples = self._generate_vllm(all_prompts, all_labels, **generate_kwargs)
+        rollout_samples = self._generate_vllm(all_prompts, all_metadata, **generate_kwargs)
 
         # vLLM offload when vllm_enable_sleep
         if self.strategy.args.vllm_enable_sleep:
@@ -285,12 +285,12 @@ class SamplesGenerator:
         )
         return {k: v.to(device) for k, v in batch.items()}
 
-    def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> List[Experience]:
+    def _generate_vllm(self, all_prompts: List[str], all_metadata: List[dict[str, Any]], **kwargs) -> List[Experience]:
         """Generate samples using vLLM engine.
 
         Args:
             all_prompts: List of prompts to generate from
-            all_labels: List of labels corresponding to prompts
+            all_metadata: List of metadata corresponding to prompts
             **kwargs: Additional arguments for generation
 
         Returns:
@@ -317,12 +317,14 @@ class SamplesGenerator:
         # Expand prompt list based on the number of samples per prompt
         n_samples_per_prompt = kwargs.pop("n_samples_per_prompt", args.n_samples_per_prompt)
         all_prompts = sum([[prompt] * n_samples_per_prompt for prompt in all_prompts], [])
-        all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
+        all_metadata = sum([[metadata] * n_samples_per_prompt for metadata in all_metadata], [])
         all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
 
         # Distribute requests to engines and collect responses
         refs = []
         batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
+
+        remote_reward_model = kwargs.get("remote_reward_model", None)
         for i, llm in enumerate(llms):
             prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
             refs.append(llm.add_requests.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
@@ -341,7 +343,7 @@ class SamplesGenerator:
         for i in range(len(all_outputs)):
             output = all_outputs[i]
             prompt = all_prompts[i]
-            label = all_labels[i]
+            metadata = all_metadata[i]
 
             # Concatenate prompt and output tokens
             input_ids = list(output.prompt_token_ids) + list(output.outputs[0].token_ids)
@@ -374,11 +376,10 @@ class SamplesGenerator:
                 attention_mask=attention_mask.unsqueeze(0),
                 action_mask=action_mask.unsqueeze(0),
                 prompts=[prompt],
-                labels=[label],
+                metadata=[metadata],
                 info=info,
             )
             samples_list.append(rollout_samples)
-
         # Get rewards from remote reward models if needed
         # This is required by dynamic sampling
         remote_reward_model = kwargs.get("remote_reward_model", None)
@@ -393,10 +394,10 @@ class SamplesGenerator:
                 [],
             )
             all_prompts = sum([s.prompts for s in samples_list], [])
-            all_labels = sum([s.labels for s in samples_list], [])
+            all_metadata = sum([s.metadata for s in samples_list], [])
 
             # Get rewards info from remote model
-            rewards_info = ray.get(remote_reward_model.get_rewards.remote(all_queries, all_prompts, all_labels))
+            rewards_info = ray.get(remote_reward_model.get_rewards.remote(all_queries, all_prompts, all_metadata))
             # Process rewards and scores
             update_samples_with_rewards(rewards_info, samples_list)
 
@@ -488,9 +489,9 @@ class RemoteExperienceMaker(ABC):
                 [],
             )
             prompts_list = sum([s.prompts for s in samples_list], [])
-            labels_list = sum([s.labels for s in samples_list], [])
+            metadata_list = sum([s.metadata for s in samples_list], [])
             # Keep the remote call asynchronous
-            r_refs = self.remote_reward_model.get_rewards.remote(queries_list, prompts_list, labels_list)
+            r_refs = self.remote_reward_model.get_rewards.remote(queries_list, prompts_list, metadata_list)
         else:
             # Batch call reward model
             r_refs = self.reward_model_group.async_run_method_batch(

@@ -1,6 +1,6 @@
 import os
 
-from datasets import interleave_datasets, load_dataset, load_from_disk
+from datasets import Dataset, interleave_datasets, load_dataset, load_from_disk
 
 
 def exist_and_not_none(d, key):
@@ -34,8 +34,6 @@ def blending_datasets(
     data_list = []
     for i, dataset in enumerate(datasets):
         dataset = dataset.strip()
-        strategy.print(f"dataset: {dataset}")
-
         data_dir = dataset.split("@")[1].strip() if "@" in dataset else None
         dataset = dataset.split("@")[0].strip()
         dataset_basename = os.path.basename(dataset)
@@ -95,5 +93,10 @@ def blending_datasets(
             seed=seed,
             stopping_strategy=stopping_strategy,
         )
-
+    # Post process pydantic datasets
+    if list(dataset.features.keys()) == ["identifier", "conversations", "trajectories", "meta", "source"]:
+        # Dataset originates from our pydantic class
+        all_lines = dataset["conversations"]
+        all_lines = [l[i] for l in all_lines for i in range(len(l))]
+        dataset = Dataset.from_list(all_lines)
     return dataset
