@@ -164,9 +164,11 @@ class BasePPOTrainer(ABC):
             batch_vllm_engine_call(self.vllm_engines, "sleep")
 
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
+        #print(f"✨ Global step {global_step}")
         if global_step % args.logging_steps == 0:
+            logger.info(f"Going to log global step {global_step}")
             # wandb
-            if self._wandb is not None:
+            if self._wandb is not None and self.strategy.is_rank_0():
                 # Add generated samples to wandb using Table
                 if "generated_samples" in logs_dict:
                     # https://github.com/wandb/wandb/issues/2981#issuecomment-1997445737
@@ -183,6 +185,7 @@ class BasePPOTrainer(ABC):
                         "global_step": global_step,
                     }.items()
                 }
+                logger.info(f"wandb logs: {logs}")
                 self._wandb.log(logs)
             # TensorBoard
             elif self._tensorboard is not None:
@@ -422,7 +425,8 @@ class PPOTrainer(BasePPOTrainer):
         )
 
         self.prepare_datasets()
-        self._init_wandb()
+        if self.strategy.is_rank_0():
+            self._init_wandb()
 
         # get eval and save steps
         if self.args.eval_steps == -1:
@@ -531,6 +535,7 @@ class PPOTrainer(BasePPOTrainer):
                     "episode": episode,
                     "data_loader_state_dict": self.prompts_dataloader.state_dict(),
                 }
+                logger.info(f"Saving logs and checkpoints at global step {steps}")
                 self.save_logs_and_checkpoints(args, steps, pbar, status, client_states)
 
                 steps = steps + 1

@@ -8,7 +8,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=96
-#SBATCH --mem=768GB
+#SBATCH --mem=800GB
 #SBATCH --exclusive
 #SBATCH --time=0-10:00:00
 #SBATCH --partition=kempner_eng
@@ -32,11 +32,12 @@ module load cudnn
 
 #export LD_LIBRARY_PATH=/n/sw/helmod-rocky8/apps/Core/cuda/11.8.0-fasrc01/lib64:$LD_LIBRARY_PATH
 #export LD_LIBRARY_PATH=/n/sw/helmod-rocky8/apps/Core/cuda/11.8.0-fasrc01/cuda/lib64:$LD_LIBRARY_PATH
+export WANDB_MODE=online
 export LD_LIBRARY_PATH=/n/sw/helmod-rocky8/apps/Core/cuda/12.4.1-fasrc01/cuda/lib64:$LD_LIBRARY_PATH
 
 export PYTHONPATH=/n/holylfs06/LABS/kempner_dev/Lab/nikhilanand/agents/AgentsOpenRLHF:$PYTHONPATH
 
-rm -r /n/home01/nikhilanand/.cache/vllm/torch_compile_cache
+rm -rf ~/.cache/vllm
 export GLOO_SOCKET_IFNAME=$(ip -4 addr | awk '/inet/ && !/127.0.0.1/ {print $NF; exit}')
 echo "Using network interface for Gloo: $GLOO_SOCKET_IFNAME"
 
@@ -74,14 +75,14 @@ export GLOO_SOCKET_IFNAME=$(ip -4 addr | awk '/inet/ && !/127.0.0.1/ {print $NF;
 echo "Using network interface for Gloo: $GLOO_SOCKET_IFNAME"
 
 # Explicitly use IPv4 for all distributed communication
-export NCCL_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME
+#export NCCL_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME
 export MASTER_ADDR=$head_node_ip
 export HOSTNAME=$(hostname)
 # Force PyTorch to use IPv4
-export NCCL_IB_DISABLE=1
-export NCCL_SOCKET_FAMILY=IPv4
+# export NCCL_IB_DISABLE=1
+#export NCCL_SOCKET_FAMILY=IPv4
 # Disable localhost references in distributed communication
-export PYTORCH_NO_SPAWN_MULTIPROCESS=1
+#export PYTORCH_NO_SPAWN_MULTIPROCESS=1
 
 # start ray on the rest of the nodes
 worker_num=$((SLURM_NNODES - 1))
@@ -100,7 +101,7 @@ export RAY_ADDRESS="$RAY_HEAD_ADDR"
 #/n/holylabs/LABS/sham_lab/Users/mkwun/inference-reasoning/openrlhf_wd/sft_llama3_8b \
 #/n/holylabs/LABS/sham_lab/Users/mkwun/inference-reasoning/models--meta-llama--Meta-Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659
 # /n/netscratch/sham_lab/Everyone/mkwun/sft_llama
-
+ # /n/holylabs/LABS/kempner_dev/Users/nikhilanand/Llama-3-8B-Instruct-HF \
 
 srun --overlap -N 1 -n 1 -w "$head_node" ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/n/netscratch/kempner_dev/Everyone/nikhilanand/openrlhf_logs_and_artifacts_202507_working_dir"}' \
@@ -111,7 +112,7 @@ srun --overlap -N 1 -n 1 -w "$head_node" ray job submit --address="http://127.0.
   --actor_num_nodes 1 \
   --actor_num_gpus_per_node 4 \
   --pretrain /n/holylabs/LABS/kempner_dev/Users/nikhilanand/Llama-3-8B-Instruct-HF \
-  --remote_rm_url http://holygpu8a17101.rc.fas.harvard.edu:5000/get_reward \
+  --remote_rm_url http://holygpu8a10301.rc.fas.harvard.edu:5000/get_reward \
   --save_path /n/netscratch/kempner_dev/Everyone/nikhilanand/openrlhf_logs_and_artifacts_202507 \
   --vllm_num_engines 2 \
   --vllm_tensor_parallel_size 2 \
@@ -120,10 +121,12 @@ srun --overlap -N 1 -n 1 -w "$head_node" ray job submit --address="http://127.0.
   --micro_rollout_batch_size 16 \
   --rollout_batch_size 1024 \
   --max_samples 100000 \
-  --max_epochs 10 \
-  --num_episodes 3 \
+  --logging_steps 1 \
+  --eval_steps 100 \
+  --max_epochs 1 \
+  --num_episodes 1 \
   --prompt_max_len 2048 \
-  --generate_max_len 2048 \
+  --generate_max_len 1024 \
   --n_samples_per_prompt 8 \
   --zero_stage 3 \
   --bf16 \

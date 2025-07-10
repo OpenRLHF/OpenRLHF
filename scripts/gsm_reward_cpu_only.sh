@@ -1,15 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=gsm_rewards
+#SBATCH --job-name=gsm_rewards_cpu
 #SBATCH --account=kempner_dev
-#SBATCH --partition=kempner_eng
+#SBATCH --partition=sapphire
 #SBATCH --output /n/holylfs06/LABS/kempner_dev/Lab/nikhilanand/agents/AgentsOpenRLHF/serverlogs/%A.log
 #SBATCH --error /n/holylfs06/LABS/kempner_dev/Lab/nikhilanand/agents/AgentsOpenRLHF/serverlogs/error_%j.out
-#SBATCH --time=2-00:00:00
+#SBATCH --time=3-00:00:00
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:2                             
+#SBATCH -c 96                
 #SBATCH --ntasks-per-node=1                                  
-#SBATCH --cpus-per-task=96               
-#SBATCH --mem=200GB
+#SBATCH --mem-per-cpu=8192              
 
 echo "Running on host: $(hostname)"
 

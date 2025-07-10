@@ -79,7 +79,7 @@ class RewardModelProxy:
             #print(f"ANSWER: {answer}, PREDICTION: {prediction}, {verify(answer, prediction) * 1.0}", flush=True)
             scores.append(verify(answer, prediction) * 1.0)
         logger.info(f"scores: {scores}")
-        return torch.tensor(scores)
+        return scores
        
 
     
@@ -105,4 +105,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     print(app)
-    uvicorn.run("openrlhf.cli.serve_gsm_rm:app", host=args.host, port=args.port, log_level="info", workers = 60)
+    uvicorn.run("openrlhf.cli.serve_gsm_rm:app", host=args.host, port=args.port, log_level="info", workers = 96)
