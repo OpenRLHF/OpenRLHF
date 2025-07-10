@@ -250,7 +250,7 @@ if __name__ == "__main__":
         "--use_vllm_logprobs",
         action="store_true",
         default=False,
-        help="Enable vLLM logprobs computation",
+        help="Use logprobs from vLLM to avoid a separate forward pass for logit computation",
     )
 
     # Async training using ray
