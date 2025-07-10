@@ -71,6 +71,7 @@ class ActorPPOTrainer(ABC):
         self.actor_loss_fn = PolicyLoss(
             clip_eps_low=self.args.eps_clip_low_high[0],
             clip_eps_high=self.args.eps_clip_low_high[1],
+            dual_clip=self.args.dual_clip,
         )
 
         # Mixtral 8x7b
