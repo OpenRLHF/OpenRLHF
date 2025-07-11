@@ -662,6 +662,7 @@ class RemoteExperienceMaker(ABC):
 
         # get rewards from experiences
         exp_len = [len(experience.index) for experience in experiences]
+        # indices is an identity mapping when not using dynamic batch; otherwise, it maps back to the original indices after rearange samples
         indices = torch.tensor(sum([experience.index for experience in experiences], []))
         raw_rewards = torch.cat([experience.rewards for experience in experiences], dim=0)
         rewards = torch.empty_like(raw_rewards)
