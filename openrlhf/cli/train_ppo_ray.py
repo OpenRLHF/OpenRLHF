@@ -71,7 +71,7 @@ def train(args):
             args.vllm_enable_sleep,
             LLMRayActor,
             args.agent_func_path,
-            args.use_vllm_logprobs
+            args.use_vllm_logprobs,
         )
 
     actor_model = RayActorGroup(
@@ -248,9 +248,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--use_vllm_logprobs",
-        action="store_true",
-        default=False,
-        help="Enable vLLM logprobs computation",
+        type=str,
+        default=None,
+        help="Use logprobs from vLLM to avoid a separate forward pass for logit computation. None disables it, non-empty string enables it. Future: will specify precision.",
     )
 
     # Async training using ray
