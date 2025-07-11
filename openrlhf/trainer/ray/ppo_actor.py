@@ -89,7 +89,7 @@ class ActorPPOTrainer(ABC):
         # Create torch group with deepspeed rank 0 and all vllm ranks
         # to update vllm engine's weights after each training stage.
         #
-        # Say we have 3 vllm engines and eache of them has 4 GPUs,
+        # Say we have 3 vllm engines and each of them has 4 GPUs,
         # then the torch group is:
         # [    0,      1, 2, 3, 4,  5, 6, 7, 8,  9, 10, 11, 12]
         # |ds rank 0 |  engine-0  |  engine-1  |   engine-2   |
@@ -146,15 +146,9 @@ class ActorPPOTrainer(ABC):
     def ppo_train(self, kl_ctl: float):
         # replay buffer may be empty at first, we should rebuild at each training
         if self.args.use_dynamic_batch:
-            self.replay_buffer.set_dynamic_batch(self.strategy)
-            num_microbatches = self.replay_buffer.num_microbatches
-            num_microbatches_rest = []
-            for num in num_microbatches:
-                tmp = [0] * num
-                tmp[0] = num
-                num_microbatches_rest.extend(tmp)
+            self.replay_buffer.setup_dynamic_batch(self.strategy)
 
-        not_shuffle = self.strategy.ring_attn_group is not None or self.args.ds_tensor_parallel_size > 1
+        not_shuffle = self.strategy.ring_attn_group is not None or self.args.ds_tensor_parallel_size > 1 or self.args.use_dynamic_batch
         dataloader = DataLoader(
             self.replay_buffer,
             batch_size=self.replay_buffer.sample_batch_size,
@@ -173,15 +167,10 @@ class ActorPPOTrainer(ABC):
                 desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
-            for i, experience in enumerate(pbar):
-                if self.args.use_dynamic_batch:
-                    if num_microbatches_rest[i]:
-                        self.strategy.engine._config.train_micro_batch_size_per_gpu = 16
-                        self.strategy.engine.gradient_accumulation_steps = 1
-                        # TODO, raise error  self.gradient_accumulation_steps() == 0, TypeError: 'int' object is not callable
+            for step, experience in enumerate(pbar):
 
                 experience.to_device(device)
-                status = self.training_step(experience, kl_ctl)
+                status = self.training_step(experience, kl_ctl, step)
                 status["kl"] *= status["response_length"]
                 status = self.strategy.all_reduce(status)
                 status["kl"] /= status["response_length"]
@@ -211,7 +200,7 @@ class ActorPPOTrainer(ABC):
                 status_mean[k] /= len(status_list)
         return status_mean
 
-    def training_step(self, experience: Experience, kl_ctl: float) -> Dict[str, float]:
+    def training_step(self, experience: Experience, kl_ctl: float, step: int) -> Dict[str, float]:
         self.actor.train()
 
         sequences = experience.sequences
@@ -267,12 +256,21 @@ class ActorPPOTrainer(ABC):
                 loss -= entropy_loss * self.args.entropy_loss_coef
 
         if self.args.use_dynamic_batch:
-            loss = loss * (len(sequences) / self.replay_buffer.local_train_batch_size)
+            loss = loss * self.replay_buffer.dynamic_loss_scale[step]
 
         self.strategy.backward(loss, self.actor, self.actor_optim)
-        self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
+        if self.args.use_dynamic_batch:
+            if self.replay_buffer.dynamic_optimizer_step[step]:
+                self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
+        else:
+            self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
+    
         if self.ema_model:
-            self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
+            if self.args.use_dynamic_batch:
+                if self.replay_buffer.dynamic_optimizer_step[step]:
+                    self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
+            else:
+                self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
 
         # status
         status = {"policy_loss": actor_loss.detach().item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}

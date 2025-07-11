@@ -9,7 +9,7 @@ import ray
 import torch
 import itertools
 
-from openrlhf.utils.seqlen_balancing import rearrange_micro_batches
+from openrlhf.utils.seqlen_balancing import get_minimum_num_micro_batch_size, get_seqlen_balanced_partitions
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.logging_utils import init_logger
@@ -437,15 +437,21 @@ class RemoteExperienceMaker(ABC):
         self.remote_reward_model = remote_reward_model
         self.tokenizer = tokenizer
 
-    def balance_samples(self, rollout_samples):
+    def split_rollout_samples(self, rollout_samples):
         for i, sample in enumerate(rollout_samples):
             sample.index = [i]
         
         samples_list = []
         if self.args.use_dynamic_batch:
-            micro_batches, _ = rearrange_micro_batches(rollout_samples, self.args.max_tokens_per_gpu)
-            for micro_bath in micro_batches:
-                concat_samples = Experience.concat_experiences(micro_bath, self.tokenizer.pad_token_id)
+            total_lengths = [int(s.info['total_length'].item()) for s in rollout_samples]
+            effective_actor_num = self.args.actor_num_nodes * self.args.actor_num_gpus_per_node // self.args.ring_attn_size // self.args.ds_tensor_parallel_size
+            minimum_batch_num = get_minimum_num_micro_batch_size(total_lengths, self.args.max_tokens_per_gpu, self.args.ring_attn_size, self.args.ds_tensor_parallel_size)
+            minimum_batch_num = minimum_batch_num // effective_actor_num * effective_actor_num
+            num_batch = max(minimum_batch_num, effective_actor_num)
+            batch_indexes = get_seqlen_balanced_partitions(total_lengths, num_batch, False)
+            for micro_index in batch_indexes:
+                micro_batch = [rollout_samples[idx] for idx in micro_index]
+                concat_samples = Experience.concat_experiences(micro_batch, self.tokenizer.pad_token_id)
                 samples_list.append(concat_samples) 
         else:
             batch_size = self.args.micro_rollout_batch_size
@@ -466,7 +472,7 @@ class RemoteExperienceMaker(ABC):
         After that, we will calculate the advantages and returns for each experience.
         """
         # Each batch of samples will be scheduled to a effective Ray Actor (i.e, a DP rank)
-        samples_list = self.balance_samples(rollout_samples)
+        samples_list = self.split_rollout_samples(rollout_samples)
 
         # Make experiences (models forward: logprobs, values, rewards, and kl divergence)
         experiences = self.make_experience(samples_list)
@@ -632,7 +638,10 @@ class RemoteExperienceMaker(ABC):
     ) -> Tuple[List[Experience], List[torch.Tensor]]:
         """
         Process experiences, this can be used to filter out some experiences or do some processing on the rewards.
-
+        Example, use_dynamic_batch
+            >>> rewards: [0, 1, 0.5, 1], indices: [1, 2, 0, 3], n_samples_per_prompt: 2
+            >>> sorted rewards: [0,5, 0, 1, 1], reward shaping: [0.25, 0.25, 1, 1]
+            >>> map back: [0.25, 1, 0.25, 1]
         Output:
         - experiences: List of Experience
         - rewards: List of rewards
@@ -642,8 +651,11 @@ class RemoteExperienceMaker(ABC):
         # get rewards from experiences
         exp_len = [len(experience.index) for experience in experiences]
         indices = torch.tensor(sum([experience.index for experience in experiences], []))
-        rewards = [experience.rewards for experience in experiences]
-        rewards = torch.cat(rewards, dim=0)[indices].reshape(-1, args.n_samples_per_prompt)
+        raw_rewards = torch.cat([experience.rewards for experience in experiences], dim=0)
+        rewards = torch.empty_like(raw_rewards)
+        rewards[indices] = raw_rewards  # sorted
+
+        rewards = rewards.reshape(-1, args.n_samples_per_prompt)
 
         # log group reward std
         if args.n_samples_per_prompt > 1:

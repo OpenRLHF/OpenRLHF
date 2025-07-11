@@ -1,7 +1,7 @@
 import random
 from abc import ABC
 from dataclasses import dataclass, fields
-from typing import List, Optional, Int
+from typing import List, Optional
 
 
 import torch
@@ -45,7 +45,8 @@ def split_experience_batch(experience: Experience) -> List[BufferItem]:
     batch_size = len(experience.sequences)
     # Get fields from BufferItem, excluding 'info'
     keys = tuple(field.name for field in fields(BufferItem) if field.name != "info")
-    experience.index = None  # TODO
+    experience.index = None
+
     # Validate batch size for all attributes
     for key in keys:
         value = getattr(experience, key)
@@ -137,6 +138,39 @@ def remove_padding_in_sequences(items):
     return items
 
 
+def balance_experiences(experiences, args):
+    """
+    Balance experience accross dp
+    Example: 
+        sorted lengths: [8,7,6,5,4,3,2,1], effective_num: 2
+        first_half: [[8,7], [6,5]], last_half: [[3,4], [1,2]], interval_items: [[8,7], [1,2], [6,5], [3,4]]
+        interval_merged: [[8,1,6,3], [7,2,5,4]]
+    """
+    # split experience, sort by total_length
+    items_all = []
+    for item in experiences:
+        items_all.extend(split_experience_batch(item))
+    items_all.sort(key=lambda x: x.info['total_length'], reverse=True)
+
+    # split experience into chunks
+    effective_num = args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size // args.ds_tensor_parallel_size
+    split_items = [items_all[i : i + effective_num] for i in range(0, len(items_all), effective_num)]
+    half = len(split_items) // 2
+    first_half = split_items[:half]
+    last_half = [item[::-1] for item in split_items[half:]]
+    
+    # balance distribution by intervaling chunks
+    interval_items = []
+    for i in range(half):
+        interval_items.append(first_half[i])
+        interval_items.append(last_half[-(i+1)])
+    if len(last_half) > len(first_half):
+        interval_items.append(last_half[0])
+
+    interval_merged = list(zip(*interval_items))
+    return [make_experience_batch(items) for items in interval_merged]
+
+
 class NaiveReplayBuffer(ABC):
     """Naive replay buffer class. It stores experience.
 
@@ -158,9 +192,9 @@ class NaiveReplayBuffer(ABC):
         self.target_device = torch.device(f"cuda:{torch.cuda.current_device()}")
         self.items: List[BufferItem] = []
         self.dynamic_batch = dynamic_batch
-        self.dynamic_indices: List[List[Int]] = []
-        self.num_microbatches: List[int] = []
-        self.local_train_batch_size: int = 0
+        self.dynamic_indices: List[List[int]] = []
+        self.dynamic_loss_scale: List[float] = []
+        self.dynamic_optimizer_step: List[int] = []
 
     @torch.no_grad()
     def append(self, experience: Experience) -> None:
@@ -193,33 +227,39 @@ class NaiveReplayBuffer(ABC):
 
     def __getitem__(self, idx: int) -> BufferItem:
         if self.dynamic_batch:
-            batch = batch[0]
-        return self.items[idx]
+            indices = self.dynamic_indices[idx]
+            return [self.items[i] for i in indices]
+        else:
+            return self.items[idx]
 
     def collate_fn(self, batch) -> Experience:
+        if self.dynamic_batch:
+            batch = batch[0]
         experience = make_experience_batch(batch, self.packing_samples)
         return experience
 
-    def set_dynamic_batch(self, strategy):
+    def setup_dynamic_batch(self, strategy):
         args = strategy.args
-
-        world_size = dist.get_world_size()  # TODO, DP
-        local_train_batch_size = args.train_batch_size // world_size
-        num_steps = args.rollout_batch_size * args.n_samples_per_prompt // args.train_batch_size  # todo, ring、tp
         sample_lengths = [sample.info['total_length'].item() for sample in self.items]
 
-        # split by train_batch_size
+        world_size = dist.get_world_size()
+        dp_size = world_size // args.ring_attn_size // args.ds_tensor_parallel_size
+        local_train_batch_size = args.train_batch_size // dp_size
+        num_steps = args.rollout_batch_size * args.n_samples_per_prompt // args.train_batch_size
+
+        # split by train_batch_size, sync num_microbatches across dp
         num_microbatches = []
         for i in range(num_steps):
             start, end = i * local_train_batch_size, (i + 1) * local_train_batch_size
-            num_microbatches.append(get_minimum_num_micro_batch_size(sample_lengths[start:end], args.max_tokens_per_gpu))  # [5, 3, 7, 2, 6] 10 -> len([10, 7, 6])=3
+            num_microbatches.append(get_minimum_num_micro_batch_size(sample_lengths[start:end], args.max_tokens_per_gpu, args.ring_attn_size, args.ds_tensor_parallel_size))
 
         num_microbatches = torch.tensor(num_microbatches, dtype=torch.int, device=torch.cuda.current_device())
         num_microbatches = strategy.all_reduce(num_microbatches, op='max')
-        num_microbatches = num_microbatches.tolist()  # [1, 1], return ?
+        num_microbatches = num_microbatches.tolist()
 
         # balance the number of mirobatches across steps
         micro_batch_indices = []
+        data_partitions = []
         for i, num_mbs in enumerate(num_microbatches):
             start, end = i * local_train_batch_size, (i + 1) * local_train_batch_size
             samples = sample_lengths[start:end]
@@ -228,8 +268,18 @@ class NaiveReplayBuffer(ABC):
                 for k in range(len(partitions[j])):
                     partitions[j][k] += start
             micro_batch_indices.extend(partitions)
-
+            data_partitions.append(partitions)
         self.dynamic_indices = micro_batch_indices
         self.sample_batch_size = 1
-        self.num_microbatches = num_microbatches
-        self.local_train_batch_size = local_train_batch_size
+
+        # adjust optimizer step and loss scale
+        loss_scales = []
+        optimizer_steps = []
+        for partitions in data_partitions:
+            sample_num = sum(len(partition) for partition in partitions)
+            loss_scale = [len(partition)/sample_num for partition in partitions]
+            optimizer_step = [0] * (len(partitions) - 1) + [1]
+            loss_scales.extend(loss_scale)
+            optimizer_steps.extend(optimizer_step)
+        self.dynamic_loss_scale = loss_scales
+        self.dynamic_optimizer_step = optimizer_steps

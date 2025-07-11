@@ -490,6 +490,11 @@ if __name__ == "__main__":
             print("[Warning] --ring_attn_size > 1 requires --packing_samples.")
             args.packing_samples = True
 
+    if args.use_dynamic_batch:
+        if not args.packing_samples:
+            print("[Warning] Please --packing_samples to accelerate when --use_dynamic_batch is enabled.")
+            args.packing_samples = True
+
     if args.packing_samples:
         if not args.flash_attn:
             print("[Warning] Please --flash_attn to accelerate when --packing_samples is enabled.")
@@ -530,11 +535,6 @@ if __name__ == "__main__":
         assert (
             args.n_samples_per_prompt > 1
         ), "n_samples_per_prompt must be greater than 1 when using dynamic filtering"
-    
-    if args.use_dynamic_batch:
-        if not args.packing_samples:
-            print("[Warning] Please --packing_samples to accelerate when --use_dynamic_batch is enabled.")
-            args.packing_samples = True
 
     assert (
         args.n_samples_per_prompt * args.rollout_batch_size // args.micro_rollout_batch_size

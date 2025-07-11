@@ -11,6 +11,7 @@ from openrlhf.datasets import PromptDataset
 from openrlhf.datasets.utils import blending_datasets
 from openrlhf.trainer.ppo_utils import AdaptiveKLController, FixedKLController
 from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
+from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.logging_utils import init_logger
@@ -507,6 +508,11 @@ class PPOTrainer(BasePPOTrainer):
                     experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True
                 )
                 print(sample0)
+
+                # balance experiences across dp
+                if args.use_dynamic_batch:
+                    experiences = balance_experiences(experiences, args)
+
                 refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences)
                 if self.critic_model_group is not None:
                     refs.extend(
