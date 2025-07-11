@@ -3,13 +3,12 @@ from abc import ABC
 from dataclasses import dataclass, fields
 from typing import List, Optional
 
-
 import torch
 from torch import distributed as dist
 
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
+from openrlhf.utils.seqlen_balancing import get_minimum_num_micro_batch_size, get_seqlen_balanced_partitions
 from openrlhf.utils.utils import zero_pad_sequences
-from openrlhf.utils.seqlen_balancing import  get_minimum_num_micro_batch_size, get_seqlen_balanced_partitions
 
 
 @dataclass
@@ -141,7 +140,7 @@ def remove_padding_in_sequences(items):
 def balance_experiences(experiences, args):
     """
     Balance experience accross dp
-    Example: 
+    Example:
         sorted lengths: [8,7,6,5,4,3,2,1], effective_num: 2
         first_half: [[8,7], [6,5]], last_half: [[3,4], [1,2]], interval_items: [[8,7], [1,2], [6,5], [3,4]]
         interval_merged: [[8,1,6,3], [7,2,5,4]]
@@ -150,20 +149,22 @@ def balance_experiences(experiences, args):
     items_all = []
     for item in experiences:
         items_all.extend(split_experience_batch(item))
-    items_all.sort(key=lambda x: x.info['total_length'], reverse=True)
+    items_all.sort(key=lambda x: x.info["total_length"], reverse=True)
 
     # split experience into chunks
-    effective_num = args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size // args.ds_tensor_parallel_size
+    effective_num = (
+        args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size // args.ds_tensor_parallel_size
+    )
     split_items = [items_all[i : i + effective_num] for i in range(0, len(items_all), effective_num)]
     half = len(split_items) // 2
     first_half = split_items[:half]
     last_half = [item[::-1] for item in split_items[half:]]
-    
+
     # balance distribution by intervaling chunks
     interval_items = []
     for i in range(half):
         interval_items.append(first_half[i])
-        interval_items.append(last_half[-(i+1)])
+        interval_items.append(last_half[-(i + 1)])
     if len(last_half) > len(first_half):
         interval_items.append(last_half[0])
 
@@ -181,7 +182,12 @@ class NaiveReplayBuffer(ABC):
     """
 
     def __init__(
-        self, sample_batch_size: int, limit: int = 0, cpu_offload: bool = True, packing_samples: bool = False, dynamic_batch: bool = False
+        self,
+        sample_batch_size: int,
+        limit: int = 0,
+        cpu_offload: bool = True,
+        packing_samples: bool = False,
+        dynamic_batch: bool = False,
     ) -> None:
         super().__init__()
         self.sample_batch_size = sample_batch_size
@@ -240,7 +246,7 @@ class NaiveReplayBuffer(ABC):
 
     def setup_dynamic_batch(self, strategy):
         args = strategy.args
-        sample_lengths = [sample.info['total_length'].item() for sample in self.items]
+        sample_lengths = [sample.info["total_length"].item() for sample in self.items]
 
         world_size = dist.get_world_size()
         dp_size = world_size // args.ring_attn_size // args.ds_tensor_parallel_size
@@ -251,10 +257,17 @@ class NaiveReplayBuffer(ABC):
         num_microbatches = []
         for i in range(num_steps):
             start, end = i * local_train_batch_size, (i + 1) * local_train_batch_size
-            num_microbatches.append(get_minimum_num_micro_batch_size(sample_lengths[start:end], args.max_tokens_per_gpu, args.ring_attn_size, args.ds_tensor_parallel_size))
+            num_microbatches.append(
+                get_minimum_num_micro_batch_size(
+                    sample_lengths[start:end],
+                    args.max_tokens_per_gpu,
+                    args.ring_attn_size,
+                    args.ds_tensor_parallel_size,
+                )
+            )
 
         num_microbatches = torch.tensor(num_microbatches, dtype=torch.int, device=torch.cuda.current_device())
-        num_microbatches = strategy.all_reduce(num_microbatches, op='max')
+        num_microbatches = strategy.all_reduce(num_microbatches, op="max")
         num_microbatches = num_microbatches.tolist()
 
         # balance the number of mirobatches across steps
@@ -277,7 +290,7 @@ class NaiveReplayBuffer(ABC):
         optimizer_steps = []
         for partitions in data_partitions:
             sample_num = sum(len(partition) for partition in partitions)
-            loss_scale = [len(partition)/sample_num for partition in partitions]
+            loss_scale = [len(partition) / sample_num for partition in partitions]
             optimizer_step = [0] * (len(partitions) - 1) + [1]
             loss_scales.extend(loss_scale)
             optimizer_steps.extend(optimizer_step)

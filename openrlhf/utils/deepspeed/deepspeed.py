@@ -110,7 +110,7 @@ class DeepspeedStrategy(ABC):
             * self.ds_tensor_parallel_size
             // self.micro_train_batch_size
             // self.world_size
-        )   
+        )
 
     def setup_ring_attn(self, ds_device_mesh):
         if self.ring_attn_size == 1:

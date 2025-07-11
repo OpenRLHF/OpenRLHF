@@ -15,14 +15,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Tuple, Callable
-import heapq
-
-import torch
-from torch import distributed as dist
-
 # from tensordict import TensorDict
 import copy
+import heapq
+from typing import List, Tuple
 
 
 def karmarkar_karp(seqlen_list: List[int], k_partitions: int, equal_size: bool):
@@ -128,8 +124,9 @@ def karmarkar_karp(seqlen_list: List[int], k_partitions: int, equal_size: bool):
     partitions = final_state.get_partitions()
     if equal_size:
         for i, partition in enumerate(partitions):
-            assert len(partition) * \
-                k_partitions == len(seqlen_list), f"{len(partition)} * {k_partitions} != {len(seqlen_list)}"
+            assert len(partition) * k_partitions == len(
+                seqlen_list
+            ), f"{len(partition)} * {k_partitions} != {len(seqlen_list)}"
     return partitions
 
 
@@ -147,13 +144,14 @@ def greedy_partition(seqlen_list: List[int], k_partitions: int, equal_size: bool
         partition_sums[min_idx] += seqlen
     if equal_size:
         for i, partition in enumerate(partitions):
-            assert len(partition) * \
-                k_partitions == len(seqlen_list), f"{len(partition)} * {k_partitions} != {len(seqlen_list)}"
+            assert len(partition) * k_partitions == len(
+                seqlen_list
+            ), f"{len(partition)} * {k_partitions} != {len(seqlen_list)}"
     return partitions
 
 
 def get_seqlen_balanced_partitions(seqlen_list: List[int], k_partitions: int, equal_size: bool):
-    """ get order of seq lengths to make partitions balanced, this is
+    """get order of seq lengths to make partitions balanced, this is
         used in balacing sum of seqlength across dp ranks and microbatches
     Parameters:
         seqlen_list (List[int]):
@@ -195,7 +193,7 @@ def log_seqlen_unbalance(seqlen_list: List[int], partitions: List[List[int]], pr
     max_sum_seqlen = None
     total_sum_seqlen = 0
     for offset in range(0, len(seqlen_list), batch_size):
-        cur_sum_seqlen = sum(seqlen_list[offset:offset + batch_size])
+        cur_sum_seqlen = sum(seqlen_list[offset : offset + batch_size])
         if min_sum_seqlen is None or cur_sum_seqlen < min_sum_seqlen:
             min_sum_seqlen = cur_sum_seqlen
         if max_sum_seqlen is None or cur_sum_seqlen > max_sum_seqlen:
@@ -211,12 +209,12 @@ def log_seqlen_unbalance(seqlen_list: List[int], partitions: List[List[int]], pr
     max_sum_seqlen_balanced = max(balanced_sum_seqlen_list)
 
     return {
-        f'{prefix}/min': min_sum_seqlen,
-        f'{prefix}/max': max_sum_seqlen,
-        f'{prefix}/minmax_diff': max_sum_seqlen - min_sum_seqlen,
-        f'{prefix}/balanced_min': min_sum_seqlen_balanced,
-        f'{prefix}/balanced_max': max_sum_seqlen_balanced,
-        f'{prefix}/mean': total_sum_seqlen / len(partitions)
+        f"{prefix}/min": min_sum_seqlen,
+        f"{prefix}/max": max_sum_seqlen,
+        f"{prefix}/minmax_diff": max_sum_seqlen - min_sum_seqlen,
+        f"{prefix}/balanced_min": min_sum_seqlen_balanced,
+        f"{prefix}/balanced_max": max_sum_seqlen_balanced,
+        f"{prefix}/mean": total_sum_seqlen / len(partitions),
     }
 
 

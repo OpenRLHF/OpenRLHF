@@ -77,7 +77,11 @@ class ActorPPOTrainer(ABC):
         self.aux_loss = self.args.aux_loss_coef > 1e-8
 
         self.replay_buffer = NaiveReplayBuffer(
-            micro_train_batch_size, buffer_limit, buffer_cpu_offload, getattr(self.args, "packing_samples", False), self.args.use_dynamic_batch
+            micro_train_batch_size,
+            buffer_limit,
+            buffer_cpu_offload,
+            getattr(self.args, "packing_samples", False),
+            self.args.use_dynamic_batch,
         )
 
         # Init torch group for weights sync
@@ -148,7 +152,11 @@ class ActorPPOTrainer(ABC):
         if self.args.use_dynamic_batch:
             self.replay_buffer.setup_dynamic_batch(self.strategy)
 
-        not_shuffle = self.strategy.ring_attn_group is not None or self.args.ds_tensor_parallel_size > 1 or self.args.use_dynamic_batch
+        not_shuffle = (
+            self.strategy.ring_attn_group is not None
+            or self.args.ds_tensor_parallel_size > 1
+            or self.args.use_dynamic_batch
+        )
         dataloader = DataLoader(
             self.replay_buffer,
             batch_size=self.replay_buffer.sample_batch_size,
@@ -264,7 +272,7 @@ class ActorPPOTrainer(ABC):
                 self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
         else:
             self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
-    
+
         if self.ema_model:
             if self.args.use_dynamic_batch:
                 if self.replay_buffer.dynamic_optimizer_step[step]:
