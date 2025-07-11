@@ -23,6 +23,7 @@ class SamplesGeneratorAsync(SamplesGenerator):
             max_tokens=kwargs.get("max_new_tokens", 1024),
             min_tokens=kwargs.get("min_new_tokens", 1),
             skip_special_tokens=kwargs.get("skip_special_tokens", False),
+            logprobs=1 if self.strategy.args.use_vllm_logprobs else None,
         )
         truncate_length = self.prompt_max_len + kwargs.get("max_new_tokens", 1024)
 
@@ -105,6 +106,40 @@ class SamplesGeneratorAsync(SamplesGenerator):
             for start, end in tokenized_ranges:
                 action_mask[start:end] = 1
 
+            # Extract logprobs from vllm output (only when using vLLM logprobs)
+            if args.use_vllm_logprobs:
+                rollout_log_probs_tensor = None
+                # Check if logprobs are available in the output
+                if "logprobs" in output and output["logprobs"] is not None:
+                    # Initialize logprobs for all tokens in the observation
+                    full_logprobs = [0.0] * len(tokenized_observation)
+
+                    # Map logprobs to their corresponding token positions
+                    logprobs_idx = 0
+                    response_logprobs = output["logprobs"]
+
+                    # Process each action range and assign logprobs
+                    for start_pos, end_pos in tokenized_ranges:
+                        # Get the number of tokens in this action range
+                        num_tokens = end_pos - start_pos
+
+                        # Assign logprobs for this action range
+                        for i in range(num_tokens):
+                            if logprobs_idx < len(response_logprobs) and (start_pos + i) < len(full_logprobs):
+                                full_logprobs[start_pos + i] = response_logprobs[logprobs_idx]
+                                logprobs_idx += 1
+
+                    # Create tensor and apply truncation
+                    if len(full_logprobs) > 0:
+                        rollout_log_probs_tensor = torch.tensor(full_logprobs, dtype=torch.float)
+                        rollout_log_probs_tensor = rollout_log_probs_tensor[1:truncate_length].to("cpu")
+                    else:
+                        rollout_log_probs_tensor = None
+                else:
+                    rollout_log_probs_tensor = None
+            else:
+                rollout_log_probs_tensor = None
+
             # Apply length limit
             sequences = sequences[:truncate_length].to("cpu")
             attention_mask = attention_mask[:truncate_length].to("cpu")
@@ -133,6 +168,9 @@ class SamplesGeneratorAsync(SamplesGenerator):
                 sequences=sequences.unsqueeze(0),
                 attention_mask=attention_mask.unsqueeze(0),
                 action_mask=action_mask.unsqueeze(0),
+                action_log_probs=(
+                    rollout_log_probs_tensor.unsqueeze(0) if rollout_log_probs_tensor is not None else None
+                ),
                 prompts=[output["prompt"]],
                 labels=[output["label"]],
                 rewards=torch.tensor([output["reward"]]),

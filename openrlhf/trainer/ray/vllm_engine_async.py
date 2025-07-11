@@ -32,6 +32,7 @@ def get_tokenize_text_len(text, tokenizer):
 class LLMRayActorAsync(BaseLLMRayActor):
     async def __init__(self, *args, bundle_indices: list = None, **kwargs):
         self.agent_func_path = kwargs.pop("agent_func_path")
+        self.use_vllm_logprobs = kwargs.pop("use_vllm_logprobs", None)
 
         # Initialize super class
         super().__init__(*args, bundle_indices=bundle_indices, **kwargs)
@@ -100,6 +101,8 @@ class LLMRayActorAsync(BaseLLMRayActor):
                 action_ranges = []
                 total_reward = 0
                 final_scores = 0
+                extra_logs = {}
+                all_logprobs = []  # Store logprobs for all generation steps
 
                 # Execute multiple steps of interaction
                 for step_idx in range(max_steps):
@@ -116,6 +119,19 @@ class LLMRayActorAsync(BaseLLMRayActor):
                     request_output = await self.generate_async(observation, sampling_params)
                     action = request_output.outputs[0].text
                     action_ranges.append((len(observation), len(observation) + len(action)))
+
+                    # Collect logprobs from vLLM output if available and enabled
+                    if (
+                        self.use_vllm_logprobs
+                        and hasattr(request_output.outputs[0], "logprobs")
+                        and request_output.outputs[0].logprobs is not None
+                    ):
+                        step_logprobs = []
+                        response_ids = list(request_output.outputs[0].token_ids)
+                        for i, logprob in enumerate(request_output.outputs[0].logprobs):
+                            if i < len(response_ids):
+                                step_logprobs.append(logprob[response_ids[i]].logprob)
+                        all_logprobs.extend(step_logprobs)
 
                     # Call step function to get reward and next observation
                     # Use asyncio.to_thread to make Ray remote call non-blocking
@@ -145,6 +161,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
                     "scores": final_scores,
                     "extra_logs": extra_logs,
                     "action_ranges": action_ranges,
+                    "logprobs": all_logprobs if all_logprobs else None,  # Include collected logprobs
                 }
                 await self.result_queue.put(final_response)
 
