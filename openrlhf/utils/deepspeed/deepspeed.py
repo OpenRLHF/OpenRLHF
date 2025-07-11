@@ -264,10 +264,12 @@ class DeepspeedStrategy(ABC):
             deepcompile=self.deepcompile,
             tensor_parallel_size=self.ds_tensor_parallel_size,
         )
-
-        ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
-        train_batch_size = self.train_batch_size
-        ds_config["train_batch_size"] = train_batch_size * self.ring_attn_size * self.ds_tensor_parallel_size
+        if self.args.use_dynamic_batch:
+            ds_config["train_micro_batch_size_per_gpu"] = 1
+            ds_config["gradient_accumulation_steps"] = 1
+        else:
+            ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
+            ds_config["train_batch_size"] = self.train_batch_size * self.ring_attn_size * self.ds_tensor_parallel_size
 
         return ds_config
 
@@ -316,7 +318,7 @@ class DeepspeedStrategy(ABC):
 
     def moving_average(self, model, model_ema, beta=0.992, device="cpu"):
         self.time_steps["ema"] += 1
-        if self.time_steps["ema"] % self.accumulated_gradient == 0:
+        if self.time_steps["ema"] % self.accumulated_gradient == 0 or self.args.use_dynamic_batch:
             with torch.no_grad():
                 for param, param_ema in zip(model.parameters(), model_ema.parameters()):
                     if param.requires_grad:
