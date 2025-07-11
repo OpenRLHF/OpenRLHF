@@ -77,11 +77,22 @@ class PolicyLoss(nn.Module):
     Policy Loss for PPO
     """
 
-    def __init__(self, clip_eps_low: float = 0.2, clip_eps_high: float = 0.2, token_level_loss: bool = True) -> None:
+    def __init__(
+        self,
+        clip_eps_low: float = 0.2,
+        clip_eps_high: float = 0.2,
+        dual_clip: float = None,
+        token_level_loss: bool = True,
+    ) -> None:
         super().__init__()
         self.clip_eps_low = clip_eps_low
         self.clip_eps_high = clip_eps_high
         self.token_level_loss = token_level_loss
+        self.dual_clip = dual_clip
+
+        # Dual-clip PPO: https://arxiv.org/pdf/1912.09729
+        if dual_clip is not None:
+            assert dual_clip > 1.0, f"dual_clip must be > 1.0, got {dual_clip}"
 
     def forward(
         self,
@@ -93,7 +104,18 @@ class PolicyLoss(nn.Module):
         ratio = (log_probs - old_log_probs).exp()
         surr1 = ratio * advantages
         surr2 = ratio.clamp(1 - self.clip_eps_low, 1 + self.clip_eps_high) * advantages
-        loss = -torch.min(surr1, surr2)
+
+        if self.dual_clip is None:
+            # Standard PPO
+            loss = -torch.min(surr1, surr2)
+        else:
+            # Standard PPO clipping
+            clip1 = torch.min(surr1, surr2)
+            # Dual-clip: additional lower bound for negative advantages
+            clip2 = torch.max(clip1, self.dual_clip * advantages)
+            # Apply dual-clip: use clip2 for negative advantages, clip1 for positive advantages
+            loss = -torch.where(advantages < 0, clip2, clip1)
+
         loss = (
             masked_mean(loss, action_mask, dim=None)
             if self.token_level_loss

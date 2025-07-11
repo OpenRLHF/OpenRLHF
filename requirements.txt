@@ -1,7 +1,7 @@
 accelerate
 bitsandbytes
 datasets
-deepspeed==0.17.1
+deepspeed==0.17.2
 einops
 flash-attn==2.8.0.post2
 isort
@@ -18,7 +18,7 @@ torch
 torchdata
 torchmetrics
 tqdm
-transformers==4.52.4
+transformers==4.53.1
 transformers_stream_generator
 wandb
 wheel
