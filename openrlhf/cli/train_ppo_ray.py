@@ -294,7 +294,8 @@ if __name__ == "__main__":
 
     # dynamic batch size
     parser.add_argument("--use_dynamic_batch", action="store_true", default=False)
-    parser.add_argument("--max_tokens_per_gpu", type=int, default=16192)
+    parser.add_argument("--rollout_max_tokens_per_gpu", type=int, default=None)
+    parser.add_argument("--train_max_tokens_per_gpu", type=int, default=16192)
 
     # LoRA
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
@@ -495,6 +496,9 @@ if __name__ == "__main__":
         if not args.packing_samples:
             print("[Warning] Please --packing_samples to accelerate when --use_dynamic_batch is enabled.")
             args.packing_samples = True
+        if args.rollout_max_tokens_per_gpu is None:
+            print("[Warning] Set --rollout_max_tokens_per_gpu to --train_max_tokens_per_gpu.")
+            args.rollout_max_tokens_per_gpu = args.train_max_tokens_per_gpu
 
     if args.packing_samples:
         if not args.flash_attn:

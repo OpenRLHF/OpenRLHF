@@ -43,5 +43,5 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --vllm_enable_sleep \
    --deepspeed_enable_sleep \
    --use_dynamic_batch \
-   --max_tokens_per_gpu 16384
+   --train_max_tokens_per_gpu 16384
 

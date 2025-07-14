@@ -454,7 +454,7 @@ class RemoteExperienceMaker(ABC):
             )
             minimum_batch_num = get_minimum_num_micro_batch_size(
                 total_lengths,
-                self.args.max_tokens_per_gpu,
+                self.args.rollout_max_tokens_per_gpu,
                 self.args.ring_attn_size,
                 self.args.ds_tensor_parallel_size,
             )
@@ -499,7 +499,7 @@ class RemoteExperienceMaker(ABC):
         Turn samples into experience by calculating logprobs, values, rewards, and kl divergence.
         """
         start_time = time.time()
-        logger.info(f"🚀 Starting experience making with {len(samples_list[0].sequences) * len(samples_list)} samples")
+        logger.info(f"🚀 Starting experience making with {sum([len(s.sequences) for s in samples_list])} samples")
 
         args = self.strategy.args
         device = "cpu"

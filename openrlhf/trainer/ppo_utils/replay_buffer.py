@@ -260,7 +260,7 @@ class NaiveReplayBuffer(ABC):
             num_microbatches.append(
                 get_minimum_num_micro_batch_size(
                     sample_lengths[start:end],
-                    args.max_tokens_per_gpu,
+                    args.train_max_tokens_per_gpu,
                     args.ring_attn_size,
                     args.ds_tensor_parallel_size,
                 )
