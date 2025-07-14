@@ -68,6 +68,7 @@ class DeepspeedStrategy(ABC):
         self.deepcompile = getattr(args, "deepcompile", False)
         self.ds_tensor_parallel_size = getattr(args, "ds_tensor_parallel_size", 1)
         self.ring_attn_size = getattr(self.args, "ring_attn_size", 1)
+        self.use_dynamic_batch = getattr(self.args, "use_dynamic_batch", False)
 
         if self.ds_tensor_parallel_size > 1:
             assert deepspeed.version >= "0.16.4", "DeepSpeed version must be >= 0.16.4 for tensor parallel training"
@@ -264,7 +265,7 @@ class DeepspeedStrategy(ABC):
             deepcompile=self.deepcompile,
             tensor_parallel_size=self.ds_tensor_parallel_size,
         )
-        if getattr(self.args, "use_dynamic_batch", False):
+        if self.use_dynamic_batch:
             ds_config["train_micro_batch_size_per_gpu"] = 1
             ds_config["gradient_accumulation_steps"] = 1
         else:
@@ -318,7 +319,7 @@ class DeepspeedStrategy(ABC):
 
     def moving_average(self, model, model_ema, beta=0.992, device="cpu"):
         self.time_steps["ema"] += 1
-        if self.time_steps["ema"] % self.accumulated_gradient == 0 or getattr(self.args, "use_dynamic_batch", False):
+        if self.time_steps["ema"] % self.accumulated_gradient == 0 or self.use_dynamic_batch:
             with torch.no_grad():
                 for param, param_ema in zip(model.parameters(), model_ema.parameters()):
                     if param.requires_grad:
