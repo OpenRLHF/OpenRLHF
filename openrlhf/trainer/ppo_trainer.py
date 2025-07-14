@@ -135,13 +135,13 @@ class BasePPOTrainer(ABC):
         # actor model training
         if global_steps > self.freezing_actor_steps:
             if self.strategy.args.deepspeed_enable_sleep:
-                self.actor_model_group.async_run_method(method_name="reload_states")
+                ray.get(self.actor_model_group.async_run_method(method_name="reload_states"))
 
             actor_status_ref = self.actor_model_group.async_run_method(method_name="fit", kl_ctl=self.kl_ctl.value)
             status.update(ray.get(actor_status_ref)[0])
 
             if self.strategy.args.deepspeed_enable_sleep:
-                self.actor_model_group.async_run_method(method_name="offload_states")
+                ray.get(self.actor_model_group.async_run_method(method_name="offload_states"))
 
             # 4. broadcast weights to vllm engines
             if self.vllm_engines is not None:
