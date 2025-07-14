@@ -22,16 +22,12 @@ conda activate openrlhf_test
 
 module purge
 
-#module load cuda/12.2.0-fasrc01 # cuda/12.4.1-fasrc01
 
 module load cuda/12.4.1-fasrc01
-#module load cuda/11.8.0-fasrc01
 module load gcc/12.2.0-fasrc01
 module load cmake/3.31.6-fasrc01
 module load cudnn
 
-#export LD_LIBRARY_PATH=/n/sw/helmod-rocky8/apps/Core/cuda/11.8.0-fasrc01/lib64:$LD_LIBRARY_PATH
-#export LD_LIBRARY_PATH=/n/sw/helmod-rocky8/apps/Core/cuda/11.8.0-fasrc01/cuda/lib64:$LD_LIBRARY_PATH
 export WANDB_MODE=online
 export LD_LIBRARY_PATH=/n/sw/helmod-rocky8/apps/Core/cuda/12.4.1-fasrc01/cuda/lib64:$LD_LIBRARY_PATH
 
@@ -40,8 +36,6 @@ export PYTHONPATH=/n/holylfs06/LABS/kempner_dev/Lab/nikhilanand/agents/AgentsOpe
 rm -rf ~/.cache/vllm
 export GLOO_SOCKET_IFNAME=$(ip -4 addr | awk '/inet/ && !/127.0.0.1/ {print $NF; exit}')
 echo "Using network interface for Gloo: $GLOO_SOCKET_IFNAME"
-
-
 
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 
@@ -52,7 +46,6 @@ else
     RAY_NUM_GPUS=$SLURM_GPUS_ON_NODE
 fi
 
-# choose available port on the head node
 head_port=`comm -23 <(seq 15000 20000 | sort) <(ss -Htan | awk '{print $4}' | cut -d':' -f2 | sort -u) | shuf | head -n 1`
 nodes=`scontrol show hostnames $SLURM_JOB_NODELIST`
 nodes_array=( $nodes )
@@ -74,15 +67,9 @@ sleep 20
 export GLOO_SOCKET_IFNAME=$(ip -4 addr | awk '/inet/ && !/127.0.0.1/ {print $NF; exit}')
 echo "Using network interface for Gloo: $GLOO_SOCKET_IFNAME"
 
-# Explicitly use IPv4 for all distributed communication
-#export NCCL_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME
 export MASTER_ADDR=$head_node_ip
 export HOSTNAME=$(hostname)
-# Force PyTorch to use IPv4
-# export NCCL_IB_DISABLE=1
-#export NCCL_SOCKET_FAMILY=IPv4
-# Disable localhost references in distributed communication
-#export PYTORCH_NO_SPAWN_MULTIPROCESS=1
+
 
 # start ray on the rest of the nodes
 worker_num=$((SLURM_NNODES - 1))
@@ -96,12 +83,6 @@ done
 
 export RAY_ADDRESS="$RAY_HEAD_ADDR"
 
-#  # --remote_rm_url http://$head_node:5000/get_reward \
-
-#/n/holylabs/LABS/sham_lab/Users/mkwun/inference-reasoning/openrlhf_wd/sft_llama3_8b \
-#/n/holylabs/LABS/sham_lab/Users/mkwun/inference-reasoning/models--meta-llama--Meta-Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659
-# /n/netscratch/sham_lab/Everyone/mkwun/sft_llama
- # /n/holylabs/LABS/kempner_dev/Users/nikhilanand/Llama-3-8B-Instruct-HF \
 
 srun --overlap -N 1 -n 1 -w "$head_node" ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/n/netscratch/kempner_dev/Everyone/nikhilanand/openrlhf_logs_and_artifacts_202507_working_dir"}' \
@@ -145,6 +126,4 @@ srun --overlap -N 1 -n 1 -w "$head_node" ray job submit --address="http://127.0.
   --wandb_project openrlhf_test_202507 \
   --wandb_run_name multinode_grpo \
   --apply_chat_template \
-
-
-#   --colocate_actor_ref \
+  
