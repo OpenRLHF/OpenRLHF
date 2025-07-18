@@ -209,7 +209,12 @@ if __name__ == "__main__":
     # DPO
     parser.add_argument("--max_epochs", type=int, default=1)
     parser.add_argument("--l2", type=float, default=0.0, help="weight decay loss")
-    parser.add_argument("--min_lr_ratio", type=float, default=0.1, help="Ratio of the minimum learning rate to the initial learning rate.")
+    parser.add_argument(
+        "--min_lr_ratio",
+        type=float,
+        default=0.1,
+        help="Ratio of the minimum learning rate to the initial learning rate.",
+    )
     parser.add_argument("--beta", type=float, default=0.1)
     parser.add_argument("--ipo", action="store_true", default=False)  # IPO https://arxiv.org/pdf/2310.12036v2.pdf
     parser.add_argument("--label_smoothing", type=float, default=0.0)  # cDPO https://arxiv.org/pdf/2305.18290.pdf
