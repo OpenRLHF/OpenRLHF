@@ -670,8 +670,9 @@ class RemoteExperienceMaker(ABC):
 
         # DAPO reward shaping with optional overlong penalty
         if args.overlong_buffer_len is not None:
-            assert args.generate_max_len >= args.overlong_buffer_len, (
-                "max_resp_len must be larger than overlong_buffer_len")
+            assert (
+                args.generate_max_len >= args.overlong_buffer_len
+            ), "max_resp_len must be larger than overlong_buffer_len"
             overlong_buffer_len = args.overlong_buffer_len
             expected_len = args.generate_max_len - overlong_buffer_len
             overlong_penalty_factor = args.overlong_penalty_factor
