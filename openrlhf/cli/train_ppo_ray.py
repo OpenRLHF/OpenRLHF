@@ -384,6 +384,8 @@ if __name__ == "__main__":
         default=False,
         help="disable dividing by std for advantages while keeping mean normalization",
     )
+    parser.add_argument("--overlong_buffer_len", type=float, default=None, help="reward with optional overlong penalty")
+    parser.add_argument("--overlong_penalty_factor", type=float, default=1, help="overlong penalty factor")
 
     # Context Parallel
     parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")
