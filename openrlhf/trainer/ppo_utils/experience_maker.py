@@ -675,7 +675,8 @@ class RemoteExperienceMaker(ABC):
                 batch_size = len(response_lengths)
                 for j in range(batch_size):
                     valid_response_length = response_lengths[j].item()
-                    exceed_len = valid_response_length - expected_len
+                    # Cap the exceed_len to overlong_buffer_len to prevent excessive penalty
+                    exceed_len = min(valid_response_length - expected_len, overlong_buffer_len)
                     if exceed_len > 0:
                         overlong_penalty = -exceed_len / overlong_buffer_len * overlong_penalty_factor
                         # Apply penalty to the j-th reward in this experience
