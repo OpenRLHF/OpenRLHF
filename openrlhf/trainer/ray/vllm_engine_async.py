@@ -15,7 +15,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
 
         # Initialize result queue for streaming completed results
         self.result_queue = asyncio.Queue()
-        self.agent_executor_cls = None
+        self.agent_executor = None
 
         os.environ["VLLM_USE_V1"] = "1"
         import vllm
@@ -65,7 +65,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
         """
 
         # Create AgentExecutor instance
-        if self.agent_executor_cls is None:
+        if self.agent_executor is None:
             assert self.agent_func_path.endswith(".py"), "Agent path must be a Python file"
             import importlib.util
 
@@ -77,16 +77,16 @@ class LLMRayActorAsync(BaseLLMRayActor):
             assert hasattr(agent_module, "AgentExecutor"), "Agent module must contain AgentExecutor class"
             self.agent_executor_cls = agent_module.AgentExecutor
 
-        agent_executor = self.agent_executor_cls(
-            max_steps=max_steps, max_length=max_length, llm_engine=self.llm, result_queue=self.result_queue
-        )
+            self.agent_executor = self.agent_executor_cls(
+                max_steps=max_steps, max_length=max_length, llm_engine=self.llm, result_queue=self.result_queue
+            )
 
         # Create and start tasks for all agent executions with controlled concurrency
         import copy
 
         tasks = []
         for prompt, label in zip(prompts, labels):
-            tasks.append(agent_executor.execute(prompt, label, copy.deepcopy(sampling_params)))
+            tasks.append(self.agent_executor.execute(prompt, label, copy.deepcopy(sampling_params)))
 
         # Run the async code using the class's event loop
         await asyncio.gather(*tasks)
