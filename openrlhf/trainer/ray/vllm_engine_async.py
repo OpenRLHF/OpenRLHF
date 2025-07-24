@@ -10,21 +10,6 @@ from .vllm_engine import BaseLLMRayActor
 class LLMRayActorAsync(BaseLLMRayActor):
     async def __init__(self, *args, bundle_indices: list = None, **kwargs):
         self.agent_func_path = kwargs.pop("agent_func_path")
-        if self.agent_func_path.endswith(".py"):
-            import importlib.util
-
-            spec = importlib.util.spec_from_file_location("agent_module", self.agent_func_path)
-            agent_module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(agent_module)
-
-            # Load AgentExecutor class instead of step function
-            if hasattr(agent_module, "AgentExecutor"):
-                self.agent_executor_cls = agent_module.AgentExecutor
-            else:
-                raise ValueError("Agent module must contain AgentExecutor class")
-        else:
-            raise ValueError("Agent path must be a Python file")
-
         # Initialize super class
         super().__init__(*args, bundle_indices=bundle_indices, **kwargs)
 
@@ -39,6 +24,21 @@ class LLMRayActorAsync(BaseLLMRayActor):
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
         await self.llm.is_sleeping()
+
+        if self.agent_func_path.endswith(".py"):
+            import importlib.util
+
+            spec = importlib.util.spec_from_file_location("agent_module", self.agent_func_path)
+            agent_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(agent_module)
+
+            # Load AgentExecutor class instead of step function
+            if hasattr(agent_module, "AgentExecutor"):
+                self.agent_executor_cls = agent_module.AgentExecutor
+            else:
+                raise ValueError("Agent module must contain AgentExecutor class")
+        else:
+            raise ValueError("Agent path must be a Python file")
 
     async def init_process_group(
         self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray
