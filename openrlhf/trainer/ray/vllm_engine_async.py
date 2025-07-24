@@ -83,7 +83,11 @@ class LLMRayActorAsync(BaseLLMRayActor):
             ), "AgentExecutor must inherit from AgentExecutorBase"
 
             self.agent_executor = self.agent_executor_cls(
-                max_steps=max_steps, max_length=max_length, llm_engine=self.llm, result_queue=self.result_queue
+                max_steps=max_steps,
+                max_length=max_length,
+                llm_engine=self.llm,
+                hf_tokenizer=hf_tokenizer,
+                result_queue=self.result_queue,
             )
 
         # Create and start tasks for all agent executions with controlled concurrency

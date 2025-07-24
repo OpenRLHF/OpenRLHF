@@ -19,9 +19,9 @@ class AgentInstanceBase(ABC):
 
 
 class AgentExecutorBase(ABC):
-    def __init__(self, agent_instance_cls, max_steps, max_length, llm_engine, result_queue):
+    def __init__(self, agent_instance_cls, max_steps, max_length, llm_engine, hf_tokenizer, result_queue):
         self.llm_engine = llm_engine
-        self.hf_tokenizer = llm_engine.tokenizer
+        self.hf_tokenizer = hf_tokenizer
         self.max_steps = max_steps
         self.max_length = max_length
         self.result_queue = result_queue

@@ -68,5 +68,5 @@ class AgentInstance(AgentInstanceBase):
 
 # You could override the execute function of AgentExecutorBase to add custom agent running logic
 class AgentExecutor(AgentExecutorBase):
-    def __init__(self, max_steps, max_length, llm_engine, result_queue):
-        super().__init__(AgentInstance, max_steps, max_length, llm_engine, result_queue)
+    def __init__(self, max_steps, max_length, llm_engine, hf_tokenizer, result_queue):
+        super().__init__(AgentInstance, max_steps, max_length, llm_engine, hf_tokenizer, result_queue)
