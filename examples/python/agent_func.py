@@ -20,7 +20,7 @@ class AgentInstance(AgentInstanceBase):
         Returns:
             str: Initial observation text
         """
-        return {"observation": states["prompt"]}  # Return original text observation
+        return {"observation": states["observation"]}  # Return original text observation
 
     async def step(self, states: dict, **kwargs) -> Dict[str, Any]:
         """Execute one step of verification and return environment feedback

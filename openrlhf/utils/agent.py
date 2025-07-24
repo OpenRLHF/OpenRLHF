@@ -44,7 +44,7 @@ class AgentExecutorBase(ABC):
             agent_instance = self.agent_instance_cls.remote()
 
             # Initialize with reset function
-            initial_states = {"prompt": prompt, "label": label}
+            initial_states = {"observation": prompt, "label": label}
             observation_text = await agent_instance.reset.remote(initial_states)["observation"]
 
             # Tokenize the initial observation
