@@ -47,7 +47,7 @@ OpenRLHF 是第一个基于 Ray、vLLM、ZeRO-3 和 HuggingFace Transformers 构
 
 
 ## 新闻  
-- [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) 使用了 REINFORCE++-baseline 训练它们的推理模型.
+- [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) 使用极其类似于 REINFORCE++-baseline 的算法训练推理模型.
 - [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) 作为 OpenRLHF 的分支版本已发布。它通过集成集中式多智能体交互与分布式策略训练，专为使用 RL 训练基于 LLM 的多智能体系统而设计。
 - [2025/5] OpenRLHF 0.8.0 支持 [Async Pipeline RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh) (`--async_train`) 和 [Async Agent RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)(`--agent_func_path`)
 - [2025/4] 发布博客 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html)
