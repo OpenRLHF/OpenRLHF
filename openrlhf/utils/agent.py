@@ -80,9 +80,9 @@ class AgentExecutorBase(ABC):
                     "observation_text": observation_text,
                     "action_text": action_text,
                     "label": label,
+                    "sampling_params": sampling_params,
                 }
-                kwargs = {"sampling_params": sampling_params}
-                step_result = await agent_instance.step.remote(states, **kwargs)
+                step_result = await agent_instance.step.remote(states)
 
                 total_reward += step_result["rewards"].item()
                 final_scores = step_result.get("scores", total_reward)
