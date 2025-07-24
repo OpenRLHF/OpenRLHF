@@ -5,64 +5,79 @@ import torch
 from openrlhf.utils.agent import AgentExecutorBase, AgentInstanceBase
 
 
-# A n-step random environment
+# A simple n-step random environment
 class AgentInstance(AgentInstanceBase):
-    def __init__(self):
-        # Global states for the environment
+    def __init__(self, tokenizer):
         self.step_idx = 0
-        self.max_steps = random.randint(0, 2)
+        self.max_steps = random.randint(1, 3)  # 1-3 steps
+        self.tokenizer = tokenizer
 
     async def reset(self, states: dict, **kwargs):
-        return states
-
-    async def step(self, states: dict, **kwargs) -> Dict[str, Any]:
-        """Execute one step of verification and return a random reward using torch.rand
+        """Initialize the environment and return initial observation
 
         Args:
-            observation: The input prompt/expression
-            action: The language model's response
-            label: Agent identifier or additional information
+            states: Dictionary containing prompt and label
+
+        Returns:
+            dict: Dictionary containing observation (text) and observation_tokens (token ids)
+        """
+        prompt = states["prompt"]
+        label = states["label"]
+
+        # Tokenize the initial prompt using stored tokenizer
+        observation_tokens = self.tokenizer(prompt, add_special_tokens=False, return_tensors="pt")["input_ids"][
+            0
+        ].tolist()
+
+        return {
+            "observation": prompt,  # Original text observation
+            "observation_tokens": observation_tokens,  # Tokenized observation
+        }
+
+    async def step(self, states: dict, **kwargs) -> Dict[str, Any]:
+        """Execute one step of verification and return environment feedback
+
+        Args:
+            states: Dictionary containing observation_tokens, action_tokens, observation_text, action_text, and label
 
         Returns:
             Dict[str, Any]: A dictionary containing:
                 - rewards: Reward value for advantage calculation
                 - scores: Reward value for dynamic filtering
-                - next_observation: The updated observation after the step
+                - next_observation_tokens: The updated observation tokens after the step
                 - done: Boolean indicating if the episode is complete
                 - sampling_params: Parameters for vLLM sampling
                 - extra_logs: Additional logging information
         """
         print(f"step_idx: {self.step_idx}, max_steps: {self.max_steps}")
 
-        observation = states["observation"]
-        action = states["action"]
+        observation_tokens = states["observation_tokens"]
+        action_tokens = states["action_tokens"]
+        observation_text = states["observation_text"]
+        action_text = states["action_text"]
         label = states["label"]
 
-        # End after verification
-        if self.step_idx >= self.max_steps:
-            done = True
-            # Generate a random reward using torch.rand
-            reward = torch.randint(0, 2, (1,)).float()
-            next_observation = (
-                observation
-                + action
-                + "\n\nHuman: [VERIFICATION RESULT: CORRECT]\nYour solution is valid and complete. The verification process is finished.\n</s>"
-            )
-        else:
-            done = False
-            reward = torch.tensor(0)
-            # Update observation
-            next_observation = (
-                observation
-                + action
-                + "\n\nHuman: [VERIFICATION RESULT: INCORRECT]\nLet's analyze what needs improvement:\n1. What are the key issues in the current solution?\n2. How can we make it more robust?\n3. What additional considerations should we take into account?\n\nPlease provide your revised solution:\n</s>\n\nAssistant: "
-            )
+        # Check if episode is done
+        done = self.step_idx >= self.max_steps
+        reward = torch.randint(0, 2, (1,)).float() if done else torch.tensor(0)
+
+        # Add feedback tokens based on whether episode is done
+        feedback_text = (
+            "\n\nHuman: [CORRECT]\n</s>"
+            if done
+            else "\n\nHuman: [INCORRECT]\nPlease analyze the issues and try again.\n</s>\n\nAssistant: "
+        )
+        feedback_tokens = self.tokenizer(feedback_text, add_special_tokens=False, return_tensors="pt")["input_ids"][
+            0
+        ].tolist()
+        next_observation_tokens = observation_tokens + action_tokens + feedback_tokens
+
         self.step_idx += 1
 
         return {
             "rewards": reward,  # Rewards for advantage calculation
             "scores": reward,  # Scores for dynamic filtering (0-1 reward)
-            "next_observation": next_observation,  # The updated observation for vLLM inference in next step
+            "next_observation_tokens": next_observation_tokens,  # The updated observation tokens
             "done": done,  # Boolean indicating if the episode is complete
             "sampling_params": kwargs.get("sampling_params", None),  # Parameters for vLLM sampling in next step
             "extra_logs": {"dummy_scores": reward},  # Additional logging information

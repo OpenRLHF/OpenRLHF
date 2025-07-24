@@ -7,7 +7,7 @@ from vllm.inputs import TokensPrompt
 
 class AgentInstanceBase(ABC):
     @abstractmethod
-    def __init__(self):
+    def __init__(self, tokenizer):
         raise NotImplementedError("AgentInstance.__init__ is not implemented")
 
     async def reset(self, states: dict, **kwargs):
@@ -42,45 +42,62 @@ class AgentExecutorBase(ABC):
             final_output = request_output
         return final_output
 
-    async def execute_agent(self, prompt, label, sampling_params):
+    async def execute(self, prompt, label, sampling_params):
         async with self.semaphore:
-            # Create a unique agent instance for this prompt
-            agent_instance = self.agent_instance_cls.remote()
+            # Create a unique agent instance for this prompt with tokenizer
+            agent_instance = self.agent_instance_cls.remote(self.hf_tokenizer)
 
-            # Initialize observations and actions for the current prompt
-            observation_tokens = self.hf_tokenizer(observation, add_special_tokens=False, return_tensors="pt")[
-                "input_ids"
-            ][0]
+            # Initialize with reset function
+            initial_states = {"prompt": prompt, "label": label}
+            reset_result = await agent_instance.reset.remote(initial_states)
+
+            # Initialize tracking variables
             action_ranges = []
             total_reward = 0
             final_scores = 0
+            current_obs_tokens = reset_result["observation_tokens"]
 
             # Execute multiple steps of interaction
             for step_idx in range(self.max_steps):
                 # Next sampling budget
-                sampling_params.max_tokens = self.max_length - len(observation_tokens)
+                sampling_params.max_tokens = self.max_length - len(current_obs_tokens)
                 # No budget to generate, break
                 if sampling_params.max_tokens <= 0:
                     break
 
-                # Generate response asynchronously
-                request_output = await self.generate(observation_tokens, sampling_params)
-                action = request_output.outputs[0].text
-                action_ranges.append((len(observation), len(observation) + len(action)))
+                # Generate response asynchronously (input and output are token ids)
+                request_output = await self.generate(current_obs_tokens, sampling_params)
+                action_tokens = request_output.outputs[0].token_ids
+                action_text = request_output.outputs[0].text
 
-                # Call step function to get reward and next observation
-                # Use asyncio.to_thread to make Ray remote call non-blocking
+                # Record action range in token space
+                action_start = len(current_obs_tokens)
+                action_end = action_start + len(action_tokens)
+                action_ranges.append((action_start, action_end))
+
+                # Decode current observation to text for step function
+                observation_text = self.hf_tokenizer.decode(current_obs_tokens, skip_special_tokens=True)
+
+                # Call step function to get environment feedback
+                states = {
+                    "observation_tokens": current_obs_tokens,
+                    "action_tokens": action_tokens,
+                    "observation_text": observation_text,
+                    "action_text": action_text,
+                    "label": label,
+                }
                 kwargs = {"sampling_params": sampling_params}
-                result = await agent_instance.step.remote(observation, action, label, **kwargs)
-                total_reward += result["rewards"].item()
-                final_scores = result.get("scores", total_reward)
-                observation = result["next_observation"]
-                done = result["done"]
-                extra_logs = result.get("extra_logs", {})
+                environment_feedback = await agent_instance.step.remote(states, **kwargs)
+
+                total_reward += environment_feedback["rewards"].item()
+                final_scores = environment_feedback.get("scores", total_reward)
+                current_obs_tokens = environment_feedback["next_observation_tokens"]
+                done = environment_feedback["done"]
+                extra_logs = environment_feedback.get("extra_logs", {})
 
                 # Get sampling params from the environment step
-                if result.get("sampling_params", None):
-                    sampling_params = result["sampling_params"]
+                if environment_feedback.get("sampling_params", None):
+                    sampling_params = environment_feedback["sampling_params"]
 
                 if done:
                     break
@@ -89,7 +106,7 @@ class AgentExecutorBase(ABC):
             final_response = {
                 "prompt": prompt,
                 "label": label,
-                "observation": observation,
+                "observation_tokens": current_obs_tokens,
                 "reward": total_reward,
                 "scores": final_scores,
                 "extra_logs": extra_logs,

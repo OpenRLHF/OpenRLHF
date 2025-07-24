@@ -13,10 +13,15 @@ class LLMRayActorAsync(BaseLLMRayActor):
         if self.agent_func_path.endswith(".py"):
             import importlib.util
 
-            spec = importlib.util.spec_from_file_location("step", self.agent_func_path)
+            spec = importlib.util.spec_from_file_location("agent_module", self.agent_func_path)
             agent_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(agent_module)
-            self.agent_step = agent_module.step
+
+            # Load AgentExecutor class instead of step function
+            if hasattr(agent_module, "AgentExecutor"):
+                self.agent_executor_cls = agent_module.AgentExecutor
+            else:
+                raise ValueError("Agent module must contain AgentExecutor class")
         else:
             raise ValueError("Agent path must be a Python file")
 
@@ -63,7 +68,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
     async def add_requests(self, sampling_params, prompts, labels, max_length, hf_tokenizer=None, max_steps=10000):
         """
         Process requests from rank0 and generate responses with multiple agent interactions.
-        Each prompt will go through multiple steps of interaction using the step function.
+        Each prompt will go through multiple steps of interaction using the AgentExecutor.
         Results are streamed back as each agent completes its execution.
 
         Args:
@@ -73,12 +78,17 @@ class LLMRayActorAsync(BaseLLMRayActor):
             max_steps: Maximum number of interaction steps
         """
 
+        # Create AgentExecutor instance
+        agent_executor = self.agent_executor_cls(
+            max_steps=max_steps, max_length=max_length, llm_engine=self.llm, result_queue=self.result_queue
+        )
+
         # Create and start tasks for all agent executions with controlled concurrency
         import copy
 
         tasks = []
         for prompt, label in zip(prompts, labels):
-            tasks.append(execute_agent(prompt, label, copy.deepcopy(sampling_params)))
+            tasks.append(agent_executor.execute(prompt, label, copy.deepcopy(sampling_params)))
 
         # Run the async code using the class's event loop
         await asyncio.gather(*tasks)
