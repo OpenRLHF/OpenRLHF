@@ -1,7 +1,7 @@
 import asyncio
 import os
 from abc import ABC
-
+import ray
 from vllm.inputs import TokensPrompt
 
 
@@ -106,6 +106,8 @@ class AgentExecutorBase(ABC):
 
                 if done:
                     break
+
+            ray.kill(agent_instance)
 
             # Store the final response when agent execution is complete
             final_response = {
