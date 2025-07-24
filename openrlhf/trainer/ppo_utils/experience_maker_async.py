@@ -79,6 +79,8 @@ class SamplesGeneratorAsync(SamplesGenerator):
 
             # Action ranges are already in token space
             tokenized_ranges = output["action_ranges"]
+            if observation_tokens[-1] != eos_token_id:
+                tokenized_ranges[-1] = (tokenized_ranges[-1][0], tokenized_ranges[-1][1] + 1)
 
             # Create tensors
             sequences = torch.tensor(tokenized_observation)
