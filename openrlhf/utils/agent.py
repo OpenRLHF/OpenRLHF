@@ -49,7 +49,8 @@ class AgentExecutorBase(ABC):
 
             # Initialize with reset function
             initial_states = {"observation": prompt, "label": label}
-            observation_text = await agent_instance.reset.remote(initial_states)["observation"]
+            reset_result = await agent_instance.reset.remote(initial_states)
+            observation_text = reset_result["observation"]
 
             # Tokenize the initial observation
             current_obs_tokens = self.hf_tokenizer(observation_text, add_special_tokens=False, return_tensors="pt")[
