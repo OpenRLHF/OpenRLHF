@@ -49,13 +49,17 @@ class AgentExecutorBase(ABC):
 
             # Initialize with reset function
             initial_states = {"prompt": prompt, "label": label}
-            reset_result = await agent_instance.reset.remote(initial_states)
+            observation_text = await agent_instance.reset.remote(initial_states)["observation"]
+
+            # Tokenize the initial observation
+            current_obs_tokens = self.hf_tokenizer(observation_text, add_special_tokens=False, return_tensors="pt")[
+                "input_ids"
+            ][0].tolist()
 
             # Initialize tracking variables
             action_ranges = []
             total_reward = 0
             final_scores = 0
-            current_obs_tokens = reset_result["observation_tokens"]
 
             # Execute multiple steps of interaction
             for step_idx in range(self.max_steps):
@@ -75,29 +79,34 @@ class AgentExecutorBase(ABC):
                 action_end = action_start + len(action_tokens)
                 action_ranges.append((action_start, action_end))
 
-                # Decode current observation to text for step function
-                observation_text = self.hf_tokenizer.decode(current_obs_tokens, skip_special_tokens=True)
-
                 # Call step function to get environment feedback
                 states = {
-                    "observation_tokens": current_obs_tokens,
-                    "action_tokens": action_tokens,
                     "observation_text": observation_text,
                     "action_text": action_text,
                     "label": label,
                 }
                 kwargs = {"sampling_params": sampling_params}
-                environment_feedback = await agent_instance.step.remote(states, **kwargs)
+                step_result = await agent_instance.step.remote(states, **kwargs)
 
-                total_reward += environment_feedback["rewards"].item()
-                final_scores = environment_feedback.get("scores", total_reward)
-                current_obs_tokens = environment_feedback["next_observation_tokens"]
-                done = environment_feedback["done"]
-                extra_logs = environment_feedback.get("extra_logs", {})
+                total_reward += step_result["rewards"].item()
+                final_scores = step_result.get("scores", total_reward)
+                environment_feedback_text = step_result["environment_feedback"]
+                done = step_result["done"]
+                extra_logs = step_result.get("extra_logs", {})
+
+                # Concatenate observation, action, and environment_feedback, then tokenize
+                observation_text = observation_text + action_text + environment_feedback_text
+                current_obs_tokens = (
+                    current_obs_tokens
+                    + action_tokens
+                    + self.hf_tokenizer(environment_feedback_text, add_special_tokens=False, return_tensors="pt")[
+                        "input_ids"
+                    ][0].tolist()
+                )
 
                 # Get sampling params from the environment step
-                if environment_feedback.get("sampling_params", None):
-                    sampling_params = environment_feedback["sampling_params"]
+                if step_result.get("sampling_params", None):
+                    sampling_params = step_result["sampling_params"]
 
                 if done:
                     break
