@@ -49,7 +49,7 @@ OpenRLHF 是第一个基于 Ray、vLLM、ZeRO-3 和 HuggingFace Transformers 构
 ## 新闻  
 - [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) 使用极其类似于 REINFORCE++-baseline 的算法训练推理模型.
 - [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) 作为 OpenRLHF 的分支版本已发布。它通过集成集中式多智能体交互与分布式策略训练，专为使用 RL 训练基于 LLM 的多智能体系统而设计。
-- [2025/5] OpenRLHF 0.8.0 支持 [Async Pipeline RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh) (`--async_train`) 和 [Async Agent RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)(`--agent_func_path`)
+- [2025/5] OpenRLHF 0.8.0 支持 [Async Pipeline RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh) (`--async_train`) 和 [Async Agent RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)(`--agent_func_path`) 以及重新设计的基于类的代理 API
 - [2025/4] 发布博客 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html)
 - [2025/4] Clean OpenRLHF: 基于 Single Controller 和 Unified Packing Samples 重构了源码
 - [2025/3] CMU的[2025春季高级自然语言处理课程](https://cmu-l3.github.io/anlp-spring2025/)使用OpenRLHF作为RLHF框架教学案例。
@@ -377,48 +377,72 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 OpenRLHF为异步RLHF和基于Agent的RLHF实现提供了全面的支持。要使用这些功能，只需在训练配置中包含`--async_train`和`--agent_func_path`参数即可。
 
+Agent API已经重新设计为使用基于类的方法，采用`AgentInstanceBase`和`AgentExecutorBase`类，以提供更好的模块化和可扩展性。
+
 ```python
 # agent_func.py
-step_idx = 0
-max_steps = 2
+import random
+from typing import Any, Dict
 
-async def step(observation, action, label, **kwargs) -> Dict[str, Any]:
-    global step_idx, max_steps
-    print(f"step_idx: {step_idx}, max_steps: {max_steps}")
+import torch
+from openrlhf.utils.agent import AgentExecutorBase, AgentInstanceBase
 
-    # End after verification
-    if step_idx >= max_steps:
-        done = True
-        # Generate a random reward using torch.rand
-        reward = torch.randint(0, 2, (1,)).float()
-        next_observation = (
-            observation
-            + action
-            + "\n\nHuman: [VERIFICATION RESULT: CORRECT]\nYour solution is valid and complete. The verification process is finished.\n</s>"
+
+# A simple n-step random environment
+class AgentInstance(AgentInstanceBase):
+    async def __init__(self, *args, **kwargs):
+        self.step_idx = 0
+        self.max_steps = random.randint(1, 3)  # 1-3 steps
+
+    async def reset(self, states: dict, **kwargs):
+        return {"observation": states["observation"]}  # Return original text observation
+
+    async def step(self, states: dict, **kwargs) -> Dict[str, Any]:
+        print(f"step_idx: {self.step_idx}, max_steps: {self.max_steps}")
+
+        observation_text = states["observation_text"]
+        action_text = states["action_text"]
+        label = states["label"]
+
+        # Check if episode is done
+        done = self.step_idx >= self.max_steps
+        reward = torch.randint(0, 2, (1,)).float() if done else torch.tensor(0)
+
+        # Generate environment feedback based on whether episode is done
+        environment_feedback = (
+            "\n\nHuman: [CORRECT]\n</s>"
+            if done
+            else "\n\nHuman: [INCORRECT]\nPlease analyze the issues and try again.\n</s>\n\nAssistant: "
         )
-    else:
-        done = False
-        reward = torch.tensor(0)
-        # Update observation
-        next_observation = (
-            observation
-            + action
-            + "\n\nHuman: [VERIFICATION RESULT: INCORRECT]\nLet's analyze what needs improvement:\n1. What are the key issues in the current solution?\n2. How can we make it more robust?\n3. What additional considerations should we take into account?\n\nPlease provide your revised solution:\n</s>\n\nAssistant: "
-        )
-    step_idx += 1
 
-    return {
-        "rewards": reward,  # Rewards for advantage calculation
-        "scores": reward,  # Scores for dynamic filtering (0-1 reward)
-        "next_observation": next_observation,  # The updated observation for vLLM inference in next step
-        "done": done,  # Boolean indicating if the episode is complete
-        "sampling_params": kwargs.get("sampling_params", None),  # Parameters for vLLM sampling in next step
-        "extra_logs": {"dummy_scores": reward},  # Additional logging information
-    }
+        self.step_idx += 1
+
+        return {
+            "rewards": reward,  # Rewards for advantage calculation
+            "scores": reward,  # Scores for dynamic filtering (0-1 reward)
+            "environment_feedback": environment_feedback,  # Environment feedback text
+            "done": done,  # Boolean indicating if the episode is complete
+            "sampling_params": states.get("sampling_params", None),  # Parameters for vLLM sampling in next step
+            "extra_logs": {"dummy_scores": reward},  # Additional logging information
+        }
+
+
+class AgentExecutor(AgentExecutorBase):
+    def __init__(self, max_steps, max_length, llm_engine, hf_tokenizer, result_queue):
+        super().__init__(AgentInstance, max_steps, max_length, llm_engine, hf_tokenizer, result_queue)
+
+    async def execute(self, prompt, label, sampling_params):
+        # You could override the execute function of AgentExecutorBase to add custom agent running logic
+        return await super().execute(prompt, label, sampling_params)
 ```
 
 您还可以通过设置`export OPENRLHF_ASYNC_NUM_TASKS=128`来配置每个vLLM引擎的最大并发代理数。
 此外，您可以通过在环境中设置`export OPENRLHF_ASYNC_QUEUE_SIZE=1`（此参数控制缓冲区最多可以存储多少批数据）来控制离策略采样的程度。
+
+> [!NOTE]
+> 通过重写 `AgentExecutorBase` 的 `execute` 函数，您可以实现完全自定义的代理运行过程。该设计遵循 **token-in-token-out 原则**，确保采样和训练样本之间的一致性，避免文本级处理可能出现的潜在不匹配问题。
+
+
 
 > [!NOTE] 
 > OpenRLHF的Agent RLHF也支持混合引擎训练。要启用此功能，请移除`--async_train`标志并启用`--colocate_all_models`。
