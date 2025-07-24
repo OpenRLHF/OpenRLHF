@@ -45,7 +45,7 @@ class AgentExecutorBase(ABC):
     async def execute(self, prompt, label, sampling_params):
         async with self.semaphore:
             # Create a unique agent instance for this prompt with tokenizer
-            agent_instance = self.agent_instance_cls.remote(self.hf_tokenizer)
+            agent_instance = self.agent_instance_cls.remote()
 
             # Initialize with reset function
             initial_states = {"prompt": prompt, "label": label}

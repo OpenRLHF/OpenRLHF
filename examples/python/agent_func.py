@@ -7,10 +7,9 @@ from openrlhf.utils.agent import AgentExecutorBase, AgentInstanceBase
 
 # A simple n-step random environment
 class AgentInstance(AgentInstanceBase):
-    def __init__(self, tokenizer):
+    def __init__(self, *args, **kwargs):
         self.step_idx = 0
         self.max_steps = random.randint(1, 3)  # 1-3 steps
-        self.tokenizer = tokenizer
 
     async def reset(self, states: dict, **kwargs):
         """Initialize the environment and return initial observation
