@@ -6,10 +6,6 @@ from vllm.inputs import TokensPrompt
 
 
 class AgentInstanceBase(ABC):
-    @abstractmethod
-    def __init__(self, tokenizer):
-        raise NotImplementedError("AgentInstance.__init__ is not implemented")
-
     async def reset(self, states: dict, **kwargs):
         return states
 
