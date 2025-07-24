@@ -1,6 +1,6 @@
 import asyncio
 import os
-from abc import ABC
+from abc import ABC, abstractmethod
 import ray
 from vllm.inputs import TokensPrompt
 
