@@ -6,6 +6,10 @@ from vllm.inputs import TokensPrompt
 
 
 class AgentInstanceBase(ABC):
+    @abstractmethod
+    async def __init__(self, *args, **kwargs):
+        pass
+
     async def reset(self, states: dict, **kwargs):
         return states
 
@@ -21,7 +25,7 @@ class AgentExecutorBase(ABC):
         self.max_steps = max_steps
         self.max_length = max_length
         self.result_queue = result_queue
-        self.agent_instance_cls = agent_instance_cls
+        self.agent_instance_cls = ray.remote(agent_instance_cls)
 
         # Create semaphore to control concurrent task execution
         NUM_TASKS = os.environ.get("OPENRLHF_ASYNC_NUM_TASKS", 128)
@@ -41,7 +45,7 @@ class AgentExecutorBase(ABC):
     async def execute(self, prompt, label, sampling_params):
         async with self.semaphore:
             # Create a unique agent instance for this prompt with tokenizer
-            agent_instance = self.agent_instance_cls.remote()
+            agent_instance = await self.agent_instance_cls.remote()
 
             # Initialize with reset function
             initial_states = {"observation": prompt, "label": label}
