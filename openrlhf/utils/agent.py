@@ -10,7 +10,7 @@ class AgentInstanceBase(ABC):
         return states
 
     @abstractmethod
-    async def step(self, state_dict: dict):
+    async def step(self, state_dict: dict, **kwargs):
         raise NotImplementedError("AgentInstance.step is not implemented")
 
 
