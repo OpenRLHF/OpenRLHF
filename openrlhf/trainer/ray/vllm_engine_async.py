@@ -3,6 +3,8 @@ import os
 
 import ray
 
+from openrlhf.utils.agent import AgentExecutorBase
+
 from .vllm_engine import BaseLLMRayActor
 
 
@@ -76,6 +78,9 @@ class LLMRayActorAsync(BaseLLMRayActor):
             # Load AgentExecutor class instead of step function
             assert hasattr(agent_module, "AgentExecutor"), "Agent module must contain AgentExecutor class"
             self.agent_executor_cls = agent_module.AgentExecutor
+            assert issubclass(
+                self.agent_executor_cls, AgentExecutorBase
+            ), "AgentExecutor must inherit from AgentExecutorBase"
 
             self.agent_executor = self.agent_executor_cls(
                 max_steps=max_steps, max_length=max_length, llm_engine=self.llm, result_queue=self.result_queue

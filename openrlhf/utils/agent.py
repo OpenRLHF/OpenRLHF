@@ -25,6 +25,7 @@ class AgentExecutorBase(ABC):
         self.max_steps = max_steps
         self.max_length = max_length
         self.result_queue = result_queue
+        assert issubclass(agent_instance_cls, AgentInstanceBase), "AgentInstance must inherit from AgentInstanceBase"
         self.agent_instance_cls = ray.remote(agent_instance_cls)
 
         # Create semaphore to control concurrent task execution
