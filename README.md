@@ -325,7 +325,8 @@ ray job submit --address="http://127.0.0.1:8265" \
 > [!NOTE]
 > RLOO and REINFORCE++-baseline in OPENRLHF are a modification based on REINFORCE++:
 > - REINFORCE++ integrates key optimization techniques from PPO (such as advantage normalization and PPO-clip loss) into REINFORCE while eliminating the need for a critic network.
-> - REINFORCE++-baseline uses the `mean reward of multiple samples from the same prompt` as the baseline to reshape the rewards then apply the global advantage normalization in REINFORCE++.
+> - REINFORCE++-baseline uses the `mean reward of multiple samples from the same prompt` as the baseline to reshape the rewards, thereby filtering out responses that
+are either entirely correct or entirely incorrect, then apply the global advantage normalization in REINFORCE++.
 > - RLOO in OpenRLHF modifies the original version by incorporating the `per-token KL reward` and utilizing the `PPO-clip loss`.
 > - Dr. GRPO remove the local group normalization `/std` in GRPO.
 
