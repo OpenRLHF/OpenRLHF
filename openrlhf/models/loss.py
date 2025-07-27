@@ -101,7 +101,8 @@ class PolicyLoss(nn.Module):
         advantages: torch.Tensor,
         action_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        ratio = (log_probs - old_log_probs).exp()
+        log_ratio = log_probs - old_log_probs
+        ratio = log_ratio.exp()
         surr1 = ratio * advantages
         surr2 = ratio.clamp(1 - self.clip_eps_low, 1 + self.clip_eps_high) * advantages
 
@@ -122,7 +123,7 @@ class PolicyLoss(nn.Module):
             else masked_mean(loss, action_mask, dim=-1).mean()
         )
         clip_ratio = masked_mean(torch.lt(surr2, surr1).float(), action_mask, dim=None)
-        ppo_kl = masked_mean(-ratio, action_mask, dim=None)
+        ppo_kl = masked_mean(-log_ratio.detach(), action_mask, dim=None)
         return loss, clip_ratio, ppo_kl
 
 
