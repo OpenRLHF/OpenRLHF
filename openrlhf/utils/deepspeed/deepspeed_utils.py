@@ -146,6 +146,7 @@ def offload_deepspeed_states(model, pin_memory=True, non_blocking=True):
     import deepspeed
     import torch
     from deepspeed.runtime.zero.offload_config import OffloadDeviceEnum, OffloadStateTypeEnum
+    from packaging import version
 
     offload_state_types = [
         OffloadStateTypeEnum.optim_states,
@@ -153,7 +154,7 @@ def offload_deepspeed_states(model, pin_memory=True, non_blocking=True):
         OffloadStateTypeEnum.hp_params,
     ]
 
-    if deepspeed.__version__ >= "0.16.5":
+    if version.parse(deepspeed.__version__) >= version.parse("0.16.5"):
         # These offload types are fixed in https://github.com/deepspeedai/DeepSpeed/pull/7050
         offload_state_types += [
             OffloadStateTypeEnum.lp_grads,
