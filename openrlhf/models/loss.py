@@ -122,7 +122,8 @@ class PolicyLoss(nn.Module):
             else masked_mean(loss, action_mask, dim=-1).mean()
         )
         clip_ratio = masked_mean(torch.lt(surr2, surr1).float(), action_mask, dim=None)
-        return loss, clip_ratio
+        ppo_kl = masked_mean(-ratio, action_mask, dim=None)
+        return loss, clip_ratio, ppo_kl
 
 
 class ValueLoss(nn.Module):
