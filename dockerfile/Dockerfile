@@ -17,7 +17,6 @@ RUN apt-get -y install build-essential git python3-dev python3-pip libopenexr-de
 RUN pip uninstall xgboost transformer_engine flash_attn pynvml opencv-python-headless -y
 RUN pip install flash-attn==2.8.2
 RUN pip install vllm==0.10.0
-RUN pip install grpcio>=1.74.0
 
 COPY docker-entrypoint.sh .
 RUN chmod a+x docker-entrypoint.sh

@@ -4,6 +4,7 @@ datasets
 deepspeed==0.17.2
 einops
 flash-attn==2.8.2
+grpcio>=1.74.0
 isort
 jsonlines
 loralib
