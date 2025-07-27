@@ -473,6 +473,7 @@ python -m openrlhf.cli.lora_combiner \
 - 应该尽可能增加 `rollout_micro_batch_size`（并最小化 vLLM 引擎的 TP 大小）。在训练阶段，较大的 `--micro_train_batch_size` 更好，并启用 `--packing_samples`。
 - 当有足够的 GPU 内存时，请禁用 `--adam_offload` 并启用 `--overlap_comm`。同时启用 `--deepcompile` 来加速训练。
 - 对于 vLLM，请使用 `--vllm_sync_backend nccl`
+- 启动 ``--use_dynamic_batch`` 以加速 deepspeed 训练和前向过程.
 - 当 `n_samples_per_prompts` > 1 时，在 vLLM 生成中启用 [enable_prefix_caching](https://docs.vllm.ai/en/stable/automatic_prefix_caching/apc.html)。
 - 对于大型基础模型，如果发生 OOM，不要使用任何 `--colocate_xxxx` 选项。
 
