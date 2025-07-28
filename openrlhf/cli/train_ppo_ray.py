@@ -500,7 +500,8 @@ if __name__ == "__main__":
         if not args.packing_samples:
             print("[Warning] Please --packing_samples to accelerate when --use_dynamic_batch is enabled.")
             args.packing_samples = True
-        if args.rollout_max_tokens_per_gpu is None:
+        # Override rollout_max_tokens_per_gpu to train_max_tokens_per_gpu due to the convergence issue
+        if args.rollout_max_tokens_per_gpu is None or args.rollout_max_tokens_per_gpu != args.train_max_tokens_per_gpu:
             print("[Warning] Set --rollout_max_tokens_per_gpu to --train_max_tokens_per_gpu.")
             args.rollout_max_tokens_per_gpu = args.train_max_tokens_per_gpu
 
