@@ -72,6 +72,7 @@ class ActorPPOTrainer(ABC):
             clip_eps_low=self.args.eps_clip_low_high[0],
             clip_eps_high=self.args.eps_clip_low_high[1],
             dual_clip=self.args.dual_clip,
+            policy_loss_type=self.args.policy_loss_type,
         )
 
         # Mixtral 8x7b
