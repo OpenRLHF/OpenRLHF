@@ -450,13 +450,13 @@ class RemoteExperienceMaker(ABC):
                 self.args.actor_num_nodes
                 * self.args.actor_num_gpus_per_node
                 // self.args.ring_attn_size
-                // self.args.ds_tensor_parallel_size
+                // self.args.actor_tensor_parallel_size
             )
             minimum_batch_num = get_minimum_num_micro_batch_size(
                 total_lengths,
                 self.args.rollout_max_tokens_per_gpu,
                 self.args.ring_attn_size,
-                self.args.ds_tensor_parallel_size,
+                self.args.actor_tensor_parallel_size,
             )
             minimum_batch_num = minimum_batch_num // effective_actor_num * effective_actor_num
             num_batch = max(minimum_batch_num, effective_actor_num)
@@ -552,6 +552,12 @@ class RemoteExperienceMaker(ABC):
             ray.get(action_log_probs_ref)
             ray.get(self.actor_model_group.async_run_method(method_name="empty_cache"))
 
+        # Note: the results duplicated ring_attn_size * ds_tensor_parallel_size times
+        actor_duplicate_factor = args.ring_attn_size * args.actor_tensor_parallel_size
+        ref_duplicate_factor = args.ring_attn_size * args.ref_tensor_parallel_size
+        critic_duplicate_factor = args.ring_attn_size * args.critic_tensor_parallel_size
+        reward_duplicate_factor = args.ring_attn_size * args.reward_tensor_parallel_size
+
         # Batch call critic model
         if self.critic_model_group is not None:
             if args.colocate_critic_reward and not self.remote_rm_url:
@@ -568,7 +574,7 @@ class RemoteExperienceMaker(ABC):
                 ray.get(value_ref)
                 ray.get(self.critic_model_group.async_run_method(method_name="empty_cache"))
         else:
-            value_ref = ray.put([[None]] * (len(samples_list) * args.ring_attn_size * args.ds_tensor_parallel_size))
+            value_ref = ray.put([[None]] * (len(samples_list) * critic_duplicate_factor))
 
         # Batch call initial model
         if self.initial_model_group is not None:
@@ -583,17 +589,14 @@ class RemoteExperienceMaker(ABC):
                 ray.get(base_action_log_probs_ref)
                 ray.get(self.initial_model_group.async_run_method(method_name="empty_cache"))
         else:
-            base_action_log_probs_ref = ray.put(
-                [[None]] * (len(samples_list) * args.ring_attn_size * args.ds_tensor_parallel_size)
-            )
+            base_action_log_probs_ref = ray.put([[None]] * (len(samples_list) * ref_duplicate_factor))
 
         # Wait for all remote calls to complete and flatten the results
         # Note: the results duplicated ring_attn_size * ds_tensor_parallel_size times
         # This is because the actors in ring group and tp group will return the same output
-        duplicate_factor = args.ring_attn_size * args.ds_tensor_parallel_size
-        action_log_probs_list = sum(ray.get(action_log_probs_ref)[::duplicate_factor], [])
-        base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref)[::duplicate_factor], [])
-        value_list = sum(ray.get(value_ref)[::duplicate_factor], [])
+        action_log_probs_list = sum(ray.get(action_log_probs_ref)[::actor_duplicate_factor], [])
+        base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref)[::ref_duplicate_factor], [])
+        value_list = sum(ray.get(value_ref)[::critic_duplicate_factor], [])
 
         # Process rewards based on source
         if samples_list[0].rewards is not None:
@@ -605,7 +608,7 @@ class RemoteExperienceMaker(ABC):
             update_samples_with_rewards(rewards_info, samples_list)
         else:
             # Reward Model
-            rewards_list = sum(ray.get(r_refs)[::duplicate_factor], [])
+            rewards_list = sum(ray.get(r_refs)[::reward_duplicate_factor], [])
             for i, samples in enumerate(samples_list):
                 samples.rewards = rewards_list[i]
                 samples.info["reward"] = rewards_list[i]
