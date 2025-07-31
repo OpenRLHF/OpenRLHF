@@ -83,12 +83,18 @@ class PolicyLoss(nn.Module):
         clip_eps_high: float = 0.2,
         dual_clip: float = None,
         token_level_loss: bool = True,
+        policy_loss_type: str = "ppo",
     ) -> None:
         super().__init__()
         self.clip_eps_low = clip_eps_low
         self.clip_eps_high = clip_eps_high
         self.token_level_loss = token_level_loss
         self.dual_clip = dual_clip
+        self.policy_loss_type = policy_loss_type
+
+        # GSPO requires sequence-level loss
+        if policy_loss_type == "gspo":
+            self.token_level_loss = False
 
         # Dual-clip PPO: https://arxiv.org/pdf/1912.09729
         if dual_clip is not None:
@@ -101,7 +107,17 @@ class PolicyLoss(nn.Module):
         advantages: torch.Tensor,
         action_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        ratio = (log_probs - old_log_probs).exp()
+        log_ratio = log_probs - old_log_probs
+
+        if self.policy_loss_type == "ppo":
+            ratio = log_ratio.exp()
+        elif self.policy_loss_type == "gspo":
+            # GSPO: https://arxiv.org/pdf/2507.18071
+            ratio = (log_ratio * action_mask).sum(dim=-1) / action_mask.sum(dim=-1)
+            ratio = ratio.exp().unsqueeze(-1) * action_mask
+        else:
+            raise ValueError(f"Invalid policy loss type: {self.policy_loss_type}")
+
         surr1 = ratio * advantages
         surr2 = ratio.clamp(1 - self.clip_eps_low, 1 + self.clip_eps_high) * advantages
 
@@ -122,7 +138,8 @@ class PolicyLoss(nn.Module):
             else masked_mean(loss, action_mask, dim=-1).mean()
         )
         clip_ratio = masked_mean(torch.lt(surr2, surr1).float(), action_mask, dim=None)
-        return loss, clip_ratio
+        ppo_kl = masked_mean(-log_ratio.detach(), action_mask, dim=None)
+        return loss, clip_ratio, ppo_kl
 
 
 class ValueLoss(nn.Module):
