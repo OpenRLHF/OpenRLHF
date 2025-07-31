@@ -92,6 +92,10 @@ class PolicyLoss(nn.Module):
         self.dual_clip = dual_clip
         self.policy_loss_type = policy_loss_type
 
+        # GSPO requires sequence-level loss
+        if policy_loss_type == "gspo":
+            self.token_level_loss = False
+
         # Dual-clip PPO: https://arxiv.org/pdf/1912.09729
         if dual_clip is not None:
             assert dual_clip > 1.0, f"dual_clip must be > 1.0, got {dual_clip}"
