@@ -213,6 +213,9 @@ if __name__ == "__main__":
         default="prm_%s" % datetime.now().strftime("%m%dT%H:%M"),
     )
 
+    # TensorBoard parameters
+    parser.add_argument("--use_tensorboard", type=str, default=None, help="TensorBoard logging path")
+
     # ModelScope parameters
     parser.add_argument("--use_ms", action="store_true", default=False)
 
