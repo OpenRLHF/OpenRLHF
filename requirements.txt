@@ -1,7 +1,7 @@
 accelerate
 bitsandbytes
 datasets
-deepspeed==0.17.3
+deepspeed==0.17.4
 einops
 flash-attn==2.8.2
 grpcio>=1.74.0
