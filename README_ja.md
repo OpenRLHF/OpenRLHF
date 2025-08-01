@@ -320,7 +320,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 > [!NOTE]
 > OpenRLHFのRLOOとREINFORCE++-baselineはREINFORCE++に基づく修正版です：
 > - REINFORCE++は、PPOの主要な最適化技術（アドバンテージ正規化やPPO-clipロスなど）を統合し、criticネットワークの必要性を排除します。
-> - REINFORCE++-baselineは、`同じプロンプトから生成された複数のサンプルの平均報酬`をベースラインとして報酬を再形成します（グローバルバッチ正規化 `/std` を使用）。
+> - REINFORCE++-baselineは、`同じプロンプトから生成された複数のサンプルの平均報酬` RLVR設定では、報酬関数は0/1または-1/1に対して敏感ではないため、REINFORCE++でグローバルアドバンテージ正規化を適用します。
 > - OpenRLHFのRLOOは、`トークンごとのKL報酬`を導入し、`PPO-clipロス`を使用することで元のバージョンを修正しています。
 > - Dr. GRPOは、GRPOのグループ正規化 `/std` を削除します。
 
