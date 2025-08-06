@@ -63,6 +63,11 @@ class AgentExecutorBase(ABC):
             total_reward = 0
             final_scores = 0
 
+            if sampling_params.logprobs is not None:
+                rollout_log_probs = [0.0] * len(current_obs_tokens)
+            else:
+                rollout_log_probs = None
+
             # Execute multiple steps of interaction
             for step_idx in range(self.max_steps):
                 # Next sampling budget
@@ -106,6 +111,14 @@ class AgentExecutorBase(ABC):
                     ][0].tolist()
                 )
 
+                # Calculate rollout log probs
+                if sampling_params.logprobs is not None:
+                    # action tokens logprobs
+                    for i, logprob in enumerate(request_output.outputs[0].logprobs):
+                        rollout_log_probs.append(logprob[action_tokens[i]].logprob)
+                    # dummy logprobs for the env feedback tokens
+                    rollout_log_probs.extend([0.0] * (len(current_obs_tokens) - len(rollout_log_probs)))
+
                 # Get sampling params from the environment step
                 if step_result.get("sampling_params", None):
                     sampling_params = step_result["sampling_params"]
@@ -124,5 +137,6 @@ class AgentExecutorBase(ABC):
                 "scores": final_scores,
                 "extra_logs": extra_logs,
                 "action_ranges": action_ranges,
+                "rollout_log_probs": rollout_log_probs,
             }
             await self.result_queue.put(final_response)

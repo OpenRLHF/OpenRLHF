@@ -84,6 +84,7 @@ class PolicyLoss(nn.Module):
         dual_clip: float = None,
         token_level_loss: bool = True,
         policy_loss_type: str = "ppo",
+        vllm_is_correction_threshold: float = None,
     ) -> None:
         super().__init__()
         self.clip_eps_low = clip_eps_low
@@ -91,6 +92,7 @@ class PolicyLoss(nn.Module):
         self.token_level_loss = token_level_loss
         self.dual_clip = dual_clip
         self.policy_loss_type = policy_loss_type
+        self.vllm_is_correction_threshold = vllm_is_correction_threshold
 
         # GSPO requires sequence-level loss
         if policy_loss_type == "gspo":
@@ -106,6 +108,7 @@ class PolicyLoss(nn.Module):
         old_log_probs: torch.Tensor,
         advantages: torch.Tensor,
         action_mask: Optional[torch.Tensor] = None,
+        rollout_log_probs: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         log_ratio = log_probs - old_log_probs
 
@@ -131,6 +134,11 @@ class PolicyLoss(nn.Module):
             clip2 = torch.max(clip1, self.dual_clip * advantages)
             # Apply dual-clip: use clip2 for negative advantages, clip1 for positive advantages
             loss = -torch.where(advantages < 0, clip2, clip1)
+
+        # Your Efficient RL Framework Secretly Brings You Off-Policy RL Training: https://fengyao.notion.site/off-policy-rl
+        if self.vllm_is_correction_threshold is not None:
+            vllm_is = torch.exp(log_probs.detach() - rollout_log_probs).clamp(max=self.vllm_is_correction_threshold)
+            loss = vllm_is * loss
 
         loss = (
             masked_mean(loss, action_mask, dim=None)
