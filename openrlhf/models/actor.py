@@ -1,5 +1,6 @@
 from typing import Optional
 
+import deepspeed
 import torch
 import torch.distributed as dist
 import torch.nn as nn
@@ -120,6 +121,11 @@ class Actor(nn.Module):
             if "output_router_logits" in model_config:
                 print("[MoE] set output_router_logits as True")
                 self.model.config.output_router_logits = True
+
+            if self.model.config.model_type == "qwen3_moe":
+                from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
+
+                deepspeed.utils.set_z3_leaf_modules(self.model, [Qwen3MoeSparseMoeBlock])
 
             # https://github.com/huggingface/transformers/issues/26877
             # Use `model.generate(use_cache=True)` instead.`
