@@ -122,10 +122,13 @@ class Actor(nn.Module):
                 print("[MoE] set output_router_logits as True")
                 self.model.config.output_router_logits = True
 
-            if self.model.config.model_type == "qwen3_moe":
-                from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
-
-                deepspeed.utils.set_z3_leaf_modules(self.model, [Qwen3MoeSparseMoeBlock])
+                # set_z3_leaf_modules is required for MoE models
+                for m in self.model.modules():
+                    # https://github.com/microsoft/DeepSpeed/pull/4966
+                    if "SparseMoeBlock" in m.__class__.__name__:
+                        deepspeed.utils.set_z3_leaf_modules(self.model, [m.__class__])
+                        print(f"Setting zero3 leaf for model on class with name: {m.__class__.__name__}")
+                        break
 
             # https://github.com/huggingface/transformers/issues/26877
             # Use `model.generate(use_cache=True)` instead.`
