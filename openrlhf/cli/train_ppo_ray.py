@@ -70,6 +70,7 @@ def train(args):
             args.vllm_gpu_memory_utilization,
             args.vllm_enable_sleep,
             LLMRayActor,
+            "processed_logprobs" if args.enable_vllm_is_correction else None,
             args.agent_func_path,
         )
 
@@ -245,6 +246,9 @@ if __name__ == "__main__":
         default=0.95,
         help="vLLM gpu_memory_utilization",
     )
+    # Your Efficient RL Framework Secretly Brings You Off-Policy RL Training: https://fengyao.notion.site/off-policy-rl
+    parser.add_argument("--enable_vllm_is_correction", action="store_true", default=False)
+    parser.add_argument("--vllm_is_truncated_threshold", type=float, default=2)
 
     # Async training using ray
     parser.add_argument("--async_train", action="store_true", default=False, help="Enable async training")

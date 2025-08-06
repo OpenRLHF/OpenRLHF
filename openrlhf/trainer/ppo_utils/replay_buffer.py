@@ -31,6 +31,7 @@ class BufferItem:
     sequences: torch.Tensor
     action_log_probs: torch.Tensor
     base_action_log_probs: torch.Tensor
+    rollout_log_probs: torch.Tensor
     values: torch.Tensor
     returns: torch.Tensor
     advantages: torch.Tensor
@@ -120,16 +121,8 @@ def remove_padding_in_sequences(items):
         right_pad = None if right_pad == 0 else -right_pad
 
         # Remove right padding for all tensors
-        for key in [
-            "sequences",
-            "action_log_probs",
-            "base_action_log_probs",
-            "values",
-            "returns",
-            "advantages",
-            "attention_mask",
-            "action_mask",
-        ]:
+        keys = tuple(field.name for field in fields(BufferItem) if field.name != "info")
+        for key in keys:
             value = getattr(item, key)
             if value is not None:
                 setattr(item, key, value[:right_pad])

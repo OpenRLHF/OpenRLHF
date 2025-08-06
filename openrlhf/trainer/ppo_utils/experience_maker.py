@@ -54,6 +54,7 @@ class Experience:
 
     action_log_probs: torch.Tensor = None
     base_action_log_probs: torch.Tensor = None
+    rollout_log_probs: torch.Tensor = None
     values: torch.Tensor = None
     returns: torch.Tensor = None
     advantages: torch.Tensor = None
@@ -74,6 +75,7 @@ class Experience:
         sequences=None,
         action_log_probs=None,
         base_action_log_probs=None,
+        rollout_log_probs=None,
         values=None,
         returns=None,
         advantages=None,
@@ -90,6 +92,7 @@ class Experience:
         self.sequences = sequences
         self.action_log_probs = action_log_probs
         self.base_action_log_probs = base_action_log_probs
+        self.rollout_log_probs = rollout_log_probs
         self.values = values
         self.returns = returns
         self.advantages = advantages
@@ -317,6 +320,7 @@ class SamplesGenerator:
             min_tokens=kwargs.get("min_new_tokens", 1),
             skip_special_tokens=kwargs.get("skip_special_tokens", False),
             include_stop_str_in_output=True,
+            logprobs=1 if self.strategy.args.enable_vllm_is_correction else None,
         )
         max_response_length = kwargs.get("max_new_tokens", 1024)
         truncate_length = self.prompt_max_len + max_response_length
@@ -341,8 +345,6 @@ class SamplesGenerator:
             all_output_refs.append(llm.get_responses.remote())
         all_outputs = sum(ray.get(all_output_refs), [])
 
-        pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
-
         # Process outputs into Experience objects
         samples_list = []
         for i in range(len(all_outputs)):
@@ -352,8 +354,6 @@ class SamplesGenerator:
 
             # Concatenate prompt and output tokens
             input_ids = list(output.prompt_token_ids) + list(output.outputs[0].token_ids)
-            if output.outputs[0].token_ids[-1] != eos_token_id:
-                input_ids.append(eos_token_id)
             attention_mask = [1] * len(input_ids)
 
             sequences = torch.tensor(input_ids)
@@ -361,8 +361,19 @@ class SamplesGenerator:
 
             # Create action mask based on output token positions
             action_mask = torch.zeros_like(attention_mask)
-            response_length = len(output.outputs[0].token_ids) + int(output.outputs[0].token_ids[-1] != eos_token_id)
+            response_length = len(output.outputs[0].token_ids)
             action_mask[len(output.prompt_token_ids) : len(output.prompt_token_ids) + response_length] = 1
+
+            # Calculate rollout log probs
+            rollout_log_probs = None
+            if self.strategy.args.enable_vllm_is_correction:
+                rollout_log_probs = []
+                response_ids = list(output.outputs[0].token_ids)
+                for i, logprob in enumerate(output.outputs[0].logprobs):
+                    rollout_log_probs.append(logprob[response_ids[i]].logprob)
+
+                rollout_log_probs = torch.tensor([0.0] * len(list(output.prompt_token_ids)) + rollout_log_probs)
+                rollout_log_probs = rollout_log_probs[1:truncate_length].to("cpu")
 
             sequences = sequences[:truncate_length].to("cpu")
             attention_mask = attention_mask[:truncate_length].to("cpu")
@@ -380,6 +391,7 @@ class SamplesGenerator:
                 sequences=sequences.unsqueeze(0),
                 attention_mask=attention_mask.unsqueeze(0),
                 action_mask=action_mask.unsqueeze(0),
+                rollout_log_probs=rollout_log_probs.unsqueeze(0) if rollout_log_probs is not None else None,
                 prompts=[prompt],
                 labels=[label],
                 info=info,

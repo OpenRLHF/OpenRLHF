@@ -73,6 +73,9 @@ class ActorPPOTrainer(ABC):
             clip_eps_high=self.args.eps_clip_low_high[1],
             dual_clip=self.args.dual_clip,
             policy_loss_type=self.args.policy_loss_type,
+            vllm_is_truncated_threshold=(
+                self.args.vllm_is_truncated_threshold if self.args.enable_vllm_is_correction else None
+            ),
         )
 
         # Mixtral 8x7b
@@ -233,14 +236,17 @@ class ActorPPOTrainer(ABC):
         )
 
         # loss function
-        actor_loss, clip_ratio, ppo_kl = self.actor_loss_fn(
+        actor_loss, clip_ratio, ppo_kl, vllm_kl = self.actor_loss_fn(
             action_log_probs,
             old_action_log_probs,
             advantages,
             action_mask=experience.action_mask,
+            rollout_log_probs=experience.rollout_log_probs,
         )
         experience.info["ppo_clip_ratio"] = clip_ratio.detach()
         experience.info["ppo_kl"] = ppo_kl.detach()
+        if vllm_kl is not None:
+            experience.info["vllm_kl"] = vllm_kl.detach()
 
         if self.args.use_kl_loss:
             if self.args.init_kl_coef > 0:

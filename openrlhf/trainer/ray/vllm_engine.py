@@ -122,6 +122,7 @@ def create_vllm_engines(
     gpu_memory_utilization=None,
     vllm_enable_sleep=False,
     llm_actor_cls=LLMRayActor,
+    logprobs_mode=None,
     agent_func_path=None,
 ):
     import vllm
@@ -155,6 +156,14 @@ def create_vllm_engines(
             placement_group_bundle_index=bundle_indices[0] if bundle_indices else i,
         )
 
+        additional_kwargs = {}
+        if logprobs_mode:
+            additional_kwargs["logprobs_mode"] = logprobs_mode
+            additional_kwargs["max_logprobs"] = 1
+            assert version.parse(vllm.__version__) > version.parse(
+                "0.10.0"
+            ), "vLLM > 0.10.0 is required for logprobs_mode"
+
         vllm_engines.append(
             llm_actor_cls.options(
                 num_cpus=num_gpus,
@@ -177,6 +186,7 @@ def create_vllm_engines(
                 num_gpus=0.2 if use_hybrid_engine else 1,
                 enable_sleep_mode=vllm_enable_sleep,
                 agent_func_path=agent_func_path,
+                **additional_kwargs,
             )
         )
 

@@ -84,6 +84,7 @@ class PolicyLoss(nn.Module):
         dual_clip: float = None,
         token_level_loss: bool = True,
         policy_loss_type: str = "ppo",
+        vllm_is_truncated_threshold: float = None,
     ) -> None:
         super().__init__()
         self.clip_eps_low = clip_eps_low
@@ -91,6 +92,7 @@ class PolicyLoss(nn.Module):
         self.token_level_loss = token_level_loss
         self.dual_clip = dual_clip
         self.policy_loss_type = policy_loss_type
+        self.vllm_is_truncated_threshold = vllm_is_truncated_threshold
 
         # GSPO requires sequence-level loss
         if policy_loss_type == "gspo":
@@ -106,6 +108,7 @@ class PolicyLoss(nn.Module):
         old_log_probs: torch.Tensor,
         advantages: torch.Tensor,
         action_mask: Optional[torch.Tensor] = None,
+        rollout_log_probs: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         log_ratio = log_probs - old_log_probs
 
@@ -132,6 +135,13 @@ class PolicyLoss(nn.Module):
             # Apply dual-clip: use clip2 for negative advantages, clip1 for positive advantages
             loss = -torch.where(advantages < 0, clip2, clip1)
 
+        # Your Efficient RL Framework Secretly Brings You Off-Policy RL Training: https://fengyao.notion.site/off-policy-rl
+        vllm_kl = None
+        if self.vllm_is_truncated_threshold is not None:
+            vllm_is = torch.exp(old_log_probs - rollout_log_probs).clamp(max=self.vllm_is_truncated_threshold).detach()
+            loss = vllm_is * loss
+            vllm_kl = masked_mean(rollout_log_probs - old_log_probs, action_mask, dim=None)
+
         loss = (
             masked_mean(loss, action_mask, dim=None)
             if self.token_level_loss
@@ -139,7 +149,7 @@ class PolicyLoss(nn.Module):
         )
         clip_ratio = masked_mean(torch.lt(surr2, surr1).float(), action_mask, dim=None)
         ppo_kl = masked_mean(-log_ratio.detach(), action_mask, dim=None)
-        return loss, clip_ratio, ppo_kl
+        return loss, clip_ratio, ppo_kl, vllm_kl
 
 
 class ValueLoss(nn.Module):

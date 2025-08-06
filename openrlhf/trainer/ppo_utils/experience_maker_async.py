@@ -23,6 +23,7 @@ class SamplesGeneratorAsync(SamplesGenerator):
             max_tokens=kwargs.get("max_new_tokens", 1024),
             min_tokens=kwargs.get("min_new_tokens", 1),
             skip_special_tokens=kwargs.get("skip_special_tokens", False),
+            logprobs=1 if args.enable_vllm_is_correction else None,
         )
         truncate_length = self.prompt_max_len + kwargs.get("max_new_tokens", 1024)
 
@@ -66,21 +67,15 @@ class SamplesGeneratorAsync(SamplesGenerator):
         for prompt in prompt_groups.keys():
             all_outputs.extend(prompt_groups[prompt])
 
-        pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
-
         # Process outputs one by one
         experiences_list = []
         for output in all_outputs:
             # Get observation tokens directly (already tokenized)
             observation_tokens = output["observation_tokens"]
             tokenized_observation = observation_tokens.copy()
-            if tokenized_observation[-1] != eos_token_id:
-                tokenized_observation.append(eos_token_id)
 
             # Action ranges are already in token space
             tokenized_ranges = output["action_ranges"]
-            if observation_tokens[-1] != eos_token_id:
-                tokenized_ranges[-1] = (tokenized_ranges[-1][0], tokenized_ranges[-1][1] + 1)
 
             # Create tensors
             sequences = torch.tensor(tokenized_observation)
@@ -96,6 +91,10 @@ class SamplesGeneratorAsync(SamplesGenerator):
             sequences = sequences[:truncate_length].to("cpu")
             attention_mask = attention_mask[:truncate_length].to("cpu")
             action_mask = action_mask[1:truncate_length].to("cpu")
+            if output["rollout_log_probs"] is not None:
+                rollout_log_probs = torch.tensor(output["rollout_log_probs"][1:truncate_length]).to("cpu")
+            else:
+                rollout_log_probs = None
 
             # Calculate response length (distance between first and last 1)
             ones_indices = torch.where(action_mask)[0]
@@ -120,6 +119,7 @@ class SamplesGeneratorAsync(SamplesGenerator):
                 sequences=sequences.unsqueeze(0),
                 attention_mask=attention_mask.unsqueeze(0),
                 action_mask=action_mask.unsqueeze(0),
+                rollout_log_probs=rollout_log_probs.unsqueeze(0) if rollout_log_probs is not None else None,
                 prompts=[output["prompt"]],
                 labels=[output["label"]],
                 rewards=torch.tensor([output["reward"]]),
