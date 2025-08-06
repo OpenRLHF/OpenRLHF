@@ -92,7 +92,7 @@ class SamplesGeneratorAsync(SamplesGenerator):
             attention_mask = attention_mask[:truncate_length].to("cpu")
             action_mask = action_mask[1:truncate_length].to("cpu")
             if output["rollout_log_probs"]:
-                rollout_log_probs = output["rollout_log_probs"][1:truncate_length].to("cpu")
+                rollout_log_probs = torch.tensor(output["rollout_log_probs"][1:truncate_length]).to("cpu")
             else:
                 rollout_log_probs = None
 
