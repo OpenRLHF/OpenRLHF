@@ -119,7 +119,7 @@ class SamplesGeneratorAsync(SamplesGenerator):
                 sequences=sequences.unsqueeze(0),
                 attention_mask=attention_mask.unsqueeze(0),
                 action_mask=action_mask.unsqueeze(0),
-                rollout_log_probs=rollout_log_probs.unsqueeze(0) if rollout_log_probs else None,
+                rollout_log_probs=rollout_log_probs.unsqueeze(0) if rollout_log_probs is not None else None,
                 prompts=[output["prompt"]],
                 labels=[output["label"]],
                 rewards=torch.tensor([output["reward"]]),

@@ -365,8 +365,9 @@ class SamplesGenerator:
             action_mask[len(output.prompt_token_ids) : len(output.prompt_token_ids) + response_length] = 1
 
             # Calculate rollout log probs
-            rollout_log_probs = []
+            rollout_log_probs = None
             if self.strategy.args.enable_vllm_is_correction:
+                rollout_log_probs = []
                 response_ids = list(output.outputs[0].token_ids)
                 for i, logprob in enumerate(output.outputs[0].logprobs):
                     rollout_log_probs.append(logprob[response_ids[i]].logprob)
@@ -390,7 +391,7 @@ class SamplesGenerator:
                 sequences=sequences.unsqueeze(0),
                 attention_mask=attention_mask.unsqueeze(0),
                 action_mask=action_mask.unsqueeze(0),
-                rollout_log_probs=rollout_log_probs.unsqueeze(0) if rollout_log_probs else None,
+                rollout_log_probs=rollout_log_probs.unsqueeze(0) if rollout_log_probs is not None else None,
                 prompts=[prompt],
                 labels=[label],
                 info=info,
