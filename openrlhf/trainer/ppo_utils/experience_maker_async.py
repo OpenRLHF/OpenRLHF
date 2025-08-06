@@ -91,7 +91,7 @@ class SamplesGeneratorAsync(SamplesGenerator):
             sequences = sequences[:truncate_length].to("cpu")
             attention_mask = attention_mask[:truncate_length].to("cpu")
             action_mask = action_mask[1:truncate_length].to("cpu")
-            if output["rollout_log_probs"]:
+            if output["rollout_log_probs"] is not None:
                 rollout_log_probs = torch.tensor(output["rollout_log_probs"][1:truncate_length]).to("cpu")
             else:
                 rollout_log_probs = None
