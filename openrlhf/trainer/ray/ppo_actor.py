@@ -19,7 +19,7 @@ from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
-from openrlhf.utils.distributed_util import init_process_group, torch_dist_barrier_and_cuda_sync
+from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.logging_utils import init_logger
 
 from ..ppo_utils import NaiveReplayBuffer
@@ -140,12 +140,8 @@ class ActorPPOTrainer(ABC):
                 collective.init_collective_group(world_size=world_size, rank=0, backend=backend, group_name=group_name)
                 self._model_update_group = group_name
             else:
-                self._model_update_group = init_process_group(
-                    backend=backend,
-                    init_method=f"tcp://{master_address}:{master_port}",
-                    world_size=world_size,
-                    rank=0,
-                    group_name=group_name,
+                self._model_update_group = stateless_init_process_group(
+                    master_address, master_port, 0, world_size, torch.cuda.current_device()
                 )
 
             ray.get(refs)
@@ -329,7 +325,7 @@ class ActorPPOTrainer(ABC):
 
                     collective.broadcast(param.data, 0, group_name=self._model_update_group)
                 else:
-                    torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
+                    self._model_update_group.broadcast(param.data, src=0, stream=torch.cuda.current_stream())
                 ray.get(refs)
 
         def _handle_cuda_ipc(param, count, num_params):
