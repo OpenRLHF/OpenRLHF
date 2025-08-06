@@ -13,8 +13,8 @@ def compute_approx_kl(
     backward_score = 0.5 * (logprob - log_probs_base).square()
 
     return backward_score - backward_score.detach() + forward_score.detach()
-    
-    
+
+
 def compute_approx_kl_forward(
     log_probs: torch.Tensor,
     log_probs_base: torch.Tensor,
