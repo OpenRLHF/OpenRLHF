@@ -9,7 +9,7 @@ def compute_approx_kl(
     log_probs_base: torch.Tensor,
     kl_estimator: str = "k1",
 ) -> torch.Tensor:
-    
+
     forward_score = compute_approx_kl_forward(log_probs, log_probs_base, kl_estimator)
     backward_score = 0.5 * (log_probs - log_probs_base).square()
 
