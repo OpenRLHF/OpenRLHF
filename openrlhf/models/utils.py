@@ -9,6 +9,18 @@ def compute_approx_kl(
     log_probs_base: torch.Tensor,
     kl_estimator: str = "k1",
 ) -> torch.Tensor:
+
+    forward_score = compute_approx_kl_forward(log_probs, log_probs_base, kl_estimator)
+    backward_score = 0.5 * (log_probs - log_probs_base).square()
+
+    return backward_score - (backward_score + forward_score).detach()
+
+
+def compute_approx_kl_forward(
+    log_probs: torch.Tensor,
+    log_probs_base: torch.Tensor,
+    kl_estimator: str = "k1",
+) -> torch.Tensor:
     """
     Compute the approximate KL divergence between two distributions.
     Schulman blog: http://joschu.net/blog/kl-approx.html
