@@ -84,6 +84,7 @@ class PolicyLoss(nn.Module):
         dual_clip: float = None,
         token_level_loss: bool = True,
         policy_loss_type: str = "ppo",
+        enable_vllm_is_correction: bool = False,
         vllm_is_truncated_threshold: float = None,
     ) -> None:
         super().__init__()
@@ -92,6 +93,7 @@ class PolicyLoss(nn.Module):
         self.token_level_loss = token_level_loss
         self.dual_clip = dual_clip
         self.policy_loss_type = policy_loss_type
+        self.enable_vllm_is_correction = enable_vllm_is_correction
         self.vllm_is_truncated_threshold = vllm_is_truncated_threshold
 
         # GSPO requires sequence-level loss
@@ -110,12 +112,15 @@ class PolicyLoss(nn.Module):
         action_mask: Optional[torch.Tensor] = None,
         rollout_log_probs: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        log_ratio = log_probs - old_log_probs
-
         if self.policy_loss_type == "ppo":
+            log_ratio = log_probs - old_log_probs
             ratio = log_ratio.exp()
         elif self.policy_loss_type == "gspo":
             # GSPO: https://arxiv.org/pdf/2507.18071
+            if self.enable_vllm_is_correction:
+                log_ratio = log_probs - rollout_log_probs
+            else:
+                log_ratio = log_probs - old_log_probs
             ratio = (log_ratio * action_mask).sum(dim=-1) / action_mask.sum(dim=-1)
             ratio = ratio.exp().unsqueeze(-1) * action_mask
         else:
@@ -137,7 +142,7 @@ class PolicyLoss(nn.Module):
 
         # Your Efficient RL Framework Secretly Brings You Off-Policy RL Training: https://fengyao.notion.site/off-policy-rl
         vllm_kl = None
-        if self.vllm_is_truncated_threshold is not None:
+        if self.enable_vllm_is_correction and self.policy_loss_type == "ppo":
             vllm_is = torch.exp(old_log_probs - rollout_log_probs).clamp(max=self.vllm_is_truncated_threshold).detach()
             loss = vllm_is * loss
             vllm_kl = masked_mean(rollout_log_probs - old_log_probs, action_mask, dim=None)

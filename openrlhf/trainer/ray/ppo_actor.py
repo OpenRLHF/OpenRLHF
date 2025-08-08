@@ -73,6 +73,7 @@ class ActorPPOTrainer(ABC):
             clip_eps_high=self.args.eps_clip_low_high[1],
             dual_clip=self.args.dual_clip,
             policy_loss_type=self.args.policy_loss_type,
+            enable_vllm_is_correction=self.args.enable_vllm_is_correction,
             vllm_is_truncated_threshold=(
                 self.args.vllm_is_truncated_threshold if self.args.enable_vllm_is_correction else None
             ),
