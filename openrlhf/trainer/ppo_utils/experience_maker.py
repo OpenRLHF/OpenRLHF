@@ -209,27 +209,29 @@ def update_samples_with_rewards(rewards_info, samples_list):
     """Process rewards info and update samples with rewards, scores and extra logs.
 
     Args:
-        rewards_info: List of reward information dictionaries
+        rewards_info: List of reward information dictionaries (from HTTP JSON)
         samples_list: List of Experience objects to update
     """
     # Process rewards and scores
     samples_len = [len(sample.sequences) for sample in samples_list]
 
-    rewards_list = torch.cat([info["rewards"] for info in rewards_info], dim=0).split(samples_len)
+    # Convert list data to tensors and concatenate
+    all_rewards = [torch.tensor(info["rewards"]) for info in rewards_info]
+    rewards_list = torch.cat(all_rewards, dim=0).split(samples_len)
+
     if "scores" in rewards_info[0]:
-        scores_list = torch.cat([info["scores"] for info in rewards_info], dim=0).split(samples_len)
+        all_scores = [torch.tensor(info["scores"]) for info in rewards_info]
+        scores_list = torch.cat(all_scores, dim=0).split(samples_len)
     else:
         scores_list = rewards_list
 
     # Process extra_logs if present
+    merged_logs = {}
     if "extra_logs" in rewards_info[0]:
-        # Merge all extra_logs tensors first
-        merged_logs = {
-            key: torch.cat([logs[key] for logs in [info["extra_logs"] for info in rewards_info]], dim=0).split(
-                samples_len
-            )
-            for key in rewards_info[0]["extra_logs"].keys()
-        }
+        # Convert all extra_logs data to tensors and merge
+        for key in rewards_info[0]["extra_logs"].keys():
+            all_values = [torch.tensor(info["extra_logs"][key]) for info in rewards_info]
+            merged_logs[key] = torch.cat(all_values, dim=0).split(samples_len)
 
     # Update samples with rewards, scores and extra logs
     for i, samples in enumerate(samples_list):
