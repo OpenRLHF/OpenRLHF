@@ -158,6 +158,7 @@ def train(args):
         max_length=args.max_len,
         temperature=args.temperature,
         top_p=args.top_p,
+        top_k=args.top_k
     )
     # training update steps
     max_steps = ray.get(ppo_trainer.get_max_steps.remote())
@@ -335,6 +336,7 @@ if __name__ == "__main__":
     parser.add_argument("--normalize_reward", action="store_true", default=False, help="Enable Reward Normazation")
     parser.add_argument("--top_p", type=float, default=1.0)
     parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--top_k", type=int, default=-1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--full_determinism",
