@@ -158,7 +158,7 @@ def train(args):
         max_length=args.max_len,
         temperature=args.temperature,
         top_p=args.top_p,
-        top_k=args.top_k
+        top_k=args.top_k,
     )
     # training update steps
     max_steps = ray.get(ppo_trainer.get_max_steps.remote())
