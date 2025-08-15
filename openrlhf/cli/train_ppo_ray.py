@@ -514,13 +514,13 @@ if __name__ == "__main__":
             print("[Warning] Set --rollout_max_tokens_per_gpu to --train_max_tokens_per_gpu.")
             args.rollout_max_tokens_per_gpu = args.train_max_tokens_per_gpu
 
-        if args.packing_samples:
-            if "flash_attention" not in args.attn_implementation:
-                print(
-                    "[Warning] Please use --attn_implementation with flash_attention to accelerate when --packing_samples is enabled."
-                )
-                args.attn_implementation = "flash_attention_2"
-            assert args.vllm_num_engines > 0, "Only support `--packing_samples` with vLLM."
+    if args.packing_samples:
+        if "flash_attention" not in args.attn_implementation:
+            print(
+                "[Warning] Please use --attn_implementation with flash_attention to accelerate when --packing_samples is enabled."
+            )
+            args.attn_implementation = "flash_attention_2"
+        assert args.vllm_num_engines > 0, "Only support `--packing_samples` with vLLM."
 
     if args.vllm_enable_sleep and not args.colocate_all_models:
         print("Set args.vllm_enable_sleep to False when args.colocate_all_models is disabled.")

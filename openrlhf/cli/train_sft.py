@@ -274,14 +274,14 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
+    if args.ring_attn_size > 1:
+        assert args.packing_samples, "packing_samples must be enabled when using ring attention"
+
     if args.packing_samples and "flash_attention" not in args.attn_implementation:
         print(
             "[Warning] Please use --attn_implementation with flash_attention to accelerate when --packing_samples is enabled."
         )
         args.attn_implementation = "flash_attention_2"
-
-    if args.ring_attn_size > 1:
-        assert args.packing_samples, "packing_samples must be enabled when using ring attention"
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub
