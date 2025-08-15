@@ -404,7 +404,7 @@ class PolicyModelActor(BaseModelActor):
 
         actor = Actor(
             pretrain,
-            use_flash_attention_2=strategy.args.flash_attn,
+            attn_implementation=strategy.args.attn_implementation,
             bf16=strategy.args.bf16,
             load_in_4bit=strategy.args.load_in_4bit,
             lora_rank=strategy.args.lora_rank,
@@ -426,7 +426,7 @@ class PolicyModelActor(BaseModelActor):
         if args.enable_ema:
             ema_model = Actor(
                 pretrain,
-                use_flash_attention_2=strategy.args.flash_attn,
+                attn_implementation=strategy.args.attn_implementation,
                 bf16=strategy.args.bf16,
                 load_in_4bit=strategy.args.load_in_4bit,
                 ds_config=strategy.get_ds_eval_config(offload=True),

@@ -24,7 +24,7 @@ openrlhf.cli.train_dpo \
    --ring_attn_size 2 \
    --ring_head_stride 2 \
    --packing_samples \
-   --flash_attn \
+   --attn_implementation flash_attention_2 \
    --load_checkpoint \
    --gradient_checkpointing
 EOF

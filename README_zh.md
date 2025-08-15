@@ -81,7 +81,7 @@ OpenRLHF 是第一个基于 Ray、vLLM、ZeRO-3 和 HuggingFace Transformers 构
 - 支持 SFT、DPO、RM、PRM 和 PPO 的训练样本打包（`--packing_samples`）。  
 - 实现 [RingAttention](./examples/scripts/train_dpo_ring_llama.sh)（`--ring_attn_size`，`--ring_head_stride`）。  
 - 支持 [专家混合模型（MoE）](./examples/test_scripts/train_sft_mixtral_lora.sh)（`--aux_loss_coef`）。  
-- 集成 FlashAttention2（`--flash_attn`）。  
+- 集成 FlashAttention2（`--attn_implementation`）。  
 - 支持 QLoRA（`--load_in_4bit`）和 [LoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--lora_rank`，`--target_modules`）。  
 - 兼容 HuggingFace 的 `tokenizer.apply_chat_template` 数据集格式（`--apply_chat_template` 和 `--input_key`）。  
 - 支持使用 Wandb（`--use_wandb`）和 TensorBoard（`--use_tensorboard`）进行日志记录。  
@@ -191,7 +191,6 @@ deepspeed --module openrlhf.cli.train_sft \
    --zero_stage 2 \
    --max_epochs 1 \
    --bf16 \
-   --flash_attn \
    --learning_rate 5e-6 \
    --gradient_checkpointing \
    --packing_samples \
@@ -212,7 +211,7 @@ deepspeed --module openrlhf.cli.train_sft \
 ```
 
 > [!NOTE]
-> OpenRLHF SFT/DPO/RewardModel/PPO 训练支持 `--packing_samples` [基于 `--flash_attn`](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
+> OpenRLHF SFT/DPO/RewardModel/PPO 训练支持 `--packing_samples` [基于 `flash attention`](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
 
 ### Reward Model Training
 ```bash
@@ -233,7 +232,6 @@ deepspeed --module openrlhf.cli.train_rm \
    --apply_chat_template \
    --chosen_key chosen \
    --rejected_key rejected \
-   --flash_attn \
    --packing_samples \
    --gradient_checkpointing \
    --load_checkpoint \

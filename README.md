@@ -76,7 +76,7 @@ More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csof
 - Integration of [Process Reward Model (PRM)](./examples/scripts/train_prm_mistral.sh).  
 - Packing of training samples for SFT, DPO, RM, PRM, and PPO (`--packing_samples`).  
 - Support for [Mixture of Experts (MoE)](./examples/test_scripts/train_sft_mixtral_lora.sh) (`--aux_loss_coef`).  
-- Integration of FlashAttention2 (`--flash_attn`).  
+- Integration of FlashAttention (`--attn_implementation`).  
 - Support for QLoRA (`--load_in_4bit`) and [LoRA](./examples/scripts/train_sft_mixtral_lora.sh) (`--lora_rank`, `--target_modules`).  
 - Compatibility with HuggingFace's `tokenizer.apply_chat_template` for datasets (`--apply_chat_template` and `--input_key`).  
 - Logging support with Wandb (`--use_wandb`) and TensorBoard (`--use_tensorboard`).  
@@ -186,7 +186,6 @@ deepspeed --module openrlhf.cli.train_sft \
    --max_epochs 1 \
    --packing_samples \
    --bf16 \
-   --flash_attn \
    --learning_rate 5e-6 \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
@@ -208,7 +207,7 @@ deepspeed --module openrlhf.cli.train_sft \
 ```
 
 > [!NOTE]
-> OpenRLHF SFT/DPO/RewardModel/PPO trainers support `--packing_samples` [based on `--flash_attn`](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
+> OpenRLHF SFT/DPO/RewardModel/PPO trainers support `--packing_samples` [based on `flash_attention`](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
 
 
 ### Reward Model Training
@@ -230,7 +229,6 @@ deepspeed --module openrlhf.cli.train_rm \
    --apply_chat_template \
    --chosen_key chosen \
    --rejected_key rejected \
-   --flash_attn \
    --packing_samples \
    --gradient_checkpointing \
    --use_wandb {wandb_token}

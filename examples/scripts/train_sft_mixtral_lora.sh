@@ -18,7 +18,7 @@ openrlhf.cli.train_sft \
     --max_epochs 1 \
     --bf16 \
     --gradient_checkpointing \
-    --flash_attn \
+    --attn_implementation flash_attention_2 \
     --learning_rate 5e-6 \
     --lora_rank 64 \
     --lora_alpha 64 \

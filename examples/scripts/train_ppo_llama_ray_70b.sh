@@ -36,6 +36,6 @@ ray job submit --address="http://127.0.0.1:8265" \
     --packing_samples \
     --normalize_reward \
     --adam_offload \
-    --flash_attn \
+    --attn_implementation flash_attention_2 \
     --vllm_sync_backend nccl \
     --gradient_checkpointing

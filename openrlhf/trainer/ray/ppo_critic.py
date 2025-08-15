@@ -170,7 +170,7 @@ class CriticModelActor(BaseModelActor):
             pretrain,
             "critic",
             normalize_reward=strategy.args.normalize_reward,
-            use_flash_attention_2=strategy.args.flash_attn,
+            attn_implementation=strategy.args.attn_implementation,
             bf16=strategy.args.bf16,
             load_in_4bit=strategy.args.load_in_4bit,
             lora_rank=strategy.args.lora_rank,

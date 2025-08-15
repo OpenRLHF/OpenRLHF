@@ -18,7 +18,7 @@ class RewardModelProxy:
             args.reward_pretrain,
             "reward",
             normalize_reward=args.normalize_reward,
-            use_flash_attention_2=args.flash_attn,
+            attn_implementation=args.attn_implementation,
             bf16=args.bf16,
             load_in_4bit=args.load_in_4bit,
             value_head_prefix=args.value_head_prefix,
@@ -79,7 +79,12 @@ if __name__ == "__main__":
     # Performance
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
     parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
-    parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
+    parser.add_argument(
+        "--attn_implementation",
+        type=str,
+        default="flash_attention_2",
+        help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
+    )
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument("--packing_samples", action="store_true", default=False)
     parser.add_argument("--batch_size", type=int, default=None)

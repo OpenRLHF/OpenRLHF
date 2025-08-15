@@ -28,9 +28,9 @@ def get_llm_for_sequence_regression(
     target_modules=None,
     lora_dropout=0,
     normalize_reward=False,
-    use_flash_attention_2=False,
+    attn_implementation="flash_attention_2",
     ds_config: dict = None,
-    init_value_head: bool = False,
+    init_value_head=False,
     value_head_prefix="score",
     device_map=None,
     packing_samples=False,
@@ -66,7 +66,7 @@ def get_llm_for_sequence_regression(
 
     config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
     config.normalize_reward = normalize_reward
-    config._attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
+    config._attn_implementation = attn_implementation
 
     # Prioritize using the value_head_prefix in the model configuration.
     value_head_prefix = getattr(config, "value_head_prefix", value_head_prefix)

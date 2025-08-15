@@ -76,7 +76,7 @@ OpenRLHFは、Ray、vLLM、ZeRO-3、およびHuggingFace Transformersを基盤�
 - SFT、DPO、RM、PRM、およびPPOのトレーニングサンプルのパッキング（`--packing_samples`）。
 - [RingAttention](./examples/scripts/train_dpo_ring_llama.sh)の実装（`--ring_attn_size`、`--ring_head_stride`）。
 - [専門家の混合モデル（MoE）](./examples/test_scripts/train_sft_mixtral_lora.sh)のサポート（`--aux_loss_coef`）。
-- FlashAttention2の統合（`--flash_attn`）。
+- FlashAttention2の統合（`--attn_implementation`）。
 - QLoRA（`--load_in_4bit`）および[LoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--lora_rank`、`--target_modules`）のサポート。
 - HuggingFaceの`tokenizer.apply_chat_template`との互換性（`--apply_chat_template`および`--input_key`）。
 - Wandb（`--use_wandb`）およびTensorBoard（`--use_tensorboard`）によるログ記録のサポート。
@@ -185,7 +185,6 @@ deepspeed --module openrlhf.cli.train_sft \
    --max_epochs 1 \
    --packing_samples \
    --bf16 \
-   --flash_attn \
    --learning_rate 5e-6 \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
@@ -204,7 +203,7 @@ deepspeed --module openrlhf.cli.train_sft \
 ```
 
 > [!NOTE]
-> OpenRLHF SFT/DPO/RewardModel/PPOトレーナーは`--packing_samples`をサポートしています [`--flash_attn`に基づく](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
+> OpenRLHF SFT/DPO/RewardModel/PPOトレーナーは`--packing_samples`をサポートしています [`flash attention`に基づく](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
 
 ### 報酬モデルのトレーニング
 ```bash
@@ -225,7 +224,6 @@ deepspeed --module openrlhf.cli.train_rm \
    --apply_chat_template \
    --chosen_key chosen \
    --rejected_key rejected \
-   --flash_attn \
    --packing_samples \
    --gradient_checkpointing \
    --use_wandb {wandb_token}

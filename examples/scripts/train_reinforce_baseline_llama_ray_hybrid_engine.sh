@@ -45,7 +45,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_sync_backend nccl \
    --enforce_eager \
    --vllm_enable_sleep \
-   --deepspeed_enable_sleep
+   --deepspeed_enable_sleep \
+   --enable_vllm_is_correction
 
 # You could also try
 #   --use_kl_loss \
