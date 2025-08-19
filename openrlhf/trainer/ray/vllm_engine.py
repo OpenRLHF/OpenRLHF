@@ -162,7 +162,7 @@ def create_vllm_engines(
             additional_kwargs["max_logprobs"] = 1
             assert version.parse(vllm.__version__) > version.parse(
                 "0.10.0"
-            ), "vLLM > 0.10.0 is required for logprobs_mode"
+            ), "vLLM > 0.10.1 is required for logprobs_mode"
 
         vllm_engines.append(
             llm_actor_cls.options(

@@ -3,7 +3,7 @@ bitsandbytes
 datasets
 deepspeed==0.17.4
 einops
-flash-attn==2.8.2
+flash-attn==2.8.3
 grpcio>=1.74.0
 isort
 jsonlines
