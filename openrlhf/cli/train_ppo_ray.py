@@ -363,6 +363,15 @@ if __name__ == "__main__":
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
     parser.add_argument("--reward_clip_range", type=float, nargs=2, default=(-10, 10), help="Reward clip range")
 
+    # Policy loss type
+    parser.add_argument(
+        "--policy_loss_type",
+        type=str,
+        choices=["ppo", "gspo"],
+        default="ppo",
+        help="Policy loss formulation: token-level PPO or sequence-level GSPO",
+    )
+
     # Reinforce/GRPO, etc
     parser.add_argument(
         "--advantage_estimator",
