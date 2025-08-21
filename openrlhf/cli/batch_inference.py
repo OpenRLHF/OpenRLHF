@@ -209,7 +209,7 @@ def batch_rm_inference(args):
         args.pretrain,
         "reward",
         normalize_reward=True,
-        use_flash_attention_2=args.flash_attn,
+        attn_implementation=args.attn_implementation,
         bf16=args.bf16,
         value_head_prefix=args.value_head_prefix,
     )
@@ -292,7 +292,12 @@ if __name__ == "__main__":
     parser.add_argument("--zero_stage", type=int, default=0, help="DeepSpeed ZeRO Stage")
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed cli")
     parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16 for deepspeed")
-    parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAtten2")
+    parser.add_argument(
+        "--attn_implementation",
+        type=str,
+        default="flash_attention_2",
+        help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
+    )
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument("--micro_batch_size", type=int, default=16)
     parser.add_argument("--seed", type=int, default=1234)

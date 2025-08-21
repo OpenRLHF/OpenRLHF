@@ -21,7 +21,7 @@ def train(args):
     # load huggingface model
     model = Actor(
         args.pretrain,
-        use_flash_attention_2=args.flash_attn,
+        attn_implementation=args.attn_implementation,
         bf16=args.bf16,
         load_in_4bit=args.load_in_4bit,
         lora_rank=args.lora_rank,
@@ -40,7 +40,7 @@ def train(args):
     # load weights for ref model
     ref_model = Actor(
         args.ref_pretrain,
-        use_flash_attention_2=args.flash_attn,
+        attn_implementation=args.attn_implementation,
         bf16=args.bf16,
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
@@ -122,7 +122,7 @@ def train(args):
         optim,
         num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
         num_training_steps=max_steps,
-        scheduler_specific_kwargs={"min_lr": args.learning_rate * 0.1},
+        scheduler_specific_kwargs={"min_lr": args.learning_rate * args.min_lr_ratio},
     )
 
     # strategy prepare
@@ -199,7 +199,12 @@ if __name__ == "__main__":
     parser.add_argument("--lr_scheduler", type=str, default="cosine_with_min_lr")
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
-    parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
+    parser.add_argument(
+        "--attn_implementation",
+        type=str,
+        default="flash_attention_2",
+        help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
+    )
     parser.add_argument("--use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
     parser.add_argument("--grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
     parser.add_argument("--overlap_comm", action="store_true", default=False)
@@ -209,6 +214,12 @@ if __name__ == "__main__":
     # DPO
     parser.add_argument("--max_epochs", type=int, default=1)
     parser.add_argument("--l2", type=float, default=0.0, help="weight decay loss")
+    parser.add_argument(
+        "--min_lr_ratio",
+        type=float,
+        default=0.1,
+        help="Ratio of the minimum learning rate to the initial learning rate.",
+    )
     parser.add_argument("--beta", type=float, default=0.1)
     parser.add_argument("--ipo", action="store_true", default=False)  # IPO https://arxiv.org/pdf/2310.12036v2.pdf
     parser.add_argument("--label_smoothing", type=float, default=0.0)  # cDPO https://arxiv.org/pdf/2305.18290.pdf
@@ -290,12 +301,14 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
-    if args.packing_samples and not args.flash_attn:
-        print("[Warning] Please --flash_attn to accelerate when --packing_samples is enabled.")
-        args.flash_attn = True
-
     if args.ring_attn_size > 1:
         assert args.packing_samples, "packing_samples must be enabled when using ring attention"
+
+    if args.packing_samples and "flash_attention" not in args.attn_implementation:
+        print(
+            "[Warning] Please use --attn_implementation with flash_attention to accelerate when --packing_samples is enabled."
+        )
+        args.attn_implementation = "flash_attention_2"
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub

@@ -70,6 +70,7 @@ def train(args):
             args.vllm_gpu_memory_utilization,
             args.vllm_enable_sleep,
             LLMRayActor,
+            "processed_logprobs" if args.enable_vllm_is_correction else None,
             args.agent_func_path,
         )
 
@@ -245,6 +246,9 @@ if __name__ == "__main__":
         default=0.95,
         help="vLLM gpu_memory_utilization",
     )
+    # Your Efficient RL Framework Secretly Brings You Off-Policy RL Training: https://fengyao.notion.site/off-policy-rl
+    parser.add_argument("--enable_vllm_is_correction", action="store_true", default=False)
+    parser.add_argument("--vllm_is_truncated_threshold", type=float, default=2)
 
     # Async training using ray
     parser.add_argument("--async_train", action="store_true", default=False, help="Enable async training")
@@ -275,7 +279,12 @@ if __name__ == "__main__":
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument("--actor_init_on_gpu", action="store_true", default=False)
-    parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
+    parser.add_argument(
+        "--attn_implementation",
+        type=str,
+        default="flash_attention_2",
+        help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
+    )
     parser.add_argument("--use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
     parser.add_argument("--grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
     parser.add_argument("--overlap_comm", action="store_true", default=False)
@@ -291,6 +300,11 @@ if __name__ == "__main__":
 
     # packing samples using Flash Attention2
     parser.add_argument("--packing_samples", action="store_true", default=False)
+
+    # dynamic batch size
+    parser.add_argument("--use_dynamic_batch", action="store_true", default=False)
+    parser.add_argument("--rollout_max_tokens_per_gpu", type=int, default=None)
+    parser.add_argument("--train_max_tokens_per_gpu", type=int, default=16192)
 
     # LoRA
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
@@ -317,6 +331,7 @@ if __name__ == "__main__":
     parser.add_argument("--ptx_coef", type=float, default=0.05, help="PPO-ptx loss coef")
     parser.add_argument("--eps_clip", type=float, default=0.2, help="PPO clip range")
     parser.add_argument("--eps_clip_low_high", type=float, nargs=2, default=None, help="PPO-clip low and high")
+    parser.add_argument("--dual_clip", type=float, default=None, help="Dual-clip PPO")
     parser.add_argument("--value_clip", type=float, default=0.5, help="PPO value clip range")
     parser.add_argument("--lambd", type=float, default=1, help="PPO GAE lambd")
     parser.add_argument("--gamma", type=float, default=1, help="PPO GAE gamma")
@@ -344,6 +359,7 @@ if __name__ == "__main__":
     parser.add_argument("--kl_target", type=float, default=None)
     parser.add_argument("--kl_horizon", type=int, default=10000)
     parser.add_argument("--init_kl_coef", type=float, default=0.01, help="KL penalty in PPO")
+    parser.add_argument("--policy_loss_type", type=str, default="ppo", choices=["ppo", "gspo"])
     parser.add_argument(
         "--kl_estimator",
         type=str,
@@ -387,6 +403,10 @@ if __name__ == "__main__":
         default=False,
         help="disable dividing by std for advantages while keeping mean normalization",
     )
+    parser.add_argument(
+        "--overlong_buffer_len", type=float, default=None, help="reward with optional overlong penalty"
+    )
+    parser.add_argument("--overlong_penalty_factor", type=float, default=1, help="overlong penalty factor")
 
     # Context Parallel
     parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")
@@ -495,10 +515,20 @@ if __name__ == "__main__":
             print("[Warning] --ring_attn_size > 1 requires --packing_samples.")
             args.packing_samples = True
 
+    if args.use_dynamic_batch:
+        if not args.packing_samples:
+            print("[Warning] Please --packing_samples to accelerate when --use_dynamic_batch is enabled.")
+            args.packing_samples = True
+        if args.rollout_max_tokens_per_gpu is None:
+            print("[Warning] Set --rollout_max_tokens_per_gpu to --train_max_tokens_per_gpu.")
+            args.rollout_max_tokens_per_gpu = args.train_max_tokens_per_gpu
+
     if args.packing_samples:
-        if not args.flash_attn:
-            print("[Warning] Please --flash_attn to accelerate when --packing_samples is enabled.")
-            args.flash_attn = True
+        if "flash_attention" not in args.attn_implementation:
+            print(
+                "[Warning] Please use --attn_implementation with flash_attention to accelerate when --packing_samples is enabled."
+            )
+            args.attn_implementation = "flash_attention_2"
         assert args.vllm_num_engines > 0, "Only support `--packing_samples` with vLLM."
 
     if args.vllm_enable_sleep and not args.colocate_all_models:

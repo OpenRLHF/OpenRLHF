@@ -28,9 +28,9 @@ def get_llm_for_sequence_regression(
     target_modules=None,
     lora_dropout=0,
     normalize_reward=False,
-    use_flash_attention_2=False,
+    attn_implementation="flash_attention_2",
     ds_config: dict = None,
-    init_value_head: bool = False,
+    init_value_head=False,
     value_head_prefix="score",
     device_map=None,
     packing_samples=False,
@@ -66,7 +66,7 @@ def get_llm_for_sequence_regression(
 
     config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
     config.normalize_reward = normalize_reward
-    config._attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
+    config._attn_implementation = attn_implementation
 
     # Prioritize using the value_head_prefix in the model configuration.
     value_head_prefix = getattr(config, "value_head_prefix", value_head_prefix)
@@ -134,6 +134,14 @@ def get_llm_for_sequence_regression(
     if "output_router_logits" in model_config:
         print("[MoE] set output_router_logits as True")
         model.config.output_router_logits = True
+
+        # set_z3_leaf_modules is required for MoE models
+        for m in model.modules():
+            # https://github.com/microsoft/DeepSpeed/pull/4966
+            if "SparseMoeBlock" in m.__class__.__name__:
+                deepspeed.utils.set_z3_leaf_modules(model, [m.__class__])
+                print(f"Setting zero3 leaf for model on class with name: {m.__class__.__name__}")
+                break
 
     # https://github.com/huggingface/transformers/issues/26877
     model.config.use_cache = False

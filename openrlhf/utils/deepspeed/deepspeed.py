@@ -68,6 +68,7 @@ class DeepspeedStrategy(ABC):
         self.deepcompile = getattr(args, "deepcompile", False)
         self.ds_tensor_parallel_size = getattr(args, "ds_tensor_parallel_size", 1)
         self.ring_attn_size = getattr(self.args, "ring_attn_size", 1)
+        self.use_dynamic_batch = getattr(self.args, "use_dynamic_batch", False)
 
         if self.ds_tensor_parallel_size > 1:
             assert deepspeed.version >= "0.16.4", "DeepSpeed version must be >= 0.16.4 for tensor parallel training"
@@ -264,10 +265,12 @@ class DeepspeedStrategy(ABC):
             deepcompile=self.deepcompile,
             tensor_parallel_size=self.ds_tensor_parallel_size,
         )
-
-        ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
-        train_batch_size = self.train_batch_size
-        ds_config["train_batch_size"] = train_batch_size * self.ring_attn_size * self.ds_tensor_parallel_size
+        if self.use_dynamic_batch:
+            ds_config["train_micro_batch_size_per_gpu"] = 1
+            ds_config["gradient_accumulation_steps"] = 1
+        else:
+            ds_config["train_micro_batch_size_per_gpu"] = self.micro_train_batch_size
+            ds_config["train_batch_size"] = self.train_batch_size * self.ring_attn_size * self.ds_tensor_parallel_size
 
         return ds_config
 
@@ -316,7 +319,7 @@ class DeepspeedStrategy(ABC):
 
     def moving_average(self, model, model_ema, beta=0.992, device="cpu"):
         self.time_steps["ema"] += 1
-        if self.time_steps["ema"] % self.accumulated_gradient == 0:
+        if self.time_steps["ema"] % self.accumulated_gradient == 0 or self.use_dynamic_batch:
             with torch.no_grad():
                 for param, param_ema in zip(model.parameters(), model_ema.parameters()):
                     if param.requires_grad:
@@ -364,8 +367,7 @@ class DeepspeedStrategy(ABC):
             output_state_dict = clone_tensors_for_torch_save(model_to_save.state_dict())
 
         if self.is_rank_0():
-            state_dict = model_to_save.state_dict()
-            state_dict_keys = set(state_dict.keys())
+            state_dict_keys = set(model_to_save.state_dict().keys())
             output_state_dict_keys = set(output_state_dict.keys())
 
             # corner case for tie_word_embeddings, such as Qwen2-0.5B
@@ -396,6 +398,12 @@ class DeepspeedStrategy(ABC):
             model_to_save.config.to_json_file(output_config_file)
             # save tokenizer
             tokenizer.save_pretrained(output_dir)
+
+        del output_state_dict
+        # Explicitly release memory
+        import gc
+
+        gc.collect()
 
         torch_dist_barrier_and_cuda_sync()
 
@@ -481,8 +489,13 @@ class DeepspeedStrategy(ABC):
                 else:
                     break
 
-        dist.barrier()
+        torch_dist_barrier_and_cuda_sync()
         model.save_checkpoint(save_dir, tag=tag, client_state=client_state, save_latest=save_latest)
+
+        # Explicitly release memory
+        import gc
+
+        gc.collect()
 
     def load_ckpt(
         self,
