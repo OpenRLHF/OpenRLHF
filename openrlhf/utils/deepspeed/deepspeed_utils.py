@@ -1,4 +1,7 @@
+import deepspeed
+import torch
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
+from packaging import version
 
 
 def get_train_ds_config(
@@ -139,14 +142,13 @@ def offload_deepspeed_states(model, pin_memory=True, non_blocking=True):
     if adam_offload:
         return
 
-    if zero_stage != 3:
-        raise NotImplementedError("Only Zero stage 3 is currently supported")
+    if zero_stage != 3 and version.parse(deepspeed.__version__) <= version.parse("0.17.5"):
+        raise NotImplementedError(
+            "Only Zero stage 3 is currently supported when using DeepSpeed version 0.17.5 or lower"
+        )
 
     # if zero_stage == 3 and not adam_offload:
-    import deepspeed
-    import torch
     from deepspeed.runtime.zero.offload_config import OffloadDeviceEnum, OffloadStateTypeEnum
-    from packaging import version
 
     offload_state_types = [
         OffloadStateTypeEnum.optim_states,
@@ -181,8 +183,10 @@ def reload_deepspeed_states(model, non_blocking=True):
     if adam_offload:
         return
 
-    if zero_stage != 3:
-        raise NotImplementedError("Only Zero stage 3 is currently supported")
+    if zero_stage != 3 and version.parse(deepspeed.__version__) <= version.parse("0.17.5"):
+        raise NotImplementedError(
+            "Only Zero stage 3 is currently supported when using DeepSpeed version 0.17.5 or lower"
+        )
 
     # if zero_stage == 3 and not adam_offload:
     import torch
