@@ -82,7 +82,7 @@ More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csof
 - Logging support with Wandb (`--use_wandb`) and TensorBoard (`--use_tensorboard`).  
 - Checkpoint recovery functionality (`--load_checkpoint` and `--save_steps`).  
 - Provided multi-node training scripts, such as [DPO](./examples/scripts/train_llama_slurm.sh) and [Ray PPO](./examples/scripts/train_ppo_llama_ray_slurm.sh).
-
+- GSPO (Group Sequence Policy Optimization) is supported via sequence-level policy loss. Enable with `--policy_loss_type gspo` and a group-based advantage estimator (e.g., `--advantage_estimator group_norm`, `--n_samples_per_prompt > 1`). See the example script: `examples/scripts/train_gspo_ray_hybrid_engine.sh`.
 > GSPO (Group Sequence Policy Optimization) is supported via sequence-level policy loss. Enable with `--policy_loss_type gspo` and a group-based advantage estimator (e.g., `--advantage_estimator group_norm`, `--n_samples_per_prompt > 1`). See the example script: `examples/scripts/train_gspo_ray_hybrid_engine.sh`.
 
 ## Quick Start
