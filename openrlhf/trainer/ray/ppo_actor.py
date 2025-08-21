@@ -75,14 +75,12 @@ class ActorPPOTrainer(ABC):
             token_level_loss=(getattr(self.args, "policy_loss_type", "ppo") != "gspo"),
             token_level_loss=False if getattr(self.args, "policy_loss_type", "ppo") == "gspo" else True,
             policy_loss_type=getattr(self.args, "policy_loss_type", "ppo"),
-
             dual_clip=self.args.dual_clip,
             policy_loss_type=self.args.policy_loss_type,
             enable_vllm_is_correction=self.args.enable_vllm_is_correction,
             vllm_is_truncated_threshold=(
                 self.args.vllm_is_truncated_threshold if self.args.enable_vllm_is_correction else None
             ),
-
         )
 
         # Mixtral 8x7b

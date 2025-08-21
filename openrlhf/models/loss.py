@@ -88,16 +88,13 @@ class PolicyLoss(nn.Module):
         self,
         clip_eps_low: float = 0.2,
         clip_eps_high: float = 0.2,
-
         token_level_loss: bool = True,
         policy_loss_type: str = "ppo",
-
         dual_clip: float = None,
         token_level_loss: bool = True,
         policy_loss_type: str = "ppo",
         enable_vllm_is_correction: bool = False,
         vllm_is_truncated_threshold: float = None,
-
     ) -> None:
         super().__init__()
         self.clip_eps_low = clip_eps_low
@@ -118,7 +115,6 @@ class PolicyLoss(nn.Module):
         # Dual-clip PPO: https://arxiv.org/pdf/1912.09729
         if dual_clip is not None:
             assert dual_clip > 1.0, f"dual_clip must be > 1.0, got {dual_clip}"
-
 
     def forward(
         self,
@@ -179,7 +175,6 @@ class PolicyLoss(nn.Module):
             vllm_is = torch.exp(old_log_probs - rollout_log_probs).clamp(max=self.vllm_is_truncated_threshold).detach()
             loss = vllm_is * loss
             vllm_kl = masked_mean(rollout_log_probs - old_log_probs, action_mask, dim=None)
-
 
         loss = (
             masked_mean(loss, action_mask, dim=None)
