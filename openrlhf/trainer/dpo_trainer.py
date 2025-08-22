@@ -182,7 +182,7 @@ class DPOTrainer(ABC):
                     logs_dict["nll_loss"] = nll_loss.item()
                 # step bar
                 logs_dict = self.strategy.all_reduce(logs_dict)
-                step_bar.set_postfix(logs_dict)
+                step_bar.set_postfix(logs_dict, refresh=False)
                 step_bar.update()
 
                 # logs/checkpoints/evaluation
@@ -273,7 +273,7 @@ class DPOTrainer(ABC):
                 "acc_mean": acc_sum / times,
             }
             logs = self.strategy.all_reduce(logs)
-            step_bar.set_postfix(logs)
+            step_bar.set_postfix(logs, refresh=False)
 
             if self.strategy.is_rank_0():
                 if self._wandb is not None:
