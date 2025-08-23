@@ -92,7 +92,11 @@ class FSDPStrategy(ABC):
         **kwargs,
     ) -> None:
         if self.max_norm and self.max_norm > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), self.max_norm)
+            # FSDP has a native method for gradient clipping, while DDP does not.
+            if hasattr(model, "clip_grad_norm_"):
+                model.clip_grad_norm_(self.max_norm)
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), self.max_norm)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         if scheduler is not None:
