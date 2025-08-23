@@ -9,6 +9,7 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import StateDictType, FullStateDictConfig
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Optimizer
@@ -148,14 +149,14 @@ class FSDPStrategy(ABC):
                 device_id=torch.cuda.current_device(),
             )
             return model
-        except Exception:
+        except Exception as e:
+            self.print(f"FSDP auto-wrap failed, falling back to DDP: {e}")
             return DDP(model, device_ids=[torch.cuda.current_device()])
 
     def prepare(
         self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False
-        except Exception as e:
-            self.print(f"FSDP auto-wrap failed, falling back to DDP: {e}")
-            return DDP(model, device_ids=[torch.cuda.current_device()])
+    ):
+        ret = []
         self.is_rlhf = is_rlhf
         for arg in models_or_model_optim_pairs:
             if isinstance(arg, tuple):
@@ -203,11 +204,6 @@ class FSDPStrategy(ABC):
         model: nn.Module,
         path: str,
         map_location="cpu",
-    def load_model(
-        self,
-        model: nn.Module,
-        path: str,
-        map_location="cpu",
         strict: bool = False,
         key_replace_fn=None,
     ) -> None:
@@ -221,11 +217,33 @@ class FSDPStrategy(ABC):
                 wrapped_model.load_state_dict(state_dict, strict=strict)
         else:
             self._unwrap_model(model).load_state_dict(state_dict, strict=strict)
+
+    def save_model(self, model: nn.Module, tokenizer, output_dir, **kwargs) -> None:
         if self.is_rank_0():
-            model_to_save.save_pretrained(output_dir, state_dict=model_to_save.state_dict(), **kwargs)
+            os.makedirs(output_dir, exist_ok=True)
+
+        # Determine wrapped module
+        wrapped_model = model.model if isinstance(model, Actor) else model
+
+        # Gather a full state dict when using FSDP; fallback for DDP/nn.Module
+        cpu_state_dict = None
+        if isinstance(wrapped_model, FSDP):
+            save_cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+            with FSDP.state_dict_type(wrapped_model, StateDictType.FULL_STATE_DICT, save_cfg):
+                cpu_state_dict = wrapped_model.state_dict()
+
+        # Rank0 writes the HF checkpoint
+        if self.is_rank_0():
+            if cpu_state_dict is None:
+                # DDP / non-sharded case
+                cpu_state_dict = self._unwrap_model(model).state_dict()
+
+            unwrapped = self._unwrap_model(model)
+            unwrapped.save_pretrained(output_dir, state_dict=cpu_state_dict, **kwargs)
             output_config_file = os.path.join(output_dir, "config.json")
-            model_to_save.config.to_json_file(output_config_file)
+            unwrapped.config.to_json_file(output_config_file)
             tokenizer.save_pretrained(output_dir)
+
         dist.barrier()
 
     def all_reduce(self, data, op="mean"):
