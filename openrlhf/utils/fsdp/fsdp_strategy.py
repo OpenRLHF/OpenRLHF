@@ -154,8 +154,9 @@ class FSDPStrategy(ABC):
 
     def prepare(
         self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False
-    ) -> Union[List[ModelOrModelOptimPair], ModelOrModelOptimPair]:
-        ret = []
+        except Exception as e:
+            self.print(f"FSDP auto-wrap failed, falling back to DDP: {e}")
+            return DDP(model, device_ids=[torch.cuda.current_device()])
         self.is_rlhf = is_rlhf
         for arg in models_or_model_optim_pairs:
             if isinstance(arg, tuple):
