@@ -149,14 +149,14 @@ class FSDPStrategy(ABC):
                 device_id=torch.cuda.current_device(),
             )
             return model
-        except Exception:
+        except Exception as e:
+            self.print(f"FSDP auto-wrap failed, falling back to DDP: {e}")
             return DDP(model, device_ids=[torch.cuda.current_device()])
 
     def prepare(
         self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False
-        except Exception as e:
-            self.print(f"FSDP auto-wrap failed, falling back to DDP: {e}")
-            return DDP(model, device_ids=[torch.cuda.current_device()])
+    ):
+        ret = []
         self.is_rlhf = is_rlhf
         for arg in models_or_model_optim_pairs:
             if isinstance(arg, tuple):
@@ -199,11 +199,6 @@ class FSDPStrategy(ABC):
                         data = param.data.to(device)
                         param_ema.data.copy_((1 - beta) * data + beta * param_ema.data)
 
-    def load_model(
-        self,
-        model: nn.Module,
-        path: str,
-        map_location="cpu",
     def load_model(
         self,
         model: nn.Module,
