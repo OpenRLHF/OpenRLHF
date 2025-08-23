@@ -181,7 +181,7 @@ class FSDPStrategy(ABC):
                 is_actor = isinstance(model, Actor)
                 module = model.model if is_actor else model
                 module = module.to(torch.cuda.current_device())
-                module = DDP(module, device_ids=[torch.cuda.current_device()])
+                module = self._wrap_train_model(module)
                 if is_actor:
                     model.model = module
                     ret.append(model)
