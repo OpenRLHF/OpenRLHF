@@ -203,14 +203,17 @@ class FSDPStrategy(ABC):
         model: nn.Module,
         path: str,
         map_location="cpu",
+    def load_model(
+        self,
+        model: nn.Module,
+        path: str,
+        map_location="cpu",
         strict: bool = False,
         key_replace_fn=None,
     ) -> None:
-        unwrapped_model = self._unwrap_model(model)
         state_dict = torch.load(path, map_location=map_location)
         if key_replace_fn:
             state_dict = key_replace_fn(state_dict)
-        unwrapped_model.load_state_dict(state_dict, strict=strict)
 
     def save_model(self, model: nn.Module, tokenizer, output_dir, **kwargs) -> None:
         if self.is_rank_0():
