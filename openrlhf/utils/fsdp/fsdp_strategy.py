@@ -5,22 +5,20 @@ from datetime import timedelta
 from typing import List, Tuple, Union
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
-import torch.distributed as dist
-from torch.optim import Optimizer
-from torchdata.stateful_dataloader import StatefulDataLoader
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import StateDictType, FullStateDictConfig
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.nn.parallel import DistributedDataParallel as DDP
-
-from transformers import set_seed, enable_full_determinism
+from torch.optim import Optimizer
+from torchdata.stateful_dataloader import StatefulDataLoader
+from transformers import enable_full_determinism, set_seed
 
 from openrlhf.models import Actor
 from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
 from openrlhf.utils.distributed_sampler import DistributedSampler
-
 
 ModelOptimPair = Tuple[nn.Module, Optimizer]
 ModelOrModelOptimPair = Union[nn.Module, ModelOptimPair]
@@ -70,9 +68,7 @@ class FSDPStrategy(ABC):
         self.ring_attn_rank = 0
         set_ring_attn_group(None)
 
-        self.accumulated_gradient = (
-            self.train_batch_size // self.micro_train_batch_size // max(1, self.world_size)
-        )
+        self.accumulated_gradient = self.train_batch_size // self.micro_train_batch_size // max(1, self.world_size)
 
     @property
     def ring_attn_group(self):
@@ -311,5 +307,3 @@ class FSDPStrategy(ABC):
 
     def get_ds_eval_config(self, offload=False):
         return None
-
-

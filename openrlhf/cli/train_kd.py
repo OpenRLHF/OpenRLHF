@@ -181,7 +181,9 @@ if __name__ == "__main__":
     )
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
-    parser.add_argument("--dist_backend", type=str, default="deepspeed", choices=["deepspeed", "fsdp"], help="Distributed backend")
+    parser.add_argument(
+        "--dist_backend", type=str, default="deepspeed", choices=["deepspeed", "fsdp"], help="Distributed backend"
+    )
     parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
