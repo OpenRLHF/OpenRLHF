@@ -248,7 +248,7 @@ class FSDPStrategy(ABC):
         else:
             is_tensor = True
             if not isinstance(data, torch.Tensor):
-                data = torch.Tensor([data])
+                data = torch.tensor([data])
                 is_tensor = False
             is_cpu_tensor = data.device.type == "cpu"
 
