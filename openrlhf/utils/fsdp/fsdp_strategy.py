@@ -2,14 +2,15 @@ import os
 from abc import ABC
 from collections import defaultdict
 from datetime import timedelta
-from typing import List, Tuple, Union
+from typing import Tuple, Union
 
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
+from torch.distributed.fsdp import FullStateDictConfig
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.distributed.fsdp import StateDictType, FullStateDictConfig
+from torch.distributed.fsdp import StateDictType
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Optimizer
@@ -153,9 +154,7 @@ class FSDPStrategy(ABC):
             self.print(f"FSDP auto-wrap failed, falling back to DDP: {e}")
             return DDP(model, device_ids=[torch.cuda.current_device()])
 
-    def prepare(
-        self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False
-    ):
+    def prepare(self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False):
         ret = []
         self.is_rlhf = is_rlhf
         for arg in models_or_model_optim_pairs:
