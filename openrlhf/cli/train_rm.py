@@ -23,7 +23,7 @@ def train(args):
         args.pretrain,
         "reward",
         attn_implementation=args.attn_implementation,
-        param_dtype=args.param_dtype,  # default: bf16
+        bf16=args.bf16,
         load_in_4bit=args.load_in_4bit,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
@@ -140,8 +140,8 @@ def train(args):
         max_norm=args.max_norm,
         max_epochs=args.max_epochs,
         loss=args.loss,
-        save_hf_ckpt=args.save_hf_ckpt,
         disable_ds_ckpt=args.disable_ds_ckpt,
+        save_hf_ckpt=args.save_hf_ckpt,
     )
 
     trainer.fit(args, consumed_samples, num_update_steps_per_epoch)
@@ -161,8 +161,6 @@ if __name__ == "__main__":
     # Checkpoint
     parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--save_steps", type=int, default=-1)
-    parser.add_argument("--save_hf_ckpt", action="store_true", default=False)
-    parser.add_argument("--disable_ds_ckpt", action="store_true", default=False)
     parser.add_argument("--logging_steps", type=int, default=1)
     parser.add_argument("--eval_steps", type=int, default=-1)
     parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_rm")
@@ -170,6 +168,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_ckpt_mem", type=int, default=1e8)
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
     parser.add_argument("--use_ds_universal_ckpt", action="store_true", default=False)
+    parser.add_argument("--disable_ds_ckpt", action="store_true", default=False)
+    parser.add_argument("--save_hf_ckpt", action="store_true", default=False)
 
     # DeepSpeed
     parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
@@ -184,13 +184,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
-    parser.add_argument(
-        "--param_dtype",
-        type=str,
-        default="bf16",
-        choices=["bf16", "fp16"],
-        help="Model data type",
-    )
+    parser.add_argument("--dist_backend", type=str, default="deepspeed", choices=["deepspeed", "fsdp"], help="Distributed backend")
+    parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument(
