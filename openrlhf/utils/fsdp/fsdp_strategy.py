@@ -269,7 +269,7 @@ class FSDPStrategy(ABC):
             return ret
         else:
             if not isinstance(data, torch.Tensor):
-                data = torch.Tensor([data])
+                data = torch.tensor([data])
             is_cpu_tensor = data.device.type == "cpu"
 
             ret = [torch.zeros_like(data).to(torch.cuda.current_device()) for _ in range(self.world_size)]
