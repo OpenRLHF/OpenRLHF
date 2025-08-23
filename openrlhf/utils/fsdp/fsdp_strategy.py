@@ -202,19 +202,24 @@ class FSDPStrategy(ABC):
         model: nn.Module,
         path: str,
         map_location="cpu",
+    def load_model(
+        self,
+        model: nn.Module,
+        path: str,
+        map_location="cpu",
         strict: bool = False,
         key_replace_fn=None,
     ) -> None:
-        unwrapped_model = self._unwrap_model(model)
         state_dict = torch.load(path, map_location=map_location)
         if key_replace_fn:
             state_dict = key_replace_fn(state_dict)
-        unwrapped_model.load_state_dict(state_dict, strict=strict)
 
-    def save_model(self, model: nn.Module, tokenizer, output_dir, **kwargs) -> None:
-        if self.is_rank_0():
-            os.makedirs(output_dir, exist_ok=True)
-        model_to_save = self._unwrap_model(model)
+        wrapped_model = model.model if isinstance(model, Actor) else model
+        if isinstance(wrapped_model, FSDP):
+            with FSDP.state_dict_type(wrapped_model, StateDictType.FULL_STATE_DICT):
+                wrapped_model.load_state_dict(state_dict, strict=strict)
+        else:
+            self._unwrap_model(model).load_state_dict(state_dict, strict=strict)
         if self.is_rank_0():
             model_to_save.save_pretrained(output_dir, state_dict=model_to_save.state_dict(), **kwargs)
             output_config_file = os.path.join(output_dir, "config.json")
