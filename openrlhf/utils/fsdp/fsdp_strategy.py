@@ -11,7 +11,7 @@ import torch.distributed as dist
 from torch.optim import Optimizer
 from torchdata.stateful_dataloader import StatefulDataLoader
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.distributed.fsdp import StateDictType
+from torch.distributed.fsdp import StateDictType, FullStateDictConfig
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -219,12 +219,29 @@ class FSDPStrategy(ABC):
     def save_model(self, model: nn.Module, tokenizer, output_dir, **kwargs) -> None:
         if self.is_rank_0():
             os.makedirs(output_dir, exist_ok=True)
-        model_to_save = self._unwrap_model(model)
+
+        # Determine wrapped module
+        wrapped_model = model.model if isinstance(model, Actor) else model
+
+        # Gather a full state dict when using FSDP; fallback for DDP/nn.Module
+        cpu_state_dict = None
+        if isinstance(wrapped_model, FSDP):
+            save_cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+            with FSDP.state_dict_type(wrapped_model, StateDictType.FULL_STATE_DICT, save_cfg):
+                cpu_state_dict = wrapped_model.state_dict()
+
+        # Rank0 writes the HF checkpoint
         if self.is_rank_0():
-            model_to_save.save_pretrained(output_dir, state_dict=model_to_save.state_dict(), **kwargs)
+            if cpu_state_dict is None:
+                # DDP / non-sharded case
+                cpu_state_dict = self._unwrap_model(model).state_dict()
+
+            unwrapped = self._unwrap_model(model)
+            unwrapped.save_pretrained(output_dir, state_dict=cpu_state_dict, **kwargs)
             output_config_file = os.path.join(output_dir, "config.json")
-            model_to_save.config.to_json_file(output_config_file)
+            unwrapped.config.to_json_file(output_config_file)
             tokenizer.save_pretrained(output_dir)
+
         dist.barrier()
 
     def all_reduce(self, data, op="mean"):
