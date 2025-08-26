@@ -64,5 +64,3 @@ def gather_and_pad_tensor(tensor, star_attn_group, star_attn_pad_len, indices, b
             tensor = tensor[:, :-star_attn_pad_len]
     tensor = pad_input(tensor.transpose(0, 1), indices, batch, seqlen).squeeze(-1)
     return tensor
-
-

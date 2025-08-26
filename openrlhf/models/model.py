@@ -10,8 +10,10 @@ from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from openrlhf.utils.logging_utils import init_logger
 
-from .ring_attn_utils import gather_and_pad_tensor as ring_gather_and_pad_tensor, unpad_and_slice_tensor as ring_unpad_and_slice_tensor
-from .star_attn_utils import gather_and_pad_tensor as star_gather_and_pad_tensor, unpad_and_slice_tensor as star_unpad_and_slice_tensor
+from .ring_attn_utils import gather_and_pad_tensor as ring_gather_and_pad_tensor
+from .ring_attn_utils import unpad_and_slice_tensor as ring_unpad_and_slice_tensor
+from .star_attn_utils import gather_and_pad_tensor as star_gather_and_pad_tensor
+from .star_attn_utils import unpad_and_slice_tensor as star_unpad_and_slice_tensor
 
 logger = init_logger(__name__)
 
@@ -206,6 +208,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
                     attn_kind = "ring"
                 else:
                     from .star_attn_utils import get_star_attn_group
+
                     star_group = get_star_attn_group()
                     input_ids, position_ids, _, ring_attn_pad_len, indices = star_unpad_and_slice_tensor(
                         input_ids, attention_mask, star_group
@@ -225,12 +228,15 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
 
             if self.packing_samples:
-                if 'attn_kind' in locals() and attn_kind == "star":
+                if "attn_kind" in locals() and attn_kind == "star":
                     from .star_attn_utils import get_star_attn_group
+
                     star_group = get_star_attn_group()
                     values = star_gather_and_pad_tensor(values, star_group, ring_attn_pad_len, indices, batch, seqlen)
                 else:
-                    values = ring_gather_and_pad_tensor(values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
+                    values = ring_gather_and_pad_tensor(
+                        values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
+                    )
             reward = values.gather(dim=1, index=eos_indices).squeeze(1)
 
             if not self.training and self.normalize_reward:
@@ -284,6 +290,7 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                     attn_kind = "ring"
                 else:
                     from .star_attn_utils import get_star_attn_group
+
                     star_group = get_star_attn_group()
                     input_ids, position_ids, _, ring_attn_pad_len, indices = star_unpad_and_slice_tensor(
                         input_ids, attention_mask, star_group
@@ -307,12 +314,15 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)  # (1, total_seqs)
 
             if self.packing_samples:
-                if 'attn_kind' in locals() and attn_kind == "star":
+                if "attn_kind" in locals() and attn_kind == "star":
                     from .star_attn_utils import get_star_attn_group
+
                     star_group = get_star_attn_group()
                     values = star_gather_and_pad_tensor(values, star_group, ring_attn_pad_len, indices, batch, seqlen)
                 else:
-                    values = ring_gather_and_pad_tensor(values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
+                    values = ring_gather_and_pad_tensor(
+                        values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
+                    )
 
             values = values[:, :-1]
             # normalize reward
