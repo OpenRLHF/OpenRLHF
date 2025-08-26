@@ -1,5 +1,6 @@
 from typing import Optional
 
+import deepspeed
 import torch
 import torch.distributed as dist
 import torch.nn as nn
@@ -21,7 +22,7 @@ class Actor(nn.Module):
 
     Args:
         pretrain_or_model (nn.Module): A pretrained model or a new model instance to be used as the actor.
-        use_flash_attention_2 (bool, optional): Whether to utilize Flash Attention 2.0 for improved performance. Defaults to False.
+        attn_implementation (str, optional): Attention mechanism implementation to use. Defaults to "flash_attention_2".
         bf16 (bool, optional): Enable bfloat16 precision for model computations. Defaults to True.
         load_in_4bit (bool, optional): Load the model in 4-bit precision. Defaults to False.
         lora_rank (int, optional): Rank for LoRA adaptation. Defaults to 0.
@@ -38,7 +39,7 @@ class Actor(nn.Module):
     def __init__(
         self,
         pretrain_or_model,
-        use_flash_attention_2=False,
+        attn_implementation="flash_attention_2",
         bf16=True,
         load_in_4bit=False,
         lora_rank=0,
@@ -56,7 +57,8 @@ class Actor(nn.Module):
         self.temperature = temperature
 
         if isinstance(pretrain_or_model, str):
-            attn_implementation = "flash_attention_2" if use_flash_attention_2 else "eager"
+            # Support multiple attention mechanism implementations
+            attn_impl = attn_implementation
 
             # Note: dschf is defined in function scope to avoid global effects
             # https://huggingface.co/docs/transformers/deepspeed#non-trainer-deepspeed-integration
@@ -86,7 +88,7 @@ class Actor(nn.Module):
             self.model = model_class.from_pretrained(
                 pretrain_or_model,
                 trust_remote_code=True,
-                attn_implementation=attn_implementation,
+                attn_implementation=attn_impl,
                 quantization_config=nf4_config,
                 torch_dtype=torch.bfloat16 if bf16 else "auto",
                 device_map=device_map,
@@ -121,6 +123,14 @@ class Actor(nn.Module):
             if "output_router_logits" in model_config:
                 print("[MoE] set output_router_logits as True")
                 self.model.config.output_router_logits = True
+
+                # set_z3_leaf_modules is required for MoE models
+                for m in self.model.modules():
+                    # https://github.com/microsoft/DeepSpeed/pull/4966
+                    if "SparseMoeBlock" in m.__class__.__name__:
+                        deepspeed.utils.set_z3_leaf_modules(self.model, [m.__class__])
+                        print(f"Setting zero3 leaf for model on class with name: {m.__class__.__name__}")
+                        break
 
             # https://github.com/huggingface/transformers/issues/26877
             # Use `model.generate(use_cache=True)` instead.`

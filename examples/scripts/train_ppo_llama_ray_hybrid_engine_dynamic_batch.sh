@@ -1,19 +1,18 @@
 set -x
 
-ray job submit --address="http://127.0.0.1:8265" \
-   --runtime-env-json='{"working_dir": "/openrlhf"}' \
-   -- python3 -m openrlhf.cli.train_ppo_ray \
+python3 -m openrlhf.cli.train_ppo_ray \
    --ref_num_nodes 1 \
    --ref_num_gpus_per_node 8 \
    --reward_num_nodes 1 \
    --reward_num_gpus_per_node 8 \
+   --critic_num_nodes 1 \
+   --critic_num_gpus_per_node 8 \
    --actor_num_nodes 1 \
    --actor_num_gpus_per_node 8 \
    --vllm_num_engines 4 \
    --vllm_tensor_parallel_size 2 \
    --colocate_all_models \
-   --vllm_gpu_memory_utilization 0.6 \
-   --advantage_estimator reinforce_baseline \
+   --vllm_gpu_memory_utilization 0.5 \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
    --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \
    --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
@@ -22,12 +21,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --micro_train_batch_size 4 \
    --train_batch_size 128 \
    --micro_rollout_batch_size 8 \
-   --rollout_batch_size 128 \
-   --n_samples_per_prompt 8 \
-   --init_kl_coef 1e-3 \
-   --gamma 1.0 \
-   --use_kl_loss \
-   --kl_estimator k2 \
+   --rollout_batch_size 1024 \
+   --n_samples_per_prompt 1 \
    --max_epochs 1 \
    --prompt_max_len 1024 \
    --max_samples 100000 \
@@ -36,6 +31,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --bf16 \
    --actor_learning_rate 5e-7 \
    --critic_learning_rate 9e-6 \
+   --init_kl_coef 0.01 \
    --prompt_data OpenRLHF/prompt-collection-v0.1 \
    --input_key context_messages \
    --apply_chat_template \
@@ -46,10 +42,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --enforce_eager \
    --vllm_enable_sleep \
    --deepspeed_enable_sleep \
-   --enable_vllm_is_correction
+   --use_dynamic_batch \
+   --train_max_tokens_per_gpu 16384
 
-# You could also try
-#   --use_kl_loss \
-#   --kl_estimator k3 | k2 \
-
-# also supports --advantage_estimator rloo | reinforce_baseline

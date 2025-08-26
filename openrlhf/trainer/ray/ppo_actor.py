@@ -19,7 +19,7 @@ from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
-from openrlhf.utils.distributed_util import init_process_group, torch_dist_barrier_and_cuda_sync
+from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.logging_utils import init_logger
 
 from ..ppo_utils import NaiveReplayBuffer
@@ -71,13 +71,23 @@ class ActorPPOTrainer(ABC):
         self.actor_loss_fn = PolicyLoss(
             clip_eps_low=self.args.eps_clip_low_high[0],
             clip_eps_high=self.args.eps_clip_low_high[1],
+            dual_clip=self.args.dual_clip,
+            policy_loss_type=self.args.policy_loss_type,
+            enable_vllm_is_correction=self.args.enable_vllm_is_correction,
+            vllm_is_truncated_threshold=(
+                self.args.vllm_is_truncated_threshold if self.args.enable_vllm_is_correction else None
+            ),
         )
 
         # Mixtral 8x7b
         self.aux_loss = self.args.aux_loss_coef > 1e-8
 
         self.replay_buffer = NaiveReplayBuffer(
-            micro_train_batch_size, buffer_limit, buffer_cpu_offload, getattr(self.args, "packing_samples", False)
+            micro_train_batch_size,
+            buffer_limit,
+            buffer_cpu_offload,
+            getattr(self.args, "packing_samples", False),
+            self.args.use_dynamic_batch,
         )
 
         # Init torch group for weights sync
@@ -89,7 +99,7 @@ class ActorPPOTrainer(ABC):
         # Create torch group with deepspeed rank 0 and all vllm ranks
         # to update vllm engine's weights after each training stage.
         #
-        # Say we have 3 vllm engines and eache of them has 4 GPUs,
+        # Say we have 3 vllm engines and each of them has 4 GPUs,
         # then the torch group is:
         # [    0,      1, 2, 3, 4,  5, 6, 7, 8,  9, 10, 11, 12]
         # |ds rank 0 |  engine-0  |  engine-1  |   engine-2   |
@@ -131,12 +141,8 @@ class ActorPPOTrainer(ABC):
                 collective.init_collective_group(world_size=world_size, rank=0, backend=backend, group_name=group_name)
                 self._model_update_group = group_name
             else:
-                self._model_update_group = init_process_group(
-                    backend=backend,
-                    init_method=f"tcp://{master_address}:{master_port}",
-                    world_size=world_size,
-                    rank=0,
-                    group_name=group_name,
+                self._model_update_group = stateless_init_process_group(
+                    master_address, master_port, 0, world_size, torch.cuda.current_device()
                 )
 
             ray.get(refs)
@@ -145,7 +151,14 @@ class ActorPPOTrainer(ABC):
 
     def ppo_train(self, kl_ctl: float):
         # replay buffer may be empty at first, we should rebuild at each training
-        not_shuffle = self.strategy.ring_attn_group is not None or self.args.ds_tensor_parallel_size > 1
+        if self.args.use_dynamic_batch:
+            self.replay_buffer.setup_dynamic_batch(self.strategy)
+
+        not_shuffle = (
+            self.strategy.ring_attn_group is not None
+            or self.args.ds_tensor_parallel_size > 1
+            or self.args.use_dynamic_batch
+        )
         dataloader = DataLoader(
             self.replay_buffer,
             batch_size=self.replay_buffer.sample_batch_size,
@@ -164,9 +177,10 @@ class ActorPPOTrainer(ABC):
                 desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
-            for experience in pbar:
+            for step, experience in enumerate(pbar):
+
                 experience.to_device(device)
-                status = self.training_step(experience, kl_ctl)
+                status = self.training_step(experience, kl_ctl, step)
                 status["kl"] *= status["response_length"]
                 status = self.strategy.all_reduce(status)
                 status["kl"] /= status["response_length"]
@@ -196,7 +210,7 @@ class ActorPPOTrainer(ABC):
                 status_mean[k] /= len(status_list)
         return status_mean
 
-    def training_step(self, experience: Experience, kl_ctl: float) -> Dict[str, float]:
+    def training_step(self, experience: Experience, kl_ctl: float, step: int) -> Dict[str, float]:
         self.actor.train()
 
         sequences = experience.sequences
@@ -219,13 +233,17 @@ class ActorPPOTrainer(ABC):
         )
 
         # loss function
-        actor_loss, clip_ratio = self.actor_loss_fn(
+        actor_loss, clip_ratio, ppo_kl, vllm_kl = self.actor_loss_fn(
             action_log_probs,
             old_action_log_probs,
             advantages,
             action_mask=experience.action_mask,
+            rollout_log_probs=experience.rollout_log_probs,
         )
         experience.info["ppo_clip_ratio"] = clip_ratio.detach()
+        experience.info["ppo_kl"] = ppo_kl.detach()
+        if vllm_kl is not None:
+            experience.info["vllm_kl"] = vllm_kl.detach()
 
         if self.args.use_kl_loss:
             if self.args.init_kl_coef > 0:
@@ -251,10 +269,22 @@ class ActorPPOTrainer(ABC):
             if self.args.entropy_loss_coef != 0:
                 loss -= entropy_loss * self.args.entropy_loss_coef
 
+        if self.args.use_dynamic_batch:
+            loss = loss * self.replay_buffer.dynamic_loss_scale[step]
+
         self.strategy.backward(loss, self.actor, self.actor_optim)
-        self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
+        if self.args.use_dynamic_batch:
+            if self.replay_buffer.dynamic_optimizer_step[step]:
+                self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
+        else:
+            self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
+
         if self.ema_model:
-            self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
+            if self.args.use_dynamic_batch:
+                if self.replay_buffer.dynamic_optimizer_step[step]:
+                    self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
+            else:
+                self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
 
         # status
         status = {"policy_loss": actor_loss.detach().item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}
@@ -296,7 +326,7 @@ class ActorPPOTrainer(ABC):
 
                     collective.broadcast(param.data, 0, group_name=self._model_update_group)
                 else:
-                    torch.distributed.broadcast(param.data, 0, group=self._model_update_group)
+                    self._model_update_group.broadcast(param.data, src=0, stream=torch.cuda.current_stream())
                 ray.get(refs)
 
         def _handle_cuda_ipc(param, count, num_params):
@@ -374,7 +404,7 @@ class PolicyModelActor(BaseModelActor):
 
         actor = Actor(
             pretrain,
-            use_flash_attention_2=strategy.args.flash_attn,
+            attn_implementation=strategy.args.attn_implementation,
             bf16=strategy.args.bf16,
             load_in_4bit=strategy.args.load_in_4bit,
             lora_rank=strategy.args.lora_rank,
@@ -396,7 +426,7 @@ class PolicyModelActor(BaseModelActor):
         if args.enable_ema:
             ema_model = Actor(
                 pretrain,
-                use_flash_attention_2=strategy.args.flash_attn,
+                attn_implementation=strategy.args.attn_implementation,
                 bf16=strategy.args.bf16,
                 load_in_4bit=strategy.args.load_in_4bit,
                 ds_config=strategy.get_ds_eval_config(offload=True),

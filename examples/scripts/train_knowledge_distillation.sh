@@ -18,7 +18,7 @@ openrlhf.cli.train_kd \
    --zero_stage 3 \
    --max_epochs 1 \
    --bf16 \
-   --flash_attn \
+   --attn_implementation flash_attention_2 \
    --kd_coef 0.4 \
    --learning_rate 5e-6 \
    --teacher_offload \

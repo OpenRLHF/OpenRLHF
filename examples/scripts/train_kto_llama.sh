@@ -18,7 +18,7 @@ openrlhf.cli.train_kto \
    --input_key instruction \
    --output_key response \
    --label_key score \
-   --flash_attn \
+   --attn_implementation flash_attention_2 \
    --beta 0.1 \
    --max_samples 1024 \
    --gradient_checkpointing

@@ -17,7 +17,7 @@ openrlhf.cli.train_sft \
    --zero_stage 2 \
    --max_epochs 1 \
    --bf16 \
-   --flash_attn \
+   --attn_implementation flash_attention_2 \
    --learning_rate 5e-6 \
    --load_checkpoint \
    --gradient_checkpointing \

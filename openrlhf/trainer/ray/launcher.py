@@ -107,7 +107,7 @@ class ReferenceModelActor(BaseModelActor):
         self._setup_distributed(strategy)
         model = Actor(
             pretrain,
-            use_flash_attention_2=strategy.args.flash_attn,
+            attn_implementation=strategy.args.attn_implementation,
             bf16=strategy.args.bf16,
             load_in_4bit=strategy.args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
@@ -151,7 +151,7 @@ class RewardModelActor(BaseModelActor):
             pretrain,
             "reward",
             normalize_reward=strategy.args.normalize_reward,
-            use_flash_attention_2=strategy.args.flash_attn,
+            attn_implementation=strategy.args.attn_implementation,
             bf16=strategy.args.bf16,
             load_in_4bit=strategy.args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),

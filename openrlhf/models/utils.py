@@ -37,6 +37,7 @@ def compute_approx_kl(
         log_ratio = -log_ratio
         log_ratio = log_ratio.exp() - 1 - log_ratio
 
+    log_ratio = log_ratio.clamp(min=-10, max=10)
     return log_ratio
 
 
