@@ -219,6 +219,7 @@ if __name__ == "__main__":
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
 
     # Context Parallel
+    parser.add_argument("--attn_topology", type=str, default="ring", choices=["ring", "star"], help="Context-parallel topology")
     parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")
     parser.add_argument(
         "--ring_head_stride",
@@ -295,7 +296,7 @@ if __name__ == "__main__":
         args.flash_attn = True
 
     if args.ring_attn_size > 1:
-        assert args.packing_samples, "packing_samples must be enabled when using ring attention"
+        assert args.packing_samples, "packing_samples must be enabled when using ring/star attention"
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub
