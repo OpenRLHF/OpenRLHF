@@ -8,6 +8,7 @@ from tqdm import tqdm
 from openrlhf.trainer.ppo_trainer import BasePPOTrainer
 from openrlhf.trainer.ppo_utils import AdaptiveKLController, FixedKLController
 from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
+from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.logging_utils import init_logger
@@ -198,6 +199,11 @@ class TrainingActor(BasePPOTrainer):
             experiences = self.experience_maker.make_experience_batch(rollout_samples)
             sample0 = self.tokenizer.batch_decode(experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True)
             print(sample0)
+
+            # balance experiences across dp
+            if args.use_dynamic_batch:
+                experiences = balance_experiences(experiences, args)
+
             refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences)
             if self.critic_model_group is not None:
                 refs.extend(
