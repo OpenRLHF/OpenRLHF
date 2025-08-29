@@ -459,6 +459,7 @@ class PPOTrainer(BasePPOTrainer):
                 range(self.prompts_dataloader.__len__()),
                 desc=f"Episode [{episode + 1}/{args.num_episodes}]",
                 disable=False,
+                initial=steps,
             )
 
             filtered_samples = []
