@@ -186,7 +186,6 @@ def create_vllm_engines(
                 num_gpus=0.2 if use_hybrid_engine else 1,
                 enable_sleep_mode=vllm_enable_sleep,
                 agent_func_path=agent_func_path,
-                skip_tokenizer_init=True,
                 **additional_kwargs,
             )
         )
