@@ -46,12 +46,13 @@ ray job submit --address="http://127.0.0.1:8265" \
    --use_dynamic_batch \
    --deepspeed_enable_sleep \
    --gradient_checkpointing \
-   --dynamic_filtering \
    --packing_samples \
    --save_steps -1 \
    --enforce_eager  \
    --eps_clip_low_high 0.2 0.28 \
-    --enable_vllm_is_correction
+   --enable_vllm_is_correction
+
+   # --dynamic_filtering \
    # --load_checkpoint \
    # --save_steps 2 \
    # --ckpt_path /openrlhf/examples/test_scripts/checkpoint/llama3-8b-rlhf-reinforce
