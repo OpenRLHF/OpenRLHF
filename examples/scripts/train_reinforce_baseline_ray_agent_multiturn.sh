@@ -5,7 +5,7 @@ NUM_GPUS=${1:-8}
 # Please install gem from the following link
 # pip install git+https://github.com/axon-rl/gem.git
 
-export OPENRLHF_ASYNC_NUM_TASKS=1024
+export OPENRLHF_ASYNC_NUM_TASKS=256
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{"working_dir": "/openrlhf"}' \
