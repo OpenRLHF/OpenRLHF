@@ -29,7 +29,7 @@ class AgentExecutorBase(ABC):
         self.agent_instance_cls = ray.remote(agent_instance_cls)
 
         # Create semaphore to control concurrent task execution
-        NUM_TASKS = os.environ.get("OPENRLHF_ASYNC_NUM_TASKS", 128)
+        NUM_TASKS = os.environ.get("OPENRLHF_ASYNC_NUM_TASKS", 256)
         self.semaphore = asyncio.Semaphore(NUM_TASKS)
 
     async def generate(self, prompt_ids, sampling_params):
