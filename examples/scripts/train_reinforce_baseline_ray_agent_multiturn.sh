@@ -50,7 +50,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --save_steps -1 \
    --enforce_eager  \
    --eps_clip_low_high 0.2 0.28 \
-   --top_p 0.99 \
+   --top_p 0.98 \
    --enable_vllm_is_correction
 
    # --dynamic_filtering \
