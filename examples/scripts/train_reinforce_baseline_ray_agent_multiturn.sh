@@ -18,9 +18,9 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_tensor_parallel_size 1 \
    --colocate_all_models \
    --agent_func_path /openrlhf/examples/python/agent_func_gem_multiturn.py \
-   --pretrain Qwen/Qwen3-4B-Instruct-2507 \
+   --pretrain Qwen/Qwen3-1.7B \
    --save_path /openrlhf/examples/test_scripts/checkpoint/llama3-8b-rlhf-rf_baseline \
-   --vllm_gpu_memory_utilization 0.75 \
+   --vllm_gpu_memory_utilization 0.8 \
    --l2 0.01 \
    --micro_train_batch_size 8 \
    --train_batch_size 256 \
