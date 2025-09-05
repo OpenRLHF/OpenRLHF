@@ -267,6 +267,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--apply_chat_template", action="store_true", default=False, help="Use HF tokenizer chat template"
     )
+    parser.add_argument("--tokenizer_chat_template", type=str, default=None)
     parser.add_argument("--max_len", type=int, default=512)
 
     # wandb parameters
