@@ -40,9 +40,9 @@ class LLMRayActorAsync(BaseLLMRayActor):
     async def update_weight(self, name, dtype, shape, empty_cache=False):
         return await self.llm.collective_rpc("update_weight", args=(name, dtype, shape, empty_cache))
 
-    async def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handles, empty_cache=False):
+    async def update_weights_from_ipc(self, name, dtype, shape, ipc_handles, empty_cache=False):
         return await self.llm.collective_rpc(
-            "update_weight_cuda_ipc", args=(name, dtype, shape, ipc_handles, empty_cache)
+            "update_weights_from_ipc", args=(name, dtype, shape, ipc_handles, empty_cache)
         )
 
     async def reset_prefix_cache(self):

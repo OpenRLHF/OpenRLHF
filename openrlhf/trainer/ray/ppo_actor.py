@@ -1,3 +1,4 @@
+import gc
 import math
 import os
 import socket
@@ -8,6 +9,7 @@ import deepspeed
 import ray
 import torch
 import torch.distributed
+import zmq
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -27,7 +29,6 @@ from ..ppo_utils import NaiveReplayBuffer
 logger = init_logger(__name__)
 
 from .launcher import BaseModelActor
-from .utils import get_physical_gpu_id
 
 
 class ActorPPOTrainer(ABC):
@@ -109,7 +110,7 @@ class ActorPPOTrainer(ABC):
         # For ZeRO-3:
         #   1. AllGather paramters to rank 0
         #   2. Broadcast parameters from rank 0 to all vllm engines
-        if self.vllm_engines is not None and not self.use_cuda_ipc and torch.distributed.get_rank() == 0:
+        if not self.use_cuda_ipc and torch.distributed.get_rank() == 0:
             master_address = ray._private.services.get_node_ip_address()
             with socket.socket() as sock:
                 sock.bind(("", 0))
@@ -146,6 +147,15 @@ class ActorPPOTrainer(ABC):
                 )
 
             ray.get(refs)
+        else:
+            # The argument for `get_device_uuid` is the index of the GPU in the
+            # list of visible devices.
+            from vllm.platforms import current_platform
+
+            self.device_uuid = current_platform.get_device_uuid(0)
+            self.zmq_context = zmq.Context()
+            self.zmq_address_counter = 0
+            self.zmq_handle = None
 
         torch_dist_barrier_and_cuda_sync()
 
@@ -329,33 +339,63 @@ class ActorPPOTrainer(ABC):
                     self._model_update_group.broadcast(param.data, src=0, stream=torch.cuda.current_stream())
                 ray.get(refs)
 
+        def get_zmq_handles(self) -> dict[str, str]:
+            suffix = f"{self.device_uuid}-{self.zmq_address_counter}"
+            self.zmq_handle = f"ipc:///tmp/rl-colocate-zmq-{suffix}.sock"
+            self.zmq_address_counter += 1
+            return {self.device_uuid: self.zmq_handle}
+
         def _handle_cuda_ipc(param, count, num_params):
             from torch.multiprocessing.reductions import reduce_tensor
 
-            weight = param.data.clone()
-            ipc_handle = reduce_tensor(weight)
+            # align size to avoid misaligned address
+            align_size = 256
 
-            ipc_handle = {get_physical_gpu_id(): ipc_handle}
-            ipc_handle_list = [None] * torch.distributed.get_world_size()
-            torch.distributed.all_gather_object(ipc_handle_list, ipc_handle)
+            def get_size(p: torch.Tensor) -> int:
+                return (p.nbytes + align_size - 1) // align_size * align_size
 
-            if torch.distributed.get_rank() == 0:
-                ipc_handles = {}
-                for d in ipc_handle_list:
-                    ipc_handles.update(d)
+            named_parameters: dict[str, torch.nn.Parameter] = dict(self.model.named_parameters())
+            max_tensor_size = max(get_size(p) for p in named_parameters.values())
+            # use max_tensor_size * 2 as buffer size
+            buffer = torch.empty(max_tensor_size * 2, dtype=torch.uint8, device="cuda:0")
+            s = self.zmq_context.socket(zmq.REQ)
+            s.bind(self.zmq_handle)
+            handle = reduce_tensor(buffer)
 
-                shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
-                refs = [
-                    engine.update_weight_cuda_ipc.remote(
-                        name,
-                        dtype=param.dtype,
-                        shape=shape,
-                        ipc_handles=ipc_handles,
-                        empty_cache=count == num_params,
+            offset = 0
+            buckets: list[tuple[list[dict], list[torch.Tensor]]] = []
+            named_tensors: list[dict] = []
+            real_tensors: list[torch.Tensor] = []
+            for name, p in named_parameters.items():
+                size = get_size(p)
+                if offset + size > buffer.numel():
+                    buckets.append((named_tensors, real_tensors))
+                    named_tensors, real_tensors = [], []
+                    offset = 0
+                # assume tensors are contiguous
+                named_tensors.append({"name": name, "dtype": p.dtype, "shape": p.shape, "offset": offset})
+                real_tensors.append(p)
+                offset += size
+            if named_tensors:
+                buckets.append((named_tensors, real_tensors))
+            s.send_pyobj(handle)
+            s.recv()
+            for named_tensors, real_tensors in buckets:
+                offset = 0
+                for p in real_tensors:
+                    buffer[offset : offset + p.nbytes].data.copy_(
+                        p.data.view(-1).view(dtype=torch.uint8), non_blocking=True
                     )
-                    for engine in self.vllm_engines
-                ]
-                ray.get(refs)
+                    offset += get_size(p)
+                torch.cuda.synchronize()
+                s.send_pyobj(named_tensors)
+                s.recv()
+            s.send_pyobj(None)
+            s.recv()
+            s.close()
+            del buffer
+            gc.collect()
+            torch.cuda.empty_cache()
             torch_dist_barrier_and_cuda_sync()
 
         for name, param in model.named_parameters():
