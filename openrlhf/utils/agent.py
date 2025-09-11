@@ -43,7 +43,7 @@ class AgentExecutorBase(ABC):
             final_output = request_output
         return final_output
 
-    async def execute(self, prompt, label, sampling_params):
+    async def execute(self, prompt, label, sampling_params, request_group_id=None):
         async with self.semaphore:
             # Create a unique agent instance for this prompt with tokenizer
             agent_instance = self.agent_instance_cls.remote()
@@ -62,6 +62,7 @@ class AgentExecutorBase(ABC):
             action_ranges = []
             total_reward = 0
             final_scores = 0
+            extra_logs = {}
 
             if sampling_params.logprobs is not None:
                 rollout_log_probs = [0.0] * len(current_obs_tokens)
@@ -138,5 +139,6 @@ class AgentExecutorBase(ABC):
                 "extra_logs": extra_logs,
                 "action_ranges": action_ranges,
                 "rollout_log_probs": rollout_log_probs,
+                "request_group_id": request_group_id,
             }
             await self.result_queue.put(final_response)

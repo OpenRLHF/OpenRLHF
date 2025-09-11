@@ -32,7 +32,7 @@ def train(args):
             assert (
                 args.actor_num_nodes == args.ref_num_nodes
                 and args.actor_num_gpus_per_node == args.ref_num_gpus_per_node
-            ), f"num_nodes and num_gpus_per_node must be the same when colocate actor and ref model."
+            ), "num_nodes and num_gpus_per_node must be the same when colocate actor and ref model."
 
         bundles = [{"GPU": 1, "CPU": 1} for _ in range(args.actor_num_nodes * args.actor_num_gpus_per_node)]
         pg = placement_group(bundles, strategy="PACK")
@@ -103,7 +103,7 @@ def train(args):
         assert (
             args.critic_num_nodes == args.reward_num_nodes
             and args.critic_num_gpus_per_node == args.reward_num_gpus_per_node
-        ), f"num_nodes and num_gpus_per_node must be the same when colocate critic and reward model."
+        ), "num_nodes and num_gpus_per_node must be the same when colocate critic and reward model."
 
         bundles = [{"GPU": 1, "CPU": 1} for _ in range(args.critic_num_nodes * args.critic_num_gpus_per_node)]
         pg = placement_group(bundles, strategy="PACK")
@@ -459,6 +459,14 @@ if __name__ == "__main__":
         "--dynamic_filtering_reward_range", nargs=2, default=(0, 1), type=float, help="Dynamic filtering rewards range"
     )
 
+    # Streaming sampling
+    parser.add_argument(
+        "--enable_streaming_sampling",
+        action="store_true",
+        default=False,
+        help="Enable streaming sampling with real-time filtering",
+    )
+
     # TensorBoard parameters
     parser.add_argument("--use_tensorboard", type=str, default=None, help="TensorBoard logging path")
 
@@ -547,15 +555,19 @@ if __name__ == "__main__":
         args.vllm_generate_batch_size = args.rollout_batch_size
 
     if args.dynamic_filtering:
-        assert (
-            args.dynamic_filtering_reward_range[0] < args.dynamic_filtering_reward_range[1]
-        ), "reward_clip_range[0] must be less than reward_clip_range[1]"
-        assert (
-            args.remote_rm_url or args.agent_func_path
-        ), "remote_rm_url or agent_func_path must be specified when using dynamic filtering"
-        assert (
-            args.n_samples_per_prompt > 1
-        ), "n_samples_per_prompt must be greater than 1 when using dynamic filtering"
+        assert args.dynamic_filtering_reward_range[0] < args.dynamic_filtering_reward_range[1], (
+            "reward_clip_range[0] must be less than reward_clip_range[1]"
+        )
+        assert args.remote_rm_url or args.agent_func_path, (
+            "remote_rm_url or agent_func_path must be specified when using dynamic filtering"
+        )
+        assert args.n_samples_per_prompt > 1, (
+            "n_samples_per_prompt must be greater than 1 when using dynamic filtering"
+        )
+
+    if args.enable_streaming_sampling:
+        assert args.async_train, "Streaming sampling requires --async_train to be enabled"
+        assert args.dynamic_filtering, "Streaming sampling requires --dynamic_filtering to be enabled"
 
     assert (
         args.n_samples_per_prompt * args.rollout_batch_size // args.micro_rollout_batch_size

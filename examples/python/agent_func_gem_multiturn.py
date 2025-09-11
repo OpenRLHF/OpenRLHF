@@ -3,6 +3,7 @@
 
 import logging
 from typing import Any, Dict
+import time
 
 import gem
 import torch
@@ -41,7 +42,6 @@ def apply_qwen3_general_template(question: str) -> str:
 #     "code": apply_code_template,
 # }
 
-import time
 
 
 # A simple n-step random environment
@@ -87,9 +87,9 @@ class AgentInstance(AgentInstanceBase):
         """
         print(f"step_idx: {self.step_idx}, max_steps: {self.max_steps}")
 
-        observation_text = states["observation_text"]
+        states["observation_text"]
         action_text = states["action_text"]
-        label = states["label"]
+        states["label"]
 
         # apply action and receive next observation, reward
         # and whether the episode has ended
@@ -142,6 +142,6 @@ class AgentExecutor(AgentExecutorBase):
     def __init__(self, max_steps, max_length, llm_engine, hf_tokenizer, result_queue):
         super().__init__(AgentInstance, max_steps, max_length, llm_engine, hf_tokenizer, result_queue)
 
-    async def execute(self, prompt, label, sampling_params):
+    async def execute(self, prompt, label, sampling_params, request_group_id=None):
         # You could override the execute function of AgentExecutorBase to add custom agent running logic
-        return await super().execute(prompt, label, sampling_params)
+        return await super().execute(prompt, label, sampling_params, request_group_id)
