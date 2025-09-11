@@ -1,6 +1,6 @@
-from typing import List
-import time
 import random
+import time
+from typing import List
 
 import ray
 import torch

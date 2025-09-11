@@ -2,8 +2,8 @@
 # Author: @yyht GitHub: https://github.com/yyht
 
 import logging
-from typing import Any, Dict
 import time
+from typing import Any, Dict
 
 import gem
 import torch
@@ -41,7 +41,6 @@ def apply_qwen3_general_template(question: str) -> str:
 #     "qwen3_general": apply_qwen3_general_template,
 #     "code": apply_code_template,
 # }
-
 
 
 # A simple n-step random environment
