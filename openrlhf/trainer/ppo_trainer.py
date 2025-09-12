@@ -323,7 +323,7 @@ class BasePPOTrainer(ABC):
         train_data = train_data.select(range(min(args.max_samples, len(train_data))))
         prompts_dataset = PromptDataset(train_data, self.tokenizer, strategy, input_template=args.input_template)
 
-        # 根据是否启用streaming模式来设置batch_size
+        # Set batch size based on whether streaming mode is enabled
         if getattr(args, "enable_streaming_sampling", False):
             dataloader_batch_size = 1
         else:
