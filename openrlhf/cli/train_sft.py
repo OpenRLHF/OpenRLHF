@@ -62,6 +62,7 @@ def train(args):
         strategy,
         pretrain_mode=args.pretrain_mode,
         input_template=args.input_template,
+        num_processors=args.num_workers,
         multiturn=args.multiturn,
     )
     # prepare dataloader
@@ -241,6 +242,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--tokenizer_chat_template", type=str, default=None)
     parser.add_argument("--max_len", type=int, default=2048, help="Max tokens for the samples")
+    parser.add_argument("--num_workers", type=int, default=8, help="Number of processes for dataset processing")
 
     # wandb parameters
     parser.add_argument("--use_wandb", type=str, default=None)
