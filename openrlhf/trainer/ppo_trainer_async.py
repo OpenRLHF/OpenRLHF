@@ -61,7 +61,7 @@ class GenerateSamplesActor(BasePPOTrainer):
         self.signal_actor = kwargs.pop("signal_actor")
         super().__init__(*args, **kwargs)
 
-        # 根据是否启用流式采样选择生成器
+        # Select generator based on whether streaming sampling is enabled
         if getattr(self.args, "enable_streaming_sampling", False):
             from openrlhf.trainer.ppo_utils.experience_maker_async import SamplesGeneratorStreamingAsync
 
