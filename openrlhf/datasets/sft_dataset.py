@@ -50,7 +50,7 @@ class SFTDataset(Dataset):
         strategy,
         input_template=None,
         pretrain_mode=False,
-        num_processors=8,  # Specify the number of processors you want to use
+        num_processors=8,
         multiturn=False,
     ) -> None:
         super().__init__()

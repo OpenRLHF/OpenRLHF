@@ -69,7 +69,12 @@ def train(args):
 
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
     train_dataset = UnpairedPreferenceDataset(
-        train_data, tokenizer, args.max_len, strategy, input_template=args.input_template
+        train_data,
+        tokenizer,
+        args.max_len,
+        strategy,
+        input_template=args.input_template,
+        num_processors=args.num_processors,
     )
 
     # prepare dataloader
@@ -223,6 +228,7 @@ if __name__ == "__main__":
         "--apply_chat_template", action="store_true", default=False, help="Use HF tokenizer chat template"
     )
     parser.add_argument("--max_len", type=int, default=2048, help="Max tokens for the samples")
+    parser.add_argument("--num_processors", type=int, default=8, help="Number of processes for dataset processing")
 
     # wandb parameters
     parser.add_argument("--use_wandb", type=str, default=None)
