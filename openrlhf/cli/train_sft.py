@@ -11,7 +11,6 @@ from openrlhf.models import Actor
 from openrlhf.trainer.sft_trainer import SFTTrainer
 from openrlhf.utils import get_strategy, get_tokenizer
 
-
 def train(args):
     # configure strategy
     strategy = get_strategy(args)
