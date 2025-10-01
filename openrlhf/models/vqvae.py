@@ -1454,7 +1454,7 @@ class TextVQVAE(nn.Module):
 
         h_enc = self.f_enc(x, key_padding_mask=attention_mask)
 
-        # chunking with compression rate r (default 16): V^L -> R^{d x (L/r)}
+        # compressing with compression rate r (default 16): V^L -> R^{d x (L/r)}
         r = self.compression_rate
         
         if attention_mask is None:
@@ -1485,7 +1485,7 @@ class TextVQVAE(nn.Module):
                 valid_idx = torch.nonzero(attn[i], as_tuple=False).squeeze(-1) # (L,)
                 K_i = int(K_list[i].item())
                 
-                base_ranks = torch.arange(1, K_i+1, device=device) * r - 1 # r-1, 2r-1, 3r-1, ..., K_i*r-1
+                base_ranks = torch.arange(1, K_i + 1, device=device) * r - 1 # r-1, 2r-1, 3r-1, ..., K_i*r-1
                 base_ranks = torch.minimum(base_ranks, torch.tensor(L-1, device=device)) # last non-pad
                 
                 global_idx = valid_idx[base_ranks] # (K_i,)
@@ -1510,7 +1510,7 @@ class TextVQVAE(nn.Module):
         
         quantized, _, vq_loss = self.vq(selected, mask=selected_mask)
 
-        h_dec = self.f_dec(quantized, key_padding_mask=attention_mask)
+        h_dec = self.f_dec(quantized, key_padding_mask=selected_mask)
         # h_dec = self.output_ln(h_dec)
         logits = self.lm_head(h_dec)
 

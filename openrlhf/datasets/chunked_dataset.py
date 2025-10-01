@@ -31,8 +31,8 @@ class ChunkedDataset(Dataset):
             if tokenizer_chat_template:
                 self.tokenizer.chat_template = tokenizer_chat_template
 
-        self.prompts = []
-        self.responses = []
+        self.prompts: List[List[int]] = []
+        self.responses: List[List[List[int]]] = []
         
         for data in dataset:
             prompt, response = preprocess_data(
@@ -40,7 +40,7 @@ class ChunkedDataset(Dataset):
                 self.input_template,
                 self.input_key,
                 self.output_key,
-                apply_chat_template=None if self.pretrain_mode else self.apply_chat,
+                apply_chat_template=self.apply_chat,
                 multiturn=self.multiturn,
             )
             
@@ -51,7 +51,6 @@ class ChunkedDataset(Dataset):
                 prompt,
                 padding=False,
                 truncation=True,
-                max_length=False,
                 return_tensors="pt",
                 add_special_tokens=False,
             )["input_ids"][0].tolist()
@@ -73,11 +72,14 @@ class ChunkedDataset(Dataset):
                 chunk_ids = resp_ids[i:i+self.chunk_size]
                 if not chunk_ids:
                     continue
+                if len(chunk_ids) < self.chunk_size:
+                    pad = self.chunk_size - len(chunk_ids)
+                    chunk_ids = chunk_ids + [self.tokenizer.pad_token_id] * pad
                 
                 response_chunks.append(chunk_ids)
             
             self.responses.append(response_chunks)
-                
+            
     def __len__(self):
         return len(self.prompts)
 
@@ -88,64 +90,57 @@ class ChunkedDataset(Dataset):
         # Build tensors directly from precomputed token ids
         prompt_ids = torch.tensor([prompts], dtype=torch.long)
         prompt_am = torch.ones_like(prompt_ids, dtype=torch.long)
-        prompt_labels = torch.zeros_like(prompt_ids, dtype=torch.float32)
         
+        # Combine chunks along batch dimension
         response_ids = []
         response_am = []
-        response_labels = []
         for chunk_ids in response_chunks:
             r_ids = torch.tensor([chunk_ids], dtype=torch.long)
-            r_am = torch.ones_like(r_ids, dtype=torch.long)
-            r_labels = torch.zeros_like(r_ids, dtype=torch.float32)
+            r_am = (r_ids != self.tokenizer.pad_token_id).long()
             response_ids.append(r_ids)
             response_am.append(r_am)
-            response_labels.append(r_labels)
 
         # Return prompt + response chunks separately
         return (
-            prompt_input_ids,
-            prompt_attention_mask,
-            prompt_loss_mask,
-            response_input_ids,
-            response_attention_masks,
-            response_loss_masks,
+            prompt_ids,
+            prompt_am,
+            response_ids,
+            response_am,
         )
 
-    def collate_fn(self, item_list):
+    def collate_fn(self, batch):
         # Unpack
-        prompts_input_ids = []
-        prompts_attention_masks = []
-        prompts_loss_masks = []
-        responses_input_ids_grouped = []
-        responses_attention_masks_grouped = []
-        responses_loss_masks_grouped = []
+        prompt_ids_list: List[torch.Tensor] = []
+        prompt_attn_list: List[torch.Tensor] = []
+        all_chunk_ids: List[torch.Tensor] = []
+        all_chunk_attn: List[torch.Tensor] = []
+        chunk_owner_indices: List[int] = []
 
-        for (
+        for owner_idx, (
             p_ids,
             p_attn,
-            p_loss,
             r_ids_list,
             r_attn_list,
-            r_loss_list,
-        ) in item_list:
+        ) in batch:
             prompts_input_ids.append(p_ids)
             prompts_attention_masks.append(p_attn)
-            prompts_loss_masks.append(p_loss)
-            responses_input_ids_grouped.append(r_ids_list)
-            responses_attention_masks_grouped.append(r_attn_list)
-            responses_loss_masks_grouped.append(r_loss_list)
+            for c_ids, c_attn in zip(r_ids_list, r_attn_list):
+                all_chunk_ids.append(c_ids)
+                all_chunk_attn.append(c_attn)
+                chunk_owner_indices.append(owner_idx)
 
         # Batch prompts with right padding
         batched_prompt_ids = zero_pad_sequences(prompts_input_ids, "right", self.tokenizer.pad_token_id)
         batched_prompt_attn = zero_pad_sequences(prompts_attention_masks, "right")
-        batched_prompt_loss = zero_pad_sequences(prompts_loss_masks, "right")
 
-        # Responses: keep ragged (list of lists of tensors) so you can process chunks separately
+        chunk_input_ids = torch.cat(all_chunk_ids, dim=0) # [B_chunks, T_chunk]
+        chunk_attn = torch.cat(all_chunk_attn, dim=0) # [B_chunks, T_chunk]
+        chunk2sample = torch.tensor(chunk_owner_indices, dtype=torch.long) # [B_chunks]
+        
         return (
             batched_prompt_ids,
             batched_prompt_attn,
-            batched_prompt_loss,
-            responses_input_ids_grouped,
-            responses_attention_masks_grouped,
-            responses_loss_masks_grouped,
+            chunk_input_ids,
+            chunk_attn,
+            chunk2sample,
         )
