@@ -13,7 +13,7 @@ from .loss import (
     VanillaKTOLoss,
 )
 from .model import get_llm_for_sequence_regression
-
+from .latent_lm import LatentLM
 __all__ = [
     "Actor",
     "SFTLoss",
@@ -28,4 +28,5 @@ __all__ = [
     "ValueLoss",
     "VanillaKTOLoss",
     "get_llm_for_sequence_regression",
+    "LatentLM",
 ]
