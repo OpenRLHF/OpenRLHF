@@ -68,9 +68,13 @@ class ActorPPOTrainer(ABC):
         self.vllm_engines = vllm_engines
         self.max_epochs = self.args.max_epochs
 
+        # Configure policy loss (PPO token-level or GSPO sequence-level)
         self.actor_loss_fn = PolicyLoss(
             clip_eps_low=self.args.eps_clip_low_high[0],
             clip_eps_high=self.args.eps_clip_low_high[1],
+            token_level_loss=(getattr(self.args, "policy_loss_type", "ppo") != "gspo"),
+            token_level_loss=False if getattr(self.args, "policy_loss_type", "ppo") == "gspo" else True,
+            policy_loss_type=getattr(self.args, "policy_loss_type", "ppo"),
             dual_clip=self.args.dual_clip,
             policy_loss_type=self.args.policy_loss_type,
             enable_vllm_is_correction=self.args.enable_vllm_is_correction,
