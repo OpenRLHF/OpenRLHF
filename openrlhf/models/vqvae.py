@@ -1443,42 +1443,55 @@ class TextVQVAE(nn.Module):
         if share_input_output_embed:
             self.lm_head.weight = self.tok_emb.weight
 
-    def forward(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> dict:
-        b, n = input_ids.shape
-        device = input_ids.device
+    def forward(self,
+                prompt_ids: torch.Tensor,
+                prompt_am: torch.Tensor,
+                response_ids: torch.Tensor, 
+                response_am: Optional[torch.Tensor] = None, 
+                chunk2sample: Optional[torch.Tensor] = None
+                ) -> dict:
+        b, n = response_ids.shape
+        device = response_ids.device
 
-        # pos = torch.arange(n, device=device)
-        # pos = pos.unsqueeze(0).expand(b, n)
-        x = self.tok_emb(input_ids) #+ self.pos_emb(pos)
-        # x = self.input_ln(x)
+        # Prompt encoding
+        x_prompt = self.tok_emb(prompt_ids)
+        h_enc_prompt = self.f_enc(x_prompt, key_padding_mask=prompt_am)
+        g = h_enc_prompt[:, -1, :]
 
-        h_enc = self.f_enc(x, key_padding_mask=attention_mask)
+        # Response encoding
+        x_response = self.tok_emb(response_ids)
+        h_enc_response = self.f_enc(x_response, key_padding_mask=response_am)
 
         # compressing with compression rate r (default 16): V^L -> R^{d x (L/r)}
         r = self.compression_rate
         
-        if attention_mask is None:
+        if response_am is None:
             attn = torch.ones(b, n, dtype=torch.bool, device=device)
         else:
-            attn = attention_mask.bool()
+            attn = response_am.bool()
         
         lens = attn.sum(dim=1)
         K_list = (lens + (r-1)) // r # ceil
         max_K = max(1, int(K_list.max().item()))
         
-        ###
         base_idx = torch.arange(1, max_K + 1, device=device).view(1, -1) # [1, 2, ..., max_K]
         idx = (base_idx * r).clamp(max=lens.view(b, 1)) - 1 # (b, max_K): [r, 2r, ..., n, n]
         selected_mask = (base_idx <= K_list.view(b, 1)) # (b, max_K) boolean: [True, True, ..., True, False]
         
-        idx_expanded = idx.unsqueeze(-1).expand(-1, -1, h_enc.size(-1))
-        selected = torch.gather(h_enc, 1, idx_expanded)
+        idx_expanded = idx.unsqueeze(-1).expand(-1, -1, h_enc_response.size(-1))
+        selected = torch.gather(h_enc_response, 1, idx_expanded)
         selected = selected * selected_mask.unsqueeze(-1)
         
         quantized, _, vq_loss = self.vq(selected, mask=selected_mask)
 
-        h_dec = self.f_dec(quantized, key_padding_mask=selected_mask)
-        # h_dec = self.output_ln(h_dec)
+        # Decoding
+        g_per_chunk = g.index_select(0, chunk2sample).unsqueeze(1)
+        dec_inp = torch.cat([g_per_chunk, quantized], dim=1)
+        ones = torch.ones(selected_mask.size(0), 1, dtype=torch.bool, device=selected_mask.device)
+        dec_mask = torch.cat([ones, selected_mask], dim=1)
+        
+        h_dec = self.f_dec(dec_inp, key_padding_mask=dec_mask)
+        
         logits = self.lm_head(h_dec)
 
         return {"logits": logits, "vq_loss": vq_loss}
