@@ -1458,55 +1458,22 @@ class TextVQVAE(nn.Module):
         r = self.compression_rate
         
         if attention_mask is None:
-            # Picking selection indices
-            base = torch.arange(r-1, n, r, device=device)
-            if base.numel() == 0 or base[-1].item() != n-1: # Ensure last index is included
-                base = torch.cat([base, torch.tensor([n-1], device=device)], dim=0)
-            
-            selected = h_enc[:, base, :]
-            selected_mask = torch.ones(b, selected.size(1), dtype=torch.bool, device=device)
-        
+            attn = torch.ones(b, n, dtype=torch.bool, device=device)
         else:
             attn = attention_mask.bool()
-            lens = attn.sum(dim=1)
-            K_list = (lens + (r-1)) // r # ceil
-            max_K = int(K_list.max().item())
-            
-            selected_list = []
-            selected_mask_list = []
-            
-            for i in range(b):
-                L = int(lens[i].item()) # length of i'th sample
-                if L == 0: # no valid tokens
-                    selected_list.append(h_enc.new_zeros(max_K if max_K > 0 else 1, self.dim))
-                    selected_mask_list.append(torch.zeros(max_K if max_K > 0 else 1, dtype=torch.bool, device=device))
-                    continue
-                
-                valid_idx = torch.nonzero(attn[i], as_tuple=False).squeeze(-1) # (L,)
-                K_i = int(K_list[i].item())
-                
-                base_ranks = torch.arange(1, K_i + 1, device=device) * r - 1 # r-1, 2r-1, 3r-1, ..., K_i*r-1
-                base_ranks = torch.minimum(base_ranks, torch.tensor(L-1, device=device)) # last non-pad
-                
-                global_idx = valid_idx[base_ranks] # (K_i,)
-                sel = h_enc[i, global_idx, :] # (K_i, dim)
-                
-                # pad to max_K
-                if max_K > K_i:
-                    pad = max_K - K_i
-                    sel = torch.cat([sel, h_enc.new_zeros(pad, sel.size(-1))], dim=0)
-                    mask_i = torch.cat(
-                        [torch.ones(K_i, dtype=torch.bool, device=device), 
-                         torch.zeros(pad, dtype=torch.bool, device=device)]
-                    )
-                else:
-                    mask_i = torch.ones(K_i, dtype=torch.bool, device=device) if K_i > 0 else torch.zeros(1, dtype=torch.bool, device=device)
-                
-                selected_list.append(sel)
-                selected_mask_list.append(mask_i)
-            
-            selected = torch.stack(selected_list, dim=0) # (b, max_K, dim)
-            selected_mask = torch.stack(selected_mask_list, dim=0) # (b, max_K)
+        
+        lens = attn.sum(dim=1)
+        K_list = (lens + (r-1)) // r # ceil
+        max_K = max(1, int(K_list.max().item()))
+        
+        ###
+        base_idx = torch.arange(1, max_K + 1, device=device).view(1, -1) # [1, 2, ..., max_K]
+        idx = (base_idx * r).clamp(max=lens.view(b, 1)) - 1 # (b, max_K): [r, 2r, ..., n, n]
+        selected_mask = (base_idx <= K_list.view(b, 1)) # (b, max_K) boolean: [True, True, ..., True, False]
+        
+        idx_expanded = idx.unsqueeze(-1).expand(-1, -1, h_enc.size(-1))
+        selected = torch.gather(h_enc, 1, idx_expanded)
+        selected = selected * selected_mask.unsqueeze(-1)
         
         quantized, _, vq_loss = self.vq(selected, mask=selected_mask)
 
