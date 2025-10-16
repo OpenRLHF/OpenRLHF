@@ -14,6 +14,7 @@ from .loss import (
 )
 from .model import get_llm_for_sequence_regression
 from .latent_lm import LatentLM
+from .vqvae import TextVQVAE
 __all__ = [
     "Actor",
     "SFTLoss",
@@ -29,4 +30,5 @@ __all__ = [
     "VanillaKTOLoss",
     "get_llm_for_sequence_regression",
     "LatentLM",
+    "TextVQVAE",
 ]

@@ -1412,6 +1412,7 @@ class TextVQVAE(nn.Module):
     ) -> None:
         super().__init__()
 
+        self.codebook_size = codebook_size
         self.block_size = block_size
         self.dim = dim
         self.compression_rate = compression_rate
@@ -1495,3 +1496,66 @@ class TextVQVAE(nn.Module):
         logits = self.lm_head(h_dec)
 
         return {"logits": logits, "vq_loss": vq_loss}
+
+
+
+
+
+    def encode_with_chunk_num(self, 
+                                sequence_ids: torch.Tensor, 
+                                sequence_attention_mask: torch.Tensor,
+                                chunk_num: list[int]|torch.Tensor
+                                ) -> tuple[torch.Tensor, torch.Tensor]:
+        b, n = sequence_ids.shape
+        device = sequence_ids.device
+        with torch.no_grad():
+            x = self.tok_emb(sequence_ids)
+            h_enc = self.f_enc(x, key_padding_mask=sequence_attention_mask)
+
+            r = self.compression_rate
+
+            if sequence_attention_mask is None:
+                attn = torch.ones(b, n, dtype=torch.bool, device=device)
+            else:
+                attn = sequence_attention_mask.bool()
+                
+            # lens: each sequence's actual length (excluding padding)
+            lens = attn.sum(dim=1)  # (b,)
+
+            # m_list: Python list or torch.Tensor
+            m_list = chunk_num
+            # convert to torch.Tensor, but dtype and device should match lens
+            if not isinstance(m_list, torch.Tensor):
+                m_list = torch.tensor(m_list, dtype=lens.dtype, device=lens.device)
+            else:
+                m_list = m_list.to(device=lens.device, dtype=lens.dtype)
+
+            # each sequence's actual chunk number to draw: min(m_i, ceil(L_i / r))
+            # (even if m_i is not a multiple of r, it works)
+            K_list = torch.minimum(m_list, (lens + (r - 1)) // r)
+            max_K = max(1, int(K_list.max().item()))
+
+            # create base index from 1 to max_K
+            base_idx = torch.arange(1, max_K + 1, device=device).view(1, -1)  # (1, max_K)
+
+            # calculate selected index for each sequence
+            # (r * base_idx) based on, each sequence's actual length(L_i) should not be exceeded
+            idx = (base_idx * r).clamp(max=lens.view(-1, 1)) - 1  # (b, max_K)
+
+            # create valid interval mask for each sequence
+            selected_mask = (base_idx <= K_list.view(-1, 1))  # (b, max_K) True/False
+            assert selected_mask.shape == (b, max_K)
+            assert torch.sum(selected_mask, dim=1) == torch.sum(K_list)
+            # expand index for gather
+            idx_expanded = idx.unsqueeze(-1).expand(-1, -1, h_enc.size(-1))  # (b, max_K, d)
+
+            # select hidden state at the corresponding index
+            selected = torch.gather(h_enc, 1, idx_expanded)  # (b, max_K, d)
+
+            # padding section (mask False) is treated as 0
+            selected = selected * selected_mask.unsqueeze(-1)
+
+            # pass through VQ module
+            quantized, indices, vq_loss = self.vq(selected, mask=selected_mask)
+
+        return indices, selected_mask

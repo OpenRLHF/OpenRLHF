@@ -4,7 +4,7 @@ from .reward_dataset import RewardDataset
 from .sft_dataset import SFTDataset
 from .unpaired_preference_dataset import UnpairedPreferenceDataset
 from .chunked_dataset import ChunkedDataset
-
+from .latent_preprocessing_dataset import Latent_preprocessing_Dataset
 __all__ = [
     "ProcessRewardDataset",
     "PromptDataset",
@@ -12,4 +12,5 @@ __all__ = [
     "SFTDataset",
     "UnpairedPreferenceDataset",
     "ChunkedDataset",
+    "Latent_preprocessing_Dataset",
 ]
