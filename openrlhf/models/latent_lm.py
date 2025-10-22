@@ -1,10 +1,7 @@
-from typing import Optional
-
-import os
 import json
+import os
 import re
-
-from typing import List, Tuple, Dict, Optional
+from typing import Dict, List, Optional
 
 import deepspeed
 import torch
@@ -12,7 +9,7 @@ import torch.distributed as dist
 import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
-from transformers import AutoModelForCausalLM, BitsAndBytesConfig, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
@@ -20,34 +17,38 @@ from .utils import compute_entropy, log_probs_from_logits
 
 
 def unicode_range(start, end):
-    return ''.join(chr(c) for c in range(start, end + 1))
+    return "".join(chr(c) for c in range(start, end + 1))
+
 
 VALID_LATEXY = re.compile(
-    r"\A[" +
-    r"A-Za-z0-9" +
-    r"\s" +
-    r"\.\,\;\:\!\?\'\"\_\-\+\=\*\/\^\|\%\<\>\~\#\@\&\$" +
-    re.escape("\\()[]{}") +  # 특수문자 안전하게
-    unicode_range(0x0370, 0x03FF) +   # Greek and Coptic
-    unicode_range(0x1F00, 0x1FFF) +   # Greek Extended
-    unicode_range(0x2190, 0x21FF) +   # Arrows
-    unicode_range(0x2200, 0x22FF) +   # Math Operators
-    unicode_range(0x27C0, 0x27EF) +   # Misc Math A
-    unicode_range(0x2980, 0x29FF) +   # Misc Math B
-    unicode_range(0x2A00, 0x2AFF) +   # Supplemental Math
-    unicode_range(0x2100, 0x214F) +   # Letterlike symbols
-    unicode_range(0x2070, 0x209F) +   # Superscripts/Subscripts
-    unicode_range(0x1D400, 0x1D7FF) + # Math alphanumeric
-    "\u00B0\u00B1\u00B2\u00B3\u00B7\u00B9\u00D7\u00F7" +
-    r"]*\Z",
-    re.UNICODE
+    r"\A["
+    + r"A-Za-z0-9"
+    + r"\s"
+    + r"\.\,\;\:\!\?\'\"\_\-\+\=\*\/\^\|\%\<\>\~\#\@\&\$"
+    + re.escape("\\()[]{}")  # 특수문자 안전하게
+    + unicode_range(0x0370, 0x03FF)  # Greek and Coptic
+    + unicode_range(0x1F00, 0x1FFF)  # Greek Extended
+    + unicode_range(0x2190, 0x21FF)  # Arrows
+    + unicode_range(0x2200, 0x22FF)  # Math Operators
+    + unicode_range(0x27C0, 0x27EF)  # Misc Math A
+    + unicode_range(0x2980, 0x29FF)  # Misc Math B
+    + unicode_range(0x2A00, 0x2AFF)  # Supplemental Math
+    + unicode_range(0x2100, 0x214F)  # Letterlike symbols
+    + unicode_range(0x2070, 0x209F)  # Superscripts/Subscripts
+    + unicode_range(0x1D400, 0x1D7FF)  # Math alphanumeric
+    + "\u00b0\u00b1\u00b2\u00b3\u00b7\u00b9\u00d7\u00f7"
+    + r"]*\Z",
+    re.UNICODE,
 )
+
 
 def is_valid_generated_text(text: str) -> bool:
     return bool(VALID_LATEXY.match(text))
 
-def count_char_len(s:str) -> int:
+
+def count_char_len(s: str) -> int:
     return len(s)
+
 
 def _pick_invalid_tokens(vocab: Dict[str, int], need: int) -> List[str]:
     """
@@ -71,15 +72,17 @@ def _pick_invalid_tokens(vocab: Dict[str, int], need: int) -> List[str]:
 
     chosen = []
     seen = set()
- 
+
     batch = take(seen)
-    chosen += batch; seen.update(batch)
+    chosen += batch
+    seen.update(batch)
 
     if len(chosen) >= need:
         return chosen[:need]
     else:
         raise ValueError("Not enough invalid tokens to replace")
-   
+
+
 class LatentLM(nn.Module):
     """
     Base class for LatentLM models in latent language modeling.
@@ -178,7 +181,9 @@ class LatentLM(nn.Module):
             if tokenizer is not None:
                 self.tokenizer = tokenizer
             else:
-                self.tokenizer = AutoTokenizer.from_pretrained(pretrain_or_model,trust_remote_code=True, use_fast=use_fast)
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    pretrain_or_model, trust_remote_code=True, use_fast=use_fast
+                )
                 self.tokenizer.padding_side = padding_side
                 # NOTE: When enable vLLM, do not resize_token_embeddings, or the vocab size will mismatch with vLLM.
                 # https://github.com/facebookresearch/llama-recipes/pull/196
@@ -187,12 +192,6 @@ class LatentLM(nn.Module):
                     self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
                     if self.model is not None:
                         self.model.config.pad_token_id = self.tokenizer.pad_token_id
-
-            
-
-
-
-            
 
             # MoE - balancing loss
             model_config = self.model.config.to_dict()
@@ -218,22 +217,20 @@ class LatentLM(nn.Module):
         else:
             self.model = pretrain_or_model
 
-
         # Replace unused tokens to Latent tokens
         # Rebuild tokenizer and initialize embeddings
         self.tokenizer, self.model, _, _, _ = self.rebuild_tokenizer_by_invalid_tokens(
-                                                                            self.model, 
-                                                                            self.tokenizer, 
-                                                                            strategy.args.save_path, 
-                                                                            None, 
-                                                                            codebook_size, 
-                                                                            token_prefix="<LATENT_", 
-                                                                            verbose=True, 
-                                                                            init_embeddings=True, 
-                                                                            init_method=init_method, 
-                                                                            torch_dtype=torch.float32)
-
-
+            self.model,
+            self.tokenizer,
+            strategy.args.save_path,
+            None,
+            codebook_size,
+            token_prefix="<LATENT_",
+            verbose=True,
+            init_embeddings=True,
+            init_method=init_method,
+            torch_dtype=torch.float32,
+        )
 
         # LoRA
         if lora_rank > 0:
@@ -261,10 +258,10 @@ class LatentLM(nn.Module):
 
     def get_tokenizer(self):
         return self.tokenizer
-    
+
     def get_model(self):
         return self.model
-    
+
     def forward(
         self,
         sequences: torch.LongTensor,
@@ -366,9 +363,6 @@ class LatentLM(nn.Module):
                     print(f"🔹 Loading original tokenizer from: {model_path}")
                 tok = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
 
-            
-            
-
             if verbose:
                 print(f"🔹 Saving tokenizer to: {save_path}")
             tok.save_pretrained(save_path)
@@ -382,8 +376,8 @@ class LatentLM(nn.Module):
 
             # load
             tokdata = None
-            vocab=None
-            merges_json=None
+            vocab = None
+            merges_json = None
             if os.path.exists(tokjson):
                 with open(tokjson, "r", encoding="utf-8") as f:
                     tokdata = json.load(f)
@@ -396,8 +390,8 @@ class LatentLM(nn.Module):
                     vocab_json_file = json.load(f)
                     if vocab is None:
                         vocab = vocab_json_file
-            
-            merges_txt=None
+
+            merges_txt = None
             if os.path.exists(mergestxt):
                 with open(mergestxt, "r", encoding="utf-8") as f:
                     merges_txt = f.read()
@@ -450,7 +444,7 @@ class LatentLM(nn.Module):
             # added_tokens / added_tokens_decoder add
             added_specs = list(zip(replaced_ids, new_tok_strs))
 
-            # tokenizer_config.json modify    
+            # tokenizer_config.json modify
             if os.path.exists(tokcfg):
                 with open(tokcfg, "r", encoding="utf-8") as f:
                     tokcfg_data = json.load(f)
@@ -501,13 +495,11 @@ class LatentLM(nn.Module):
                 tokdata["added_tokens"] = added_list
                 tokdata["model"]["vocab"] = vocab
                 tokdata["model"]["merges"] = kept_merges_json
-            
+
             else:
                 for tid, content in added_specs:
                     added_tokens[content] = tid
 
-
-            
             # save
             if tokdata:
                 with open(tokjson, "w", encoding="utf-8") as f:
@@ -521,7 +513,7 @@ class LatentLM(nn.Module):
             if added_tokens:
                 with open(addedtoks, "w", encoding="utf-8") as f:
                     json.dump(added_tokens, f, ensure_ascii=False, indent=2)
-                    
+
             if verbose:
                 print(f"✅ Saved modified tokenizer with {len(replaced_ids)} replaced tokens.")
                 print(f"🔹 Example: {candidates[0]} → {new_tokens[0]}")
@@ -542,11 +534,13 @@ class LatentLM(nn.Module):
             if verbose:
                 print(f"✅ Replaced {len(replaced_ids)} tokens. Example: {candidates[0]} → {new_tokens[0]}")
                 print(f"🔹 New token id check: {new_tokens[0]} → {tok2.convert_tokens_to_ids(new_tokens[0])}")
-                print(f"New token decode check: {tok2.convert_tokens_to_ids(new_tokens[0])} → {tok2.convert_ids_to_tokens(tok2.convert_tokens_to_ids(new_tokens[0]))}")
+                print(
+                    f"New token decode check: {tok2.convert_tokens_to_ids(new_tokens[0])} → {tok2.convert_ids_to_tokens(tok2.convert_tokens_to_ids(new_tokens[0]))}"
+                )
 
             # 7) (optional) initialize embeddings/LM-Head
             if init_embeddings:
-                
+
                 if model is None:
                     if verbose:
                         print(f"🔹 Loading model for embedding init from: {model_path}")
@@ -584,7 +578,6 @@ class LatentLM(nn.Module):
         if dist.is_initialized():
             dist.barrier()
         return tok2, model, replaced_ids, new_tokens, candidates
-
 
     # def replace_unused_tokens(self, codebook_size, start_cp, init_method="random", save_dir="./custom_tokenizer"):
     #     """
@@ -677,32 +670,6 @@ class LatentLM(nn.Module):
 
     #     # 8️⃣ return replaced token ids
     #     return replaced_token_ids
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 class LatentLM_old(nn.Module):
@@ -803,7 +770,9 @@ class LatentLM_old(nn.Module):
             if tokenizer is not None:
                 self.tokenizer = tokenizer
             else:
-                self.tokenizer = AutoTokenizer.from_pretrained(pretrain_or_model,trust_remote_code=True, use_fast=use_fast)
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    pretrain_or_model, trust_remote_code=True, use_fast=use_fast
+                )
                 self.tokenizer.padding_side = padding_side
                 # NOTE: When enable vLLM, do not resize_token_embeddings, or the vocab size will mismatch with vLLM.
                 # https://github.com/facebookresearch/llama-recipes/pull/196
@@ -812,12 +781,6 @@ class LatentLM_old(nn.Module):
                     self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
                     if self.model is not None:
                         self.model.config.pad_token_id = self.tokenizer.pad_token_id
-
-            
-
-
-
-            
 
             # MoE - balancing loss
             model_config = self.model.config.to_dict()
@@ -849,31 +812,31 @@ class LatentLM_old(nn.Module):
         latent_token_list = []
         for i in range(codebook_size):
             latent_token_list.append(f"<LATENT_{i}>")
-        
+
         # add latent tokens to tokenizer
         n_added = self.tokenizer.add_tokens(latent_token_list)
         self.strategy.print(f"tokenizer.add_tokens returned: {n_added}")
 
         # get input embeddings
-        input_emb = self.model.get_input_embeddings()   # nn.Embedding
+        input_emb = self.model.get_input_embeddings()  # nn.Embedding
         old_num_tokens, emb_dim = input_emb.weight.size()
-        
+
         # resize token embeddings
         self.model.resize_token_embeddings(len(self.tokenizer))  # maybe tie_weights is handled internally
         new_input_emb = self.model.get_input_embeddings()
         new_num_tokens = new_input_emb.weight.size(0)
-        self.strategy.print(f"new embedding shape: {new_num_tokens} x {self.model.config.hidden_size} (expected {self.model.config.vocab_size + n_added})")
-
+        self.strategy.print(
+            f"new embedding shape: {new_num_tokens} x {self.model.config.hidden_size} (expected {self.model.config.vocab_size + n_added})"
+        )
 
         # initialize new embeddings
         with torch.no_grad():
             if init_method == "mean":
                 # initialize new embeddings with the mean of existing embeddings
                 mean_vec = new_input_emb.weight.mean(dim=0, keepdim=True)  # 1 x D
-                new_input_emb.weight.data[self.model.config.vocab_size:] = mean_vec.repeat(n_added, 1)
+                new_input_emb.weight.data[self.model.config.vocab_size :] = mean_vec.repeat(n_added, 1)
                 self.strategy.print("Initialized new embeddings with the mean of existing embeddings.")
 
-            
             elif init_method == "random":
                 # initialize new embeddings randomly
                 std = getattr(self.model.config, "initializer_range", 0.02)
@@ -886,10 +849,11 @@ class LatentLM_old(nn.Module):
         # tie_weights: maybe tied internally, but we call it explicitly
         try:
             self.model.tie_weights()
-            self.strategy.print("Called model.tie_weights() to ensure input/output embeddings are tied (if supported).")
+            self.strategy.print(
+                "Called model.tie_weights() to ensure input/output embeddings are tied (if supported)."
+            )
         except Exception as e:
             self.strategy.print("model.tie_weights() not available or failed:", e)
-
 
         # LoRA
         if lora_rank > 0:
@@ -917,10 +881,10 @@ class LatentLM_old(nn.Module):
 
     def get_tokenizer(self):
         return self.tokenizer
-    
+
     def get_model(self):
         return self.model
-    
+
     def forward(
         self,
         sequences: torch.LongTensor,

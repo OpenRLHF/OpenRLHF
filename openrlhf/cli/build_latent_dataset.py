@@ -1,30 +1,16 @@
 import argparse
-import math
-import os
-from datetime import datetime
 import json
-import glob
+import os
+import random
 
-from transformers.trainer import get_scheduler
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-from openrlhf.models import TextVQVAE
-from openrlhf.datasets import Latent_preprocessing_Dataset
-from openrlhf.datasets.utils import blending_datasets
-
-
-from tqdm import tqdm
 import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader
+from transformers import AutoTokenizer
 
-
-import re
-import random
-
-
-
-
+from openrlhf.datasets import Latent_preprocessing_Dataset
+from openrlhf.datasets.utils import blending_datasets
+from openrlhf.models import TextVQVAE
 
 
 def add_special_tokens(indices, selected_mask, attn_masks, tokenizer, special_token_id_list):
@@ -37,30 +23,30 @@ def add_special_tokens(indices, selected_mask, attn_masks, tokenizer, special_to
     bol_id = special_token_id_list[0]
     eol_id = special_token_id_list[1]
     valid_len = selected_mask.sum(dim=-1)
-    
+
     # 1. generate result tensor with pad_id, add bol_id at the beginning, add eol_id at the end of each sequence
     batch_size, seq_len = indices.shape
     result = torch.full((batch_size, seq_len + 2), pad_id, device=device, dtype=indices.dtype)
-    
+
     # 2. fill the left side of result with bol_id
     result[:, 0] = bol_id
-    
+
     # 3. append valid tokens to the result
     for i in range(batch_size):
         valid_count = valid_len[i].item()
         if valid_count > 0:
             # copy valid tokens to the result
-            result[i, 1:1+valid_count] = indices[i, :valid_count]
+            result[i, 1 : 1 + valid_count] = indices[i, :valid_count]
             # add eol_id to the end of valid tokens
-            result[i, 1+valid_count] = eol_id
+            result[i, 1 + valid_count] = eol_id
             # copy invalid tokens to the result
             if valid_count < seq_len:
-                result[i, 2+valid_count:] = indices[i, valid_count:]
-    
+                result[i, 2 + valid_count :] = indices[i, valid_count:]
+
     attention_mask = result != pad_id
 
     return result, attention_mask
-  
+
 
 ## TODO: need to check
 def replace_indices_with_latent_tokens(indices, selected_mask, tokenizer, latent_vocab_indices):
@@ -88,14 +74,13 @@ def replace_indices_with_latent_tokens(indices, selected_mask, tokenizer, latent
     return replaced_indices
 
 
-
 def integrate_vq_indices(
-    extended_inputs: torch.Tensor,    # (B, N)
-    indices: torch.Tensor,            # (B, seq_len)
-    selected_mask: torch.Tensor,      # (B, seq_len), bool
+    extended_inputs: torch.Tensor,  # (B, N)
+    indices: torch.Tensor,  # (B, seq_len)
+    selected_mask: torch.Tensor,  # (B, seq_len), bool
     r: int,
-    chunk_num: list[int]|torch.Tensor,
-    m_list: list[int]|torch.Tensor,
+    chunk_num: list[int] | torch.Tensor,
+    m_list: list[int] | torch.Tensor,
     pad_value: int = 0,
 ):
     """
@@ -115,12 +100,12 @@ def integrate_vq_indices(
 
     # for each batch
     for i in range(B):
-        valid_len = int(selected_mask[i].sum().item())   # valid tokens from VQ
+        valid_len = int(selected_mask[i].sum().item())  # valid tokens from VQ
         replaced_len = valid_len * r
         if chunk_num:
             assert chunk_num[i] == valid_len
         if m_list:
-            assert m_list[i] == valid_len * r                     # replaced tokens in original sequence
+            assert m_list[i] == valid_len * r  # replaced tokens in original sequence
 
         # ① replace the valid part of indices
         if valid_len > 0:
@@ -130,15 +115,16 @@ def integrate_vq_indices(
         tail_len = N - replaced_len
         if tail_len > 0:
             # tail is the part of extended_inputs after replaced_len
-            result[i, valid_len:valid_len + tail_len] = extended_inputs[i, replaced_len:replaced_len + tail_len]
+            result[i, valid_len : valid_len + tail_len] = extended_inputs[i, replaced_len : replaced_len + tail_len]
 
     attention_mask = result != pad_value
 
     return result, attention_mask
 
 
-
-def _preprocess_original_dataset(dataloader, tokenizer, vqvae: TextVQVAE, max_M_list: list, m_count_per_sample: int, r: int, latent_vocab_size: int):
+def _preprocess_original_dataset(
+    dataloader, tokenizer, vqvae: TextVQVAE, max_M_list: list, m_count_per_sample: int, r: int, latent_vocab_size: int
+):
     """
     preprocess original dataset - sample max M, uniform m, slicing and chunking with m.
 
@@ -147,7 +133,7 @@ def _preprocess_original_dataset(dataloader, tokenizer, vqvae: TextVQVAE, max_M_
     3. caching list of m in batch, m_list.
 
 
-    
+
     Return:
         - preprocessed dataset
         (batch, m/L, L)
@@ -155,7 +141,7 @@ def _preprocess_original_dataset(dataloader, tokenizer, vqvae: TextVQVAE, max_M_
         (batch,)
     """
 
-    latent_vocab_size=vqvae.codebook_size
+    latent_vocab_size = vqvae.codebook_size
     latent_token_id_list = []
     for i in range(latent_vocab_size):
         token_str = f"<LATENT_{i}>"
@@ -175,7 +161,7 @@ def _preprocess_original_dataset(dataloader, tokenizer, vqvae: TextVQVAE, max_M_
         # prompts have left padding, responses have right padding
         inputs = response_ids
         attn_masks = response_attention_masks
-        
+
         sampled_max_Ms = random.sample(max_M_list, inputs.shape[0])
 
         b, n = inputs.shape
@@ -214,35 +200,39 @@ def _preprocess_original_dataset(dataloader, tokenizer, vqvae: TextVQVAE, max_M_
 
         # indices = integrate_vq_indices(extended_inputs, indices, selected_mask, r, chunk_nums, m_list, tokenizer.pad_token_id)
 
-        latent_token_indices = replace_indices_with_latent_tokens(indices, selected_mask, tokenizer, latent_token_id_list)
-        origin_with_latent, origin_with_latent_attn_masks = integrate_vq_indices(extended_inputs, latent_token_indices, selected_mask, r, chunk_nums, m_list, tokenizer.pad_token_id)
-        
+        latent_token_indices = replace_indices_with_latent_tokens(
+            indices, selected_mask, tokenizer, latent_token_id_list
+        )
+        origin_with_latent, origin_with_latent_attn_masks = integrate_vq_indices(
+            extended_inputs, latent_token_indices, selected_mask, r, chunk_nums, m_list, tokenizer.pad_token_id
+        )
+
         # add bol, eol special tokens to the origin_with_latent
-        origin_with_latent, origin_with_latent_attn_masks = add_special_tokens(origin_with_latent, selected_mask, origin_with_latent_attn_masks, tokenizer, special_token_id_list)
+        origin_with_latent, origin_with_latent_attn_masks = add_special_tokens(
+            origin_with_latent, selected_mask, origin_with_latent_attn_masks, tokenizer, special_token_id_list
+        )
 
-        
-
-        
         origin_prompt_ids.extend(prompt_ids)
         preprocessed_response_ids.extend(origin_with_latent.tolist())
-        
 
     return origin_prompt_ids, preprocessed_response_ids
 
+
 def init_distributed():
     """Initialize distributed training if available"""
-    if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
-        rank = int(os.environ['RANK'])
-        world_size = int(os.environ['WORLD_SIZE'])
-        local_rank = int(os.environ['LOCAL_RANK'])
-        
-        dist.init_process_group(backend='nccl')
+    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        rank = int(os.environ["RANK"])
+        world_size = int(os.environ["WORLD_SIZE"])
+        local_rank = int(os.environ["LOCAL_RANK"])
+
+        dist.init_process_group(backend="nccl")
         torch.cuda.set_device(local_rank)
-        
+
         return rank, world_size, local_rank
     else:
         # Single GPU mode
         return 0, 1, 0
+
 
 def build_latent_dataset(args):
     """
@@ -256,6 +246,7 @@ def build_latent_dataset(args):
     6. save dataset
     """
     rank, world_size, local_rank = init_distributed()
+
     class Empty:
         pass
 
@@ -263,8 +254,7 @@ def build_latent_dataset(args):
     dummy_strategy.print = print if rank == 0 else lambda *args, **kwargs: None
     dummy_strategy.is_rank_0 = lambda: rank == 0
     dummy_strategy.args = args
-    
-    
+
     # maybe change load config method
     model_config = json.load(open(os.path.join(args.model_path, "config.json")))
 
@@ -282,7 +272,7 @@ def build_latent_dataset(args):
         dummy_strategy,
         args.seed,
     )
-    
+
     # split dataset to each rank
     if world_size > 1:
         # Calculate chunk size for each rank
@@ -290,28 +280,44 @@ def build_latent_dataset(args):
         samples_per_rank = total_samples // world_size
         start_idx = rank * samples_per_rank
         end_idx = start_idx + samples_per_rank if rank < world_size - 1 else total_samples
-        
+
         # Create subset for this rank
         dataset = torch.utils.data.Subset(dataset, range(start_idx, end_idx))
-        
+
         if rank == 0:
             dummy_strategy.print(f"Total samples: {total_samples}, samples per rank: {samples_per_rank}")
             dummy_strategy.print(f"Rank {rank} processing samples {start_idx} to {end_idx-1}")
 
     dataset = Latent_preprocessing_Dataset(dataset, tokenizer, args.max_length, dummy_strategy)
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, collate_fn=dataset.collate_fn, pin_memory=True, drop_last=True)
-    
-    prompt_ids, preprocessed_response_ids = _preprocess_original_dataset(dataloader, tokenizer, vqvae, args.max_M_list, args.m_count_per_sample, vqvae.compression_rate, vqvae.codebook_size)
-    
+    dataloader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        collate_fn=dataset.collate_fn,
+        pin_memory=True,
+        drop_last=True,
+    )
+
+    prompt_ids, preprocessed_response_ids = _preprocess_original_dataset(
+        dataloader,
+        tokenizer,
+        vqvae,
+        args.max_M_list,
+        args.m_count_per_sample,
+        vqvae.compression_rate,
+        vqvae.codebook_size,
+    )
+
     # gather prompt_ids and preprocessed_response_ids to rank 0
     if world_size > 1:
         # Gather all prompt_ids and preprocessed_response_ids to rank 0
         gathered_prompt_ids = [None] * world_size
         gathered_response_ids = [None] * world_size
-        
+
         dist.all_gather_object(gathered_prompt_ids, prompt_ids)
         dist.all_gather_object(gathered_response_ids, preprocessed_response_ids)
-        
+
         if rank == 0:
             # Flatten the gathered lists
             all_prompt_ids = []
@@ -319,19 +325,19 @@ def build_latent_dataset(args):
             for i in range(world_size):
                 all_prompt_ids.extend(gathered_prompt_ids[i])
                 all_response_ids.extend(gathered_response_ids[i])
-            
+
             prompt_ids = all_prompt_ids
             preprocessed_response_ids = all_response_ids
-    
+
     if rank == 0:
         import jsonlines
+
         with jsonlines.open(args.save_path, mode="w") as writer:
             for prompt_id, latent_response in zip(prompt_ids, preprocessed_response_ids):
                 writer.write({f"{args.input_key}": prompt_id, f"{args.output_key}": latent_response})
-    
+
     if world_size > 1:
         dist.barrier()
-
 
 
 if __name__ == "__main__":
@@ -350,17 +356,5 @@ if __name__ == "__main__":
     parser.add_argument("--num_workers", type=int, required=True)
     parser.add_argument("--seed", type=int, required=True)
     args = parser.parse_args()
-    
+
     build_latent_dataset(args)
-
-
-
-
-
-
-
-
-
-
-
-

@@ -6,9 +6,7 @@ from torch.utils.data import Dataset
 from openrlhf.utils.utils import zero_pad_sequences
 
 
-def preprocess_data(
-    data, input_key="query", output_key="response"
-):
+def preprocess_data(data, input_key="query", output_key="response"):
     prompt = data[input_key]
     response = data[output_key]
     return prompt, response
@@ -55,7 +53,6 @@ class Latent_preprocessing_Dataset(Dataset):
         self.prompt_ids_lens = processed_dataset["prompt_ids_len"]
 
     def process_data(self, data):
-        
 
         prompt, response = preprocess_data(
             data,
@@ -76,7 +73,6 @@ class Latent_preprocessing_Dataset(Dataset):
         if not prompt or not response or prompt_ids_len >= self.max_length - 2:
             prompt = None
 
-
         return {
             "prompt": prompt,
             "response": response,
@@ -91,7 +87,7 @@ class Latent_preprocessing_Dataset(Dataset):
         prompt = self.prompts[idx]
         response = self.responses[idx]
         prompt_ids_len = self.prompt_ids_lens[idx]
-        
+
         prompt_token = self.tokenizer(
             prompt,
             max_length=self.max_length,
@@ -149,7 +145,7 @@ class Latent_preprocessing_Dataset(Dataset):
         return loss_mask
 
     def collate_fn(self, item_list):
-        
+
         prompt_ids = []
         prompt_attention_masks = []
         response_ids = []
@@ -163,7 +159,7 @@ class Latent_preprocessing_Dataset(Dataset):
             response_attention_masks.append(response_attention_mask)
             prompt_ids_lens.append(prompt_ids_len)
 
-        #prompt_ids = zero_pad_sequences(prompt_ids, "left", self.tokenizer.pad_token_id)
+        # prompt_ids = zero_pad_sequences(prompt_ids, "left", self.tokenizer.pad_token_id)
         # prompt_attention_masks = zero_pad_sequences(prompt_attention_masks, "left")
         response_ids = zero_pad_sequences(response_ids, "right", self.tokenizer.pad_token_id)
         response_attention_masks = zero_pad_sequences(response_attention_masks, "right")
