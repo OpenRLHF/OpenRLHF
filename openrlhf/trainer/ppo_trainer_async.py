@@ -151,9 +151,10 @@ class GenerateSamplesActor(BasePPOTrainer):
 @ray.remote
 class TrainingActor(BasePPOTrainer):
     def __init__(self, *args, **kwargs):
-        self.signal_actor = kwargs.pop("signal_actor")
-        self.remote_reward_model = kwargs.pop("remote_reward_model")
         super().__init__(*args, **kwargs)
+        self.signal_actor = kwargs.pop("signal_actor")
+        # Assign after super().__init__ to avoid being overwritten by parent
+        self.remote_reward_model = kwargs.pop("remote_reward_model")
 
         if self.kl_target:
             self.kl_ctl = AdaptiveKLController(self.init_kl_coef, self.kl_target, self.kl_horizon)
