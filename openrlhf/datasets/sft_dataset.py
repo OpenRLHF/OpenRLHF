@@ -94,7 +94,7 @@ class SFTDataset(Dataset):
         if self.multiturn:
             assert (
                 not self.output_key or not data[self.output_key]
-            ), "You should put the whole trajactory into data[input_key] and do not set output_key"
+            ), "You should put the whole trajectory into data[input_key] and do not set output_key"
             input_key = self.input_key
             apply_chat_template = self.apply_chat_template
             response_ranges = []

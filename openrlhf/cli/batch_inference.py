@@ -356,7 +356,7 @@ if __name__ == "__main__":
     parser.add_argument("--rollout_batch_size", type=int, default=2048, help="Number of samples to generate")
 
     # For Conditional SFT
-    parser.add_argument("--normalize_reward", action="store_true", default=False, help="Enable Reward Normazation")
+    parser.add_argument("--normalize_reward", action="store_true", default=False, help="Enable Reward Normalization")
     parser.add_argument("--reward_template", type=str, default=None)
     parser.add_argument("--enable_csft", action="store_true", default=False)
     parser.add_argument("--csft_prompt", type=str, default="<rm_score>: 5.00", help="Conditional SFT prompt")
