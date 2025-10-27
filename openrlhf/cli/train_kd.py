@@ -260,7 +260,7 @@ if __name__ == "__main__":
 
     if args.input_template and "\\n" in args.input_template:
         print(
-            "[Warning] input_template contains \\n chracters instead of newline. "
+            "[Warning] input_template contains \\n characters instead of newline. "
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
