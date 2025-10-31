@@ -42,6 +42,7 @@ OpenRLHFは、Ray、vLLM、ZeRO-3、およびHuggingFace Transformersを基盤�
 詳細は[スライド](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [技術報告](https://arxiv.org/abs/2405.11143) | [ドキュメント](https://openrlhf.readthedocs.io/)をご覧ください。
 
 ## ニュース
+- [2025/11] [NeMo Gym](https://github.com/NVIDIA-NeMo/Gym) OpenRLHF は NeMo-Gym との統合をサポートし、外部評価環境を使用した高度なエージェントベースの RLHF トレーニングが可能になりました。
 - [2025/10] [ScaleRL](https://arxiv.org/abs/2510.13786) は大規模訓練シナリオにおいて REINFORCE++-baseline の有効性を検証しました。[REINFORCE++ slides](https://docs.google.com/presentation/d/1stieP_3PM1z4Hq1YWR3GywFkxcHEAlstXMaS23KlGN4) を公開
 - [2025/8] [ProRL V2](https://hijkzzz.notion.site/prorl-v2) は REINFORCE++-baseline を使用して最先端の 1.5B 推論モデルを訓練し、ブログ記事 [REINFORCE++-baseline is all you need in RLVR](https://medium.com/@janhu9527/reinforce-baseline-is-all-you-need-in-rlvr-f5406930aa85) を公開しました。
 - [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) は REINFORCE++-baseline を使用して推論モデルを訓練しています。
@@ -60,9 +61,10 @@ OpenRLHFは、Ray、vLLM、ZeRO-3、およびHuggingFace Transformersを基盤�
 
 ## 特徴
 
-- Rayに基づく分散[ PPO](./examples/scripts/train_ppo_llama_ray.sh)および[EINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray.sh)の実装。
+- Rayに基づく分散[ PPO](./examples/scripts/train_ppo_llama_ray.sh)および[REINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray.sh)の実装。
 - [Ray-based Reinforced Finetuning](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
 - RayとHybrid Engineに基づく[PPO](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh)および[REINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh)のサポート (`--colocate_all_models`, `--vllm_enable_sleep` and `--vllm_gpu_memory_utilization 0.5`)
+- [NeMo Gym](./examples/scripts/train_reinforce_nemogym.sh) との統合により、外部評価環境を使用したエージェントベースの RLHF をサポート（`--agent_func_path` と NeMo Gym の統合）
 - DAPOからのRL Dynamic Samplingのサポート(`--dynamic_filtering` and `--dynamic_filtering_reward_range`)
 - [DeepSpeed AutoTP トレーニング](./examples/scripts/train_sft_llama_tensor_parallelism.sh)のサポート (`--ds_tensor_parallel_size`)
 - [70億以上のパラメータを持つモデル](./examples/scripts/train_ppo_llama_ray_70b.sh)の完全なRLHF微調整のサポート。

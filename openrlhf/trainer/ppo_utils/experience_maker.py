@@ -356,7 +356,7 @@ class SamplesGenerator:
             input_ids = list(output.prompt_token_ids) + list(output.outputs[0].token_ids)
             attention_mask = [1] * len(input_ids)
 
-            sequences = torch.tensor(input_ids)
+            sequences = torch.tensor(input_ids, dtype=torch.long)
             attention_mask = torch.tensor(attention_mask)
 
             # Create action mask based on output token positions

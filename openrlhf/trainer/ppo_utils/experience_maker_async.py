@@ -78,7 +78,7 @@ class SamplesGeneratorAsync(SamplesGenerator):
             tokenized_ranges = output["action_ranges"]
 
             # Create tensors
-            sequences = torch.tensor(tokenized_observation)
+            sequences = torch.tensor(tokenized_observation, dtype=torch.long)
             attention_mask = torch.tensor([1] * len(tokenized_observation))
 
             # Create action mask based on tokenized action_ranges
