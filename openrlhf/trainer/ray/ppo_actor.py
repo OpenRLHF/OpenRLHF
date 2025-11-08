@@ -266,9 +266,7 @@ class ActorPPOTrainer(ABC):
 
         policy_entropy = None
         if hasattr(output, "entropy"):
-            policy_entropy = masked_mean(
-                output.entropy[:, -experience.action_mask.shape[1] :], experience.action_mask
-            )
+            policy_entropy = masked_mean(output.entropy[:, -experience.action_mask.shape[1] :], experience.action_mask)
 
         # entropy loss
         if self.args.entropy_loss_coef is not None and policy_entropy is not None:
@@ -288,7 +286,6 @@ class ActorPPOTrainer(ABC):
                 self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
         else:
             self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
-
 
         if self.ema_model:
             if self.args.use_dynamic_batch:
