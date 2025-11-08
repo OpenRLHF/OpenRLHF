@@ -48,7 +48,11 @@ class CriticPPOTrainer(ABC):
         self.max_epochs = self.args.max_epochs
 
         self.replay_buffer = NaiveReplayBuffer(
-            micro_train_batch_size, buffer_limit, buffer_cpu_offload, getattr(self.args, "packing_samples", False)
+            micro_train_batch_size,
+            buffer_limit,
+            buffer_cpu_offload,
+            getattr(self.args, "packing_samples", False),
+            self.args.use_dynamic_batch,
         )
 
         self.critic_loss_fn = ValueLoss(value_clip)
@@ -58,7 +62,14 @@ class CriticPPOTrainer(ABC):
 
     def ppo_train(self):
         # replay buffer may be empty at first, we should rebuild at each training
-        not_shuffle = self.strategy.ring_attn_group is not None or self.args.ds_tensor_parallel_size > 1
+        if self.args.use_dynamic_batch:
+            self.replay_buffer.setup_dynamic_batch(self.strategy)
+
+        not_shuffle = (
+            self.strategy.ring_attn_group is not None
+            or self.args.ds_tensor_parallel_size > 1
+            or self.args.use_dynamic_batch
+        )
         dataloader = DataLoader(
             self.replay_buffer,
             batch_size=self.replay_buffer.sample_batch_size,
@@ -77,9 +88,9 @@ class CriticPPOTrainer(ABC):
                 desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
-            for experience in pbar:
+            for step, experience in enumerate(pbar):
                 experience.to_device(device)
-                status = self.training_step(experience)
+                status = self.training_step(experience, step)
 
                 # for DP
                 status = self.strategy.all_reduce(status)
@@ -96,7 +107,7 @@ class CriticPPOTrainer(ABC):
                 status_mean[k] /= len(status_list)
         return status_mean
 
-    def training_step(self, experience: Experience) -> Dict[str, float]:
+    def training_step(self, experience: Experience, step: int) -> Dict[str, float]:
         self.critic.train()
 
         sequences = experience.sequences
@@ -130,8 +141,15 @@ class CriticPPOTrainer(ABC):
         else:
             aux_loss = 0
         loss = critic_loss + aux_loss * self.args.aux_loss_coef
+        if self.args.use_dynamic_batch:
+            loss = loss * self.replay_buffer.dynamic_loss_scale[step]
+
         self.strategy.backward(loss, self.critic, self.critic_optim)
-        self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
+        if self.args.use_dynamic_batch:
+            if self.replay_buffer.dynamic_optimizer_step[step]:
+                self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
+        else:
+            self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
 
         # status
         status = {
@@ -152,7 +170,7 @@ class CriticModelActor(BaseModelActor):
             pretrain,
             "critic",
             normalize_reward=strategy.args.normalize_reward,
-            use_flash_attention_2=strategy.args.flash_attn,
+            attn_implementation=strategy.args.attn_implementation,
             bf16=strategy.args.bf16,
             load_in_4bit=strategy.args.load_in_4bit,
             lora_rank=strategy.args.lora_rank,

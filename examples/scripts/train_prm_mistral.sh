@@ -17,7 +17,7 @@ openrlhf.cli.train_prm \
    --dataset zhuzilin/Math-Shepherd \
    --input_key input \
    --label_key value \
-   --flash_attn \
+   --attn_implementation flash_attention_2 \
    --load_checkpoint \
    --gradient_checkpointing \
    --packing_samples \

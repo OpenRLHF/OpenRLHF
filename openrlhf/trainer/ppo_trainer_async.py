@@ -8,6 +8,7 @@ from tqdm import tqdm
 from openrlhf.trainer.ppo_trainer import BasePPOTrainer
 from openrlhf.trainer.ppo_utils import AdaptiveKLController, FixedKLController
 from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
+from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.logging_utils import init_logger
@@ -150,9 +151,10 @@ class GenerateSamplesActor(BasePPOTrainer):
 @ray.remote
 class TrainingActor(BasePPOTrainer):
     def __init__(self, *args, **kwargs):
-        self.signal_actor = kwargs.pop("signal_actor")
-        self.remote_reward_model = kwargs.pop("remote_reward_model")
         super().__init__(*args, **kwargs)
+        self.signal_actor = kwargs.pop("signal_actor")
+        # Assign after super().__init__ to avoid being overwritten by parent
+        self.remote_reward_model = kwargs.pop("remote_reward_model")
 
         if self.kl_target:
             self.kl_ctl = AdaptiveKLController(self.init_kl_coef, self.kl_target, self.kl_horizon)
@@ -198,6 +200,11 @@ class TrainingActor(BasePPOTrainer):
             experiences = self.experience_maker.make_experience_batch(rollout_samples)
             sample0 = self.tokenizer.batch_decode(experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True)
             print(sample0)
+
+            # balance experiences across dp
+            if args.use_dynamic_batch:
+                experiences = balance_experiences(experiences, args)
+
             refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences)
             if self.critic_model_group is not None:
                 refs.extend(
@@ -266,7 +273,7 @@ class PPOTrainerAsync:
         if self.args.remote_rm_url and not self.args.remote_rm_url[0] == "agent":
             from openrlhf.utils.remote_rm_utils import RemoteRewardModel
 
-            self.remote_reward_model = RemoteRewardModel.remote(self.args, self.remote_rm_url)
+            self.remote_reward_model = RemoteRewardModel.remote(self.args, self.args.remote_rm_url)
         else:
             self.remote_reward_model = None
 

@@ -15,8 +15,8 @@ RUN DEBIAN_FRONTEND=noninteractive apt install -y tzdata
 
 RUN apt-get -y install build-essential git python3-dev python3-pip libopenexr-dev libxi-dev libglfw3-dev libglew-dev libomp-dev libxinerama-dev libxcursor-dev gdb
 RUN pip uninstall xgboost transformer_engine flash_attn pynvml opencv-python-headless -y
-RUN pip install flash-attn==2.8.0.post2
-RUN pip install vllm==0.9.1
+RUN pip install vllm==0.11.0
+RUN pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
 
 COPY docker-entrypoint.sh .
 RUN chmod a+x docker-entrypoint.sh

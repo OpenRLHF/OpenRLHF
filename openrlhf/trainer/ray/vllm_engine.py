@@ -55,8 +55,9 @@ class BaseLLMRayActor:
         self.kwargs = kwargs
 
         import vllm
+        from packaging import version
 
-        if vllm.__version__ >= "0.9.0":
+        if version.parse(vllm.__version__) >= version.parse("0.9.0"):
             os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 
 
@@ -121,11 +122,13 @@ def create_vllm_engines(
     gpu_memory_utilization=None,
     vllm_enable_sleep=False,
     llm_actor_cls=LLMRayActor,
+    logprobs_mode=None,
     agent_func_path=None,
 ):
     import vllm
+    from packaging import version
 
-    assert vllm.__version__ > "0.8.2", "OpenRLHF only supports vllm > 0.8.2"
+    assert version.parse(vllm.__version__) > version.parse("0.8.2"), "OpenRLHF only supports vllm > 0.8.2"
 
     vllm_engines = []
     distributed_executor_backend = "uni" if tensor_parallel_size == 1 else "ray"
@@ -153,6 +156,14 @@ def create_vllm_engines(
             placement_group_bundle_index=bundle_indices[0] if bundle_indices else i,
         )
 
+        additional_kwargs = {}
+        if logprobs_mode:
+            additional_kwargs["logprobs_mode"] = logprobs_mode
+            additional_kwargs["max_logprobs"] = 1
+            assert version.parse(vllm.__version__) > version.parse(
+                "0.10.0"
+            ), "vLLM > 0.10.0 is required for logprobs_mode"
+
         vllm_engines.append(
             llm_actor_cls.options(
                 num_cpus=num_gpus,
@@ -175,6 +186,7 @@ def create_vllm_engines(
                 num_gpus=0.2 if use_hybrid_engine else 1,
                 enable_sleep_mode=vllm_enable_sleep,
                 agent_func_path=agent_func_path,
+                **additional_kwargs,
             )
         )
 

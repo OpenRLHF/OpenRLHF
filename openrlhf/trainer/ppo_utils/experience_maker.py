@@ -11,6 +11,7 @@ import torch
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.logging_utils import init_logger
+from openrlhf.utils.seqlen_balancing import get_minimum_num_micro_batch_size, get_seqlen_balanced_partitions
 from openrlhf.utils.utils import remove_pad_token, zero_pad_sequences
 
 logger = init_logger(__name__)
@@ -33,6 +34,7 @@ class Experience:
     """Experience is a batch of data for RLHF training.
 
     Shapes of each tensor:
+    index: (B,)
     sequences: (B, S)
     attention_mask: (B, S)
     action_mask: (B, A)
@@ -45,12 +47,14 @@ class Experience:
     info: dict[str, list]
     """
 
+    index: list[int] = None
     sequences: torch.Tensor = None
     attention_mask: torch.LongTensor = None
     action_mask: torch.BoolTensor = None
 
     action_log_probs: torch.Tensor = None
     base_action_log_probs: torch.Tensor = None
+    rollout_log_probs: torch.Tensor = None
     values: torch.Tensor = None
     returns: torch.Tensor = None
     advantages: torch.Tensor = None
@@ -67,9 +71,11 @@ class Experience:
 
     def __init__(
         self,
+        index=None,
         sequences=None,
         action_log_probs=None,
         base_action_log_probs=None,
+        rollout_log_probs=None,
         values=None,
         returns=None,
         advantages=None,
@@ -82,9 +88,11 @@ class Experience:
         scores=None,
         info=None,
     ):
+        self.index = index
         self.sequences = sequences
         self.action_log_probs = action_log_probs
         self.base_action_log_probs = base_action_log_probs
+        self.rollout_log_probs = rollout_log_probs
         self.values = values
         self.returns = returns
         self.advantages = advantages
@@ -205,9 +213,11 @@ def update_samples_with_rewards(rewards_info, samples_list):
         samples_list: List of Experience objects to update
     """
     # Process rewards and scores
-    rewards_list = torch.cat([info["rewards"] for info in rewards_info], dim=0).chunk(len(samples_list))
+    samples_len = [len(sample.sequences) for sample in samples_list]
+
+    rewards_list = torch.cat([torch.as_tensor(info["rewards"]) for info in rewards_info], dim=0).split(samples_len)
     if "scores" in rewards_info[0]:
-        scores_list = torch.cat([info["scores"] for info in rewards_info], dim=0).chunk(len(samples_list))
+        scores_list = torch.cat([torch.as_tensor(info["scores"]) for info in rewards_info], dim=0).split(samples_len)
     else:
         scores_list = rewards_list
 
@@ -215,9 +225,9 @@ def update_samples_with_rewards(rewards_info, samples_list):
     if "extra_logs" in rewards_info[0]:
         # Merge all extra_logs tensors first
         merged_logs = {
-            key: torch.cat([logs[key] for logs in [info["extra_logs"] for info in rewards_info]], dim=0).chunk(
-                len(samples_list)
-            )
+            key: torch.cat(
+                [torch.as_tensor(logs[key]) for logs in [info["extra_logs"] for info in rewards_info]], dim=0
+            ).split(samples_len)
             for key in rewards_info[0]["extra_logs"].keys()
         }
 
@@ -310,6 +320,7 @@ class SamplesGenerator:
             min_tokens=kwargs.get("min_new_tokens", 1),
             skip_special_tokens=kwargs.get("skip_special_tokens", False),
             include_stop_str_in_output=True,
+            logprobs=1 if self.strategy.args.enable_vllm_is_correction else None,
         )
         max_response_length = kwargs.get("max_new_tokens", 1024)
         truncate_length = self.prompt_max_len + max_response_length
@@ -334,8 +345,6 @@ class SamplesGenerator:
             all_output_refs.append(llm.get_responses.remote())
         all_outputs = sum(ray.get(all_output_refs), [])
 
-        pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
-
         # Process outputs into Experience objects
         samples_list = []
         for i in range(len(all_outputs)):
@@ -345,17 +354,26 @@ class SamplesGenerator:
 
             # Concatenate prompt and output tokens
             input_ids = list(output.prompt_token_ids) + list(output.outputs[0].token_ids)
-            if output.outputs[0].token_ids[-1] != eos_token_id:
-                input_ids.append(eos_token_id)
             attention_mask = [1] * len(input_ids)
 
-            sequences = torch.tensor(input_ids)
+            sequences = torch.tensor(input_ids, dtype=torch.long)
             attention_mask = torch.tensor(attention_mask)
 
             # Create action mask based on output token positions
             action_mask = torch.zeros_like(attention_mask)
-            response_length = len(output.outputs[0].token_ids) + int(output.outputs[0].token_ids[-1] != eos_token_id)
+            response_length = len(output.outputs[0].token_ids)
             action_mask[len(output.prompt_token_ids) : len(output.prompt_token_ids) + response_length] = 1
+
+            # Calculate rollout log probs
+            rollout_log_probs = None
+            if self.strategy.args.enable_vllm_is_correction:
+                rollout_log_probs = []
+                response_ids = list(output.outputs[0].token_ids)
+                for i, logprob in enumerate(output.outputs[0].logprobs):
+                    rollout_log_probs.append(logprob[response_ids[i]].logprob)
+
+                rollout_log_probs = torch.tensor([0.0] * len(list(output.prompt_token_ids)) + rollout_log_probs)
+                rollout_log_probs = rollout_log_probs[1:truncate_length].to("cpu")
 
             sequences = sequences[:truncate_length].to("cpu")
             attention_mask = attention_mask[:truncate_length].to("cpu")
@@ -373,6 +391,7 @@ class SamplesGenerator:
                 sequences=sequences.unsqueeze(0),
                 attention_mask=attention_mask.unsqueeze(0),
                 action_mask=action_mask.unsqueeze(0),
+                rollout_log_probs=rollout_log_probs.unsqueeze(0) if rollout_log_probs is not None else None,
                 prompts=[prompt],
                 labels=[label],
                 info=info,
@@ -427,10 +446,45 @@ class RemoteExperienceMaker(ABC):
         self.advantage_estimator = strategy.args.advantage_estimator
         self.args = strategy.args
 
-        # remote_rm_url indicates that the remote reward model is agent enviroment, remote http server or custom reward func
+        # remote_rm_url indicates that the remote reward model is agent environment, remote http server or custom reward func
         self.remote_rm_url = self.args.remote_rm_url
         self.remote_reward_model = remote_reward_model
         self.tokenizer = tokenizer
+
+    def split_rollout_samples(self, rollout_samples):
+        for i, sample in enumerate(rollout_samples):
+            sample.index = [i]
+
+        samples_list = []
+        if self.args.use_dynamic_batch:
+            total_lengths = [int(s.info["total_length"].item()) for s in rollout_samples]
+            effective_actor_num = (
+                self.args.actor_num_nodes
+                * self.args.actor_num_gpus_per_node
+                // self.args.ring_attn_size
+                // self.args.ds_tensor_parallel_size
+            )
+            minimum_batch_num = get_minimum_num_micro_batch_size(
+                total_lengths,
+                self.args.rollout_max_tokens_per_gpu,
+                self.args.ring_attn_size,
+                self.args.ds_tensor_parallel_size,
+            )
+            minimum_batch_num = minimum_batch_num // effective_actor_num * effective_actor_num
+            num_batch = max(minimum_batch_num, effective_actor_num)
+            batch_indexes = get_seqlen_balanced_partitions(total_lengths, num_batch, False)
+            for micro_index in batch_indexes:
+                micro_batch = [rollout_samples[idx] for idx in micro_index]
+                concat_samples = Experience.concat_experiences(micro_batch, self.tokenizer.pad_token_id)
+                samples_list.append(concat_samples)
+        else:
+            batch_size = self.args.micro_rollout_batch_size
+            for i in range(0, len(rollout_samples), batch_size):
+                concat_samples = Experience.concat_experiences(
+                    rollout_samples[i : i + batch_size], self.tokenizer.pad_token_id
+                )
+                samples_list.append(concat_samples)
+        return samples_list
 
     @torch.no_grad()
     def make_experience_batch(self, rollout_samples) -> List[Experience]:
@@ -441,16 +495,8 @@ class RemoteExperienceMaker(ABC):
         Then, if we need certain processing for the rewards or do certain filtering, we can process the rollout as a whole.
         After that, we will calculate the advantages and returns for each experience.
         """
-        # Concat the samples into micro_rollout_batch_size
         # Each batch of samples will be scheduled to a effective Ray Actor (i.e, a DP rank)
-        # TODO: balance the number of tokens of each batch for better performance
-        samples_list = []
-        batch_size = self.args.micro_rollout_batch_size
-        for i in range(0, len(rollout_samples), batch_size):
-            concat_samples = Experience.concat_experiences(
-                rollout_samples[i : i + batch_size], self.tokenizer.pad_token_id
-            )
-            samples_list.append(concat_samples)
+        samples_list = self.split_rollout_samples(rollout_samples)
 
         # Make experiences (models forward: logprobs, values, rewards, and kl divergence)
         experiences = self.make_experience(samples_list)
@@ -465,7 +511,7 @@ class RemoteExperienceMaker(ABC):
         Turn samples into experience by calculating logprobs, values, rewards, and kl divergence.
         """
         start_time = time.time()
-        logger.info(f"🚀 Starting experience making with {len(samples_list[0].sequences) * len(samples_list)} samples")
+        logger.info(f"🚀 Starting experience making with {sum([len(s.sequences) for s in samples_list])} samples")
 
         args = self.strategy.args
         device = "cpu"
@@ -616,16 +662,47 @@ class RemoteExperienceMaker(ABC):
     ) -> Tuple[List[Experience], List[torch.Tensor]]:
         """
         Process experiences, this can be used to filter out some experiences or do some processing on the rewards.
-
+        Example, use_dynamic_batch
+            >>> rewards: [0, 1, 0.5, 1], indices: [1, 2, 0, 3], n_samples_per_prompt: 2
+            >>> sorted rewards: [0,5, 0, 1, 1], reward shaping: [0.25, 0.25, 1, 1]
+            >>> map back: [0.25, 1, 0.25, 1]
         Output:
         - experiences: List of Experience
         - rewards: List of rewards
         """
         args = self.strategy.args
 
+        # DAPO reward shaping with optional overlong penalty - Apply BEFORE dynamic indices processing
+        if args.overlong_buffer_len is not None:
+            assert (
+                args.generate_max_len >= args.overlong_buffer_len
+            ), "generate_max_len must be larger than overlong_buffer_len"
+            overlong_buffer_len = args.overlong_buffer_len
+            expected_len = args.generate_max_len - overlong_buffer_len
+            overlong_penalty_factor = args.overlong_penalty_factor
+
+            # Apply penalty to each experience's rewards based on response length
+            for experience in experiences:
+                response_lengths = experience.info["response_length"]
+                batch_size = len(response_lengths)
+                for j in range(batch_size):
+                    valid_response_length = response_lengths[j].item()
+                    # Cap the exceed_len to overlong_buffer_len to prevent excessive penalty
+                    exceed_len = min(valid_response_length - expected_len, overlong_buffer_len)
+                    if exceed_len > 0:
+                        overlong_penalty = -exceed_len / overlong_buffer_len * overlong_penalty_factor
+                        # Apply penalty to the j-th reward in this experience
+                        experience.rewards[j] += overlong_penalty
+
         # get rewards from experiences
-        rewards = [experience.rewards for experience in experiences]
-        rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt)
+        exp_len = [len(experience.index) for experience in experiences]
+        # indices is an identity mapping when not using dynamic batch; otherwise, it maps back to the original indices after rearrange samples
+        indices = torch.tensor(sum([experience.index for experience in experiences], []))
+        raw_rewards = torch.cat([experience.rewards for experience in experiences], dim=0)
+        rewards = torch.empty_like(raw_rewards)
+        rewards[indices] = raw_rewards  # sorted
+
+        rewards = rewards.reshape(-1, args.n_samples_per_prompt)
 
         flat_rewards = rewards.reshape(-1)
         reward_mean_tensor = flat_rewards.mean().detach().unsqueeze(0)
@@ -634,7 +711,7 @@ class RemoteExperienceMaker(ABC):
         # log group reward std
         if args.n_samples_per_prompt > 1:
             group_reward_stds = (
-                rewards.std(-1, keepdim=True).repeat(1, args.n_samples_per_prompt).reshape(-1).chunk(len(experiences))
+                rewards.std(-1, keepdim=True).repeat(1, args.n_samples_per_prompt).reshape(-1)[indices].split(exp_len)
             )
             for experience, group_reward_std in zip(experiences, group_reward_stds):
                 experience.info["group_reward_std"] = group_reward_std
@@ -654,7 +731,7 @@ class RemoteExperienceMaker(ABC):
         elif args.advantage_estimator == "group_norm":
             rewards = (rewards - rewards.mean(-1, keepdim=True)) / (rewards.std(-1, keepdim=True) + 1e-9)
 
-        rewards = rewards.reshape(-1).chunk(len(experiences))
+        rewards = rewards.reshape(-1)[indices].split(exp_len)
 
         # calculate return and advantages
         for experience, reward in zip(experiences, rewards):

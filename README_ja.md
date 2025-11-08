@@ -42,9 +42,12 @@ OpenRLHFは、Ray、vLLM、ZeRO-3、およびHuggingFace Transformersを基盤�
 詳細は[スライド](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [技術報告](https://arxiv.org/abs/2405.11143) | [ドキュメント](https://openrlhf.readthedocs.io/)をご覧ください。
 
 ## ニュース
+- [2025/11] [NeMo Gym](https://github.com/NVIDIA-NeMo/Gym) OpenRLHF は NeMo-Gym との統合をサポートし、外部評価環境を使用した高度なエージェントベースの RLHF トレーニングが可能になりました。
+- [2025/10] [ScaleRL](https://arxiv.org/abs/2510.13786) は大規模訓練シナリオにおいて REINFORCE++-baseline の有効性を検証しました。[REINFORCE++ slides](https://docs.google.com/presentation/d/1stieP_3PM1z4Hq1YWR3GywFkxcHEAlstXMaS23KlGN4) を公開
+- [2025/8] [ProRL V2](https://hijkzzz.notion.site/prorl-v2) は REINFORCE++-baseline を使用して最先端の 1.5B 推論モデルを訓練し、ブログ記事 [REINFORCE++-baseline is all you need in RLVR](https://medium.com/@janhu9527/reinforce-baseline-is-all-you-need-in-rlvr-f5406930aa85) を公開しました。
 - [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) は REINFORCE++-baseline を使用して推論モデルを訓練しています。
 - [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) が OpenRLHF のフォークとしてリリースされました。集中型マルチエージェント相互作用と分散型ポリシー訓練を統合し、RL を使用した LLM ベースのマルチエージェントシステムの訓練を目的として設計されています。
-- [2025/5] OpenRLHF 0.8.0 は [Async Pipeline RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh) (`--async_train`) と [Async Agent RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)(`--agent_func_path`) をサポート
+- [2025/5] OpenRLHF 0.8.0 は [Async Pipeline RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh) (`--async_train`) と [Async Agent RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)(`--agent_func_path`) および再設計されたクラスベースのエージェントAPIをサポート
 - [2025/4] ブログ記事 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html) を公開
 - [2025/4] Clean OpenRLHF: シングルコントローラーと統合パッキングサンプルに基づくソースコードのリファクタリング
 - [2025/3] CMUの[2025年春の高度自然言語処理コース](https://cmu-l3.github.io/anlp-spring2025/)がOpenRLHFをRLHFフレームワークの教育事例として採用。
@@ -58,9 +61,10 @@ OpenRLHFは、Ray、vLLM、ZeRO-3、およびHuggingFace Transformersを基盤�
 
 ## 特徴
 
-- Rayに基づく分散[ PPO](./examples/scripts/train_ppo_llama_ray.sh)および[EINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray.sh)の実装。
+- Rayに基づく分散[ PPO](./examples/scripts/train_ppo_llama_ray.sh)および[REINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray.sh)の実装。
 - [Ray-based Reinforced Finetuning](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
 - RayとHybrid Engineに基づく[PPO](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh)および[REINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh)のサポート (`--colocate_all_models`, `--vllm_enable_sleep` and `--vllm_gpu_memory_utilization 0.5`)
+- [NeMo Gym](./examples/scripts/train_reinforce_nemogym.sh) との統合により、外部評価環境を使用したエージェントベースの RLHF をサポート（`--agent_func_path` と NeMo Gym の統合）
 - DAPOからのRL Dynamic Samplingのサポート(`--dynamic_filtering` and `--dynamic_filtering_reward_range`)
 - [DeepSpeed AutoTP トレーニング](./examples/scripts/train_sft_llama_tensor_parallelism.sh)のサポート (`--ds_tensor_parallel_size`)
 - [70億以上のパラメータを持つモデル](./examples/scripts/train_ppo_llama_ray_70b.sh)の完全なRLHF微調整のサポート。
@@ -75,7 +79,7 @@ OpenRLHFは、Ray、vLLM、ZeRO-3、およびHuggingFace Transformersを基盤�
 - SFT、DPO、RM、PRM、およびPPOのトレーニングサンプルのパッキング（`--packing_samples`）。
 - [RingAttention](./examples/scripts/train_dpo_ring_llama.sh)の実装（`--ring_attn_size`、`--ring_head_stride`）。
 - [専門家の混合モデル（MoE）](./examples/test_scripts/train_sft_mixtral_lora.sh)のサポート（`--aux_loss_coef`）。
-- FlashAttention2の統合（`--flash_attn`）。
+- FlashAttention2の統合（`--attn_implementation`）。
 - QLoRA（`--load_in_4bit`）および[LoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--lora_rank`、`--target_modules`）のサポート。
 - HuggingFaceの`tokenizer.apply_chat_template`との互換性（`--apply_chat_template`および`--input_key`）。
 - Wandb（`--use_wandb`）およびTensorBoard（`--use_tensorboard`）によるログ記録のサポート。
@@ -96,7 +100,7 @@ sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
 # pip install
 pip install openrlhf
 
-# vLLM加速を使用する場合（vLLM 0.9.1をインストール）
+# vLLM加速を使用する場合（vLLM 0.11.0をインストール）
 pip install openrlhf[vllm]
 # 最新のvLLMもサポートされています
 pip install openrlhf[vllm_latest]
@@ -113,7 +117,7 @@ pip install -e .
 ```
 
 > [!NOTE]
->vLLM 0.9.1以降の使用をお勧めします。
+>vLLM 0.11.0以降の使用をお勧めします。
 >また、[vLLM用のDockerfile](./dockerfile/)および[Nvidia-Dockerのワンクリックインストールスクリプト](./examples/scripts/nvidia_docker_install.sh)も提供しています。
 
 ### データセットの準備
@@ -184,7 +188,6 @@ deepspeed --module openrlhf.cli.train_sft \
    --max_epochs 1 \
    --packing_samples \
    --bf16 \
-   --flash_attn \
    --learning_rate 5e-6 \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
@@ -203,7 +206,7 @@ deepspeed --module openrlhf.cli.train_sft \
 ```
 
 > [!NOTE]
-> OpenRLHF SFT/DPO/RewardModel/PPOトレーナーは`--packing_samples`をサポートしています [`--flash_attn`に基づく](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
+> OpenRLHF SFT/DPO/RewardModel/PPOトレーナーは`--packing_samples`をサポートしています [`flash attention`に基づく](https://github.com/MeetKai/functionary/tree/main/functionary/train/packing)
 
 ### 報酬モデルのトレーニング
 ```bash
@@ -224,7 +227,6 @@ deepspeed --module openrlhf.cli.train_rm \
    --apply_chat_template \
    --chosen_key chosen \
    --rejected_key rejected \
-   --flash_attn \
    --packing_samples \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
@@ -320,7 +322,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 > [!NOTE]
 > OpenRLHFのRLOOとREINFORCE++-baselineはREINFORCE++に基づく修正版です：
 > - REINFORCE++は、PPOの主要な最適化技術（アドバンテージ正規化やPPO-clipロスなど）を統合し、criticネットワークの必要性を排除します。
-> - REINFORCE++-baselineは、`同じプロンプトから生成された複数のサンプルの平均報酬`をベースラインとして報酬を再形成します（グローバルバッチ正規化 `/std` を使用）。
+> - REINFORCE++-baselineは、`同じプロンプトから生成された複数のサンプルの平均報酬`をベースラインとして使用して報酬を再形成するため、RLVR設定では、アルゴリズムは0（不正解）/ 1（正解）/ -0.5（フォーマット報酬）や-1（不正解）/ 1（正解）/ -0.5（フォーマット報酬）などの報酬パターンに対して敏感ではありません。
 > - OpenRLHFのRLOOは、`トークンごとのKL報酬`を導入し、`PPO-clipロス`を使用することで元のバージョンを修正しています。
 > - Dr. GRPOは、GRPOのグループ正規化 `/std` を削除します。
 
@@ -374,38 +376,73 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 OpenRLHFは、非同期RLHFとエージェントベースのRLHF実装の両方を包括的にサポートしています。これらの機能を使用するには、トレーニング設定に`--async_train`と`--agent_func_path`パラメータを含めるだけです。
 
+Agent APIは、より良いモジュール性と拡張性を提供するために、`AgentInstanceBase`と`AgentExecutorBase`クラスを使用したクラスベースのアプローチに再設計されました。
+
 ```python
 # agent_func.py
-step_idx = 0
-max_steps = 2
+import random
+from typing import Any, Dict
 
-async def step(state, action, label, **kwargs) -> Tuple[float, Dict[str, Any], bool]:
-    global step_idx, max_steps
-    # 検証後に終了
-    if step_idx >= max_steps:
-        done = True
-        # torch.randを使用してランダムな報酬を生成
-        reward = torch.rand(1)
-        next_state = state + action + " The answer is correct. <|endoftext|>"
-    else:
-        done = False
-        reward = torch.tensor(0)
-        # 状態を更新
-        next_state = state + action + " The answer is not correct, please try again: "
-    step_idx += 1
+import torch
+from openrlhf.utils.agent import AgentExecutorBase, AgentInstanceBase
 
-    return {
-        "rewards": reward,  # アドバンテージ計算用の報酬
-        "scores": reward,  # 動的フィルタリング用のスコア（0-1報酬）
-        "next_state": next_state,  # 次のステップのvLLMの更新状態
-        "done": done,  # エピソードが完了したかどうかを示すブール値
-        "sampling_params": kwargs.get("sampling_params", None),  # 次のステップのvLLMサンプリングのパラメータ
-        "extra_logs": {"dummy_scores": reward},  # 追加のログ情報
-    }
+
+# A simple n-step random environment
+class AgentInstance(AgentInstanceBase):
+    async def __init__(self, *args, **kwargs):
+        self.step_idx = 0
+        self.max_steps = random.randint(1, 3)  # 1-3 steps
+
+    async def reset(self, states: dict, **kwargs):
+        return {"observation": states["observation"]}  # Return original text observation
+
+    async def step(self, states: dict, **kwargs) -> Dict[str, Any]:
+        print(f"step_idx: {self.step_idx}, max_steps: {self.max_steps}")
+
+        observation_text = states["observation_text"]
+        action_text = states["action_text"]
+        label = states["label"]
+
+        # Check if episode is done
+        done = self.step_idx >= self.max_steps
+        reward = torch.randint(0, 2, (1,)).float() if done else torch.tensor(0)
+
+        # Generate environment feedback based on whether episode is done
+        environment_feedback = (
+            "\n\nHuman: [CORRECT]\n</s>"
+            if done
+            else "\n\nHuman: [INCORRECT]\nPlease analyze the issues and try again.\n</s>\n\nAssistant: "
+        )
+
+        self.step_idx += 1
+
+        return {
+            "rewards": reward,  # Rewards for advantage calculation
+            "scores": reward,  # Scores for dynamic filtering (0-1 reward)
+            "environment_feedback": environment_feedback,  # Environment feedback text
+            "done": done,  # Boolean indicating if the episode is complete
+            "sampling_params": states.get("sampling_params", None),  # Parameters for vLLM sampling in next step
+            "extra_logs": {"dummy_scores": reward},  # Additional logging information
+        }
+
+
+# You could override the execute function of AgentExecutorBase to add custom agent running logic
+class AgentExecutor(AgentExecutorBase):
+    def __init__(self, max_steps, max_length, llm_engine, hf_tokenizer, result_queue):
+        super().__init__(AgentInstance, max_steps, max_length, llm_engine, hf_tokenizer, result_queue)
+
+    async def execute(self, prompt, label, sampling_params):
+        # You could override the execute function of AgentExecutorBase to add custom agent running logic
+        return await super().execute(prompt, label, sampling_params)
 ```
 
 また、`export OPENRLHF_ASYNC_NUM_TASKS=128`を設定することで、vLLMエンジンごとの最大同時エージェント数を設定できます。
 さらに、環境で`export OPENRLHF_ASYNC_QUEUE_SIZE=1`（このパラメータはバッファに保存できるデータのバッチ数を制御します）を設定することで、オフポリシーサンプリングの程度を制御できます。
+
+> [!NOTE]
+> `AgentExecutorBase`の`execute`関数をオーバーライドすることで、完全にカスタマイズされたエージェント実行プロセスを実装できます。この設計は**token-in-token-out原則**に従い、サンプリングとトレーニングサンプル間の一貫性を確保し、テキストレベルの処理で発生する可能性のある不整合を回避します。
+
+
 
 > [!NOTE] 
 > OpenRLHFのAgent RLHFはハイブリッドエンジントレーニングもサポートしています。この機能を有効にするには、`--async_train`フラグを削除し、`--colocate_all_models`を有効にしてください。

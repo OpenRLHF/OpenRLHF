@@ -4,7 +4,7 @@ set -x
 #     --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \
 #     --port 5000 \
 #     --bf16 \
-#     --flash_attn \
+#     --attn_implementation flash_attention_2 \
 #     --normalize_reward \
 #     --max_len 8192 \
 #     --batch_size 16
@@ -43,7 +43,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --normalize_reward \
    --packing_samples \
    --adam_offload \
-   --flash_attn \
+   --attn_implementation flash_attention_2 \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
 

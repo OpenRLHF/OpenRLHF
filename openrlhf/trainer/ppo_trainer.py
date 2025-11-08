@@ -11,6 +11,7 @@ from openrlhf.datasets import PromptDataset
 from openrlhf.datasets.utils import blending_datasets
 from openrlhf.trainer.ppo_utils import AdaptiveKLController, FixedKLController
 from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
+from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.logging_utils import init_logger
@@ -134,13 +135,13 @@ class BasePPOTrainer(ABC):
         # actor model training
         if global_steps > self.freezing_actor_steps:
             if self.strategy.args.deepspeed_enable_sleep:
-                self.actor_model_group.async_run_method(method_name="reload_states")
+                ray.get(self.actor_model_group.async_run_method(method_name="reload_states"))
 
             actor_status_ref = self.actor_model_group.async_run_method(method_name="fit", kl_ctl=self.kl_ctl.value)
             status.update(ray.get(actor_status_ref)[0])
 
             if self.strategy.args.deepspeed_enable_sleep:
-                self.actor_model_group.async_run_method(method_name="offload_states")
+                ray.get(self.actor_model_group.async_run_method(method_name="offload_states"))
 
             # 4. broadcast weights to vllm engines
             if self.vllm_engines is not None:
@@ -458,6 +459,7 @@ class PPOTrainer(BasePPOTrainer):
                 range(self.prompts_dataloader.__len__()),
                 desc=f"Episode [{episode + 1}/{args.num_episodes}]",
                 disable=False,
+                initial=steps,
             )
 
             filtered_samples = []
@@ -507,6 +509,11 @@ class PPOTrainer(BasePPOTrainer):
                     experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True
                 )
                 print(sample0)
+
+                # balance experiences across dp
+                if args.use_dynamic_batch:
+                    experiences = balance_experiences(experiences, args)
+
                 refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences)
                 if self.critic_model_group is not None:
                     refs.extend(

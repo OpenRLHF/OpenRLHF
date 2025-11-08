@@ -21,7 +21,7 @@ def train(args):
     # load huggingface model
     model = Actor(
         args.pretrain,
-        use_flash_attention_2=args.flash_attn,
+        attn_implementation=args.attn_implementation,
         bf16=args.bf16,
         load_in_4bit=args.load_in_4bit,
         lora_rank=args.lora_rank,
@@ -39,7 +39,7 @@ def train(args):
     # load weights for ref model
     ref_model = Actor(
         args.pretrain,
-        use_flash_attention_2=args.flash_attn,
+        attn_implementation=args.attn_implementation,
         bf16=args.bf16,
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
@@ -173,7 +173,12 @@ if __name__ == "__main__":
     parser.add_argument("--ref_offload", action="store_true", default=False)
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
-    parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
+    parser.add_argument(
+        "--attn_implementation",
+        type=str,
+        default="flash_attention_2",
+        help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
+    )
     parser.add_argument("--use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
     parser.add_argument("--grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
     parser.add_argument("--overlap_comm", action="store_true", default=False)
@@ -244,7 +249,7 @@ if __name__ == "__main__":
 
     if args.input_template and "\\n" in args.input_template:
         print(
-            "[Warning] input_template contains \\n chracters instead of newline. "
+            "[Warning] input_template contains \\n characters instead of newline. "
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
