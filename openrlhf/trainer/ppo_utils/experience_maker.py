@@ -627,6 +627,10 @@ class RemoteExperienceMaker(ABC):
         rewards = [experience.rewards for experience in experiences]
         rewards = torch.cat(rewards).reshape(-1, args.n_samples_per_prompt)
 
+        flat_rewards = rewards.reshape(-1)
+        reward_mean_tensor = flat_rewards.mean().detach().unsqueeze(0)
+        reward_std_tensor = torch.nan_to_num(flat_rewards.std(unbiased=False), nan=0.0).detach().unsqueeze(0)
+
         # log group reward std
         if args.n_samples_per_prompt > 1:
             group_reward_stds = (
@@ -634,6 +638,10 @@ class RemoteExperienceMaker(ABC):
             )
             for experience, group_reward_std in zip(experiences, group_reward_stds):
                 experience.info["group_reward_std"] = group_reward_std
+
+        for experience in experiences:
+            experience.info["reward_mean"] = reward_mean_tensor.clone()
+            experience.info["reward_std"] = reward_std_tensor.clone()
 
         # reward shaping
         if args.advantage_estimator == "rloo":

@@ -215,7 +215,7 @@ class ActorPPOTrainer(ABC):
             return_output=True,
             ring_attn_group=self.strategy.ring_attn_group,
             packed_seq_lens=packed_seq_lens,
-            return_entropy=self.args.entropy_loss_coef is not None,
+            return_entropy=True,
         )
 
         # loss function
@@ -245,21 +245,32 @@ class ActorPPOTrainer(ABC):
         # mixtral
         if self.aux_loss:
             loss += output.aux_loss * self.args.aux_loss_coef
+
+        policy_entropy = None
+        if hasattr(output, "entropy"):
+            policy_entropy = masked_mean(
+                output.entropy[:, -experience.action_mask.shape[1] :], experience.action_mask
+            )
+
         # entropy loss
-        if self.args.entropy_loss_coef is not None:
-            entropy_loss = masked_mean(output.entropy[:, -experience.action_mask.shape[1] :], experience.action_mask)
+        if self.args.entropy_loss_coef is not None and policy_entropy is not None:
             if self.args.entropy_loss_coef != 0:
-                loss -= entropy_loss * self.args.entropy_loss_coef
+                loss -= policy_entropy * self.args.entropy_loss_coef
 
         self.strategy.backward(loss, self.actor, self.actor_optim)
+        grad_norm = self.strategy.get_global_grad_norm(self.actor)
         self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
         if self.ema_model:
             self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
 
         # status
         status = {"policy_loss": actor_loss.detach().item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}
-        if self.args.entropy_loss_coef is not None:
-            status["entropy_loss"] = entropy_loss.detach().item()
+        if policy_entropy is not None:
+            status["policy_entropy"] = policy_entropy.detach().item()
+            if self.args.entropy_loss_coef is not None:
+                status["entropy_loss"] = policy_entropy.detach().item()
+        if grad_norm is not None:
+            status["grad_norm"] = grad_norm
 
         # merge logs from info field
         for k, v in experience.info.items():

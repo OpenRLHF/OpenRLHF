@@ -157,6 +157,19 @@ class DeepspeedStrategy(ABC):
             model = model.model
         model.step()
 
+    def get_global_grad_norm(self, model):
+        if isinstance(model, Actor):
+            model = model.model
+        grad_norm = None
+        if hasattr(model, "get_global_grad_norm"):
+            try:
+                grad_norm = model.get_global_grad_norm()
+            except Exception:
+                grad_norm = None
+        if isinstance(grad_norm, torch.Tensor):
+            grad_norm = grad_norm.item()
+        return grad_norm
+
     def setup_dataloader(
         self,
         replay_buffer,
