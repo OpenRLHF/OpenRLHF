@@ -720,9 +720,7 @@ class RemoteExperienceMaker(ABC):
             batch_size = len(experience.rewards)
             dtype = experience.rewards.dtype
             device = experience.rewards.device
-            experience.info["reward_mean"] = torch.full(
-                (batch_size,), reward_mean_value, dtype=dtype, device=device
-            )
+            experience.info["reward_mean"] = torch.full((batch_size,), reward_mean_value, dtype=dtype, device=device)
             experience.info["reward_std"] = torch.full((batch_size,), reward_std_value, dtype=dtype, device=device)
 
         # reward shaping
