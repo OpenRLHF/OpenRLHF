@@ -2,25 +2,24 @@ import os
 from abc import ABC
 from collections import defaultdict
 from datetime import timedelta
-from typing import List, Tuple, Union
+from typing import Tuple, Union
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
-import torch.distributed as dist
-from torch.optim import Optimizer
-from torchdata.stateful_dataloader import StatefulDataLoader
+from torch.distributed.fsdp import FullStateDictConfig
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import StateDictType, FullStateDictConfig
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.nn.parallel import DistributedDataParallel as DDP
-
-from transformers import set_seed, enable_full_determinism
+from torch.optim import Optimizer
+from torchdata.stateful_dataloader import StatefulDataLoader
+from transformers import enable_full_determinism, set_seed
 
 from openrlhf.models import Actor
 from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
 from openrlhf.utils.distributed_sampler import DistributedSampler
-
 
 ModelOptimPair = Tuple[nn.Module, Optimizer]
 ModelOrModelOptimPair = Union[nn.Module, ModelOptimPair]
@@ -70,9 +69,7 @@ class FSDPStrategy(ABC):
         self.ring_attn_rank = 0
         set_ring_attn_group(None)
 
-        self.accumulated_gradient = (
-            self.train_batch_size // self.micro_train_batch_size // max(1, self.world_size)
-        )
+        self.accumulated_gradient = self.train_batch_size // self.micro_train_batch_size // max(1, self.world_size)
 
     @property
     def ring_attn_group(self):
@@ -95,7 +92,11 @@ class FSDPStrategy(ABC):
         **kwargs,
     ) -> None:
         if self.max_norm and self.max_norm > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), self.max_norm)
+            # FSDP has a native method for gradient clipping, while DDP does not.
+            if hasattr(model, "clip_grad_norm_"):
+                model.clip_grad_norm_(self.max_norm)
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), self.max_norm)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         if scheduler is not None:
@@ -153,12 +154,11 @@ class FSDPStrategy(ABC):
                 device_id=torch.cuda.current_device(),
             )
             return model
-        except Exception:
+        except Exception as e:
+            self.print(f"FSDP auto-wrap failed, falling back to DDP: {e}")
             return DDP(model, device_ids=[torch.cuda.current_device()])
 
-    def prepare(
-        self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False
-    ) -> Union[List[ModelOrModelOptimPair], ModelOrModelOptimPair]:
+    def prepare(self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False):
         ret = []
         self.is_rlhf = is_rlhf
         for arg in models_or_model_optim_pairs:
@@ -185,7 +185,7 @@ class FSDPStrategy(ABC):
                 is_actor = isinstance(model, Actor)
                 module = model.model if is_actor else model
                 module = module.to(torch.cuda.current_device())
-                module = DDP(module, device_ids=[torch.cuda.current_device()])
+                module = self._wrap_train_model(module)
                 if is_actor:
                     model.model = module
                     ret.append(model)
@@ -210,11 +210,16 @@ class FSDPStrategy(ABC):
         strict: bool = False,
         key_replace_fn=None,
     ) -> None:
-        unwrapped_model = self._unwrap_model(model)
         state_dict = torch.load(path, map_location=map_location)
         if key_replace_fn:
             state_dict = key_replace_fn(state_dict)
-        unwrapped_model.load_state_dict(state_dict, strict=strict)
+
+        wrapped_model = model.model if isinstance(model, Actor) else model
+        if isinstance(wrapped_model, FSDP):
+            with FSDP.state_dict_type(wrapped_model, StateDictType.FULL_STATE_DICT):
+                wrapped_model.load_state_dict(state_dict, strict=strict)
+        else:
+            self._unwrap_model(model).load_state_dict(state_dict, strict=strict)
 
     def save_model(self, model: nn.Module, tokenizer, output_dir, **kwargs) -> None:
         if self.is_rank_0():
@@ -254,7 +259,7 @@ class FSDPStrategy(ABC):
         else:
             is_tensor = True
             if not isinstance(data, torch.Tensor):
-                data = torch.Tensor([data])
+                data = torch.tensor([data])
                 is_tensor = False
             is_cpu_tensor = data.device.type == "cpu"
 
@@ -275,7 +280,7 @@ class FSDPStrategy(ABC):
             return ret
         else:
             if not isinstance(data, torch.Tensor):
-                data = torch.Tensor([data])
+                data = torch.tensor([data])
             is_cpu_tensor = data.device.type == "cpu"
 
             ret = [torch.zeros_like(data).to(torch.cuda.current_device()) for _ in range(self.world_size)]
@@ -311,5 +316,3 @@ class FSDPStrategy(ABC):
 
     def get_ds_eval_config(self, offload=False):
         return None
-
-
