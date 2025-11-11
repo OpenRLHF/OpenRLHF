@@ -1,11 +1,46 @@
+import warnings
 from typing import List
 
 import torch
 import torch.nn.functional as F
+from packaging import version
 from transformers import AutoTokenizer
 
 
 def get_strategy(args):
+    dist_backend = getattr(args, "dist_backend", "deepspeed")
+
+    if dist_backend == "fsdp":
+        torch_version = version.parse(torch.__version__.split("+")[0])
+        if torch_version < version.parse("2.0.0"):
+            raise RuntimeError(
+                f"FSDP backend requires torch>=2.0.0. Detected torch=={torch.__version__}. "
+                "Please upgrade PyTorch or use --dist_backend deepspeed."
+            )
+        if torch_version < version.parse("2.4.0"):
+            warnings.warn(
+                "torch>=2.4.0 recommended for FSDP2. Falling back to legacy FSDP behaviour.",
+                UserWarning,
+            )
+        try:
+            from openrlhf.utils.fsdp import FSDPStrategy  # type: ignore
+        except Exception as e:
+            raise RuntimeError(
+                f"FSDP backend requested but not available: {e}. Please use --dist_backend deepspeed or install a recent PyTorch with FSDP."
+            )
+
+        strategy = FSDPStrategy(
+            seed=getattr(args, "seed", 42),
+            full_determinism=getattr(args, "full_determinism", False),
+            max_norm=getattr(args, "max_norm", 1.0),
+            micro_train_batch_size=getattr(args, "micro_train_batch_size", 1),
+            train_batch_size=getattr(args, "train_batch_size", 128),
+            bf16=getattr(args, "bf16", True),
+            args=args,
+        )
+        return strategy
+
+    # default: deepspeed
     from openrlhf.utils.deepspeed import DeepspeedStrategy
 
     strategy = DeepspeedStrategy(
@@ -14,7 +49,7 @@ def get_strategy(args):
         max_norm=getattr(args, "max_norm", 1.0),
         micro_train_batch_size=getattr(args, "micro_train_batch_size", 1),
         train_batch_size=getattr(args, "train_batch_size", 128),
-        zero_stage=args.zero_stage,
+        zero_stage=getattr(args, "zero_stage", 2),
         bf16=getattr(args, "bf16", True),
         args=args,
     )
