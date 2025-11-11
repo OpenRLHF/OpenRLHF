@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-from typing import Tuple
-
 import torch
 
-from .ring_attn_utils import (
-    unpad_and_slice_tensor as ring_unpad_and_slice_tensor,
-    gather_and_pad_tensor as ring_gather_and_pad_tensor,
-)
+from .ring_attn_utils import gather_and_pad_tensor as ring_gather_and_pad_tensor
+from .ring_attn_utils import unpad_and_slice_tensor as ring_unpad_and_slice_tensor
+from .star_attn_utils import gather_and_pad_tensor as star_gather_and_pad_tensor
 from .star_attn_utils import (
-    unpad_and_slice_tensor as star_unpad_and_slice_tensor,
-    gather_and_pad_tensor as star_gather_and_pad_tensor,
     get_star_attn_group,
 )
+from .star_attn_utils import unpad_and_slice_tensor as star_unpad_and_slice_tensor
 
 
 def unpad_and_slice_auto(
@@ -54,5 +50,3 @@ def gather_and_pad_auto(
         return star_gather_and_pad_tensor(tensor, attn_group, attn_pad_len, indices, batch, seqlen)
     else:
         return ring_gather_and_pad_tensor(tensor, attn_group, attn_pad_len, indices, batch, seqlen)
-
-
