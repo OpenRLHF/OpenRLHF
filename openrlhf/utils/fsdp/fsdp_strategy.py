@@ -12,12 +12,15 @@ from packaging import version
 from torch.distributed.fsdp import (
     BackwardPrefetch,
     CPUOffload,
-    FullyShardedDataParallel as FSDP,
     FullStateDictConfig,
+)
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import (
     MixedPrecision,
     ShardingStrategy,
     StateDictType,
 )
+
 try:
     from torch.distributed.fsdp import FSDPModule, fully_shard
 except ImportError:
