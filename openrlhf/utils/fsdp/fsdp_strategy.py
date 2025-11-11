@@ -2,7 +2,7 @@ import os
 from abc import ABC
 from collections import defaultdict
 from datetime import timedelta
-from typing import Tuple, Union
+from typing import List, Tuple, Union
 
 import torch
 import torch.distributed as dist
@@ -16,6 +16,17 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Optimizer
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import enable_full_determinism, set_seed
+
+try:
+    from torch.distributed.checkpoint.state_dict import (  # type: ignore[attr-defined]
+        StateDictOptions,
+        get_model_state_dict,
+        set_model_state_dict,
+    )
+except ImportError:  # pragma: no cover - older torch versions
+    StateDictOptions = None  # type: ignore
+    get_model_state_dict = None  # type: ignore
+    set_model_state_dict = None  # type: ignore
 
 from openrlhf.models import Actor
 from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
@@ -49,6 +60,16 @@ class FSDPStrategy(ABC):
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
 
+        self._torch_version = version.parse(torch.__version__.split("+")[0])
+        self._enable_fsdp2 = self._torch_version >= version.parse("2.4.0")
+
+        fsdp_kwargs = getattr(self.args, "fsdp_kwargs", None) or {}
+        self.use_orig_params = fsdp_kwargs.get("use_orig_params", self._enable_fsdp2)
+        self.limit_all_gathers = fsdp_kwargs.get("limit_all_gathers", True)
+        self.sync_module_states = fsdp_kwargs.get("sync_module_states", self._enable_fsdp2)
+        self.cpu_offload = fsdp_kwargs.get("cpu_offload", False)
+        self.backward_prefetch_mode = fsdp_kwargs.get("backward_prefetch", "post").lower()
+
     def setup_distributed(self, timeout=timedelta(minutes=60)) -> None:
         if self.full_determinism:
             enable_full_determinism(self.seed)
@@ -65,9 +86,11 @@ class FSDPStrategy(ABC):
         dist.init_process_group(timeout=timeout)
 
         self.world_size = dist.get_world_size()
-        # ring attention group is optional and matches existing behavior
         self.ring_attn_rank = 0
         set_ring_attn_group(None)
+
+        if not self._enable_fsdp2 and self.is_rank_0():
+            self.print("Warning: torch>=2.4.0 recommended for FSDP2. Using legacy FSDP configuration.")
 
         self.accumulated_gradient = self.train_batch_size // self.micro_train_batch_size // max(1, self.world_size)
 
@@ -92,7 +115,6 @@ class FSDPStrategy(ABC):
         **kwargs,
     ) -> None:
         if self.max_norm and self.max_norm > 0:
-            # FSDP has a native method for gradient clipping, while DDP does not.
             if hasattr(model, "clip_grad_norm_"):
                 model.clip_grad_norm_(self.max_norm)
             else:
@@ -144,26 +166,92 @@ class FSDPStrategy(ABC):
             return model.module
         return model
 
+    def _build_mixed_precision(self):
+        if not self.bf16:
+            return None
+        return MixedPrecision(
+            param_dtype=torch.bfloat16,
+            reduce_dtype=torch.bfloat16,
+            buffer_dtype=torch.bfloat16,
+        )
+
     def _wrap_train_model(self, model: nn.Module) -> nn.Module:
-        # Auto wrap transformer blocks if possible; otherwise fall back to DDP
+        if self._enable_fsdp2 and fully_shard is not None and FSDPModule is not None:
+            return self._wrap_train_model_fsdp2(model)
+        return self._wrap_train_model_fsdp1(model)
+
+    def _wrap_train_model_fsdp1(self, model: nn.Module) -> nn.Module:
         try:
             auto_wrap = transformer_auto_wrap_policy
-            model = FSDP(
-                model,
+            backward_prefetch = (
+                BackwardPrefetch.BACKWARD_PRE
+                if self.backward_prefetch_mode.startswith("pre")
+                else BackwardPrefetch.BACKWARD_POST
+            )
+            fsdp_kwargs = dict(
                 auto_wrap_policy=auto_wrap,
                 device_id=torch.cuda.current_device(),
+                sharding_strategy=ShardingStrategy.FULL_SHARD,
+                limit_all_gathers=self.limit_all_gathers,
+                sync_module_states=self.sync_module_states,
+                use_orig_params=self.use_orig_params,
+                backward_prefetch=backward_prefetch,
             )
+
+            mp_conf = self._build_mixed_precision()
+            if mp_conf is not None:
+                fsdp_kwargs["mixed_precision"] = mp_conf
+
+            if self.cpu_offload:
+                fsdp_kwargs["cpu_offload"] = CPUOffload(offload_params=True)
+
+            model = FSDP(model, **fsdp_kwargs)
             return model
-        except Exception as e:
-            self.print(f"FSDP auto-wrap failed, falling back to DDP: {e}")
+        except Exception as exc:  # pragma: no cover - defensive
+            self.print(f"FSDP auto-wrap failed, falling back to DDP: {exc}")
             return DDP(model, device_ids=[torch.cuda.current_device()])
 
+    def _maybe_fully_shard_children(self, module: nn.Module) -> None:
+        assert fully_shard is not None and FSDPModule is not None
+        for name, child in module.named_children():
+            if isinstance(child, FSDPModule):
+                continue
+            if isinstance(child, nn.ModuleList):
+                new_list = []
+                changed = False
+                for sub in child:
+                    if isinstance(sub, nn.Module) and not isinstance(sub, FSDPModule):
+                        new_sub = fully_shard(sub)
+                        new_list.append(new_sub)
+                        changed = True
+                    else:
+                        new_list.append(sub)
+                if changed:
+                    setattr(module, name, nn.ModuleList(new_list))
+                continue
+            if not any(p.requires_grad for p in child.parameters(recurse=False)):
+                continue
+            new_child = fully_shard(child)
+            if new_child is not child:
+                setattr(module, name, new_child)
+
+    def _wrap_train_model_fsdp2(self, model: nn.Module) -> nn.Module:
+        assert fully_shard is not None and FSDPModule is not None
+        try:
+            # shard large submodules first (e.g. transformer blocks) if possible
+            self._maybe_fully_shard_children(model)
+            if not isinstance(model, FSDPModule):
+                model = fully_shard(model)
+            return model
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            self.print(f"fully_shard failed ({exc}); falling back to legacy FSDP.")
+            return self._wrap_train_model_fsdp1(model)
+
     def prepare(self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False):
-        ret = []
+        ret: List[ModelOrModelOptimPair] = []
         self.is_rlhf = is_rlhf
         for arg in models_or_model_optim_pairs:
             if isinstance(arg, tuple):
-                assert len(arg) == 3, f'Expect (model, optimizer, scheduler) pair, got a tuple with size "{len(arg)}"'
                 model, optim_, scheduler = arg
                 if model is None:
                     ret.append((None, None, None))
@@ -198,9 +286,10 @@ class FSDPStrategy(ABC):
         if self.time_steps["ema"] % max(1, self.accumulated_gradient) == 0:
             with torch.no_grad():
                 for param, param_ema in zip(model.parameters(), model_ema.parameters()):
-                    if param.requires_grad:
-                        data = param.data.to(device)
-                        param_ema.data.copy_((1 - beta) * data + beta * param_ema.data)
+                    if not param.requires_grad:
+                        continue
+                    param_ema.data.mul_(beta)
+                    param_ema.data.add_(param, alpha=1 - beta)
 
     def load_model(
         self,
@@ -218,20 +307,36 @@ class FSDPStrategy(ABC):
         if self.is_rank_0():
             os.makedirs(output_dir, exist_ok=True)
 
-        # Determine wrapped module
         wrapped_model = model.model if isinstance(model, Actor) else model
 
-        # Gather a full state dict when using FSDP; fallback for DDP/nn.Module
+        if (
+            self._enable_fsdp2
+            and FSDPModule is not None
+            and StateDictOptions is not None
+            and get_model_state_dict is not None
+            and isinstance(wrapped_model, FSDPModule)
+        ):
+            model_state = get_model_state_dict(
+                model=wrapped_model,
+                options=StateDictOptions(full_state_dict=True, cpu_offload=True),
+            )
+            if self.is_rank_0():
+                unwrapped = self._unwrap_model(model)
+                unwrapped.save_pretrained(output_dir, state_dict=model_state, **kwargs)
+                output_config_file = os.path.join(output_dir, "config.json")
+                unwrapped.config.to_json_file(output_config_file)
+                tokenizer.save_pretrained(output_dir)
+            dist.barrier()
+            return
+
         cpu_state_dict = None
         if isinstance(wrapped_model, FSDP):
             save_cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
             with FSDP.state_dict_type(wrapped_model, StateDictType.FULL_STATE_DICT, save_cfg):
                 cpu_state_dict = wrapped_model.state_dict()
 
-        # Rank0 writes the HF checkpoint
         if self.is_rank_0():
             if cpu_state_dict is None:
-                # DDP / non-sharded case
                 cpu_state_dict = self._unwrap_model(model).state_dict()
 
             unwrapped = self._unwrap_model(model)
@@ -294,16 +399,12 @@ class FSDPStrategy(ABC):
             return 0
         return dist.get_rank()
 
-    # FSDP uses standard torch.save in trainers; DeepSpeed-like ckpt helpers are not provided here.
     def save_ckpt(self, *args, **kwargs):
-        # Not supported: trainers should rely on save_model for HF checkpoints.
         return None
 
     def load_ckpt(self, *args, **kwargs):
-        # Return a dummy state for compatibility with trainers expecting consumed_samples
         return None, {"consumed_samples": 0}
 
-    # Compatibility shims for actor construction paths expecting DeepSpeed configs
     def get_ds_train_config(self, is_actor):
         return None
 
