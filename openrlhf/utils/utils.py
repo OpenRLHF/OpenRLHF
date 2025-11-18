@@ -1,4 +1,3 @@
-import warnings
 from typing import List
 
 import torch
@@ -12,15 +11,10 @@ def get_strategy(args):
 
     if dist_backend == "fsdp":
         torch_version = version.parse(torch.__version__.split("+")[0])
-        if torch_version < version.parse("2.0.0"):
-            raise RuntimeError(
-                f"FSDP backend requires torch>=2.0.0. Detected torch=={torch.__version__}. "
-                "Please upgrade PyTorch or use --dist_backend deepspeed."
-            )
         if torch_version < version.parse("2.4.0"):
-            warnings.warn(
-                "torch>=2.4.0 recommended for FSDP2. Falling back to legacy FSDP behaviour.",
-                UserWarning,
+            raise RuntimeError(
+                f"FSDP2 backend requires torch>=2.4.0. Detected torch=={torch.__version__}. "
+                "Please upgrade PyTorch or use --dist_backend deepspeed."
             )
         try:
             from openrlhf.utils.fsdp import FSDPStrategy  # type: ignore
