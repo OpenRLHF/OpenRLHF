@@ -59,16 +59,18 @@ class FSDPStrategy(ABC):
 
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
-
-        self._torch_version = version.parse(torch.__version__.split("+")[0])
-        self._enable_fsdp2 = self._torch_version >= version.parse("2.4.0")
-
-        fsdp_kwargs = getattr(self.args, "fsdp_kwargs", None) or {}
-        self.use_orig_params = fsdp_kwargs.get("use_orig_params", self._enable_fsdp2)
-        self.limit_all_gathers = fsdp_kwargs.get("limit_all_gathers", True)
-        self.sync_module_states = fsdp_kwargs.get("sync_module_states", self._enable_fsdp2)
-        self.cpu_offload = fsdp_kwargs.get("cpu_offload", False)
-        self.backward_prefetch_mode = fsdp_kwargs.get("backward_prefetch", "post").lower()
+        torch_version = version.parse(torch.__version__.split("+")[0])
+        required_version = version.parse("2.4.0")
+        if fully_shard is None or FSDPModule is None or torch_version < required_version:
+            raise RuntimeError(
+                "FSDP2 backend requires PyTorch >= 2.4 with the fully_shard API. "
+                f"Detected torch=={torch.__version__}. Please upgrade PyTorch or use --dist_backend deepspeed."
+            )
+        if StateDictOptions is None or get_model_state_dict is None or set_model_state_dict is None:
+            raise RuntimeError(
+                "torch.distributed.checkpoint.state_dict APIs are required for FSDP2 checkpointing. "
+                "Please install a recent PyTorch build with distributed.checkpoint enabled."
+            )
 
     def setup_distributed(self, timeout=timedelta(minutes=60)) -> None:
         if self.full_determinism:
@@ -88,9 +90,6 @@ class FSDPStrategy(ABC):
         self.world_size = dist.get_world_size()
         self.ring_attn_rank = 0
         set_ring_attn_group(None)
-
-        if not self._enable_fsdp2 and self.is_rank_0():
-            self.print("Warning: torch>=2.4.0 recommended for FSDP2. Using legacy FSDP configuration.")
 
         self.accumulated_gradient = self.train_batch_size // self.micro_train_batch_size // max(1, self.world_size)
 
@@ -162,54 +161,12 @@ class FSDPStrategy(ABC):
     def _unwrap_model(self, model) -> nn.Module:
         if isinstance(model, Actor):
             return self._unwrap_model(model.model)
-        if isinstance(model, (FSDP, DDP)):
+        if FSDPModule is not None and isinstance(model, FSDPModule):
             return model.module
         return model
 
-    def _build_mixed_precision(self):
-        if not self.bf16:
-            return None
-        return MixedPrecision(
-            param_dtype=torch.bfloat16,
-            reduce_dtype=torch.bfloat16,
-            buffer_dtype=torch.bfloat16,
-        )
-
     def _wrap_train_model(self, model: nn.Module) -> nn.Module:
-        if self._enable_fsdp2 and fully_shard is not None and FSDPModule is not None:
-            return self._wrap_train_model_fsdp2(model)
-        return self._wrap_train_model_fsdp1(model)
-
-    def _wrap_train_model_fsdp1(self, model: nn.Module) -> nn.Module:
-        try:
-            auto_wrap = transformer_auto_wrap_policy
-            backward_prefetch = (
-                BackwardPrefetch.BACKWARD_PRE
-                if self.backward_prefetch_mode.startswith("pre")
-                else BackwardPrefetch.BACKWARD_POST
-            )
-            fsdp_kwargs = dict(
-                auto_wrap_policy=auto_wrap,
-                device_id=torch.cuda.current_device(),
-                sharding_strategy=ShardingStrategy.FULL_SHARD,
-                limit_all_gathers=self.limit_all_gathers,
-                sync_module_states=self.sync_module_states,
-                use_orig_params=self.use_orig_params,
-                backward_prefetch=backward_prefetch,
-            )
-
-            mp_conf = self._build_mixed_precision()
-            if mp_conf is not None:
-                fsdp_kwargs["mixed_precision"] = mp_conf
-
-            if self.cpu_offload:
-                fsdp_kwargs["cpu_offload"] = CPUOffload(offload_params=True)
-
-            model = FSDP(model, **fsdp_kwargs)
-            return model
-        except Exception as exc:  # pragma: no cover - defensive
-            self.print(f"FSDP auto-wrap failed, falling back to DDP: {exc}")
-            return DDP(model, device_ids=[torch.cuda.current_device()])
+        return self._wrap_train_model_fsdp2(model)
 
     def _maybe_fully_shard_children(self, module: nn.Module) -> None:
         assert fully_shard is not None and FSDPModule is not None
@@ -244,8 +201,10 @@ class FSDPStrategy(ABC):
                 model = fully_shard(model)
             return model
         except Exception as exc:  # pragma: no cover - defensive fallback
-            self.print(f"fully_shard failed ({exc}); falling back to legacy FSDP.")
-            return self._wrap_train_model_fsdp1(model)
+            raise RuntimeError(
+                "fully_shard() failed while constructing the FSDP2 model. "
+                "Please double-check that the model supports composable FSDP."
+            ) from exc
 
     def prepare(self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False):
         ret: List[ModelOrModelOptimPair] = []
@@ -309,13 +268,7 @@ class FSDPStrategy(ABC):
 
         wrapped_model = model.model if isinstance(model, Actor) else model
 
-        if (
-            self._enable_fsdp2
-            and FSDPModule is not None
-            and StateDictOptions is not None
-            and get_model_state_dict is not None
-            and isinstance(wrapped_model, FSDPModule)
-        ):
+        if FSDPModule is not None and isinstance(wrapped_model, FSDPModule):
             model_state = get_model_state_dict(
                 model=wrapped_model,
                 options=StateDictOptions(full_state_dict=True, cpu_offload=True),
@@ -329,17 +282,9 @@ class FSDPStrategy(ABC):
             dist.barrier()
             return
 
-        cpu_state_dict = None
-        if isinstance(wrapped_model, FSDP):
-            save_cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
-            with FSDP.state_dict_type(wrapped_model, StateDictType.FULL_STATE_DICT, save_cfg):
-                cpu_state_dict = wrapped_model.state_dict()
-
         if self.is_rank_0():
-            if cpu_state_dict is None:
-                cpu_state_dict = self._unwrap_model(model).state_dict()
-
             unwrapped = self._unwrap_model(model)
+            cpu_state_dict = unwrapped.state_dict()
             unwrapped.save_pretrained(output_dir, state_dict=cpu_state_dict, **kwargs)
             output_config_file = os.path.join(output_dir, "config.json")
             unwrapped.config.to_json_file(output_config_file)
