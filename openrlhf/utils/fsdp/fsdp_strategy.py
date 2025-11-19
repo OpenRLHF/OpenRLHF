@@ -2,7 +2,7 @@ import os
 from abc import ABC
 from collections import defaultdict
 from datetime import timedelta
-from typing import List, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
@@ -57,6 +57,16 @@ class FSDPStrategy(ABC):
         self.full_determinism = full_determinism
         self.max_norm = max_norm
 
+        self.fsdp_offload = getattr(args, "fsdp_offload", "none")
+        self.fsdp_cpu_offload_pin_memory = self._coerce_bool(
+            getattr(args, "fsdp_cpu_offload_pin_memory", True),
+            default=True,
+        )
+        self.fsdp_reshard_after_forward = self._coerce_bool(
+            getattr(args, "fsdp_reshard_after_forward", True),
+            default=True,
+        )
+
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
         torch_version = version.parse(torch.__version__.split("+")[0])
@@ -71,6 +81,8 @@ class FSDPStrategy(ABC):
                 "torch.distributed.checkpoint.state_dict APIs are required for FSDP2 checkpointing. "
                 "Please install a recent PyTorch build with distributed.checkpoint enabled."
             )
+
+        self._offload_policy: Optional["OffloadPolicy"] = self._build_offload_policy()
 
     def setup_distributed(self, timeout=timedelta(minutes=60)) -> None:
         if self.full_determinism:
@@ -168,6 +180,32 @@ class FSDPStrategy(ABC):
     def _wrap_train_model(self, model: nn.Module) -> nn.Module:
         return self._wrap_train_model_fsdp2(model)
 
+    @staticmethod
+    def _coerce_bool(value, default=False):
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "1", "yes", "y", "t"}:
+                return True
+            if lowered in {"false", "0", "no", "n", "f"}:
+                return False
+        return bool(value)
+
+    def _build_offload_policy(self) -> Optional["OffloadPolicy"]:
+        offload_mode = (self.fsdp_offload or "none").lower()
+        if offload_mode == "none":
+            return None
+        if offload_mode == "cpu":
+            if CPUOffloadPolicy is None:
+                raise RuntimeError(
+                    "CPUOffloadPolicy is unavailable in this torch build. Please upgrade PyTorch to use fsdp_offload=cpu."
+                )
+            return CPUOffloadPolicy(pin_memory=bool(self.fsdp_cpu_offload_pin_memory))
+        raise ValueError(f"Unknown fsdp_offload mode: {self.fsdp_offload}")
+
     def _maybe_fully_shard_children(self, module: nn.Module) -> None:
         assert fully_shard is not None and FSDPModule is not None
         for name, child in module.named_children():
@@ -178,7 +216,11 @@ class FSDPStrategy(ABC):
                 changed = False
                 for sub in child:
                     if isinstance(sub, nn.Module) and not isinstance(sub, FSDPModule):
-                        new_sub = fully_shard(sub)
+                        new_sub = fully_shard(
+                            sub,
+                            reshard_after_forward=self.fsdp_reshard_after_forward,
+                            offload_policy=self._offload_policy,
+                        )
                         new_list.append(new_sub)
                         changed = True
                     else:
@@ -188,7 +230,11 @@ class FSDPStrategy(ABC):
                 continue
             if not any(p.requires_grad for p in child.parameters(recurse=False)):
                 continue
-            new_child = fully_shard(child)
+            new_child = fully_shard(
+                child,
+                reshard_after_forward=self.fsdp_reshard_after_forward,
+                offload_policy=self._offload_policy,
+            )
             if new_child is not child:
                 setattr(module, name, new_child)
 
@@ -198,7 +244,11 @@ class FSDPStrategy(ABC):
             # shard large submodules first (e.g. transformer blocks) if possible
             self._maybe_fully_shard_children(model)
             if not isinstance(model, FSDPModule):
-                model = fully_shard(model)
+                model = fully_shard(
+                    model,
+                    reshard_after_forward=self.fsdp_reshard_after_forward,
+                    offload_policy=self._offload_policy,
+                )
             return model
         except Exception as exc:  # pragma: no cover - defensive fallback
             raise RuntimeError(
