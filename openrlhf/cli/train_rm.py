@@ -187,6 +187,25 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dist_backend", type=str, default="deepspeed", choices=["deepspeed", "fsdp"], help="Distributed backend"
     )
+    parser.add_argument(
+        "--fsdp_offload",
+        type=str,
+        default="none",
+        choices=["none", "cpu"],
+        help="Fully-Sharded Data Parallel offload policy",
+    )
+    parser.add_argument(
+        "--fsdp_cpu_offload_pin_memory",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Pin CPU memory when fsdp_offload=cpu",
+    )
+    parser.add_argument(
+        "--fsdp_reshard_after_forward",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Control fully_shard reshard_after_forward flag",
+    )
     parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
