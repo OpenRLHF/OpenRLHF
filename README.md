@@ -43,6 +43,8 @@ OpenRLHF is the first easy-to-use, high-performance open-source RLHF framework b
 More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [Technical Report](https://www.researchgate.net/publication/393414548_OpenRLHF_An_Easy-to-use_Scalable_and_High-performance_RLHF_Framework) | [Documents](https://openrlhf.readthedocs.io/)
 
 ## News
+- [2025/11] [NeMo Gym](https://github.com/NVIDIA-NeMo/Gym) OpenRLHF now supports integration with NeMo-Gym for advanced agent-based RLHF training with external evaluation environments.
+- [2025/10] [ScaleRL](https://arxiv.org/abs/2510.13786) validates the effectiveness of REINFORCE++-baseline in large-scale training scenarios. Releases [REINFORCE++ slides](https://docs.google.com/presentation/d/1stieP_3PM1z4Hq1YWR3GywFkxcHEAlstXMaS23KlGN4)
 - [2025/8] [ProRL V2](https://hijkzzz.notion.site/prorl-v2) uses REINFORCE++-baseline to train a state-of-the-art 1.5B reasoning model and releases the blog post [REINFORCE++-baseline is all you need in RLVR](https://medium.com/@janhu9527/reinforce-baseline-is-all-you-need-in-rlvr-f5406930aa85).
 - [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) uses the method quite similar to REINFORCE++-baseline to train the reasoning models.
 - [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) has been released as a fork of OpenRLHF. It is designed to train LLM-based multi-agent systems using RL, by integrating centralized multi-agent interactions with distributed policy training.
@@ -64,6 +66,7 @@ More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csof
 - Distributed [PPO](./examples/scripts/train_ppo_llama_ray.sh) and [REINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh) implementations based on Ray.  
 - Support Ray-based [PPO](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh) and [REINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh) using Hybrid Engine  (`--colocate_all_models`, `--vllm_enable_sleep` and `--vllm_gpu_memory_utilization 0.5`)
 - [Ray-based Reinforced Finetuning](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
+- Integration with [NeMo Gym](./examples/scripts/train_reinforce_nemogym.sh) for agent-based RLHF with external evaluation environments (`--agent_func_path` with NeMo Gym integration)
 - Integration with vLLM for accelerated generation in RLHF tasks (`--vllm_num_engines`).  
 - Support RL Dynamic Sampling from DAPO(`--dynamic_filtering` and `--dynamic_filtering_reward_range`)
 - Support [DeepSpeed AutoTP training](./examples/scripts/train_sft_llama_tensor_parallelism.sh) (`--ds_tensor_parallel_size`)
@@ -97,7 +100,7 @@ sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
 # pip install
 pip install openrlhf
 
-# If you want to use vLLM acceleration (Install vLLM 0.10.1.1)
+# If you want to use vLLM acceleration (Install vLLM 0.11.0)
 pip install openrlhf[vllm]
 # latest vLLM is also supported
 pip install openrlhf[vllm_latest]
@@ -114,7 +117,7 @@ pip install -e .
 ```
 
 > [!NOTE]
->We recommend using vLLM 0.10.1.1 or higher.
+>We recommend using vLLM 0.11.0 or higher.
 >We also provided the [Dockerfiles for vLLM](./dockerfile/) and [One-Click Installation Script of Nvidia-Docker](./examples/scripts/nvidia_docker_install.sh).
 
 ### Prepare Datasets

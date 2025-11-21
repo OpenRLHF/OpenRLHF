@@ -225,9 +225,9 @@ def update_samples_with_rewards(rewards_info, samples_list):
     if "extra_logs" in rewards_info[0]:
         # Merge all extra_logs tensors first
         merged_logs = {
-            key: torch.cat([logs[key] for logs in [info["extra_logs"] for info in rewards_info]], dim=0).split(
-                samples_len
-            )
+            key: torch.cat(
+                [torch.as_tensor(logs[key]) for logs in [info["extra_logs"] for info in rewards_info]], dim=0
+            ).split(samples_len)
             for key in rewards_info[0]["extra_logs"].keys()
         }
 
@@ -356,7 +356,7 @@ class SamplesGenerator:
             input_ids = list(output.prompt_token_ids) + list(output.outputs[0].token_ids)
             attention_mask = [1] * len(input_ids)
 
-            sequences = torch.tensor(input_ids)
+            sequences = torch.tensor(input_ids, dtype=torch.long)
             attention_mask = torch.tensor(attention_mask)
 
             # Create action mask based on output token positions
@@ -446,7 +446,7 @@ class RemoteExperienceMaker(ABC):
         self.advantage_estimator = strategy.args.advantage_estimator
         self.args = strategy.args
 
-        # remote_rm_url indicates that the remote reward model is agent enviroment, remote http server or custom reward func
+        # remote_rm_url indicates that the remote reward model is agent environment, remote http server or custom reward func
         self.remote_rm_url = self.args.remote_rm_url
         self.remote_reward_model = remote_reward_model
         self.tokenizer = tokenizer
@@ -696,7 +696,7 @@ class RemoteExperienceMaker(ABC):
 
         # get rewards from experiences
         exp_len = [len(experience.index) for experience in experiences]
-        # indices is an identity mapping when not using dynamic batch; otherwise, it maps back to the original indices after rearange samples
+        # indices is an identity mapping when not using dynamic batch; otherwise, it maps back to the original indices after rearrange samples
         indices = torch.tensor(sum([experience.index for experience in experiences], []))
         raw_rewards = torch.cat([experience.rewards for experience in experiences], dim=0)
         rewards = torch.empty_like(raw_rewards)

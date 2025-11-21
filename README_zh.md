@@ -47,6 +47,8 @@ OpenRLHF 是第一个基于 Ray、vLLM、ZeRO-3 和 HuggingFace Transformers 构
 
 
 ## 新闻  
+- [2025/11] [NeMo Gym](https://github.com/NVIDIA-NeMo/Gym) OpenRLHF 现已支持与 NeMo-Gym 集成，用于基于外部评估环境的高级智能体 RLHF 训练。
+- [2025/10] [ScaleRL](https://arxiv.org/abs/2510.13786) 在大规模训练场景中验证了 REINFORCE++-baseline 的有效性。发布 [REINFORCE++ slides](https://docs.google.com/presentation/d/1stieP_3PM1z4Hq1YWR3GywFkxcHEAlstXMaS23KlGN4)
 - [2025/8] [ProRL V2](https://hijkzzz.notion.site/prorl-v2) 使用 REINFORCE++-baseline 训练最先进的 1.5B 推理模型，并发布博客文章 [REINFORCE++-baseline is all you need in RLVR](https://medium.com/@janhu9527/reinforce-baseline-is-all-you-need-in-rlvr-f5406930aa85)。
 - [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) 使用极其类似于 REINFORCE++-baseline 的算法训练推理模型.
 - [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) 作为 OpenRLHF 的分支版本已发布。它通过集成集中式多智能体交互与分布式策略训练，专为使用 RL 训练基于 LLM 的多智能体系统而设计。
@@ -68,6 +70,7 @@ OpenRLHF 是第一个基于 Ray、vLLM、ZeRO-3 和 HuggingFace Transformers 构
 - 支持对 [超过 700 亿参数的模型](./examples/scripts/train_ppo_llama_ray_70b.sh) 进行完整的 RLHF 微调。  
 - 支持基于 Ray 和 Hybrid Engine 的 [PPO](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh) 和 [REINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh) (`--colocate_all_models`, `--vllm_enable_sleep` and `--vllm_gpu_memory_utilization 0.5`)
 - [Ray-based Reinforced Finetuning](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
+- 集成 [NeMo Gym](./examples/scripts/train_reinforce_nemogym.sh)，支持基于外部评估环境的智能体 RLHF（通过 `--agent_func_path` 配合 NeMo Gym 集成）
 - 支持 Dynamic Sampling from DAPO(`--dynamic_filtering` and `--dynamic_filtering_reward_range`)
 - 支持 [DeepSpeed AutoTP 训练](./examples/scripts/train_sft_llama_tensor_parallelism.sh) (`--ds_tensor_parallel_size`)
 - 集成 vLLM，加速 RLHF 任务中的样本生成（`--vllm_num_engines`）。  
@@ -103,7 +106,7 @@ sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
 # pip install
 pip install openrlhf
 
-# 如果你需要使用 vLLM 加速 (安装 vLLM 0.10.1.1)
+# 如果你需要使用 vLLM 加速 (安装 vLLM 0.11.0)
 pip install openrlhf[vllm]
 # 最新的 vLLM 也是支持的
 pip install openrlhf[vllm_latest]
@@ -120,7 +123,7 @@ pip install -e .
 ```
 
 > [!NOTE]
->我们推荐使用 vLLM 0.10.1.1 及以上版本。
+>我们推荐使用 vLLM 0.11.0 及以上版本。
 >我们也提供了 [Dockerfiles for vLLM](./dockerfile/) 和 [Nvidia-Docker 一键安装脚本](./examples/scripts/nvidia_docker_install.sh)。
 
 ### 准备数据集
