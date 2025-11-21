@@ -5,17 +5,17 @@
 
 set -x
 
-# Model and data configuration
-export PRETRAIN="microsoft/DialoGPT-medium"
-export REWARD_MODEL="microsoft/DialoGPT-medium"
-export DATASET="Anthropic/hh-rlhf"
-
-# Ray cluster configuration (if applicable)
-export RAY_CLUSTER_CONFIG="examples/scripts/ray_cluster.yaml"
-
 # Asynchronous sampling configuration
 export OPENRLHF_ASYNC_NUM_TASKS=128  # Number of concurrent agents
 export OPENRLHF_ASYNC_QUEUE_SIZE=2   # Controls the degree of off-policy learning
+
+# Model and data configuration
+PRETRAIN="microsoft/DialoGPT-medium"
+REWARD_MODEL="microsoft/DialoGPT-medium"
+DATASET="Anthropic/hh-rlhf"
+
+# Ray cluster configuration (if applicable)
+# export RAY_CLUSTER_CONFIG="examples/scripts/ray_cluster.yaml"
 
 # GPU and parallelism configuration
 ACTOR_NUM_NODES=1
@@ -31,8 +31,8 @@ N_SAMPLES_PER_PROMPT=8
 MICRO_ROLLOUT_BATCH_SIZE=8
 
 # Streaming sampling and dynamic filtering configuration
-ENABLE_STREAMING_SAMPLING=true
-DYNAMIC_FILTERING=true
+# ENABLE_STREAMING_SAMPLING=true
+# DYNAMIC_FILTERING=true
 DYNAMIC_FILTERING_REWARD_RANGE="0.1 0.9"
 
 # Agent configuration (for multi-step agent interaction)

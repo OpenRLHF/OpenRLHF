@@ -55,34 +55,29 @@ class SignalActor:
             self.update_weights_event.clear()
 
 
-@ray.remote
-class GenerateSamplesActor(BasePPOTrainer):
+class BaseGenerateSamplesWorker(BasePPOTrainer):
     def __init__(self, *args, **kwargs):
         self.signal_actor = kwargs.pop("signal_actor")
         super().__init__(*args, **kwargs)
 
-        # Select generator based on whether streaming sampling is enabled
-        if getattr(self.args, "enable_streaming_sampling", False):
-            from openrlhf.trainer.ppo_utils.experience_maker_async import SamplesGeneratorStreamingAsync
-
-            self.samples_generator = SamplesGeneratorStreamingAsync(
-                self.vllm_engines,
-                self.strategy,
-                self.tokenizer,
-                self.prompt_max_len,
-            )
-            logger.info("Using SamplesGeneratorStreamingAsync for streaming sampling")
-        else:
-            self.samples_generator = self.generator_cls(
-                self.vllm_engines,
-                self.strategy,
-                self.tokenizer,
-                self.prompt_max_len,
-            )
+        self.samples_generator = self.generator_cls(
+            self.vllm_engines,
+            self.strategy,
+            self.tokenizer,
+            self.prompt_max_len,
+        )
         self.prepare_datasets()
-
+    
     def generate_samples(self, prompts, labels, **generate_kwargs):
         return self.samples_generator.generate_samples(prompts, labels, **generate_kwargs)
+
+    @staticmethod
+    def fit(self, start_episode, queue, data_loader_state_dict, remote_reward_model=None):
+        raise NotImplementedError("This method should be implemented in subclasses.")
+
+
+@ray.remote
+class GenerateSamplesActor(BaseGenerateSamplesWorker):
 
     def fit(self, start_episode, queue, data_loader_state_dict, remote_reward_model=None):
         if data_loader_state_dict:
@@ -159,24 +154,27 @@ class GenerateSamplesActor(BasePPOTrainer):
                 queue.put((rollout_samples, episode, self.prompts_dataloader.state_dict(), pass_rate))
         queue.put("done")
 
-    def streaming_fit(self, start_episode, queue, data_loader_state_dict, remote_reward_model=None):
-        """
-        Main loop for streaming sampling.
-        Uses SamplesGeneratorStreamingAsync for prompt-level asynchronous sampling.
-        """
+
+@ray.remote
+class StreamingGenerateSamplesActor(BaseGenerateSamplesWorker):
+
+    def fit(self, start_episode, queue, data_loader_state_dict, remote_reward_model=None):
         if data_loader_state_dict:
             self.prompts_dataloader.load_state_dict(data_loader_state_dict)
 
-        logger.info("Starting streaming sampling mode")
-
         for episode in range(start_episode, self.args.num_episodes):
-            logger.info(f"Episode {episode + 1}/{self.args.num_episodes} - Streaming sampling")
+            logger.info(
+                f"Episode {episode + 1}/{self.args.num_episodes} - Streaming sampling"
+            )
 
             batch_count = 0
-            while True:  # 持续处理直到数据集耗尽
+            is_exhausted = False
+
+            # Loop until the dataset is exhausted in this episode
+            while not is_exhausted:
                 batch_count += 1
 
-                # 等待队列不满
+                # Wait until the queue has free space
                 queue_log_counter = 0
                 while queue.full():
                     if queue_log_counter % 10 == 0:
@@ -184,40 +182,40 @@ class GenerateSamplesActor(BasePPOTrainer):
                     queue_log_counter += 1
                     time.sleep(1)
 
-                # 等待生成信号
+                # Wait for generation signal and block weight updates
                 ray.get(self.signal_actor.wait_generating.remote())
                 ray.get(self.signal_actor.set_update_weights.remote(False))
 
                 rollout_samples = []
-                is_exhausted = False
-                pass_rate = 0.0
+                pass_rate = None  # None means no dynamic filtering or not computed
 
                 try:
-                    # Generate a rollout_batch_size of valid prompts using streaming sampling
+                    # Number of prompts to collect in this rollout
                     target_prompts = self.args.rollout_batch_size
 
-                    rollout_samples, is_exhausted, pass_rate = self.samples_generator._generate_vllm_streaming(
-                        target_prompts=target_prompts,
-                        dataloader=self.prompts_dataloader,
-                        remote_reward_model=remote_reward_model,
-                        **self.generate_kwargs,
-                    )
+                    rollout_samples, is_exhausted, pass_rate = \
+                        self.samples_generator._generate_vllm_streaming(
+                            target_prompts=target_prompts,
+                            dataloader=self.prompts_dataloader,
+                            remote_reward_model=remote_reward_model,
+                            **self.generate_kwargs,
+                        )
 
                 finally:
-                    # Allow weight updates
+                    # Always allow weight updates after generation
                     ray.get(self.signal_actor.set_update_weights.remote(True))
 
-                # Put samples in the queue for training
+                # Push samples to the training queue
                 if rollout_samples:
                     queue.put((rollout_samples, episode, self.prompts_dataloader.state_dict(), pass_rate))
                 else:
                     logger.warning(f"No samples collected in batch {batch_count}, skipping")
 
-                # 检查数据集是否耗尽
-                if is_exhausted:
-                    logger.info(f"Episode {episode + 1} completed: processed {batch_count} batches, dataset exhausted")
-                    break
+                logger.info(
+                    f"Episode {episode + 1} completed: processed {batch_count} batches; dataset exhausted"
+                )
 
+        # Signal training that sampling is finished
         queue.put("done")
         logger.info("Streaming sampling completed for all episodes")
 
@@ -350,8 +348,13 @@ class PPOTrainerAsync:
             self.remote_reward_model = RemoteRewardModel.remote(self.args, self.args.remote_rm_url)
         else:
             self.remote_reward_model = None
+        
+        if self.args.enable_streaming_sampling:
+            generator_actor_cls = StreamingGenerateSamplesActor
+        else:
+            generator_actor_cls = GenerateSamplesActor
 
-        self.generator_actor = GenerateSamplesActor.remote(
+        self.generator_actor = generator_actor_cls.remote(
             pretrain,
             strategy,
             actor_model_group,
@@ -401,9 +404,7 @@ class PPOTrainerAsync:
         # Update initial weights to vLLM engines
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path):
-            checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
-                0
-            ]
+            checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[0]
             logger.info(f"checkpoint_states: {checkpoint_states}")
             ray.get(self.trainer_actor._broadcast_to_vllm.remote())
         else:
@@ -417,14 +418,9 @@ class PPOTrainerAsync:
         # Launch async training
         remote_reward_model = self.remote_reward_model if self.args.dynamic_filtering else None
 
-        if getattr(args, "enable_streaming_sampling", False):
-            generator_actor_ref = self.generator_actor.streaming_fit.remote(
-                episode, self.queue, data_loader_state_dict, remote_reward_model
-            )
-        else:
-            generator_actor_ref = self.generator_actor.fit.remote(
-                episode, self.queue, data_loader_state_dict, remote_reward_model
-            )
+        generator_actor_ref = self.generator_actor.fit.remote(
+            episode, self.queue, data_loader_state_dict, remote_reward_model
+        )
 
         trainer_actor_ref = self.trainer_actor.fit.remote(self.queue, steps)
         ray.get([generator_actor_ref, trainer_actor_ref])

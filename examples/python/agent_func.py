@@ -39,9 +39,9 @@ class AgentInstance(AgentInstanceBase):
         """
         print(f"step_idx: {self.step_idx}, max_steps: {self.max_steps}")
 
-        states["observation_text"]
-        states["action_text"]
-        states["label"]
+        observation_text = states["observation_text"]
+        action_text = states["action_text"]
+        label = states["label"]
 
         # Check if episode is done
         done = self.step_idx >= self.max_steps
