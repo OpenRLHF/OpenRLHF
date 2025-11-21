@@ -67,7 +67,7 @@ class BaseGenerateSamplesWorker(BasePPOTrainer):
             self.prompt_max_len,
         )
         self.prepare_datasets()
-    
+
     def generate_samples(self, prompts, labels, **generate_kwargs):
         return self.samples_generator.generate_samples(prompts, labels, **generate_kwargs)
 
@@ -163,9 +163,7 @@ class StreamingGenerateSamplesActor(BaseGenerateSamplesWorker):
             self.prompts_dataloader.load_state_dict(data_loader_state_dict)
 
         for episode in range(start_episode, self.args.num_episodes):
-            logger.info(
-                f"Episode {episode + 1}/{self.args.num_episodes} - Streaming sampling"
-            )
+            logger.info(f"Episode {episode + 1}/{self.args.num_episodes} - Streaming sampling")
 
             batch_count = 0
             is_exhausted = False
@@ -193,13 +191,12 @@ class StreamingGenerateSamplesActor(BaseGenerateSamplesWorker):
                     # Number of prompts to collect in this rollout
                     target_prompts = self.args.rollout_batch_size
 
-                    rollout_samples, is_exhausted, pass_rate = \
-                        self.samples_generator._generate_vllm_streaming(
-                            target_prompts=target_prompts,
-                            dataloader=self.prompts_dataloader,
-                            remote_reward_model=remote_reward_model,
-                            **self.generate_kwargs,
-                        )
+                    rollout_samples, is_exhausted, pass_rate = self.samples_generator._generate_vllm_streaming(
+                        target_prompts=target_prompts,
+                        dataloader=self.prompts_dataloader,
+                        remote_reward_model=remote_reward_model,
+                        **self.generate_kwargs,
+                    )
 
                 finally:
                     # Always allow weight updates after generation
@@ -211,9 +208,7 @@ class StreamingGenerateSamplesActor(BaseGenerateSamplesWorker):
                 else:
                     logger.warning(f"No samples collected in batch {batch_count}, skipping")
 
-                logger.info(
-                    f"Episode {episode + 1} completed: processed {batch_count} batches; dataset exhausted"
-                )
+                logger.info(f"Episode {episode + 1} completed: processed {batch_count} batches; dataset exhausted")
 
         # Signal training that sampling is finished
         queue.put("done")
@@ -348,7 +343,7 @@ class PPOTrainerAsync:
             self.remote_reward_model = RemoteRewardModel.remote(self.args, self.args.remote_rm_url)
         else:
             self.remote_reward_model = None
-        
+
         if self.args.enable_streaming_sampling:
             generator_actor_cls = StreamingGenerateSamplesActor
         else:
@@ -404,7 +399,9 @@ class PPOTrainerAsync:
         # Update initial weights to vLLM engines
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path):
-            checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[0]
+            checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
+                0
+            ]
             logger.info(f"checkpoint_states: {checkpoint_states}")
             ray.get(self.trainer_actor._broadcast_to_vllm.remote())
         else:

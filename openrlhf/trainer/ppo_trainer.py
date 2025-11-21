@@ -73,7 +73,9 @@ class BasePPOTrainer(ABC):
         self.remote_reward_model = None
 
         if self.args.enable_streaming_sampling:
-            from openrlhf.trainer.ppo_utils.experience_maker_async import SamplesGeneratorStreamingAsync as SamplesGenerator
+            from openrlhf.trainer.ppo_utils.experience_maker_async import (
+                SamplesGeneratorStreamingAsync as SamplesGenerator,
+            )
         elif self.args.agent_func_path:
             from openrlhf.trainer.ppo_utils.experience_maker_async import SamplesGeneratorAsync as SamplesGenerator
         else:
