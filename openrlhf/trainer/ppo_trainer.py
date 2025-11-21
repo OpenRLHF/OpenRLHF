@@ -72,7 +72,11 @@ class BasePPOTrainer(ABC):
         self.experience_maker = None
         self.remote_reward_model = None
 
-        if self.args.agent_func_path:
+        if self.args.enable_streaming_sampling:
+            from openrlhf.trainer.ppo_utils.experience_maker_async import (
+                SamplesGeneratorStreamingAsync as SamplesGenerator,
+            )
+        elif self.args.agent_func_path:
             from openrlhf.trainer.ppo_utils.experience_maker_async import SamplesGeneratorAsync as SamplesGenerator
         else:
             from openrlhf.trainer.ppo_utils.experience_maker import SamplesGenerator
@@ -322,15 +326,22 @@ class BasePPOTrainer(ABC):
         # Create train dataset
         train_data = train_data.select(range(min(args.max_samples, len(train_data))))
         prompts_dataset = PromptDataset(train_data, self.tokenizer, strategy, input_template=args.input_template)
+
+        # Set batch size based on whether streaming mode is enabled
+        if args.enable_streaming_sampling:
+            dataloader_batch_size = 1
+        else:
+            dataloader_batch_size = args.vllm_generate_batch_size
+
         prompts_dataloader = strategy.setup_dataloader(
             prompts_dataset,
-            args.vllm_generate_batch_size,
+            dataloader_batch_size,
             True,
             True,
         )
 
         # Create eval dataset if eval data exists
-        if getattr(args, "eval_dataset", None):
+        if args.eval_dataset:
             eval_data = blending_datasets(
                 args.eval_dataset,
                 None,  # No probability sampling for eval datasets
