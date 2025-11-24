@@ -242,6 +242,7 @@ class SamplesGeneratorAsync:
 
 class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
 
+    @torch.no_grad()
     def generate_batch(self, dataloader_iter, num_prompts: int, **kwargs) -> tuple[List[Experience], bool, int]:
         """Stream samples until target prompts are collected or the dataloader is exhausted."""
         filter_hook: FilterHookBase = kwargs.pop("filter_hook", NoOpFilterHook())
