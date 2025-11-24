@@ -1,6 +1,7 @@
 import random
 import time
-from typing import List
+from abc import ABC, abstractmethod
+from typing import List, Optional
 
 import ray
 import torch
@@ -11,9 +12,98 @@ from openrlhf.utils.logging_utils import init_logger
 logger = init_logger(__name__)
 
 
+class FilterHookBase(ABC):
+    """Filter hook to optionally drop samples and report pass rate."""
+
+    @abstractmethod
+    def apply(self, experiences: List[Experience]) -> List[Experience]:
+        raise NotImplementedError
+
+    def pass_rate(self) -> Optional[float]:
+        return None
+
+    def reset(self):
+        """Reset internal stats if any."""
+        return
+
+
+class NoOpFilterHook(FilterHookBase):
+    def apply(self, experiences: List[Experience]) -> List[Experience]:
+        return experiences
+
+
+class DynamicFilteringHook(FilterHookBase):
+    """Group-level filtering based on avg reward in a target range."""
+
+    def __init__(self, args):
+        self.n_samples = args.n_samples_per_prompt
+        self.min_r, self.max_r = args.dynamic_filtering_reward_range
+        self.total_groups = 0
+        self.valid_groups = 0
+
+    def apply(self, experiences: List[Experience]) -> List[Experience]:
+        if len(experiences) != self.n_samples:
+            return []
+        self.total_groups += 1
+
+        scores = [exp.scores[0].item() for exp in experiences]
+        avg_reward = sum(scores) / len(scores)
+        is_valid = self.min_r + 1e-6 < avg_reward < self.max_r - 1e-6
+        if is_valid:
+            self.valid_groups += 1
+            return experiences
+        return []
+
+    def pass_rate(self) -> Optional[float]:
+        if self.total_groups == 0:
+            return None
+        return self.valid_groups / self.total_groups * 100
+
+    def reset(self):
+        self.total_groups = 0
+        self.valid_groups = 0
+
+
+def _collect_prompts(target_prompts: int, dataloader_iter):
+    prompts, labels = [], []
+    exhausted = False
+
+    while len(prompts) < target_prompts:
+        try:
+            _, rand_prompts, rand_labels = next(dataloader_iter)
+            remaining = target_prompts - len(prompts)
+            prompts.extend(rand_prompts[:remaining])
+            labels.extend(rand_labels[:remaining])
+        except StopIteration:
+            exhausted = True
+            break
+
+    return prompts, labels, exhausted
+
+
+def _filter_batches(samples: List[Experience], group: int, hook: FilterHookBase) -> List[Experience]:
+    filtered: List[Experience] = []
+    for i in range(0, len(samples), group):
+        batch = samples[i : i + group]
+        kept = hook.apply(batch)
+        filtered.extend(kept)
+    return filtered
+
+
 class SamplesGeneratorAsync(SamplesGenerator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+    def generate_batch(self, target_prompts: int, dataloader_iter, **kwargs) -> tuple[List[Experience], bool, int]:
+        filter_hook: FilterHookBase = kwargs.pop("filter_hook", NoOpFilterHook())
+
+        prompts, labels, exhausted = _collect_prompts(target_prompts, dataloader_iter)
+        if not prompts:
+            return [], True, 0
+
+        samples = super().generate_samples(prompts, labels, **kwargs)
+        filtered = _filter_batches(samples, self.args.n_samples_per_prompt, filter_hook)
+        return filtered, exhausted, len(prompts)
 
     def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> List[Experience]:
         from vllm import SamplingParams
@@ -145,22 +235,24 @@ class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def _generate_vllm_streaming(
-        self, target_prompts: int, dataloader, **kwargs
-    ) -> tuple[List[Experience], bool, float]:
+    def generate_batch(self, target_prompts: int, dataloader_iter, **kwargs) -> tuple[List[Experience], bool, int]:
         """
         Core method for streaming sampling.
 
         Args:
             target_prompts: The target number of prompts.
-            dataloader: The dataloader iterator.
+            dataloader_iter: Iterator over the prompt dataloader (stateful across calls).
 
         Returns:
             A tuple containing the list of samples, whether the dataset is exhausted, and the filter pass rate.
         """
+        if dataloader_iter is None:
+            raise ValueError("dataloader_iter must be provided for streaming sampling")
+
+        filter_hook: FilterHookBase = kwargs.pop("filter_hook", NoOpFilterHook())
+
         valid_experiences = []
         active_requests = {}  # {request_id: request_info}
-        dataloader_iter = iter(dataloader)
         dataloader_exhausted = False  # Track dataloader status
 
         # Calculate the target number of samples for internal logic
@@ -248,29 +340,11 @@ class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
                         # Convert to Experience objects
                         prompt_experiences = self._convert_agent_outputs_to_experiences(agent_outputs, request_info)
 
-                        # Immediately perform group-level filtering
-                        is_valid = self._filter_prompt_group(prompt_experiences)
+                        kept = filter_hook.apply(prompt_experiences)
 
-                        # Add filter statistics
-                        if not hasattr(self, "_filter_stats"):
-                            self._filter_stats = {"total_groups": 0, "valid_groups": 0}
-                        self._filter_stats["total_groups"] += 1
-
-                        if is_valid:
-                            self._filter_stats["valid_groups"] += 1
-                            valid_experiences.extend(prompt_experiences)
+                        if kept:
+                            valid_experiences.extend(kept)
                             self._valid_prompt_collected += 1  # Increment valid prompt count
-
-                            # Print stats every 10 valid groups or 50 total groups
-                            if (self._filter_stats["valid_groups"] % 10 == 0) or (
-                                self._filter_stats["total_groups"] % 50 == 0
-                            ):
-                                pass_rate = (
-                                    self._filter_stats["valid_groups"] / self._filter_stats["total_groups"] * 100
-                                )
-                                logger.info(
-                                    f"Filter stats: {self._filter_stats['valid_groups']}/{self._filter_stats['total_groups']} groups passed ({pass_rate:.1f}%)"
-                                )
 
                             # Precise stop check
                             if len(valid_experiences) >= target_samples:
@@ -279,29 +353,13 @@ class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
                                 logger.info(
                                     f"Target reached! Collected {self._valid_prompt_collected} prompts ({len(valid_experiences)} samples), cancelling {len(remaining_refs)} remaining requests"
                                 )
-                                # Calculate filter pass rate
-                                filter_pass_rate = (
-                                    self._filter_stats["valid_groups"] / self._filter_stats["total_groups"] * 100
-                                    if self._filter_stats["total_groups"] > 0
-                                    else 100.0
-                                )
                                 return (
                                     valid_experiences[:target_samples],
                                     False,
-                                    filter_pass_rate,
+                                    self._total_prompt_processed,
                                 )  # Target reached, but dataset is not exhausted
                         else:
                             # Invalid group: dynamically supplement with a new request
-                            # Print a warning for every 100 filtered groups
-                            filtered_count = self._filter_stats["total_groups"] - self._filter_stats["valid_groups"]
-                            if filtered_count % 100 == 0:
-                                pass_rate = (
-                                    self._filter_stats["valid_groups"] / self._filter_stats["total_groups"] * 100
-                                )
-                                logger.warning(
-                                    f"Low pass rate warning: only {pass_rate:.1f}% groups passing filter ({self._filter_stats['valid_groups']}/{self._filter_stats['total_groups']})"
-                                )
-
                             new_ref, new_request_id, new_request_info = self._supplement_new_request_optimized(
                                 dataloader_iter, dataloader_exhausted, **kwargs
                             )
@@ -338,7 +396,7 @@ class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
         final_prompts = self._valid_prompt_collected
         logger.info("Final statistics:")
         logger.info(
-            f"   - Target prompts: {target_prompts} ({target_prompts}×{self.args.n_samples_per_prompt}={target_samples} samples)"
+            f"   - Target prompts: {target_prompts} ({target_prompts}x{self.args.n_samples_per_prompt}={target_samples} samples)"
         )
         logger.info(f"   - Collected prompts: {final_prompts} ({final_count} samples)")
         logger.info(f"   - Dataloader batches consumed: {self._dataloader_consumed_count}")
@@ -347,40 +405,42 @@ class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
             f"   - Prompt success rate: {final_prompts / target_prompts * 100:.1f}% ({final_count / target_samples * 100:.1f}% samples)"
         )
 
-        # Add filter statistics
-        if hasattr(self, "_filter_stats"):
-            total_groups = self._filter_stats["total_groups"]
-            valid_groups = self._filter_stats["valid_groups"]
-            filter_pass_rate = valid_groups / total_groups * 100 if total_groups > 0 else 0
-            logger.info(
-                f"   - Filter statistics: {valid_groups}/{total_groups} prompt groups passed ({filter_pass_rate:.1f}%)"
-            )
-            logger.info(
-                f"   - Average prompts processed per valid group: {self._total_prompt_processed / valid_groups:.1f}"
-                if valid_groups > 0
-                else "   - No valid groups found"
-            )
+        filter_pass_rate = filter_hook.pass_rate()
+        if filter_pass_rate is not None:
+            logger.info(f"   - Filter pass rate: {filter_pass_rate:.1f}%")
 
         if final_count < target_samples:
             logger.warning(
                 f"Could not collect target. Collected {final_prompts}/{target_prompts} prompts ({final_count}/{target_samples} samples)"
             )
             if dataloader_exhausted:
-                logger.info("💡 Consider adjusting dynamic_filtering_reward_range or increasing dataset size")
-                logger.info(f"💡 Dataloader was exhausted after {self._dataloader_consumed_count} batches")
+                logger.info("Hint: consider adjusting dynamic_filtering_reward_range or increasing dataset size")
+                logger.info(f"Hint: dataloader was exhausted after {self._dataloader_consumed_count} batches")
         else:
-            logger.info(f"🏁 Streaming sampling completed: {final_prompts} prompts collected ({final_count} samples)")
+            logger.info(f"Streaming sampling completed: {final_prompts} prompts collected ({final_count} samples)")
 
         # Calculate the final filter pass rate
-        final_filter_pass_rate = 100.0
-        if hasattr(self, "_filter_stats") and self._filter_stats["total_groups"] > 0:
-            final_filter_pass_rate = self._filter_stats["valid_groups"] / self._filter_stats["total_groups"] * 100
+        final_filter_pass_rate = filter_hook.pass_rate()
 
         return (
             (valid_experiences[:target_samples] if final_count >= target_samples else valid_experiences),
             dataloader_exhausted,
-            final_filter_pass_rate,
+            self._total_prompt_processed,
         )
+
+    def generate_samples(
+        self, prompts: List[str], labels: List[str], filter_hook: Optional[FilterHookBase] = None, **kwargs
+    ) -> List[Experience]:
+        """Compatibility wrapper; streams over a one-off iterator."""
+        dataloader_iter = iter([(None, prompts, labels)])
+        target_prompts = len(prompts)
+        samples, _, _ = self.generate_batch(
+            target_prompts=target_prompts,
+            dataloader_iter=dataloader_iter,
+            filter_hook=filter_hook or NoOpFilterHook(),
+            **kwargs,
+        )
+        return samples
 
     def _get_initial_request_pool(self, dataloader_iter):
         """Get the initial request pool, distributed by the number of engines."""
@@ -394,7 +454,7 @@ class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
         collected_prompts = []
         collected_labels = []
 
-        logger.info(f"📋 Initializing request pool, need {batch_size} prompts for {engine_count} engines")
+        logger.info(f"Initializing request pool, need {batch_size} prompts for {engine_count} engines")
 
         while len(collected_prompts) < batch_size:
             try:
@@ -415,7 +475,7 @@ class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
             self._total_prompt_processed += 1
 
         logger.info(
-            f"📋 Initial request pool created: {len(initial_requests)} requests, consumed {self._dataloader_consumed_count} dataloader batches"
+            f"Initial request pool created: {len(initial_requests)} requests, consumed {self._dataloader_consumed_count} dataloader batches"
         )
         return initial_requests
 
@@ -502,32 +562,6 @@ class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
 
         return experience
 
-    def _filter_prompt_group(self, prompt_experiences):
-        """
-        Group-level filtering method, reusing original logic.
-        """
-        if len(prompt_experiences) != self.args.n_samples_per_prompt:
-            logger.warning(
-                f"Invalid group size: got {len(prompt_experiences)}, expected {self.args.n_samples_per_prompt}"
-            )
-            return False
-
-        # Calculate average reward for the group
-        scores = [exp.scores[0].item() for exp in prompt_experiences]
-        avg_reward = sum(scores) / len(scores)
-
-        # Check if it is within the filtering range
-        min_r, max_r = self.args.dynamic_filtering_reward_range
-        is_valid = min_r + 1e-6 < avg_reward < max_r - 1e-6
-
-        # Add detailed debug logs
-        if not is_valid:
-            logger.info(
-                f"Filtered out: avg_reward={avg_reward:.6f}, threshold=({min_r + 1e-6:.6f}, {max_r - 1e-6:.6f}), scores={scores}"
-            )
-
-        return is_valid
-
     def _supplement_new_request_optimized(self, dataloader_iter, dataloader_exhausted, **kwargs):
         """
         Optimized method to supplement requests, directly returning the new ref, request_id, and request_info.
@@ -537,7 +571,7 @@ class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
         """
         if dataloader_exhausted:
             logger.debug(
-                f"💀 Supplement skipped: dataloader already exhausted (consumed {self._dataloader_consumed_count} batches)"
+                f"Skip supplement: dataloader already exhausted (consumed {self._dataloader_consumed_count} batches)"
             )
             return None, None, None
 
@@ -558,7 +592,7 @@ class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
             new_request_id = f"prompt_{time.time()}_{random.randint(1000, 9999)}"
             prompts_to_submit = [new_prompt] * self.args.n_samples_per_prompt
             labels_to_submit = [new_label] * self.args.n_samples_per_prompt
-            logger.debug(f"🔍 Submitting {len(prompts_to_submit)} prompts to engine {best_engine_idx}")
+            logger.debug(f"Submitting {len(prompts_to_submit)} prompts to engine {best_engine_idx}")
 
             new_ref = engine.add_requests.remote(
                 sampling_params=self._build_sampling_params(**kwargs),
@@ -607,7 +641,7 @@ class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
                 # Try to cancel the Ray task
                 ray.cancel(ref)
                 request_id = refs_to_request_id.get(ref, "unknown")
-                logger.debug(f"🚫 Cancelled request {request_id}")
+                logger.debug(f"Cancelled request {request_id}")
                 cancelled_count += 1
 
                 # Remove from active_requests
@@ -618,7 +652,7 @@ class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
                 request_id = refs_to_request_id.get(ref, "unknown")
                 logger.warning(f"Failed to cancel request {request_id}: {e}")
 
-        logger.info(f"🚫 Cancelled {cancelled_count} remaining requests")
+        logger.info(f"Cancelled {cancelled_count} remaining requests")
 
     def _build_sampling_params(self, **kwargs):
         """

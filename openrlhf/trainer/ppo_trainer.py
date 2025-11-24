@@ -73,15 +73,20 @@ class BasePPOTrainer(ABC):
         self.remote_reward_model = None
 
         if self.args.enable_streaming_sampling:
-            from openrlhf.trainer.ppo_utils.experience_maker_async import (
-                SamplesGeneratorStreamingAsync as SamplesGenerator,
-            )
+            assert self.args.agent_func_path, "enable_streaming_sampling requires agent_func_path to be set."
+
+            from openrlhf.trainer.ppo_utils.experience_maker_async import SamplesGeneratorStreamingAsync
+
+            self.generator_cls = SamplesGeneratorStreamingAsync
         elif self.args.agent_func_path:
-            from openrlhf.trainer.ppo_utils.experience_maker_async import SamplesGeneratorAsync as SamplesGenerator
+            from openrlhf.trainer.ppo_utils.experience_maker_async import SamplesGeneratorAsync
+
+            self.generator_cls = SamplesGeneratorAsync
         else:
+            # TODO: Default sync generator (legacy generate_samples); to be migrated to unified interface later
             from openrlhf.trainer.ppo_utils.experience_maker import SamplesGenerator
 
-        self.generator_cls = SamplesGenerator
+            self.generator_cls = SamplesGenerator
 
     def _init_wandb(self):
         # wandb/tensorboard setting
