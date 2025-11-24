@@ -121,21 +121,23 @@ class LLMRayActorAsync(BaseLLMRayActor):
             while not self.result_queue.empty():
                 results.append(await self.result_queue.get())
             return results
-        else:
-            # Filter by request_group_id
-            matching_results = []
-            temp_queue = []
 
-            # Extract all items from queue
-            while not self.result_queue.empty():
-                item = await self.result_queue.get()
-                if item.get("request_group_id") == request_group_id:
-                    matching_results.append(item)
-                else:
-                    temp_queue.append(item)
+        # Filter by request_group_id without disturbing ordering
+        matching_results = []
+        unmatched = []
 
-            # Put back non-matching items
-            for item in temp_queue:
-                await self.result_queue.put(item)
+        while True:
+            try:
+                item = self.result_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
-            return matching_results
+            if item.get("request_group_id") == request_group_id:
+                matching_results.append(item)
+            else:
+                unmatched.append(item)
+
+        for item in unmatched:
+            self.result_queue.put_nowait(item)
+
+        return matching_results
