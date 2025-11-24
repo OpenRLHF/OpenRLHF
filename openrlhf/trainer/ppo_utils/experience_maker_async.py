@@ -81,15 +81,6 @@ def _collect_prompts(dataloader_iter, num_prompts: int):
     return prompts, labels, exhausted
 
 
-def _filter_batches(samples: List[Experience], group: int, hook: FilterHookBase) -> List[Experience]:
-    filtered: List[Experience] = []
-    for i in range(0, len(samples), group):
-        batch = samples[i : i + group]
-        kept = hook.apply(batch)
-        filtered.extend(kept)
-    return filtered
-
-
 def _build_sampling_params(args, **kwargs):
     from vllm import SamplingParams
 
@@ -139,7 +130,12 @@ class SamplesGeneratorAsync:
         for output in all_outputs:
             experiences_list.append(self._create_experience_from_output(output, **kwargs))
 
-        filtered = _filter_batches(experiences_list, self.args.n_samples_per_prompt, filter_hook)
+        # Apply filter hook in prompt-sized batches
+        filtered: List[Experience] = []
+        group = self.args.n_samples_per_prompt
+        for i in range(0, len(experiences_list), group):
+            batch = experiences_list[i : i + group]
+            filtered.extend(filter_hook.apply(batch))
 
         return filtered, exhausted, len(prompts)
 
