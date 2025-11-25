@@ -101,6 +101,7 @@ def _build_sampling_params(args, **kwargs):
         logprobs=1 if args.enable_vllm_is_correction else None,
     )
 
+
 def _create_experience_from_output(output, truncate_length, **kwargs):
     """Build an Experience from a single vLLM output."""
     # Use already tokenized observation
@@ -161,6 +162,7 @@ def _create_experience_from_output(output, truncate_length, **kwargs):
 
     return experience
 
+
 class SyncTrainerSamplesGeneratorAsync(SamplesGenerator):
 
     def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> List[Experience]:
@@ -213,11 +215,7 @@ class SyncTrainerSamplesGeneratorAsync(SamplesGenerator):
         # Process outputs one by one
         experiences_list = []
         for output in all_outputs:
-            experiences_list.append(
-                _create_experience_from_output(
-                    output, truncate_length, **kwargs
-                )
-            )
+            experiences_list.append(_create_experience_from_output(output, truncate_length, **kwargs))
 
         return experiences_list
 
@@ -309,7 +307,7 @@ class SamplesGeneratorAsync:
     def _create_experience_from_output(self, output, **kwargs):
         """Build an Experience from a single vLLM output."""
         truncate_length = self.prompt_max_len + kwargs.get("max_new_tokens", 1024)
-        return _create_experience_from_output(output, truncate_length **kwargs)
+        return _create_experience_from_output(output, truncate_length**kwargs)
 
 
 class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
@@ -356,10 +354,12 @@ class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
                 kept = filter_hook.apply(experiences_list)
                 if kept:
                     valid_experiences.extend(kept)
-                    pbar.set_postfix({
-                        "pass_rate": filter_hook.pass_rate(),
-                        "use_prompt_in_batch": total_prompt_processed,
-                    })
+                    pbar.set_postfix(
+                        {
+                            "pass_rate": filter_hook.pass_rate(),
+                            "use_prompt_in_batch": total_prompt_processed,
+                        }
+                    )
                     pbar.update()
 
                     if len(valid_experiences) >= num_samples:

@@ -73,7 +73,9 @@ class BasePPOTrainer(ABC):
         self.remote_reward_model = None
 
         if self.args.enable_streaming_sampling:
-            assert self.args.agent_func_path and self.args.async_train, "enable_streaming_sampling requires agent_func_path to be set."
+            assert (
+                self.args.agent_func_path and self.args.async_train
+            ), "enable_streaming_sampling requires agent_func_path to be set."
 
             from openrlhf.trainer.ppo_utils.experience_maker_async import SamplesGeneratorStreamingAsync
 
