@@ -99,7 +99,7 @@ class GenerateSamplesActor(BasePPOTrainer):
                 # TODO: init checkpoint step
             )
 
-            while not exhausted:
+            while not is_exhausted:
                 # Wait until queue is not full
                 # To support 1-step off-policy training
                 queue_log_counter = 0
@@ -114,7 +114,7 @@ class GenerateSamplesActor(BasePPOTrainer):
                 ray.get(self.signal_actor.set_update_weights.remote(False))
 
                 # Generate samples
-                rollout_samples, exhausted, prompts_used = self.samples_generator.generate_batch(
+                rollout_samples, is_exhausted, prompts_used = self.samples_generator.generate_batch(
                     dataloader_iter=dataloader_iter,
                     num_prompts=self.args.rollout_batch_size,
                     filter_hook=self.filter_hook,

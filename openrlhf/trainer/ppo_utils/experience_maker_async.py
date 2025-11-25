@@ -3,8 +3,10 @@ import time
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
+
 import ray
 import torch
+from tqdm import tqdm
 
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.utils.logging_utils import init_logger
@@ -48,10 +50,15 @@ class DynamicFilteringHook(FilterHookBase):
 
         scores = [exp.scores[0].item() for exp in experiences]
         avg_reward = sum(scores) / len(scores)
-        is_valid = self.min_r + 1e-6 < avg_reward < self.max_r - 1e-6
+        
+        is_valid = self.min_r < avg_reward < self.max_r
         if is_valid:
             self.valid_groups += 1
             return experiences
+        
+        logger.info(
+            f"Filtered out: avg_reward={avg_reward:.4f}, threshold=({self.min_r:.4f}, {self.max_r:.4f}), scores={scores}"
+        )
         return []
 
     def pass_rate(self) -> Optional[float]:
@@ -261,6 +268,11 @@ class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
 
         valid_experiences = []
         num_samples = num_prompts * self.args.n_samples_per_prompt
+        pbar = tqdm(
+            range(num_prompts),
+            desc=f"Generate experiences",
+            disable=False,
+        )
         while remaining_refs:
             # Wait for the next completed request
             ready_refs, remaining_refs = ray.wait(remaining_refs, num_returns=1, timeout=10.0)
@@ -279,8 +291,10 @@ class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
                 kept = filter_hook.apply(experiences_list)
                 if kept:
                     valid_experiences.extend(kept)
+                    pbar.update()
 
                     if len(valid_experiences) >= num_samples:
+                        # Cancel remaining requests
                         for ref in remaining_refs:
                             ray.cancel(ref)
 
