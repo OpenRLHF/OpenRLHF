@@ -73,15 +73,20 @@ class BasePPOTrainer(ABC):
         self.remote_reward_model = None
 
         if self.args.enable_streaming_sampling:
-            assert self.args.agent_func_path, "enable_streaming_sampling requires agent_func_path to be set."
+            assert self.args.agent_func_path and self.args.async_train, "enable_streaming_sampling requires agent_func_path to be set."
 
             from openrlhf.trainer.ppo_utils.experience_maker_async import SamplesGeneratorStreamingAsync
 
             self.generator_cls = SamplesGeneratorStreamingAsync
-        elif self.args.agent_func_path:
+        elif self.args.agent_func_path and self.args.async_train:
             from openrlhf.trainer.ppo_utils.experience_maker_async import SamplesGeneratorAsync
 
             self.generator_cls = SamplesGeneratorAsync
+        elif self.args.agent_func_path and not self.args.async_train:
+            # TODO: Default sync generator (legacy generate_samples); to be migrated to unified interface later
+            from openrlhf.trainer.ppo_utils.experience_maker_async import SyncTrainerSamplesGeneratorAsync
+
+            self.generator_cls = SyncTrainerSamplesGeneratorAsync
         else:
             # TODO: Default sync generator (legacy generate_samples); to be migrated to unified interface later
             from openrlhf.trainer.ppo_utils.experience_maker import SamplesGenerator
