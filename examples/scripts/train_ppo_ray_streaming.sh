@@ -1,44 +1,56 @@
 #!/bin/bash
 
-# Example script for PPO training with streaming asynchronous sampling.
-# Implements prompt-level asynchronous gathering based on the OpenRLHF Agent architecture.
-
 set -x
 
 # Asynchronous sampling configuration
 export OPENRLHF_ASYNC_NUM_TASKS=128  # Number of concurrent agents
 export OPENRLHF_ASYNC_QUEUE_SIZE=2   # Controls the degree of off-policy learning
 
-# Model and data configuration
-PRETRAIN="microsoft/DialoGPT-medium"
-REWARD_MODEL="microsoft/DialoGPT-medium"
-DATASET="Anthropic/hh-rlhf"
-
-# Ray cluster configuration (if applicable)
-# export RAY_CLUSTER_CONFIG="examples/scripts/ray_cluster.yaml"
-
-# GPU and parallelism configuration
-ACTOR_NUM_NODES=1
-ACTOR_NUM_GPUS_PER_NODE=4
-CRITIC_NUM_NODES=1
-CRITIC_NUM_GPUS_PER_NODE=4
-VLLM_NUM_ENGINES=2
-VLLM_TENSOR_PARALLEL_SIZE=2
-
-# Batch and sampling configuration
-ROLLOUT_BATCH_SIZE=192
-N_SAMPLES_PER_PROMPT=8
-MICRO_ROLLOUT_BATCH_SIZE=8
-
 # Streaming sampling and dynamic filtering configuration
-# ENABLE_STREAMING_SAMPLING=true
-# DYNAMIC_FILTERING=true
 DYNAMIC_FILTERING_REWARD_RANGE="0.1 0.9"
-
 # Agent configuration (for multi-step agent interaction)
-AGENT_FUNC_PATH="examples/batch_inference/agent_func.py"
+AGENT_FUNC_PATH="examples/python/agent_func.py"
 
-python -m openrlhf.cli.train_ppo_ray \
+python3 -m openrlhf.cli.train_ppo_ray \
+    --ref_num_nodes 1 \
+    --ref_num_gpus_per_node 8 \
+    --actor_num_nodes 1 \
+    --actor_num_gpus_per_node 8 \
+    --vllm_num_engines 4 \
+    --vllm_tensor_parallel_size 2 \
+    --colocate_all_models \
+    --vllm_gpu_memory_utilization 0.6 \
+    \
+    --init_kl_coef 1e-3 \
+    --gamma 1.0 \
+    --use_kl_loss \
+    --kl_estimator k3 \
+    --advantage_estimator reinforce_baseline \
+    \
+    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
+    --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \
+    --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
+    --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
+    --save_hf_ckpt \
+    \
+    --prompt_data OpenRLHF/prompt-collection-v0.1 \
+    --input_key context_messages \
+    --apply_chat_template \
+    \
+    --micro_train_batch_size 8 \
+    --train_batch_size 128 \
+    --micro_rollout_batch_size 16 \
+    --rollout_batch_size 128 \
+    --n_samples_per_prompt 8 \
+    --max_epochs 1 \
+    --prompt_max_len 1024 \
+    --max_samples 100000 \
+    --generate_max_len 1024 \
+    --zero_stage 3 \
+    --bf16 \
+    --actor_learning_rate 5e-7 \
+    --critic_learning_rate 9e-6 \
+    \
     --pretrain ${PRETRAIN} \
     --reward_pretrain ${REWARD_MODEL} \
     --dataset ${DATASET} \
@@ -59,30 +71,14 @@ python -m openrlhf.cli.train_ppo_ray \
     --prompt_max_len 512 \
     --generate_max_len 512 \
     \
-    --actor_num_nodes ${ACTOR_NUM_NODES} \
-    --actor_num_gpus_per_node ${ACTOR_NUM_GPUS_PER_NODE} \
-    --critic_num_nodes ${CRITIC_NUM_NODES} \
-    --critic_num_gpus_per_node ${CRITIC_NUM_GPUS_PER_NODE} \
-    \
-    --vllm_num_engines ${VLLM_NUM_ENGINES} \
-    --vllm_tensor_parallel_size ${VLLM_TENSOR_PARALLEL_SIZE} \
-    --vllm_gpu_memory_utilization 0.85 \
+    --gradient_checkpointing \
+    --packing_samples \
     --vllm_sync_backend nccl \
-    \
+    --enforce_eager \
+    --vllm_enable_sleep \
+    --deepspeed_enable_sleep \
     --async_train \
     --dynamic_filtering \
     --dynamic_filtering_reward_range ${DYNAMIC_FILTERING_REWARD_RANGE} \
     --enable_streaming_sampling \
-    \
-    --agent_func_path ${AGENT_FUNC_PATH} \
-    \
-    --actor_learning_rate 1e-6 \
-    --critic_learning_rate 9e-6 \
-    --adam_offload \
-    --flash_attn \
-    --gradient_checkpointing \
-    --use_wandb [your_wandb_api_key] \
-    --wandb_project "openrlhf_streaming_sampling" \
-    --wandb_run_name "streaming_ppo_${ROLLOUT_BATCH_SIZE}_${N_SAMPLES_PER_PROMPT}"
-
-echo "🏁 Streaming sampling PPO training completed!"
+    --agent_func_path ${AGENT_FUNC_PATH}
