@@ -307,7 +307,7 @@ class SamplesGeneratorAsync:
     def _create_experience_from_output(self, output, **kwargs):
         """Build an Experience from a single vLLM output."""
         truncate_length = self.prompt_max_len + kwargs.get("max_new_tokens", 1024)
-        return _create_experience_from_output(output, truncate_length**kwargs)
+        return _create_experience_from_output(output, truncate_length, **kwargs)
 
 
 class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
