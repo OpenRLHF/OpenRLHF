@@ -50,12 +50,12 @@ class DynamicFilteringHook(FilterHookBase):
 
         scores = [exp.scores[0].item() for exp in experiences]
         avg_reward = sum(scores) / len(scores)
-        
+
         is_valid = self.min_r < avg_reward < self.max_r
         if is_valid:
             self.valid_groups += 1
             return experiences
-        
+
         logger.info(
             f"Filtered out: avg_reward={avg_reward:.4f}, threshold=({self.min_r:.4f}, {self.max_r:.4f}), scores={scores}"
         )
