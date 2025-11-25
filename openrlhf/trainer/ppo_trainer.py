@@ -85,7 +85,7 @@ class BasePPOTrainer(ABC):
 
             self.generator_cls = SamplesGeneratorAsync
         elif self.args.agent_func_path and not self.args.async_train:
-            # TODO: Default sync generator (legacy generate_samples); to be migrated to unified interface later
+            # TODO: Default async generator (legacy generate_samples); to be migrated to unified interface later
             from openrlhf.trainer.ppo_utils.experience_maker_async import SyncTrainerSamplesGeneratorAsync
 
             self.generator_cls = SyncTrainerSamplesGeneratorAsync
