@@ -33,7 +33,7 @@ def get_train_ds_config(
         "zero_quantized_weights": False,
         "zero_quantized_gradients": False,
     }
-    if overlap_comm:
+    if overlap_comm and stage >= 2:
         zero_opt_dict["overlap_comm"] = True
         zero_opt_dict["contiguous_gradients"] = True
     if stage == 3:
