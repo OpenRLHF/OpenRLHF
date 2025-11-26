@@ -5,6 +5,7 @@ from datetime import datetime
 
 from transformers.trainer import get_scheduler
 
+from openrlhf.cli.utils import add_overlap_comm_arg
 from openrlhf.datasets import RewardDataset
 from openrlhf.datasets.utils import blending_datasets
 from openrlhf.models import get_llm_for_sequence_regression
@@ -189,12 +190,7 @@ if __name__ == "__main__":
     parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
     parser.add_argument("--grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
-    parser.add_argument(
-        "--overlap_comm",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Enable DeepSpeed overlap_comm (default: on; use --no-overlap_comm to disable)",
-    )
+    add_overlap_comm_arg(parser)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed Tensor parallel size")

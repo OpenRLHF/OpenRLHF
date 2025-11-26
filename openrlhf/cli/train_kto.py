@@ -5,6 +5,7 @@ from datetime import datetime
 
 from transformers.trainer import get_scheduler
 
+from openrlhf.cli.utils import add_overlap_comm_arg
 from openrlhf.datasets import UnpairedPreferenceDataset
 from openrlhf.datasets.utils import blending_datasets
 from openrlhf.models import Actor
@@ -176,12 +177,7 @@ if __name__ == "__main__":
     parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
     parser.add_argument("--use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
     parser.add_argument("--grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
-    parser.add_argument(
-        "--overlap_comm",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Enable DeepSpeed overlap_comm (default: on; use --no-overlap_comm to disable)",
-    )
+    add_overlap_comm_arg(parser)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
 
     # LoRA

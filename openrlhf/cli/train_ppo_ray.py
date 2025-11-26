@@ -4,6 +4,7 @@ from datetime import datetime
 import ray
 from ray.util.placement_group import placement_group
 
+from openrlhf.cli.utils import add_overlap_comm_arg
 from openrlhf.trainer.ray import create_vllm_engines
 from openrlhf.trainer.ray.launcher import (
     RayActorGroup,
@@ -278,12 +279,7 @@ if __name__ == "__main__":
     parser.add_argument("--flash_attn", action="store_true", default=False, help="Enable FlashAttention2")
     parser.add_argument("--use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
     parser.add_argument("--grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
-    parser.add_argument(
-        "--overlap_comm",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Enable DeepSpeed overlap_comm (default: on; use --no-overlap_comm to disable)",
-    )
+    add_overlap_comm_arg(parser)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument(
