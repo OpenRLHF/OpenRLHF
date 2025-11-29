@@ -128,6 +128,7 @@ class GenerateSamplesActor(BasePPOTrainer):
 
                 if rollout_samples:
                     queue.put((rollout_samples, episode, self.prompts_dataloader.state_dict(), pass_rate))
+                    self.filter_hook.reset()
 
                 pbar.update(prompts_used)
 
