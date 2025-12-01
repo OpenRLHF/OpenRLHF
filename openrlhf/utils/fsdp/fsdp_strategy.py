@@ -214,7 +214,9 @@ class FSDPStrategy(ABC):
             raise RuntimeError(
                 "MixedPrecisionPolicy is unavailable in this torch build. Please upgrade PyTorch to use bf16 with FSDP."
             )
-        return MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16, buffer_dtype=torch.bfloat16)
+        return MixedPrecisionPolicy(
+            param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16, buffer_dtype=torch.bfloat16
+        )
 
     def _maybe_fully_shard_children(self, module: nn.Module) -> None:
         assert fully_shard is not None and FSDPModule is not None
