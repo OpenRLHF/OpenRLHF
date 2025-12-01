@@ -82,7 +82,8 @@ class FSDPStrategy(ABC):
                 "Please install a recent PyTorch build with distributed.checkpoint enabled."
             )
 
-        self._offload_policy: Optional["OffloadPolicy"] = self._build_offload_policy()
+        self._offload_policy: Optional["CPUOffloadPolicy"] = self._build_offload_policy()
+        self._mp_policy: Optional["MixedPrecisionPolicy"] = self._build_mixed_precision_policy()
 
     def setup_distributed(self, timeout=timedelta(minutes=60)) -> None:
         if self.full_determinism:
@@ -194,7 +195,7 @@ class FSDPStrategy(ABC):
                 return False
         return bool(value)
 
-    def _build_offload_policy(self) -> Optional["OffloadPolicy"]:
+    def _build_offload_policy(self) -> Optional["CPUOffloadPolicy"]:
         offload_mode = (self.fsdp_offload or "none").lower()
         if offload_mode == "none":
             return None
@@ -205,6 +206,15 @@ class FSDPStrategy(ABC):
                 )
             return CPUOffloadPolicy(pin_memory=bool(self.fsdp_cpu_offload_pin_memory))
         raise ValueError(f"Unknown fsdp_offload mode: {self.fsdp_offload}")
+
+    def _build_mixed_precision_policy(self) -> Optional["MixedPrecisionPolicy"]:
+        if not self.bf16:
+            return None
+        if MixedPrecisionPolicy is None:
+            raise RuntimeError(
+                "MixedPrecisionPolicy is unavailable in this torch build. Please upgrade PyTorch to use bf16 with FSDP."
+            )
+        return MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16, buffer_dtype=torch.bfloat16)
 
     def _maybe_fully_shard_children(self, module: nn.Module) -> None:
         assert fully_shard is not None and FSDPModule is not None
@@ -220,6 +230,7 @@ class FSDPStrategy(ABC):
                             sub,
                             reshard_after_forward=self.fsdp_reshard_after_forward,
                             offload_policy=self._offload_policy,
+                            mixed_precision=self._mp_policy,
                         )
                         new_list.append(new_sub)
                         changed = True
@@ -234,6 +245,7 @@ class FSDPStrategy(ABC):
                 child,
                 reshard_after_forward=self.fsdp_reshard_after_forward,
                 offload_policy=self._offload_policy,
+                mixed_precision=self._mp_policy,
             )
             if new_child is not child:
                 setattr(module, name, new_child)
@@ -248,6 +260,7 @@ class FSDPStrategy(ABC):
                     model,
                     reshard_after_forward=self.fsdp_reshard_after_forward,
                     offload_policy=self._offload_policy,
+                    mixed_precision=self._mp_policy,
                 )
             return model
         except Exception as exc:  # pragma: no cover - defensive fallback
