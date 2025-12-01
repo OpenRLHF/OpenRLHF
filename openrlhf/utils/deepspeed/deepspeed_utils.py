@@ -141,6 +141,8 @@ def _z3_params_to_fetch(param_list):
 
 
 def offload_deepspeed_states(model, pin_memory=True, non_blocking=True):
+    if not hasattr(model, "zero_optimization_stage"):
+        return
     zero_stage = model.zero_optimization_stage()  # config['zero_optimization']['stage']
     adam_offload = model.config["zero_optimization"]["offload_optimizer"]["device"] == "cpu"
 
@@ -182,6 +184,8 @@ def offload_deepspeed_states(model, pin_memory=True, non_blocking=True):
 
 
 def reload_deepspeed_states(model, non_blocking=True):
+    if not hasattr(model, "zero_optimization_stage"):
+        return
     zero_stage = model.zero_optimization_stage()  # config['zero_optimization']['stage']
     adam_offload = model.config["zero_optimization"]["offload_optimizer"]["device"] == "cpu"
 
