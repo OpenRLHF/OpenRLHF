@@ -291,7 +291,13 @@ class CriticModelActor(BaseModelActor):
             )
 
     def reload_states(self):
-        reload_deepspeed_states(self.critic)
+        if hasattr(self.strategy, "reload_states"):
+            self.strategy.reload_states(self.critic, self.critic_optim)
+        else:
+            reload_deepspeed_states(self.critic)
 
     def offload_states(self):
-        offload_deepspeed_states(self.critic)
+        if hasattr(self.strategy, "offload_states"):
+            self.strategy.offload_states(self.critic, self.critic_optim)
+        else:
+            offload_deepspeed_states(self.critic)

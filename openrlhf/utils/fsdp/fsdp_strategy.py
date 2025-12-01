@@ -218,6 +218,15 @@ class FSDPStrategy(ABC):
             param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16, buffer_dtype=torch.bfloat16
         )
 
+    @staticmethod
+    def _move_optimizer_state(optimizer: optim.Optimizer, device: torch.device) -> None:
+        for state in optimizer.state.values():
+            for k, v in state.items():
+                if torch.is_tensor(v):
+                    state[k] = v.to(device, non_blocking=True)
+                elif isinstance(v, (list, tuple)):
+                    state[k] = type(v)(t.to(device, non_blocking=True) if torch.is_tensor(t) else t for t in v)
+
     def _maybe_fully_shard_children(self, module: nn.Module) -> None:
         assert fully_shard is not None and FSDPModule is not None
         for name, child in module.named_children():
@@ -304,6 +313,23 @@ class FSDPStrategy(ABC):
                 else:
                     ret.append(module)
         return ret[0] if len(ret) == 1 else ret
+
+    def offload_states(self, model, optimizer=None):
+        """Sleep: offload parameters/optimizer to CPU for hybrid engine."""
+        module = self._unwrap_model(model).cpu()
+        if optimizer is not None:
+            self._move_optimizer_state(optimizer, torch.device("cpu"))
+        torch.cuda.empty_cache()
+        if dist.is_initialized():
+            dist.barrier()
+
+    def reload_states(self, model, optimizer=None):
+        """Wake up: move parameters/optimizer back to GPU."""
+        module = self._unwrap_model(model).to(torch.cuda.current_device())
+        if optimizer is not None:
+            self._move_optimizer_state(optimizer, torch.device(torch.cuda.current_device()))
+        if dist.is_initialized():
+            dist.barrier()
 
     def moving_average(self, model, model_ema, beta=0.992, device="cpu"):
         self.time_steps["ema"] += 1

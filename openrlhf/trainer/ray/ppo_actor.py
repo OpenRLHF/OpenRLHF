@@ -542,10 +542,16 @@ class PolicyModelActor(BaseModelActor):
         self.trainer.replay_buffer.append(experience)
 
     def reload_states(self):
-        reload_deepspeed_states(self.actor.model)
+        if hasattr(self.strategy, "reload_states"):
+            self.strategy.reload_states(self.actor, self.actor_optim)
+        else:
+            reload_deepspeed_states(self.actor.model)
 
     def offload_states(self):
-        offload_deepspeed_states(self.actor.model)
+        if hasattr(self.strategy, "offload_states"):
+            self.strategy.offload_states(self.actor, self.actor_optim)
+        else:
+            offload_deepspeed_states(self.actor.model)
 
     def save_checkpoint(self, tag, client_states):
         args = self.strategy.args
