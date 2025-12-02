@@ -127,7 +127,11 @@ class FSDPStrategy(ABC):
         **kwargs,
     ) -> None:
         if self.max_norm and self.max_norm > 0:
-            if hasattr(model, "clip_grad_norm_"):
+            devices = {p.device.type for p in model.parameters() if p.grad is not None}
+            if "cpu" in devices:
+                # Avoid DTensor all_reduce on CPU backends; skip clipping when offloaded.
+                pass
+            elif hasattr(model, "clip_grad_norm_"):
                 model.clip_grad_norm_(self.max_norm)
             else:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), self.max_norm)
