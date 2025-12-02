@@ -214,9 +214,8 @@ class FSDPStrategy(ABC):
             raise RuntimeError(
                 "MixedPrecisionPolicy is unavailable in this torch build. Please upgrade PyTorch to use bf16 with FSDP."
             )
-        return MixedPrecisionPolicy(
-            param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16, buffer_dtype=torch.bfloat16
-        )
+        # torch.distributed.fsdp.fully_shard.MixedPrecisionPolicy signature: (param_dtype=None, reduce_dtype=None, cast_forward_inputs=None)
+        return MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16, cast_forward_inputs=None)
 
     @staticmethod
     def _move_optimizer_state(optimizer: optim.Optimizer, device: torch.device) -> None:
