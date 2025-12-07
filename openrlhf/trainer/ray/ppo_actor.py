@@ -247,11 +247,12 @@ class ActorPPOTrainer(ABC):
 
         if self.args.use_kl_loss:
             if self.args.init_kl_coef > 0:
-                kl, logprobs_diff = compute_approx_kl(
+                kl = compute_approx_kl(
                     action_log_probs,
                     base_action_log_probs,
                     kl_estimator=self.args.kl_estimator,
                 )
+                logprobs_diff = action_log_probs.float() - base_action_log_probs.float()
             else:
                 kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=action_log_probs.device)
                 logprobs_diff = torch.zeros_like(action_log_probs)
