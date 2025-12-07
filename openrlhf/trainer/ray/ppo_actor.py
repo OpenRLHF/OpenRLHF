@@ -254,7 +254,7 @@ class ActorPPOTrainer(ABC):
                 )
             else:
                 kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=action_log_probs.device)
-                logprobs_diff = torch.zeros_like(
+                logprobs_diff = torch.zeros_like(action_log_probs)
                     action_log_probs, dtype=action_log_probs.dtype, device=action_log_probs.device
                 )
             kl_loss = masked_mean(kl, experience.action_mask)
