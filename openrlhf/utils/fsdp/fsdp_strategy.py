@@ -244,7 +244,7 @@ class FSDPStrategy(ABC):
                             sub,
                             reshard_after_forward=self.fsdp_reshard_after_forward,
                             offload_policy=self._offload_policy,
-                            mixed_precision=self._mp_policy,
+                            mp_policy=self._mp_policy,
                         )
                         new_list.append(new_sub)
                         changed = True
@@ -259,7 +259,7 @@ class FSDPStrategy(ABC):
                 child,
                 reshard_after_forward=self.fsdp_reshard_after_forward,
                 offload_policy=self._offload_policy,
-                mixed_precision=self._mp_policy,
+                mp_policy=self._mp_policy,
             )
             if new_child is not child:
                 setattr(module, name, new_child)
@@ -274,7 +274,7 @@ class FSDPStrategy(ABC):
                     model,
                     reshard_after_forward=self.fsdp_reshard_after_forward,
                     offload_policy=self._offload_policy,
-                    mixed_precision=self._mp_policy,
+                    mp_policy=self._mp_policy,
                 )
             return model
         except Exception as exc:  # pragma: no cover - defensive fallback
