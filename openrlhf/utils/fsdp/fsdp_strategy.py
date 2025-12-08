@@ -179,7 +179,11 @@ class FSDPStrategy(ABC):
         if isinstance(model, Actor):
             return self._unwrap_model(model.model)
         if FSDPModule is not None and isinstance(model, FSDPModule):
-            return model.module
+            # FSDP2 modules may expose either `.module` or `._orig_module`
+            if hasattr(model, "module"):
+                return model.module
+            if hasattr(model, "_orig_module"):  # pragma: no cover - torch internal
+                return model._orig_module
         return model
 
     def _wrap_train_model(self, model: nn.Module) -> nn.Module:
