@@ -359,33 +359,50 @@ class ActorPPOTrainer(ABC):
                 ray.get(refs)
             torch_dist_barrier_and_cuda_sync()
 
-        # FSDP does not support DeepSpeed ZeRO gather semantics; skip broadcast for now.
-        if getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp":
-            raise RuntimeError(
-                "vLLM weight broadcast is only implemented for DeepSpeed backend. "
-                "Please use --dist_backend deepspeed when running hybrid engine with vLLM."
-            )
+        is_fsdp = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp"
+
+        def _get_full_tensor(param):
+            """Return full tensor for FSDP DTensor or regular param."""
+            if is_fsdp:
+                if hasattr(param, "full_tensor"):
+                    # ensure on CUDA before materializing
+                    if param.device.type == "cpu":
+                        param = param.to(torch.cuda.current_device())
+                    return param.full_tensor()
+                return param.data if param.device.type != "cpu" else param.data.to(torch.cuda.current_device())
+            return param.data
+
+        def _get_param_shape(param):
+            if is_fsdp:
+                return param.shape  # DTensor reports global shape
+            return param.shape if getattr(self.strategy.args, "zero_stage", 2) != 3 else param.ds_shape
 
         for name, param in model.named_parameters():
             count += 1  # empty_cache at last param
 
             # broadcast
             if not self.use_cuda_ipc:
-                # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
-                if self.strategy.args.ds_tensor_parallel_size > 1:
-                    with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
-                        _broadcast_param(param, count, num_params)
+                if is_fsdp:
+                    _broadcast_param(param, count, num_params)
                 else:
-                    with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                        _broadcast_param(param, count, num_params)
+                    # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
+                    if self.strategy.args.ds_tensor_parallel_size > 1:
+                        with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
+                            _broadcast_param(param, count, num_params)
+                    else:
+                        with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
+                            _broadcast_param(param, count, num_params)
             # CUDA IPC
             else:
-                if self.strategy.args.ds_tensor_parallel_size > 1:
-                    with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
-                        _handle_cuda_ipc(param, count, num_params)
+                if is_fsdp:
+                    _handle_cuda_ipc(param, count, num_params)
                 else:
-                    with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                        _handle_cuda_ipc(param, count, num_params)
+                    if self.strategy.args.ds_tensor_parallel_size > 1:
+                        with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
+                            _handle_cuda_ipc(param, count, num_params)
+                    else:
+                        with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
+                            _handle_cuda_ipc(param, count, num_params)
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)
