@@ -359,6 +359,13 @@ class ActorPPOTrainer(ABC):
                 ray.get(refs)
             torch_dist_barrier_and_cuda_sync()
 
+        # FSDP does not support DeepSpeed ZeRO gather semantics; skip broadcast for now.
+        if getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp":
+            raise RuntimeError(
+                "vLLM weight broadcast is only implemented for DeepSpeed backend. "
+                "Please use --dist_backend deepspeed when running hybrid engine with vLLM."
+            )
+
         for name, param in model.named_parameters():
             count += 1  # empty_cache at last param
 
