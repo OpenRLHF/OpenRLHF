@@ -233,7 +233,8 @@ class SamplesGeneratorAsync:
         filter_hook: FilterHookBase = kwargs.pop("filter_hook", NoOpFilterHook())
 
         prompts, labels, exhausted = _collect_prompts(dataloader_iter, num_prompts)
-        if not prompts:
+        # Drop the final short batch to align with sync training drop_last behavior
+        if exhausted and len(prompts) < num_prompts:
             return [], True, 0
 
         # Submit prompts to engines
@@ -321,7 +322,8 @@ class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
 
         # Collect initial prompts
         prompts, labels, exhausted = _collect_prompts(dataloader_iter, num_prompts)
-        if not prompts:
+        # Drop the final short batch to align with sync training drop_last behavior
+        if exhausted and len(prompts) < num_prompts:
             return [], True, 0
 
         # Submit prompts to engines
@@ -379,6 +381,10 @@ class SamplesGeneratorStreamingAsync(SamplesGeneratorAsync):
                         remaining_refs.extend(new_refs)
                         ref_map.update({info["ref"]: info for info in new_infos})
                         total_prompt_processed += len(prompts)
+
+        # Not enough samples to form a full batch; drop to mirror drop_last semantics
+        if exhausted and len(valid_experiences) < num_samples:
+            return [], True, 0
 
         return (
             valid_experiences[:num_samples],

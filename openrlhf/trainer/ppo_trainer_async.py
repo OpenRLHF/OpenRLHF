@@ -188,10 +188,12 @@ class TrainingActor(BasePPOTrainer):
             if output == "done":
                 break
             rollout_samples, episode, data_loader_state_dict, pass_rate = output
+            if not rollout_samples:
+                logger.warning("Empty rollout_samples received; skipping this batch.")
+                continue
 
             experiences = self.experience_maker.make_experience_batch(rollout_samples)
             sample0 = self.tokenizer.batch_decode(experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True)
-            print(sample0)
 
             # balance experiences across dp
             if args.use_dynamic_batch:
@@ -312,7 +314,7 @@ class PPOTrainerAsync:
         from ray.util.queue import Queue
 
         # the max size is used to control the degree of off-policy
-        self.queue = Queue(maxsize=os.environ.get("OPENRLHF_ASYNC_QUEUE_SIZE", 1))
+        self.queue = Queue(maxsize=int(os.environ.get("OPENRLHF_ASYNC_QUEUE_SIZE", 1)))
 
     def fit(self) -> None:
         args = self.args
