@@ -636,7 +636,7 @@ class RemoteExperienceMaker(ABC):
                     base_action_log_probs,
                     kl_estimator=self.strategy.args.kl_estimator,
                 )
-                logprobs_diff = action_log_probs.float() - base_action_log_probs.float()
+                logprobs_diff = (action_log_probs.float() - base_action_log_probs.float()).detach()
             else:
                 kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
                 logprobs_diff = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
