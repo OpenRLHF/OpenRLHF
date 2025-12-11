@@ -77,6 +77,7 @@ class ActorPPOTrainer(ABC):
             vllm_is_truncated_threshold=(
                 self.args.vllm_is_truncated_threshold if self.args.enable_vllm_is_correction else None
             ),
+            use_icepop=self.args.use_icepop,
         )
 
         # Mixtral 8x7b

@@ -248,7 +248,20 @@ if __name__ == "__main__":
     )
     # Your Efficient RL Framework Secretly Brings You Off-Policy RL Training: https://fengyao.notion.site/off-policy-rl
     parser.add_argument("--enable_vllm_is_correction", action="store_true", default=False)
-    parser.add_argument("--vllm_is_truncated_threshold", type=float, default=2)
+    parser.add_argument(
+        "--vllm_is_truncated_threshold",
+        type=float,
+        nargs=2,
+        default=[0.5, 5.0],
+        help="Low and high thresholds for vllm importance sampling truncation",
+    )
+    # https://www.emergentmind.com/topics/icepop
+    parser.add_argument(
+        "--use_icepop",
+        action="store_true",
+        default=False,
+        help="Use ICEPOP mode: set vllm_is coefficients outside the threshold interval to 0",
+    )
 
     # Async training using ray
     parser.add_argument("--async_train", action="store_true", default=False, help="Enable async training")
