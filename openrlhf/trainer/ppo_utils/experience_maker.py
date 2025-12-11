@@ -639,7 +639,7 @@ class RemoteExperienceMaker(ABC):
                 logprobs_diff = action_log_probs.float() - base_action_log_probs.float()
             else:
                 kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
-                logprobs_diff = torch.zeros_like(action_log_probs)
+                logprobs_diff = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
             kl_mean = masked_mean(kl, samples.action_mask, dim=-1)
             logprobs_diff_mean = masked_mean(logprobs_diff, samples.action_mask, dim=-1)
 
