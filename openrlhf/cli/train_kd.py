@@ -15,7 +15,7 @@ from openrlhf.utils import get_strategy, get_tokenizer
 def train(args):
     # configure strategy
     strategy = get_strategy(args)
-    strategy.setup_distributed()
+    strategy.setup_distributed(args.ds_tensor_parallel_size)
 
     # configure model
     # load huggingface model
@@ -28,7 +28,7 @@ def train(args):
         lora_alpha=args.lora_alpha,
         target_modules=args.target_modules,
         lora_dropout=args.lora_dropout,
-        ds_config=strategy.get_ds_train_config(is_actor=True),
+        ds_config=strategy.get_ds_train_config(ds_tp=strategy.args.ds_tensor_parallel_size),
         use_liger_kernel=args.use_liger_kernel,
     )
 
@@ -116,7 +116,9 @@ def train(args):
         )
 
     # prepare models
-    ((model, optim, scheduler), teacher_model) = strategy.prepare((model, optim, scheduler), teacher_model)
+    ((model, optim, scheduler), teacher_model) = strategy.prepare(
+        (model, optim, scheduler), teacher_model, ds_tp=strategy.args.ds_tensor_parallel_size
+    )
 
     # load checkpoint
     consumed_samples = 0
@@ -253,6 +255,12 @@ if __name__ == "__main__":
     parser.add_argument("--use_ms", action="store_true", default=False)
 
     args = parser.parse_args()
+
+    if args.ds_tensor_parallel_size > 1:
+        import deepspeed
+
+        assert deepspeed.version >= "0.16.4", "DeepSpeed version must be >= 0.16.4 for tensor parallel training"
+        assert args.bf16, "BF16 is required for tensor parallel training"
 
     if args.input_template and "{}" not in args.input_template:
         print("[Warning] {} not in args.input_template, set to None")

@@ -63,11 +63,11 @@ class CriticPPOTrainer(ABC):
     def ppo_train(self):
         # replay buffer may be empty at first, we should rebuild at each training
         if self.args.use_dynamic_batch:
-            self.replay_buffer.setup_dynamic_batch(self.strategy)
+            self.replay_buffer.setup_dynamic_batch(self.strategy, self.args.critic_tensor_parallel_size)
 
         not_shuffle = (
             self.strategy.ring_attn_group is not None
-            or self.args.ds_tensor_parallel_size > 1
+            or self.args.critic_tensor_parallel_size > 1
             or self.args.use_dynamic_batch
         )
         dataloader = DataLoader(
@@ -165,7 +165,7 @@ class CriticModelActor(BaseModelActor):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps):
         args = strategy.args
 
-        self._setup_distributed(strategy)
+        self._setup_distributed(strategy, strategy.args.critic_tensor_parallel_size)
         critic = get_llm_for_sequence_regression(
             pretrain,
             "critic",
@@ -177,7 +177,7 @@ class CriticModelActor(BaseModelActor):
             lora_alpha=strategy.args.lora_alpha,
             target_modules=strategy.args.target_modules,
             lora_dropout=strategy.args.lora_dropout,
-            ds_config=strategy.get_ds_train_config(is_actor=False),
+            ds_config=strategy.get_ds_train_config(ds_tp=strategy.args.critic_tensor_parallel_size),
             value_head_prefix=strategy.args.value_head_prefix,
             init_value_head=strategy.args.pretrain == strategy.args.critic_pretrain,
             packing_samples=strategy.args.packing_samples,
@@ -214,6 +214,7 @@ class CriticModelActor(BaseModelActor):
         # prepare models/optimizers...
         self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare(
             (critic, critic_optim, critic_scheduler),
+            ds_tp=strategy.args.critic_tensor_parallel_size,
             is_rlhf=True,
         )
 
