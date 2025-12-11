@@ -182,8 +182,12 @@ class ActorPPOTrainer(ABC):
                 experience.to_device(device)
                 status = self.training_step(experience, kl_ctl, step)
                 status["kl"] *= status["response_length"]
+                if "logprobs_diff" in status:
+                    status["logprobs_diff"] *= status["response_length"]
                 status = self.strategy.all_reduce(status)
                 status["kl"] /= status["response_length"]
+                if "logprobs_diff" in status:
+                    status["logprobs_diff"] /= status["response_length"]
 
                 short_status = {
                     "act_loss": status["policy_loss"],
