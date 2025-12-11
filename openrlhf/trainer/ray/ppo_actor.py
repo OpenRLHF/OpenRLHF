@@ -183,8 +183,12 @@ class ActorPPOTrainer(ABC):
                 experience.to_device(device)
                 status = self.training_step(experience, kl_ctl, step)
                 status["kl"] *= status["response_length"]
+                if "logprobs_diff" in status:
+                    status["logprobs_diff"] *= status["response_length"]
                 status = self.strategy.all_reduce(status)
                 status["kl"] /= status["response_length"]
+                if "logprobs_diff" in status:
+                    status["logprobs_diff"] /= status["response_length"]
 
                 short_status = {
                     "act_loss": status["policy_loss"],
@@ -253,10 +257,14 @@ class ActorPPOTrainer(ABC):
                     base_action_log_probs,
                     kl_estimator=self.args.kl_estimator,
                 )
+                logprobs_diff = action_log_probs.float() - base_action_log_probs.float()
             else:
-                kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=action_log_probs.device)
+                kl = torch.zeros_like(action_log_probs)
+                logprobs_diff = torch.zeros_like(action_log_probs)
             kl_loss = masked_mean(kl, experience.action_mask)
+            logprobs_diff = masked_mean(logprobs_diff, experience.action_mask)
             experience.info["kl"] = kl_loss.detach()
+            experience.info["logprobs_diff"] = logprobs_diff.detach()
         else:
             kl_loss = 0
 
