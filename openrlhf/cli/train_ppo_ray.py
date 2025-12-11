@@ -123,7 +123,6 @@ def train(args):
 
     # multiple reward models
     if not args.remote_rm_url:
-        reward_pretrain = args.reward_pretrain
         reward_model = RayActorGroup(
             args.reward_num_nodes,
             args.reward_num_gpus_per_node,
@@ -135,12 +134,13 @@ def train(args):
     else:
         reward_model = None
 
+    # Select trainer by mode
     if args.async_train:
         from openrlhf.trainer.ppo_trainer_async import PPOTrainerAsync as PPOTrainer
     else:
         from openrlhf.trainer.ppo_trainer import PPOTrainer
 
-    # init PPO trainer (Single controller)
+    # Build trainer
     ppo_trainer = PPOTrainer.remote(
         args.pretrain,
         strategy,
@@ -159,19 +159,20 @@ def train(args):
         temperature=args.temperature,
         top_p=args.top_p,
     )
+
     # training update steps
     max_steps = ray.get(ppo_trainer.get_max_steps.remote())
 
-    # init reference/reward/actor model
+    # init actor/reference/reward model
     refs = []
+    refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.pretrain, max_steps, vllm_engines))
     if ref_model is not None:
         refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.pretrain))
-    refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.pretrain, max_steps, vllm_engines))
-    if not args.remote_rm_url:
-        refs.extend(reward_model.async_init_model_from_pretrained(strategy, reward_pretrain))
+    if reward_model is not None and args.reward_pretrain:
+        refs.extend(reward_model.async_init_model_from_pretrained(strategy, args.reward_pretrain))
     ray.get(refs)
 
-    if args.critic_pretrain:
+    if critic_model is not None and args.critic_pretrain:
         # critic scheduler initialization depends on max_step, so we have to init critic after actor
         # TODO: use first reward model as critic model
         refs.extend(critic_model.async_init_model_from_pretrained(strategy, args.critic_pretrain, max_steps))
@@ -183,7 +184,7 @@ def train(args):
     # save model
     ray.get(actor_model.async_save_model())
 
-    if args.critic_pretrain and args.save_value_network:
+    if args.critic_pretrain and args.save_value_network and critic_model is not None:
         ray.get(critic_model.async_save_model())
 
 
@@ -252,6 +253,7 @@ if __name__ == "__main__":
 
     # Async training using ray
     parser.add_argument("--async_train", action="store_true", default=False, help="Enable async training")
+    parser.add_argument("--async_queue_size", type=int, default=1, help="Queue size for async sampler<->trainer")
 
     # Checkpoints
     parser.add_argument("--eval_steps", type=int, default=-1)
