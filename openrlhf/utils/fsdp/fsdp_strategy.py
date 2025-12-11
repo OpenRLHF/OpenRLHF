@@ -9,30 +9,31 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
 from packaging import version
-from torch.distributed.fsdp import FullStateDictConfig
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.distributed.fsdp import StateDictType
-from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
-from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Optimizer
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import enable_full_determinism, set_seed
 
 try:
     from torch.distributed.fsdp.fully_shard import (
-        FullyShardedDataParallel as FSDPModule,
         CPUOffloadPolicy,
+    )
+    from torch.distributed.fsdp.fully_shard import FullyShardedDataParallel as FSDPModule
+    from torch.distributed.fsdp.fully_shard import (
         MixedPrecisionPolicy,
         fully_shard,
     )
 except ImportError:
     try:
-        from torch.distributed.fsdp import FullyShardedDataParallel as FSDPModule, fully_shard  # type: ignore
+        from torch.distributed.fsdp import FullyShardedDataParallel as FSDPModule  # type: ignore
+        from torch.distributed.fsdp import fully_shard
     except ImportError:  # pragma: no cover
         FSDPModule = None  # type: ignore
         fully_shard = None  # type: ignore
     try:
-        from torch.distributed.fsdp._fully_shard.offload_policy import CPUOffloadPolicy, MixedPrecisionPolicy  # type: ignore
+        from torch.distributed.fsdp._fully_shard.offload_policy import (  # type: ignore
+            CPUOffloadPolicy,
+            MixedPrecisionPolicy,
+        )
     except ImportError:  # pragma: no cover
         CPUOffloadPolicy = None  # type: ignore
         MixedPrecisionPolicy = None  # type: ignore
