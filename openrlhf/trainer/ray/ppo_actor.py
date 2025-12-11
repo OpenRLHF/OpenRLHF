@@ -258,7 +258,7 @@ class ActorPPOTrainer(ABC):
                 )
                 logprobs_diff = action_log_probs.float() - base_action_log_probs.float()
             else:
-                kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=action_log_probs.device)
+                kl = torch.zeros_like(action_log_probs)
                 logprobs_diff = torch.zeros_like(action_log_probs)
             kl_loss = masked_mean(kl, experience.action_mask)
             logprobs_diff = masked_mean(logprobs_diff, experience.action_mask)
