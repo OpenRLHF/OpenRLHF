@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 from openrlhf.trainer.ppo_trainer import BasePPOTrainer
 from openrlhf.trainer.ppo_utils.misc import ensure_remote_rm, normalize_interval_config
-from openrlhf.trainer.ppo_utils.sample_maker import RemoteSampleStreamer
+from openrlhf.trainer.ppo_utils.sample_maker import RemoteSampleGenerater
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.logging_utils import init_logger
@@ -109,7 +109,7 @@ class GenerateSamplesActor:
         self.signal_actor = signal_actor
         self.controller_actor = controller_actor
 
-        self.train_streamer = RemoteSampleStreamer(
+        self.train_sample_generater = RemoteSampleGenerater(
             strategy,
             tokenizer,
             vllm_engines,
@@ -119,15 +119,15 @@ class GenerateSamplesActor:
         )
 
     def get_max_steps(self):
-        return self.train_streamer.max_steps
+        return self.train_sample_generater.max_steps
 
     def load_state_dict(self, state_dict):
-        self.train_streamer.load_state_dict(state_dict)
+        self.train_sample_generater.load_state_dict(state_dict)
 
     def fit(self, episode, global_step):
         for episode in range(episode, self.args.num_episodes):
             pbar = tqdm(
-                range(len(self.train_streamer.prompts_dataloader)),
+                range(len(self.train_sample_generater.prompts_dataloader)),
                 desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
                 # initial=global_step, # TODO
             )
@@ -136,7 +136,7 @@ class GenerateSamplesActor:
                 ray.get(self.signal_actor.wait_generating.remote())
                 ray.get(self.signal_actor.set_update_weights.remote(False))
 
-                samples, pass_rate, prompts_used, is_exhausted = self.train_streamer.make_sample_batch()
+                samples, pass_rate, prompts_used, is_exhausted = self.train_sample_generater.make_sample_batch()
 
                 # Re-open weight updates now that the batch is ready (or we've hit the end).
                 ray.get(self.signal_actor.set_update_weights.remote(True))
@@ -145,7 +145,7 @@ class GenerateSamplesActor:
 
                 # Send the produced batch to the controller for training.
                 ray.get(
-                    self.controller_actor.put.remote((samples, episode, self.train_streamer.state_dict(), pass_rate))
+                    self.controller_actor.put.remote((samples, episode, self.train_sample_generater.state_dict(), pass_rate))
                 )
                 pbar.update(prompts_used)
 

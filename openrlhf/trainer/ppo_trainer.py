@@ -13,7 +13,7 @@ from openrlhf.trainer.ppo_utils.misc import (
     normalize_interval_config,
 )
 from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
-from openrlhf.trainer.ppo_utils.sample_maker import RemoteSampleStreamer
+from openrlhf.trainer.ppo_utils.sample_maker import RemoteSampleGenerater
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.logging_utils import init_logger
@@ -277,7 +277,7 @@ class PPOTrainer(BasePPOTrainer):
             **generate_kwargs,
         )
 
-        self.train_streamer = RemoteSampleStreamer(
+        self.train_sample_generater = RemoteSampleGenerater(
             strategy,
             tokenizer,
             vllm_engines,
@@ -294,17 +294,17 @@ class PPOTrainer(BasePPOTrainer):
         # Keep vLLM weights and dataloader states in sync when resuming.
         if global_step:
             ray.get(self.trainer_actor._broadcast_to_vllm.remote())
-            self.train_streamer.load_state_dict(checkpoint_states["data_loader_state_dict"])
+            self.train_sample_generater.load_state_dict(checkpoint_states["data_loader_state_dict"])
 
         for episode in range(start_episode, self.args.num_episodes):
             pbar = tqdm(
-                range(len(self.train_streamer.prompts_dataloader)),
+                range(len(self.train_sample_generater.prompts_dataloader)),
                 desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
                 # initial=steps, # TODO
             )
 
             while True:
-                samples, pass_rate, prompts_used, is_exhausted = self.train_streamer.make_sample_batch()
+                samples, pass_rate, prompts_used, is_exhausted = self.train_sample_generater.make_sample_batch()
                 if is_exhausted:
                     break
 
@@ -318,7 +318,7 @@ class PPOTrainer(BasePPOTrainer):
                 client_states = {
                     "global_step": global_step,
                     "episode": episode,
-                    "data_loader_state_dict": self.train_streamer.state_dict(),
+                    "data_loader_state_dict": self.train_sample_generater.state_dict(),
                 }
                 self.save_logs_and_checkpoints(global_step, status, client_states)
 
@@ -331,4 +331,4 @@ class PPOTrainer(BasePPOTrainer):
             self._tensorboard.close()
 
     def get_max_steps(self):
-        return self.train_streamer.max_steps
+        return self.train_sample_generater.max_steps

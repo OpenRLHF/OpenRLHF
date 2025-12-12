@@ -1,5 +1,6 @@
 import random
 import time
+from tqdm import tqdm
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
@@ -132,8 +133,8 @@ class Sample:
         )
 
 
-class RemoteSampleStreamer:
-    """Stateless sampler: caller decides which split to build; no train/eval knowledge here."""
+class RemoteSampleGenerater:
+    """Stateless sampler: caller decides which split to build."""
 
     def __init__(
         self,
@@ -170,7 +171,7 @@ class RemoteSampleStreamer:
             self._dataloader_iter = iter(self.prompts_dataloader)
 
         filter_hook = DynamicFilteringHook(self.args) if self.args.dynamic_filtering else NoOpFilterHook()
-        samples, is_exhausted, prompts_used = self._generate_batch(
+        samples, is_exhausted, prompts_used = self._generate_samples(
             dataloader_iter=self._dataloader_iter,
             num_prompts=self.args.rollout_batch_size,
             filter_hook=filter_hook,
@@ -216,7 +217,7 @@ class RemoteSampleStreamer:
     #     return collected[:total_needed]
 
     @torch.no_grad()
-    def _generate_batch(self, dataloader_iter, num_prompts: int, **kwargs) -> Tuple[List[Sample], bool, int]:
+    def _generate_samples(self, dataloader_iter, num_prompts: int, **kwargs) -> Tuple[List[Sample], bool, int]:
         """Generate a batch of Samples, applying filter hooks if configured."""
         filter_hook: FilterHookBase = kwargs.pop("filter_hook", NoOpFilterHook())
 
@@ -232,6 +233,7 @@ class RemoteSampleStreamer:
 
         accepted_samples = []
         num_samples = num_prompts * self.args.n_samples_per_prompt
+        pbar = tqdm(range(num_prompts), desc=f"Generate experiences")
         while remaining_refs:
             ready_refs, remaining_refs = ray.wait(remaining_refs, num_returns=1, timeout=10.0)
             for ref in ready_refs:
@@ -248,6 +250,13 @@ class RemoteSampleStreamer:
                 kept = filter_hook.apply(sample_list)
                 if kept:
                     accepted_samples.extend(kept)
+                    pbar.set_postfix(
+                        {
+                            "pass_rate": filter_hook.pass_rate(),
+                            "use_prompt_in_batch": total_prompt_processed,
+                        }
+                    )
+                    pbar.update()
                     if len(accepted_samples) >= num_samples:
                         for ref in remaining_refs:
                             ray.cancel(ref)

@@ -47,7 +47,6 @@ ROLLOUT_ARGS=(
    --n_samples_per_prompt 8
    --dynamic_filtering
    --dynamic_filtering_reward_range 0.0 1.1
-   --enable_streaming_sampling
 
    --train_batch_size 1024
 
