@@ -1,0 +1,96 @@
+import os
+
+from openrlhf.datasets import PromptDataset
+from openrlhf.datasets.utils import blending_datasets
+from openrlhf.utils.logging_utils import init_logger
+
+logger = init_logger(__name__)
+
+
+def normalize_interval_config(args):
+    """Normalize eval/save interval configs to simplify callers."""
+    if args.eval_steps == -1:
+        args.eval_steps = float("inf")
+    if args.save_steps == -1:
+        args.save_steps = float("inf")
+
+
+def init_wandb(args):
+    """
+    Initialize wandb logging; return (wandb_handle, generated_samples_table) or (None, None).
+    """
+    if not args.use_wandb:
+        return None, None
+
+    import wandb
+
+    wandb_handle = wandb
+    if not wandb.api.api_key:
+        wandb.login(key=args.use_wandb)
+    wandb.init(
+        entity=args.wandb_org,
+        project=args.wandb_project,
+        group=args.wandb_group,
+        name=args.wandb_run_name,
+        config=args.__dict__,
+        reinit=True,
+    )
+
+    wandb.define_metric("train/global_step")
+    wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
+    wandb.define_metric("eval/epoch")
+    wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
+    generated_samples_table = wandb.Table(columns=["global_step", "text", "reward"])
+
+    return wandb_handle, generated_samples_table
+
+
+def init_tensorboard(args):
+    """
+    Initialize tensorboard writer; return writer or None.
+    """
+    if not args.use_tensorboard:
+        return None
+
+    from torch.utils.tensorboard import SummaryWriter
+
+    os.makedirs(args.use_tensorboard, exist_ok=True)
+    log_dir = os.path.join(args.use_tensorboard, args.wandb_run_name)
+    return SummaryWriter(log_dir=log_dir)
+
+
+def ensure_remote_rm(args, remote_rm_url, remote_reward_model=None):
+    """Resolve remote reward model handle if provided."""
+    if remote_reward_model is not None:
+        return remote_reward_model
+    if remote_rm_url and not remote_rm_url[0] == "agent":
+        from openrlhf.utils.remote_rm_utils import RemoteRewardModel
+
+        return RemoteRewardModel.remote(args, remote_rm_url)
+    return None
+
+
+def build_prompt_dataloader(args, strategy, tokenizer, split, *, for_eval=False):
+    """Create dataloader for the given split; compute max_steps only for training."""
+    max_count = args.max_samples if not for_eval else sys.maxsize
+    data = blending_datasets(
+        args.eval_dataset if for_eval else args.prompt_data,
+        args.prompt_data_probs if not for_eval else None,
+        strategy,
+        args.seed,
+        max_count=max_count,
+        dataset_split=split,
+    )
+
+    data = data.select(range(min(max_count, len(data))))
+    dataset = PromptDataset(data, tokenizer, strategy, input_template=args.input_template)
+    # train -> shuffle/drop_last True; eval -> shuffle True keeps prior behavior
+    dataloader = strategy.setup_dataloader(dataset, 1, True, not for_eval)
+
+    max_steps = None
+    if not for_eval:
+        max_steps = (
+            len(dataset) * args.n_samples_per_prompt // args.train_batch_size * args.num_episodes * args.max_epochs
+        )
+
+    return dataloader, max_steps

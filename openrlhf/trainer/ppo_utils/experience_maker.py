@@ -1,5 +1,4 @@
 import time
-from abc import ABC
 from copy import deepcopy
 from dataclasses import dataclass, fields
 from datetime import timedelta
@@ -68,6 +67,7 @@ class Experience:
     # the info field is used to store additional information
     # all the fields in the info will be logged to the tensorboard/wandb
     info: dict[str, torch.Tensor] = None
+    metadata: list = None
 
     def __init__(
         self,
@@ -87,6 +87,7 @@ class Experience:
         rewards=None,
         scores=None,
         info=None,
+        metadata=None,
     ):
         self.index = index
         self.sequences = sequences
@@ -104,6 +105,7 @@ class Experience:
         self.rewards = rewards
         self.scores = scores
         self.info = info or []
+        self.metadata = metadata or []
 
     @torch.no_grad()
     def to_device(self, device: torch.device):
@@ -244,185 +246,7 @@ def update_samples_with_rewards(rewards_info, samples_list):
     return samples_list
 
 
-class SamplesGenerator:
-    def __init__(self, vllm_engines, strategy, tokenizer, prompt_max_len):
-        self.strategy = strategy
-        self.args = strategy.args
-        self.vllm_engines = vllm_engines
-        self.tokenizer = tokenizer
-        self.prompt_max_len = prompt_max_len
-
-    @torch.no_grad()
-    def generate_samples(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Experience]:
-        """
-        Generate samples and return in batches.
-
-        When not using vllm, we will fallback to the default implementation,
-        in which actor will be used to generate samples.
-        """
-        # vLLM wakeup when vllm_enable_sleep
-        if self.strategy.args.vllm_enable_sleep:
-            from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
-
-            batch_vllm_engine_call(self.vllm_engines, "wake_up")
-
-        rollout_samples = self._generate_vllm(all_prompts, all_labels, **generate_kwargs)
-
-        # vLLM offload when vllm_enable_sleep
-        if self.strategy.args.vllm_enable_sleep:
-            batch_vllm_engine_call(self.vllm_engines, "sleep")
-
-        return rollout_samples
-
-        # tokenizer
-
-    def tokenize_fn(self, texts, max_length, padding=True, device=None):
-        if not padding:
-            # when padding is False, return tokenized texts as list
-            return self.tokenizer(
-                texts,
-                add_special_tokens=False,
-                max_length=max_length,
-                truncation=True,
-            )
-        batch = self.tokenizer(
-            texts,
-            return_tensors="pt",
-            add_special_tokens=False,
-            max_length=max_length,
-            padding=True,
-            truncation=True,
-        )
-        return {k: v.to(device) for k, v in batch.items()}
-
-    def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> List[Experience]:
-        """Generate samples using vLLM engine.
-
-        Args:
-            all_prompts: List of prompts to generate from
-            all_labels: List of labels corresponding to prompts
-            **kwargs: Additional arguments for generation
-
-        Returns:
-            List of Experience objects containing generated samples
-        """
-        from vllm import SamplingParams
-
-        llms = self.vllm_engines
-        args = self.strategy.args
-
-        # Set up sampling parameters
-        sampling_params = SamplingParams(
-            temperature=kwargs.get("temperature", 1.0),
-            top_p=kwargs.get("top_p", 1.0),
-            top_k=kwargs.get("top_k", -1),
-            max_tokens=kwargs.get("max_new_tokens", 1024),
-            min_tokens=kwargs.get("min_new_tokens", 1),
-            skip_special_tokens=kwargs.get("skip_special_tokens", False),
-            include_stop_str_in_output=True,
-            logprobs=1 if self.strategy.args.enable_vllm_is_correction else None,
-        )
-        max_response_length = kwargs.get("max_new_tokens", 1024)
-        truncate_length = self.prompt_max_len + max_response_length
-
-        # Expand prompt list based on the number of samples per prompt
-        n_samples_per_prompt = kwargs.pop("n_samples_per_prompt", args.n_samples_per_prompt)
-        all_prompts = sum([[prompt] * n_samples_per_prompt for prompt in all_prompts], [])
-        all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
-        all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
-
-        # Distribute requests to engines and collect responses
-        refs = []
-        batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
-        for i, llm in enumerate(llms):
-            prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
-            refs.append(llm.add_requests.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
-        ray.get(refs)
-
-        # Retrieve and combine results from all outputs
-        all_output_refs = []
-        for i, llm in enumerate(llms):
-            all_output_refs.append(llm.get_responses.remote())
-        all_outputs = sum(ray.get(all_output_refs), [])
-
-        # Process outputs into Experience objects
-        samples_list = []
-        for i in range(len(all_outputs)):
-            output = all_outputs[i]
-            prompt = all_prompts[i]
-            label = all_labels[i]
-
-            # Concatenate prompt and output tokens
-            input_ids = list(output.prompt_token_ids) + list(output.outputs[0].token_ids)
-            attention_mask = [1] * len(input_ids)
-
-            sequences = torch.tensor(input_ids, dtype=torch.long)
-            attention_mask = torch.tensor(attention_mask)
-
-            # Create action mask based on output token positions
-            action_mask = torch.zeros_like(attention_mask)
-            response_length = len(output.outputs[0].token_ids)
-            action_mask[len(output.prompt_token_ids) : len(output.prompt_token_ids) + response_length] = 1
-
-            # Calculate rollout log probs
-            rollout_log_probs = None
-            if self.strategy.args.enable_vllm_is_correction:
-                rollout_log_probs = []
-                response_ids = list(output.outputs[0].token_ids)
-                for i, logprob in enumerate(output.outputs[0].logprobs):
-                    rollout_log_probs.append(logprob[response_ids[i]].logprob)
-
-                rollout_log_probs = torch.tensor([0.0] * len(list(output.prompt_token_ids)) + rollout_log_probs)
-                rollout_log_probs = rollout_log_probs[1:truncate_length].to("cpu")
-
-            sequences = sequences[:truncate_length].to("cpu")
-            attention_mask = attention_mask[:truncate_length].to("cpu")
-            action_mask = action_mask[1:truncate_length].to("cpu")
-            total_length = attention_mask.float().sum()
-            is_clipped = response_length >= max_response_length
-
-            info = {
-                "response_length": torch.tensor([response_length]),
-                "total_length": torch.tensor([total_length]),
-                "response_clip_ratio": torch.tensor([is_clipped]),
-            }
-
-            rollout_samples = Experience(
-                sequences=sequences.unsqueeze(0),
-                attention_mask=attention_mask.unsqueeze(0),
-                action_mask=action_mask.unsqueeze(0),
-                rollout_log_probs=rollout_log_probs.unsqueeze(0) if rollout_log_probs is not None else None,
-                prompts=[prompt],
-                labels=[label],
-                info=info,
-            )
-            samples_list.append(rollout_samples)
-
-        # Get rewards from remote reward models if needed
-        # This is required by dynamic sampling
-        remote_reward_model = kwargs.get("remote_reward_model", None)
-        if remote_reward_model:
-            all_queries = sum(
-                [
-                    self.tokenizer.batch_decode(
-                        remove_pad_token(s.sequences, s.attention_mask), skip_special_tokens=False
-                    )
-                    for s in samples_list
-                ],
-                [],
-            )
-            all_prompts = sum([s.prompts for s in samples_list], [])
-            all_labels = sum([s.labels for s in samples_list], [])
-
-            # Get rewards info from remote model
-            rewards_info = ray.get(remote_reward_model.get_rewards.remote(all_queries, all_prompts, all_labels))
-            # Process rewards and scores
-            update_samples_with_rewards(rewards_info, samples_list)
-
-        return samples_list
-
-
-class RemoteExperienceMaker(ABC):
+class RemoteExperienceMaker:
     def __init__(
         self,
         actor_model_group: RayActorGroup,
@@ -430,8 +254,8 @@ class RemoteExperienceMaker(ABC):
         reward_model_group: RayActorGroup,
         initial_model_group: RayActorGroup,
         kl_controller,
-        strategy=None,
-        tokenizer=None,
+        strategy,
+        tokenizer,
         remote_reward_model=None,
         **kwargs,
     ):
@@ -456,6 +280,18 @@ class RemoteExperienceMaker(ABC):
             sample.index = [i]
 
         samples_list = []
+
+        def _as_experience(batch):
+            converted = []
+            for item in batch:
+                if isinstance(item, Experience):
+                    converted.append(item)
+                elif hasattr(item, "to_experience"):
+                    converted.append(item.to_experience())
+                else:
+                    raise TypeError(f"Unsupported rollout sample type: {type(item)}")
+            return converted
+
         if self.args.use_dynamic_batch:
             total_lengths = [int(s.info["total_length"].item()) for s in rollout_samples]
             effective_actor_num = (
@@ -475,14 +311,15 @@ class RemoteExperienceMaker(ABC):
             batch_indexes = get_seqlen_balanced_partitions(total_lengths, num_batch, False)
             for micro_index in batch_indexes:
                 micro_batch = [rollout_samples[idx] for idx in micro_index]
-                concat_samples = Experience.concat_experiences(micro_batch, self.tokenizer.pad_token_id)
+                experiences = _as_experience(micro_batch)
+                concat_samples = Experience.concat_experiences(experiences, self.tokenizer.pad_token_id)
                 samples_list.append(concat_samples)
         else:
             batch_size = self.args.micro_rollout_batch_size
             for i in range(0, len(rollout_samples), batch_size):
-                concat_samples = Experience.concat_experiences(
-                    rollout_samples[i : i + batch_size], self.tokenizer.pad_token_id
-                )
+                micro_batch = rollout_samples[i : i + batch_size]
+                experiences = _as_experience(micro_batch)
+                concat_samples = Experience.concat_experiences(experiences, self.tokenizer.pad_token_id)
                 samples_list.append(concat_samples)
         return samples_list
 
