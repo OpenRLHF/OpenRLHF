@@ -114,7 +114,7 @@ class BasePPOTrainer(ABC):
         # Peek at the first decoded sample for quick sanity check.
         sample0 = [
             self.tokenizer.batch_decode(experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True)[0],
-            experiences[0].info["reward"][0].item()
+            experiences[0].info["reward"][0].item(),
         ]
         print(sample0)
 
@@ -313,7 +313,7 @@ class PPOTrainer(BasePPOTrainer):
 
                 if self.args.dynamic_filtering:
                     status["dynamic_filtering_pass_rate"] = pass_rate
-                
+
                 log_statue = {k: v for k, v in status.items() if k not in ["generated_samples"]}
                 logger.info(f"✨ Global step {global_step}: {log_statue}")
 
