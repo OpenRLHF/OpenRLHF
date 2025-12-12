@@ -112,11 +112,11 @@ class BasePPOTrainer(ABC):
 
     def train_step(self, experiences, global_step):
         # Peek at the first decoded sample for quick sanity check.
-        sample_text = self.tokenizer.batch_decode(experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True)[
-            0
+        sample0 = [
+            self.tokenizer.batch_decode(experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True)[0],
+            experiences[0].info["reward"][0].item()
         ]
-        sample_reward = experiences[0].info["reward"][0]
-        print(sample_text, sample_reward)
+        print(sample0)
 
         # Balance experiences across DP ranks if needed.
         if self.args.use_dynamic_batch:
@@ -138,7 +138,7 @@ class BasePPOTrainer(ABC):
         if "kl" in status:
             self.kl_ctl.update(status["kl"], self.args.rollout_batch_size * self.args.n_samples_per_prompt)
 
-        status["generated_samples"] = [sample_text, sample_reward]
+        status["generated_samples"] = sample0
         return global_step + 1, status
 
     def _broadcast_to_vllm(self):
@@ -313,7 +313,9 @@ class PPOTrainer(BasePPOTrainer):
 
                 if self.args.dynamic_filtering:
                     status["dynamic_filtering_pass_rate"] = pass_rate
-                logger.info(f"✨ Global step {global_step}: {status}")
+                
+                log_statue = {k: v for k, v in status.items() if k not in ["generated_samples"]}
+                logger.info(f"✨ Global step {global_step}: {log_statue}")
 
                 client_states = {
                     "global_step": global_step,
