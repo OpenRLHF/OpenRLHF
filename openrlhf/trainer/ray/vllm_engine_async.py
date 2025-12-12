@@ -19,6 +19,12 @@ class LLMRayActorAsync(BaseLLMRayActor):
         self.result_queue = asyncio.Queue()
         self.agent_executor = None
 
+        # fix: https://github.com/vllm-project/vllm/pull/21540
+        if not os.environ.get("RAY_ADDRESS"):
+            from ray._private.worker import global_worker
+
+            os.environ["RAY_ADDRESS"] = global_worker.gcs_client.address
+
         os.environ["VLLM_USE_V1"] = "1"
         import vllm
         from packaging import version
