@@ -171,12 +171,24 @@ class RemoteSampleGenerater:
             self._dataloader_iter = iter(self.prompts_dataloader)
 
         filter_hook = DynamicFilteringHook(self.args) if self.args.dynamic_filtering else NoOpFilterHook()
+
+        # vLLM wakeup when vllm_enable_sleep
+        if self.args.vllm_enable_sleep:
+            from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
+
+            batch_vllm_engine_call(self.vllm_engines, "wake_up")
+
         samples, is_exhausted, prompts_used = self._generate_samples(
             dataloader_iter=self._dataloader_iter,
             num_prompts=self.args.rollout_batch_size,
             filter_hook=filter_hook,
             **self.generate_kwargs,
         )
+
+        # vLLM offload when vllm_enable_sleep
+        if self.args.vllm_enable_sleep:
+            batch_vllm_engine_call(self.vllm_engines, "sleep")
+
         expected_batch = self.args.rollout_batch_size * self.args.n_samples_per_prompt
         if len(samples) < expected_batch:
             # Treat partial batches as exhausted to avoid passing undersized data downstream.
@@ -233,7 +245,7 @@ class RemoteSampleGenerater:
 
         accepted_samples = []
         num_samples = num_prompts * self.args.n_samples_per_prompt
-        pbar = tqdm(range(num_prompts), desc=f"Generate experiences")
+        pbar = tqdm(range(num_prompts), desc=f"Generate samples")
         while remaining_refs:
             ready_refs, remaining_refs = ray.wait(remaining_refs, num_returns=1, timeout=10.0)
             for ref in ready_refs:

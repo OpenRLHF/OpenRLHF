@@ -267,12 +267,12 @@ class PPOTrainer(BasePPOTrainer):
 
         super().__init__(
             strategy,
-            tokenizer,
             actor_model_group,
             critic_model_group,
             reward_model_group,
             reference_model_group,
             vllm_engines,
+            tokenizer,
             prompt_max_len,
             **generate_kwargs,
         )
