@@ -145,7 +145,9 @@ class GenerateSamplesActor:
 
                 # Send the produced batch to the controller for training.
                 ray.get(
-                    self.controller_actor.put.remote((samples, episode, self.train_sample_generater.state_dict(), pass_rate))
+                    self.controller_actor.put.remote(
+                        (samples, episode, self.train_sample_generater.state_dict(), pass_rate)
+                    )
                 )
                 pbar.update(prompts_used)
 

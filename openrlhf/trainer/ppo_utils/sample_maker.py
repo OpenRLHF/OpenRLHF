@@ -1,11 +1,11 @@
 import random
 import time
-from tqdm import tqdm
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
 import ray
 import torch
+from tqdm import tqdm
 
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.trainer.ppo_utils.filter_hooks import DynamicFilteringHook, FilterHookBase, NoOpFilterHook
