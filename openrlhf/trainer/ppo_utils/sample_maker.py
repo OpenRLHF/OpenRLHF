@@ -232,9 +232,9 @@ class RemoteSampleGenerater:
     #     return collected[:total_needed]
 
     @torch.no_grad()
-    def _generate_samples(self, dataloader_iter, num_prompts: int, **kwargs) -> Tuple[List[Sample], bool, int]:
+    def _generate_samples(self, dataloader_iter, num_prompts: int, **generate_kwargs) -> Tuple[List[Sample], bool, int]:
         """Generate a batch of Samples, applying filter hooks if configured."""
-        filter_hook: FilterHookBase = kwargs.pop("filter_hook", NoOpFilterHook())
+        filter_hook: FilterHookBase = generate_kwargs.pop("filter_hook", NoOpFilterHook())
 
         total_prompt_processed = 0
 
@@ -242,7 +242,7 @@ class RemoteSampleGenerater:
         if exhausted and len(prompts) < num_prompts:
             return [], True, 0
 
-        remaining_refs, remaining_infos = self._dispatch_prompt_requests(prompts, labels, metadatas, **kwargs)
+        remaining_refs, remaining_infos = self._dispatch_prompt_requests(prompts, labels, metadatas, **generate_kwargs)
         ref_map = {info["ref"]: info for info in remaining_infos}
         total_prompt_processed += len(prompts)
 
@@ -260,7 +260,7 @@ class RemoteSampleGenerater:
                 outputs = ray.get(info["llm"].get_responses.remote(info["id"]))
                 for output in outputs:
                     output["metadata"] = info.get("metadata")
-                sample_list = [self._create_sample_from_output(output, **kwargs) for output in outputs]
+                sample_list = [self._create_sample_from_output(output, **generate_kwargs) for output in outputs]
 
                 kept = filter_hook.apply(sample_list)
                 if kept:
@@ -281,7 +281,7 @@ class RemoteSampleGenerater:
                     if not prompts:
                         continue
 
-                    new_refs, new_infos = self._dispatch_prompt_requests(prompts, labels, metadatas, **kwargs)
+                    new_refs, new_infos = self._dispatch_prompt_requests(prompts, labels, metadatas, **generate_kwargs)
                     if new_refs is not None:
                         remaining_refs.extend(new_refs)
                         ref_map.update({info["ref"]: info for info in new_infos})

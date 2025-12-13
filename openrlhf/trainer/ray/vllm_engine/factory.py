@@ -5,7 +5,7 @@ from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from ..utils import get_bundle_indices
-from .async_actor import LLMRayActor
+from .async_actor import LLMRayActorAsync
 
 
 def create_vllm_engines(
@@ -20,7 +20,7 @@ def create_vllm_engines(
     shared_pg=None,
     gpu_memory_utilization=None,
     vllm_enable_sleep=False,
-    llm_actor_cls=LLMRayActor,
+    llm_actor_cls=LLMRayActorAsync,
     logprobs_mode=None,
     agent_func_path=None,
 ):
