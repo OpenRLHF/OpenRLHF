@@ -23,6 +23,8 @@ def create_vllm_engines(
     llm_actor_cls=LLMRayActorAsync,
     logprobs_mode=None,
     agent_func_path=None,
+    remote_rm_url=None,
+    remote_rm_batch_size=None,
 ):
     import vllm
     from packaging import version
@@ -63,30 +65,39 @@ def create_vllm_engines(
                 "0.10.0"
             ), "vLLM > 0.10.0 is required for logprobs_mode"
 
+        actor_kwargs = {
+            "model": pretrain,
+            "enforce_eager": enforce_eager,
+            "worker_extension_cls": "openrlhf.trainer.ray.vllm_worker_wrap.WorkerWrap",
+            "tensor_parallel_size": tensor_parallel_size,
+            "seed": seed + i,
+            "distributed_executor_backend": distributed_executor_backend,
+            "max_model_len": max_model_len,
+            "enable_prefix_caching": enable_prefix_caching,
+            "dtype": "bfloat16",
+            "trust_remote_code": True,
+            "full_determinism": full_determinism,
+            "gpu_memory_utilization": gpu_memory_utilization,
+            "bundle_indices": bundle_indices,
+            "num_gpus": 0.2 if use_hybrid_engine else 1,
+            "enable_sleep_mode": vllm_enable_sleep,
+            "agent_func_path": agent_func_path,
+            **additional_kwargs,
+        }
+
+        # Only non-agent actors support remote_rm_url-based rewards.
+        supports_remote_rm = getattr(llm_actor_cls, "__name__", "") == "LLMRayActorAsync"
+        if remote_rm_url and supports_remote_rm:
+            actor_kwargs["remote_rm_url"] = remote_rm_url
+            if remote_rm_batch_size is not None:
+                actor_kwargs["remote_rm_batch_size"] = remote_rm_batch_size
+
         vllm_engines.append(
             llm_actor_cls.options(
                 num_cpus=num_gpus,
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
-            ).remote(
-                model=pretrain,
-                enforce_eager=enforce_eager,
-                worker_extension_cls="openrlhf.trainer.ray.vllm_worker_wrap.WorkerWrap",
-                tensor_parallel_size=tensor_parallel_size,
-                seed=seed + i,
-                distributed_executor_backend=distributed_executor_backend,
-                max_model_len=max_model_len,
-                enable_prefix_caching=enable_prefix_caching,
-                dtype="bfloat16",
-                trust_remote_code=True,
-                full_determinism=full_determinism,
-                gpu_memory_utilization=gpu_memory_utilization,
-                bundle_indices=bundle_indices,
-                num_gpus=0.2 if use_hybrid_engine else 1,
-                enable_sleep_mode=vllm_enable_sleep,
-                agent_func_path=agent_func_path,
-                **additional_kwargs,
-            )
+            ).remote(**actor_kwargs)
         )
 
     if vllm_enable_sleep:

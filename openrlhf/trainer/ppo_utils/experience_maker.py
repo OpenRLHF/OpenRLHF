@@ -11,7 +11,7 @@ from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.seqlen_balancing import get_minimum_num_micro_batch_size, get_seqlen_balanced_partitions
-from openrlhf.utils.utils import remove_pad_token, zero_pad_sequences
+from openrlhf.utils.utils import zero_pad_sequences
 
 logger = init_logger(__name__)
 
@@ -256,24 +256,20 @@ class RemoteExperienceMaker:
         kl_controller,
         strategy,
         tokenizer,
-        remote_reward_model=None,
         **kwargs,
     ):
         super().__init__()
+
+        self.strategy = strategy
+        self.args = strategy.args
+        self.advantage_estimator = strategy.args.advantage_estimator
 
         self.actor_model_group = actor_model_group
         self.critic_model_group = critic_model_group
         self.reward_model_group = reward_model_group
         self.initial_model_group = initial_model_group
-        self.kl_ctl = kl_controller
-        self.strategy = strategy
-        self.advantage_estimator = strategy.args.advantage_estimator
-        self.args = strategy.args
-
-        # remote_rm_url indicates that the remote reward model is agent environment, remote http server or custom reward func
-        self.remote_rm_url = self.args.remote_rm_url
-        self.remote_reward_model = remote_reward_model
         self.tokenizer = tokenizer
+        self.kl_ctl = kl_controller
 
     def split_rollout_samples(self, rollout_samples):
         for i, sample in enumerate(rollout_samples):
@@ -360,21 +356,10 @@ class RemoteExperienceMaker:
         action_mask_list = [s.action_mask for s in samples_list]
 
         # The rewards are already filled in the samples_list, such as the agent's environment rewards
-        if samples_list[0].rewards is not None:
-            pass
-        elif self.remote_rm_url:
-            queries_list = sum(
-                [
-                    self.tokenizer.batch_decode(remove_pad_token(seq, attention_mask), skip_special_tokens=False)
-                    for seq, attention_mask in zip(sequences_list, attention_mask_list)
-                ],
-                [],
-            )
-            prompts_list = sum([s.prompts for s in samples_list], [])
-            labels_list = sum([s.labels for s in samples_list], [])
-            # Keep the remote call asynchronous
-            r_refs = self.remote_reward_model.get_rewards.remote(queries_list, prompts_list, labels_list)
-        else:
+        use_reward_model = samples_list[0].rewards is None
+        if use_reward_model:
+            if self.reward_model_group is None:
+                raise ValueError("reward_model_group is required when rewards are not precomputed")
             # Batch call reward model
             r_refs = self.reward_model_group.async_run_method_batch(
                 method_name="forward",
@@ -382,9 +367,11 @@ class RemoteExperienceMaker:
                 attention_mask=attention_mask_list,
                 pad_sequence=[True] * len(samples_list),
             )
+        else:
+            r_refs = None
 
         # Sync to avoid GPU OOM when colocate models
-        if args.colocate_all_models and not self.remote_rm_url:
+        if args.colocate_all_models and r_refs is not None:
             ray.get(r_refs)
             ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
 
@@ -403,7 +390,7 @@ class RemoteExperienceMaker:
 
         # Batch call critic model
         if self.critic_model_group is not None:
-            if args.colocate_critic_reward and not self.remote_rm_url:
+            if args.colocate_critic_reward and r_refs is not None:
                 ray.get(r_refs)
                 ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
 
@@ -445,14 +432,7 @@ class RemoteExperienceMaker:
         value_list = sum(ray.get(value_ref)[::duplicate_factor], [])
 
         # Process rewards based on source
-        if samples_list[0].rewards is not None:
-            pass
-        elif self.remote_rm_url:
-            # Get rewards info from remote model
-            rewards_info = ray.get(r_refs)
-            # Process rewards and scores
-            update_samples_with_rewards(rewards_info, samples_list)
-        else:
+        if use_reward_model:
             # Reward Model
             rewards_list = sum(ray.get(r_refs)[::duplicate_factor], [])
             for i, samples in enumerate(samples_list):

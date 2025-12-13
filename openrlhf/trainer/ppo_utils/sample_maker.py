@@ -89,7 +89,14 @@ def _build_sample_from_output(output, truncate_length, **kwargs):
 
     extra_logs = output.get("extra_logs", {})
     for key, value in extra_logs.items():
-        info[key] = torch.tensor([value.item()])
+        if isinstance(value, torch.Tensor):
+            value = value.flatten()[0].item()
+        elif hasattr(value, "item"):
+            try:
+                value = value.item()
+            except Exception:
+                pass
+        info[key] = torch.tensor([value])
 
     return Sample(
         sequences=sequences.unsqueeze(0),
