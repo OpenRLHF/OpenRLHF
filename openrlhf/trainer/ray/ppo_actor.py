@@ -332,11 +332,20 @@ class ActorPPOTrainer(ABC):
 
         def _broadcast_param(param, count, num_params):
             use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
+
+            # FSDP2 requires all ranks to participate in full_tensor()
+            full_data = None
+            if is_fsdp2:
+                full_data = _get_full_tensor(param)
+
             # Fire all vllm engines for broadcast
             if torch.distributed.get_rank() == 0:
                 # Get proper shape and full tensor data
                 shape = _get_param_shape(param)
-                full_data = _get_full_tensor(param)
+                # ZeRO-3 or others don't need collective participation here
+                if not is_fsdp2:
+                    full_data = _get_full_tensor(param)
+
                 refs = [
                     engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
                     for engine in self.vllm_engines
