@@ -195,35 +195,35 @@ class BasePPOTrainer(ABC):
                 refs.extend(self.critic_model_group.async_run_method(method_name="save_checkpoint", tag=tag))
             ray.get(refs)
 
-    def _log_eval_metrics(self, global_step, logs):
-        if not logs:
-            return
-        if self._wandb is not None:
-            logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": global_step}.items()}
-            self._wandb.log(logs)
-        elif self._tensorboard is not None:
-            for k, v in logs.items():
-                self._tensorboard.add_scalar(f"eval/{k}", v, global_step)
+    # def _log_eval_metrics(self, global_step, logs):
+    #     if not logs:
+    #         return
+    #     if self._wandb is not None:
+    #         logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": global_step}.items()}
+    #         self._wandb.log(logs)
+    #     elif self._tensorboard is not None:
+    #         for k, v in logs.items():
+    #             self._tensorboard.add_scalar(f"eval/{k}", v, global_step)
 
-    def _build_eval_runner(self, evaluator, *, before_eval=None, after_eval=None):
-        """Wrap evaluator into a callable so subclasses only decide when to run."""
-        if evaluator is None:
-            return None
+    # def _build_eval_runner(self, evaluator, *, before_eval=None, after_eval=None):
+    #     """Wrap evaluator into a callable so subclasses only decide when to run."""
+    #     if evaluator is None:
+    #         return None
 
-        def _run(global_step):
-            if before_eval:
-                before_eval()
-            try:
-                return evaluator.run(
-                    global_step,
-                    self.args.eval_temperature,
-                    self.args.eval_n_samples_per_prompt,
-                )
-            finally:
-                if after_eval:
-                    after_eval()
+    #     def _run(global_step):
+    #         if before_eval:
+    #             before_eval()
+    #         try:
+    #             return evaluator.run(
+    #                 global_step,
+    #                 self.args.eval_temperature,
+    #                 self.args.eval_n_samples_per_prompt,
+    #             )
+    #         finally:
+    #             if after_eval:
+    #                 after_eval()
 
-        return _run
+    #     return _run
 
     def _load_checkpoint_states(self):
         ckpt_path = os.path.join(self.args.ckpt_path, "_actor")
@@ -235,11 +235,11 @@ class BasePPOTrainer(ABC):
             return checkpoint_states
         return {"global_step": 0, "episode": 0, "data_loader_state_dict": {}}
 
-    def _maybe_run_eval(self, global_step):
-        if self._eval_runner is None:
-            return
-        logs = self._eval_runner(global_step)
-        self._log_eval_metrics(global_step, logs)
+    # def _maybe_run_eval(self, global_step):
+    #     if self._eval_runner is None:
+    #         return
+    #     logs = self._eval_runner(global_step)
+    #     self._log_eval_metrics(global_step, logs)
 
 
 @ray.remote

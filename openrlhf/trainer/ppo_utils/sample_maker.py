@@ -265,7 +265,7 @@ class RemoteSampleGenerater:
                     pbar.set_postfix(
                         {
                             "pass_rate": filter_hook.pass_rate(),
-                            "use_prompt_in_batch": total_prompt_processed,
+                            "prompts_in_batch": total_prompt_processed,
                         }
                     )
                     pbar.update()
