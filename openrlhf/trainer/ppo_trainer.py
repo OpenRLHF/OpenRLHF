@@ -6,15 +6,15 @@ from tqdm import tqdm
 
 from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
 from openrlhf.trainer.ppo_utils.kl_controller import build_kl_controller
+from openrlhf.trainer.ppo_utils.loggers import TensorboardLogger, WandbLogger
 from openrlhf.trainer.ppo_utils.misc import (
     ensure_remote_rm,
-    init_tensorboard,
-    init_wandb,
     normalize_interval_config,
 )
 from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ppo_utils.sample_maker import RemoteSampleGenerater
 from openrlhf.trainer.ray.launcher import RayActorGroup
+from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.utils import get_tokenizer
@@ -34,7 +34,6 @@ class BasePPOTrainer(ABC):
         reference_model_group: RayActorGroup,
         vllm_engines,
         tokenizer,
-        prompt_max_len: int = 120,
         **generate_kwargs,
     ) -> None:
         self.strategy = strategy
@@ -47,11 +46,10 @@ class BasePPOTrainer(ABC):
         self.vllm_engines = vllm_engines
         self.tokenizer = tokenizer
 
-        self.prompt_max_len = prompt_max_len
-        self.freezing_actor_steps = getattr(self.args, "freezing_actor_steps", -1)
-
         self.remote_reward_model = ensure_remote_rm(
-            self.args, self.args.remote_rm_url, generate_kwargs.pop("remote_reward_model", None)
+            self.args,
+            self.args.remote_rm_url,
+            generate_kwargs.pop("remote_reward_model", None),
         )
         self.kl_ctl = build_kl_controller(
             self.args.init_kl_coef,
@@ -70,19 +68,54 @@ class BasePPOTrainer(ABC):
         )
 
         # Tracking backends
-        self._wandb, self._wandb_samples_table = init_wandb(self.args)
-        self._tensorboard = init_tensorboard(self.args)
+        self.wandb_logger = WandbLogger(self.args) if self.args.use_wandb else None
+        self.tensorboard_logger = TensorboardLogger(self.args) if self.args.use_tensorboard else None
 
-        self._eval_runner = None
+        # self._eval_runner = None
         self.generate_kwargs = generate_kwargs
-        normalize_interval_config(self.args)
+
+    def train_step(self, samples, global_step):
+        # Turn raw samples into PPO-ready trajectories with rewards.
+        experiences = self.experience_maker.make_experience_batch(samples)
+
+        # Peek at the first decoded sample for quick sanity check.
+        sample0 = [
+            self.tokenizer.batch_decode(experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True)[0],
+            experiences[0].info["reward"][0].item(),
+        ]
+        print(sample0)
+
+        # Balance experiences across DP ranks if needed.
+        if self.args.use_dynamic_batch:
+            experiences = balance_experiences(experiences, self.args)
+
+        # Push experiences to actor (and critic) shards before PPO.
+        refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences)
+        if self.critic_model_group is not None:
+            refs.extend(self.critic_model_group.async_run_method_batch(method_name="append", experience=experiences))
+        ray.get(refs)
+
+        # Perform PPO optimization for actor/critic and gather metrics.
+        status = self.ppo_train(global_step)
+
+        # Sync weights to vLLM.
+        if self.vllm_engines is not None:
+            self.broadcast_to_vllm()
+
+        # Refresh KL controller with the latest measurement.
+        if "kl" in status:
+            self.kl_ctl.update(status["kl"], self.args.rollout_batch_size * self.args.n_samples_per_prompt)
+
+        status["generated_samples"] = sample0
+        return status, global_step + 1
 
     def ppo_train(self, global_steps):
         """Run one PPO train step for critic + actor and return merged status dict."""
         status: dict = {}
 
+        # Decide whether to train critic/actor this round (actor can be frozen initially).
         run_critic = self.critic_model_group is not None
-        run_actor = global_steps > self.freezing_actor_steps and self.actor_model_group is not None
+        run_actor = global_steps > self.args.freezing_actor_steps and self.actor_model_group is not None
 
         def _run_sleep(group, **kwargs):
             # Sleep mode: reload -> fit -> offload (smaller GPU memory).
@@ -91,7 +124,7 @@ class BasePPOTrainer(ABC):
             status.update(ray.get(ref)[0])
             ray.get(group.async_run_method(method_name="offload_states"))
 
-        if self.strategy.args.deepspeed_enable_sleep:
+        if self.args.deepspeed_enable_sleep:
             # Colocated/sleeping: run critic first, then actor.
             if run_critic:
                 _run_sleep(self.critic_model_group)
@@ -110,74 +143,22 @@ class BasePPOTrainer(ABC):
 
         return status
 
-    def train_step(self, experiences, global_step):
-        # Peek at the first decoded sample for quick sanity check.
-        sample0 = [
-            self.tokenizer.batch_decode(experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True)[0],
-            experiences[0].info["reward"][0].item(),
-        ]
-        print(sample0)
-
-        # Balance experiences across DP ranks if needed.
-        if self.args.use_dynamic_batch:
-            experiences = balance_experiences(experiences, self.args)
-
-        # Push experiences to actor (and critic) shards before PPO.
-        refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences)
-        if self.critic_model_group is not None:
-            refs.extend(self.critic_model_group.async_run_method_batch(method_name="append", experience=experiences))
-        ray.get(refs)
-
-        status = self.ppo_train(global_step)
-
-        # Sync weights to vLLM.
-        if self.vllm_engines is not None:
-            self._broadcast_to_vllm()
-
-        # Refresh KL controller with the latest measurement.
-        if "kl" in status:
-            self.kl_ctl.update(status["kl"], self.args.rollout_batch_size * self.args.n_samples_per_prompt)
-
-        status["generated_samples"] = sample0
-        return global_step + 1, status
-
-    def _broadcast_to_vllm(self):
-        if self.strategy.args.vllm_enable_sleep:
-            from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
-
+    def broadcast_to_vllm(self):
+        if self.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
         ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
 
-        if self.strategy.args.vllm_enable_sleep:
+        if self.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "sleep")
 
     def save_logs_and_checkpoints(self, global_step, logs_dict=None, client_states=None):
         logs_dict = logs_dict or {}
         if global_step % self.args.logging_steps == 0:
-            if self._wandb is not None:
-                # Add generated samples to wandb using Table
-                if logs_dict.get("generated_samples"):
-                    # https://github.com/wandb/wandb/issues/2981#issuecomment-1997445737
-                    new_table = self._wandb.Table(
-                        columns=self._wandb_samples_table.columns, data=self._wandb_samples_table.data
-                    )
-                    new_table.add_data(global_step, *logs_dict.pop("generated_samples"))
-                    self._wandb_samples_table = new_table
-                    self._wandb.log({"train/generated_samples": new_table})
-
-                metrics = {k: v for k, v in logs_dict.items() if v is not None}
-                logs = {"train/%s" % k: v for k, v in {**metrics, "global_step": global_step}.items()}
-                self._wandb.log(logs)
-            elif self._tensorboard is not None:
-                for k, v in logs_dict.items():
-                    if k == "generated_samples" and v is not None:
-                        # Record generated samples in TensorBoard using simple text format
-                        text, reward = v
-                        formatted_text = f"Sample:\n{text}\n\nReward: {reward:.4f}"
-                        self._tensorboard.add_text("train/generated_samples", formatted_text, global_step)
-                    elif v is not None:
-                        self._tensorboard.add_scalar(f"train/{k}", v, global_step)
+            if self.wandb_logger:
+                self.wandb_logger.log_train(global_step, logs_dict)
+            if self.tensorboard_logger:
+                self.tensorboard_logger.log_train(global_step, logs_dict)
 
         # TODO: Add evaluation mechanism for PPO
         if global_step % self.args.eval_steps == 0:
@@ -194,6 +175,16 @@ class BasePPOTrainer(ABC):
             if self.critic_model_group is not None:
                 refs.extend(self.critic_model_group.async_run_method(method_name="save_checkpoint", tag=tag))
             ray.get(refs)
+
+    def load_checkpoint_states(self):
+        ckpt_path = os.path.join(self.args.ckpt_path, "_actor")
+        if self.args.load_checkpoint and os.path.exists(ckpt_path):
+            checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
+                0
+            ]
+            logger.info(f"checkpoint_states: {checkpoint_states}")
+            return checkpoint_states
+        return {"global_step": 0, "episode": 0, "data_loader_state_dict": {}}
 
     # def _log_eval_metrics(self, global_step, logs):
     #     if not logs:
@@ -225,16 +216,6 @@ class BasePPOTrainer(ABC):
 
     #     return _run
 
-    def _load_checkpoint_states(self):
-        ckpt_path = os.path.join(self.args.ckpt_path, "_actor")
-        if self.args.load_checkpoint and os.path.exists(ckpt_path):
-            checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
-                0
-            ]
-            logger.info(f"checkpoint_states: {checkpoint_states}")
-            return checkpoint_states
-        return {"global_step": 0, "episode": 0, "data_loader_state_dict": {}}
-
     # def _maybe_run_eval(self, global_step):
     #     if self._eval_runner is None:
     #         return
@@ -258,12 +239,12 @@ class PPOTrainer(BasePPOTrainer):
         reward_model_group: RayActorGroup,
         reference_model_group: RayActorGroup,
         vllm_engines=None,
-        prompt_max_len: int = 120,
-        train_split: str = "train",
+        prompt_split: str = "train",
         eval_split: str = "test",
         **generate_kwargs,
     ) -> None:
         tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
+        normalize_interval_config(strategy.args)
 
         super().__init__(
             strategy,
@@ -273,50 +254,51 @@ class PPOTrainer(BasePPOTrainer):
             reference_model_group,
             vllm_engines,
             tokenizer,
-            prompt_max_len,
             **generate_kwargs,
         )
 
         self.train_sample_generater = RemoteSampleGenerater(
-            strategy,
-            tokenizer,
-            vllm_engines,
-            prompt_max_len,
-            train_split,
-            generate_kwargs,
+            strategy=strategy,
+            tokenizer=tokenizer,
+            vllm_engines=vllm_engines,
+            dataset_split=prompt_split,
+            generate_kwargs=generate_kwargs,
         )
 
     def fit(self) -> None:
-        checkpoint_states = self._load_checkpoint_states()
+        checkpoint_states = self.load_checkpoint_states()
+
         # Restore step and start_epoch
         global_step = checkpoint_states["global_step"]
         start_episode = checkpoint_states["episode"]
         # Keep vLLM weights and dataloader states in sync when resuming.
         if global_step:
-            ray.get(self.trainer_actor._broadcast_to_vllm.remote())
+            self.broadcast_to_vllm()
             self.train_sample_generater.load_state_dict(checkpoint_states["data_loader_state_dict"])
 
         for episode in range(start_episode, self.args.num_episodes):
             pbar = tqdm(
                 range(len(self.train_sample_generater.prompts_dataloader)),
                 desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
-                # initial=steps, # TODO
+                # initial=global_step, # TODO: init step
             )
 
             while True:
+                # Draw one mini-batch of prompts; stop when loader is exhausted.
                 samples, pass_rate, prompts_used, is_exhausted = self.train_sample_generater.make_sample_batch()
                 if is_exhausted:
                     break
 
-                experiences = self.experience_maker.make_experience_batch(samples)
-                global_step, status = self.train_step(experiences, global_step)
+                # Run PPO update on this batch and bump the global step counter.
+                status, global_step = self.train_step(samples, global_step)
 
+                # Add generated samples to status dictionary
                 if self.args.dynamic_filtering:
                     status["dynamic_filtering_pass_rate"] = pass_rate
-
                 log_statue = {k: v for k, v in status.items() if k not in ["generated_samples"]}
                 logger.info(f"✨ Global step {global_step}: {log_statue}")
 
+                # logs/checkpoints
                 client_states = {
                     "global_step": global_step,
                     "episode": episode,
@@ -326,11 +308,11 @@ class PPOTrainer(BasePPOTrainer):
 
                 pbar.update(prompts_used)
 
-        # close trackers
-        if self._wandb is not None:
-            self._wandb.finish()
-        if self._tensorboard is not None:
-            self._tensorboard.close()
+        # Close trackers
+        if self.wandb_logger:
+            self.wandb_logger.close()
+        if self.tensorboard_logger:
+            self.tensorboard_logger.close()
 
     def get_max_steps(self):
         return self.train_sample_generater.max_steps

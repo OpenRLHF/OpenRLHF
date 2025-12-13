@@ -141,14 +141,12 @@ class RemoteSampleGenerater:
         strategy,
         tokenizer,
         vllm_engines: List,
-        prompt_max_len: int,
         dataset_split: str,
         generate_kwargs: dict,
         for_eval: bool = False,
     ):
         self.strategy = strategy
         self.args = strategy.args
-        self.prompt_max_len = prompt_max_len
         self.generate_kwargs = generate_kwargs
 
         self.tokenizer = tokenizer
@@ -296,7 +294,7 @@ class RemoteSampleGenerater:
         args = self.strategy.args
 
         sampling_params = _build_sampling_params(args, **kwargs)
-        truncate_length = self.prompt_max_len + kwargs.get("max_new_tokens", 1024)
+        truncate_length = kwargs.get("prompt_max_len", 1024) + kwargs.get("max_new_tokens", 1024)
 
         n_samples_per_prompt = kwargs.get("n_samples_per_prompt", args.n_samples_per_prompt)
         engine_count = len(llms)
@@ -332,5 +330,5 @@ class RemoteSampleGenerater:
 
     def _create_sample_from_output(self, output, **kwargs) -> Sample:
         """Wrap output parsing to keep truncation logic in one place."""
-        truncate_length = self.prompt_max_len + kwargs.get("max_new_tokens", 1024)
+        truncate_length = kwargs.get("prompt_max_len", 1024) + kwargs.get("max_new_tokens", 1024)
         return _build_sample_from_output(output, truncate_length, **kwargs)

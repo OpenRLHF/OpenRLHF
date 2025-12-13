@@ -299,7 +299,7 @@ class ActorPPOTrainer(ABC):
                 status[k] = v.float().mean().item()
         return status
 
-    def _broadcast_to_vllm(self):
+    def broadcast_to_vllm(self):
         use_prefix_cache = getattr(self.strategy.args, "enable_prefix_caching", False)
         cache_reset_refs = []
         if use_prefix_cache and torch.distributed.get_rank() == 0:
@@ -534,7 +534,7 @@ class PolicyModelActor(BaseModelActor):
         return action_log_probs.to("cpu")
 
     def broadcast_to_vllm(self):
-        self.trainer._broadcast_to_vllm()
+        self.trainer.broadcast_to_vllm()
 
     def get_checkpoint_states(self):
         return self.checkpoint_states

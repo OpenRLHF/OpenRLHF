@@ -46,7 +46,7 @@ ROLLOUT_ARGS=(
    --rollout_batch_size 128
    --n_samples_per_prompt 8
    --dynamic_filtering
-   --dynamic_filtering_reward_range 0.0 1.1
+   --dynamic_filtering_reward_range 0.0 1.0
 
    --train_batch_size 1024
 

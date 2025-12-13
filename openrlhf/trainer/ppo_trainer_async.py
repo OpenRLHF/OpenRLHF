@@ -6,7 +6,7 @@ from ray.util.queue import Queue
 from tqdm import tqdm
 
 from openrlhf.trainer.ppo_trainer import BasePPOTrainer
-from openrlhf.trainer.ppo_utils.misc import ensure_remote_rm, normalize_interval_config
+from openrlhf.trainer.ppo_utils.misc import normalize_interval_config
 from openrlhf.trainer.ppo_utils.sample_maker import RemoteSampleGenerater
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.deepspeed import DeepspeedStrategy
@@ -94,8 +94,8 @@ class GenerateSamplesActor:
         pretrain,
         strategy,
         vllm_engines=None,
-        prompt_max_len=120,
-        train_split="train",
+        prompt_split="train",
+        eval_split="test",
         *,
         signal_actor=None,
         controller_actor=None,
@@ -106,17 +106,16 @@ class GenerateSamplesActor:
         self.strategy = strategy
         self.args = strategy.args
 
+        self.train_sample_generater = RemoteSampleGenerater(
+            strategy=strategy,
+            tokenizer=tokenizer,
+            vllm_engines=vllm_engines,
+            dataset_split=prompt_split,
+            generate_kwargs=generate_kwargs,
+        )
+
         self.signal_actor = signal_actor
         self.controller_actor = controller_actor
-
-        self.train_sample_generater = RemoteSampleGenerater(
-            strategy,
-            tokenizer,
-            vllm_engines,
-            prompt_max_len,
-            train_split,
-            generate_kwargs,
-        )
 
     def get_max_steps(self):
         return self.train_sample_generater.max_steps
@@ -165,46 +164,43 @@ class TrainingActor(BasePPOTrainer):
         reward_model_group,
         reference_model_group,
         vllm_engines=None,
-        prompt_max_len=120,
-        # eval_split="test",
-        *,
         signal_actor=None,
         controller_actor=None,
-        remote_reward_model=None,
         **generate_kwargs,
     ):
-        self.signal_actor = signal_actor
-        self.controller_actor = controller_actor
-
         tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
 
         super().__init__(
             strategy,
-            tokenizer,
             actor_model_group,
             critic_model_group,
             reward_model_group,
             reference_model_group,
             vllm_engines,
-            prompt_max_len,
-            remote_reward_model=remote_reward_model,
+            tokenizer,
             **generate_kwargs,
         )
+        self.signal_actor = signal_actor
+        self.controller_actor = controller_actor
 
     def fit(self, global_step):
         while True:
+            # Draw one mini-batch of prompts; stop when loader is exhausted.
             output = ray.get(self.controller_actor.get.remote())
             if output == "done":
                 break
             samples, episode, data_loader_state_dict, pass_rate = output
 
-            experiences = self.experience_maker.make_experience_batch(samples)
-            global_step, status = self.train_step(experiences, global_step)
+            # Run PPO update on this batch and bump the global step counter.
+            status, global_step = self.train_step(samples, global_step)
 
+            # Add generated samples to status dictionary
             if self.args.dynamic_filtering:
                 status["dynamic_filtering_pass_rate"] = pass_rate
-            logger.info(f"✨ Global step {global_step}: {status}")
+            log_statue = {k: v for k, v in status.items() if k not in ["generated_samples"]}
+            logger.info(f"✨ Global step {global_step}: {log_statue}")
 
+            # logs/checkpoints
             client_states = {
                 "global_step": global_step,
                 "episode": episode,
@@ -212,13 +208,13 @@ class TrainingActor(BasePPOTrainer):
             }
             self.save_logs_and_checkpoints(global_step, status, client_states)
 
-        # close trackers
-        if self._wandb is not None:
-            self._wandb.finish()
-        if self._tensorboard is not None:
-            self._tensorboard.close()
+        # Close trackers
+        if self.wandb_logger.enabled:
+            self.wandb_logger.close()
+        if self.tensorboard_logger.enabled:
+            self.tensorboard_logger.close()
 
-    def _broadcast_to_vllm(self):
+    def broadcast_to_vllm(self):
         assert not self.args.vllm_enable_sleep, "Async training does not use vLLM sleep"
         # Pause generation while weights sync, then resume.
         ray.get(self.signal_actor.set_generating.remote(False))
@@ -238,71 +234,64 @@ class PPOTrainerAsync:
         reward_model_group: RayActorGroup,
         reference_model_group: RayActorGroup,
         vllm_engines=None,
-        prompt_max_len: int = 120,
         prompt_split: str = "train",
         eval_split: str = "test",
         **generate_kwargs,
     ) -> None:
-        super().__init__()
+        args = strategy.args
+        normalize_interval_config(args)
 
-        self.args = strategy.args
-        self.strategy = strategy
-        self.actor_model_group = actor_model_group
-        self.critic_model_group = critic_model_group
-        self.reward_model_group = reward_model_group
-        self.reference_model_group = reference_model_group
-        self.vllm_engines = vllm_engines
-        self.prompt_max_len = prompt_max_len
-
-        queue_size = getattr(self.args, "async_queue_size", 1)
+        queue_size = getattr(args, "async_queue_size", 1)
         if queue_size <= 0:
             raise ValueError(f"async_queue_size must be positive, got {queue_size}")
         logger.info(f"queue_size={queue_size}")
         self.controller_actor = AsyncController.remote(queue_size=queue_size)
-
         self.signal_actor = SignalActor.remote()
-        self.remote_reward_model = ensure_remote_rm(self.args, self.args.remote_rm_url)
 
         self.generator_actor = GenerateSamplesActor.remote(
-            pretrain,
-            self.strategy,
-            self.vllm_engines,
-            self.prompt_max_len,
-            prompt_split,
+            pretrain=pretrain,
+            strategy=strategy,
+            vllm_engines=vllm_engines,
+            prompt_split=prompt_split,
+            eval_split=eval_split,
             signal_actor=self.signal_actor,
             controller_actor=self.controller_actor,
             **generate_kwargs,
         )
         self.trainer_actor = TrainingActor.remote(
-            pretrain,
-            self.strategy,
-            self.actor_model_group,
-            self.critic_model_group,
-            self.reward_model_group,
-            self.reference_model_group,
-            self.vllm_engines,
-            self.prompt_max_len,
+            pretrain=pretrain,
+            strategy=strategy,
+            actor_model_group=actor_model_group,
+            critic_model_group=critic_model_group,
+            reward_model_group=reward_model_group,
+            reference_model_group=reference_model_group,
+            vllm_engines=vllm_engines,
             signal_actor=self.signal_actor,
             controller_actor=self.controller_actor,
-            eval_split=eval_split,
-            remote_reward_model=self.remote_reward_model,
             **generate_kwargs,
         )
-        normalize_interval_config(self.args)
 
     def fit(self) -> None:
-        checkpoint_states = ray.get(self.trainer_actor._load_checkpoint_states.remote())[0]
+        checkpoint_states = ray.get(self.trainer_actor.load_checkpoint_states.remote())[0]
+
         # Restore step and epoch
         global_step = checkpoint_states["global_step"]
-        episode = checkpoint_states["episode"]
+        start_episode = checkpoint_states["episode"]
         # Keep vLLM weights and dataloader states in sync when resuming.
         if global_step:
-            ray.get(self.trainer_actor._broadcast_to_vllm.remote())
-            ray.get(self.generator_actor.load_state_dict.remote(checkpoint_states["data_loader_state_dict"]))
+            ray.get(
+                [
+                    self.trainer_actor.broadcast_to_vllm.remote(),
+                    self.generator_actor.load_state_dict.remote(checkpoint_states["data_loader_state_dict"]),
+                ]
+            )
 
-        generator_actor_ref = self.generator_actor.fit.remote(episode=episode, global_step=global_step)
-        trainer_actor_ref = self.trainer_actor.fit.remote(global_step=global_step)
-        ray.get([generator_actor_ref, trainer_actor_ref])
+        ray.get(
+            [
+                self.generator_actor.fit.remote(episode=start_episode, global_step=global_step),
+                self.trainer_actor.fit.remote(global_step=global_step),
+            ]
+        )
 
     def get_max_steps(self):
         return ray.get(self.generator_actor.get_max_steps.remote())
