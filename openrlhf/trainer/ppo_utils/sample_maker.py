@@ -54,6 +54,8 @@ def _build_sample_from_output(output, truncate_length, **kwargs):
     tokenized_observation = output["observation_tokens"].copy()
     tokenized_ranges = output["action_ranges"]
     metadata = output.get("metadata")
+    reward_val = output.get("reward", None)
+    score_val = output.get("scores", None)
 
     sequences = torch.tensor(tokenized_observation, dtype=torch.long)
     attention_mask = torch.tensor([1] * len(tokenized_observation))
@@ -79,9 +81,11 @@ def _build_sample_from_output(output, truncate_length, **kwargs):
         "response_length": torch.tensor([response_length]),
         "total_length": torch.tensor([total_length]),
         "response_clip_ratio": torch.tensor([is_clipped]),
-        "reward": torch.tensor([output["reward"]]),
-        "score": torch.tensor([output["scores"]]),
     }
+    if reward_val is not None:
+        info["reward"] = torch.tensor([reward_val])
+    if score_val is not None:
+        info["score"] = torch.tensor([score_val])
 
     extra_logs = output.get("extra_logs", {})
     for key, value in extra_logs.items():
@@ -94,8 +98,8 @@ def _build_sample_from_output(output, truncate_length, **kwargs):
         rollout_log_probs=rollout_log_probs.unsqueeze(0) if rollout_log_probs is not None else None,
         prompts=[output["prompt"]],
         labels=[output["label"]],
-        rewards=torch.tensor([output["reward"]]),
-        scores=torch.tensor([output["scores"]]),
+        rewards=torch.tensor([reward_val]) if reward_val is not None else None,
+        scores=torch.tensor([score_val]) if score_val is not None else None,
         info=info,
         metadata=metadata,
     )

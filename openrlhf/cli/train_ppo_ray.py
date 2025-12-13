@@ -53,9 +53,12 @@ def train(args):
             )
 
         if args.agent_func_path:
-            from openrlhf.trainer.ray.vllm_engine_async import LLMRayActorAsync as LLMRayActor
+            from openrlhf.trainer.ray.vllm_engine import AgentLLMRayActorAsync as LLMRayActor
         else:
-            from openrlhf.trainer.ray.vllm_engine import LLMRayActor
+            from openrlhf.trainer.ray.vllm_engine import LLMRayActorAsync as LLMRayActor
+
+            # Legacy sync actor:
+            # from openrlhf.trainer.ray.vllm_engine import LLMRayActorSync as LLMRayActor
 
         vllm_engines = create_vllm_engines(
             args.vllm_num_engines,
@@ -461,14 +464,6 @@ if __name__ == "__main__":
         "--dynamic_filtering_reward_range", nargs=2, default=(0, 1), type=float, help="Dynamic filtering rewards range"
     )
 
-    # # Streaming sampling
-    # parser.add_argument(
-    #     "--enable_streaming_sampling",
-    #     action="store_true",
-    #     default=False,
-    #     help="Enable streaming sampling with real-time filtering",
-    # )
-
     # TensorBoard parameters
     parser.add_argument("--use_tensorboard", type=str, default=None, help="TensorBoard logging path")
 
@@ -566,10 +561,6 @@ if __name__ == "__main__":
         assert (
             args.n_samples_per_prompt > 1
         ), "n_samples_per_prompt must be greater than 1 when using dynamic filtering"
-
-    # if args.enable_streaming_sampling:
-    #     assert args.async_train, "Streaming sampling requires --async_train to be enabled"
-    #     assert args.dynamic_filtering, "Streaming sampling requires --dynamic_filtering to be enabled"
 
     assert (
         args.n_samples_per_prompt * args.rollout_batch_size // args.micro_rollout_batch_size

@@ -37,6 +37,8 @@ class DynamicFilteringHook(FilterHookBase):
     def apply(self, experiences: List[Experience]) -> List[Experience]:
         if len(experiences) != self.n_samples:
             return []
+        if any(exp.scores is None for exp in experiences):
+            return experiences
         self.total_groups += 1
 
         scores = [exp.scores[0].item() for exp in experiences]

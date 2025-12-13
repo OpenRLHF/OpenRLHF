@@ -1,35 +1,25 @@
 import asyncio
-import os
+from copy import deepcopy
 
 import ray
 
 from openrlhf.utils.agent import AgentExecutorBase
 
-from .vllm_engine import BaseLLMRayActor
+from .base import BaseLLMRayActor
 
 
 @ray.remote
-class LLMRayActorAsync(BaseLLMRayActor):
+class AgentLLMRayActorAsync(BaseLLMRayActor):
+    """Agent-style streaming actor using vLLM.AsyncLLMEngine."""
+
     async def __init__(self, *args, bundle_indices: list = None, **kwargs):
+        import vllm
+
         self.agent_func_path = kwargs.pop("agent_func_path")
-        # Initialize super class
         super().__init__(*args, bundle_indices=bundle_indices, **kwargs)
 
-        # Initialize result queue for streaming completed results
         self.result_queue = asyncio.Queue()
-        self.agent_executor = None
-
-        # fix: https://github.com/vllm-project/vllm/pull/21540
-        if not os.environ.get("RAY_ADDRESS"):
-            from ray._private.worker import global_worker
-
-            os.environ["RAY_ADDRESS"] = global_worker.gcs_client.address
-
-        os.environ["VLLM_USE_V1"] = "1"
-        import vllm
-        from packaging import version
-
-        assert version.parse(vllm.__version__) > version.parse("0.8.5"), "Asyn VLLM version must be greater than 0.8.5"
+        # self.agent_executor = None
 
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
@@ -61,21 +51,8 @@ class LLMRayActorAsync(BaseLLMRayActor):
         await self.llm.wake_up()
 
     async def add_requests(
-        self, sampling_params, prompts, labels, max_length, hf_tokenizer=None, max_steps=10000, request_group_id=None
+        self, sampling_params, prompts, labels, max_length, hf_tokenizer=None, request_group_id=None
     ):
-        """
-        Process requests from rank0 and generate responses with multiple agent interactions.
-        Each prompt will go through multiple steps of interaction using the AgentExecutor.
-        Results are streamed back as each agent completes its execution.
-
-        Args:
-            sampling_params: Parameters for sampling
-            prompts: List of prompts to process
-            labels: List of labels corresponding to prompts
-            max_steps: Maximum number of interaction steps
-            request_group_id: Optional ID to group related requests together
-        """
-
         # Create AgentExecutor instance
         if self.agent_executor is None:
             assert self.agent_func_path.endswith(".py"), "Agent path must be a Python file"
@@ -85,7 +62,6 @@ class LLMRayActorAsync(BaseLLMRayActor):
             agent_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(agent_module)
 
-            # Load AgentExecutor class instead of step function
             assert hasattr(agent_module, "AgentExecutor"), "Agent module must contain AgentExecutor class"
             self.agent_executor_cls = agent_module.AgentExecutor
             assert issubclass(
@@ -93,42 +69,32 @@ class LLMRayActorAsync(BaseLLMRayActor):
             ), "AgentExecutor must inherit from AgentExecutorBase"
 
             self.agent_executor = self.agent_executor_cls(
-                max_steps=max_steps,
                 max_length=max_length,
                 llm_engine=self.llm,
                 hf_tokenizer=hf_tokenizer,
                 result_queue=self.result_queue,
             )
 
-        # Create and start tasks for all agent executions with controlled concurrency
-        import copy
-
         tasks = []
         for prompt, label in zip(prompts, labels):
-            tasks.append(self.agent_executor.execute(prompt, label, copy.deepcopy(sampling_params), request_group_id))
+            tasks.append(
+                self.agent_executor.execute(
+                    prompt,
+                    label,
+                    deepcopy(sampling_params),
+                    request_group_id,
+                )
+            )
 
-        # Run the async code using the class's event loop
         await asyncio.gather(*tasks)
 
     async def get_responses(self, request_group_id=None):
-        """
-        Get completed agent results from the queue.
-        If request_group_id is provided, only return results for that group.
-
-        Args:
-            request_group_id: Optional ID to filter results by group
-
-        Returns:
-            List of agent results (all if request_group_id is None, filtered otherwise)
-        """
         if request_group_id is None:
-            # Original behavior: return all results
             results = []
             while not self.result_queue.empty():
                 results.append(await self.result_queue.get())
             return results
 
-        # Filter by request_group_id without disturbing ordering
         matching_results = []
         unmatched = []
 

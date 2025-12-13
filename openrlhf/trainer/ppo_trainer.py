@@ -49,7 +49,7 @@ class BasePPOTrainer(ABC):
         if remote_rm_url and not remote_rm_url[0] == "agent":
             from openrlhf.utils.remote_rm_utils import RemoteRewardModel
 
-            return RemoteRewardModel.remote(self.args, remote_rm_url)
+            self.remote_reward_model = RemoteRewardModel.remote(self.args, remote_rm_url)
         else:
             self.remote_reward_model = None
 

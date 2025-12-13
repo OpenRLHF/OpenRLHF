@@ -19,10 +19,9 @@ class AgentInstanceBase(ABC):
 
 
 class AgentExecutorBase(ABC):
-    def __init__(self, agent_instance_cls, max_steps, max_length, llm_engine, hf_tokenizer, result_queue):
+    def __init__(self, agent_instance_cls, max_length, llm_engine, hf_tokenizer, result_queue):
         self.llm_engine = llm_engine
         self.hf_tokenizer = hf_tokenizer
-        self.max_steps = max_steps
         self.max_length = max_length
         self.result_queue = result_queue
         assert issubclass(agent_instance_cls, AgentInstanceBase), "AgentInstance must inherit from AgentInstanceBase"
@@ -70,7 +69,7 @@ class AgentExecutorBase(ABC):
                 rollout_log_probs = None
 
             # Execute multiple steps of interaction
-            for step_idx in range(self.max_steps):
+            while True:
                 # Next sampling budget
                 sampling_params.max_tokens = self.max_length - len(current_obs_tokens)
                 # No budget to generate, break
