@@ -19,10 +19,9 @@ class AgentInstanceBase(ABC):
 
 
 class AgentExecutorBase(ABC):
-    def __init__(self, agent_instance_cls, max_steps, max_length, llm_engine, hf_tokenizer, result_queue):
+    def __init__(self, agent_instance_cls, max_length, llm_engine, hf_tokenizer, result_queue):
         self.llm_engine = llm_engine
         self.hf_tokenizer = hf_tokenizer
-        self.max_steps = max_steps
         self.max_length = max_length
         self.result_queue = result_queue
         assert issubclass(agent_instance_cls, AgentInstanceBase), "AgentInstance must inherit from AgentInstanceBase"
@@ -43,7 +42,7 @@ class AgentExecutorBase(ABC):
             final_output = request_output
         return final_output
 
-    async def execute(self, prompt, label, sampling_params):
+    async def execute(self, prompt, label, sampling_params, request_group_id=None):
         async with self.semaphore:
             # Create a unique agent instance for this prompt with tokenizer
             agent_instance = self.agent_instance_cls.remote()
@@ -62,6 +61,7 @@ class AgentExecutorBase(ABC):
             action_ranges = []
             total_reward = 0
             final_scores = 0
+            extra_logs = {}
 
             if sampling_params.logprobs is not None:
                 rollout_log_probs = [0.0] * len(current_obs_tokens)
@@ -69,7 +69,7 @@ class AgentExecutorBase(ABC):
                 rollout_log_probs = None
 
             # Execute multiple steps of interaction
-            for step_idx in range(self.max_steps):
+            while True:
                 # Next sampling budget
                 sampling_params.max_tokens = self.max_length - len(current_obs_tokens)
                 # No budget to generate, break
@@ -138,5 +138,6 @@ class AgentExecutorBase(ABC):
                 "extra_logs": extra_logs,
                 "action_ranges": action_ranges,
                 "rollout_log_probs": rollout_log_probs,
+                "request_group_id": request_group_id,
             }
             await self.result_queue.put(final_response)

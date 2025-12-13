@@ -27,3 +27,10 @@ class FixedKLController:
 
     def update(self, current, n_steps):
         pass
+
+
+def build_kl_controller(init_kl_coef, kl_target=None, kl_horizon=10000):
+    """Factory to build KL controller from explicit params."""
+    if kl_target:
+        return AdaptiveKLController(init_kl_coef, kl_target, kl_horizon)
+    return FixedKLController(init_kl_coef)

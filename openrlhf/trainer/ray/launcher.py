@@ -334,10 +334,12 @@ class RayActorGroup:
         # Calculate chunk size based on number of effective actors (considering ring groups)
         num_actors = len(self._actor_handlers)
         effective_actors = num_actors // self.duplicate_actors
+        if total_length == 0 or total_length < effective_actors:
+            raise ValueError(
+                f"Insufficient batch size for async_run_method_batch: total_length={total_length}, "
+                f"effective_actors={effective_actors}"
+            )
         chunk_size = total_length // effective_actors
-        assert (
-            total_length >= effective_actors
-        ), f"Total length {total_length} must be greater than or equal to effective actors {effective_actors}"
         if total_length % effective_actors != 0:
             chunk_size += 1
 
