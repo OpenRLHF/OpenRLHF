@@ -9,16 +9,17 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
 from packaging import version
-from torch.optim import Optimizer
-from torchdata.stateful_dataloader import StatefulDataLoader
-from transformers import enable_full_determinism, set_seed
-
 from torch.distributed.fsdp import (
     CPUOffloadPolicy,
+)
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDPModule
+from torch.distributed.fsdp import (
     MixedPrecisionPolicy,
     fully_shard,
 )
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDPModule
+from torch.optim import Optimizer
+from torchdata.stateful_dataloader import StatefulDataLoader
+from transformers import enable_full_determinism, set_seed
 
 try:
     from torch.distributed.checkpoint.state_dict import (  # type: ignore[attr-defined]
