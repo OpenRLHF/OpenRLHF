@@ -185,23 +185,23 @@ if __name__ == "__main__":
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
     parser.add_argument(
-        "--dist_backend", type=str, default="deepspeed", choices=["deepspeed", "fsdp"], help="Distributed backend"
+        "--dist_backend", type=str, default="deepspeed", choices=["deepspeed", "fsdp2"], help="Distributed backend"
     )
     parser.add_argument(
-        "--fsdp_offload",
+        "--fsdp2_offload",
         type=str,
         default="none",
         choices=["none", "cpu"],
         help="Fully-Sharded Data Parallel offload policy",
     )
     parser.add_argument(
-        "--fsdp_cpu_offload_pin_memory",
+        "--fsdp2_cpu_offload_pin_memory",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Pin CPU memory when fsdp_offload=cpu",
+        help="Pin CPU memory when fsdp2_offload=cpu",
     )
     parser.add_argument(
-        "--fsdp_reshard_after_forward",
+        "--fsdp2_reshard_after_forward",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Control fully_shard reshard_after_forward flag",
