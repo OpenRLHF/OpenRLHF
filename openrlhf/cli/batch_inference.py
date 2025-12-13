@@ -97,7 +97,7 @@ def batch_generate(args):
     # configure model
     model = Actor(
         args.pretrain,
-        use_flash_attention_2=args.flash_attn,
+        attn_implementation=args.attn_implementation,
         bf16=args.bf16,
     )
 
