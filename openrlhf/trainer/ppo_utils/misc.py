@@ -1,5 +1,3 @@
-import sys
-
 from openrlhf.datasets import PromptDataset
 from openrlhf.datasets.utils import blending_datasets
 from openrlhf.utils.logging_utils import init_logger
@@ -10,9 +8,10 @@ logger = init_logger(__name__)
 def normalize_interval_config(args):
     """Normalize eval/save interval configs to simplify callers."""
     if args.eval_steps == -1:
-        args.eval_steps = float("inf") # do not evaluate
+        args.eval_steps = float("inf")  # do not evaluate
     if args.save_steps == -1:
-        args.save_steps = float("inf") # do not save ckpt
+        args.save_steps = float("inf")  # do not save ckpt
+
 
 def build_prompt_dataloader(args, strategy, tokenizer, split):
     # prepare datasets
