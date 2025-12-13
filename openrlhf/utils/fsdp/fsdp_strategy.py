@@ -9,28 +9,23 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
 from packaging import version
-from torch.distributed.fsdp import (
-    CPUOffloadPolicy,
-)
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDPModule
+
 from torch.distributed.fsdp import (
     MixedPrecisionPolicy,
     fully_shard,
+    CPUOffloadPolicy,
+    FullyShardedDataParallel as FSDPModule
 )
+
 from torch.optim import Optimizer
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import enable_full_determinism, set_seed
 
-try:
-    from torch.distributed.checkpoint.state_dict import (  # type: ignore[attr-defined]
-        StateDictOptions,
-        get_model_state_dict,
-        set_model_state_dict,
-    )
-except ImportError:  # pragma: no cover - older torch versions
-    StateDictOptions = None  # type: ignore
-    get_model_state_dict = None  # type: ignore
-    set_model_state_dict = None  # type: ignore
+from torch.distributed.checkpoint.state_dict import (  # type: ignore[attr-defined]
+    StateDictOptions,
+    get_model_state_dict,
+    set_model_state_dict,
+)
 
 from openrlhf.models import Actor
 from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
