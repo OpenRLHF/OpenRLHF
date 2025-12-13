@@ -9,7 +9,7 @@ from transformers import AutoTokenizer
 def get_strategy(args):
     dist_backend = getattr(args, "dist_backend", "deepspeed")
 
-    if dist_backend == "fsdp":
+    if dist_backend == "fsdp2":
         torch_version = version.parse(torch.__version__.split("+")[0])
         if torch_version < version.parse("2.4.0"):
             raise RuntimeError(
