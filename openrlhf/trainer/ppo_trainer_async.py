@@ -18,7 +18,7 @@ logger = init_logger(__name__)
 
 @ray.remote(num_cpus=0)
 class AsyncController:
-    """Central controller to manage async queue; keep it minimal."""
+    """Bounded queue with simple backpressure logging between generator/trainer."""
 
     def __init__(
         self,
@@ -28,8 +28,7 @@ class AsyncController:
         self.queue = Queue(maxsize=queue_size)
         self.log_interval = log_interval
 
-    def put(self, item):
-        """Enqueue an item with simple backpressure."""
+    def _wait_for_consumer(self):
         log_counter = 0
         while self.queue.full():
             if log_counter % self.log_interval == 0:
@@ -37,6 +36,9 @@ class AsyncController:
             log_counter = (log_counter + 1) % self.log_interval
             time.sleep(1)
 
+    def put(self, item):
+        """Enqueue an item with simple backpressure."""
+        self._wait_for_consumer()
         self.queue.put(item)
         return {"status": "enqueued", "queued": self.queue.qsize()}
 
@@ -49,11 +51,17 @@ class AsyncController:
 
 @ray.remote(num_cpus=0)
 class SignalActor:
+    """Lightweight gatekeeper to coordinate generation and weight updates."""
+
     def __init__(self):
         self.generating_event = asyncio.Event()
         self.update_weights_event = asyncio.Event()
-        self.generating_event.set()  # Initially allow generation
-        self.update_weights_event.set()  # Initially allow weight updates
+        self.set_generating(True)  # Initially allow generation
+        self.set_update_weights(True)  # Initially allow weight updates
+
+    @staticmethod
+    def _toggle_event(event: asyncio.Event, allow: bool):
+        event.set() if allow else event.clear()
 
     async def wait_generating(self):
         """Wait for generation to be allowed."""
@@ -69,10 +77,7 @@ class SignalActor:
         Args:
             is_generating: True to allow generation, False to block it
         """
-        if allow_generating:
-            self.generating_event.set()
-        else:
-            self.generating_event.clear()
+        self._toggle_event(self.generating_event, allow_generating)
 
     def set_update_weights(self, allow_updating):
         """Set weight update state.
@@ -80,10 +85,7 @@ class SignalActor:
         Args:
             is_updating: True to allow weight updates, False to block it
         """
-        if allow_updating:
-            self.update_weights_event.set()
-        else:
-            self.update_weights_event.clear()
+        self._toggle_event(self.update_weights_event, allow_updating)
 
 
 @ray.remote
@@ -166,7 +168,6 @@ class TrainingActor(BasePPOTrainer):
         vllm_engines=None,
         signal_actor=None,
         controller_actor=None,
-        **generate_kwargs,
     ):
         tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
 
@@ -178,7 +179,6 @@ class TrainingActor(BasePPOTrainer):
             reference_model_group,
             vllm_engines,
             tokenizer,
-            **generate_kwargs,
         )
         self.signal_actor = signal_actor
         self.controller_actor = controller_actor
@@ -197,8 +197,8 @@ class TrainingActor(BasePPOTrainer):
             # Add generated samples to status dictionary
             if self.args.dynamic_filtering:
                 status["dynamic_filtering_pass_rate"] = pass_rate
-            log_statue = {k: v for k, v in status.items() if k not in ["generated_samples"]}
-            logger.info(f"✨ Global step {global_step}: {log_statue}")
+            log_status = {k: v for k, v in status.items() if k not in ["generated_samples"]}
+            logger.info(f"✨ Global step {global_step}: {log_status}")
 
             # logs/checkpoints
             client_states = {
@@ -209,17 +209,18 @@ class TrainingActor(BasePPOTrainer):
             self.save_logs_and_checkpoints(global_step, status, client_states)
 
         # Close trackers
-        if self.wandb_logger.enabled:
+        if self.wandb_logger:
             self.wandb_logger.close()
-        if self.tensorboard_logger.enabled:
+        if self.tensorboard_logger:
             self.tensorboard_logger.close()
 
     def broadcast_to_vllm(self):
-        assert not self.args.vllm_enable_sleep, "Async training does not use vLLM sleep"
-        # Pause generation while weights sync, then resume.
+        # pause generation for sync
         ray.get(self.signal_actor.set_generating.remote(False))
         ray.get(self.signal_actor.wait_update_weights.remote())
-        ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
+        # broadcast
+        super().broadcast_to_vllm()
+        # resume generation
         ray.get(self.signal_actor.set_generating.remote(True))
 
 
@@ -239,6 +240,7 @@ class PPOTrainerAsync:
         **generate_kwargs,
     ) -> None:
         args = strategy.args
+        # get eval and save steps
         normalize_interval_config(args)
 
         queue_size = getattr(args, "async_queue_size", 1)
@@ -248,6 +250,7 @@ class PPOTrainerAsync:
         self.controller_actor = AsyncController.remote(queue_size=queue_size)
         self.signal_actor = SignalActor.remote()
 
+        # rollout
         self.generator_actor = GenerateSamplesActor.remote(
             pretrain=pretrain,
             strategy=strategy,
@@ -258,6 +261,7 @@ class PPOTrainerAsync:
             controller_actor=self.controller_actor,
             **generate_kwargs,
         )
+        # train
         self.trainer_actor = TrainingActor.remote(
             pretrain=pretrain,
             strategy=strategy,
@@ -268,12 +272,10 @@ class PPOTrainerAsync:
             vllm_engines=vllm_engines,
             signal_actor=self.signal_actor,
             controller_actor=self.controller_actor,
-            **generate_kwargs,
         )
 
     def fit(self) -> None:
-        checkpoint_states = ray.get(self.trainer_actor.load_checkpoint_states.remote())[0]
-
+        checkpoint_states = ray.get(self.trainer_actor.init_checkpoint_states.remote())[0]
         # Restore step and epoch
         global_step = checkpoint_states["global_step"]
         start_episode = checkpoint_states["episode"]
@@ -286,6 +288,7 @@ class PPOTrainerAsync:
                 ]
             )
 
+        # Launch async training
         ray.get(
             [
                 self.generator_actor.fit.remote(episode=start_episode, global_step=global_step),

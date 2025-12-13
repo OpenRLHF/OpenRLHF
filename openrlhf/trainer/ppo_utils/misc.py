@@ -13,17 +13,6 @@ def normalize_interval_config(args):
         args.save_steps = float("inf")
 
 
-def ensure_remote_rm(args, remote_rm_url, remote_reward_model=None):
-    """Resolve remote reward model handle if provided."""
-    if remote_reward_model is not None:
-        return remote_reward_model
-    if remote_rm_url and not remote_rm_url[0] == "agent":
-        from openrlhf.utils.remote_rm_utils import RemoteRewardModel
-
-        return RemoteRewardModel.remote(args, remote_rm_url)
-    return None
-
-
 def build_prompt_dataloader(args, strategy, tokenizer, split, *, for_eval=False):
     """Create dataloader for the given split; compute max_steps only for training."""
     max_count = args.max_samples if not for_eval else sys.maxsize

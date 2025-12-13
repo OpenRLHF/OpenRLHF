@@ -8,7 +8,6 @@ from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
 from openrlhf.trainer.ppo_utils.kl_controller import build_kl_controller
 from openrlhf.trainer.ppo_utils.loggers import TensorboardLogger, WandbLogger
 from openrlhf.trainer.ppo_utils.misc import (
-    ensure_remote_rm,
     normalize_interval_config,
 )
 from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
@@ -34,7 +33,6 @@ class BasePPOTrainer(ABC):
         reference_model_group: RayActorGroup,
         vllm_engines,
         tokenizer,
-        **generate_kwargs,
     ) -> None:
         self.strategy = strategy
         self.args = strategy.args
@@ -46,16 +44,15 @@ class BasePPOTrainer(ABC):
         self.vllm_engines = vllm_engines
         self.tokenizer = tokenizer
 
-        self.remote_reward_model = ensure_remote_rm(
-            self.args,
-            self.args.remote_rm_url,
-            generate_kwargs.pop("remote_reward_model", None),
-        )
-        self.kl_ctl = build_kl_controller(
-            self.args.init_kl_coef,
-            self.args.kl_target,
-            self.args.kl_horizon,
-        )
+        # set remote_reward_model
+        remote_rm_url = self.args.remote_rm_url
+        if remote_rm_url and not remote_rm_url[0] == "agent":
+            from openrlhf.utils.remote_rm_utils import RemoteRewardModel
+
+            return RemoteRewardModel.remote(self.args, remote_rm_url)
+        else:
+            self.remote_reward_model = None
+
         self.experience_maker = RemoteExperienceMaker(
             self.actor_model_group,
             self.critic_model_group,
@@ -66,13 +63,15 @@ class BasePPOTrainer(ABC):
             tokenizer,
             remote_reward_model=self.remote_reward_model,
         )
+        self.kl_ctl = build_kl_controller(
+            self.args.init_kl_coef,
+            self.args.kl_target,
+            self.args.kl_horizon,
+        )
 
         # Tracking backends
         self.wandb_logger = WandbLogger(self.args) if self.args.use_wandb else None
         self.tensorboard_logger = TensorboardLogger(self.args) if self.args.use_tensorboard else None
-
-        # self._eval_runner = None
-        self.generate_kwargs = generate_kwargs
 
     def train_step(self, samples, global_step):
         # Turn raw samples into PPO-ready trajectories with rewards.
@@ -108,6 +107,9 @@ class BasePPOTrainer(ABC):
 
         status["generated_samples"] = sample0
         return status, global_step + 1
+
+    def fit(self):
+        raise NotImplementedError("fit method is not implemented")
 
     def ppo_train(self, global_steps):
         """Run one PPO train step for critic + actor and return merged status dict."""
@@ -160,9 +162,9 @@ class BasePPOTrainer(ABC):
             if self.tensorboard_logger:
                 self.tensorboard_logger.log_train(global_step, logs_dict)
 
-        # TODO: Add evaluation mechanism for PPO
-        if global_step % self.args.eval_steps == 0:
-            self._maybe_run_eval(global_step)
+        # # TODO: Add evaluation mechanism for PPO
+        # if global_step % self.args.eval_steps == 0:
+        #     self._maybe_run_eval(global_step)
 
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity/others on whole dev dataset as metric
@@ -176,7 +178,7 @@ class BasePPOTrainer(ABC):
                 refs.extend(self.critic_model_group.async_run_method(method_name="save_checkpoint", tag=tag))
             ray.get(refs)
 
-    def load_checkpoint_states(self):
+    def init_checkpoint_states(self):
         ckpt_path = os.path.join(self.args.ckpt_path, "_actor")
         if self.args.load_checkpoint and os.path.exists(ckpt_path):
             checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
@@ -244,19 +246,10 @@ class PPOTrainer(BasePPOTrainer):
         **generate_kwargs,
     ) -> None:
         tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
+        # get eval and save steps
         normalize_interval_config(strategy.args)
 
-        super().__init__(
-            strategy,
-            actor_model_group,
-            critic_model_group,
-            reward_model_group,
-            reference_model_group,
-            vllm_engines,
-            tokenizer,
-            **generate_kwargs,
-        )
-
+        # rollout
         self.train_sample_generater = RemoteSampleGenerater(
             strategy=strategy,
             tokenizer=tokenizer,
@@ -265,9 +258,19 @@ class PPOTrainer(BasePPOTrainer):
             generate_kwargs=generate_kwargs,
         )
 
-    def fit(self) -> None:
-        checkpoint_states = self.load_checkpoint_states()
+        # train
+        super().__init__(
+            strategy,
+            actor_model_group,
+            critic_model_group,
+            reward_model_group,
+            reference_model_group,
+            vllm_engines,
+            tokenizer,
+        )
 
+    def fit(self) -> None:
+        checkpoint_states = self.init_checkpoint_states()
         # Restore step and start_epoch
         global_step = checkpoint_states["global_step"]
         start_episode = checkpoint_states["episode"]
