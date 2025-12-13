@@ -78,13 +78,13 @@ class FSDPStrategy(ABC):
         self.full_determinism = full_determinism
         self.max_norm = max_norm
 
-        self.fsdp_offload = getattr(args, "fsdp_offload", "none")
-        self.fsdp_cpu_offload_pin_memory = self._coerce_bool(
-            getattr(args, "fsdp_cpu_offload_pin_memory", True),
+        self.fsdp2_offload = getattr(args, "fsdp2_offload", "none")
+        self.fsdp2_cpu_offload_pin_memory = self._coerce_bool(
+            getattr(args, "fsdp2_cpu_offload_pin_memory", True),
             default=True,
         )
-        self.fsdp_reshard_after_forward = self._coerce_bool(
-            getattr(args, "fsdp_reshard_after_forward", True),
+        self.fsdp2_reshard_after_forward = self._coerce_bool(
+            getattr(args, "fsdp2_reshard_after_forward", True),
             default=True,
         )
 
@@ -224,16 +224,16 @@ class FSDPStrategy(ABC):
         return bool(value)
 
     def _build_offload_policy(self) -> Optional["CPUOffloadPolicy"]:
-        offload_mode = (self.fsdp_offload or "none").lower()
+        offload_mode = (self.fsdp2_offload or "none").lower()
         if offload_mode == "none":
             return None
         if offload_mode == "cpu":
             if CPUOffloadPolicy is None:
                 raise RuntimeError(
-                    "CPUOffloadPolicy is unavailable in this torch build. Please upgrade PyTorch to use fsdp_offload=cpu."
+                    "CPUOffloadPolicy is unavailable in this torch build. Please upgrade PyTorch to use fsdp2_offload=cpu."
                 )
-            return CPUOffloadPolicy(pin_memory=bool(self.fsdp_cpu_offload_pin_memory))
-        raise ValueError(f"Unknown fsdp_offload mode: {self.fsdp_offload}")
+            return CPUOffloadPolicy(pin_memory=bool(self.fsdp2_cpu_offload_pin_memory))
+        raise ValueError(f"Unknown fsdp2_offload mode: {self.fsdp2_offload}")
 
     def _build_mixed_precision_policy(self) -> Optional["MixedPrecisionPolicy"]:
         if not self.bf16:
@@ -265,7 +265,7 @@ class FSDPStrategy(ABC):
                     if isinstance(sub, nn.Module) and not isinstance(sub, FSDPModule):
                         new_sub = fully_shard(
                             sub,
-                            reshard_after_forward=self.fsdp_reshard_after_forward,
+                            reshard_after_forward=self.fsdp2_reshard_after_forward,
                             offload_policy=self._offload_policy,
                             mp_policy=self._mp_policy,
                         )
@@ -280,7 +280,7 @@ class FSDPStrategy(ABC):
                 continue
             new_child = fully_shard(
                 child,
-                reshard_after_forward=self.fsdp_reshard_after_forward,
+                reshard_after_forward=self.fsdp2_reshard_after_forward,
                 offload_policy=self._offload_policy,
                 mp_policy=self._mp_policy,
             )
@@ -294,7 +294,7 @@ class FSDPStrategy(ABC):
             if not isinstance(model, FSDPModule):
                 model = fully_shard(
                     model,
-                    reshard_after_forward=self.fsdp_reshard_after_forward,
+                    reshard_after_forward=self.fsdp2_reshard_after_forward,
                     offload_policy=self._offload_policy,
                     mp_policy=self._mp_policy,
                 )
