@@ -232,7 +232,9 @@ class RemoteSampleGenerater:
     #     return collected[:total_needed]
 
     @torch.no_grad()
-    def _generate_samples(self, dataloader_iter, num_prompts: int, **generate_kwargs) -> Tuple[List[Sample], bool, int]:
+    def _generate_samples(
+        self, dataloader_iter, num_prompts: int, **generate_kwargs
+    ) -> Tuple[List[Sample], bool, int]:
         """Generate a batch of Samples, applying filter hooks if configured."""
         filter_hook: FilterHookBase = generate_kwargs.pop("filter_hook", NoOpFilterHook())
 
