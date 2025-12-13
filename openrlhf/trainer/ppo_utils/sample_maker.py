@@ -1,5 +1,6 @@
 import random
 import time
+
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
@@ -153,7 +154,7 @@ class RemoteSampleGenerater:
         self.vllm_engines = vllm_engines
 
         self.prompts_dataloader, self.max_steps = build_prompt_dataloader(
-            self.args, strategy, self.tokenizer, dataset_split, for_eval=for_eval
+            self.args, strategy, self.tokenizer, dataset_split
         )
 
     def state_dict(self) -> dict:
