@@ -312,11 +312,11 @@ class ActorPPOTrainer(ABC):
         model = self.actor.model.module
         count, num_params = 0, len(list(model.named_parameters()))
 
-        is_fsdp = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp"
+        is_fsdp2 = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2"
 
         def _get_full_tensor(param):
-            """Return full tensor for FSDP DTensor or regular param."""
-            if is_fsdp:
+            """Return full tensor for FSDP2 DTensor or regular param."""
+            if is_fsdp2:
                 if hasattr(param, "full_tensor"):
                     # ensure on CUDA before materializing
                     if param.device.type == "cpu":
@@ -326,7 +326,7 @@ class ActorPPOTrainer(ABC):
             return param.data
 
         def _get_param_shape(param):
-            if is_fsdp:
+            if is_fsdp2:
                 return param.shape  # DTensor reports global shape
             return param.shape if getattr(self.strategy.args, "zero_stage", 2) != 3 else param.ds_shape
 
@@ -353,7 +353,7 @@ class ActorPPOTrainer(ABC):
         def _handle_cuda_ipc(param, count, num_params):
             from torch.multiprocessing.reductions import reduce_tensor
 
-            # Get full tensor for FSDP or regular data
+            # Get full tensor for FSDP2 or regular data
             full_data = _get_full_tensor(param)
             weight = full_data.clone()
             ipc_handle = reduce_tensor(weight)
@@ -386,7 +386,7 @@ class ActorPPOTrainer(ABC):
 
             # broadcast
             if not self.use_cuda_ipc:
-                if is_fsdp:
+                if is_fsdp2:
                     _broadcast_param(param, count, num_params)
                 else:
                     # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
@@ -398,7 +398,7 @@ class ActorPPOTrainer(ABC):
                             _broadcast_param(param, count, num_params)
             # CUDA IPC
             else:
-                if is_fsdp:
+                if is_fsdp2:
                     _handle_cuda_ipc(param, count, num_params)
                 else:
                     if self.strategy.args.ds_tensor_parallel_size > 1:
