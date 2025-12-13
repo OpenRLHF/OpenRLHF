@@ -311,7 +311,7 @@ class ActorPPOTrainer(ABC):
         torch.cuda.empty_cache()
         model = self.actor.model.module
         count, num_params = 0, len(list(model.named_parameters()))
-        
+
         is_fsdp = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp"
 
         def _get_full_tensor(param):
@@ -352,7 +352,7 @@ class ActorPPOTrainer(ABC):
 
         def _handle_cuda_ipc(param, count, num_params):
             from torch.multiprocessing.reductions import reduce_tensor
-            
+
             # Get full tensor for FSDP or regular data
             full_data = _get_full_tensor(param)
             weight = full_data.clone()
