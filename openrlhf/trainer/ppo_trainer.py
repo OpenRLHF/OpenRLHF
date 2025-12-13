@@ -52,6 +52,12 @@ class BasePPOTrainer(ABC):
             return RemoteRewardModel.remote(self.args, remote_rm_url)
         else:
             self.remote_reward_model = None
+        
+        self.kl_ctl = build_kl_controller(
+            self.args.init_kl_coef,
+            self.args.kl_target,
+            self.args.kl_horizon,
+        )
 
         self.experience_maker = RemoteExperienceMaker(
             self.actor_model_group,
@@ -62,11 +68,6 @@ class BasePPOTrainer(ABC):
             self.strategy,
             tokenizer,
             remote_reward_model=self.remote_reward_model,
-        )
-        self.kl_ctl = build_kl_controller(
-            self.args.init_kl_coef,
-            self.args.kl_target,
-            self.args.kl_horizon,
         )
 
         # Tracking backends
