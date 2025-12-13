@@ -9,7 +9,7 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
 from packaging import version
-from torch.distributed.checkpoint.state_dict import (  # type: ignore[attr-defined]
+from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     get_model_state_dict,
     set_model_state_dict,
