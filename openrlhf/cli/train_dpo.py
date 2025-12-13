@@ -206,7 +206,7 @@ if __name__ == "__main__":
         "--fsdp2_cpu_offload_pin_memory",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Pin CPU memory when fsdp_offload=cpu",
+        help="Pin CPU memory when fsdp2_offload=cpu",
     )
     parser.add_argument(
         "--fsdp2_reshard_after_forward",
