@@ -13,30 +13,12 @@ from torch.optim import Optimizer
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import enable_full_determinism, set_seed
 
-try:
-    from torch.distributed.fsdp.fully_shard import (
-        CPUOffloadPolicy,
-    )
-    from torch.distributed.fsdp.fully_shard import FullyShardedDataParallel as FSDPModule
-    from torch.distributed.fsdp.fully_shard import (
-        MixedPrecisionPolicy,
-        fully_shard,
-    )
-except ImportError:
-    try:
-        from torch.distributed.fsdp import FullyShardedDataParallel as FSDPModule  # type: ignore
-        from torch.distributed.fsdp import fully_shard
-    except ImportError:  # pragma: no cover
-        FSDPModule = None  # type: ignore
-        fully_shard = None  # type: ignore
-    try:
-        from torch.distributed.fsdp._fully_shard.offload_policy import (  # type: ignore
-            CPUOffloadPolicy,
-            MixedPrecisionPolicy,
-        )
-    except ImportError:  # pragma: no cover
-        CPUOffloadPolicy = None  # type: ignore
-        MixedPrecisionPolicy = None  # type: ignore
+from torch.distributed.fsdp import (
+    CPUOffloadPolicy,
+    MixedPrecisionPolicy,
+    fully_shard,
+)
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDPModule
 
 try:
     from torch.distributed.checkpoint.state_dict import (  # type: ignore[attr-defined]
