@@ -234,35 +234,57 @@ class FSDPStrategy(ABC):
             torch.cuda.synchronize()
 
     def _maybe_fully_shard_children(self, module: nn.Module) -> None:
-        for name, child in module.named_children():
-            if isinstance(child, FSDPModule):
-                continue
-            if isinstance(child, nn.ModuleList):
-                new_list = []
-                changed = False
-                for sub in child:
-                    if isinstance(sub, nn.Module) and not isinstance(sub, FSDPModule):
-                        new_sub = fully_shard(
-                            sub,
-                            reshard_after_forward=self.fsdp2_reshard_after_forward,
-                            offload_policy=self._offload_policy,
-                            mp_policy=self._mp_policy,
-                        )
-                        new_list.append(new_sub)
-                        changed = True
-                    else:
-                        new_list.append(sub)
-                if changed:
-                    setattr(module, name, nn.ModuleList(new_list))
-                continue
-            if not any(p.requires_grad for p in child.parameters(recurse=True)):
-                continue
-            fully_shard(
-                child,
-                reshard_after_forward=self.fsdp2_reshard_after_forward,
-                offload_policy=self._offload_policy,
-                mp_policy=self._mp_policy,
-            )
+        layer_cls_to_wrap = getattr(module, "_no_split_modules", None)
+        
+        if layer_cls_to_wrap:
+            # Policy-based wrapping for HF models
+            for name, child in module.named_modules():
+                if child.__class__.__name__ in layer_cls_to_wrap:
+                    fully_shard(
+                        child,
+                        reshard_after_forward=self.fsdp2_reshard_after_forward,
+                        offload_policy=self._offload_policy,
+                        mp_policy=self._mp_policy,
+                    )
+                # Also wrap Embeddings if not tied (optional, but good practice)
+                elif isinstance(child, nn.Embedding) and hasattr(module, "config") and not module.config.tie_word_embeddings:
+                     fully_shard(
+                        child,
+                        reshard_after_forward=self.fsdp2_reshard_after_forward,
+                        offload_policy=self._offload_policy,
+                        mp_policy=self._mp_policy,
+                    )
+        else:
+            # Fallback: shallow wrapping for non-HF models
+            for name, child in module.named_children():
+                if isinstance(child, FSDPModule):
+                    continue
+                if isinstance(child, nn.ModuleList):
+                    new_list = []
+                    changed = False
+                    for sub in child:
+                        if isinstance(sub, nn.Module) and not isinstance(sub, FSDPModule):
+                            fully_shard(
+                                sub,
+                                reshard_after_forward=self.fsdp2_reshard_after_forward,
+                                offload_policy=self._offload_policy,
+                                mp_policy=self._mp_policy,
+                            )
+                            new_list.append(sub)
+                            changed = True
+                        else:
+                            new_list.append(sub)
+                    if changed:
+                        setattr(module, name, nn.ModuleList(new_list))
+                    continue
+                if not any(p.requires_grad for p in child.parameters(recurse=True)):
+                    continue
+                fully_shard(
+                    child,
+                    reshard_after_forward=self.fsdp2_reshard_after_forward,
+                    offload_policy=self._offload_policy,
+                    mp_policy=self._mp_policy,
+                )
 
     def prepare(self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False):
         ret: List[ModelOrModelOptimPair] = []
