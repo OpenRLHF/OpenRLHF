@@ -516,7 +516,7 @@ class PolicyModelActor(BaseModelActor):
 
         # initial offload
         if strategy.args.deepspeed_enable_sleep:
-            offload_deepspeed_states(self.actor.model)
+            self.offload_states()
 
         # configure Trainer
         self.trainer = ActorPPOTrainer(
