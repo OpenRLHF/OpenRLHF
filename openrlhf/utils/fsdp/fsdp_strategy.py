@@ -113,15 +113,17 @@ class FSDPStrategy(ABC):
         name="model",
         **kwargs,
     ) -> None:
+        # Unwrap Actor to get the underlying FSDPModule
+        unwrapped = self._unwrap_model(model)
         if self.max_norm and self.max_norm > 0:
-            devices = {p.device.type for p in model.parameters() if p.grad is not None}
+            devices = {p.device.type for p in unwrapped.parameters() if p.grad is not None}
             if "cpu" in devices:
                 # Avoid DTensor all_reduce on CPU backends; skip clipping when offloaded.
                 pass
-            elif hasattr(model, "clip_grad_norm_"):
-                model.clip_grad_norm_(self.max_norm)
+            elif hasattr(unwrapped, "clip_grad_norm_"):
+                unwrapped.clip_grad_norm_(self.max_norm)
             else:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), self.max_norm)
+                torch.nn.utils.clip_grad_norm_(unwrapped.parameters(), self.max_norm)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         if scheduler is not None:
@@ -211,16 +213,25 @@ class FSDPStrategy(ABC):
     def _build_mixed_precision_policy(self) -> Optional["MixedPrecisionPolicy"]:
         if not self.bf16:
             return None
-        return MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16, cast_forward_inputs=None)
+        # Use float32 for reduce_dtype to maintain gradient precision during all-reduce
+        return MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32, cast_forward_inputs=None)
 
     @staticmethod
     def _move_optimizer_state(optimizer: optim.Optimizer, device: torch.device) -> None:
-        for state in optimizer.state.values():
-            for k, v in state.items():
-                if torch.is_tensor(v):
-                    state[k] = v.to(device, non_blocking=True)
-                elif isinstance(v, (list, tuple)):
-                    state[k] = type(v)(t.to(device, non_blocking=True) if torch.is_tensor(t) else t for t in v)
+        if not optimizer.state:
+            return
+        for param_group in optimizer.param_groups:
+            for param in param_group["params"]:
+                state = optimizer.state.get(param)
+                if state is None:
+                    continue
+                for k, v in state.items():
+                    if torch.is_tensor(v):
+                        state[k] = v.to(device, non_blocking=True)
+                    elif isinstance(v, (list, tuple)):
+                        state[k] = type(v)(t.to(device, non_blocking=True) if torch.is_tensor(t) else t for t in v)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
 
     def _maybe_fully_shard_children(self, module: nn.Module) -> None:
         for name, child in module.named_children():
@@ -246,7 +257,7 @@ class FSDPStrategy(ABC):
                 continue
             if not any(p.requires_grad for p in child.parameters(recurse=True)):
                 continue
-            new_child = fully_shard(
+            fully_shard(
                 child,
                 reshard_after_forward=self.fsdp2_reshard_after_forward,
                 offload_policy=self._offload_policy,
@@ -288,7 +299,8 @@ class FSDPStrategy(ABC):
         return ret[0] if len(ret) == 1 else ret
 
     def offload_states(self, model, optimizer=None):
-        module = self._unwrap_model(model).cpu()
+        """Offload model and optimizer states to CPU."""
+        self._unwrap_model(model).cpu()
         if optimizer is not None:
             self._move_optimizer_state(optimizer, torch.device("cpu"))
         torch.cuda.empty_cache()
@@ -296,9 +308,12 @@ class FSDPStrategy(ABC):
             dist.barrier()
 
     def reload_states(self, model, optimizer=None):
-        module = self._unwrap_model(model).to(torch.cuda.current_device())
+        """Reload model and optimizer states to GPU."""
+        device = torch.device("cuda", torch.cuda.current_device())
+        self._unwrap_model(model).to(device)
         if optimizer is not None:
-            self._move_optimizer_state(optimizer, torch.device(torch.cuda.current_device()))
+            self._move_optimizer_state(optimizer, device)
+        torch.cuda.synchronize()  # Ensure async operations complete
         if dist.is_initialized():
             dist.barrier()
 
