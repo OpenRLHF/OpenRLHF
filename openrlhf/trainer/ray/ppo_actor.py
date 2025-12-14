@@ -324,7 +324,7 @@ class ActorPPOTrainer(ABC):
                     # ensure on CUDA before materializing
                     if param.device.type == "cpu":
                         param = param.to(torch.cuda.current_device())
-                    return param.full_tensor()
+                    return param.full_tensor().data
                 return param.data if param.device.type != "cpu" else param.data.to(torch.cuda.current_device())
             return param.data
 
