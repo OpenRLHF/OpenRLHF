@@ -310,7 +310,7 @@ class ActorPPOTrainer(ABC):
 
         torch.cuda.empty_cache()
         is_fsdp2 = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2"
-        
+
         if is_fsdp2:
             model = self.actor.model
         else:
