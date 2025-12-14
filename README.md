@@ -320,6 +320,20 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 # Support N samples
 # --n_samples_per_prompt 4
+
+#### PPO logging telemetry
+
+PPO/ray runs now log `policy_entropy`, `ppo_clip_ratio`, `reward_mean`, `reward_std`, `grad_norm`, and `ppo_kl` to both W&B and TensorBoard by default. You can smoke-test the metrics locally on a single GPU by trimming the example script:
+
+```bash
+bash examples/scripts/train_ppo_llama_ray.sh \
+  --max_steps 5 \
+  --logging_steps 1 \
+  --save_steps -1 \
+  --use_tensorboard ./tb_logs/ppo_logging_demo
+```
+
+Within a couple of steps you should see the new scalars populated in your dashboard, which makes it easy to verify that entropy, clipping behaviour, KL drift, and reward statistics remain stable when iterating on PPO changes.
 ```
 > [!NOTE]
 > You can also use ``setup_commands`` to let Ray automatically deploy the environment, such as `--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`.
