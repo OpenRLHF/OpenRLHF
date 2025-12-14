@@ -25,7 +25,7 @@ class AsyncController:
     ):
         self.queue = asyncio.Queue(maxsize=queue_size)
         self.log_interval = log_interval
-    
+
     async def wait_for_consumer(self):
         log_counter = 0
         while self.queue.full():
