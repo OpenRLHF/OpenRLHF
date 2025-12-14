@@ -367,7 +367,8 @@ class ActorPPOTrainer(ABC):
 
             # Get full tensor for FSDP2 or regular data
             full_data = _get_full_tensor(param)
-            weight = full_data.clone()
+            # detach() is required to avoid "Cowardly refusing to serialize non-leaf tensor"
+            weight = full_data.clone().detach()
             ipc_handle = reduce_tensor(weight)
 
             ipc_handle = {get_physical_gpu_id(): ipc_handle}
