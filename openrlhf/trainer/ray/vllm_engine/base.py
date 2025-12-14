@@ -13,7 +13,10 @@ class BaseLLMRayActor:
         import vllm
         from packaging import version
 
+        # TODO: remove func_path from kwargs after refactoring
         kwargs.pop("agent_func_path", None)
+        kwargs.pop("remote_rm_url", None)
+        kwargs.pop("remote_rm_batch_size", None)
 
         noset_visible_devices = ray_noset_visible_devices()
         if kwargs.get("distributed_executor_backend") == "ray":

@@ -19,11 +19,24 @@ class AgentLLMRayActorAsync(BaseLLMRayActor):
         super().__init__(*args, bundle_indices=bundle_indices, **kwargs)
 
         self.result_queue = asyncio.Queue()
-        # self.agent_executor = None
 
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
         await self.llm.is_sleeping()
+
+        # Create AgentExecutor instance
+        assert self.agent_func_path.endswith(".py"), "Agent path must be a Python file"
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("agent_module", self.agent_func_path)
+        agent_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(agent_module)
+
+        assert hasattr(agent_module, "AgentExecutor"), "Agent module must contain AgentExecutor class"
+        self.agent_executor_cls = agent_module.AgentExecutor
+        assert issubclass(
+            self.agent_executor_cls, AgentExecutorBase
+        ), "AgentExecutor must inherit from AgentExecutorBase"
 
     async def init_process_group(
         self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray
@@ -53,27 +66,12 @@ class AgentLLMRayActorAsync(BaseLLMRayActor):
     async def add_requests(
         self, sampling_params, prompts, labels, max_length, hf_tokenizer=None, request_group_id=None
     ):
-        # Create AgentExecutor instance
-        if self.agent_executor is None:
-            assert self.agent_func_path.endswith(".py"), "Agent path must be a Python file"
-            import importlib.util
-
-            spec = importlib.util.spec_from_file_location("agent_module", self.agent_func_path)
-            agent_module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(agent_module)
-
-            assert hasattr(agent_module, "AgentExecutor"), "Agent module must contain AgentExecutor class"
-            self.agent_executor_cls = agent_module.AgentExecutor
-            assert issubclass(
-                self.agent_executor_cls, AgentExecutorBase
-            ), "AgentExecutor must inherit from AgentExecutorBase"
-
-            self.agent_executor = self.agent_executor_cls(
-                max_length=max_length,
-                llm_engine=self.llm,
-                hf_tokenizer=hf_tokenizer,
-                result_queue=self.result_queue,
-            )
+        self.agent_executor = self.agent_executor_cls(
+            max_length=max_length,
+            llm_engine=self.llm,
+            hf_tokenizer=hf_tokenizer,
+            result_queue=self.result_queue,
+        )
 
         tasks = []
         for prompt, label in zip(prompts, labels):

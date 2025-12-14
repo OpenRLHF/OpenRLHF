@@ -1,8 +1,6 @@
 import asyncio
-import time
 
 import ray
-from ray.util.queue import Queue
 from tqdm import tqdm
 
 from openrlhf.trainer.ppo_trainer import BasePPOTrainer
@@ -25,25 +23,24 @@ class AsyncController:
         queue_size: int = 1,
         log_interval: int = 10,
     ):
-        self.queue = Queue(maxsize=queue_size)
+        self.queue = asyncio.Queue(maxsize=queue_size)
         self.log_interval = log_interval
-
-    def _wait_for_consumer(self):
+    
+    async def wait_for_consumer(self):
         log_counter = 0
         while self.queue.full():
             if log_counter % self.log_interval == 0:
-                logger.info(f"[async-controller] queue is full, waiting for consumer...")
+                logger.info("[async-controller] queue is full, waiting for consumer...")
             log_counter = (log_counter + 1) % self.log_interval
-            time.sleep(1)
+            await asyncio.sleep(1)
 
-    def put(self, item):
-        """Enqueue an item with simple backpressure."""
-        self._wait_for_consumer()
-        self.queue.put(item)
+    async def put(self, item):
+        await self.wait_for_consumer()
+        await self.queue.put(item)
         return {"status": "enqueued", "queued": self.queue.qsize()}
 
-    def get(self):
-        return self.queue.get()
+    async def get(self):
+        return await self.queue.get()
 
     def stats(self):
         return {"queued": self.queue.qsize()}
@@ -133,6 +130,9 @@ class GenerateSamplesActor:
                 # initial=global_step, # TODO
             )
             while True:
+                # Wait until queue is not full
+                ray.get(self.controller_actor.wait_for_consumer.remote())
+
                 # Pause generation while weights are being broadcasted to keep outputs consistent.
                 ray.get(self.signal_actor.wait_generating.remote())
                 ray.get(self.signal_actor.set_update_weights.remote(False))
@@ -275,12 +275,12 @@ class PPOTrainerAsync:
         )
 
     def fit(self) -> None:
-        checkpoint_states = ray.get(self.trainer_actor.init_checkpoint_states.remote())[0]
+        checkpoint_states = ray.get(self.trainer_actor.init_checkpoint_states.remote())
         # Restore step and epoch
         global_step = checkpoint_states["global_step"]
         start_episode = checkpoint_states["episode"]
         # Keep vLLM weights and dataloader states in sync when resuming.
-        if global_step:
+        if global_step > 0:
             ray.get(
                 [
                     self.trainer_actor.broadcast_to_vllm.remote(),
