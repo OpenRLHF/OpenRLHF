@@ -212,32 +212,6 @@ class RemoteSampleGenerater:
 
         return samples, pass_rate, prompts_used, is_exhausted
 
-    # def iter_eval_prompts(self) -> Iterator[Tuple[List[str], List[str], List[str]]]:
-    #     """Yield eval datasource/prompt/label triples through the streamer interface."""
-    #     if not self.prompts_dataloader:
-    #         return
-    #     for datasources, prompts, labels in self.prompts_dataloader:
-    #         yield datasources, prompts, labels
-
-    # @torch.no_grad()
-    # def generate_samples(self, all_prompts: List[str], all_labels: List[str], **kwargs) -> List[Sample]:
-    #     """Generate samples for a provided prompt list (used in eval)."""
-    #     refs, infos = self._dispatch_prompt_requests(all_prompts, all_labels, **kwargs)
-    #     ref_map = {info["ref"]: info for info in infos}
-    #     total_needed = len(all_prompts) * kwargs.get("n_samples_per_prompt", self.args.n_samples_per_prompt)
-
-    #     collected = []
-    #     while refs and len(collected) < total_needed:
-    #         ready_refs, refs = ray.wait(refs, num_returns=1)
-    #         for ref in ready_refs:
-    #             info = ref_map.pop(ref, None)
-    #             if info is None:
-    #                 continue
-    #             outputs = ray.get(info["llm"].get_responses.remote(info["id"]))
-    #             collected.extend([self._create_sample_from_output(output, **kwargs) for output in outputs])
-
-    #     return collected[:total_needed]
-
     @torch.no_grad()
     def _generate_samples(
         self, dataloader_iter, num_prompts: int, **generate_kwargs

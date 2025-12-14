@@ -7,9 +7,7 @@ from tqdm import tqdm
 from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
 from openrlhf.trainer.ppo_utils.kl_controller import build_kl_controller
 from openrlhf.trainer.ppo_utils.loggers import TensorboardLogger, WandbLogger
-from openrlhf.trainer.ppo_utils.misc import (
-    normalize_interval_config,
-)
+from openrlhf.trainer.ppo_utils.misc import normalize_interval_config
 from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ppo_utils.sample_maker import RemoteSampleGenerater
 from openrlhf.trainer.ray.launcher import RayActorGroup
@@ -178,42 +176,6 @@ class BasePPOTrainer(ABC):
             logger.info(f"checkpoint_states: {checkpoint_states}")
             return checkpoint_states
         return {"global_step": 0, "episode": 0, "data_loader_state_dict": {}}
-
-    # def _log_eval_metrics(self, global_step, logs):
-    #     if not logs:
-    #         return
-    #     if self._wandb is not None:
-    #         logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": global_step}.items()}
-    #         self._wandb.log(logs)
-    #     elif self._tensorboard is not None:
-    #         for k, v in logs.items():
-    #             self._tensorboard.add_scalar(f"eval/{k}", v, global_step)
-
-    # def _build_eval_runner(self, evaluator, *, before_eval=None, after_eval=None):
-    #     """Wrap evaluator into a callable so subclasses only decide when to run."""
-    #     if evaluator is None:
-    #         return None
-
-    #     def _run(global_step):
-    #         if before_eval:
-    #             before_eval()
-    #         try:
-    #             return evaluator.run(
-    #                 global_step,
-    #                 self.args.eval_temperature,
-    #                 self.args.eval_n_samples_per_prompt,
-    #             )
-    #         finally:
-    #             if after_eval:
-    #                 after_eval()
-
-    #     return _run
-
-    # def _maybe_run_eval(self, global_step):
-    #     if self._eval_runner is None:
-    #         return
-    #     logs = self._eval_runner(global_step)
-    #     self._log_eval_metrics(global_step, logs)
 
 
 @ray.remote
