@@ -235,7 +235,7 @@ class FSDPStrategy(ABC):
 
     def _maybe_fully_shard_children(self, module: nn.Module) -> None:
         layer_cls_to_wrap = getattr(module, "_no_split_modules", None)
-        
+
         if layer_cls_to_wrap:
             # Policy-based wrapping for HF models
             for name, child in module.named_modules():
@@ -247,8 +247,12 @@ class FSDPStrategy(ABC):
                         mp_policy=self._mp_policy,
                     )
                 # Also wrap Embeddings if not tied (optional, but good practice)
-                elif isinstance(child, nn.Embedding) and hasattr(module, "config") and not module.config.tie_word_embeddings:
-                     fully_shard(
+                elif (
+                    isinstance(child, nn.Embedding)
+                    and hasattr(module, "config")
+                    and not module.config.tie_word_embeddings
+                ):
+                    fully_shard(
                         child,
                         reshard_after_forward=self.fsdp2_reshard_after_forward,
                         offload_policy=self._offload_policy,
