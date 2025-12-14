@@ -309,10 +309,13 @@ class ActorPPOTrainer(ABC):
                 cache_reset_refs.append(engine.reset_prefix_cache.remote())
 
         torch.cuda.empty_cache()
-        model = self.actor.model.module
-        count, num_params = 0, len(list(model.named_parameters()))
-
         is_fsdp2 = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2"
+        
+        if is_fsdp2:
+            model = self.actor.model
+        else:
+            model = self.actor.model.module
+        count, num_params = 0, len(list(model.named_parameters()))
 
         def _get_full_tensor(param):
             """Return full tensor for FSDP2 DTensor or regular param."""
