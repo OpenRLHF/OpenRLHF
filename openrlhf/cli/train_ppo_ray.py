@@ -75,7 +75,7 @@ def train(args):
             LLMRayActor,
             "processed_logprobs" if args.enable_vllm_is_correction else None,
             args.agent_func_path,
-            None if args.agent_func_path else args.remote_rm_url,
+            args.remote_rm_url,
             args.micro_rollout_batch_size,
         )
 

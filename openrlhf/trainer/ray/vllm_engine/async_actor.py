@@ -27,7 +27,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
         self.remote_reward_model = None
         if self.remote_rm_url:
             rm_args = SimpleNamespace(micro_rollout_batch_size=self.remote_rm_batch_size or 1)
-            self.remote_reward_model = RemoteRewardModel.options(num_cpus=0).remote(rm_args, self.remote_rm_url)
+            self.remote_reward_model = RemoteRewardModel(rm_args, self.remote_rm_url)
 
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
@@ -144,8 +144,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
 
         try:
             query = hf_tokenizer.decode(observation_tokens, skip_special_tokens=False)
-            ref = self.remote_reward_model.get_rewards.remote([query], [prompt], [label])
-            rewards_info_list = await asyncio.to_thread(ray.get, ref)
+            rewards_info_list = await self.remote_reward_model.get_rewards([query], [prompt], [label])
             if not rewards_info_list:
                 return None, None, {}
 

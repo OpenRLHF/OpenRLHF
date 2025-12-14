@@ -86,8 +86,7 @@ def create_vllm_engines(
         }
 
         # Only non-agent actors support remote_rm_url-based rewards.
-        supports_remote_rm = getattr(llm_actor_cls, "__name__", "") == "LLMRayActorAsync"
-        if remote_rm_url and supports_remote_rm:
+        if remote_rm_url:
             actor_kwargs["remote_rm_url"] = remote_rm_url
             if remote_rm_batch_size is not None:
                 actor_kwargs["remote_rm_batch_size"] = remote_rm_batch_size

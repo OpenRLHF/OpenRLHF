@@ -1,5 +1,5 @@
+import asyncio
 import time
-import ray
 import requests
 
 from openrlhf.utils.logging_utils import init_logger
@@ -27,12 +27,6 @@ def request_api_wrapper(url, data, try_max_times=5):
     raise Exception(f"Request error for {try_max_times} times, returning None. Please check the API server.")
 
 
-@ray.remote
-def remote_rm_fn_ray(api_url, queries, prompts, labels):
-    return request_api_wrapper(api_url, {"query": queries, "prompts": prompts, "labels": labels})
-
-
-@ray.remote
 class RemoteRewardModel:
     def __init__(self, args, remote_rm_url):
         self.args = args
@@ -46,38 +40,44 @@ class RemoteRewardModel:
             spec = importlib.util.spec_from_file_location("reward_func", self.remote_rm_url[0])
             reward_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(reward_module)
-            self.custom_reward_func = ray.remote(reward_module.reward_func)
+            self.custom_reward_func = reward_module.reward_func
 
-    def get_rewards(self, queries_list, prompts_list, labels_list):
+    async def get_rewards(self, queries_list, prompts_list, labels_list):
         if self.custom_reward_func:
             # Let Ray automatically distribute the workload across available resources
             batch_size = self.args.micro_rollout_batch_size
             num_chunks = (len(queries_list) + batch_size - 1) // batch_size
-            r_refs = []
+            tasks = []
             for i in range(num_chunks):
                 start_idx = i * batch_size
                 end_idx = min((i + 1) * batch_size, len(queries_list))
-                r = self.custom_reward_func.remote(
-                    queries_list[start_idx:end_idx],
-                    prompts_list[start_idx:end_idx],
-                    labels_list[start_idx:end_idx],
+                tasks.append(
+                    asyncio.to_thread(
+                        self.custom_reward_func,
+                        queries_list[start_idx:end_idx],
+                        prompts_list[start_idx:end_idx],
+                        labels_list[start_idx:end_idx],
+                    )
                 )
-                r_refs.append(r)
         else:
             # Distribute data across different remote reward function servers
             num_servers = len(self.remote_rm_url)
             batch_size = (len(queries_list) + num_servers - 1) // num_servers
-            r_refs = []
+            tasks = []
             for i in range(num_servers):
                 start_idx = i * batch_size
                 end_idx = min((i + 1) * batch_size, len(queries_list))
                 rm = self.remote_rm_url[i]
-                r = remote_rm_fn_ray.remote(
-                    rm,
-                    queries=queries_list[start_idx:end_idx],
-                    prompts=prompts_list[start_idx:end_idx],
-                    labels=labels_list[start_idx:end_idx],
+                tasks.append(
+                    asyncio.to_thread(
+                        request_api_wrapper,
+                        rm,
+                        {
+                            "query": queries_list[start_idx:end_idx],
+                            "prompts": prompts_list[start_idx:end_idx],
+                            "labels": labels_list[start_idx:end_idx],
+                        },
+                    )
                 )
-                r_refs.append(r)
 
-        return ray.get(r_refs)
+        return await asyncio.gather(*tasks)
