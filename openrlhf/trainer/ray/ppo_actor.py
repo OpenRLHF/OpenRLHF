@@ -477,29 +477,43 @@ class PolicyModelActor(BaseModelActor):
         else:
             ema_model = None
 
-        # configure optimizer
-        actor_optim = strategy.create_optimizer(
-            actor, lr=args.actor_learning_rate, betas=strategy.args.adam_betas, weight_decay=args.l2
-        )
-
-        actor_scheduler = get_scheduler(
-            args.lr_scheduler,
-            actor_optim,
-            num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
-            num_training_steps=max_steps,
-            scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
-        )
-
         if args.gradient_checkpointing:
             actor.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
 
-        # prepare models/optimizers...
-        self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare(
-            (actor, actor_optim, actor_scheduler),
-            is_rlhf=True,
-        )
+        is_fsdp2 = getattr(args, "dist_backend", "deepspeed") == "fsdp2"
+        if is_fsdp2:
+            # FSDP2: wrap/shard model before building optimizer/scheduler (params become DTensor/sharded).
+            self.actor = strategy.prepare(actor, is_rlhf=True)
+            self.actor_optim = strategy.create_optimizer(
+                self.actor, lr=args.actor_learning_rate, betas=strategy.args.adam_betas, weight_decay=args.l2
+            )
+            self.actor_scheduler = get_scheduler(
+                args.lr_scheduler,
+                self.actor_optim,
+                num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
+                num_training_steps=max_steps,
+                scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
+            )
+        else:
+            # DeepSpeed: build optimizer/scheduler first; engine handles gradient accumulation.
+            actor_optim = strategy.create_optimizer(
+                actor, lr=args.actor_learning_rate, betas=strategy.args.adam_betas, weight_decay=args.l2
+            )
+            actor_scheduler = get_scheduler(
+                args.lr_scheduler,
+                actor_optim,
+                num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
+                num_training_steps=max_steps,
+                scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
+            )
+
+            # prepare models/optimizers...
+            self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare(
+                (actor, actor_optim, actor_scheduler),
+                is_rlhf=True,
+            )
 
         if ema_model:
             ema_model._offload = True
@@ -512,7 +526,12 @@ class PolicyModelActor(BaseModelActor):
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
+            _, states = strategy.load_ckpt(
+                self.actor.model,
+                ckpt_path,
+                optimizer=self.actor_optim,
+                scheduler=self.actor_scheduler,
+            )
             self.checkpoint_states = states
 
         # initial offload
@@ -604,6 +623,8 @@ class PolicyModelActor(BaseModelActor):
                 args.max_ckpt_num,
                 args.max_ckpt_mem,
                 client_states,
+                optimizer=self.actor_optim,
+                scheduler=self.actor_scheduler,
             )
         if self.save_hf_ckpt:
             save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
