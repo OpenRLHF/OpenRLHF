@@ -135,7 +135,6 @@ class FSDPStrategy(ABC):
             if "cpu" in devices:
                 # Avoid DTensor all_reduce on CPU backends; skip clipping when offloaded.
                 self.print("Warning: Gradient clipping is skipped when using FSDP2 CPU offload.")
-                pass
             elif hasattr(unwrapped, "clip_grad_norm_"):
                 unwrapped.clip_grad_norm_(self.max_norm)
             else:
