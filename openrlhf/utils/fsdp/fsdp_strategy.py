@@ -91,7 +91,12 @@ class FSDPStrategy(ABC):
         self.ring_attn_rank = 0
         set_ring_attn_group(None)
 
-        self.accumulated_gradient = self.train_batch_size // self.micro_train_batch_size // max(1, self.world_size)
+        self.accumulated_gradient = max(
+            1, self.train_batch_size // self.micro_train_batch_size // max(1, self.world_size)
+        )
+        # Dynamic batch mode manages stepping explicitly (see PPO trainers); disable fixed accumulation.
+        if getattr(self.args, "use_dynamic_batch", False):
+            self.accumulated_gradient = 1
 
     @property
     def ring_attn_group(self):
@@ -103,6 +108,10 @@ class FSDPStrategy(ABC):
         return optim.AdamW(model.parameters(), **kwargs)
 
     def backward(self, loss: torch.Tensor, model: nn.Module, optimizer: optim.Optimizer, **kwargs) -> None:
+        # Match DeepSpeed semantics: average gradients over accumulation steps.
+        accumulation_steps = max(1, int(getattr(self, "accumulated_gradient", 1)))
+        if accumulation_steps > 1:
+            loss = loss / accumulation_steps
         loss.backward()
 
     def optimizer_step(
@@ -113,12 +122,19 @@ class FSDPStrategy(ABC):
         name="model",
         **kwargs,
     ) -> None:
+        micro_step_key = f"optim_micro_step_{name}"
+        self.time_steps[micro_step_key] += 1
+        accumulation_steps = max(1, int(getattr(self, "accumulated_gradient", 1)))
+        if self.time_steps[micro_step_key] % accumulation_steps != 0:
+            return
+
         # Unwrap Actor to get the underlying FSDPModule
         unwrapped = self._unwrap_model(model)
         if self.max_norm and self.max_norm > 0:
             devices = {p.device.type for p in unwrapped.parameters() if p.grad is not None}
             if "cpu" in devices:
                 # Avoid DTensor all_reduce on CPU backends; skip clipping when offloaded.
+                self.print("Warning: Gradient clipping is skipped when using FSDP2 CPU offload.")
                 pass
             elif hasattr(unwrapped, "clip_grad_norm_"):
                 unwrapped.clip_grad_norm_(self.max_norm)
@@ -301,8 +317,8 @@ class FSDPStrategy(ABC):
                     continue
                 is_actor = isinstance(model, Actor)
                 module = model.model if is_actor else model
-                module = module.to(torch.cuda.current_device())
                 module = self._wrap_train_model(module)
+                module = module.to(torch.cuda.current_device())
                 if is_actor:
                     model.model = module
                     ret.append((model, optim_, scheduler))
@@ -315,8 +331,8 @@ class FSDPStrategy(ABC):
                     continue
                 is_actor = isinstance(model, Actor)
                 module = model.model if is_actor else model
-                module = module.to(torch.cuda.current_device())
                 module = self._wrap_train_model(module)
+                module = module.to(torch.cuda.current_device())
                 if is_actor:
                     model.model = module
                     ret.append(model)
