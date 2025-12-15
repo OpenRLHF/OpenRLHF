@@ -42,8 +42,10 @@ def train(args):
             gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
         )
 
-    # configure optimizer
-    optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
+    is_fsdp2 = getattr(args, "dist_backend", "deepspeed") == "fsdp2"
+    # FSDP2: wrap/shard model before building optimizer/scheduler (params become DTensor/sharded).
+    if is_fsdp2:
+        model = strategy.prepare(model)
 
     # prepare for data and dataset
     train_data = blending_datasets(
@@ -102,6 +104,9 @@ def train(args):
     num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
 
+    # configure optimizer (create AFTER FSDP2 wrapping)
+    optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
+
     scheduler = get_scheduler(
         args.lr_scheduler,
         optim,
@@ -110,13 +115,14 @@ def train(args):
         scheduler_specific_kwargs={"min_lr": args.learning_rate * 0.1},
     )
 
-    # prepare models
-    (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
+    # prepare models (DeepSpeed path expects optimizer/scheduler passed in)
+    if not is_fsdp2:
+        (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
 
     # load checkpoint
     consumed_samples = 0
     if args.load_checkpoint and os.path.exists(args.ckpt_path):
-        _, states = strategy.load_ckpt(model.model, args.ckpt_path)
+        _, states = strategy.load_ckpt(model.model, args.ckpt_path, optimizer=optim, scheduler=scheduler)
         consumed_samples = states["consumed_samples"]
         strategy.print(f"Loaded the checkpoint: {args.ckpt_path}, consumed_samples: {consumed_samples}")
 
