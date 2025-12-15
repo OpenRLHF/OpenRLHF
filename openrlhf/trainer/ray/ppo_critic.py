@@ -193,36 +193,54 @@ class CriticModelActor(BaseModelActor):
                 pretrain, critic, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer
             )
 
-        # configure optimizer
-        critic_optim = strategy.create_optimizer(
-            critic, lr=args.critic_learning_rate, betas=args.adam_betas, weight_decay=args.l2
-        )
-
-        # configure scheduler
-        critic_scheduler = get_scheduler(
-            args.lr_scheduler,
-            critic_optim,
-            num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
-            num_training_steps=max_steps,
-            scheduler_specific_kwargs={"min_lr": args.critic_learning_rate * 0.1},
-        )
-
         if args.gradient_checkpointing:
             critic.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
 
-        # prepare models/optimizers...
-        self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare(
-            (critic, critic_optim, critic_scheduler),
-            is_rlhf=True,
-        )
+        is_fsdp2 = getattr(args, "dist_backend", "deepspeed") == "fsdp2"
+        if is_fsdp2:
+            # FSDP2: wrap/shard model before building optimizer/scheduler (params become DTensor/sharded).
+            self.critic = strategy.prepare(critic, is_rlhf=True)
+            self.critic_optim = strategy.create_optimizer(
+                self.critic, lr=args.critic_learning_rate, betas=args.adam_betas, weight_decay=args.l2
+            )
+            self.critic_scheduler = get_scheduler(
+                args.lr_scheduler,
+                self.critic_optim,
+                num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
+                num_training_steps=max_steps,
+                scheduler_specific_kwargs={"min_lr": args.critic_learning_rate * 0.1},
+            )
+        else:
+            # DeepSpeed: build optimizer/scheduler first; engine handles gradient accumulation.
+            critic_optim = strategy.create_optimizer(
+                critic, lr=args.critic_learning_rate, betas=args.adam_betas, weight_decay=args.l2
+            )
+            critic_scheduler = get_scheduler(
+                args.lr_scheduler,
+                critic_optim,
+                num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
+                num_training_steps=max_steps,
+                scheduler_specific_kwargs={"min_lr": args.critic_learning_rate * 0.1},
+            )
+
+            # prepare models/optimizers...
+            self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare(
+                (critic, critic_optim, critic_scheduler),
+                is_rlhf=True,
+            )
 
         # load checkpoint
         if args.load_checkpoint and os.path.exists(os.path.join(args.ckpt_path, "_actor")):
             ckpt_path = os.path.join(args.ckpt_path, "_critic")
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            strategy.load_ckpt(self.critic, ckpt_path)
+            strategy.load_ckpt(
+                self.critic,
+                ckpt_path,
+                optimizer=self.critic_optim,
+                scheduler=self.critic_scheduler,
+            )
 
         # initial offload
         if strategy.args.deepspeed_enable_sleep:
@@ -287,7 +305,13 @@ class CriticModelActor(BaseModelActor):
         args = self.strategy.args
         if not self.disable_ds_ckpt:
             self.strategy.save_ckpt(
-                self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
+                self.critic,
+                os.path.join(args.ckpt_path, "_critic"),
+                tag,
+                args.max_ckpt_num,
+                args.max_ckpt_mem,
+                optimizer=self.critic_optim,
+                scheduler=self.critic_scheduler,
             )
 
     def reload_states(self):
