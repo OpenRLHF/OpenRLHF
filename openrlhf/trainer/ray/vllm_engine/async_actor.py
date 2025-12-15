@@ -24,14 +24,15 @@ class LLMRayActorAsync(BaseLLMRayActor):
         self.result_queue = asyncio.Queue()
         self.semaphore = asyncio.Semaphore(int(os.environ.get("OPENRLHF_ASYNC_NUM_TASKS", 128)))
 
+        engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
+        self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
+        await self.llm.is_sleeping()
+
+        # Create remote_reward_model instance
         self.remote_reward_model = None
         if self.remote_rm_url:
             rm_args = SimpleNamespace(micro_rollout_batch_size=self.remote_rm_batch_size or 1)
             self.remote_reward_model = RemoteRewardModel(rm_args, self.remote_rm_url)
-
-        engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
-        self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
-        await self.llm.is_sleeping()
 
     async def init_process_group(
         self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray

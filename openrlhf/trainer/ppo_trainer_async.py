@@ -15,7 +15,7 @@ logger = init_logger(__name__)
 
 
 @ray.remote(num_cpus=0)
-class AsyncController:
+class BufferActor:
     """Bounded queue with simple backpressure logging between generator/trainer."""
 
     def __init__(
@@ -86,8 +86,7 @@ class SignalActor:
 
 
 @ray.remote
-class GenerateSamplesActor:
-
+class RolloutActor:
     def __init__(
         self,
         pretrain,
@@ -97,7 +96,7 @@ class GenerateSamplesActor:
         eval_split="test",
         *,
         signal_actor=None,
-        controller_actor=None,
+        buffer_actor=None,
         **generate_kwargs,
     ):
         tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
@@ -114,7 +113,7 @@ class GenerateSamplesActor:
         )
 
         self.signal_actor = signal_actor
-        self.controller_actor = controller_actor
+        self.buffer_actor = buffer_actor
 
     def get_max_steps(self):
         return self.train_sample_generater.max_steps
@@ -131,7 +130,7 @@ class GenerateSamplesActor:
             )
             while True:
                 # Wait until queue is not full
-                ray.get(self.controller_actor.wait_for_consumer.remote())
+                ray.get(self.buffer_actor.wait_for_consumer.remote())
 
                 # Pause generation while weights are being broadcasted to keep outputs consistent.
                 ray.get(self.signal_actor.wait_generating.remote())
@@ -146,17 +145,17 @@ class GenerateSamplesActor:
 
                 # Send the produced batch to the controller for training.
                 ray.get(
-                    self.controller_actor.put.remote(
+                    self.buffer_actor.put.remote(
                         (samples, episode, self.train_sample_generater.state_dict(), pass_rate)
                     )
                 )
                 pbar.update(prompts_used)
 
-        ray.get(self.controller_actor.put.remote("done"))
+        ray.get(self.buffer_actor.put.remote("done"))
 
 
 @ray.remote
-class TrainingActor(BasePPOTrainer):
+class TrainActor(BasePPOTrainer):
     def __init__(
         self,
         pretrain,
@@ -167,7 +166,7 @@ class TrainingActor(BasePPOTrainer):
         reference_model_group,
         vllm_engines=None,
         signal_actor=None,
-        controller_actor=None,
+        buffer_actor=None,
     ):
         tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
 
@@ -181,12 +180,12 @@ class TrainingActor(BasePPOTrainer):
             tokenizer,
         )
         self.signal_actor = signal_actor
-        self.controller_actor = controller_actor
+        self.buffer_actor = buffer_actor
 
     def fit(self, global_step):
         while True:
             # Draw one mini-batch of prompts; stop when loader is exhausted.
-            output = ray.get(self.controller_actor.get.remote())
+            output = ray.get(self.buffer_actor.get.remote())
             if output == "done":
                 break
             samples, episode, data_loader_state_dict, pass_rate = output
@@ -247,22 +246,22 @@ class PPOTrainerAsync:
         if queue_size <= 0:
             raise ValueError(f"async_queue_size must be positive, got {queue_size}")
         logger.info(f"queue_size={queue_size}")
-        self.controller_actor = AsyncController.remote(queue_size=queue_size)
+        self.buffer_actor = BufferActor.remote(queue_size=queue_size)
         self.signal_actor = SignalActor.remote()
 
         # rollout
-        self.generator_actor = GenerateSamplesActor.remote(
+        self.rollout_actor = RolloutActor.remote(
             pretrain=pretrain,
             strategy=strategy,
             vllm_engines=vllm_engines,
             prompt_split=prompt_split,
             eval_split=eval_split,
             signal_actor=self.signal_actor,
-            controller_actor=self.controller_actor,
+            buffer_actor=self.buffer_actor,
             **generate_kwargs,
         )
         # train
-        self.trainer_actor = TrainingActor.remote(
+        self.train_actor = TrainActor.remote(
             pretrain=pretrain,
             strategy=strategy,
             actor_model_group=actor_model_group,
@@ -271,11 +270,11 @@ class PPOTrainerAsync:
             reference_model_group=reference_model_group,
             vllm_engines=vllm_engines,
             signal_actor=self.signal_actor,
-            controller_actor=self.controller_actor,
+            buffer_actor=self.buffer_actor,
         )
 
     def fit(self) -> None:
-        checkpoint_states = ray.get(self.trainer_actor.init_checkpoint_states.remote())
+        checkpoint_states = ray.get(self.train_actor.init_checkpoint_states.remote())
         # Restore step and epoch
         global_step = checkpoint_states["global_step"]
         start_episode = checkpoint_states["episode"]
@@ -283,18 +282,18 @@ class PPOTrainerAsync:
         if global_step > 0:
             ray.get(
                 [
-                    self.trainer_actor.broadcast_to_vllm.remote(),
-                    self.generator_actor.load_state_dict.remote(checkpoint_states["data_loader_state_dict"]),
+                    self.rollout_actor.load_state_dict.remote(checkpoint_states["data_loader_state_dict"]),
+                    self.train_actor.broadcast_to_vllm.remote(),
                 ]
             )
 
         # Launch async training
         ray.get(
             [
-                self.generator_actor.fit.remote(episode=start_episode, global_step=global_step),
-                self.trainer_actor.fit.remote(global_step=global_step),
+                self.rollout_actor.fit.remote(episode=start_episode, global_step=global_step),
+                self.train_actor.fit.remote(global_step=global_step),
             ]
         )
 
     def get_max_steps(self):
-        return ray.get(self.generator_actor.get_max_steps.remote())
+        return ray.get(self.rollout_actor.get_max_steps.remote())

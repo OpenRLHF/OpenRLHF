@@ -15,6 +15,12 @@ from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
 
+# https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py#L41
+import uuid
+MASK_64_BITS = (1 << 64) - 1
+def random_uuid() -> str:
+    return f"{uuid.uuid4().int & MASK_64_BITS:016x}"  # 16 hex chars
+
 
 def _collect_prompts(dataloader_iter, num_prompts: int):
     """Draw up to `num_prompts` items from the prompt dataloader."""
@@ -290,7 +296,7 @@ class RemoteSampleGenerater:
         refs = []
         infos = []
         for idx, (prompt, label, metadata) in enumerate(zip(all_prompts, all_labels, all_metadatas)):
-            request_id = f"prompt_{time.time()}_{random.randint(1000, 9999)}"
+            request_id = f"prompt_{random_uuid()}"
             batched_prompts = [prompt] * n_samples_per_prompt
             batched_labels = [label] * n_samples_per_prompt
             llm = llms[idx % engine_count]

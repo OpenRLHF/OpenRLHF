@@ -19,6 +19,7 @@ class AgentLLMRayActorAsync(BaseLLMRayActor):
         super().__init__(*args, bundle_indices=bundle_indices, **kwargs)
 
         self.result_queue = asyncio.Queue()
+        self.semaphore = asyncio.Semaphore(int(os.environ.get("OPENRLHF_ASYNC_NUM_TASKS", 128)))
 
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
@@ -66,12 +67,13 @@ class AgentLLMRayActorAsync(BaseLLMRayActor):
     async def add_requests(
         self, sampling_params, prompts, labels, max_length, hf_tokenizer=None, request_group_id=None
     ):
-        self.agent_executor = self.agent_executor_cls(
-            max_length=max_length,
-            llm_engine=self.llm,
-            hf_tokenizer=hf_tokenizer,
-            result_queue=self.result_queue,
-        )
+        if not hasattr(self, "agent_executor"):
+            self.agent_executor = self.agent_executor_cls(
+                max_length=max_length,
+                llm_engine=self.llm,
+                hf_tokenizer=hf_tokenizer,
+                result_queue=self.result_queue,
+            )
 
         tasks = []
         for prompt, label in zip(prompts, labels):
