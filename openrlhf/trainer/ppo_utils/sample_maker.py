@@ -1,8 +1,8 @@
+import uuid
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
 import ray
-import uuid
 import torch
 from tqdm import tqdm
 
@@ -13,6 +13,7 @@ from openrlhf.trainer.ray.vllm_engine.executor import AgentRequestExecutor, Gene
 from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
+
 
 # https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py#L41
 def random_uuid() -> str:
