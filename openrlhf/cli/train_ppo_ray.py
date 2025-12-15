@@ -328,9 +328,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--vllm_generate_batch_size", type=int, default=None, help="Batch size for vLLM generating samples"
     )
-    parser.add_argument(
-        "--rollout_worker_cpus", type=int, default=8, help="CPUs to allocate per rollout worker actor"
-    )
+    parser.add_argument("--rollout_worker_cpus", type=int, default=8, help="CPUs to allocate per rollout worker actor")
     parser.add_argument("--micro_rollout_batch_size", type=int, default=8)
     parser.add_argument("--max_epochs", type=int, default=1)
     parser.add_argument("--prompt_max_len", type=int, default=1024, help="Max tokens for each prompt")
