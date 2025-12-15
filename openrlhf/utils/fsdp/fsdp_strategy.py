@@ -9,6 +9,7 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
 from packaging import version
+from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     get_model_state_dict,
@@ -48,6 +49,10 @@ class FSDPStrategy(ABC):
         self.seed = seed
         self.full_determinism = full_determinism
         self.max_norm = max_norm
+
+        # Keep argument parity with DeepSpeedStrategy for RLHF/ring attention settings.
+        self.ring_attn_size = int(getattr(args, "ring_attn_size", 1) or 1)
+        self.ds_tensor_parallel_size = int(getattr(args, "ds_tensor_parallel_size", 1) or 1)
 
         self.fsdp2_offload = getattr(args, "fsdp2_offload", "none")
         self.fsdp2_cpu_offload_pin_memory = self._coerce_bool(
@@ -91,12 +96,51 @@ class FSDPStrategy(ABC):
         self.ring_attn_rank = 0
         set_ring_attn_group(None)
 
-        self.accumulated_gradient = max(
-            1, self.train_batch_size // self.micro_train_batch_size // max(1, self.world_size)
-        )
+        duplicate_factor = max(1, self.ring_attn_size) * max(1, self.ds_tensor_parallel_size)
+        if self.world_size % duplicate_factor != 0:
+            raise ValueError(
+                f"world_size({self.world_size}) must be divisible by ring_attn_size({self.ring_attn_size}) * "
+                f"ds_tensor_parallel_size({self.ds_tensor_parallel_size})."
+            )
+        self.dp_size = self.world_size // duplicate_factor
+
+        # Ring attention group setup (mirrors DeepSpeedStrategy.setup_ring_attn()).
+        if duplicate_factor > 1:
+            self.fsdp_device_mesh = init_device_mesh(
+                "cuda",
+                (self.dp_size, max(1, self.ring_attn_size), max(1, self.ds_tensor_parallel_size)),
+                mesh_dim_names=("dp", "sp", "tp"),
+            )
+        if self.ring_attn_size > 1:
+            group = self.fsdp_device_mesh["sp"].get_group()
+            self.ring_attn_rank = dist.get_rank(group=group)
+            set_ring_attn_group(group)
+
+            try:
+                from ring_flash_attn import substitute_hf_flash_attn
+
+                ring_head_stride = getattr(self.args, "ring_head_stride", 1)
+                substitute_hf_flash_attn(self.ring_attn_group, ring_head_stride)
+            except Exception as exc:
+                raise RuntimeError(
+                    "ring_attn_size > 1 requires ring_flash_attn. "
+                    "Please install ring_flash_attn or set --ring_attn_size 1."
+                ) from exc
+
+        # Match DeepSpeedStrategy semantics: treat `train_batch_size` as the *effective DP* batch.
+        # When using ring attention / TP, ranks within a ring/TP group process the same data.
+        denom = max(1, self.micro_train_batch_size) * max(1, self.world_size)
+        numerator = self.train_batch_size * max(1, self.ring_attn_size) * max(1, self.ds_tensor_parallel_size)
+        self.accumulated_gradient = max(1, numerator // denom)
         # Dynamic batch mode manages stepping explicitly (see PPO trainers); disable fixed accumulation.
         if getattr(self.args, "use_dynamic_batch", False):
             self.accumulated_gradient = 1
+
+        self.print(
+            f"[fsdp2] world_size={self.world_size}, dp_size={getattr(self, 'dp_size', self.world_size)}, "
+            f"ring_attn_size={self.ring_attn_size}, ds_tensor_parallel_size={self.ds_tensor_parallel_size}, "
+            f"accumulated_gradient={self.accumulated_gradient}, fsdp2_offload={self.fsdp2_offload}"
+        )
 
     @property
     def ring_attn_group(self):
@@ -135,6 +179,7 @@ class FSDPStrategy(ABC):
             if "cpu" in devices:
                 # Avoid DTensor all_reduce on CPU backends; skip clipping when offloaded.
                 self.print("Warning: Gradient clipping is skipped when using FSDP2 CPU offload.")
+                pass
             elif hasattr(unwrapped, "clip_grad_norm_"):
                 unwrapped.clip_grad_norm_(self.max_norm)
             else:
@@ -156,8 +201,17 @@ class FSDPStrategy(ABC):
         consumed_samples=0,
     ):
         if sampler is None and dist.is_initialized():
-            num_replicas = dist.get_world_size()
-            rank = dist.get_rank()
+            # When using ring attention / TP, ranks in the same ring/TP group
+            # should process the same data. Mirror DeepSpeedStrategy behavior by
+            # sampling only over the effective DP ranks.
+            dp_group = None
+            if hasattr(self, "fsdp_device_mesh"):
+                try:
+                    dp_group = self.fsdp_device_mesh["dp"].get_group()
+                except Exception:
+                    dp_group = None
+            num_replicas = dist.get_world_size(group=dp_group) if dp_group is not None else dist.get_world_size()
+            rank = dist.get_rank(group=dp_group) if dp_group is not None else dist.get_rank()
 
             sampler = DistributedSampler(
                 replay_buffer,
@@ -184,6 +238,22 @@ class FSDPStrategy(ABC):
         if isinstance(model, Actor):
             return self._unwrap_model(model.model)
         return model
+
+    def _set_gradient_divide_factor(self, model: nn.Module) -> None:
+        """Match DeepSpeed dp semantics when using ring attention / TP duplicates.
+
+        FSDP2's default gradient reduction averages by the FSDP mesh size. In
+        OpenRLHF, ranks in a ring/TP group process the same samples (split by
+        tokens / TP) and should not contribute to the data-parallel averaging
+        factor. We therefore set the divide factor to the effective DP size.
+        """
+        if not dist.is_initialized():
+            return
+        dp_size = int(getattr(self, "dp_size", dist.get_world_size()) or 1)
+        factor = float(max(1, dp_size))
+        for module in model.modules():
+            if isinstance(module, FSDPModule):
+                module.set_gradient_divide_factor(factor)
 
     def _wrap_train_model(self, model: nn.Module) -> nn.Module:
         """Wrap model with FSDP2 fully_shard."""
@@ -318,6 +388,7 @@ class FSDPStrategy(ABC):
                 module = model.model if is_actor else model
                 module = self._wrap_train_model(module)
                 module = module.to(torch.cuda.current_device())
+                self._set_gradient_divide_factor(module)
                 if is_actor:
                     model.model = module
                     ret.append((model, optim_, scheduler))
@@ -332,6 +403,7 @@ class FSDPStrategy(ABC):
                 module = model.model if is_actor else model
                 module = self._wrap_train_model(module)
                 module = module.to(torch.cuda.current_device())
+                self._set_gradient_divide_factor(module)
                 if is_actor:
                     model.model = module
                     ret.append(model)
@@ -340,8 +412,17 @@ class FSDPStrategy(ABC):
         return ret[0] if len(ret) == 1 else ret
 
     def offload_states(self, model, optimizer=None):
-        """Offload model and optimizer states to CPU."""
-        self._unwrap_model(model).cpu()
+        """Offload training-only states to CPU.
+
+        Match DeepSpeed sleep semantics: keep model weights on GPU (so forward can still run),
+        but offload optimizer state to free memory when colocating with vLLM.
+        """
+        unwrapped = self._unwrap_model(model)
+        # Ensure we don't keep unsharded params resident unnecessarily.
+        # Note: FSDPModule.reshard() is not recursive, so walk all nested FSDP modules.
+        for module in unwrapped.modules():
+            if isinstance(module, FSDPModule):
+                module.reshard()
         if optimizer is not None:
             self._move_optimizer_state(optimizer, torch.device("cpu"))
         torch.cuda.empty_cache()
@@ -349,8 +430,9 @@ class FSDPStrategy(ABC):
             dist.barrier()
 
     def reload_states(self, model, optimizer=None):
-        """Reload model and optimizer states to GPU."""
+        """Reload training states to GPU."""
         device = torch.device("cuda", torch.cuda.current_device())
+        # Keep the model on the current GPU in case it was moved to CPU elsewhere.
         self._unwrap_model(model).to(device)
         if optimizer is not None:
             self._move_optimizer_state(optimizer, device)
@@ -490,10 +572,233 @@ class FSDPStrategy(ABC):
         return dist.get_rank()
 
     def save_ckpt(self, *args, **kwargs):
-        return None
+        return self._save_ckpt_impl(*args, **kwargs)
 
     def load_ckpt(self, *args, **kwargs):
-        return None, {"consumed_samples": 0}
+        return self._load_ckpt_impl(*args, **kwargs)
+
+    def _save_ckpt_impl(
+        self,
+        model: nn.Module,
+        save_dir: str,
+        tag: Optional[str] = None,
+        max_num: int = 3,
+        max_mem: int = 1000,
+        client_state: dict = {},
+        save_latest: bool = True,
+        optimizer: Optional[Optimizer] = None,
+        scheduler=None,
+        **kwargs,
+    ):
+        """Save a distributed checkpoint for FSDP2 models.
+
+        This follows the same high-level contract as DeepSpeedEngine.save_checkpoint():
+        - checkpoints are written under `save_dir/<tag>/`
+        - an optional `save_dir/latest` file points to the latest tag
+        - `client_state` is saved and returned by load_ckpt()
+        """
+        import shutil
+        import warnings
+
+        import torch.distributed.checkpoint as dcp
+        from torch.distributed.checkpoint.state_dict import get_state_dict
+        from torch.distributed.checkpoint.stateful import Stateful
+
+        if tag is None:
+            raise ValueError("FSDP2 save_ckpt requires a non-empty tag (e.g., 'global_step123').")
+
+        os.makedirs(save_dir, exist_ok=True)
+
+        # Basic retention policy, similar to DeepspeedStrategy.save_ckpt().
+        if self.is_rank_0():
+            max_size_bytes = max_mem * 1024**3  # GB -> bytes
+
+            def _list_ckpt_dirs():
+                entries = []
+                for name in os.listdir(save_dir):
+                    path = os.path.join(save_dir, name)
+                    if os.path.isdir(path):
+                        entries.append((path, os.path.getmtime(path)))
+                entries.sort(key=lambda x: x[1])
+                return entries
+
+            def _dir_size_bytes(path: str) -> int:
+                total = 0
+                for dirpath, _dirnames, filenames in os.walk(path):
+                    for filename in filenames:
+                        fp = os.path.join(dirpath, filename)
+                        try:
+                            total += os.path.getsize(fp)
+                        except OSError:
+                            pass
+                return total
+
+            while True:
+                subdirs = _list_ckpt_dirs()
+                total_size = sum(_dir_size_bytes(subdir) for subdir, _ in subdirs)
+                if len(subdirs) >= max_num or total_size > max_size_bytes:
+                    oldest_dir = subdirs[0][0] if subdirs else None
+                    if oldest_dir and os.path.exists(oldest_dir):
+                        shutil.rmtree(oldest_dir, ignore_errors=True)
+                        self.print(f"Deleted oldest ckpt {oldest_dir}")
+                    else:
+                        break
+                else:
+                    break
+
+        if dist.is_initialized():
+            dist.barrier()
+
+        fsdp_model = self._unwrap_model(model)
+        ckpt_path = os.path.join(save_dir, tag)
+
+        # Torch DCP stores state from objects implementing Stateful.
+        class AppState(Stateful):
+            def __init__(self, model_, optimizer_, scheduler_, client_state_):
+                self.model = model_
+                self.optimizer = optimizer_
+                self.scheduler = scheduler_
+                self.client_state = dict(client_state_ or {})
+
+            def state_dict(self):
+                optimizers = [self.optimizer] if self.optimizer is not None else []
+                model_state, optim_state = get_state_dict(self.model, optimizers)
+                state = {
+                    "model": model_state,
+                    "optimizers": optim_state,
+                    "client_state": self.client_state,
+                }
+                if self.scheduler is not None:
+                    state["scheduler"] = self.scheduler.state_dict()
+                return state
+
+            def load_state_dict(self, state_dict):
+                raise RuntimeError("AppState.load_state_dict should not be called from save_ckpt().")
+
+        state_dict = {"app": AppState(fsdp_model, optimizer, scheduler, client_state)}
+        if self.is_rank_0():
+            os.makedirs(ckpt_path, exist_ok=True)
+
+        if dist.is_initialized():
+            dist.barrier()
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=FutureWarning, module="torch.distributed")
+            warnings.filterwarnings("ignore", category=UserWarning, module="torch.distributed.*")
+            dcp.save(state_dict=state_dict, checkpoint_id=ckpt_path)
+
+        if dist.is_initialized():
+            dist.barrier()
+
+        if save_latest and self.is_rank_0():
+            latest_path = os.path.join(save_dir, "latest")
+            with open(latest_path, "w", encoding="utf-8") as f:
+                f.write(str(tag))
+
+    def _load_ckpt_impl(
+        self,
+        model: nn.Module,
+        load_dir: str,
+        tag: Optional[str] = None,
+        load_module_strict: bool = True,
+        load_optimizer_states: bool = True,
+        load_lr_scheduler_states: bool = True,
+        load_module_only: bool = False,
+        optimizer: Optional[Optimizer] = None,
+        scheduler=None,
+        **kwargs,
+    ):
+        """Load a distributed checkpoint for FSDP2 models.
+
+        Returns `(load_path, client_state)` similar to DeepSpeedEngine.load_checkpoint().
+        """
+        import warnings
+
+        import torch.distributed.checkpoint as dcp
+        from torch.distributed.checkpoint.state_dict import StateDictOptions, set_state_dict
+        from torch.distributed.checkpoint.stateful import Stateful
+
+        if not os.path.exists(load_dir):
+            raise FileNotFoundError(f"[fsdp2] checkpoint directory not found: {load_dir}")
+
+        resolved_tag = tag
+        if resolved_tag is None:
+            latest_path = os.path.join(load_dir, "latest")
+            if os.path.isfile(latest_path):
+                with open(latest_path, "r", encoding="utf-8") as f:
+                    resolved_tag = f.read().strip()
+            else:
+                # Fallback: pick the most recently modified subdir.
+                subdirs = [
+                    os.path.join(load_dir, d)
+                    for d in os.listdir(load_dir)
+                    if os.path.isdir(os.path.join(load_dir, d))
+                ]
+                if subdirs:
+                    subdirs.sort(key=lambda p: os.path.getmtime(p))
+                    resolved_tag = os.path.basename(subdirs[-1])
+
+        if not resolved_tag:
+            raise FileNotFoundError(f"[fsdp2] no checkpoint tag found under {load_dir}")
+
+        ckpt_path = os.path.join(load_dir, resolved_tag)
+        if not os.path.isdir(ckpt_path):
+            raise FileNotFoundError(f"[fsdp2] checkpoint path not found: {ckpt_path}")
+
+        fsdp_model = self._unwrap_model(model)
+
+        # Respect load flags.
+        if load_module_only:
+            load_optimizer_states = False
+            load_lr_scheduler_states = False
+
+        if optimizer is None:
+            load_optimizer_states = False
+        if scheduler is None:
+            load_lr_scheduler_states = False
+
+        class AppState(Stateful):
+            def __init__(self, model_, optimizer_, scheduler_):
+                self.model = model_
+                self.optimizer = optimizer_
+                self.scheduler = scheduler_
+                self.client_state: dict = {}
+
+            def state_dict(self):
+                raise RuntimeError("AppState.state_dict should not be called from load_ckpt().")
+
+            def load_state_dict(self, state_dict):
+                optimizers = [self.optimizer] if (load_optimizer_states and self.optimizer is not None) else []
+                if optimizers:
+                    optim_state = state_dict.get("optimizers")
+                    if optim_state is None:
+                        raise RuntimeError(
+                            "[fsdp2] checkpoint is missing optimizer states, but load_optimizer_states=True."
+                        )
+                else:
+                    optim_state = {}
+                set_state_dict(
+                    self.model,
+                    optimizers,
+                    model_state_dict=state_dict.get("model"),
+                    optim_state_dict=optim_state,
+                    options=StateDictOptions(strict=bool(load_module_strict)),
+                )
+                if load_lr_scheduler_states and self.scheduler is not None and "scheduler" in state_dict:
+                    self.scheduler.load_state_dict(state_dict["scheduler"])
+                self.client_state = state_dict.get("client_state", {}) or {}
+
+        app_state = AppState(fsdp_model, optimizer, scheduler)
+        state_dict = {"app": app_state}
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=FutureWarning, module="torch.distributed")
+            warnings.filterwarnings("ignore", category=UserWarning, module="torch.distributed.*")
+            dcp.load(state_dict=state_dict, checkpoint_id=ckpt_path)
+
+        if dist.is_initialized():
+            dist.barrier()
+
+        return ckpt_path, app_state.client_state
 
     def get_ds_train_config(self, is_actor):
         return None
