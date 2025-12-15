@@ -210,7 +210,14 @@ class ProcessRewardModelTrainer(ABC):
             tag = f"global_step{global_step}"
             if not self.disable_ds_ckpt:
                 self.strategy.save_ckpt(
-                    self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+                    self.model.model,
+                    args.ckpt_path,
+                    tag,
+                    args.max_ckpt_num,
+                    args.max_ckpt_mem,
+                    client_states,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
                 )
             if self.save_hf_ckpt:
                 save_path = os.path.join(args.ckpt_path, f"{tag}_hf")

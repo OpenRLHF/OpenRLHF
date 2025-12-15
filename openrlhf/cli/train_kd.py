@@ -48,6 +48,17 @@ def train(args):
 
     strategy.print(model)
 
+    # gradient_checkpointing
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
+        )
+
+    is_fsdp2 = getattr(args, "dist_backend", "deepspeed") == "fsdp2"
+    # FSDP2: wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
+    if is_fsdp2:
+        model, teacher_model = strategy.prepare(model, teacher_model)
+
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
 
@@ -109,19 +120,14 @@ def train(args):
         scheduler_specific_kwargs={"min_lr": args.learning_rate * 0.1},
     )
 
-    # gradient_checkpointing
-    if args.gradient_checkpointing:
-        model.gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
-        )
-
-    # prepare models
-    ((model, optim, scheduler), teacher_model) = strategy.prepare((model, optim, scheduler), teacher_model)
+    # prepare models (DeepSpeed path expects optimizer/scheduler passed in)
+    if not is_fsdp2:
+        ((model, optim, scheduler), teacher_model) = strategy.prepare((model, optim, scheduler), teacher_model)
 
     # load checkpoint
     consumed_samples = 0
     if args.load_checkpoint and os.path.exists(args.ckpt_path):
-        _, states = strategy.load_ckpt(model.model, args.ckpt_path)
+        _, states = strategy.load_ckpt(model.model, args.ckpt_path, optimizer=optim, scheduler=scheduler)
         consumed_samples = states["consumed_samples"]
         strategy.print(f"Loaded the checkpoint: {args.ckpt_path}, consumed_samples: {consumed_samples}")
 
