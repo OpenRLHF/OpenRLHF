@@ -18,7 +18,7 @@ class AgentInstanceBase(ABC):
 class AgentExecutorBase(ABC):
     def __init__(self, agent_instance_cls, max_length, llm_engine, hf_tokenizer):
         assert issubclass(agent_instance_cls, AgentInstanceBase), "AgentInstance must inherit from AgentInstanceBase"
-        self.agent_instance_cls = agent_instance_cls
+        self.agent_instance = agent_instance_cls()
 
         self.llm_engine = llm_engine
         self.hf_tokenizer = hf_tokenizer
