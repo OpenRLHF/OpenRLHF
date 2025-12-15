@@ -4,7 +4,6 @@ import ray
 from tqdm import tqdm
 
 from openrlhf.trainer.ppo_trainer import BasePPOTrainer
-from openrlhf.trainer.ppo_utils.misc import normalize_interval_config
 from openrlhf.trainer.ppo_utils.sample_maker import RemoteSampleGenerater
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.deepspeed import DeepspeedStrategy
@@ -240,7 +239,10 @@ class PPOTrainerAsync:
     ) -> None:
         args = strategy.args
         # get eval and save steps
-        normalize_interval_config(args)
+        if strategy.args.eval_steps == -1:
+            strategy.args.eval_steps = float("inf")  # do not evaluate
+        if strategy.args.save_steps == -1:
+            strategy.args.save_steps = float("inf")  # do not save ckpt
 
         queue_size = getattr(args, "async_queue_size", 1)
         if queue_size <= 0:

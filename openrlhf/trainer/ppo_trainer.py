@@ -7,7 +7,6 @@ from tqdm import tqdm
 from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
 from openrlhf.trainer.ppo_utils.kl_controller import build_kl_controller
 from openrlhf.trainer.ppo_utils.loggers import TensorboardLogger, WandbLogger
-from openrlhf.trainer.ppo_utils.misc import normalize_interval_config
 from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ppo_utils.sample_maker import RemoteSampleGenerater
 from openrlhf.trainer.ray.launcher import RayActorGroup
@@ -200,7 +199,10 @@ class PPOTrainer(BasePPOTrainer):
     ) -> None:
         tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
         # get eval and save steps
-        normalize_interval_config(strategy.args)
+        if strategy.args.eval_steps == -1:
+            strategy.args.eval_steps = float("inf")  # do not evaluate
+        if strategy.args.save_steps == -1:
+            strategy.args.save_steps = float("inf")  # do not save ckpt
 
         # rollout
         self.train_sample_generater = RemoteSampleGenerater(
