@@ -9,13 +9,12 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
 from packaging import version
-from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     get_model_state_dict,
     set_model_state_dict,
 )
-
+from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import CPUOffloadPolicy, FSDPModule, MixedPrecisionPolicy, fully_shard
 from torch.optim import Optimizer
 from torchdata.stateful_dataloader import StatefulDataLoader
@@ -179,7 +178,6 @@ class FSDPStrategy(ABC):
             if "cpu" in devices:
                 # Avoid DTensor all_reduce on CPU backends; skip clipping when offloaded.
                 self.print("Warning: Gradient clipping is skipped when using FSDP2 CPU offload.")
-                pass
             elif hasattr(unwrapped, "clip_grad_norm_"):
                 unwrapped.clip_grad_norm_(self.max_norm)
             else:
@@ -730,9 +728,7 @@ class FSDPStrategy(ABC):
             else:
                 # Fallback: pick the most recently modified subdir.
                 subdirs = [
-                    os.path.join(load_dir, d)
-                    for d in os.listdir(load_dir)
-                    if os.path.isdir(os.path.join(load_dir, d))
+                    os.path.join(load_dir, d) for d in os.listdir(load_dir) if os.path.isdir(os.path.join(load_dir, d))
                 ]
                 if subdirs:
                     subdirs.sort(key=lambda p: os.path.getmtime(p))
