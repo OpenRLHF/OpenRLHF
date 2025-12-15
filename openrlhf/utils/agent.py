@@ -57,7 +57,7 @@ class AgentExecutorBase(ABC):
                 break
 
             # Generate response asynchronously (input and output are token ids)
-            request_output = ray.get(self.llm_engine.generate.remote(current_obs_tokens, deepcopy(sampling_params)))
+            request_output = await self.llm_engine.generate.remote(current_obs_tokens, deepcopy(sampling_params))
             action_tokens = request_output.outputs[0].token_ids
             action_text = request_output.outputs[0].text
 

@@ -100,7 +100,7 @@ class GenerationExecutor(RolloutExecutorBase):
         assert max_length > len(prompt_token_ids)
 
         # Generate response asynchronously (input and output are token ids).
-        request_output = ray.get(llm_engine.generate.remote(prompt_token_ids, deepcopy(sampling_params)))
+        request_output = await llm_engine.generate.remote(prompt_token_ids, deepcopy(sampling_params))
 
         # Record action range in token space.
         action_tokens = request_output.outputs[0].token_ids
@@ -277,6 +277,7 @@ class RolloutWorker:
 def create_rollout_workers(
     num_workers: int,
     worker_cpus: int,
+    num_task_per_cpu: int,
     agent_func_path: Optional[str],
     remote_rm_url: Optional[str],
     remote_rm_batch_size: Optional[int],
@@ -291,7 +292,7 @@ def create_rollout_workers(
             agent_func_path=agent_func_path,
             remote_rm_url=remote_rm_url,
             remote_rm_batch_size=remote_rm_batch_size,
-            max_tasks=worker_cpus,
+            max_tasks=num_task_per_cpu * worker_cpus,
         )
         workers.append(worker)
 

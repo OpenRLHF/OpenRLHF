@@ -283,7 +283,7 @@ class RemoteSampleGenerator:
                             new_prompts, new_labels, new_metadatas, **generate_kwargs
                         )
                         pending_refs.extend(new_refs)
-                        ref_map.update({info["ref"]: info for info in new_infos})
+                        ref_map.update(new_infos)
                         total_prompt_processed += len(new_prompts)
 
         if exhausted and len(accepted_samples) < target_samples:

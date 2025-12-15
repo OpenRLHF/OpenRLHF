@@ -133,6 +133,7 @@ def train(args):
         rollout_workers = create_rollout_workers(
             num_workers=args.vllm_num_engines,
             worker_cpus=args.rollout_worker_cpus * args.vllm_tensor_parallel_size,
+            num_task_per_cpu=8,
             agent_func_path=args.agent_func_path,
             remote_rm_url=args.remote_rm_url,
             remote_rm_batch_size=args.micro_rollout_batch_size,
@@ -328,7 +329,7 @@ if __name__ == "__main__":
         "--vllm_generate_batch_size", type=int, default=None, help="Batch size for vLLM generating samples"
     )
     parser.add_argument(
-        "--rollout_worker_cpus", type=int, default=16, help="CPUs to allocate per rollout worker actor"
+        "--rollout_worker_cpus", type=int, default=8, help="CPUs to allocate per rollout worker actor"
     )
     parser.add_argument("--micro_rollout_batch_size", type=int, default=8)
     parser.add_argument("--max_epochs", type=int, default=1)
