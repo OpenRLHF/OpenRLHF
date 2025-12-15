@@ -9,37 +9,46 @@ from openrlhf.utils.remote_rm_utils import RemoteRewardModel
 class BaseRequestExecutor:
     """Base executor for dispatching generation or agent requests."""
 
-    def __init__(self, llm_engine, result_queue, semaphore: asyncio.Semaphore):
-        self.llm_engine = llm_engine
-        self.result_queue = result_queue
-        self.semaphore = semaphore
-
-    async def execute(self, prompt, label, sampling_params, max_length, hf_tokenizer=None, request_id=None):
+    async def execute(
+        self,
+        prompt,
+        label,
+        sampling_params,
+        max_length,
+        hf_tokenizer,
+        request_id,
+        llm_engine,
+        result_queue,
+        semaphore: asyncio.Semaphore = None,
+    ):
         raise NotImplementedError
 
 
 class GenerationRequestExecutor(BaseRequestExecutor):
     """Default vLLM generation executor with optional remote reward model support."""
 
-    def __init__(
-        self,
-        llm_engine,
-        result_queue,
-        semaphore: asyncio.Semaphore,
-        remote_rm_url: Optional[str] = None,
-        remote_rm_batch_size: Optional[int] = None,
-    ):
-        super().__init__(llm_engine, result_queue, semaphore)
+    def __init__(self, remote_rm_url: Optional[str] = None, remote_rm_batch_size: Optional[int] = None):
         self.remote_reward_model = None
         if remote_rm_url:
             rm_args = SimpleNamespace(micro_rollout_batch_size=remote_rm_batch_size or 1)
             self.remote_reward_model = RemoteRewardModel(rm_args, remote_rm_url)
 
-    async def execute(self, prompt, label, sampling_params, max_length, hf_tokenizer=None, request_id=None):
+    async def execute(
+        self,
+        prompt,
+        label,
+        sampling_params,
+        max_length,
+        hf_tokenizer,
+        request_id,
+        llm_engine,
+        result_queue,
+        semaphore: asyncio.Semaphore = None,
+    ):
         from vllm.inputs import TokensPrompt
         from vllm.utils import random_uuid
 
-        async with self.semaphore:
+        async with semaphore:
             if hf_tokenizer is None:
                 raise ValueError("hf_tokenizer is required for GenerationRequestExecutor.")
 
@@ -49,7 +58,7 @@ class GenerationRequestExecutor(BaseRequestExecutor):
 
             remaining_budget = max_length - len(prompt_token_ids)
             if remaining_budget <= 0:
-                await self.result_queue.put(
+                await result_queue.put(
                     {
                         "prompt": prompt,
                         "label": label,
@@ -68,7 +77,7 @@ class GenerationRequestExecutor(BaseRequestExecutor):
                 sampling_params.max_tokens = max(1, min(sampling_params.max_tokens, remaining_budget))
 
             generation_request_id = random_uuid()
-            generator = self.llm_engine.generate(
+            generator = llm_engine.generate(
                 TokensPrompt(prompt_token_ids=prompt_token_ids),
                 sampling_params,
                 request_id=generation_request_id,
@@ -105,7 +114,7 @@ class GenerationRequestExecutor(BaseRequestExecutor):
                 "extra_logs": extra_logs,
                 "request_id": request_id,
             }
-            await self.result_queue.put(final_response)
+            await result_queue.put(final_response)
 
     async def _maybe_compute_remote_reward(self, observation_tokens, prompt, label, hf_tokenizer):
         """Fetch reward/score from remote RM if configured."""
@@ -151,34 +160,42 @@ class GenerationRequestExecutor(BaseRequestExecutor):
 class AgentRequestExecutor(BaseRequestExecutor):
     """Executor wrapper around user-provided AgentExecutor implementations."""
 
-    def __init__(
-        self,
-        llm_engine,
-        result_queue,
-        semaphore: asyncio.Semaphore,
-        agent_func_path: str,
-    ):
-        super().__init__(llm_engine, result_queue, semaphore)
+    def __init__(self, agent_func_path: str):
         self.agent_func_path = agent_func_path
-        self.agent_executor_cls = self._load_agent_executor_cls(agent_func_path)
+        self.agent_executor_cls = None
         self.agent_executor = None
         self._cached_max_length = None
 
-    async def execute(self, prompt, label, sampling_params, max_length, hf_tokenizer=None, request_id=None):
+    async def execute(
+        self,
+        prompt,
+        label,
+        sampling_params,
+        max_length,
+        hf_tokenizer,
+        request_id=None,
+        llm_engine=None,
+        result_queue=None,
+        semaphore: asyncio.Semaphore = None,
+    ):
         if hf_tokenizer is None:
             raise ValueError("hf_tokenizer is required for AgentRequestExecutor.")
 
-        self._ensure_agent_executor(max_length, hf_tokenizer)
+        # Lazily load executor class after deserialization to avoid pickling issues.
+        if self.agent_executor_cls is None:
+            self.agent_executor_cls = self._load_agent_executor_cls(self.agent_func_path)
+
+        self._ensure_agent_executor(max_length, hf_tokenizer, llm_engine, result_queue)
         await self.agent_executor.execute(prompt, label, sampling_params, request_id)
 
-    def _ensure_agent_executor(self, max_length, hf_tokenizer):
+    def _ensure_agent_executor(self, max_length, hf_tokenizer, llm_engine, result_queue):
         """Instantiate or refresh the agent executor when settings change."""
         if self.agent_executor is None or self._cached_max_length != max_length:
             self.agent_executor = self.agent_executor_cls(
                 max_length=max_length,
-                llm_engine=self.llm_engine,
+                llm_engine=llm_engine,
                 hf_tokenizer=hf_tokenizer,
-                result_queue=self.result_queue,
+                result_queue=result_queue,
             )
             self._cached_max_length = max_length
 

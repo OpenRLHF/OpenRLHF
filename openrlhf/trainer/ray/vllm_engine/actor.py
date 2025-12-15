@@ -69,7 +69,6 @@ class LLMRayActorAsync(LLMEngineActorBase):
     """Unified async actor that delegates work to provided executors."""
 
     async def __init__(self, *args, bundle_indices: list = None, **kwargs):
-        self._executor_cache = {}
         super().__init__(*args, bundle_indices=bundle_indices, **kwargs)
 
         # Number of actors that will send prompt to this engine
@@ -109,51 +108,16 @@ class LLMRayActorAsync(LLMEngineActorBase):
     async def wake_up(self):
         await self.llm.wake_up()
 
-    def _normalize_for_cache(self, value):
-        if isinstance(value, dict):
-            return tuple(sorted((k, self._normalize_for_cache(v)) for k, v in value.items()))
-        if isinstance(value, (tuple, list)):
-            return tuple(self._normalize_for_cache(v) for v in value)
-        return value
-
-    def _get_executor(self, executor_cls, executor_kwargs):
-        key = (executor_cls, self._normalize_for_cache(executor_kwargs))
-        if key not in self._executor_cache:
-            self._executor_cache[key] = executor_cls(
-                llm_engine=self.llm,
-                result_queue=self.result_queue,
-                semaphore=self.semaphore,
-                **(executor_kwargs or {}),
-            )
-        return self._executor_cache[key]
-
     async def add_requests(
         self,
+        executor,
         sampling_params,
         prompts,
         labels,
         max_length,
         hf_tokenizer=None,
         request_id=None,
-        executor_cls=None,
-        executor_kwargs=None,
     ):
-        if executor_cls is None:
-            raise ValueError("executor_cls must be provided for add_requests.")
-
-        merged_kwargs = dict(executor_kwargs or {})
-
-        # Ensure agent executors have required configuration.
-        try:
-            from .executor import AgentRequestExecutor
-
-            if executor_cls is AgentRequestExecutor and not merged_kwargs.get("agent_func_path"):
-                raise ValueError("agent_func_path must be provided for AgentRequestExecutor via executor_kwargs.")
-        except ImportError:
-            pass
-
-        executor = self._get_executor(executor_cls, merged_kwargs)
-
         tasks = []
         for prompt, label in zip(prompts, labels):
             tasks.append(
@@ -164,6 +128,9 @@ class LLMRayActorAsync(LLMEngineActorBase):
                     max_length,
                     hf_tokenizer=hf_tokenizer,
                     request_id=request_id,
+                    llm_engine=self.llm,
+                    result_queue=self.result_queue,
+                    semaphore=self.semaphore,
                 )
             )
 

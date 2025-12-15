@@ -171,6 +171,15 @@ class RemoteSampleGenerater:
         self.tokenizer = tokenizer
         self.vllm_engines = vllm_engines
 
+        # Build a single executor reused for all add_requests calls.
+        if self.args.agent_func_path:
+            self.executor = AgentRequestExecutor(agent_func_path=self.args.agent_func_path)
+        else:
+            self.executor = GenerationRequestExecutor(
+                remote_rm_url=self.args.remote_rm_url,
+                remote_rm_batch_size=self.args.micro_rollout_batch_size,
+            )
+
         self.prompts_dataloader, self.max_steps = build_prompt_dataloader(
             self.args, strategy, self.tokenizer, dataset_split
         )
@@ -291,34 +300,21 @@ class RemoteSampleGenerater:
         sampling_params = _build_sampling_params(args, **kwargs)
         truncate_length = kwargs.get("prompt_max_len", 1024) + kwargs.get("max_new_tokens", 1024)
 
-        n_samples_per_prompt = kwargs.get("n_samples_per_prompt", args.n_samples_per_prompt)
-        engine_count = len(llms)
-        if self.args.agent_func_path:
-            executor_cls = AgentRequestExecutor
-            executor_kwargs = {"agent_func_path": self.args.agent_func_path}
-        else:
-            executor_cls = GenerationRequestExecutor
-            executor_kwargs = {
-                "remote_rm_url": self.args.remote_rm_url,
-                "remote_rm_batch_size": self.args.micro_rollout_batch_size,
-            }
-
         refs = []
         infos = []
         for idx, (prompt, label, metadata) in enumerate(zip(all_prompts, all_labels, all_metadatas)):
             request_id = f"prompt_{random_uuid()}"
-            batched_prompts = [prompt] * n_samples_per_prompt
-            batched_labels = [label] * n_samples_per_prompt
-            llm = llms[idx % engine_count]
+            batched_prompts = [prompt] * args.n_samples_per_prompt
+            batched_labels = [label] * args.n_samples_per_prompt
+            llm = llms[idx % len(llms)]
             ref = llm.add_requests.remote(
+                executor=self.executor,
                 sampling_params=sampling_params,
                 prompts=batched_prompts,
                 labels=batched_labels,
                 max_length=truncate_length,
                 hf_tokenizer=self.tokenizer,
                 request_id=request_id,
-                executor_cls=executor_cls,
-                executor_kwargs=executor_kwargs,
             )
             refs.append(ref)
             infos.append(
