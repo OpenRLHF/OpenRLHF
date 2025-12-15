@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
 import ray
+import uuid
 import torch
 from tqdm import tqdm
 
@@ -14,12 +15,8 @@ from openrlhf.utils.logging_utils import init_logger
 logger = init_logger(__name__)
 
 # https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py#L41
-import uuid
-
-MASK_64_BITS = (1 << 64) - 1
-
-
 def random_uuid() -> str:
+    MASK_64_BITS = (1 << 64) - 1
     return f"{uuid.uuid4().int & MASK_64_BITS:016x}"  # 16 hex chars
 
 
