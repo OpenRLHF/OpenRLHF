@@ -1,4 +1,3 @@
-import asyncio
 import os
 from copy import deepcopy
 from typing import Any, List
@@ -8,6 +7,8 @@ import vllm
 from packaging import version
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+from vllm.inputs import TokensPrompt
+from vllm.utils import random_uuid
 
 from ..utils import get_bundle_indices, ray_noset_visible_devices
 
@@ -71,10 +72,6 @@ class LLMRayActorAsync(LLMEngineActorBase):
     async def __init__(self, *args, bundle_indices: list = None, **kwargs):
         super().__init__(*args, bundle_indices=bundle_indices, **kwargs)
 
-        # Number of actors that will send prompt to this engine
-        self.result_queue = asyncio.Queue()
-        self.semaphore = asyncio.Semaphore(int(os.environ.get("OPENRLHF_ASYNC_NUM_TASKS", 128)))
-
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
         await self.llm.is_sleeping()
@@ -108,59 +105,19 @@ class LLMRayActorAsync(LLMEngineActorBase):
     async def wake_up(self):
         await self.llm.wake_up()
 
-    async def add_requests(
-        self,
-        executor,
-        sampling_params,
-        prompts,
-        labels,
-        max_length,
-        hf_tokenizer=None,
-        request_id=None,
-    ):
-        tasks = []
-        for prompt, label in zip(prompts, labels):
-            tasks.append(
-                executor.execute(
-                    prompt,
-                    label,
-                    deepcopy(sampling_params),
-                    max_length,
-                    hf_tokenizer=hf_tokenizer,
-                    request_id=request_id,
-                    llm_engine=self.llm,
-                    result_queue=self.result_queue,
-                    semaphore=self.semaphore,
-                )
-            )
+    async def generate(self, prompt_token_ids, sampling_params):
+        """Token-level generation for Agent executors."""
+        generator = self.llm.generate(
+            TokensPrompt(prompt_token_ids=prompt_token_ids),
+            deepcopy(sampling_params),
+            request_id=random_uuid(),
+        )
 
-        await asyncio.gather(*tasks)
+        final_output = None
+        async for request_output in generator:
+            final_output = request_output
 
-    async def get_responses(self, request_id=None):
-        if request_id is None:
-            results = []
-            while not self.result_queue.empty():
-                results.append(await self.result_queue.get())
-            return results
-
-        matching_results = []
-        unmatched = []
-
-        while True:
-            try:
-                item = self.result_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-
-            if item.get("request_id") == request_id:
-                matching_results.append(item)
-            else:
-                unmatched.append(item)
-
-        for item in unmatched:
-            self.result_queue.put_nowait(item)
-
-        return matching_results
+        return final_output
 
 
 def create_vllm_engines(

@@ -88,7 +88,7 @@ class AgentExecutor(AgentExecutorBase):
     initializes NeMo Gym services for collecting rollouts during RL training.
     """
 
-    def __init__(self, max_steps: int, max_length: int, llm_engine, hf_tokenizer, result_queue):
+    def __init__(self, max_steps: int, max_length: int, llm_engine, hf_tokenizer):
         """
         Initialize the AgentExecutor with vLLM and NeMo Gym services.
 
@@ -97,7 +97,6 @@ class AgentExecutor(AgentExecutorBase):
             max_length: Maximum sequence length for generation
             llm_engine: The vLLM engine instance for inference
             hf_tokenizer: HuggingFace tokenizer for the model
-            result_queue: Queue for collecting execution results
         """
         # Configure server endpoints
         self.vllm_server_host = "127.0.0.1"  # Local vLLM server host
@@ -122,7 +121,7 @@ class AgentExecutor(AgentExecutorBase):
             raise
 
         # Initialize parent class
-        super().__init__(AgentInstance, max_steps, max_length, llm_engine, hf_tokenizer, result_queue)
+        super().__init__(AgentInstance, max_steps, max_length, llm_engine, hf_tokenizer)
 
     def _wait_for_vllm_server(self) -> bool:
         """
@@ -421,8 +420,7 @@ class AgentExecutor(AgentExecutorBase):
                 "rollout_log_probs": rollout_log_probs,
             }
 
-            # Add to result queue
-            await self.result_queue.put(final_response)
+            return final_response
 
     def shutdown(self):
         """

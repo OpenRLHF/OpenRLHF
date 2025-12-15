@@ -9,7 +9,7 @@ from tqdm import tqdm
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.trainer.ppo_utils.filter_hooks import DynamicFilteringHook, FilterHookBase, NoOpFilterHook
 from openrlhf.trainer.ppo_utils.misc import build_prompt_dataloader
-from openrlhf.trainer.ray.vllm_engine.executor import AgentRequestExecutor, GenerationRequestExecutor
+from openrlhf.trainer.ray.vllm_engine.executor import RequestExecutorActor
 from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
@@ -169,14 +169,19 @@ class RemoteSampleGenerater:
         self.tokenizer = tokenizer
         self.vllm_engines = vllm_engines
 
-        # Build a single executor reused for all add_requests calls.
-        if self.args.agent_func_path:
-            self.executor = AgentRequestExecutor(agent_func_path=self.args.agent_func_path)
-        else:
-            self.executor = GenerationRequestExecutor(
+        # CPU executor actor pool to offload tokenization/reward/agent logic.
+        num_workers = getattr(self.args, "rollout_executor_workers", len(self.vllm_engines))
+        worker_cpus = getattr(self.args, "rollout_executor_worker_cpus", 128)
+        self.executor_actors = []
+        for _ in range(num_workers):
+            actor = RequestExecutorActor.options(num_cpus=worker_cpus).remote(
+                agent_func_path=self.args.agent_func_path,
                 remote_rm_url=self.args.remote_rm_url,
                 remote_rm_batch_size=self.args.micro_rollout_batch_size,
+                max_tasks=worker_cpus,
             )
+            self.executor_actors.append(actor)
+        self._executor_rr = 0
 
         self.prompts_dataloader, self.max_steps = build_prompt_dataloader(
             self.args, strategy, self.tokenizer, dataset_split
@@ -254,7 +259,7 @@ class RemoteSampleGenerater:
                     logger.warning("Missing ref info, skipping")
                     continue
 
-                outputs = ray.get(info["llm"].get_responses.remote(info["id"]))
+                outputs = ray.get(ref)
                 for output in outputs:
                     output["metadata"] = info.get("metadata")
                 sample_list = [self._create_sample_from_output(output, **generate_kwargs) for output in outputs]
@@ -301,24 +306,27 @@ class RemoteSampleGenerater:
         refs = []
         infos = []
         for idx, (prompt, label, metadata) in enumerate(zip(all_prompts, all_labels, all_metadatas)):
+            if not self.executor_actors:
+                raise RuntimeError("Executor actor pool is empty.")
+
             request_id = f"prompt_{random_uuid()}"
-            batched_prompts = [prompt] * args.n_samples_per_prompt
-            batched_labels = [label] * args.n_samples_per_prompt
-            llm = llms[idx % len(llms)]
-            ref = llm.add_requests.remote(
-                executor=self.executor,
+            executor_actor = self.executor_actors[self._executor_rr]
+            self._executor_rr = (self._executor_rr + 1) % len(self.executor_actors)
+
+            ref = executor_actor.execute.remote(
+                llm_engine=llms[idx % len(llms)],
                 sampling_params=sampling_params,
-                prompts=batched_prompts,
-                labels=batched_labels,
+                prompt=prompt,
+                label=label,
                 max_length=truncate_length,
                 hf_tokenizer=self.tokenizer,
                 request_id=request_id,
+                num_samples=args.n_samples_per_prompt,
             )
             refs.append(ref)
             infos.append(
                 {
                     "id": request_id,
-                    "llm": llm,
                     "ref": ref,
                     "prompt": prompt,
                     "label": label,
