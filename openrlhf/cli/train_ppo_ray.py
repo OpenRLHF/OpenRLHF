@@ -52,14 +52,6 @@ def train(args):
                 f"and {args.vllm_num_engines * args.vllm_tensor_parallel_size}"
             )
 
-        if args.agent_func_path:
-            from openrlhf.trainer.ray.vllm_engine import AgentLLMRayActorAsync as LLMRayActor
-        else:
-            from openrlhf.trainer.ray.vllm_engine import LLMRayActorAsync as LLMRayActor
-
-            # Legacy sync actor:
-            # from openrlhf.trainer.ray.vllm_engine import LLMRayActorSync as LLMRayActor
-
         vllm_engines = create_vllm_engines(
             args.vllm_num_engines,
             args.vllm_tensor_parallel_size,
@@ -72,11 +64,7 @@ def train(args):
             pg if args.colocate_all_models and not args.async_train else None,
             args.vllm_gpu_memory_utilization,
             args.vllm_enable_sleep,
-            LLMRayActor,
             "processed_logprobs" if args.enable_vllm_is_correction else None,
-            args.agent_func_path,
-            args.remote_rm_url,
-            args.micro_rollout_batch_size,
         )
 
     actor_model = RayActorGroup(

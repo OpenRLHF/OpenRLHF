@@ -86,9 +86,9 @@ class AgentInstance(AgentInstanceBase):
         """
         print(f"step_idx: {self.step_idx}, max_steps: {self.max_steps}")
 
-        states["observation_text"]
+        observation_text = states["observation_text"]
         action_text = states["action_text"]
-        states["label"]
+        label = states["label"]
 
         # apply action and receive next observation, reward
         # and whether the episode has ended
@@ -141,6 +141,6 @@ class AgentExecutor(AgentExecutorBase):
     def __init__(self, max_steps, max_length, llm_engine, hf_tokenizer, result_queue):
         super().__init__(AgentInstance, max_steps, max_length, llm_engine, hf_tokenizer, result_queue)
 
-    async def execute(self, prompt, label, sampling_params, request_group_id=None):
+    async def execute(self, prompt, label, sampling_params, request_id=None):
         # You could override the execute function of AgentExecutorBase to add custom agent running logic
-        return await super().execute(prompt, label, sampling_params, request_group_id)
+        return await super().execute(prompt, label, sampling_params, request_id)

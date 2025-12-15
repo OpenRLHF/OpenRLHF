@@ -8,6 +8,7 @@ from tqdm import tqdm
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.trainer.ppo_utils.filter_hooks import DynamicFilteringHook, FilterHookBase, NoOpFilterHook
 from openrlhf.trainer.ppo_utils.misc import build_prompt_dataloader
+from openrlhf.trainer.ray.vllm_engine.executor import AgentRequestExecutor, GenerationRequestExecutor
 from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
@@ -161,7 +162,7 @@ class RemoteSampleGenerater:
         vllm_engines: List,
         dataset_split: str,
         generate_kwargs: dict,
-        for_eval: bool = False,
+        eval: bool = False,
     ):
         self.strategy = strategy
         self.args = strategy.args
@@ -292,6 +293,15 @@ class RemoteSampleGenerater:
 
         n_samples_per_prompt = kwargs.get("n_samples_per_prompt", args.n_samples_per_prompt)
         engine_count = len(llms)
+        if self.args.agent_func_path:
+            executor_cls = AgentRequestExecutor
+            executor_kwargs = {"agent_func_path": self.args.agent_func_path}
+        else:
+            executor_cls = GenerationRequestExecutor
+            executor_kwargs = {
+                "remote_rm_url": self.args.remote_rm_url,
+                "remote_rm_batch_size": self.args.micro_rollout_batch_size,
+            }
 
         refs = []
         infos = []
@@ -306,7 +316,9 @@ class RemoteSampleGenerater:
                 labels=batched_labels,
                 max_length=truncate_length,
                 hf_tokenizer=self.tokenizer,
-                request_group_id=request_id,
+                request_id=request_id,
+                executor_cls=executor_cls,
+                executor_kwargs=executor_kwargs,
             )
             refs.append(ref)
             infos.append(

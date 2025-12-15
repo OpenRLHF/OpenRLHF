@@ -1,0 +1,291 @@
+import asyncio
+import os
+from copy import deepcopy
+from typing import Any, List
+
+import ray
+import vllm
+from packaging import version
+from ray.util.placement_group import placement_group
+from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+
+from ..utils import get_bundle_indices, ray_noset_visible_devices
+
+
+class LLMEngineActorBase:
+    """Shared setup for Ray actors backed by vLLM."""
+
+    def __init__(self, *args, bundle_indices: list = None, **kwargs):
+        self._configure_device_env(
+            backend=kwargs.get("distributed_executor_backend"),
+            bundle_indices=bundle_indices,
+            num_gpus=kwargs.pop("num_gpus"),
+        )
+        self._configure_vllm_env(version, vllm, kwargs.pop("full_determinism", False))
+
+        self.kwargs = kwargs
+
+    def _configure_device_env(self, backend, bundle_indices, num_gpus):
+        if backend == "ray":
+            # a hack to make the script work.
+            # stop ray from manipulating *_VISIBLE_DEVICES
+            # at the top-level when the distributed_executor_backend is ray.
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+            os.environ.pop("ROCR_VISIBLE_DEVICES", None)
+            os.environ.pop("HIP_VISIBLE_DEVICES", None)
+        elif ray_noset_visible_devices():
+            # We need to set CUDA_VISIBLE_DEVICES to the ray assigned GPU
+            # when the distributed_executor_backend is not ray and
+            # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES is set.
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(ray.get_gpu_ids()[0])
+
+        if bundle_indices is not None:
+            os.environ["VLLM_RAY_PER_WORKER_GPUS"] = str(num_gpus)
+            os.environ["VLLM_RAY_BUNDLE_INDICES"] = ",".join(map(str, bundle_indices))
+            print(f"creating LLM with bundle_indices={bundle_indices}")
+
+    def _configure_vllm_env(self, version, vllm, full_determinism: bool):
+        assert version.parse(vllm.__version__) > version.parse(
+            "0.8.5"
+        ), "Streaming VLLM version must be greater than 0.8.5"
+
+        if version.parse(vllm.__version__) >= version.parse("0.9.0"):
+            os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
+
+        if full_determinism:
+            # https://github.com/vllm-project/vllm/blob/effc5d24fae10b29996256eb7a88668ff7941aed/examples/offline_inference/reproduciblity.py#L11
+            os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+
+        if not os.environ.get("RAY_ADDRESS"):
+            from ray._private.worker import global_worker
+
+            os.environ["RAY_ADDRESS"] = global_worker.gcs_client.address
+
+        os.environ["VLLM_USE_V1"] = "1"
+
+
+@ray.remote
+class LLMRayActorAsync(LLMEngineActorBase):
+    """Unified async actor that delegates work to provided executors."""
+
+    async def __init__(self, *args, bundle_indices: list = None, **kwargs):
+        self._executor_cache = {}
+        super().__init__(*args, bundle_indices=bundle_indices, **kwargs)
+
+        # Number of actors that will send prompt to this engine
+        self.result_queue = asyncio.Queue()
+        self.semaphore = asyncio.Semaphore(int(os.environ.get("OPENRLHF_ASYNC_NUM_TASKS", 128)))
+
+        engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
+        self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
+        await self.llm.is_sleeping()
+
+    async def init_process_group(
+        self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray
+    ):
+        return await self.llm.collective_rpc(
+            "init_process_group",
+            args=(master_address, master_port, rank_offset, world_size, group_name, backend, use_ray),
+        )
+
+    async def update_weight(self, name, dtype, shape, empty_cache=False):
+        return await self.llm.collective_rpc(
+            "update_weight",
+            args=(name, dtype, shape, empty_cache),
+        )
+
+    async def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handles, empty_cache=False):
+        return await self.llm.collective_rpc(
+            "update_weight_cuda_ipc",
+            args=(name, dtype, shape, ipc_handles, empty_cache),
+        )
+
+    async def reset_prefix_cache(self):
+        await self.llm.reset_prefix_cache()
+
+    async def sleep(self, level=1):
+        await self.llm.sleep(level=level)
+
+    async def wake_up(self):
+        await self.llm.wake_up()
+
+    def _normalize_for_cache(self, value):
+        if isinstance(value, dict):
+            return tuple(sorted((k, self._normalize_for_cache(v)) for k, v in value.items()))
+        if isinstance(value, (tuple, list)):
+            return tuple(self._normalize_for_cache(v) for v in value)
+        return value
+
+    def _get_executor(self, executor_cls, executor_kwargs):
+        key = (executor_cls, self._normalize_for_cache(executor_kwargs))
+        if key not in self._executor_cache:
+            self._executor_cache[key] = executor_cls(
+                llm_engine=self.llm,
+                result_queue=self.result_queue,
+                semaphore=self.semaphore,
+                **(executor_kwargs or {}),
+            )
+        return self._executor_cache[key]
+
+    async def add_requests(
+        self,
+        sampling_params,
+        prompts,
+        labels,
+        max_length,
+        hf_tokenizer=None,
+        request_id=None,
+        executor_cls=None,
+        executor_kwargs=None,
+    ):
+        if executor_cls is None:
+            raise ValueError("executor_cls must be provided for add_requests.")
+
+        merged_kwargs = dict(executor_kwargs or {})
+
+        # Ensure agent executors have required configuration.
+        try:
+            from .executor import AgentRequestExecutor
+
+            if executor_cls is AgentRequestExecutor and not merged_kwargs.get("agent_func_path"):
+                raise ValueError("agent_func_path must be provided for AgentRequestExecutor via executor_kwargs.")
+        except ImportError:
+            pass
+
+        executor = self._get_executor(executor_cls, merged_kwargs)
+
+        tasks = []
+        for prompt, label in zip(prompts, labels):
+            tasks.append(
+                executor.execute(
+                    prompt,
+                    label,
+                    deepcopy(sampling_params),
+                    max_length,
+                    hf_tokenizer=hf_tokenizer,
+                    request_id=request_id,
+                )
+            )
+
+        await asyncio.gather(*tasks)
+
+    async def get_responses(self, request_id=None):
+        if request_id is None:
+            results = []
+            while not self.result_queue.empty():
+                results.append(await self.result_queue.get())
+            return results
+
+        matching_results = []
+        unmatched = []
+
+        while True:
+            try:
+                item = self.result_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+            if item.get("request_id") == request_id:
+                matching_results.append(item)
+            else:
+                unmatched.append(item)
+
+        for item in unmatched:
+            self.result_queue.put_nowait(item)
+
+        return matching_results
+
+
+def create_vllm_engines(
+    num_engines: int,
+    tensor_parallel_size: int,
+    pretrain: str,
+    seed: int,
+    full_determinism: bool,
+    enable_prefix_caching: bool,
+    enforce_eager: bool,
+    max_model_len: int,
+    shared_pg=None,
+    gpu_memory_utilization=None,
+    vllm_enable_sleep=False,
+    logprobs_mode=None,
+):
+    """Spin up a set of vLLM Ray actors with consistent placement."""
+    vllm_engines = []
+    distributed_executor_backend = "uni" if tensor_parallel_size == 1 else "ray"
+    use_hybrid_engine = shared_pg is not None
+    num_gpus = int(tensor_parallel_size == 1)
+    if use_hybrid_engine and tensor_parallel_size == 1:
+        # allow two engines to share one GPU in hybrid mode
+        num_gpus = 0.2
+
+    if not use_hybrid_engine:
+        # Create a big placement group to ensure that all engines are packed
+        bundles = [{"GPU": 1, "CPU": 1} for _ in range(num_engines * tensor_parallel_size)]
+        shared_pg = placement_group(bundles, strategy="PACK")
+        ray.get(shared_pg.ready())
+
+    for i in range(num_engines):
+        bundle_indices = None
+        if tensor_parallel_size > 1:
+            bundle_indices = get_bundle_indices(shared_pg, i, tensor_parallel_size)
+
+        scheduling_strategy = PlacementGroupSchedulingStrategy(
+            placement_group=shared_pg,
+            placement_group_capture_child_tasks=True,
+            placement_group_bundle_index=bundle_indices[0] if bundle_indices else i,
+        )
+
+        actor_kwargs = {
+            "model": pretrain,
+            "enforce_eager": enforce_eager,
+            "worker_extension_cls": "openrlhf.trainer.ray.vllm_worker_wrap.WorkerWrap",
+            "tensor_parallel_size": tensor_parallel_size,
+            "seed": seed + i,
+            "distributed_executor_backend": distributed_executor_backend,
+            "max_model_len": max_model_len,
+            "enable_prefix_caching": enable_prefix_caching,
+            "dtype": "bfloat16",
+            "trust_remote_code": True,
+            "full_determinism": full_determinism,
+            "gpu_memory_utilization": gpu_memory_utilization,
+            "bundle_indices": bundle_indices,
+            "num_gpus": 0.2 if use_hybrid_engine else 1,
+            "enable_sleep_mode": vllm_enable_sleep,
+        }
+
+        if logprobs_mode:
+            actor_kwargs["logprobs_mode"] = logprobs_mode
+            actor_kwargs["max_logprobs"] = 1
+            assert version.parse(vllm.__version__) > version.parse(
+                "0.10.0"
+            ), "vLLM > 0.10.0 is required for logprobs_mode"
+
+        vllm_engines.append(
+            LLMRayActorAsync.options(
+                num_cpus=num_gpus,
+                num_gpus=num_gpus,
+                scheduling_strategy=scheduling_strategy,
+            ).remote(**actor_kwargs)
+        )
+
+    if vllm_enable_sleep:
+        batch_vllm_engine_call(vllm_engines, "sleep")
+
+    return vllm_engines
+
+
+def batch_vllm_engine_call(engines: List[Any], method_name: str, *args, rank_0_only: bool = True, **kwargs):
+    """Call the same method on a list of engines and gather results."""
+    import torch
+
+    if torch.distributed.is_initialized():
+        if rank_0_only and torch.distributed.get_rank() != 0:
+            return None
+
+    refs = []
+    for engine in engines:
+        method = getattr(engine, method_name)
+        refs.append(method.remote(*args, **kwargs))
+
+    return ray.get(refs)

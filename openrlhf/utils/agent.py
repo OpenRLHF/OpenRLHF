@@ -42,7 +42,7 @@ class AgentExecutorBase(ABC):
             final_output = request_output
         return final_output
 
-    async def execute(self, prompt, label, sampling_params, request_group_id=None):
+    async def execute(self, prompt, label, sampling_params, request_id=None):
         async with self.semaphore:
             # Create a unique agent instance for this prompt with tokenizer
             agent_instance = self.agent_instance_cls.remote()
@@ -138,6 +138,6 @@ class AgentExecutorBase(ABC):
                 "extra_logs": extra_logs,
                 "action_ranges": action_ranges,
                 "rollout_log_probs": rollout_log_probs,
-                "request_group_id": request_group_id,
+                "request_id": request_id,
             }
             await self.result_queue.put(final_response)
