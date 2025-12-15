@@ -1,6 +1,6 @@
 import uuid
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import ray
 import torch
@@ -9,7 +9,6 @@ from tqdm import tqdm
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.trainer.ppo_utils.filter_hooks import DynamicFilteringHook, FilterHookBase, NoOpFilterHook
 from openrlhf.trainer.ppo_utils.misc import build_prompt_dataloader
-from openrlhf.trainer.ray.vllm_engine.executor import RequestExecutorActor
 from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
@@ -150,14 +149,15 @@ class Sample:
         )
 
 
-class RemoteSampleGenerater:
-    """Stateless sampler: caller decides which split to build."""
+class RemoteSampleGenerator:
+    """Stateless sampler: pulls prompts, dispatches to rollout workers, applies filters."""
 
     def __init__(
         self,
         strategy,
         tokenizer,
         vllm_engines: List,
+        rollout_workers: List,
         dataset_split: str,
         generate_kwargs: dict,
         eval: bool = False,
@@ -167,25 +167,20 @@ class RemoteSampleGenerater:
         self.generate_kwargs = generate_kwargs
 
         self.tokenizer = tokenizer
-        self.vllm_engines = vllm_engines
+        self.vllm_engines = vllm_engines or []
+        self.rollout_workers = rollout_workers or []
 
-        # CPU executor actor pool to offload tokenization/reward/agent logic.
-        num_workers = getattr(self.args, "rollout_executor_workers", len(self.vllm_engines))
-        worker_cpus = getattr(self.args, "rollout_executor_worker_cpus", 128)
-        self.executor_actors = []
-        for _ in range(num_workers):
-            actor = RequestExecutorActor.options(num_cpus=worker_cpus).remote(
-                agent_func_path=self.args.agent_func_path,
-                remote_rm_url=self.args.remote_rm_url,
-                remote_rm_batch_size=self.args.micro_rollout_batch_size,
-                max_tasks=worker_cpus,
-            )
-            self.executor_actors.append(actor)
-        self._executor_rr = 0
+        if not self.vllm_engines:
+            raise ValueError("vLLM engines must be provided to build the rollout sampler.")
+        if not self.rollout_workers:
+            raise ValueError("Rollout workers must be provided to build the rollout sampler.")
 
         self.prompts_dataloader, self.max_steps = build_prompt_dataloader(
             self.args, strategy, self.tokenizer, dataset_split
         )
+        # Track round-robin positions separately in case engines/workers differ.
+        self._engine_count = len(self.vllm_engines)
+        self._worker_count = len(self.rollout_workers)
 
     def state_dict(self) -> dict:
         return self.prompts_dataloader.state_dict()
@@ -236,6 +231,7 @@ class RemoteSampleGenerater:
         self, dataloader_iter, num_prompts: int, **generate_kwargs
     ) -> Tuple[List[Sample], bool, int]:
         """Generate a batch of Samples, applying filter hooks if configured."""
+        generate_kwargs = dict(generate_kwargs)  # avoid mutating caller state
         filter_hook: FilterHookBase = generate_kwargs.pop("filter_hook", NoOpFilterHook())
 
         total_prompt_processed = 0
@@ -244,15 +240,15 @@ class RemoteSampleGenerater:
         if exhausted and len(prompts) < num_prompts:
             return [], True, 0
 
-        remaining_refs, remaining_infos = self._dispatch_prompt_requests(prompts, labels, metadatas, **generate_kwargs)
-        ref_map = {info["ref"]: info for info in remaining_infos}
+        pending_refs, ref_map = self._dispatch_prompt_requests(prompts, labels, metadatas, **generate_kwargs)
         total_prompt_processed += len(prompts)
 
-        accepted_samples = []
-        num_samples = num_prompts * self.args.n_samples_per_prompt
-        pbar = tqdm(range(num_prompts), desc=f"Generate samples")
-        while remaining_refs:
-            ready_refs, remaining_refs = ray.wait(remaining_refs, num_returns=1, timeout=10.0)
+        accepted_samples: List[Sample] = []
+        target_samples = num_prompts * self.args.n_samples_per_prompt
+        pbar = tqdm(range(num_prompts), desc="Generate samples")
+
+        while pending_refs:
+            ready_refs, pending_refs = ray.wait(pending_refs, num_returns=1, timeout=10.0)
             for ref in ready_refs:
                 info = ref_map.pop(ref, None)
                 if info is None:
@@ -262,9 +258,9 @@ class RemoteSampleGenerater:
                 outputs = ray.get(ref)
                 for output in outputs:
                     output["metadata"] = info.get("metadata")
-                sample_list = [self._create_sample_from_output(output, **generate_kwargs) for output in outputs]
 
-                kept = filter_hook.apply(sample_list)
+                samples = [self._create_sample_from_output(output, **generate_kwargs) for output in outputs]
+                kept = filter_hook.apply(samples)
                 if kept:
                     accepted_samples.extend(kept)
                     pbar.set_postfix(
@@ -274,67 +270,60 @@ class RemoteSampleGenerater:
                         }
                     )
                     pbar.update()
-                    if len(accepted_samples) >= num_samples:
-                        for ref in remaining_refs:
-                            ray.cancel(ref)
-                        return accepted_samples[:num_samples], exhausted, total_prompt_processed
-                elif not exhausted:
-                    prompts, labels, metadatas, exhausted = _collect_prompts(dataloader_iter, 1)
-                    if not prompts:
-                        continue
+                    if len(accepted_samples) >= target_samples:
+                        for remaining_ref in pending_refs:
+                            ray.cancel(remaining_ref)
+                        return accepted_samples[:target_samples], exhausted, total_prompt_processed
 
-                    new_refs, new_infos = self._dispatch_prompt_requests(prompts, labels, metadatas, **generate_kwargs)
-                    if new_refs is not None:
-                        remaining_refs.extend(new_refs)
+                # If nothing kept and still prompts available, top up a new prompt.
+                if not kept and not exhausted:
+                    new_prompts, new_labels, new_metadatas, exhausted = _collect_prompts(dataloader_iter, 1)
+                    if new_prompts:
+                        new_refs, new_infos = self._dispatch_prompt_requests(
+                            new_prompts, new_labels, new_metadatas, **generate_kwargs
+                        )
+                        pending_refs.extend(new_refs)
                         ref_map.update({info["ref"]: info for info in new_infos})
-                        total_prompt_processed += len(prompts)
+                        total_prompt_processed += len(new_prompts)
 
-        if exhausted and len(accepted_samples) < num_samples:
+        if exhausted and len(accepted_samples) < target_samples:
             return [], True, 0
 
-        return accepted_samples[:num_samples], exhausted, total_prompt_processed
+        return accepted_samples[:target_samples], exhausted, total_prompt_processed
 
     def _dispatch_prompt_requests(
         self, all_prompts: List[str], all_labels: List[str], all_metadatas: List[Any], **kwargs
-    ) -> Tuple[List, List[dict]]:
-        llms = self.vllm_engines
-        args = self.strategy.args
-
-        sampling_params = _build_sampling_params(args, **kwargs)
+    ) -> Tuple[List, Dict]:
+        """Dispatch a set of prompts to rollout workers and return refs + metadata map."""
+        sampling_params = _build_sampling_params(self.args, **kwargs)
         truncate_length = kwargs.get("prompt_max_len", 1024) + kwargs.get("max_new_tokens", 1024)
 
         refs = []
-        infos = []
+        ref_map: Dict = {}
         for idx, (prompt, label, metadata) in enumerate(zip(all_prompts, all_labels, all_metadatas)):
-            if not self.executor_actors:
-                raise RuntimeError("Executor actor pool is empty.")
-
             request_id = f"prompt_{random_uuid()}"
-            executor_actor = self.executor_actors[self._executor_rr]
-            self._executor_rr = (self._executor_rr + 1) % len(self.executor_actors)
+            llm_engine = self.vllm_engines[idx % self._engine_count]
+            rollout_worker = self.rollout_workers[idx % self._worker_count]
 
-            ref = executor_actor.execute.remote(
-                llm_engine=llms[idx % len(llms)],
+            ref = rollout_worker.execute.remote(
+                llm_engine=llm_engine,
                 sampling_params=sampling_params,
                 prompt=prompt,
                 label=label,
                 max_length=truncate_length,
                 hf_tokenizer=self.tokenizer,
                 request_id=request_id,
-                num_samples=args.n_samples_per_prompt,
+                num_samples=self.args.n_samples_per_prompt,
             )
             refs.append(ref)
-            infos.append(
-                {
-                    "id": request_id,
-                    "ref": ref,
-                    "prompt": prompt,
-                    "label": label,
-                    "metadata": metadata,
-                }
-            )
+            ref_map[ref] = {
+                "id": request_id,
+                "prompt": prompt,
+                "label": label,
+                "metadata": metadata,
+            }
 
-        return refs, infos
+        return refs, ref_map
 
     def _create_sample_from_output(self, output, **kwargs) -> Sample:
         """Wrap output parsing to keep truncation logic in one place."""

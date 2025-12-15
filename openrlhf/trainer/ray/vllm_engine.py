@@ -10,7 +10,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from vllm.inputs import TokensPrompt
 from vllm.utils import random_uuid
 
-from ..utils import get_bundle_indices, ray_noset_visible_devices
+from .utils import get_bundle_indices, ray_noset_visible_devices
 
 
 class LLMEngineActorBase:
@@ -106,7 +106,7 @@ class LLMRayActorAsync(LLMEngineActorBase):
         await self.llm.wake_up()
 
     async def generate(self, prompt_token_ids, sampling_params):
-        """Token-level generation for Agent executors."""
+        """Token-level generation for RolloutWorker executors."""
         generator = self.llm.generate(
             TokensPrompt(prompt_token_ids=prompt_token_ids),
             deepcopy(sampling_params),

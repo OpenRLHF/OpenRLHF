@@ -1,5 +1,6 @@
 import os
 from abc import ABC
+from typing import Dict, Tuple
 
 import ray
 from tqdm import tqdm
@@ -8,7 +9,7 @@ from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
 from openrlhf.trainer.ppo_utils.kl_controller import build_kl_controller
 from openrlhf.trainer.ppo_utils.loggers import TensorboardLogger, WandbLogger
 from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
-from openrlhf.trainer.ppo_utils.sample_maker import RemoteSampleGenerater
+from openrlhf.trainer.ppo_utils.sample_maker import RemoteSampleGenerator
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils.deepspeed import DeepspeedStrategy
@@ -61,7 +62,7 @@ class BasePPOTrainer(ABC):
         self.wandb_logger = WandbLogger(self.args) if self.args.use_wandb else None
         self.tensorboard_logger = TensorboardLogger(self.args) if self.args.use_tensorboard else None
 
-    def train_step(self, samples, global_step):
+    def train_step(self, samples, global_step: int) -> Tuple[Dict, int]:
         # Turn raw samples into PPO-ready trajectories with rewards.
         experiences = self.experience_maker.make_experience_batch(samples)
 
@@ -99,7 +100,7 @@ class BasePPOTrainer(ABC):
     def fit(self):
         raise NotImplementedError("fit method is not implemented")
 
-    def ppo_train(self, global_steps):
+    def ppo_train(self, global_steps: int) -> Dict:
         """Run one PPO train step for critic + actor and return merged status dict."""
         status: dict = {}
 
@@ -133,7 +134,7 @@ class BasePPOTrainer(ABC):
 
         return status
 
-    def broadcast_to_vllm(self):
+    def broadcast_to_vllm(self) -> None:
         if self.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
@@ -142,7 +143,7 @@ class BasePPOTrainer(ABC):
         if self.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "sleep")
 
-    def save_logs_and_checkpoints(self, global_step, logs_dict=None, client_states=None):
+    def save_logs_and_checkpoints(self, global_step: int, logs_dict=None, client_states=None) -> None:
         logs_dict = logs_dict or {}
         if global_step % self.args.logging_steps == 0:
             if self.wandb_logger:
@@ -166,7 +167,7 @@ class BasePPOTrainer(ABC):
                 refs.extend(self.critic_model_group.async_run_method(method_name="save_checkpoint", tag=tag))
             ray.get(refs)
 
-    def init_checkpoint_states(self):
+    def init_checkpoint_states(self) -> Dict:
         ckpt_path = os.path.join(self.args.ckpt_path, "_actor")
         if self.args.load_checkpoint and os.path.exists(ckpt_path):
             checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
@@ -192,7 +193,8 @@ class PPOTrainer(BasePPOTrainer):
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,
         reference_model_group: RayActorGroup,
-        vllm_engines=None,
+        vllm_engines,
+        rollout_workers,
         prompt_split: str = "train",
         eval_split: str = "test",
         **generate_kwargs,
@@ -205,10 +207,11 @@ class PPOTrainer(BasePPOTrainer):
             strategy.args.save_steps = float("inf")  # do not save ckpt
 
         # rollout
-        self.train_sample_generater = RemoteSampleGenerater(
+        self.train_sample_generator = RemoteSampleGenerator(
             strategy=strategy,
             tokenizer=tokenizer,
             vllm_engines=vllm_engines,
+            rollout_workers=rollout_workers,
             dataset_split=prompt_split,
             generate_kwargs=generate_kwargs,
         )
@@ -232,18 +235,18 @@ class PPOTrainer(BasePPOTrainer):
         # Keep vLLM weights and dataloader states in sync when resuming.
         if global_step:
             self.broadcast_to_vllm()
-            self.train_sample_generater.load_state_dict(checkpoint_states["data_loader_state_dict"])
+            self.train_sample_generator.load_state_dict(checkpoint_states["data_loader_state_dict"])
 
         for episode in range(start_episode, self.args.num_episodes):
             pbar = tqdm(
-                range(len(self.train_sample_generater.prompts_dataloader)),
+                range(len(self.train_sample_generator.prompts_dataloader)),
                 desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
                 # initial=global_step, # TODO: init step
             )
 
             while True:
                 # Draw one mini-batch of prompts; stop when loader is exhausted.
-                samples, pass_rate, prompts_used, is_exhausted = self.train_sample_generater.make_sample_batch()
+                samples, pass_rate, prompts_used, is_exhausted = self.train_sample_generator.make_sample_batch()
                 if is_exhausted:
                     break
 
@@ -260,7 +263,7 @@ class PPOTrainer(BasePPOTrainer):
                 client_states = {
                     "global_step": global_step,
                     "episode": episode,
-                    "data_loader_state_dict": self.train_sample_generater.state_dict(),
+                    "data_loader_state_dict": self.train_sample_generator.state_dict(),
                 }
                 self.save_logs_and_checkpoints(global_step, status, client_states)
 
@@ -273,4 +276,4 @@ class PPOTrainer(BasePPOTrainer):
             self.tensorboard_logger.close()
 
     def get_max_steps(self):
-        return self.train_sample_generater.max_steps
+        return self.train_sample_generator.max_steps

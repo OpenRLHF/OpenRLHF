@@ -4,7 +4,7 @@ import ray
 from tqdm import tqdm
 
 from openrlhf.trainer.ppo_trainer import BasePPOTrainer
-from openrlhf.trainer.ppo_utils.sample_maker import RemoteSampleGenerater
+from openrlhf.trainer.ppo_utils.sample_maker import RemoteSampleGenerator
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.logging_utils import init_logger
@@ -17,11 +17,7 @@ logger = init_logger(__name__)
 class BufferActor:
     """Bounded queue with simple backpressure logging between generator/trainer."""
 
-    def __init__(
-        self,
-        queue_size: int = 1,
-        log_interval: int = 10,
-    ):
+    def __init__(self, queue_size: int = 1, log_interval: int = 10):
         self.queue = asyncio.Queue(maxsize=queue_size)
         self.log_interval = log_interval
 
@@ -67,20 +63,12 @@ class SignalActor:
         """Wait for weight update to be allowed."""
         return await self.update_weights_event.wait()
 
-    def set_generating(self, allow_generating):
-        """Set generation state.
-
-        Args:
-            is_generating: True to allow generation, False to block it
-        """
+    def set_generating(self, allow_generating: bool):
+        """Set generation state."""
         self._toggle_event(self.generating_event, allow_generating)
 
-    def set_update_weights(self, allow_updating):
-        """Set weight update state.
-
-        Args:
-            is_updating: True to allow weight updates, False to block it
-        """
+    def set_update_weights(self, allow_updating: bool):
+        """Set weight update state."""
         self._toggle_event(self.update_weights_event, allow_updating)
 
 
@@ -90,12 +78,13 @@ class RolloutActor:
         self,
         pretrain,
         strategy,
-        vllm_engines=None,
+        vllm_engines,
+        rollout_workers,
         prompt_split="train",
         eval_split="test",
         *,
-        signal_actor=None,
-        buffer_actor=None,
+        signal_actor,
+        buffer_actor,
         **generate_kwargs,
     ):
         tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
@@ -103,10 +92,11 @@ class RolloutActor:
         self.strategy = strategy
         self.args = strategy.args
 
-        self.train_sample_generater = RemoteSampleGenerater(
+        self.train_sample_generator = RemoteSampleGenerator(
             strategy=strategy,
             tokenizer=tokenizer,
             vllm_engines=vllm_engines,
+            rollout_workers=rollout_workers,
             dataset_split=prompt_split,
             generate_kwargs=generate_kwargs,
         )
@@ -115,15 +105,15 @@ class RolloutActor:
         self.buffer_actor = buffer_actor
 
     def get_max_steps(self):
-        return self.train_sample_generater.max_steps
+        return self.train_sample_generator.max_steps
 
     def load_state_dict(self, state_dict):
-        self.train_sample_generater.load_state_dict(state_dict)
+        self.train_sample_generator.load_state_dict(state_dict)
 
     def fit(self, episode, global_step):
         for episode in range(episode, self.args.num_episodes):
             pbar = tqdm(
-                range(len(self.train_sample_generater.prompts_dataloader)),
+                range(len(self.train_sample_generator.prompts_dataloader)),
                 desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
                 # initial=global_step, # TODO
             )
@@ -135,7 +125,7 @@ class RolloutActor:
                 ray.get(self.signal_actor.wait_generating.remote())
                 ray.get(self.signal_actor.set_update_weights.remote(False))
 
-                samples, pass_rate, prompts_used, is_exhausted = self.train_sample_generater.make_sample_batch()
+                samples, pass_rate, prompts_used, is_exhausted = self.train_sample_generator.make_sample_batch()
 
                 # Re-open weight updates now that the batch is ready (or we've hit the end).
                 ray.get(self.signal_actor.set_update_weights.remote(True))
@@ -145,7 +135,7 @@ class RolloutActor:
                 # Send the produced batch to the controller for training.
                 ray.get(
                     self.buffer_actor.put.remote(
-                        (samples, episode, self.train_sample_generater.state_dict(), pass_rate)
+                        (samples, episode, self.train_sample_generator.state_dict(), pass_rate)
                     )
                 )
                 pbar.update(prompts_used)
@@ -163,9 +153,9 @@ class TrainActor(BasePPOTrainer):
         critic_model_group,
         reward_model_group,
         reference_model_group,
-        vllm_engines=None,
-        signal_actor=None,
-        buffer_actor=None,
+        vllm_engines,
+        signal_actor,
+        buffer_actor,
     ):
         tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
 
@@ -232,7 +222,8 @@ class PPOTrainerAsync:
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,
         reference_model_group: RayActorGroup,
-        vllm_engines=None,
+        vllm_engines,
+        rollout_workers,
         prompt_split: str = "train",
         eval_split: str = "test",
         **generate_kwargs,
@@ -256,6 +247,7 @@ class PPOTrainerAsync:
             pretrain=pretrain,
             strategy=strategy,
             vllm_engines=vllm_engines,
+            rollout_workers=rollout_workers,
             prompt_split=prompt_split,
             eval_split=eval_split,
             signal_actor=self.signal_actor,
