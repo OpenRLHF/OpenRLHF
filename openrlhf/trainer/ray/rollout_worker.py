@@ -29,7 +29,6 @@ class RolloutExecutorBase:
         sampling_params,
         max_length: int,
         hf_tokenizer,
-        request_id: Optional[str],
         llm_engine,
         semaphore: Optional[asyncio.Semaphore] = None,
     ):
@@ -40,7 +39,6 @@ class RolloutExecutorBase:
                 sampling_params=sampling_params,
                 max_length=max_length,
                 hf_tokenizer=hf_tokenizer,
-                request_id=request_id,
                 llm_engine=llm_engine,
             )
 
@@ -53,7 +51,6 @@ class RolloutExecutorBase:
         sampling_params,
         max_length: int,
         hf_tokenizer,
-        request_id: Optional[str],
         llm_engine,
     ):
         raise NotImplementedError("Subclasses must implement execute.")
@@ -69,7 +66,6 @@ class GenerationExecutor(RolloutExecutorBase):
         sampling_params,
         max_length: int,
         hf_tokenizer,
-        request_id: Optional[str],
         llm_engine,
     ):
         output = await self._generate_with_engine(
@@ -77,7 +73,6 @@ class GenerationExecutor(RolloutExecutorBase):
             sampling_params=deepcopy(sampling_params),
             max_length=max_length,
             hf_tokenizer=hf_tokenizer,
-            request_id=request_id,
             llm_engine=llm_engine,
         )
 
@@ -92,7 +87,7 @@ class GenerationExecutor(RolloutExecutorBase):
         )
         return output
 
-    async def _generate_with_engine(self, prompt, sampling_params, max_length, hf_tokenizer, request_id, llm_engine):
+    async def _generate_with_engine(self, prompt, sampling_params, max_length, hf_tokenizer, llm_engine):
         # Tokenize the initial observation.
         prompt_token_ids = hf_tokenizer(prompt, add_special_tokens=False, return_tensors="pt")["input_ids"][0].tolist()
 
@@ -120,7 +115,6 @@ class GenerationExecutor(RolloutExecutorBase):
             "observation_tokens": observation_tokens,
             "action_ranges": action_ranges,
             "rollout_log_probs": rollout_log_probs,
-            "request_id": request_id,
         }
 
 
@@ -138,7 +132,6 @@ class RewardedGenerationExecutor(GenerationExecutor):
         sampling_params,
         max_length: int,
         hf_tokenizer,
-        request_id: Optional[str],
         llm_engine,
     ):
         output = await super().execute(
@@ -147,7 +140,6 @@ class RewardedGenerationExecutor(GenerationExecutor):
             sampling_params=sampling_params,
             max_length=max_length,
             hf_tokenizer=hf_tokenizer,
-            request_id=request_id,
             llm_engine=llm_engine,
         )
 
@@ -198,7 +190,6 @@ class AgentExecutor(RolloutExecutorBase):
         sampling_params,
         max_length: int,
         hf_tokenizer,
-        request_id: Optional[str],
         llm_engine,
     ):
         agent_executor = self.agent_executor_cls(
@@ -206,7 +197,7 @@ class AgentExecutor(RolloutExecutorBase):
             llm_engine=llm_engine,
             hf_tokenizer=hf_tokenizer,
         )
-        return await agent_executor.execute(prompt, label, sampling_params, request_id)
+        return await agent_executor.execute(prompt, label, sampling_params)
 
     def _load_agent_executor_cls(self, agent_func_path: str):
         assert agent_func_path.endswith(".py"), "Agent path must be a Python file"
@@ -252,12 +243,11 @@ class RolloutWorker:
         label: str,
         max_length: int,
         hf_tokenizer,
-        request_id: Optional[str],
         num_samples: int = 1,
     ):
         # Fan out requests; semaphore limits concurrency if configured.
         tasks = []
-        for i in range(num_samples):
+        for _ in range(num_samples):
             tasks.append(
                 self.executor.execute_with_semaphore(
                     prompt=prompt,
@@ -266,7 +256,6 @@ class RolloutWorker:
                     max_length=max_length,
                     hf_tokenizer=hf_tokenizer,
                     llm_engine=llm_engine,
-                    request_id=f"{request_id}_{i}" if request_id is not None else None,
                     semaphore=self.semaphore,
                 )
             )

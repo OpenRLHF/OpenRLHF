@@ -301,7 +301,6 @@ class RemoteSampleGenerator:
         refs = []
         ref_map: Dict = {}
         for idx, (prompt, label, metadata) in enumerate(zip(all_prompts, all_labels, all_metadatas)):
-            request_id = f"prompt_{random_uuid()}"
             llm_engine = self.vllm_engines[idx % self._engine_count]
             rollout_worker = self.rollout_workers[idx % self._worker_count]
 
@@ -312,12 +311,10 @@ class RemoteSampleGenerator:
                 label=label,
                 max_length=truncate_length,
                 hf_tokenizer=self.tokenizer,
-                request_id=request_id,
                 num_samples=self.args.n_samples_per_prompt,
             )
             refs.append(ref)
             ref_map[ref] = {
-                "id": request_id,
                 "prompt": prompt,
                 "label": label,
                 "metadata": metadata,

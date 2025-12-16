@@ -24,7 +24,7 @@ class AgentExecutorBase(ABC):
         self.hf_tokenizer = hf_tokenizer
         self.max_length = max_length
 
-    async def execute(self, prompt, label, sampling_params, request_id=None):
+    async def execute(self, prompt, label, sampling_params):
         # Initialize with reset function
         initial_states = {"observation": prompt, "label": label}
         reset_result = await self.agent_instance.reset(initial_states)
@@ -113,7 +113,6 @@ class AgentExecutorBase(ABC):
             "observation_tokens": current_obs_tokens,
             "action_ranges": action_ranges,
             "rollout_log_probs": rollout_log_probs,
-            "request_id": request_id,
             "extra_logs": extra_logs,
         }
         return final_response
