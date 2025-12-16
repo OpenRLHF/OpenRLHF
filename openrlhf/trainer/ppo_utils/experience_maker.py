@@ -291,14 +291,15 @@ class RemoteExperienceMaker:
             num_batch = max(minimum_batch_num, effective_actor_num)
             batch_indexes = get_seqlen_balanced_partitions(total_lengths, num_batch, False)
             for micro_index in batch_indexes:
-                experiences = [rollout_samples[idx] for idx in micro_index]
-                concat_samples = Experience.concat_experiences(experiences, self.tokenizer.pad_token_id)
+                micro_batch = [rollout_samples[idx] for idx in micro_index]
+                concat_samples = Experience.concat_experiences(micro_batch, self.tokenizer.pad_token_id)
                 samples_list.append(concat_samples)
         else:
             batch_size = self.args.micro_rollout_batch_size
             for i in range(0, len(rollout_samples), batch_size):
-                experiences = [rollout_samples[idx] for idx in range(i, i + batch_size)]
-                concat_samples = Experience.concat_experiences(experiences, self.tokenizer.pad_token_id)
+                concat_samples = Experience.concat_experiences(
+                    rollout_samples[i : i + batch_size], self.tokenizer.pad_token_id
+                )
                 samples_list.append(concat_samples)
         return samples_list
 
