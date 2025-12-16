@@ -306,7 +306,7 @@ class RemoteSampleGenerator:
             # Spread work across engines/workers in round-robin order.
             llm_engine = self.vllm_engines[idx % engine_count]
             rollout_worker = self.rollout_workers[idx % worker_count]
-            
+
             # num_unfinished_requests = ray.get(llm_engine.get_num_unfinished_requests.remote())
             # logger.info(f"Current number of unfinished requests in vLLM engine: {num_unfinished_requests}")
 
