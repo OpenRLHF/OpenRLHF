@@ -145,7 +145,7 @@ def train(args):
     else:
         from openrlhf.trainer.ppo_trainer import PPOTrainer
 
-    # Build trainer
+    # init PPO trainer (Single controller)
     ppo_trainer = PPOTrainer.remote(
         args.pretrain,
         strategy,

@@ -2,7 +2,6 @@
 # Author: @yyht GitHub: https://github.com/yyht
 
 import logging
-import time
 from typing import Any, Dict
 
 import gem
@@ -41,6 +40,8 @@ def apply_qwen3_general_template(question: str) -> str:
 #     "qwen3_general": apply_qwen3_general_template,
 #     "code": apply_code_template,
 # }
+
+import time
 
 
 # A simple n-step random environment
