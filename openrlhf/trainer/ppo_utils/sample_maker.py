@@ -1,5 +1,4 @@
 import heapq
-from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import ray
@@ -32,37 +31,6 @@ def _collect_prompts(dataloader_iter, num_prompts: int):
             break
 
     return prompts, labels, exhausted
-
-
-@dataclass
-class Sample:
-    """Lightweight container for rollout outputs prior to model inference."""
-
-    index: Optional[List[int]] = None  # filled by trainer before batching
-    sequences: torch.Tensor
-    attention_mask: torch.Tensor
-    action_mask: torch.Tensor
-    rollout_log_probs: Optional[torch.Tensor]
-    prompts: List[str]
-    labels: List[str]
-    rewards: torch.Tensor
-    scores: torch.Tensor
-    info: dict
-
-    def to_experience(self) -> Experience:
-        """Convert a Sample to an Experience for downstream processing."""
-        return Experience(
-            index=self.index,
-            sequences=self.sequences,
-            attention_mask=self.attention_mask,
-            action_mask=self.action_mask,
-            rollout_log_probs=self.rollout_log_probs,
-            prompts=self.prompts,
-            labels=self.labels,
-            rewards=self.rewards,
-            scores=self.scores,
-            info=self.info,
-        )
 
 
 class RemoteSampleGenerator:
@@ -131,7 +99,7 @@ class RemoteSampleGenerator:
         if state_dict:
             self.prompts_dataloader.load_state_dict(state_dict)
 
-    def make_sample_batch(self) -> Tuple[List[Sample], Optional[float], int, bool]:
+    def make_sample_batch(self) -> Tuple[List[Experience], Optional[float], int, bool]:
         """Produce one batch and indicate if the dataloader is exhausted."""
         if getattr(self, "_dataloader_iter", None) is None:
             self._dataloader_iter = iter(self.prompts_dataloader)
@@ -140,7 +108,7 @@ class RemoteSampleGenerator:
         if self.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
-        samples, prompts_used, exhausted = self._generate_samples(
+        experiences, prompts_used, exhausted = self._generate_samples(
             dataloader_iter=self._dataloader_iter,
             num_prompts=self.args.rollout_batch_size,
             **self.generate_kwargs,
@@ -150,18 +118,18 @@ class RemoteSampleGenerator:
         if self.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "sleep")
 
-        pass_rate = (len(samples) / prompts_used * 100) if prompts_used else None
+        pass_rate = (len(experiences) / prompts_used * 100) if prompts_used else None
 
         if exhausted:
             self._dataloader_iter = None
 
-        return samples, pass_rate, prompts_used, exhausted
+        return experiences, pass_rate, prompts_used, exhausted
 
     @torch.no_grad()
     def _generate_samples(
         self, dataloader_iter, num_prompts: int, **generate_kwargs
-    ) -> Tuple[List[Sample], bool, int]:
-        """Generate a batch of Samples with optional reward filtering."""
+    ) -> Tuple[List[Experience], bool, int]:
+        """Generate a batch of Experiences with optional reward filtering."""
         prompts_used = 0
         prompts, labels, exhausted = _collect_prompts(dataloader_iter, num_prompts)
         # Stop early if the prompt source is fully consumed.
@@ -171,36 +139,36 @@ class RemoteSampleGenerator:
         pending_refs = self._dispatch_prompts(prompts, labels, **generate_kwargs)
         prompts_used += len(prompts)
 
-        accepted_samples: List[Sample] = []
+        accepted_experiences: List[Experience] = []
         num_samples = num_prompts * self.args.n_samples_per_prompt
         pbar = tqdm(range(num_prompts), desc="Generate samples")
 
         while pending_refs:
             ready_refs, pending_refs = ray.wait(pending_refs, num_returns=1, timeout=10.0)
             for ref in ready_refs:
-                # Build Sample objects for each output returned from this worker.
-                samples = list()
-                for output in ray.get(ref):
-                    samples.append(self._create_sample_from_output(output, **generate_kwargs))
+                # Build Experience objects for each output returned from this worker.
+                experiences = [
+                    self._create_experience_from_output(output, **generate_kwargs) for output in ray.get(ref)
+                ]
 
-                # Drop samples if the average score falls outside the allowed range.
-                if self.args.dynamic_filtering and all(s.scores is not None for s in samples):
-                    scores = [s.scores[0].item() for s in samples]
+                # Drop experiences if the average score falls outside the allowed range.
+                if self.args.dynamic_filtering and all(e.scores is not None for e in experiences):
+                    scores = [e.scores[0].item() for e in experiences]
                     avg_reward = sum(scores) / len(scores)
                     min_r, max_r = self.args.dynamic_filtering_reward_range
                     if not (min_r < avg_reward < max_r):
-                        samples = []
+                        experiences = []
 
-                # Accept samples and stop once enough have been gathered.
-                if samples:
-                    accepted_samples.extend(samples)
+                # Accept experiences and stop once enough have been gathered.
+                if experiences:
+                    accepted_experiences.extend(experiences)
                     pbar.set_postfix({"prompts_used": prompts_used})
                     pbar.update()
                     # Stop early once the target batch size is reached.
-                    if len(accepted_samples) >= num_samples:
+                    if len(accepted_experiences) >= num_samples:
                         for remaining_ref in pending_refs:
                             ray.cancel(remaining_ref)
-                        return accepted_samples[:num_samples], prompts_used, exhausted
+                        return accepted_experiences[:num_samples], prompts_used, exhausted
 
                 # If rejected, request a new prompt to keep filling the batch.
                 else:
@@ -210,14 +178,18 @@ class RemoteSampleGenerator:
                     if exhausted:
                         for remaining_ref in pending_refs:
                             ray.cancel(remaining_ref)
-                        return accepted_samples[:num_samples], prompts_used, exhausted
+                        return accepted_experiences[:num_samples], prompts_used, exhausted
                     # Otherwise dispatch the new prompt to keep filling the queue.
                     else:
                         new_refs = self._dispatch_prompts(new_prompts, new_labels, **generate_kwargs)
                         pending_refs.extend(new_refs)
                         prompts_used += len(new_prompts)
 
-        return accepted_samples[:num_samples], prompts_used, exhausted
+        # If the loader is drained and we still lack a full batch, signal exhaustion.
+        if exhausted and len(accepted_experiences) < num_samples:
+            return [], prompts_used, True
+
+        return accepted_experiences[:num_samples], prompts_used, exhausted
 
     def _dispatch_prompts(self, prompts: List[str], labels: List[str], **generate_kwargs) -> List:
         """Send prompts to rollout workers and return Ray object refs."""
@@ -264,8 +236,8 @@ class RemoteSampleGenerator:
 
         return refs
 
-    def _create_sample_from_output(self, output, **generate_kwargs) -> Sample:
-        """Turn a single vLLM response into a Sample."""
+    def _create_experience_from_output(self, output, **generate_kwargs) -> Experience:
+        """Turn a single vLLM response into an Experience."""
         truncate_length = generate_kwargs.get("prompt_max_len", 1024) + generate_kwargs.get("max_new_tokens", 1024)
 
         # Base rollout fields from the output.
@@ -315,7 +287,7 @@ class RemoteSampleGenerator:
                 value = value.flatten()[0].item()
             info[key] = torch.tensor([value])
 
-        return Sample(
+        return Experience(
             sequences=sequences.unsqueeze(0),
             attention_mask=attention_mask.unsqueeze(0),
             action_mask=action_mask.unsqueeze(0),
