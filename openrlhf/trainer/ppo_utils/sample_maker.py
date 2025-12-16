@@ -134,7 +134,7 @@ class RemoteSampleGenerator:
         tokenizer,
         vllm_engines: List,
         rollout_workers: List,
-        train_split: str,
+        prompt_split: str,
         generate_kwargs: dict,
         # eval: bool = False,
     ):
@@ -147,14 +147,14 @@ class RemoteSampleGenerator:
         self.rollout_workers = rollout_workers or []
 
         self.prompts_dataloader, self.max_steps = self.prepare_datasets(
-            train_split=train_split,
+            prompt_split=prompt_split,
         )
 
         # Track round-robin positions separately in case engines/workers differ.
         self._engine_count = len(self.vllm_engines)
         self._worker_count = len(self.rollout_workers)
 
-    def prepare_datasets(self, train_split):
+    def prepare_datasets(self, prompt_split):
         args = self.args
         strategy = self.strategy
 
@@ -165,7 +165,7 @@ class RemoteSampleGenerator:
             strategy,
             args.seed,
             max_count=args.max_samples,
-            dataset_split=train_split,
+            dataset_split=prompt_split,
         )
         # Create train dataset
         train_data = train_data.select(range(min(args.max_samples, len(train_data))))
@@ -306,6 +306,9 @@ class RemoteSampleGenerator:
             # Spread work across engines/workers in round-robin order.
             llm_engine = self.vllm_engines[idx % engine_count]
             rollout_worker = self.rollout_workers[idx % worker_count]
+            
+            # num_unfinished_requests = ray.get(llm_engine.get_num_unfinished_requests.remote())
+            # logger.info(f"Current number of unfinished requests in vLLM engine: {num_unfinished_requests}")
 
             ref = rollout_worker.execute.remote(
                 llm_engine=llm_engine,

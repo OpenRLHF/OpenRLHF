@@ -212,7 +212,7 @@ class PPOTrainer(BasePPOTrainer):
             tokenizer=tokenizer,
             vllm_engines=vllm_engines,
             rollout_workers=rollout_workers,
-            dataset_split=prompt_split,
+            prompt_split=prompt_split,
             generate_kwargs=generate_kwargs,
         )
 

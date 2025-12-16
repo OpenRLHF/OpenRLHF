@@ -105,9 +105,6 @@ class LLMRayActorAsync(LLMEngineActorBase):
     async def wake_up(self):
         await self.llm.wake_up()
 
-    async def get_num_unfinished_requests(self):
-        await self.llm.output_processor.get_num_unfinished_requests()
-
     async def generate(self, prompt_token_ids, sampling_params):
         """Token-level generation for RolloutWorker executors."""
         generator = self.llm.generate(
@@ -121,6 +118,10 @@ class LLMRayActorAsync(LLMEngineActorBase):
             final_output = request_output
 
         return final_output
+
+    def get_num_unfinished_requests(self) -> int:
+        # vLLM v1: output_processor.get_num_unfinished_requests() -> len(request_states)
+        return int(self.llm.output_processor.get_num_unfinished_requests())
 
 
 def create_vllm_engines(
