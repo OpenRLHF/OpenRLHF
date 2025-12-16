@@ -1,3 +1,4 @@
+import heapq
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -33,71 +34,11 @@ def _collect_prompts(dataloader_iter, num_prompts: int):
     return prompts, labels, exhausted
 
 
-def _build_sample_from_output(output, truncate_length, **kwargs):
-    """Turn a single vLLM response into a Sample."""
-    tokenized_observation = output["observation_tokens"].copy()
-    tokenized_ranges = output["action_ranges"]
-    reward_val = output.get("reward", None)
-    score_val = output.get("scores", None)
-
-    sequences = torch.tensor(tokenized_observation, dtype=torch.long)
-    attention_mask = torch.tensor([1] * len(tokenized_observation))
-
-    action_mask = torch.zeros_like(attention_mask)
-    for start, end in tokenized_ranges:
-        action_mask[start:end] = 1
-
-    sequences = sequences[:truncate_length].to("cpu")
-    attention_mask = attention_mask[:truncate_length].to("cpu")
-    action_mask = action_mask[1:truncate_length].to("cpu")
-    if output["rollout_log_probs"] is not None:
-        rollout_log_probs = torch.tensor(output["rollout_log_probs"][1:truncate_length]).to("cpu")
-    else:
-        rollout_log_probs = None
-
-    ones_indices = torch.where(action_mask)[0]
-    response_length = (ones_indices[-1] - ones_indices[0] + 1).item() if len(ones_indices) else 0
-    total_length = attention_mask.float().sum()
-    is_clipped = total_length >= truncate_length
-
-    info = {
-        "response_length": torch.tensor([response_length]),
-        "total_length": torch.tensor([total_length]),
-        "response_clip_ratio": torch.tensor([is_clipped]),
-    }
-    if reward_val is not None:
-        info["reward"] = torch.tensor([reward_val])
-    if score_val is not None:
-        info["score"] = torch.tensor([score_val])
-
-    extra_logs = output.get("extra_logs", {})
-    for key, value in extra_logs.items():
-        if isinstance(value, torch.Tensor):
-            value = value.flatten()[0].item()
-        elif hasattr(value, "item"):
-            try:
-                value = value.item()
-            except Exception:
-                pass
-        info[key] = torch.tensor([value])
-
-    return Sample(
-        sequences=sequences.unsqueeze(0),
-        attention_mask=attention_mask.unsqueeze(0),
-        action_mask=action_mask.unsqueeze(0),
-        rollout_log_probs=rollout_log_probs.unsqueeze(0) if rollout_log_probs is not None else None,
-        prompts=[output["prompt"]],
-        labels=[output["label"]],
-        rewards=torch.tensor([reward_val]) if reward_val is not None else None,
-        scores=torch.tensor([score_val]) if score_val is not None else None,
-        info=info,
-    )
-
-
 @dataclass
 class Sample:
     """Lightweight container for rollout outputs prior to model inference."""
 
+    index: Optional[List[int]] = None  # filled by trainer before batching
     sequences: torch.Tensor
     attention_mask: torch.Tensor
     action_mask: torch.Tensor
@@ -107,7 +48,6 @@ class Sample:
     rewards: torch.Tensor
     scores: torch.Tensor
     info: dict
-    index: Optional[List[int]] = None  # filled by trainer before batching
 
     def to_experience(self) -> Experience:
         """Convert a Sample to an Experience for downstream processing."""
@@ -136,7 +76,6 @@ class RemoteSampleGenerator:
         rollout_workers: List,
         prompt_split: str,
         generate_kwargs: dict,
-        # eval: bool = False,
     ):
         self.strategy = strategy
         self.args = strategy.args
@@ -151,7 +90,6 @@ class RemoteSampleGenerator:
         )
 
         # Track round-robin positions separately in case engines/workers differ.
-        self._engine_count = len(self.vllm_engines)
         self._worker_count = len(self.rollout_workers)
 
     def prepare_datasets(self, prompt_split):
@@ -198,7 +136,7 @@ class RemoteSampleGenerator:
         if getattr(self, "_dataloader_iter", None) is None:
             self._dataloader_iter = iter(self.prompts_dataloader)
 
-        # vLLM wakeup when vllm_enable_sleep
+        # Wake sleeping vLLM engines before dispatching.
         if self.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
@@ -208,7 +146,7 @@ class RemoteSampleGenerator:
             **self.generate_kwargs,
         )
 
-        # vLLM offload when vllm_enable_sleep
+        # Put engines back to sleep when enabled.
         if self.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "sleep")
 
@@ -265,7 +203,7 @@ class RemoteSampleGenerator:
                         return accepted_samples[:num_samples], prompts_used, exhausted
 
                 # If rejected, request a new prompt to keep filling the batch.
-                elif not exhausted:
+                else:
                     # Pull another prompt when the current one fails filtering.
                     new_prompts, new_labels, exhausted = _collect_prompts(dataloader_iter, 1)
                     # Cancel outstanding work if the dataloader is drained.
@@ -279,17 +217,10 @@ class RemoteSampleGenerator:
                         pending_refs.extend(new_refs)
                         prompts_used += len(new_prompts)
 
-        # Return empty if we cannot satisfy the desired batch size.
-        if exhausted and len(accepted_samples) < num_samples:
-            return [], prompts_used, True
-
         return accepted_samples[:num_samples], prompts_used, exhausted
 
     def _dispatch_prompts(self, prompts: List[str], labels: List[str], **generate_kwargs) -> List:
         """Send prompts to rollout workers and return Ray object refs."""
-        engine_count = self._engine_count
-        worker_count = self._worker_count
-
         sampling_params = SamplingParams(
             temperature=generate_kwargs.get("temperature", 1.0),
             top_p=generate_kwargs.get("top_p", 1.0),
@@ -301,14 +232,24 @@ class RemoteSampleGenerator:
         )
         truncate_length = generate_kwargs.get("prompt_max_len", 1024) + generate_kwargs.get("max_new_tokens", 1024)
 
+        # Snapshot current unfinished request counts to balance upcoming work.
+        unfinished_counts = ray.get([engine.get_num_unfinished_requests.remote() for engine in self.vllm_engines])
+        engine_heap = [(count, idx) for idx, count in enumerate(unfinished_counts)]
+        heapq.heapify(engine_heap)
+
+        # Pre-compute engine assignment to keep loads even.
+        engine_indices = []
+        for _ in prompts:
+            current_load, engine_idx = heapq.heappop(engine_heap)
+            engine_indices.append(engine_idx)
+            heapq.heappush(engine_heap, (current_load + self.args.n_samples_per_prompt, engine_idx))
+
         refs = []
         for idx, (prompt, label) in enumerate(zip(prompts, labels)):
-            # Spread work across engines/workers in round-robin order.
-            llm_engine = self.vllm_engines[idx % engine_count]
-            rollout_worker = self.rollout_workers[idx % worker_count]
-
-            # num_unfinished_requests = ray.get(llm_engine.get_num_unfinished_requests.remote())
-            # logger.info(f"Current number of unfinished requests in vLLM engine: {num_unfinished_requests}")
+            # Spread work across engines/workers in load-aware order.
+            llm_engine = self.vllm_engines[engine_indices[idx]]
+            # TODO: refactor worker to engine
+            rollout_worker = self.rollout_workers[idx % self._worker_count]
 
             ref = rollout_worker.execute.remote(
                 llm_engine=llm_engine,
@@ -324,6 +265,64 @@ class RemoteSampleGenerator:
         return refs
 
     def _create_sample_from_output(self, output, **generate_kwargs) -> Sample:
-        """Wrap output parsing to keep truncation logic in one place."""
+        """Turn a single vLLM response into a Sample."""
         truncate_length = generate_kwargs.get("prompt_max_len", 1024) + generate_kwargs.get("max_new_tokens", 1024)
-        return _build_sample_from_output(output, truncate_length, **generate_kwargs)
+
+        # Base rollout fields from the output.
+        tokenized_observation = output["observation_tokens"].copy()
+        tokenized_ranges = output["action_ranges"]
+        reward_val = output.get("reward", None)
+        score_val = output.get("scores", None)
+
+        sequences = torch.tensor(tokenized_observation, dtype=torch.long)
+        attention_mask = torch.tensor([1] * len(tokenized_observation))
+        # Mark the action span within the concatenated tokens.
+        action_mask = torch.zeros_like(attention_mask)
+        for start, end in tokenized_ranges:
+            action_mask[start:end] = 1
+
+        # Truncate everything to the configured context window.
+        sequences = sequences[:truncate_length].to("cpu")
+        attention_mask = attention_mask[:truncate_length].to("cpu")
+        action_mask = action_mask[1:truncate_length].to("cpu")
+
+        # Align rollout logprobs with the truncated action span.
+        if output["rollout_log_probs"] is not None:
+            rollout_log_probs = torch.tensor(output["rollout_log_probs"][1:truncate_length]).to("cpu")
+        else:
+            rollout_log_probs = None
+
+        # Collect simple stats about lengths and clipping.
+        ones_indices = torch.where(action_mask)[0]
+        response_length = (ones_indices[-1] - ones_indices[0] + 1).item() if len(ones_indices) else 0
+        total_length = attention_mask.float().sum()
+        is_clipped = total_length >= truncate_length
+
+        info = {
+            "response_length": torch.tensor([response_length]),
+            "total_length": torch.tensor([total_length]),
+            "response_clip_ratio": torch.tensor([is_clipped]),
+        }
+        if reward_val is not None:
+            info["reward"] = torch.tensor([reward_val])
+        if score_val is not None:
+            info["score"] = torch.tensor([score_val])
+
+        # Convert extra logs to tensors for downstream consumers.
+        extra_logs = output.get("extra_logs", {})
+        for key, value in extra_logs.items():
+            if isinstance(value, torch.Tensor):
+                value = value.flatten()[0].item()
+            info[key] = torch.tensor([value])
+
+        return Sample(
+            sequences=sequences.unsqueeze(0),
+            attention_mask=attention_mask.unsqueeze(0),
+            action_mask=action_mask.unsqueeze(0),
+            rollout_log_probs=rollout_log_probs.unsqueeze(0) if rollout_log_probs is not None else None,
+            prompts=[output["prompt"]],
+            labels=[output["label"]],
+            rewards=torch.tensor([reward_val]) if reward_val is not None else None,
+            scores=torch.tensor([score_val]) if score_val is not None else None,
+            info=info,
+        )
