@@ -67,7 +67,6 @@ class Experience:
     # the info field is used to store additional information
     # all the fields in the info will be logged to the tensorboard/wandb
     info: dict[str, torch.Tensor] = None
-    metadata: list = None
 
     def __init__(
         self,
@@ -87,7 +86,6 @@ class Experience:
         rewards=None,
         scores=None,
         info=None,
-        metadata=None,
     ):
         self.index = index
         self.sequences = sequences
@@ -105,7 +103,6 @@ class Experience:
         self.rewards = rewards
         self.scores = scores
         self.info = info or []
-        self.metadata = metadata or []
 
     @torch.no_grad()
     def to_device(self, device: torch.device):
@@ -276,18 +273,6 @@ class RemoteExperienceMaker:
             sample.index = [i]
 
         samples_list = []
-
-        def _as_experience(batch):
-            converted = []
-            for item in batch:
-                if isinstance(item, Experience):
-                    converted.append(item)
-                elif hasattr(item, "to_experience"):
-                    converted.append(item.to_experience())
-                else:
-                    raise TypeError(f"Unsupported rollout sample type: {type(item)}")
-            return converted
-
         if self.args.use_dynamic_batch:
             total_lengths = [int(s.info["total_length"].item()) for s in rollout_samples]
             effective_actor_num = (
@@ -306,15 +291,13 @@ class RemoteExperienceMaker:
             num_batch = max(minimum_batch_num, effective_actor_num)
             batch_indexes = get_seqlen_balanced_partitions(total_lengths, num_batch, False)
             for micro_index in batch_indexes:
-                micro_batch = [rollout_samples[idx] for idx in micro_index]
-                experiences = _as_experience(micro_batch)
+                experiences = [rollout_samples[idx].to_experience() for idx in micro_index]
                 concat_samples = Experience.concat_experiences(experiences, self.tokenizer.pad_token_id)
                 samples_list.append(concat_samples)
         else:
             batch_size = self.args.micro_rollout_batch_size
             for i in range(0, len(rollout_samples), batch_size):
-                micro_batch = rollout_samples[i : i + batch_size]
-                experiences = _as_experience(micro_batch)
+                experiences = [rollout_samples[idx].to_experience() for idx in range(i, i + batch_size)]
                 concat_samples = Experience.concat_experiences(experiences, self.tokenizer.pad_token_id)
                 samples_list.append(concat_samples)
         return samples_list
