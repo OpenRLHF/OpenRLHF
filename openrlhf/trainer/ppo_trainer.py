@@ -95,8 +95,7 @@ class BasePPOTrainer(ABC):
 
         # Refresh KL controller with the latest measurement.
         if "kl" in status:
-            # TODO: 用简单英文说明
-            # kl_ctl必须是FixedKLController,如果是AdaptiveKLController会有问题。
+            # TODO: KL controller must be FixedKLController; AdaptiveKLController is incompatible here.
             self.kl_ctl.update(status["kl"], self.args.rollout_batch_size * self.args.n_samples_per_prompt)
 
         status["generated_samples"] = sample0
@@ -200,6 +199,7 @@ class PPOTrainer(BasePPOTrainer):
         eval_split: str = "test",
         **generate_kwargs,
     ) -> None:
+        # Tokenizer is shared across sampler and trainer to avoid duplicated loads.
         tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
         # get eval and save steps
         if strategy.args.eval_steps == -1:
