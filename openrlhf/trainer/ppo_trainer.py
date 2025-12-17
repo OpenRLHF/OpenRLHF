@@ -7,13 +7,12 @@ from tqdm import tqdm
 
 from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
 from openrlhf.trainer.ppo_utils.kl_controller import build_kl_controller
-from openrlhf.trainer.ppo_utils.loggers import TensorboardLogger, WandbLogger
 from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ppo_utils.sample_maker import RemoteSampleGenerator
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils.deepspeed import DeepspeedStrategy
-from openrlhf.utils.logging_utils import init_logger
+from openrlhf.utils.logging_utils import TensorboardLogger, WandbLogger, init_logger
 from openrlhf.utils.utils import get_tokenizer
 
 logger = init_logger(__name__)

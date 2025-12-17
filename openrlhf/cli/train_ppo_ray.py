@@ -66,7 +66,7 @@ def train(args):
             args.vllm_enable_sleep,
             "processed_logprobs" if args.enable_vllm_is_correction else None,
             rollout_cpus_per_engine=args.rollout_cpus_per_gpu * args.vllm_tensor_parallel_size,
-            rollout_tasks_per_cpu=8,
+            rollout_tasks_per_cpu=4,
             agent_func_path=args.agent_func_path,
             remote_rm_url=args.remote_rm_url,
             remote_rm_batch_size=args.micro_rollout_batch_size,
