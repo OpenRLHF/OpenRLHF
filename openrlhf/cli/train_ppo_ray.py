@@ -81,9 +81,7 @@ def train(args):
         duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
     )
 
-    if args.init_kl_coef <= 0:
-        ref_model = None
-    else:
+    if args.init_kl_coef > 0:
         ref_model = RayActorGroup(
             args.ref_num_nodes,
             args.ref_num_gpus_per_node,
@@ -92,6 +90,8 @@ def train(args):
             num_gpus_per_actor=0.2 if pg else 1,
             duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
         )
+    else:
+        ref_model = None
 
     if not args.colocate_all_models:
         pg = None
