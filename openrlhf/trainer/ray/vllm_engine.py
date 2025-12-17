@@ -193,8 +193,8 @@ def create_vllm_engines(
     gpu_memory_utilization=None,
     vllm_enable_sleep=False,
     logprobs_mode=None,
-    num_cpu_per_engine: Optional[int] = None,
-    num_task_per_cpu: Optional[int] = None,
+    rollout_cpus_per_engine: Optional[int] = None,
+    rollout_tasks_per_cpu: Optional[int] = None,
     agent_func_path: Optional[str] = None,
     remote_rm_url: Optional[str] = None,
     remote_rm_batch_size: Optional[int] = None,
@@ -249,7 +249,9 @@ def create_vllm_engines(
                 "remote_rm_url": remote_rm_url,
                 "remote_rm_batch_size": remote_rm_batch_size,
                 "max_tasks": (
-                    (num_task_per_cpu * num_cpu_per_engine) if num_task_per_cpu and num_cpu_per_engine else None
+                    rollout_tasks_per_cpu * rollout_cpus_per_engine
+                    if rollout_tasks_per_cpu and rollout_cpus_per_engine
+                    else None
                 ),
             }
         )
@@ -261,7 +263,7 @@ def create_vllm_engines(
                 "0.10.0"
             ), "vLLM > 0.10.0 is required for logprobs_mode"
 
-        num_cpus = num_cpu_per_engine if num_cpu_per_engine is not None else num_gpus
+        num_cpus = rollout_cpus_per_engine if rollout_cpus_per_engine is not None else num_gpus
         vllm_engines.append(
             LLMRayActorAsync.options(
                 num_cpus=num_cpus,
