@@ -323,7 +323,7 @@ if __name__ == "__main__":
         "--rollout_tasks_per_gpu",
         type=int,
         default=32,
-        help="CPUs to reserve per GPU for rollout/vLLM actor work",
+        help="Tasks to reserve per GPU for rollout/vLLM actor work",
     )
     parser.add_argument("--micro_rollout_batch_size", type=int, default=8)
     parser.add_argument("--max_epochs", type=int, default=1)
