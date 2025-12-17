@@ -201,8 +201,7 @@ def create_vllm_engines(
     gpu_memory_utilization=None,
     vllm_enable_sleep=False,
     logprobs_mode=None,
-    rollout_cpus_per_engine: Optional[int] = None,
-    rollout_tasks_per_cpu: Optional[int] = None,
+    rollout_tasks_per_gpu: Optional[int] = None,
     agent_func_path: Optional[str] = None,
     remote_rm_url: Optional[str] = None,
     remote_rm_batch_size: Optional[int] = None,
@@ -218,8 +217,7 @@ def create_vllm_engines(
 
     if not use_hybrid_engine:
         # Create a big placement group to ensure that all engines are packed
-        bundle_cpu = max(1, int(rollout_cpus_per_engine)) if rollout_cpus_per_engine is not None else 1
-        bundles = [{"GPU": 1, "CPU": bundle_cpu} for _ in range(num_engines * tensor_parallel_size)]
+        bundles = [{"GPU": 1, "CPU": 1} for _ in range(num_engines * tensor_parallel_size)]
         shared_pg = placement_group(bundles, strategy="PACK")
         ray.get(shared_pg.ready())
 
@@ -258,9 +256,7 @@ def create_vllm_engines(
                 "remote_rm_url": remote_rm_url,
                 "remote_rm_batch_size": remote_rm_batch_size,
                 "max_tasks": (
-                    rollout_tasks_per_cpu * rollout_cpus_per_engine
-                    if rollout_tasks_per_cpu and rollout_cpus_per_engine
-                    else None
+                    rollout_tasks_per_gpu * tensor_parallel_size if rollout_tasks_per_gpu else None
                 ),
             }
         )
@@ -272,10 +268,9 @@ def create_vllm_engines(
                 "0.10.0"
             ), "vLLM > 0.10.0 is required for logprobs_mode"
 
-        num_cpus = rollout_cpus_per_engine if rollout_cpus_per_engine is not None else num_gpus
         vllm_engines.append(
             LLMRayActorAsync.options(
-                num_cpus=num_cpus,
+                num_cpus=num_gpus,
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
             ).remote(**actor_kwargs)

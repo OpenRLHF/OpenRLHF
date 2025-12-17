@@ -34,11 +34,7 @@ def train(args):
                 and args.actor_num_gpus_per_node == args.ref_num_gpus_per_node
             ), "num_nodes and num_gpus_per_node must be the same when colocate actor and ref model."
 
-        bundle_cpu = 1
-        if args.colocate_all_models and args.vllm_num_engines:
-            bundle_cpu = max(1, args.rollout_cpus_per_gpu * args.vllm_tensor_parallel_size)
-
-        bundles = [{"GPU": 1, "CPU": bundle_cpu} for _ in range(args.actor_num_nodes * args.actor_num_gpus_per_node)]
+        bundles = [{"GPU": 1, "CPU": 1} for _ in range(args.actor_num_nodes * args.actor_num_gpus_per_node)]
         pg = placement_group(bundles, strategy="PACK")
         ray.get(pg.ready())
 
@@ -69,8 +65,7 @@ def train(args):
             args.vllm_gpu_memory_utilization,
             args.vllm_enable_sleep,
             "processed_logprobs" if args.enable_vllm_is_correction else None,
-            rollout_cpus_per_engine=args.rollout_cpus_per_gpu * args.vllm_tensor_parallel_size,
-            rollout_tasks_per_cpu=4,
+            rollout_tasks_per_gpu=args.rollout_tasks_per_gpu,
             agent_func_path=args.agent_func_path,
             remote_rm_url=args.remote_rm_url,
             remote_rm_batch_size=args.micro_rollout_batch_size,
@@ -325,9 +320,9 @@ if __name__ == "__main__":
         "--vllm_generate_batch_size", type=int, default=None, help="Batch size for vLLM generating samples"
     )
     parser.add_argument(
-        "--rollout_cpus_per_gpu",
+        "--rollout_tasks_per_gpu",
         type=int,
-        default=2,
+        default=32,
         help="CPUs to reserve per GPU for rollout/vLLM actor work",
     )
     parser.add_argument("--micro_rollout_batch_size", type=int, default=8)

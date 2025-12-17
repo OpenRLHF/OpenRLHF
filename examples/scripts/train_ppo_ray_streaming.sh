@@ -5,9 +5,6 @@ WORK_DIR="$(realpath "$SCRIPT_DIR/..")"
 
 set -x
 
-export OPENRLHF_ASYNC_NUM_TASKS=128  # Number of concurrent agents
-export OPENRLHF_ASYNC_QUEUE_SIZE=1   # Controls the degree of off-policy learning
-
 MODEL_PATH="Qwen/Qwen3-4B-Thinking-2507"
 DATASET_PATH="zhuzilin/dapo-math-17k"
 SAVE_PATH="${WORK_DIR}/exp/Qwen3-4B-Thinking"
@@ -18,7 +15,7 @@ AGENT_FUNC_PATH="examples/python/agent_func.py"
 # For demo
 # git clone https://github.com/Freder-chen/OpenRLHF-Agent.git
 # cd OpenRLHF-Agent && pip install -e .
-# AGENT_FUNC_PATH="{OpenRLHF-Agent/examples/qwen3/agent_func.py}"
+# AGENT_FUNC_PATH="{OpenRLHF-Agent/examples/qwen3/train_openrlhf/agent_func_math.py}"
 
 CKPT_ARGS=(
    --pretrain ${MODEL_PATH}
@@ -34,6 +31,7 @@ CKPT_ARGS=(
 
 ROLLOUT_ARGS=(
    --agent_func_path ${AGENT_FUNC_PATH}
+   # --remote_rm_url ${REWARD_FUNC_FILENAME}
 
    --prompt_data ${DATASET_PATH}
    --input_key prompt
@@ -45,12 +43,15 @@ ROLLOUT_ARGS=(
 
    --rollout_batch_size 128
    --n_samples_per_prompt 8
+   --train_batch_size 1024
    --dynamic_filtering
    --dynamic_filtering_reward_range 0.0 1.0
 
-   --train_batch_size 1024
+   --use_dynamic_batch
+   --train_max_tokens_per_gpu 16192
+   --rollout_max_tokens_per_gpu 32768
 
-   --micro_train_batch_size 2
+   --micro_train_batch_size 1
    --micro_rollout_batch_size 8
    --max_samples 128000
    --max_epochs 1
@@ -58,6 +59,8 @@ ROLLOUT_ARGS=(
 )
 
 ENGINE_ARGS=(
+   --async_train
+
    --ref_num_nodes 1
    --ref_num_gpus_per_node 4
    --actor_num_nodes 1
@@ -76,8 +79,6 @@ ENGINE_ARGS=(
    --ring_attn_size 4
    --ring_head_stride 2
    --bf16
-
-   --async_train
 )
 
 OPTIMIZER_ARGS=(

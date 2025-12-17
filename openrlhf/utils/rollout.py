@@ -22,11 +22,9 @@ class RolloutWorker:
         # Generate one continuation from the engine.
         request_output = await llm_engine.generate(prompt_token_ids, deepcopy(sampling_params))
         action_token_ids = request_output.outputs[0].token_ids
-        action_text = request_output.outputs[0].text
 
         # Stitch prompt + action together for downstream consumers.
         observation_token_ids = prompt_token_ids + action_token_ids
-        observation_text = prompt + action_text
         action_ranges = [(len(prompt_token_ids), len(observation_token_ids))]
 
         # Calculate rollout log probs.
@@ -44,7 +42,6 @@ class RolloutWorker:
             "label": label,
             # Token/text observations and action span.
             "observation_tokens": observation_token_ids,
-            "observation_text": observation_text,
             "action_ranges": action_ranges,
             "rollout_log_probs": rollout_log_probs,
             # Reward-related fields (filled by reward/agent variants).
@@ -84,10 +81,11 @@ class RolloutAndRewardWorker(RolloutWorker):
 
         # Compute reward/score after generation.
         try:
+            query = hf_tokenizer.decode(output["observation_tokens"], skip_special_tokens=False)
             if self.custom_reward_func:
-                rewards_info_list = await self._get_rewards_via_func([output["observation_text"]], [prompt], [label])
+                rewards_info_list = await self._get_rewards_via_func([query], [prompt], [label])
             else:
-                rewards_info_list = await self._get_rewards_via_http([output["observation_text"]], [prompt], [label])
+                rewards_info_list = await self._get_rewards_via_http([query], [prompt], [label])
 
             if rewards_info_list:
                 rewards_info = rewards_info_list[0]
