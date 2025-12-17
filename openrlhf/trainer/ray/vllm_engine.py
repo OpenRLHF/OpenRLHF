@@ -168,7 +168,9 @@ class LLMRayActorAsync(LLMEngineActorBase):
             async with self.rollout_semaphore:
                 return await _run_one(sampling_params)
 
-        tasks = [_run_with_semaphore(deepcopy(sampling_params)) for _ in range(num_samples)]
+        tasks = []
+        for _ in range(num_samples):
+            tasks.append(_run_with_semaphore(deepcopy(sampling_params)))
 
         try:
             return await asyncio.gather(*tasks)
