@@ -81,13 +81,7 @@ class RolloutAndRewardWorker(RolloutWorker):
         except Exception as e:
             print(f"[RewardedRolloutWorker] Failed to fetch reward from remote RM: {e}")
 
-        output.update(
-            {
-                "reward": reward_val,
-                "scores": score_val,
-                "extra_logs": extra_logs,
-            }
-        )
+        output.update(reward=reward_val, scores=score_val, extra_logs=extra_logs)
         return output
 
 
