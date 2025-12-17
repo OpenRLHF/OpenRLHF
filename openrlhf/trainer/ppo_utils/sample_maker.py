@@ -74,7 +74,11 @@ class RemoteSampleGenerator:
         prompts_dataloader = strategy.setup_dataloader(prompts_dataset, 1, True, True)
 
         max_steps = (
-            len(prompts_dataset) * args.n_samples_per_prompt // args.train_batch_size * args.num_episodes * args.max_epochs
+            len(prompts_dataset)
+            * args.n_samples_per_prompt
+            // args.train_batch_size
+            * args.num_episodes
+            * args.max_epochs
         )
         return prompts_dataloader, max_steps
 
