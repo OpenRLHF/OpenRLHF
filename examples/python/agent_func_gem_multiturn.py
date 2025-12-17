@@ -139,8 +139,8 @@ class AgentInstance(AgentInstanceBase):
 
 
 class AgentExecutor(AgentExecutorBase):
-    def __init__(self, max_steps, max_length, llm_engine, hf_tokenizer):
-        super().__init__(AgentInstance, max_steps, max_length, llm_engine, hf_tokenizer)
+    def __init__(self, max_length, llm_engine, hf_tokenizer):
+        super().__init__(AgentInstance, max_length, llm_engine, hf_tokenizer)
 
     async def execute(self, prompt, label, sampling_params):
         # You could override the execute function of AgentExecutorBase to add custom agent running logic
