@@ -71,19 +71,10 @@ class RemoteSampleGenerator:
         # Create train dataset
         train_data = train_data.select(range(min(args.max_samples, len(train_data))))
         prompts_dataset = PromptDataset(train_data, self.tokenizer, strategy, input_template=args.input_template)
-        prompts_dataloader = strategy.setup_dataloader(
-            prompts_dataset,
-            args.vllm_generate_batch_size,
-            True,
-            True,
-        )
+        prompts_dataloader = strategy.setup_dataloader(prompts_dataset, 1, True, True)
 
         max_steps = (
-            len(prompts_dataset)
-            * args.n_samples_per_prompt
-            // args.train_batch_size
-            * args.num_episodes
-            * args.max_epochs
+            len(prompts_dataset) * args.n_samples_per_prompt // args.train_batch_size * args.num_episodes * args.max_epochs
         )
         return prompts_dataloader, max_steps
 
