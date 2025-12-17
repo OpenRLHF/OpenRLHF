@@ -327,7 +327,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--rollout_cpus_per_gpu",
         type=int,
-        default=8,
+        default=2,
         help="CPUs to reserve per GPU for rollout/vLLM actor work",
     )
     parser.add_argument("--micro_rollout_batch_size", type=int, default=8)
