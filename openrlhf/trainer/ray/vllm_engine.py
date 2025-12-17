@@ -255,9 +255,7 @@ def create_vllm_engines(
                 "agent_func_path": agent_func_path,
                 "remote_rm_url": remote_rm_url,
                 "remote_rm_batch_size": remote_rm_batch_size,
-                "max_tasks": (
-                    rollout_tasks_per_gpu * tensor_parallel_size if rollout_tasks_per_gpu else None
-                ),
+                "max_tasks": (rollout_tasks_per_gpu * tensor_parallel_size if rollout_tasks_per_gpu else None),
             }
         )
 
