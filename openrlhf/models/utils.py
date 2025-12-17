@@ -35,6 +35,7 @@ def compute_approx_kl(
     if kl_estimator == "k3":
         log_ratio = log_probs.float() - log_probs_base.float()
         log_ratio = -log_ratio
+        log_ratio = log_ratio.clamp(min=-10, max=10)
         log_ratio = log_ratio.exp() - 1 - log_ratio
 
     log_ratio = log_ratio.clamp(min=-10, max=10)
