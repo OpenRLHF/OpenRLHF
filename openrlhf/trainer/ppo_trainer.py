@@ -62,6 +62,9 @@ class BasePPOTrainer(ABC):
         self.wandb_logger = WandbLogger(self.args) if self.args.use_wandb else None
         self.tensorboard_logger = TensorboardLogger(self.args) if self.args.use_tensorboard else None
 
+    def fit(self):
+        raise NotImplementedError("fit method is not implemented")
+
     def train_step(self, samples, global_step: int) -> Tuple[Dict, int]:
         # Turn raw samples into PPO-ready trajectories with rewards.
         experiences = self.experience_maker.make_experience_batch(samples)
@@ -92,13 +95,12 @@ class BasePPOTrainer(ABC):
 
         # Refresh KL controller with the latest measurement.
         if "kl" in status:
+            # TODO: 用简单英文说明
+            # kl_ctl必须是FixedKLController,如果是AdaptiveKLController会有问题。
             self.kl_ctl.update(status["kl"], self.args.rollout_batch_size * self.args.n_samples_per_prompt)
 
         status["generated_samples"] = sample0
         return status, global_step + 1
-
-    def fit(self):
-        raise NotImplementedError("fit method is not implemented")
 
     def ppo_train(self, global_steps: int) -> Dict:
         """Run one PPO train step for critic + actor and return merged status dict."""
