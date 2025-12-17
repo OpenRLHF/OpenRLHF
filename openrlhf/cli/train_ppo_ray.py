@@ -4,7 +4,7 @@ from datetime import datetime
 import ray
 from ray.util.placement_group import placement_group
 
-from openrlhf.trainer.ray import create_rollout_workers, create_vllm_engines
+from openrlhf.trainer.ray import create_vllm_engines
 from openrlhf.trainer.ray.launcher import (
     RayActorGroup,
     ReferenceModelActor,
@@ -65,6 +65,11 @@ def train(args):
             args.vllm_gpu_memory_utilization,
             args.vllm_enable_sleep,
             "processed_logprobs" if args.enable_vllm_is_correction else None,
+            num_cpu_per_engine=args.rollout_worker_cpus * args.vllm_tensor_parallel_size,
+            num_task_per_cpu=8,
+            agent_func_path=args.agent_func_path,
+            remote_rm_url=args.remote_rm_url,
+            remote_rm_batch_size=args.micro_rollout_batch_size,
         )
 
     actor_model = RayActorGroup(
@@ -127,18 +132,6 @@ def train(args):
     else:
         reward_model = None
 
-    # CPU rollout workers to offload tokenization/reward/agent logic (aligned with vLLM engines).
-    rollout_workers = None
-    if vllm_engines is not None:
-        rollout_workers = create_rollout_workers(
-            num_workers=args.vllm_num_engines,
-            worker_cpus=args.rollout_worker_cpus * args.vllm_tensor_parallel_size,
-            num_task_per_cpu=8,
-            agent_func_path=args.agent_func_path,
-            remote_rm_url=args.remote_rm_url,
-            remote_rm_batch_size=args.micro_rollout_batch_size,
-        )
-
     # Select trainer by mode
     if args.async_train:
         from openrlhf.trainer.ppo_trainer_async import PPOTrainerAsync as PPOTrainer
@@ -154,7 +147,6 @@ def train(args):
         reward_model,
         ref_model,
         vllm_engines,
-        rollout_workers,
         prompt_split=args.prompt_split,
         eval_split=args.eval_split,
         # generate kwargs

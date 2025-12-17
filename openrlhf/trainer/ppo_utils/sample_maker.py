@@ -41,7 +41,6 @@ class RemoteSampleGenerator:
         strategy,
         tokenizer,
         vllm_engines: List,
-        rollout_workers: List,
         prompt_split: str,
         generate_kwargs: dict,
     ):
@@ -51,14 +50,10 @@ class RemoteSampleGenerator:
 
         self.tokenizer = tokenizer
         self.vllm_engines = vllm_engines or []
-        self.rollout_workers = rollout_workers or []
 
         self.prompts_dataloader, self.max_steps = self.prepare_datasets(
             prompt_split=prompt_split,
         )
-
-        # Track round-robin positions separately in case engines/workers differ.
-        self._worker_count = len(self.rollout_workers)
 
     def prepare_datasets(self, prompt_split):
         args = self.args
@@ -220,14 +215,10 @@ class RemoteSampleGenerator:
         for idx, (prompt, label) in enumerate(zip(prompts, labels)):
             # Spread work across engines/workers in load-aware order.
             llm_engine = self.vllm_engines[engine_indices[idx]]
-            # TODO: refactor worker to engine
-            rollout_worker = self.rollout_workers[idx % self._worker_count]
-
-            ref = rollout_worker.execute.remote(
-                llm_engine=llm_engine,
-                sampling_params=sampling_params,
+            ref = llm_engine.rollout.remote(
                 prompt=prompt,
                 label=label,
+                sampling_params=sampling_params,
                 max_length=truncate_length,
                 hf_tokenizer=self.tokenizer,
                 num_samples=self.args.n_samples_per_prompt,

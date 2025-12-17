@@ -1,6 +1,7 @@
+import asyncio
 import os
 from copy import deepcopy
-from typing import Any, List
+from typing import Any, List, Optional
 
 import ray
 import vllm
@@ -9,6 +10,8 @@ from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from vllm.inputs import TokensPrompt
 from vllm.utils import random_uuid
+
+from openrlhf.utils.rollout import RolloutAndRewardWorker, RolloutWithAgentWorker, RolloutWorker
 
 from .utils import get_bundle_indices, ray_noset_visible_devices
 
@@ -69,8 +72,19 @@ class LLMEngineActorBase:
 class LLMRayActorAsync(LLMEngineActorBase):
     """Unified async actor that delegates work to provided executors."""
 
-    async def __init__(self, *args, bundle_indices: list = None, **kwargs):
+    async def __init__(
+        self,
+        *args,
+        bundle_indices: list = None,
+        agent_func_path: Optional[str] = None,
+        remote_rm_url: Optional[str] = None,
+        remote_rm_batch_size: Optional[int] = None,
+        max_tasks: Optional[int] = None,
+        **kwargs,
+    ):
         super().__init__(*args, bundle_indices=bundle_indices, **kwargs)
+        self.rollout_worker = self._build_worker(agent_func_path, remote_rm_url, remote_rm_batch_size)
+        self.rollout_semaphore = asyncio.Semaphore(max_tasks) if max_tasks else None
 
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
@@ -106,7 +120,7 @@ class LLMRayActorAsync(LLMEngineActorBase):
         await self.llm.wake_up()
 
     async def generate(self, prompt_token_ids, sampling_params):
-        """Token-level generation for RolloutWorker executors."""
+        """Token-level generation for rollout executors."""
         generator = self.llm.generate(
             TokensPrompt(prompt_token_ids=prompt_token_ids),
             deepcopy(sampling_params),
@@ -123,6 +137,48 @@ class LLMRayActorAsync(LLMEngineActorBase):
         # vLLM v1: output_processor.get_num_unfinished_requests() -> len(request_states)
         return int(self.llm.output_processor.get_num_unfinished_requests())
 
+    async def rollout(
+        self,
+        prompt: str,
+        label: str,
+        sampling_params,
+        max_length: int,
+        hf_tokenizer,
+        num_samples: int = 1,
+    ):
+        """Rollout locally without a separate worker."""
+
+        async def _run_one(sampling_params):
+            return await self.rollout_worker.run(
+                prompt=prompt,
+                label=label,
+                sampling_params=sampling_params,
+                max_length=max_length,
+                hf_tokenizer=hf_tokenizer,
+                llm_engine=self,
+            )
+
+        async def _run_with_semaphore(sampling_params):
+            if self.rollout_semaphore is None:
+                return await _run_one(sampling_params)
+            async with self.rollout_semaphore:
+                return await _run_one(sampling_params)
+
+        tasks = []
+        for _ in range(num_samples):
+            tasks.append(_run_with_semaphore(deepcopy(sampling_params)))
+
+        return await asyncio.gather(*tasks)
+
+    def _build_worker(
+        self, agent_func_path: Optional[str], remote_rm_url: Optional[str], remote_rm_batch_size: Optional[int]
+    ):
+        if agent_func_path:
+            return RolloutWithAgentWorker(agent_func_path=agent_func_path)
+        if remote_rm_url:
+            return RolloutAndRewardWorker(remote_rm_url, remote_rm_batch_size)
+        return RolloutWorker()
+
 
 def create_vllm_engines(
     num_engines: int,
@@ -137,6 +193,11 @@ def create_vllm_engines(
     gpu_memory_utilization=None,
     vllm_enable_sleep=False,
     logprobs_mode=None,
+    num_cpu_per_engine: Optional[int] = None,
+    num_task_per_cpu: Optional[int] = None,
+    agent_func_path: Optional[str] = None,
+    remote_rm_url: Optional[str] = None,
+    remote_rm_batch_size: Optional[int] = None,
 ):
     """Spin up a set of vLLM Ray actors with consistent placement."""
     vllm_engines = []
@@ -182,6 +243,17 @@ def create_vllm_engines(
             "enable_sleep_mode": vllm_enable_sleep,
         }
 
+        actor_kwargs.update(
+            {
+                "agent_func_path": agent_func_path,
+                "remote_rm_url": remote_rm_url,
+                "remote_rm_batch_size": remote_rm_batch_size,
+                "max_tasks": (
+                    (num_task_per_cpu * num_cpu_per_engine) if num_task_per_cpu and num_cpu_per_engine else None
+                ),
+            }
+        )
+
         if logprobs_mode:
             actor_kwargs["logprobs_mode"] = logprobs_mode
             actor_kwargs["max_logprobs"] = 1
@@ -189,9 +261,10 @@ def create_vllm_engines(
                 "0.10.0"
             ), "vLLM > 0.10.0 is required for logprobs_mode"
 
+        num_cpus = num_cpu_per_engine if num_cpu_per_engine is not None else num_gpus
         vllm_engines.append(
             LLMRayActorAsync.options(
-                num_cpus=num_gpus,
+                num_cpus=num_cpus,
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
             ).remote(**actor_kwargs)

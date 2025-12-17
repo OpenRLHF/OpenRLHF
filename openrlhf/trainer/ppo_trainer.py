@@ -194,7 +194,6 @@ class PPOTrainer(BasePPOTrainer):
         reward_model_group: RayActorGroup,
         reference_model_group: RayActorGroup,
         vllm_engines,
-        rollout_workers,
         prompt_split: str = "train",
         eval_split: str = "test",
         **generate_kwargs,
@@ -211,7 +210,6 @@ class PPOTrainer(BasePPOTrainer):
             strategy=strategy,
             tokenizer=tokenizer,
             vllm_engines=vllm_engines,
-            rollout_workers=rollout_workers,
             prompt_split=prompt_split,
             generate_kwargs=generate_kwargs,
         )
