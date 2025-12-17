@@ -200,7 +200,7 @@ class RemoteSampleGenerator:
         truncate_length = generate_kwargs.get("prompt_max_len", 1024) + generate_kwargs.get("max_new_tokens", 1024)
 
         # Snapshot current unfinished request counts to balance upcoming work.
-        unfinished_counts = ray.get([engine.get_num_unfinished_requests.remote() for engine in self.vllm_engines])
+        unfinished_counts = ray.get([engine.get_num_unfinished_rollouts.remote() for engine in self.vllm_engines])
         engine_heap = [(count, idx) for idx, count in enumerate(unfinished_counts)]
         heapq.heapify(engine_heap)
 

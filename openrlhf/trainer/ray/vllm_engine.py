@@ -85,6 +85,8 @@ class LLMRayActorAsync(LLMEngineActorBase):
         super().__init__(*args, bundle_indices=bundle_indices, **kwargs)
         self.rollout_worker = self._build_worker(agent_func_path, remote_rm_url, remote_rm_batch_size)
         self.rollout_semaphore = asyncio.Semaphore(max_tasks) if max_tasks else None
+        self._pending_rollouts = 0
+        self._pending_rollouts_lock = asyncio.Lock()
 
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
@@ -133,9 +135,9 @@ class LLMRayActorAsync(LLMEngineActorBase):
 
         return final_output
 
-    def get_num_unfinished_requests(self) -> int:
-        # vLLM v1: output_processor.get_num_unfinished_requests() -> len(request_states)
-        return int(self.llm.output_processor.get_num_unfinished_requests())
+    def get_num_unfinished_rollouts(self) -> int:
+        # Count pending rollout calls (not raw vLLM request count).
+        return int(self._pending_rollouts)
 
     async def rollout(
         self,
@@ -147,6 +149,8 @@ class LLMRayActorAsync(LLMEngineActorBase):
         num_samples: int = 1,
     ):
         """Rollout locally without a separate worker."""
+        async with self._pending_rollouts_lock:
+            self._pending_rollouts += num_samples
 
         async def _run_one(sampling_params):
             return await self.rollout_worker.run(
@@ -164,11 +168,13 @@ class LLMRayActorAsync(LLMEngineActorBase):
             async with self.rollout_semaphore:
                 return await _run_one(sampling_params)
 
-        tasks = []
-        for _ in range(num_samples):
-            tasks.append(_run_with_semaphore(deepcopy(sampling_params)))
+        tasks = [_run_with_semaphore(deepcopy(sampling_params)) for _ in range(num_samples)]
 
-        return await asyncio.gather(*tasks)
+        try:
+            return await asyncio.gather(*tasks)
+        finally:
+            async with self._pending_rollouts_lock:
+                self._pending_rollouts -= num_samples
 
     def _build_worker(
         self, agent_func_path: Optional[str], remote_rm_url: Optional[str], remote_rm_batch_size: Optional[int]
