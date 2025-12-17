@@ -16,7 +16,7 @@ from openrlhf.utils.rollout import RolloutAndRewardWorker, RolloutWithAgentWorke
 from .utils import get_bundle_indices, ray_noset_visible_devices
 
 
-class LLMEngineActorBase:
+class BaseLLMRayActor:
     """Shared setup for Ray actors backed by vLLM."""
 
     def __init__(self, *args, bundle_indices: list = None, **kwargs):
@@ -69,7 +69,7 @@ class LLMEngineActorBase:
 
 
 @ray.remote
-class LLMRayActorAsync(LLMEngineActorBase):
+class LLMRayActorAsync(BaseLLMRayActor):
     """Unified async actor that delegates work to provided executors."""
 
     async def __init__(
