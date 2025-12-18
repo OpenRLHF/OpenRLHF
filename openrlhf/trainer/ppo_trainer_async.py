@@ -152,6 +152,9 @@ class TrainingActor(BasePPOTrainer):
                 break
             samples, episode, data_loader_state_dict, pass_rate = output
 
+            # Release a slot after batch is consumed to unblock generator.
+            self.generation_semaphore.put(None, block=True)
+
             # Run PPO update on this batch and bump the global step counter.
             status, global_step = self.train_step(samples, global_step)
 
@@ -168,9 +171,6 @@ class TrainingActor(BasePPOTrainer):
                 "data_loader_state_dict": data_loader_state_dict,
             }
             self.save_logs_and_checkpoints(global_step, status, client_states)
-
-            # Release a slot after batch is consumed to unblock generator.
-            self.generation_semaphore.put(None, block=True)
 
         # Close trackers
         if self.wandb_logger:
