@@ -153,11 +153,11 @@ class ActorPPOTrainer(ABC):
     def ppo_train(self, kl_ctl: float):
         # replay buffer may be empty at first, we should rebuild at each training
         if self.args.use_dynamic_batch:
-            self.replay_buffer.setup_dynamic_batch(self.strategy)
+            self.replay_buffer.setup_dynamic_batch(self.strategy, self.args.actor_tensor_parallel_size)
 
         not_shuffle = (
             self.strategy.ring_attn_group is not None
-            or self.args.ds_tensor_parallel_size > 1
+            or self.args.actor_tensor_parallel_size > 1
             or self.args.use_dynamic_batch
         )
         dataloader = DataLoader(
@@ -365,7 +365,7 @@ class ActorPPOTrainer(ABC):
             # broadcast
             if not self.use_cuda_ipc:
                 # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
-                if self.strategy.args.ds_tensor_parallel_size > 1:
+                if self.strategy.args.actor_tensor_parallel_size > 1:
                     with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
                         _broadcast_param(param, count, num_params)
                 else:
@@ -373,7 +373,7 @@ class ActorPPOTrainer(ABC):
                         _broadcast_param(param, count, num_params)
             # CUDA IPC
             else:
-                if self.strategy.args.ds_tensor_parallel_size > 1:
+                if self.strategy.args.actor_tensor_parallel_size > 1:
                     with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
                         _handle_cuda_ipc(param, count, num_params)
                 else:
@@ -401,7 +401,7 @@ class PolicyModelActor(BaseModelActor):
             if getattr(args, "vllm_sync_backend", "nccl") == "nccl":
                 os.environ["NCCL_CUMEM_ENABLE"] = "0"
 
-        self._setup_distributed(strategy)
+        self._setup_distributed(strategy, strategy.args.actor_tensor_parallel_size)
 
         actor = Actor(
             pretrain,
@@ -412,7 +412,7 @@ class PolicyModelActor(BaseModelActor):
             lora_alpha=strategy.args.lora_alpha,
             target_modules=strategy.args.target_modules,
             lora_dropout=strategy.args.lora_dropout,
-            ds_config=strategy.get_ds_train_config(is_actor=True),
+            ds_config=strategy.get_ds_train_config(ds_tp=strategy.args.actor_tensor_parallel_size),
             packing_samples=strategy.args.packing_samples,
             temperature=strategy.args.temperature,
             use_liger_kernel=strategy.args.use_liger_kernel,
@@ -430,7 +430,7 @@ class PolicyModelActor(BaseModelActor):
                 attn_implementation=strategy.args.attn_implementation,
                 bf16=strategy.args.bf16,
                 load_in_4bit=strategy.args.load_in_4bit,
-                ds_config=strategy.get_ds_eval_config(offload=True),
+                ds_config=strategy.get_ds_eval_config(ds_tp=strategy.args.actor_tensor_parallel_size, offload=True),
                 packing_samples=strategy.args.packing_samples,
             )
         else:
@@ -457,12 +457,13 @@ class PolicyModelActor(BaseModelActor):
         # prepare models/optimizers...
         self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare(
             (actor, actor_optim, actor_scheduler),
+            ds_tp=strategy.args.actor_tensor_parallel_size,
             is_rlhf=True,
         )
 
         if ema_model:
             ema_model._offload = True
-            self.ema_model = strategy.prepare(ema_model, is_rlhf=True)
+            self.ema_model = strategy.prepare(ema_model, ds_tp=strategy.args.actor_tensor_parallel_size, is_rlhf=True)
         else:
             self.ema_model = None
 

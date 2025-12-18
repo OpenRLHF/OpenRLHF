@@ -510,14 +510,26 @@ class PPOTrainer(BasePPOTrainer):
                 )
                 print(sample0)
 
+                actor_experiences = experiences
+                critic_experiences = experiences
                 # balance experiences across dp
                 if args.use_dynamic_batch:
-                    experiences = balance_experiences(experiences, args)
+                    actor_experiences = balance_experiences(experiences, args, ds_tp=args.actor_tensor_parallel_size)
+                    if args.critic_tensor_parallel_size != args.actor_tensor_parallel_size:
+                        critic_experiences = balance_experiences(
+                            experiences, args, ds_tp=args.critic_tensor_parallel_size
+                        )
+                    else:
+                        critic_experiences = actor_experiences
 
-                refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences)
+                refs = self.actor_model_group.async_run_method_batch(
+                    method_name="append", experience=actor_experiences
+                )
                 if self.critic_model_group is not None:
                     refs.extend(
-                        self.critic_model_group.async_run_method_batch(method_name="append", experience=experiences)
+                        self.critic_model_group.async_run_method_batch(
+                            method_name="append", experience=critic_experiences
+                        )
                     )
                 ray.get(refs)
 
