@@ -1,5 +1,4 @@
 import asyncio
-from contextlib import contextmanager
 
 import ray
 from ray.util.queue import Queue
@@ -169,7 +168,7 @@ class TrainingActor(BasePPOTrainer):
                 "data_loader_state_dict": data_loader_state_dict,
             }
             self.save_logs_and_checkpoints(global_step, status, client_states)
-            
+
             # Release a slot after batch is consumed to unblock generator.
             self.generation_semaphore.put(None, block=True)
 
@@ -215,13 +214,13 @@ class PPOTrainerAsync:
         if queue_size <= 0:
             raise ValueError(f"async_queue_size must be positive, got {queue_size}")
         logger.info(f"queue_size={queue_size}")
-        
+
         # Token pool used as a counting semaphore for queue capacity.
         self.generation_semaphore = Queue(maxsize=queue_size)
         for _ in range(queue_size):
             self.generation_semaphore.put(None, block=True)
 
-        self.queue = Queue(maxsize=queue_size)        
+        self.queue = Queue(maxsize=queue_size)
         self.signal_actor = SignalActor.remote()
 
         # rollout
