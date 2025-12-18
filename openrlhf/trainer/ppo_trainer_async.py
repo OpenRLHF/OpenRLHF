@@ -15,16 +15,6 @@ from openrlhf.utils.utils import get_tokenizer
 logger = init_logger(__name__)
 
 
-@contextmanager
-def queue_token(queue_tokens: Queue):
-    """Cross-actor counting semaphore backed by ray.util.queue.Queue."""
-    queue_tokens.get(block=True)
-    try:
-        yield
-    finally:
-        queue_tokens.put(None, block=True)
-
-
 @ray.remote(num_cpus=0)
 class SignalActor:
     """Lightweight gatekeeper to coordinate generation and weight updates."""
@@ -68,7 +58,7 @@ class GenerateSamplesActor:
         *,
         signal_actor,
         queue,
-        queue_tokens,
+        generation_semaphore,
         **generate_kwargs,
     ):
         tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
@@ -87,7 +77,7 @@ class GenerateSamplesActor:
         self.signal_actor = signal_actor
         self.queue = queue
         # Acts like a counting semaphore for queue capacity (cross-actor safe).
-        self.queue_tokens = queue_tokens
+        self.generation_semaphore = generation_semaphore
 
     def get_max_steps(self):
         return self.samples_generator.max_steps
@@ -104,21 +94,22 @@ class GenerateSamplesActor:
             )
             while True:
                 # Backpressure: acquire a slot before generating.
-                with queue_token(self.queue_tokens):
-                    # Pause generation while weights are being broadcasted to keep outputs consistent.
-                    ray.get(self.signal_actor.wait_generating.remote())
-                    ray.get(self.signal_actor.set_update_weights.remote(False))
+                self.generation_semaphore.get(block=True)
 
-                    samples, pass_rate, prompts_used, is_exhausted = self.samples_generator.make_sample_batch()
+                # Pause generation while weights are being broadcasted to keep outputs consistent.
+                ray.get(self.signal_actor.wait_generating.remote())
+                ray.get(self.signal_actor.set_update_weights.remote(False))
 
-                    # Re-open weight updates now that the batch is ready (or we've hit the end).
-                    ray.get(self.signal_actor.set_update_weights.remote(True))
-                    if is_exhausted:
-                        break
+                samples, pass_rate, prompts_used, is_exhausted = self.samples_generator.make_sample_batch()
 
-                    # Send the produced batch to the controller for training.
-                    self.queue.put((samples, episode, self.samples_generator.state_dict(), pass_rate), block=True)
-                    pbar.update(prompts_used)
+                # Re-open weight updates now that the batch is ready (or we've hit the end).
+                ray.get(self.signal_actor.set_update_weights.remote(True))
+                if is_exhausted:
+                    break
+
+                # Send the produced batch to the controller for training.
+                self.queue.put((samples, episode, self.samples_generator.state_dict(), pass_rate), block=True)
+                pbar.update(prompts_used)
 
         self.queue.put("done", block=True)
 
@@ -136,7 +127,7 @@ class TrainingActor(BasePPOTrainer):
         vllm_engines,
         signal_actor,
         queue,
-        queue_tokens,
+        generation_semaphore,
     ):
         tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
 
@@ -152,7 +143,7 @@ class TrainingActor(BasePPOTrainer):
         self.signal_actor = signal_actor
         self.queue = queue
         # Acts like a counting semaphore for queue capacity (cross-actor safe).
-        self.queue_tokens = queue_tokens
+        self.generation_semaphore = generation_semaphore
 
     def fit(self, global_step):
         while True:
@@ -178,8 +169,9 @@ class TrainingActor(BasePPOTrainer):
                 "data_loader_state_dict": data_loader_state_dict,
             }
             self.save_logs_and_checkpoints(global_step, status, client_states)
+            
             # Release a slot after batch is consumed to unblock generator.
-            self.queue_tokens.put(None, block=True)
+            self.generation_semaphore.put(None, block=True)
 
         # Close trackers
         if self.wandb_logger:
@@ -223,11 +215,13 @@ class PPOTrainerAsync:
         if queue_size <= 0:
             raise ValueError(f"async_queue_size must be positive, got {queue_size}")
         logger.info(f"queue_size={queue_size}")
-        self.queue = Queue(maxsize=queue_size)
+        
         # Token pool used as a counting semaphore for queue capacity.
-        self.queue_tokens = Queue(maxsize=queue_size)
+        self.generation_semaphore = Queue(maxsize=queue_size)
         for _ in range(queue_size):
-            self.queue_tokens.put(None, block=True)
+            self.generation_semaphore.put(None, block=True)
+
+        self.queue = Queue(maxsize=queue_size)        
         self.signal_actor = SignalActor.remote()
 
         # rollout
@@ -239,7 +233,7 @@ class PPOTrainerAsync:
             eval_split=eval_split,
             signal_actor=self.signal_actor,
             queue=self.queue,
-            queue_tokens=self.queue_tokens,
+            generation_semaphore=self.generation_semaphore,
             **generate_kwargs,
         )
         # train
@@ -253,7 +247,7 @@ class PPOTrainerAsync:
             vllm_engines=vllm_engines,
             signal_actor=self.signal_actor,
             queue=self.queue,
-            queue_tokens=self.queue_tokens,
+            generation_semaphore=self.generation_semaphore,
         )
 
     def fit(self) -> None:

@@ -112,6 +112,7 @@ class RemoteSampleGenerator:
 
         if exhausted:
             self._dataloader_iter = None
+            logger.info("Prompt dataloader is exhausted.")
 
         return experiences, pass_rate, prompts_used, exhausted
 
