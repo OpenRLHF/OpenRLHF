@@ -29,6 +29,16 @@ ModelOrModelOptimPair = Union[nn.Module, ModelOptimPair]
 
 
 class FSDPStrategy(ABC):
+    _HF_STATE_DICT_WRAPPER_PREFIXES = (
+        # Composable FSDP2 / wrapper prefixes that can leak into state_dict keys.
+        "_fsdp_wrapped_module.",
+        "_orig_module.",
+        "_checkpoint_wrapped_module.",
+        # Common wrapper prefixes.
+        "module.",  # DDP
+        "_orig_mod.",  # torch.compile / OptimizedModule
+    )
+
     def __init__(
         self,
         seed: int = 42,
@@ -500,16 +510,96 @@ class FSDPStrategy(ABC):
 
         fsdp_model = self._unwrap_model(model)
 
+        # If the model is a PEFT wrapper (e.g., LoRA), only save trainable params to avoid
+        # materializing the full base model on rank 0.
+        is_peft_model = hasattr(fsdp_model, "peft_config")
+
+        # Some configs may contain invalid keys (e.g., `None`) under `auto_map`, which
+        # breaks JSON serialization in `save_pretrained()` / `to_json_file()`.
+        if self.is_rank_0():
+            config = getattr(fsdp_model, "config", None)
+            if config is not None and hasattr(config, "auto_map") and isinstance(config.auto_map, dict):
+                if None in config.auto_map:
+                    config.auto_map = {k: v for k, v in config.auto_map.items() if k is not None}
+
         model_state = get_model_state_dict(
             model=fsdp_model,
-            options=StateDictOptions(full_state_dict=True, cpu_offload=True),
+            options=StateDictOptions(full_state_dict=True, cpu_offload=True, ignore_frozen_params=is_peft_model),
         )
+        if model_state:
+            # Ensure HF-compatible keys by stripping PyTorch wrapper prefixes that can appear
+            # with composable FSDP2 (and other wrappers like torch.compile/DDP).
+            cleaned_state: dict = {}
+            duplicated = 0
+            for key, value in model_state.items():
+                clean_key = key
+                for prefix in self._HF_STATE_DICT_WRAPPER_PREFIXES:
+                    clean_key = clean_key.replace(prefix, "")
+                if clean_key in cleaned_state:
+                    duplicated += 1
+                    continue
+                cleaned_state[clean_key] = value
+            model_state = cleaned_state
+            if duplicated and self.is_rank_0():
+                self.print(f"[fsdp2] warning: dropped {duplicated} duplicated keys after HF key normalization.")
         if self.is_rank_0():
             fsdp_model.save_pretrained(output_dir, state_dict=model_state, **kwargs)
-            fsdp_model.config.to_json_file(os.path.join(output_dir, "config.json"))
-            tokenizer.save_pretrained(output_dir)
+            config = getattr(fsdp_model, "config", None)
+            if config is not None:
+                # Prefer the HF helper to ensure any auxiliary files are written
+                # consistently (mirrors verl checkpoint manager behavior).
+                try:
+                    config.save_pretrained(output_dir)
+                except Exception:
+                    config.to_json_file(os.path.join(output_dir, "config.json"))
+
+                # If the model was loaded with trust_remote_code, persist custom
+                # code so the checkpoint can be loaded offline.
+                try:
+                    if getattr(config, "auto_map", None):
+                        from transformers.dynamic_module_utils import custom_object_save
+
+                        custom_object_save(fsdp_model, output_dir, config=config)
+                except Exception as exc:
+                    self.print(f"[fsdp2] warning: failed to save custom code: {exc}")
+
+            generation_config = getattr(fsdp_model, "generation_config", None)
+            if generation_config is not None:
+                try:
+                    generation_config.save_pretrained(output_dir)
+                except Exception:
+                    pass
+
+            if tokenizer is not None:
+                tokenizer.save_pretrained(output_dir)
+
+            # Save minimal runtime metadata to aid debugging/repro.
+            try:
+                import json
+
+                metadata = {
+                    "backend": "fsdp2",
+                    "world_size": int(getattr(self, "world_size", 1) or 1),
+                    "dp_size": int(getattr(self, "dp_size", getattr(self, "world_size", 1)) or 1),
+                    "ring_attn_size": int(getattr(self, "ring_attn_size", 1) or 1),
+                    "ds_tensor_parallel_size": int(getattr(self, "ds_tensor_parallel_size", 1) or 1),
+                    "fsdp2_offload": str(getattr(self, "fsdp2_offload", "none") or "none"),
+                    "fsdp2_reshard_after_forward": bool(getattr(self, "fsdp2_reshard_after_forward", True)),
+                    "bf16": bool(getattr(self, "bf16", True)),
+                }
+                with open(os.path.join(output_dir, "fsdp2_runtime.json"), "w", encoding="utf-8") as f:
+                    json.dump(metadata, f, indent=2, sort_keys=True)
+            except Exception:
+                pass
+
         if dist.is_initialized():
             dist.barrier()
+
+        # Explicitly release memory to avoid rank-0 CPU spikes post-save.
+        del model_state
+        import gc
+
+        gc.collect()
 
     def all_reduce(self, data, op="mean"):
         assert op in ("mean", "max", "sum")
