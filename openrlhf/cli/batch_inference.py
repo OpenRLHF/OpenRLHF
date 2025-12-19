@@ -290,8 +290,30 @@ if __name__ == "__main__":
         "--eval_task", type=str, default=None, help="Set to generate_vllm, generate (HF generate) or rm"
     )
     parser.add_argument("--zero_stage", type=int, default=0, help="DeepSpeed ZeRO Stage")
-    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed cli")
-    parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16 for deepspeed")
+    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for distributed launch")
+    parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
+    parser.add_argument(
+        "--dist_backend", type=str, default="deepspeed", choices=["deepspeed", "fsdp2"], help="Distributed backend"
+    )
+    parser.add_argument(
+        "--fsdp2_offload",
+        type=str,
+        default="none",
+        choices=["none", "cpu"],
+        help="Fully-Sharded Data Parallel offload policy",
+    )
+    parser.add_argument(
+        "--fsdp2_cpu_offload_pin_memory",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Pin CPU memory when fsdp2_offload=cpu",
+    )
+    parser.add_argument(
+        "--fsdp2_reshard_after_forward",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Control fully_shard reshard_after_forward flag",
+    )
     parser.add_argument(
         "--attn_implementation",
         type=str,
@@ -365,14 +387,14 @@ if __name__ == "__main__":
     parser.add_argument("--use_ms", action="store_true", default=False)
 
     args = parser.parse_args()
-    if args.eval_task and args.eval_task == "generate":
+    if args.eval_task == "generate":
         batch_generate(args)
-    if args.eval_task and args.eval_task == "generate_vllm":
+    elif args.eval_task == "generate_vllm":
         batch_generate_vllm(args)
-    elif args.eval_task and args.eval_task == "rm":
+    elif args.eval_task == "rm":
         batch_rm_inference(args)
     else:
-        print("Invalid or missing '--eval_task' argument. Please specify either 'generate' or 'rm'.")
+        print("Invalid or missing '--eval_task' argument. Please specify 'generate', 'generate_vllm', or 'rm'.")
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub

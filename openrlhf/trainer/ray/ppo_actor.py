@@ -309,14 +309,46 @@ class ActorPPOTrainer(ABC):
                 cache_reset_refs.append(engine.reset_prefix_cache.remote())
 
         torch.cuda.empty_cache()
-        model = self.actor.model.module
+        is_fsdp2 = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2"
+
+        if is_fsdp2:
+            model = self.actor.model
+        else:
+            model = self.actor.model.module
         count, num_params = 0, len(list(model.named_parameters()))
+
+        def _get_full_tensor(param):
+            """Return full tensor for FSDP2 DTensor or regular param."""
+            if is_fsdp2:
+                if hasattr(param, "full_tensor"):
+                    # ensure on CUDA before materializing
+                    if param.device.type == "cpu":
+                        param = param.to(torch.cuda.current_device())
+                    return param.full_tensor().data
+                return param.data if param.device.type != "cpu" else param.data.to(torch.cuda.current_device())
+            return param.data
+
+        def _get_param_shape(param):
+            if is_fsdp2:
+                return param.shape  # DTensor reports global shape
+            return param.shape if getattr(self.strategy.args, "zero_stage", 2) != 3 else param.ds_shape
 
         def _broadcast_param(param, count, num_params):
             use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
+
+            # FSDP2 requires all ranks to participate in full_tensor()
+            full_data = None
+            if is_fsdp2:
+                full_data = _get_full_tensor(param)
+
             # Fire all vllm engines for broadcast
             if torch.distributed.get_rank() == 0:
-                shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
+                # Get proper shape and full tensor data
+                shape = _get_param_shape(param)
+                # ZeRO-3 or others don't need collective participation here
+                if not is_fsdp2:
+                    full_data = _get_full_tensor(param)
+
                 refs = [
                     engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
                     for engine in self.vllm_engines
@@ -325,15 +357,18 @@ class ActorPPOTrainer(ABC):
                 if use_ray:
                     import ray.util.collective as collective
 
-                    collective.broadcast(param.data, 0, group_name=self._model_update_group)
+                    collective.broadcast(full_data, 0, group_name=self._model_update_group)
                 else:
-                    self._model_update_group.broadcast(param.data, src=0, stream=torch.cuda.current_stream())
+                    self._model_update_group.broadcast(full_data, src=0, stream=torch.cuda.current_stream())
                 ray.get(refs)
 
         def _handle_cuda_ipc(param, count, num_params):
             from torch.multiprocessing.reductions import reduce_tensor
 
-            weight = param.data.clone()
+            # Get full tensor for FSDP2 or regular data
+            full_data = _get_full_tensor(param)
+            # detach() is required to avoid "Cowardly refusing to serialize non-leaf tensor"
+            weight = full_data.clone().detach()
             ipc_handle = reduce_tensor(weight)
 
             ipc_handle = {get_physical_gpu_id(): ipc_handle}
@@ -345,7 +380,7 @@ class ActorPPOTrainer(ABC):
                 for d in ipc_handle_list:
                     ipc_handles.update(d)
 
-                shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
+                shape = _get_param_shape(param)
                 refs = [
                     engine.update_weight_cuda_ipc.remote(
                         name,
@@ -364,21 +399,27 @@ class ActorPPOTrainer(ABC):
 
             # broadcast
             if not self.use_cuda_ipc:
-                # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
-                if self.strategy.args.ds_tensor_parallel_size > 1:
-                    with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
-                        _broadcast_param(param, count, num_params)
+                if is_fsdp2:
+                    _broadcast_param(param, count, num_params)
                 else:
-                    with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                        _broadcast_param(param, count, num_params)
+                    # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
+                    if self.strategy.args.ds_tensor_parallel_size > 1:
+                        with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
+                            _broadcast_param(param, count, num_params)
+                    else:
+                        with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
+                            _broadcast_param(param, count, num_params)
             # CUDA IPC
             else:
-                if self.strategy.args.ds_tensor_parallel_size > 1:
-                    with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
-                        _handle_cuda_ipc(param, count, num_params)
+                if is_fsdp2:
+                    _handle_cuda_ipc(param, count, num_params)
                 else:
-                    with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                        _handle_cuda_ipc(param, count, num_params)
+                    if self.strategy.args.ds_tensor_parallel_size > 1:
+                        with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
+                            _handle_cuda_ipc(param, count, num_params)
+                    else:
+                        with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
+                            _handle_cuda_ipc(param, count, num_params)
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)
@@ -436,29 +477,43 @@ class PolicyModelActor(BaseModelActor):
         else:
             ema_model = None
 
-        # configure optimizer
-        actor_optim = strategy.create_optimizer(
-            actor, lr=args.actor_learning_rate, betas=strategy.args.adam_betas, weight_decay=args.l2
-        )
-
-        actor_scheduler = get_scheduler(
-            args.lr_scheduler,
-            actor_optim,
-            num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
-            num_training_steps=max_steps,
-            scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
-        )
-
         if args.gradient_checkpointing:
             actor.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
 
-        # prepare models/optimizers...
-        self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare(
-            (actor, actor_optim, actor_scheduler),
-            is_rlhf=True,
-        )
+        is_fsdp2 = getattr(args, "dist_backend", "deepspeed") == "fsdp2"
+        if is_fsdp2:
+            # FSDP2: wrap/shard model before building optimizer/scheduler (params become DTensor/sharded).
+            self.actor = strategy.prepare(actor, is_rlhf=True)
+            self.actor_optim = strategy.create_optimizer(
+                self.actor, lr=args.actor_learning_rate, betas=strategy.args.adam_betas, weight_decay=args.l2
+            )
+            self.actor_scheduler = get_scheduler(
+                args.lr_scheduler,
+                self.actor_optim,
+                num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
+                num_training_steps=max_steps,
+                scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
+            )
+        else:
+            # DeepSpeed: build optimizer/scheduler first; engine handles gradient accumulation.
+            actor_optim = strategy.create_optimizer(
+                actor, lr=args.actor_learning_rate, betas=strategy.args.adam_betas, weight_decay=args.l2
+            )
+            actor_scheduler = get_scheduler(
+                args.lr_scheduler,
+                actor_optim,
+                num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
+                num_training_steps=max_steps,
+                scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
+            )
+
+            # prepare models/optimizers...
+            self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare(
+                (actor, actor_optim, actor_scheduler),
+                is_rlhf=True,
+            )
 
         if ema_model:
             ema_model._offload = True
@@ -471,14 +526,19 @@ class PolicyModelActor(BaseModelActor):
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
+            _, states = strategy.load_ckpt(
+                self.actor.model,
+                ckpt_path,
+                optimizer=self.actor_optim,
+                scheduler=self.actor_scheduler,
+            )
             self.checkpoint_states["global_step"] = states["global_step"]
             self.checkpoint_states["episode"] = states["episode"]
             self.checkpoint_states["data_loader_state_dict"] = states["data_loader_state_dict"]
 
         # initial offload
         if strategy.args.deepspeed_enable_sleep:
-            offload_deepspeed_states(self.actor.model)
+            self.offload_states()
 
         # configure Trainer
         self.trainer = ActorPPOTrainer(
@@ -544,10 +604,16 @@ class PolicyModelActor(BaseModelActor):
         self.trainer.replay_buffer.append(experience)
 
     def reload_states(self):
-        reload_deepspeed_states(self.actor.model)
+        if hasattr(self.strategy, "reload_states"):
+            self.strategy.reload_states(self.actor, self.actor_optim)
+        else:
+            reload_deepspeed_states(self.actor.model)
 
     def offload_states(self):
-        offload_deepspeed_states(self.actor.model)
+        if hasattr(self.strategy, "offload_states"):
+            self.strategy.offload_states(self.actor, self.actor_optim)
+        else:
+            offload_deepspeed_states(self.actor.model)
 
     def save_checkpoint(self, tag, client_states):
         args = self.strategy.args
@@ -558,6 +624,8 @@ class PolicyModelActor(BaseModelActor):
             args.max_ckpt_num,
             args.max_ckpt_mem,
             client_states,
+            optimizer=self.actor_optim,
+            scheduler=self.actor_scheduler,
         )
         if self.save_hf_ckpt:
             save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
