@@ -523,6 +523,9 @@ class PPOTrainer(BasePPOTrainer):
 
                 status = self.ppo_train(steps)
 
+                if "kl" in status and "ppo_kl" not in status:
+                    status["ppo_kl"] = status["kl"]
+
                 if "kl" in status:
                     self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
 
