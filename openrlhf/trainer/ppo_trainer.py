@@ -175,7 +175,12 @@ class BasePPOTrainer(ABC):
             ]
             logger.info(f"checkpoint_states: {checkpoint_states}")
             return checkpoint_states
-        return {"global_step": 0, "episode": 0, "data_loader_state_dict": {}}
+        return {
+            "episode": 0,
+            "global_step": 0,
+            "total_consumed_prompts": 0,
+            "data_loader_state_dict": {},
+        }
 
 
 @ray.remote
@@ -207,7 +212,7 @@ class PPOTrainer(BasePPOTrainer):
             strategy.args.save_steps = float("inf")  # do not save ckpt
 
         # rollout
-        self.train_sample_generator = RemoteSampleGenerator(
+        self.samples_generator = RemoteSampleGenerator(
             strategy=strategy,
             tokenizer=tokenizer,
             vllm_engines=vllm_engines,
@@ -229,23 +234,25 @@ class PPOTrainer(BasePPOTrainer):
     def fit(self) -> None:
         checkpoint_states = self.init_checkpoint_states()
         # Restore step and start_epoch
-        global_step = checkpoint_states["global_step"]
         start_episode = checkpoint_states["episode"]
+        global_step = checkpoint_states["global_step"]
+        total_consumed_prompts = checkpoint_states["total_consumed_prompts"]
         # Keep vLLM weights and dataloader states in sync when resuming.
         if global_step:
             self.broadcast_to_vllm()
-            self.train_sample_generator.load_state_dict(checkpoint_states["data_loader_state_dict"])
+            self.samples_generator.load_state_dict(checkpoint_states["data_loader_state_dict"])
 
         for episode in range(start_episode, self.args.num_episodes):
+            dataset_length = len(self.samples_generator.prompts_dataloader)
             pbar = tqdm(
-                range(len(self.train_sample_generator.prompts_dataloader)),
+                range(dataset_length),
                 desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
-                # initial=global_step, # TODO: init step
+                initial=total_consumed_prompts % dataset_length,
             )
-
             while True:
                 # Draw one mini-batch of prompts; stop when loader is exhausted.
-                samples, pass_rate, prompts_used, is_exhausted = self.train_sample_generator.make_sample_batch()
+                samples, pass_rate, batch_consumed_prompts, is_exhausted = self.samples_generator.make_sample_batch()
+                total_consumed_prompts += batch_consumed_prompts
                 if is_exhausted:
                     break
 
@@ -260,13 +267,14 @@ class PPOTrainer(BasePPOTrainer):
 
                 # logs/checkpoints
                 client_states = {
-                    "global_step": global_step,
                     "episode": episode,
-                    "data_loader_state_dict": self.train_sample_generator.state_dict(),
+                    "global_step": global_step,
+                    "total_consumed_prompts": total_consumed_prompts,
+                    "data_loader_state_dict": self.samples_generator.state_dict(),
                 }
                 self.save_logs_and_checkpoints(global_step, status, client_states)
 
-                pbar.update(prompts_used)
+                pbar.update(batch_consumed_prompts)
 
         # Close trackers
         if self.wandb_logger:
@@ -275,4 +283,4 @@ class PPOTrainer(BasePPOTrainer):
             self.tensorboard_logger.close()
 
     def get_max_steps(self):
-        return self.train_sample_generator.max_steps
+        return self.samples_generator.max_steps

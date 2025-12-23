@@ -84,12 +84,13 @@ class GenerateSamplesActor:
     def load_state_dict(self, state_dict):
         self.samples_generator.load_state_dict(state_dict)
 
-    def fit(self, episode, global_step):
+    def fit(self, episode, total_consumed_prompts):
         for episode in range(episode, self.args.num_episodes):
+            dataset_length = len(self.samples_generator.prompts_dataloader)
             pbar = tqdm(
-                range(len(self.samples_generator.prompts_dataloader)),
+                range(dataset_length),
                 desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
-                # initial=global_step, # TODO
+                initial=total_consumed_prompts % dataset_length,
             )
             while True:
                 # Backpressure: acquire a slot before generating.
@@ -99,7 +100,9 @@ class GenerateSamplesActor:
                 ray.get(self.signal_actor.wait_generating.remote())
                 ray.get(self.signal_actor.set_update_weights.remote(False))
 
-                samples, pass_rate, prompts_used, is_exhausted = self.samples_generator.make_sample_batch()
+                # Draw one mini-batch of prompts; stop when loader is exhausted.
+                samples, pass_rate, batch_consumed_prompts, is_exhausted = self.samples_generator.make_sample_batch()
+                total_consumed_prompts += batch_consumed_prompts
 
                 # Re-open weight updates now that the batch is ready (or we've hit the end).
                 ray.get(self.signal_actor.set_update_weights.remote(True))
@@ -107,8 +110,13 @@ class GenerateSamplesActor:
                     break
 
                 # Send the produced batch to the controller for training.
-                self.queue.put((samples, episode, self.samples_generator.state_dict(), pass_rate), block=True)
-                pbar.update(prompts_used)
+                client_states = {
+                    "episode": episode,
+                    "total_consumed_prompts": total_consumed_prompts,
+                    "data_loader_state_dict": self.samples_generator.state_dict(),
+                }
+                self.queue.put((samples, client_states, pass_rate), block=True)
+                pbar.update(batch_consumed_prompts)
 
         self.queue.put("done", block=True)
 
@@ -150,7 +158,7 @@ class TrainingActor(BasePPOTrainer):
             output = self.queue.get(block=True)
             if output == "done":
                 break
-            samples, episode, data_loader_state_dict, pass_rate = output
+            samples, client_states, pass_rate = output
 
             # Release a slot after batch is consumed to unblock generator.
             self.generation_semaphore.put(None, block=True)
@@ -165,11 +173,7 @@ class TrainingActor(BasePPOTrainer):
             logger.info(f"✨ Global step {global_step}: {log_status}")
 
             # logs/checkpoints
-            client_states = {
-                "global_step": global_step,
-                "episode": episode,
-                "data_loader_state_dict": data_loader_state_dict,
-            }
+            client_states.update({"global_step": global_step})
             self.save_logs_and_checkpoints(global_step, status, client_states)
 
         # Close trackers
@@ -252,8 +256,9 @@ class PPOTrainerAsync:
     def fit(self) -> None:
         checkpoint_states = ray.get(self.trainer_actor.init_checkpoint_states.remote())
         # Restore step and epoch
-        global_step = checkpoint_states["global_step"]
         start_episode = checkpoint_states["episode"]
+        global_step = checkpoint_states["global_step"]
+        total_consumed_prompts = checkpoint_states["total_consumed_prompts"]
         # Keep vLLM weights and dataloader states in sync when resuming.
         if global_step > 0:
             ray.get(
@@ -266,7 +271,7 @@ class PPOTrainerAsync:
         # Launch async training
         ray.get(
             [
-                self.generator_actor.fit.remote(episode=start_episode, global_step=global_step),
+                self.generator_actor.fit.remote(episode=start_episode, total_consumed_prompts=total_consumed_prompts),
                 self.trainer_actor.fit.remote(global_step=global_step),
             ]
         )
