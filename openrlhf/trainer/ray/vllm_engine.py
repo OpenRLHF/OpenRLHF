@@ -139,7 +139,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
         # Count pending rollout calls (not raw vLLM request count).
         return int(self._pending_rollouts)
 
-    async def rollout(
+    async def generate_sample(
         self,
         prompt: str,
         label: str,

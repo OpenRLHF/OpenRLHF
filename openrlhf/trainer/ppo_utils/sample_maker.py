@@ -158,32 +158,26 @@ class RemoteSampleGenerator:
                     accepted_experiences.extend(experiences)
                     pbar.set_postfix({"prompts_used": prompts_used})
                     pbar.update()
-                    # Stop early once the target batch size is reached.
-                    if len(accepted_experiences) >= num_samples:
-                        for remaining_ref in pending_refs:
-                            ray.cancel(remaining_ref)
-                        return accepted_experiences[:num_samples], prompts_used, exhausted
 
                 # If rejected, request a new prompt to keep filling the batch.
                 else:
                     # Pull another prompt when the current one fails filtering.
                     new_prompts, new_labels, exhausted = _collect_prompts(dataloader_iter, 1)
+                    prompts_used += len(new_prompts)
                     # Cancel outstanding work if the dataloader is drained.
                     if exhausted:
                         for remaining_ref in pending_refs:
                             ray.cancel(remaining_ref)
-                        return accepted_experiences[:num_samples], prompts_used, exhausted
+                        return [], prompts_used, True
                     # Otherwise dispatch the new prompt to keep filling the queue.
                     else:
                         new_refs = self._dispatch_prompts(new_prompts, new_labels, **generate_kwargs)
                         pending_refs.extend(new_refs)
-                        prompts_used += len(new_prompts)
 
-        # If the loader is drained and we still lack a full batch, signal exhaustion.
-        if exhausted and len(accepted_experiences) < num_samples:
-            return [], prompts_used, True
+        assert len(accepted_experiences) == num_samples
+        assert len(pending_refs) == 0
 
-        return accepted_experiences[:num_samples], prompts_used, exhausted
+        return accepted_experiences, prompts_used, exhausted
 
     def _dispatch_prompts(self, prompts: List[str], labels: List[str], **generate_kwargs) -> List:
         """Send prompts to rollout workers and return Ray object refs."""
@@ -214,7 +208,7 @@ class RemoteSampleGenerator:
         for idx, (prompt, label) in enumerate(zip(prompts, labels)):
             # Spread work across engines/workers in load-aware order.
             llm_engine = self.vllm_engines[engine_indices[idx]]
-            ref = llm_engine.rollout.remote(
+            ref = llm_engine.generate_sample.remote(
                 prompt=prompt,
                 label=label,
                 sampling_params=sampling_params,
