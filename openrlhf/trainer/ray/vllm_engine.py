@@ -73,8 +73,8 @@ class BaseVLLMActor:
 
 
 @ray.remote
-class VLLMEngineActor(BaseVLLMActor):
-    """Async vLLM actor that delegates rollouts to a chosen executor."""
+class VLLMRolloutActor(BaseVLLMActor):
+    """Async vLLM-backed actor that serves rollouts via a chosen executor."""
 
     async def __init__(
         self,
@@ -280,7 +280,7 @@ def create_vllm_engines(
             ), "vLLM > 0.10.0 is required for logprobs_mode"
 
         vllm_engines.append(
-            VLLMEngineActor.options(
+            VLLMRolloutActor.options(
                 num_cpus=num_gpus,
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
