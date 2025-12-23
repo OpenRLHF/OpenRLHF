@@ -1,6 +1,7 @@
 import asyncio
 import os
 import time
+from enum import Enum
 
 import ray
 from tqdm import tqdm
@@ -16,43 +17,64 @@ from openrlhf.utils.logging_utils import init_logger
 logger = init_logger(__name__)
 
 
+class SignalStatus(Enum):
+    IDLE = 0  # Idle state (can be occupied by either operation)
+    GENERATOR = 1  # Occupied by trajectory generation
+    UPDATE_WEIGHT = 2  # Occupied by weight update
+
+
 @ray.remote(num_cpus=0)
 class SignalActor:
     def __init__(self):
-        self.generating_event = asyncio.Event()
-        self.update_weights_event = asyncio.Event()
-        self.generating_event.set()  # Initially allow generation
-        self.update_weights_event.set()  # Initially allow weight updates
+        # Condition lock: ensures atomic state modification and wait/notify mechanism
+        self.cond = asyncio.Condition()
+        # Core state: tracks current occupied operation type
+        self.state = SignalStatus.IDLE
 
     async def wait_generating(self):
-        """Wait for generation to be allowed."""
-        return await self.generating_event.wait()
+        """Wait for trajectory generation to be allowed.
+
+        Blocks until weight update operation is released (state is not UPDATE_WEIGHT).
+        """
+        async with self.cond:
+            # Loop to avoid spurious wakeups: wait until weight update is finished
+            while self.state == SignalStatus.UPDATE_WEIGHT:
+                await self.cond.wait()
+
+            # Atomically occupy state for generation if idle
+            if self.state == SignalStatus.IDLE:
+                self.state = SignalStatus.GENERATOR
 
     async def wait_update_weights(self):
-        """Wait for weight update to be allowed."""
-        return await self.update_weights_event.wait()
+        """Wait for weight update to be allowed.
 
-    def set_generating(self, allow_generating):
-        """Set generation state.
+        Blocks until trajectory generation operation is released (state is not GENERATOR).
+        """
+        async with self.cond:
+            # Loop to avoid spurious wakeups: wait until generation is finished
+            while self.state == SignalStatus.GENERATOR:
+                await self.cond.wait()
+
+            # Atomically occupy state for weight update if idle
+            if self.state == SignalStatus.IDLE:
+                self.state = SignalStatus.UPDATE_WEIGHT
+
+    def release_generating(self):
+        asyncio.create_task(self._release_state(SignalStatus.GENERATOR))
+
+    def release_update_weights(self):
+        asyncio.create_task(self._release_state(SignalStatus.UPDATE_WEIGHT))
+
+    async def _release_state(self, target_state: SignalStatus):
+        """Internal method: atomically release target state and notify waiting coroutines.
 
         Args:
-            is_generating: True to allow generation, False to block it
+            target_state: The state to release (GENERATOR/UPDATE_WEIGHT)
         """
-        if allow_generating:
-            self.generating_event.set()
-        else:
-            self.generating_event.clear()
-
-    def set_update_weights(self, allow_updating):
-        """Set weight update state.
-
-        Args:
-            is_updating: True to allow weight updates, False to block it
-        """
-        if allow_updating:
-            self.update_weights_event.set()
-        else:
-            self.update_weights_event.clear()
+        async with self.cond:
+            if self.state == target_state:
+                self.state = SignalStatus.IDLE
+                self.cond.notify_all()
 
 
 @ray.remote
@@ -97,8 +119,6 @@ class GenerateSamplesActor(BasePPOTrainer):
 
                 # Wait for generation to be allowed
                 ray.get(self.signal_actor.wait_generating.remote())
-                # Block weight updates
-                ray.get(self.signal_actor.set_update_weights.remote(False))
 
                 # Generate samples
                 # remote_reward_model is used to get rewards for dynamic sampling
@@ -107,7 +127,7 @@ class GenerateSamplesActor(BasePPOTrainer):
                 )
 
                 # Allow weight updates after generation is done
-                ray.get(self.signal_actor.set_update_weights.remote(True))
+                ray.get(self.signal_actor.release_generating.remote())
 
                 pbar.update()
 
@@ -177,8 +197,7 @@ class TrainingActor(BasePPOTrainer):
 
     def _broadcast_to_vllm(self):
         if self.vllm_engines is not None:
-            # Block generation
-            ray.get(self.signal_actor.set_generating.remote(False))
+
             # Wait for weight updates to be allowed
             ray.get(self.signal_actor.wait_update_weights.remote())
 
@@ -186,7 +205,7 @@ class TrainingActor(BasePPOTrainer):
             ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
 
             # Allow generation
-            ray.get(self.signal_actor.set_generating.remote(True))
+            ray.get(self.signal_actor.release_update_weights.remote())
 
     def fit(self, queue, steps):
         args = self.args
