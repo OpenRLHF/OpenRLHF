@@ -19,7 +19,7 @@ logger = init_logger(__name__)
 
 class SignalStatus(Enum):
     IDLE = 0  # Idle state (can be occupied by either operation)
-    GENERATOR = 1  # Occupied by trajectory generation
+    GENERATION = 1  # Occupied by trajectory generation
     UPDATE_WEIGHT = 2  # Occupied by weight update
 
 
@@ -38,12 +38,13 @@ class SignalActor:
         """
         async with self.cond:
             # Loop to avoid spurious wakeups: wait until weight update is finished
-            while self.state == SignalStatus.UPDATE_WEIGHT:
+            while self.state != SignalStatus.IDLE:
+                if self.state == SignalStatus.GENERATION:
+                    return
                 await self.cond.wait()
 
-            # Atomically occupy state for generation if idle
-            if self.state == SignalStatus.IDLE:
-                self.state = SignalStatus.GENERATOR
+            # Atomically occupy state for generation
+            self.state = SignalStatus.GENERATION
 
     async def wait_update_weights(self):
         """Wait for weight update to be allowed.
@@ -52,15 +53,16 @@ class SignalActor:
         """
         async with self.cond:
             # Loop to avoid spurious wakeups: wait until generation is finished
-            while self.state == SignalStatus.GENERATOR:
+            while self.state != SignalStatus.IDLE:
+                if self.state == SignalStatus.UPDATE_WEIGHT:
+                    return
                 await self.cond.wait()
 
-            # Atomically occupy state for weight update if idle
-            if self.state == SignalStatus.IDLE:
-                self.state = SignalStatus.UPDATE_WEIGHT
+            # Atomically occupy state for weight update
+            self.state = SignalStatus.UPDATE_WEIGHT
 
     def release_generating(self):
-        asyncio.create_task(self._release_state(SignalStatus.GENERATOR))
+        asyncio.create_task(self._release_state(SignalStatus.GENERATION))
 
     def release_update_weights(self):
         asyncio.create_task(self._release_state(SignalStatus.UPDATE_WEIGHT))
