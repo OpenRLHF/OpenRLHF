@@ -416,7 +416,7 @@ class RolloutSampler:
         return accepted_experiences, prompts_consumed, exhausted
 
     def _dispatch_prompts(self, prompts: List[str], labels: List[str], **generate_kwargs) -> List:
-        """Send prompts to rollout workers and return Ray object refs."""
+        """Send prompts to rollout executors and return Ray object refs."""
         sampling_params = SamplingParams(
             temperature=generate_kwargs.get("temperature", 1.0),
             top_p=generate_kwargs.get("top_p", 1.0),
@@ -444,7 +444,7 @@ class RolloutSampler:
         for idx, (prompt, label) in enumerate(zip(prompts, labels)):
             # Spread work across engines/workers in load-aware order.
             llm_engine = self.vllm_engines[engine_indices[idx]]
-            ref = llm_engine.generate_sample.remote(
+            ref = llm_engine.generate_rollouts.remote(
                 prompt=prompt,
                 label=label,
                 sampling_params=sampling_params,
