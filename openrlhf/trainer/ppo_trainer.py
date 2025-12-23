@@ -6,7 +6,7 @@ import ray
 from tqdm import tqdm
 
 from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
-from openrlhf.trainer.ppo_utils.kl_controller import build_kl_controller
+from openrlhf.trainer.ppo_utils.kl_controller import AdaptiveKLController, FixedKLController
 from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ppo_utils.sample_maker import RemoteSampleGenerator
 from openrlhf.trainer.ray.launcher import RayActorGroup
@@ -41,11 +41,10 @@ class BasePPOTrainer(ABC):
         self.vllm_engines = vllm_engines
         self.tokenizer = tokenizer
 
-        self.kl_ctl = build_kl_controller(
-            self.args.init_kl_coef,
-            self.args.kl_target,
-            self.args.kl_horizon,
-        )
+        if self.kl_target:
+            self.kl_ctl = AdaptiveKLController(self.init_kl_coef, self.kl_target, self.kl_horizon)
+        else:
+            self.kl_ctl = FixedKLController(self.init_kl_coef)
 
         self.experience_maker = RemoteExperienceMaker(
             self.actor_model_group,
