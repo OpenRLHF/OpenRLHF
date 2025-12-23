@@ -40,10 +40,10 @@ class BasePPOTrainer(ABC):
         self.vllm_engines = vllm_engines
         self.tokenizer = tokenizer
 
-        if self.kl_target:
-            self.kl_ctl = AdaptiveKLController(self.init_kl_coef, self.kl_target, self.kl_horizon)
+        if self.args.kl_target:
+            self.kl_ctl = AdaptiveKLController(self.args.init_kl_coef, self.args.kl_target, self.args.kl_horizon)
         else:
-            self.kl_ctl = FixedKLController(self.init_kl_coef)
+            self.kl_ctl = FixedKLController(self.args.init_kl_coef)
 
         self.experience_maker = RemoteExperienceMaker(
             self.actor_model_group,
