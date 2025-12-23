@@ -249,17 +249,17 @@ def update_samples_with_rewards(rewards_info, samples_list):
     return samples_list
 
 
-def _collect_prompts(dataloader_iter, num_prompts: int):
+def _collect_prompt_batch(dataloader_iter, num_prompts: int):
     """Draw up to `num_prompts` items from the prompt dataloader."""
     prompts, labels = [], []
     exhausted = False
 
     while len(prompts) < num_prompts:
         try:
-            _, rand_prompts, rand_labels = next(dataloader_iter)
+            _, batch_prompts, batch_labels = next(dataloader_iter)
             remaining = num_prompts - len(prompts)
-            prompts.extend(rand_prompts[:remaining])
-            labels.extend(rand_labels[:remaining])
+            prompts.extend(batch_prompts[:remaining])
+            labels.extend(batch_labels[:remaining])
         except StopIteration:
             exhausted = True
             break
@@ -267,7 +267,7 @@ def _collect_prompts(dataloader_iter, num_prompts: int):
     return prompts, labels, exhausted
 
 
-class RemoteSampleGenerator:
+class RolloutSampler:
     """Stateless sampler: pulls prompts and dispatches to rollout workers."""
 
     def __init__(
@@ -323,7 +323,7 @@ class RemoteSampleGenerator:
         if state_dict:
             self.prompts_dataloader.load_state_dict(state_dict)
 
-    def make_sample_batch(self) -> Tuple[List[Experience], Optional[float], int, bool]:
+    def sample_batch(self) -> Tuple[List[Experience], Optional[float], int, bool]:
         """Produce one batch and indicate if the dataloader is exhausted."""
         if getattr(self, "_dataloader_iter", None) is None:
             self._dataloader_iter = iter(self.prompts_dataloader)
@@ -332,7 +332,7 @@ class RemoteSampleGenerator:
         if self.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
-        experiences, prompts_used, exhausted = self._generate_samples(
+        experiences, prompts_consumed, exhausted = self._generate_samples(
             dataloader_iter=self._dataloader_iter,
             num_prompts=self.args.rollout_batch_size,
             **self.generate_kwargs,
@@ -342,27 +342,29 @@ class RemoteSampleGenerator:
         if self.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "sleep")
 
-        pass_rate = (self.args.rollout_batch_size / prompts_used * 100) if prompts_used else None
+        filter_pass_rate = None
+        if self.args.dynamic_filtering and prompts_consumed:
+            filter_pass_rate = self.args.rollout_batch_size / prompts_consumed * 100
 
         if exhausted:
             self._dataloader_iter = None
             logger.info("Prompt dataloader is exhausted.")
 
-        return experiences, pass_rate, prompts_used, exhausted
+        return experiences, filter_pass_rate, prompts_consumed, exhausted
 
     @torch.no_grad()
     def _generate_samples(
         self, dataloader_iter, num_prompts: int, **generate_kwargs
-    ) -> Tuple[List[Experience], bool, int]:
+    ) -> Tuple[List[Experience], int, bool]:
         """Generate a batch of Experiences with optional reward filtering."""
-        prompts_used = 0
-        prompts, labels, exhausted = _collect_prompts(dataloader_iter, num_prompts)
+        prompts_consumed = 0
+        prompts, labels, exhausted = _collect_prompt_batch(dataloader_iter, num_prompts)
         # Stop early if the prompt source is fully consumed.
         if exhausted:
-            return [], prompts_used, exhausted
+            return [], prompts_consumed, exhausted
 
         pending_refs = self._dispatch_prompts(prompts, labels, **generate_kwargs)
-        prompts_used += len(prompts)
+        prompts_consumed += len(prompts)
 
         accepted_experiences: List[Experience] = []
         num_samples = num_prompts * self.args.n_samples_per_prompt
@@ -390,19 +392,19 @@ class RemoteSampleGenerator:
                 # Accept experiences and stop once enough have been gathered.
                 if experiences:
                     accepted_experiences.extend(experiences)
-                    pbar.set_postfix({"prompts_used": prompts_used})
+                    pbar.set_postfix({"prompts_consumed": prompts_consumed})
                     pbar.update()
 
                 # If rejected, request a new prompt to keep filling the batch.
                 else:
                     # Pull another prompt when the current one fails filtering.
-                    new_prompts, new_labels, exhausted = _collect_prompts(dataloader_iter, 1)
-                    prompts_used += len(new_prompts)
+                    new_prompts, new_labels, exhausted = _collect_prompt_batch(dataloader_iter, 1)
+                    prompts_consumed += len(new_prompts)
                     # Cancel outstanding work if the dataloader is drained.
                     if exhausted:
                         for remaining_ref in pending_refs:
                             ray.cancel(remaining_ref)
-                        return [], prompts_used, True
+                        return [], prompts_consumed, True
                     # Otherwise dispatch the new prompt to keep filling the queue.
                     else:
                         new_refs = self._dispatch_prompts(new_prompts, new_labels, **generate_kwargs)
@@ -411,7 +413,7 @@ class RemoteSampleGenerator:
         assert len(accepted_experiences) == num_samples
         assert len(pending_refs) == 0
 
-        return accepted_experiences, prompts_used, exhausted
+        return accepted_experiences, prompts_consumed, exhausted
 
     def _dispatch_prompts(self, prompts: List[str], labels: List[str], **generate_kwargs) -> List:
         """Send prompts to rollout workers and return Ray object refs."""
@@ -426,9 +428,9 @@ class RemoteSampleGenerator:
         )
         truncate_length = generate_kwargs.get("prompt_max_len", 1024) + generate_kwargs.get("max_new_tokens", 1024)
 
-        # Snapshot current unfinished request counts to balance upcoming work.
-        unfinished_counts = ray.get([engine.get_num_unfinished_rollouts.remote() for engine in self.vllm_engines])
-        engine_heap = [(count, idx) for idx, count in enumerate(unfinished_counts)]
+        # Snapshot current pending rollout counts to balance upcoming work.
+        pending_counts = ray.get([engine.get_num_pending_rollouts.remote() for engine in self.vllm_engines])
+        engine_heap = [(count, idx) for idx, count in enumerate(pending_counts)]
         heapq.heapify(engine_heap)
 
         # Pre-compute engine assignment to keep loads even.

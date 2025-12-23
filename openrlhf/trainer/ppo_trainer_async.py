@@ -5,7 +5,7 @@ from ray.util.queue import Queue
 from tqdm import tqdm
 
 from openrlhf.trainer.ppo_trainer import BasePPOTrainer
-from openrlhf.trainer.ppo_utils.experience_maker import RemoteSampleGenerator
+from openrlhf.trainer.ppo_utils.experience_maker import RolloutSampler
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.logging_utils import init_logger
@@ -65,7 +65,7 @@ class GenerateSamplesActor:
         self.strategy = strategy
         self.args = strategy.args
 
-        self.samples_generator = RemoteSampleGenerator(
+        self.rollout_sampler = RolloutSampler(
             strategy=strategy,
             tokenizer=tokenizer,
             vllm_engines=vllm_engines,
@@ -79,14 +79,14 @@ class GenerateSamplesActor:
         self.generation_semaphore = generation_semaphore
 
     def get_max_steps(self):
-        return self.samples_generator.max_steps
+        return self.rollout_sampler.max_steps
 
     def load_state_dict(self, state_dict):
-        self.samples_generator.load_state_dict(state_dict)
+        self.rollout_sampler.load_state_dict(state_dict)
 
     def fit(self, episode, total_consumed_prompts):
         for episode in range(episode, self.args.num_episodes):
-            dataset_length = len(self.samples_generator.prompts_dataloader)
+            dataset_length = len(self.rollout_sampler.prompts_dataloader)
             pbar = tqdm(
                 range(dataset_length),
                 desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
@@ -101,8 +101,8 @@ class GenerateSamplesActor:
                 ray.get(self.signal_actor.set_update_weights.remote(False))
 
                 # Draw one mini-batch of prompts; stop when loader is exhausted.
-                samples, pass_rate, batch_consumed_prompts, is_exhausted = self.samples_generator.make_sample_batch()
-                total_consumed_prompts += batch_consumed_prompts
+                rollout_samples, filter_pass_rate, prompts_consumed, is_exhausted = self.rollout_sampler.sample_batch()
+                total_consumed_prompts += prompts_consumed
 
                 # Re-open weight updates now that the batch is ready (or we've hit the end).
                 ray.get(self.signal_actor.set_update_weights.remote(True))
@@ -113,10 +113,10 @@ class GenerateSamplesActor:
                 client_states = {
                     "episode": episode,
                     "total_consumed_prompts": total_consumed_prompts,
-                    "data_loader_state_dict": self.samples_generator.state_dict(),
+                    "data_loader_state_dict": self.rollout_sampler.state_dict(),
                 }
-                self.queue.put((samples, client_states, pass_rate), block=True)
-                pbar.update(batch_consumed_prompts)
+                self.queue.put((rollout_samples, client_states, filter_pass_rate), block=True)
+                pbar.update(prompts_consumed)
 
         self.queue.put("done", block=True)
 
@@ -158,17 +158,17 @@ class TrainingActor(BasePPOTrainer):
             output = self.queue.get(block=True)
             if output == "done":
                 break
-            samples, client_states, pass_rate = output
+            rollout_samples, client_states, filter_pass_rate = output
 
             # Release a slot after batch is consumed to unblock generator.
             self.generation_semaphore.put(None, block=True)
 
             # Run PPO update on this batch and bump the global step counter.
-            status, global_step = self.train_step(samples, global_step)
+            status, global_step = self.train_step(rollout_samples, global_step)
 
             # Add generated samples to status dictionary
             if self.args.dynamic_filtering:
-                status["dynamic_filtering_pass_rate"] = pass_rate
+                status["dynamic_filtering_pass_rate"] = filter_pass_rate
             log_status = {k: v for k, v in status.items() if k not in ["generated_samples"]}
             logger.info(f"✨ Global step {global_step}: {log_status}")
 

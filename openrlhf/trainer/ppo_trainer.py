@@ -5,7 +5,7 @@ from typing import Dict, Tuple
 import ray
 from tqdm import tqdm
 
-from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker, RemoteSampleGenerator
+from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker, RolloutSampler
 from openrlhf.trainer.ppo_utils.kl_controller import AdaptiveKLController, FixedKLController
 from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ray.launcher import RayActorGroup
@@ -62,9 +62,9 @@ class BasePPOTrainer(ABC):
     def fit(self):
         raise NotImplementedError("fit method is not implemented")
 
-    def train_step(self, samples, global_step: int) -> Tuple[Dict, int]:
-        # Turn raw samples into PPO-ready trajectories with rewards.
-        experiences = self.experience_maker.make_experience_batch(samples)
+    def train_step(self, rollout_samples, global_step: int) -> Tuple[Dict, int]:
+        # Turn raw rollouts into PPO-ready trajectories with rewards.
+        experiences = self.experience_maker.make_experience_batch(rollout_samples)
 
         # Peek at the first decoded sample for quick sanity check.
         sample0 = [
@@ -210,7 +210,7 @@ class PPOTrainer(BasePPOTrainer):
             strategy.args.save_steps = float("inf")  # do not save ckpt
 
         # rollout
-        self.samples_generator = RemoteSampleGenerator(
+        self.rollout_sampler = RolloutSampler(
             strategy=strategy,
             tokenizer=tokenizer,
             vllm_engines=vllm_engines,
@@ -238,10 +238,10 @@ class PPOTrainer(BasePPOTrainer):
         # Keep vLLM weights and dataloader states in sync when resuming.
         if global_step:
             self.broadcast_to_vllm()
-            self.samples_generator.load_state_dict(checkpoint_states["data_loader_state_dict"])
+            self.rollout_sampler.load_state_dict(checkpoint_states["data_loader_state_dict"])
 
         for episode in range(start_episode, self.args.num_episodes):
-            dataset_length = len(self.samples_generator.prompts_dataloader)
+            dataset_length = len(self.rollout_sampler.prompts_dataloader)
             pbar = tqdm(
                 range(dataset_length),
                 desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
@@ -249,30 +249,30 @@ class PPOTrainer(BasePPOTrainer):
             )
             while True:
                 # Draw one mini-batch of prompts; stop when loader is exhausted.
-                samples, pass_rate, batch_consumed_prompts, is_exhausted = self.samples_generator.make_sample_batch()
-                total_consumed_prompts += batch_consumed_prompts
+                rollout_samples, filter_pass_rate, prompts_consumed, is_exhausted = self.rollout_sampler.sample_batch()
+                total_consumed_prompts += prompts_consumed
                 if is_exhausted:
                     break
 
                 # Run PPO update on this batch and bump the global step counter.
-                status, global_step = self.train_step(samples, global_step)
+                status, global_step = self.train_step(rollout_samples, global_step)
 
                 # Add generated samples to status dictionary
                 if self.args.dynamic_filtering:
-                    status["dynamic_filtering_pass_rate"] = pass_rate
-                log_statue = {k: v for k, v in status.items() if k not in ["generated_samples"]}
-                logger.info(f"✨ Global step {global_step}: {log_statue}")
+                    status["dynamic_filtering_pass_rate"] = filter_pass_rate
+                log_status = {k: v for k, v in status.items() if k not in ["generated_samples"]}
+                logger.info(f"✨ Global step {global_step}: {log_status}")
 
                 # logs/checkpoints
                 client_states = {
                     "episode": episode,
                     "global_step": global_step,
                     "total_consumed_prompts": total_consumed_prompts,
-                    "data_loader_state_dict": self.samples_generator.state_dict(),
+                    "data_loader_state_dict": self.rollout_sampler.state_dict(),
                 }
                 self.save_logs_and_checkpoints(global_step, status, client_states)
 
-                pbar.update(batch_consumed_prompts)
+                pbar.update(prompts_consumed)
 
         # Close trackers
         if self.wandb_logger:
@@ -281,4 +281,4 @@ class PPOTrainer(BasePPOTrainer):
             self.tensorboard_logger.close()
 
     def get_max_steps(self):
-        return self.samples_generator.max_steps
+        return self.rollout_sampler.max_steps

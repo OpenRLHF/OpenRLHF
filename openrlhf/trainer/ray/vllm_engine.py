@@ -92,7 +92,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
             self.rollout_worker = RolloutWorker()
 
         self.rollout_semaphore = asyncio.Semaphore(max_tasks) if max_tasks else None
-        self._pending_rollouts = 0
+        self._pending_rollout_count = 0
         self._pending_rollouts_lock = asyncio.Lock()
 
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
@@ -142,9 +142,9 @@ class LLMRayActorAsync(BaseLLMRayActor):
 
         return final_output
 
-    def get_num_unfinished_rollouts(self) -> int:
+    def get_num_pending_rollouts(self) -> int:
         # Count pending rollout calls (not raw vLLM request count).
-        return int(self._pending_rollouts)
+        return int(self._pending_rollout_count)
 
     async def generate_sample(
         self,
@@ -157,7 +157,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
     ):
         """Rollout locally without a separate worker."""
         async with self._pending_rollouts_lock:
-            self._pending_rollouts += num_samples
+            self._pending_rollout_count += num_samples
 
         async def _run_one(sampling_params):
             return await self.rollout_worker.run(
@@ -183,7 +183,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
             return await asyncio.gather(*tasks)
         finally:
             async with self._pending_rollouts_lock:
-                self._pending_rollouts -= num_samples
+                self._pending_rollout_count -= num_samples
 
 
 def create_vllm_engines(
