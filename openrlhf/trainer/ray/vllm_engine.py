@@ -83,7 +83,14 @@ class LLMRayActorAsync(BaseLLMRayActor):
         **kwargs,
     ):
         super().__init__(*args, bundle_indices=bundle_indices, **kwargs)
-        self.rollout_worker = self._build_worker(agent_func_path, remote_rm_url, remote_rm_batch_size)
+
+        if agent_func_path:
+            self.rollout_worker = RolloutWithAgentWorker(agent_func_path=agent_func_path)
+        elif remote_rm_url:
+            self.rollout_worker = RolloutAndRewardWorker(remote_rm_url, remote_rm_batch_size)
+        else:
+            self.rollout_worker = RolloutWorker()
+
         self.rollout_semaphore = asyncio.Semaphore(max_tasks) if max_tasks else None
         self._pending_rollouts = 0
         self._pending_rollouts_lock = asyncio.Lock()
@@ -177,15 +184,6 @@ class LLMRayActorAsync(BaseLLMRayActor):
         finally:
             async with self._pending_rollouts_lock:
                 self._pending_rollouts -= num_samples
-
-    def _build_worker(
-        self, agent_func_path: Optional[str], remote_rm_url: Optional[str], remote_rm_batch_size: Optional[int]
-    ):
-        if agent_func_path:
-            return RolloutWithAgentWorker(agent_func_path=agent_func_path)
-        if remote_rm_url:
-            return RolloutAndRewardWorker(remote_rm_url, remote_rm_batch_size)
-        return RolloutWorker()
 
 
 def create_vllm_engines(
