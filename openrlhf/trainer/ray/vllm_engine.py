@@ -186,19 +186,24 @@ class VLLMRolloutActor(BaseVLLMActor):
 
     async def _run_rollout(self, prompt, label, sampling_params, max_length, hf_tokenizer):
         if self.rollout_slots is None:
-            return await self._run_rollout_once(prompt, label, sampling_params, max_length, hf_tokenizer)
-        async with self.rollout_slots:
-            return await self._run_rollout_once(prompt, label, sampling_params, max_length, hf_tokenizer)
+            return await self.rollout_executor.execute_rollout(
+                prompt=prompt,
+                label=label,
+                sampling_params=sampling_params,
+                max_length=max_length,
+                hf_tokenizer=hf_tokenizer,
+                llm_engine=self,
+            )
 
-    async def _run_rollout_once(self, prompt, label, sampling_params, max_length, hf_tokenizer):
-        return await self.rollout_executor.execute_rollout(
-            prompt=prompt,
-            label=label,
-            sampling_params=sampling_params,
-            max_length=max_length,
-            hf_tokenizer=hf_tokenizer,
-            llm_engine=self,
-        )
+        async with self.rollout_slots:
+            return await self.rollout_executor.execute_rollout(
+                prompt=prompt,
+                label=label,
+                sampling_params=sampling_params,
+                max_length=max_length,
+                hf_tokenizer=hf_tokenizer,
+                llm_engine=self,
+            )
 
 
 def create_vllm_engines(
