@@ -15,34 +15,39 @@ logger = init_logger(__name__)
 
 
 @ray.remote(num_cpus=0)
-class SignalActor:
-    """Lightweight gatekeeper to coordinate generation and weight updates."""
+class GenerationUpdateLock:
+    """Mutual exclusion gate between generation and weight updates."""
 
     def __init__(self):
-        self.generating_event = asyncio.Event()
-        self.update_weights_event = asyncio.Event()
-        self.set_generating(True)  # Initially allow generation
-        self.set_update_weights(True)  # Initially allow weight updates
+        self._cond = asyncio.Condition()
+        self._generating = False
+        self._updating = False
 
-    @staticmethod
-    def _toggle_event(event: asyncio.Event, allow: bool):
-        event.set() if allow else event.clear()
+    async def acquire_for_generation(self):
+        """Block until no update is active, then mark generation as active."""
+        async with self._cond:
+            while self._updating:
+                await self._cond.wait()
+            self._generating = True
 
-    async def wait_generating(self):
-        """Wait for generation to be allowed."""
-        return await self.generating_event.wait()
+    async def release_for_generation(self):
+        """Mark generation as inactive and wake any waiting updates."""
+        async with self._cond:
+            self._generating = False
+            self._cond.notify_all()
 
-    async def wait_update_weights(self):
-        """Wait for weight update to be allowed."""
-        return await self.update_weights_event.wait()
+    async def acquire_for_update(self):
+        """Block until no generation is active, then mark update as active."""
+        async with self._cond:
+            while self._generating:
+                await self._cond.wait()
+            self._updating = True
 
-    def set_generating(self, allow_generating: bool):
-        """Set generation state."""
-        self._toggle_event(self.generating_event, allow_generating)
-
-    def set_update_weights(self, allow_updating: bool):
-        """Set weight update state."""
-        self._toggle_event(self.update_weights_event, allow_updating)
+    async def release_for_update(self):
+        """Mark update as inactive and wake any waiting generators."""
+        async with self._cond:
+            self._updating = False
+            self._cond.notify_all()
 
 
 @ray.remote
@@ -55,7 +60,7 @@ class GenerateSamplesActor:
         prompt_split="train",
         eval_split="test",
         *,
-        signal_actor,
+        generation_update_lock,
         queue,
         generation_semaphore,
         **generate_kwargs,
@@ -73,7 +78,7 @@ class GenerateSamplesActor:
             generate_kwargs=generate_kwargs,
         )
 
-        self.signal_actor = signal_actor
+        self.generation_update_lock = generation_update_lock
         self.queue = queue
         # Acts like a counting semaphore for queue capacity (cross-actor safe).
         self.generation_semaphore = generation_semaphore
@@ -96,16 +101,16 @@ class GenerateSamplesActor:
                 # Backpressure: acquire a slot before generating.
                 self.generation_semaphore.get(block=True)
 
-                # Pause generation while weights are being broadcasted to keep outputs consistent.
-                ray.get(self.signal_actor.wait_generating.remote())
-                ray.get(self.signal_actor.set_update_weights.remote(False))
-
-                # Draw one mini-batch of prompts; stop when loader is exhausted.
-                rollout_samples, filter_pass_rate, prompts_consumed, is_exhausted = self.rollout_sampler.sample_batch()
-                total_consumed_prompts += prompts_consumed
-
-                # Re-open weight updates now that the batch is ready (or we've hit the end).
-                ray.get(self.signal_actor.set_update_weights.remote(True))
+                # Pause updates while we sample to keep outputs consistent.
+                ray.get(self.generation_update_lock.acquire_for_generation.remote())
+                try:
+                    # Draw one mini-batch of prompts; stop when loader is exhausted.
+                    rollout_samples, filter_pass_rate, prompts_consumed, is_exhausted = (
+                        self.rollout_sampler.sample_batch()
+                    )
+                    total_consumed_prompts += prompts_consumed
+                finally:
+                    ray.get(self.generation_update_lock.release_for_generation.remote())
                 if is_exhausted:
                     break
 
@@ -132,7 +137,7 @@ class TrainingActor(BasePPOTrainer):
         reward_model_group,
         reference_model_group,
         vllm_engines,
-        signal_actor,
+        generation_update_lock,
         queue,
         generation_semaphore,
     ):
@@ -147,7 +152,7 @@ class TrainingActor(BasePPOTrainer):
             vllm_engines,
             tokenizer,
         )
-        self.signal_actor = signal_actor
+        self.generation_update_lock = generation_update_lock
         self.queue = queue
         # Acts like a counting semaphore for queue capacity (cross-actor safe).
         self.generation_semaphore = generation_semaphore
@@ -183,13 +188,12 @@ class TrainingActor(BasePPOTrainer):
             self.tensorboard_logger.close()
 
     def broadcast_to_vllm(self):
-        # pause generation for sync
-        ray.get(self.signal_actor.set_generating.remote(False))
-        ray.get(self.signal_actor.wait_update_weights.remote())
-        # broadcast
-        super().broadcast_to_vllm()
-        # resume generation
-        ray.get(self.signal_actor.set_generating.remote(True))
+        ray.get(self.generation_update_lock.acquire_for_update.remote())
+        try:
+            # broadcast
+            super().broadcast_to_vllm()
+        finally:
+            ray.get(self.generation_update_lock.release_for_update.remote())
 
 
 @ray.remote
@@ -225,7 +229,7 @@ class PPOTrainerAsync:
             self.generation_semaphore.put(None, block=True)
 
         self.queue = Queue(maxsize=queue_size)
-        self.signal_actor = SignalActor.remote()
+        self.generation_update_lock = GenerationUpdateLock.remote()
 
         # rollout
         self.generator_actor = GenerateSamplesActor.remote(
@@ -234,7 +238,7 @@ class PPOTrainerAsync:
             vllm_engines=vllm_engines,
             prompt_split=prompt_split,
             eval_split=eval_split,
-            signal_actor=self.signal_actor,
+            generation_update_lock=self.generation_update_lock,
             queue=self.queue,
             generation_semaphore=self.generation_semaphore,
             **generate_kwargs,
@@ -248,7 +252,7 @@ class PPOTrainerAsync:
             reward_model_group=reward_model_group,
             reference_model_group=reference_model_group,
             vllm_engines=vllm_engines,
-            signal_actor=self.signal_actor,
+            generation_update_lock=self.generation_update_lock,
             queue=self.queue,
             generation_semaphore=self.generation_semaphore,
         )
