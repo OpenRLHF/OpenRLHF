@@ -471,9 +471,7 @@ class PolicyModelActor(BaseModelActor):
         if args.load_checkpoint and os.path.exists(ckpt_path):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
             _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
-            self.checkpoint_states["global_step"] = states["global_step"]
-            self.checkpoint_states["episode"] = states["episode"]
-            self.checkpoint_states["data_loader_state_dict"] = states["data_loader_state_dict"]
+            self.checkpoint_states = states
 
         # initial offload
         if strategy.args.deepspeed_enable_sleep:
