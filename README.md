@@ -476,7 +476,7 @@ To achieve optimal performance, we recommend allocating nodes `vLLM:Actor:Critic
 - Using hybrid engine `--colocate_all_models` and `--vllm_enable_sleep` and `--deepspeed_enable_sleep` rather than distributed RLHF when there are enough GPU memory.
 - Enable the `--colocate_critic_reward`, `--colocate_actor_ref` options to merge nodes.  
 - You should increase the `rollout_micro_batch_size` (and minimize the TP size of vLLM engine) as much as possible. During the training phase, a larger `--micro_train_batch_size` is better and enable `--packing_samples`.
-- When there are enough GPU memory, please disable `--adam_offload` and enable `--overlap_comm`.  Also enable ``--deepcompile`` to speed up the training.
+- When there are enough GPU memory, please disable `--adam_offload` (and you can keep `--overlap_comm` on by default).  Also enable ``--deepcompile`` to speed up the training.
 - For vLLM, please use `--vllm_sync_backend nccl`
 - Enable ``--use_dynamic_batch`` to accelerate the deepspeed training and forward.
 - Enable [enable_prefix_caching](https://docs.vllm.ai/en/stable/automatic_prefix_caching/apc.html) in vLLM generation when `n_samples_per_prompts` > 1.
