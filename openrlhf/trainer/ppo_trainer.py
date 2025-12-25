@@ -5,7 +5,7 @@ from typing import Dict, Tuple
 import ray
 from tqdm import tqdm
 
-from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker, RolloutSampler
+from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker, SamplesGenerator
 from openrlhf.trainer.ppo_utils.kl_controller import AdaptiveKLController, FixedKLController
 from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ray.launcher import RayActorGroup
@@ -201,7 +201,7 @@ class PPOTrainer(BasePPOTrainer):
         eval_split: str = "test",
         **generate_kwargs,
     ) -> None:
-        # Tokenizer is shared across sampler and trainer to avoid duplicated loads.
+        # Tokenizer is shared across the sample generator and trainer to avoid duplicated loads.
         tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
         # get eval and save steps
         if strategy.args.eval_steps == -1:
@@ -209,8 +209,8 @@ class PPOTrainer(BasePPOTrainer):
         if strategy.args.save_steps == -1:
             strategy.args.save_steps = float("inf")  # do not save ckpt
 
-        # rollout
-        self.rollout_sampler = RolloutSampler(
+        # sample generation
+        self.samples_generator = SamplesGenerator(
             strategy=strategy,
             tokenizer=tokenizer,
             vllm_engines=vllm_engines,
@@ -238,10 +238,10 @@ class PPOTrainer(BasePPOTrainer):
         # Keep vLLM weights and dataloader states in sync when resuming.
         if global_step:
             self.broadcast_to_vllm()
-            self.rollout_sampler.load_state_dict(checkpoint_states["data_loader_state_dict"])
+            self.samples_generator.load_state_dict(checkpoint_states["data_loader_state_dict"])
 
         for episode in range(start_episode, self.args.num_episodes):
-            dataset_length = len(self.rollout_sampler.prompts_dataloader)
+            dataset_length = len(self.samples_generator.prompts_dataloader)
             pbar = tqdm(
                 range(dataset_length),
                 desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
@@ -249,7 +249,9 @@ class PPOTrainer(BasePPOTrainer):
             )
             while True:
                 # Draw one mini-batch of prompts; stop when loader is exhausted.
-                rollout_samples, filter_pass_rate, prompts_consumed, is_exhausted = self.rollout_sampler.sample_batch()
+                rollout_samples, filter_pass_rate, prompts_consumed, is_exhausted = (
+                    self.samples_generator.sample_batch()
+                )
                 total_consumed_prompts += prompts_consumed
                 if is_exhausted:
                     break
@@ -268,7 +270,7 @@ class PPOTrainer(BasePPOTrainer):
                     "episode": episode,
                     "global_step": global_step,
                     "total_consumed_prompts": total_consumed_prompts,
-                    "data_loader_state_dict": self.rollout_sampler.state_dict(),
+                    "data_loader_state_dict": self.samples_generator.state_dict(),
                 }
                 self.save_logs_and_checkpoints(global_step, status, client_states)
 
@@ -281,4 +283,4 @@ class PPOTrainer(BasePPOTrainer):
             self.tensorboard_logger.close()
 
     def get_max_steps(self):
-        return self.rollout_sampler.max_steps
+        return self.samples_generator.max_steps

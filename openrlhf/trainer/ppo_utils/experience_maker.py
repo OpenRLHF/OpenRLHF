@@ -267,8 +267,8 @@ def _collect_prompt_batch(dataloader_iter, num_prompts: int):
     return prompts, labels, exhausted
 
 
-class RolloutSampler:
-    """Stateless sampler: pulls prompts and dispatches to rollout workers."""
+class SamplesGenerator:
+    """Stateless sample generator: pulls prompts and dispatches to rollout workers."""
 
     def __init__(
         self,

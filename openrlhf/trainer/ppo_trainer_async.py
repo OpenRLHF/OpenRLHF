@@ -5,7 +5,7 @@ from ray.util.queue import Queue
 from tqdm import tqdm
 
 from openrlhf.trainer.ppo_trainer import BasePPOTrainer
-from openrlhf.trainer.ppo_utils.experience_maker import RolloutSampler
+from openrlhf.trainer.ppo_utils.experience_maker import SamplesGenerator
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.logging_utils import init_logger
@@ -70,7 +70,7 @@ class GenerateSamplesActor:
         self.strategy = strategy
         self.args = strategy.args
 
-        self.rollout_sampler = RolloutSampler(
+        self.samples_generator = SamplesGenerator(
             strategy=strategy,
             tokenizer=tokenizer,
             vllm_engines=vllm_engines,
@@ -84,14 +84,14 @@ class GenerateSamplesActor:
         self.rollout_slots = rollout_slots
 
     def get_max_steps(self):
-        return self.rollout_sampler.max_steps
+        return self.samples_generator.max_steps
 
     def load_state_dict(self, state_dict):
-        self.rollout_sampler.load_state_dict(state_dict)
+        self.samples_generator.load_state_dict(state_dict)
 
     def fit(self, episode, total_consumed_prompts):
         for episode in range(episode, self.args.num_episodes):
-            dataset_length = len(self.rollout_sampler.prompts_dataloader)
+            dataset_length = len(self.samples_generator.prompts_dataloader)
             pbar = tqdm(
                 range(dataset_length),
                 desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
@@ -106,7 +106,7 @@ class GenerateSamplesActor:
                 try:
                     # Draw one mini-batch of prompts; stop when loader is exhausted.
                     rollout_samples, filter_pass_rate, prompts_consumed, is_exhausted = (
-                        self.rollout_sampler.sample_batch()
+                        self.samples_generator.sample_batch()
                     )
                     total_consumed_prompts += prompts_consumed
                 finally:
@@ -118,7 +118,7 @@ class GenerateSamplesActor:
                 client_states = {
                     "episode": episode,
                     "total_consumed_prompts": total_consumed_prompts,
-                    "data_loader_state_dict": self.rollout_sampler.state_dict(),
+                    "data_loader_state_dict": self.samples_generator.state_dict(),
                 }
                 self.rollout_queue.put((rollout_samples, client_states, filter_pass_rate), block=True)
                 pbar.update(prompts_consumed)
@@ -231,7 +231,7 @@ class PPOTrainerAsync:
         self.rollout_queue = Queue(maxsize=queue_size)
         self.generation_update_lock = GenerationUpdateLock.remote()
 
-        # rollout
+        # sample generation
         self.generator_actor = GenerateSamplesActor.remote(
             pretrain=pretrain,
             strategy=strategy,
