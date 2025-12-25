@@ -61,8 +61,8 @@ class GenerateSamplesActor:
         eval_split="test",
         *,
         generation_update_lock,
-        queue,
-        generation_semaphore,
+        rollout_queue,
+        rollout_slots,
         **generate_kwargs,
     ):
         tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
@@ -79,9 +79,9 @@ class GenerateSamplesActor:
         )
 
         self.generation_update_lock = generation_update_lock
-        self.queue = queue
-        # Acts like a counting semaphore for queue capacity (cross-actor safe).
-        self.generation_semaphore = generation_semaphore
+        self.rollout_queue = rollout_queue
+        # Acts like a counting semaphore for rollout_queue capacity (cross-actor safe).
+        self.rollout_slots = rollout_slots
 
     def get_max_steps(self):
         return self.rollout_sampler.max_steps
@@ -99,7 +99,7 @@ class GenerateSamplesActor:
             )
             while True:
                 # Backpressure: acquire a slot before generating.
-                self.generation_semaphore.get(block=True)
+                self.rollout_slots.get(block=True)
 
                 # Pause updates while we sample to keep outputs consistent.
                 ray.get(self.generation_update_lock.acquire_for_generation.remote())
@@ -120,10 +120,10 @@ class GenerateSamplesActor:
                     "total_consumed_prompts": total_consumed_prompts,
                     "data_loader_state_dict": self.rollout_sampler.state_dict(),
                 }
-                self.queue.put((rollout_samples, client_states, filter_pass_rate), block=True)
+                self.rollout_queue.put((rollout_samples, client_states, filter_pass_rate), block=True)
                 pbar.update(prompts_consumed)
 
-        self.queue.put("done", block=True)
+        self.rollout_queue.put("done", block=True)
 
 
 @ray.remote
@@ -138,8 +138,8 @@ class TrainingActor(BasePPOTrainer):
         reference_model_group,
         vllm_engines,
         generation_update_lock,
-        queue,
-        generation_semaphore,
+        rollout_queue,
+        rollout_slots,
     ):
         tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
 
@@ -153,20 +153,20 @@ class TrainingActor(BasePPOTrainer):
             tokenizer,
         )
         self.generation_update_lock = generation_update_lock
-        self.queue = queue
-        # Acts like a counting semaphore for queue capacity (cross-actor safe).
-        self.generation_semaphore = generation_semaphore
+        self.rollout_queue = rollout_queue
+        # Acts like a counting semaphore for rollout_queue capacity (cross-actor safe).
+        self.rollout_slots = rollout_slots
 
     def fit(self, global_step):
         while True:
             # Draw one mini-batch of prompts; stop when loader is exhausted.
-            output = self.queue.get(block=True)
-            if output == "done":
+            payload = self.rollout_queue.get(block=True)
+            if payload == "done":
                 break
-            rollout_samples, client_states, filter_pass_rate = output
+            rollout_samples, client_states, filter_pass_rate = payload
 
             # Release a slot after batch is consumed to unblock generator.
-            self.generation_semaphore.put(None, block=True)
+            self.rollout_slots.put(None, block=True)
 
             # Run PPO update on this batch and bump the global step counter.
             status, global_step = self.train_step(rollout_samples, global_step)
@@ -213,22 +213,22 @@ class PPOTrainerAsync:
     ) -> None:
         args = strategy.args
         # get eval and save steps
-        if strategy.args.eval_steps == -1:
-            strategy.args.eval_steps = float("inf")  # do not evaluate
-        if strategy.args.save_steps == -1:
-            strategy.args.save_steps = float("inf")  # do not save ckpt
+        if args.eval_steps == -1:
+            args.eval_steps = float("inf")  # do not evaluate
+        if args.save_steps == -1:
+            args.save_steps = float("inf")  # do not save ckpt
 
         queue_size = getattr(args, "async_queue_size", 1)
         if queue_size <= 0:
             raise ValueError(f"async_queue_size must be positive, got {queue_size}")
         logger.info(f"queue_size={queue_size}")
 
-        # Token pool used as a counting semaphore for queue capacity.
-        self.generation_semaphore = Queue(maxsize=queue_size)
+        # Token pool used as a counting semaphore for rollout_queue capacity.
+        self.rollout_slots = Queue(maxsize=queue_size)
         for _ in range(queue_size):
-            self.generation_semaphore.put(None, block=True)
+            self.rollout_slots.put(None, block=True)
 
-        self.queue = Queue(maxsize=queue_size)
+        self.rollout_queue = Queue(maxsize=queue_size)
         self.generation_update_lock = GenerationUpdateLock.remote()
 
         # rollout
@@ -239,8 +239,8 @@ class PPOTrainerAsync:
             prompt_split=prompt_split,
             eval_split=eval_split,
             generation_update_lock=self.generation_update_lock,
-            queue=self.queue,
-            generation_semaphore=self.generation_semaphore,
+            rollout_queue=self.rollout_queue,
+            rollout_slots=self.rollout_slots,
             **generate_kwargs,
         )
         # train
@@ -253,8 +253,8 @@ class PPOTrainerAsync:
             reference_model_group=reference_model_group,
             vllm_engines=vllm_engines,
             generation_update_lock=self.generation_update_lock,
-            queue=self.queue,
-            generation_semaphore=self.generation_semaphore,
+            rollout_queue=self.rollout_queue,
+            rollout_slots=self.rollout_slots,
         )
 
     def fit(self) -> None:
