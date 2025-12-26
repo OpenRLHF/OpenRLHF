@@ -15,7 +15,7 @@ logger = init_logger(__name__)
 
 
 @ray.remote(num_cpus=0)
-class GenerationUpdateLock:
+class SignalActor:
     """Mutual exclusion gate between generation and weight updates."""
 
     def __init__(self):
@@ -60,7 +60,7 @@ class GenerateSamplesActor:
         prompt_split="train",
         eval_split="test",
         *,
-        generation_update_lock,
+        signal_actor,
         rollout_queue,
         rollout_slots,
         **generate_kwargs,
@@ -78,7 +78,7 @@ class GenerateSamplesActor:
             generate_kwargs=generate_kwargs,
         )
 
-        self.generation_update_lock = generation_update_lock
+        self.signal_actor = signal_actor
         self.rollout_queue = rollout_queue
         # Acts like a counting semaphore for rollout_queue capacity (cross-actor safe).
         self.rollout_slots = rollout_slots
@@ -102,7 +102,7 @@ class GenerateSamplesActor:
                 self.rollout_slots.get(block=True)
 
                 # Pause updates while we sample to keep outputs consistent.
-                ray.get(self.generation_update_lock.acquire_for_generation.remote())
+                ray.get(self.signal_actor.acquire_for_generation.remote())
                 try:
                     # Draw one mini-batch of prompts; stop when loader is exhausted.
                     rollout_samples, filter_pass_rate, prompts_consumed, is_exhausted = (
@@ -110,7 +110,7 @@ class GenerateSamplesActor:
                     )
                     total_consumed_prompts += prompts_consumed
                 finally:
-                    ray.get(self.generation_update_lock.release_for_generation.remote())
+                    ray.get(self.signal_actor.release_for_generation.remote())
                 if is_exhausted:
                     break
 
@@ -137,7 +137,7 @@ class TrainingActor(BasePPOTrainer):
         reward_model_group,
         reference_model_group,
         vllm_engines,
-        generation_update_lock,
+        signal_actor,
         rollout_queue,
         rollout_slots,
     ):
@@ -152,7 +152,7 @@ class TrainingActor(BasePPOTrainer):
             vllm_engines,
             tokenizer,
         )
-        self.generation_update_lock = generation_update_lock
+        self.signal_actor = signal_actor
         self.rollout_queue = rollout_queue
         # Acts like a counting semaphore for rollout_queue capacity (cross-actor safe).
         self.rollout_slots = rollout_slots
@@ -188,12 +188,12 @@ class TrainingActor(BasePPOTrainer):
             self.tensorboard_logger.close()
 
     def broadcast_to_vllm(self):
-        ray.get(self.generation_update_lock.acquire_for_update.remote())
+        ray.get(self.signal_actor.acquire_for_update.remote())
         try:
             # broadcast
             super().broadcast_to_vllm()
         finally:
-            ray.get(self.generation_update_lock.release_for_update.remote())
+            ray.get(self.signal_actor.release_for_update.remote())
 
 
 @ray.remote
@@ -229,7 +229,7 @@ class PPOTrainerAsync:
             self.rollout_slots.put(None, block=True)
 
         self.rollout_queue = Queue(maxsize=queue_size)
-        self.generation_update_lock = GenerationUpdateLock.remote()
+        self.signal_actor = SignalActor.remote()
 
         # sample generation
         self.generator_actor = GenerateSamplesActor.remote(
@@ -238,7 +238,7 @@ class PPOTrainerAsync:
             vllm_engines=vllm_engines,
             prompt_split=prompt_split,
             eval_split=eval_split,
-            generation_update_lock=self.generation_update_lock,
+            signal_actor=self.signal_actor,
             rollout_queue=self.rollout_queue,
             rollout_slots=self.rollout_slots,
             **generate_kwargs,
@@ -252,7 +252,7 @@ class PPOTrainerAsync:
             reward_model_group=reward_model_group,
             reference_model_group=reference_model_group,
             vllm_engines=vllm_engines,
-            generation_update_lock=self.generation_update_lock,
+            signal_actor=self.signal_actor,
             rollout_queue=self.rollout_queue,
             rollout_slots=self.rollout_slots,
         )
