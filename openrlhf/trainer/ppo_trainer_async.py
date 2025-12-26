@@ -1,242 +1,199 @@
 import asyncio
-import os
-import time
 
 import ray
+from ray.util.queue import Queue
 from tqdm import tqdm
 
 from openrlhf.trainer.ppo_trainer import BasePPOTrainer
-from openrlhf.trainer.ppo_utils import AdaptiveKLController, FixedKLController
-from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
-from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
+from openrlhf.trainer.ppo_utils.experience_maker import SamplesGenerator
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.logging_utils import init_logger
+from openrlhf.utils.utils import get_tokenizer
 
 logger = init_logger(__name__)
 
 
 @ray.remote(num_cpus=0)
 class SignalActor:
+    """Mutual exclusion gate between generation and weight updates."""
+
     def __init__(self):
-        self.generating_event = asyncio.Event()
-        self.update_weights_event = asyncio.Event()
-        self.generating_event.set()  # Initially allow generation
-        self.update_weights_event.set()  # Initially allow weight updates
+        self._cond = asyncio.Condition()
+        self._generating = False
+        self._updating = False
 
-    async def wait_generating(self):
-        """Wait for generation to be allowed."""
-        return await self.generating_event.wait()
+    async def acquire_for_generation(self):
+        """Block until no update is active, then mark generation as active."""
+        async with self._cond:
+            while self._updating:
+                await self._cond.wait()
+            self._generating = True
 
-    async def wait_update_weights(self):
-        """Wait for weight update to be allowed."""
-        return await self.update_weights_event.wait()
+    async def release_for_generation(self):
+        """Mark generation as inactive and wake any waiting updates."""
+        async with self._cond:
+            self._generating = False
+            self._cond.notify_all()
 
-    def set_generating(self, allow_generating):
-        """Set generation state.
+    async def acquire_for_update(self):
+        """Block until no generation is active, then mark update as active."""
+        async with self._cond:
+            while self._generating:
+                await self._cond.wait()
+            self._updating = True
 
-        Args:
-            is_generating: True to allow generation, False to block it
-        """
-        if allow_generating:
-            self.generating_event.set()
-        else:
-            self.generating_event.clear()
-
-    def set_update_weights(self, allow_updating):
-        """Set weight update state.
-
-        Args:
-            is_updating: True to allow weight updates, False to block it
-        """
-        if allow_updating:
-            self.update_weights_event.set()
-        else:
-            self.update_weights_event.clear()
+    async def release_for_update(self):
+        """Mark update as inactive and wake any waiting generators."""
+        async with self._cond:
+            self._updating = False
+            self._cond.notify_all()
 
 
 @ray.remote
-class GenerateSamplesActor(BasePPOTrainer):
-    def __init__(self, *args, **kwargs):
-        self.signal_actor = kwargs.pop("signal_actor")
-        super().__init__(*args, **kwargs)
+class GenerateSamplesActor:
+    def __init__(
+        self,
+        pretrain,
+        strategy,
+        vllm_engines,
+        prompt_split="train",
+        eval_split="test",
+        *,
+        signal_actor,
+        rollout_queue,
+        rollout_slots,
+        **generate_kwargs,
+    ):
+        tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
 
-        self.samples_generator = self.generator_cls(
-            self.vllm_engines,
-            self.strategy,
-            self.tokenizer,
-            self.prompt_max_len,
+        self.strategy = strategy
+        self.args = strategy.args
+
+        self.samples_generator = SamplesGenerator(
+            strategy=strategy,
+            tokenizer=tokenizer,
+            vllm_engines=vllm_engines,
+            prompt_split=prompt_split,
+            generate_kwargs=generate_kwargs,
         )
-        self.prepare_datasets()
 
-    def generate_samples(self, prompts, labels, **generate_kwargs):
-        return self.samples_generator.generate_samples(prompts, labels, **generate_kwargs)
+        self.signal_actor = signal_actor
+        self.rollout_queue = rollout_queue
+        # Acts like a counting semaphore for rollout_queue capacity (cross-actor safe).
+        self.rollout_slots = rollout_slots
 
-    def fit(self, start_episode, queue, data_loader_state_dict, remote_reward_model=None):
-        if data_loader_state_dict:
-            self.prompts_dataloader.load_state_dict(data_loader_state_dict)
+    def get_max_steps(self):
+        return self.samples_generator.max_steps
 
-        for episode in range(start_episode, self.args.num_episodes):
+    def load_state_dict(self, state_dict):
+        self.samples_generator.load_state_dict(state_dict)
+
+    def fit(self, episode, total_consumed_prompts):
+        for episode in range(episode, self.args.num_episodes):
+            dataset_length = len(self.samples_generator.prompts_dataloader)
             pbar = tqdm(
-                range(self.prompts_dataloader.__len__()),
-                desc=f"Generate Episode [{episode + 1}/{self.args.num_episodes}]",
-                disable=False,
+                range(dataset_length),
+                desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
+                initial=total_consumed_prompts % dataset_length,
             )
+            while True:
+                # Backpressure: acquire a slot before generating.
+                self.rollout_slots.get(block=True)
 
-            filtered_samples = []
-            number_of_samples = 0
-            queue_log_counter = 0  # Counter for log interval
-            for _, rand_prompts, labels in self.prompts_dataloader:
-                # Wait until queue is not full
-                # To support 1-step off-policy training
-                while queue.full():
-                    if queue_log_counter % 10 == 0:  # Print log every 10 seconds
-                        logger.info("Queue is full, waiting for training to consume samples...")
-                    queue_log_counter += 1
-                    time.sleep(1)  # Wait for 1 second before checking again
-
-                # Wait for generation to be allowed
-                ray.get(self.signal_actor.wait_generating.remote())
-                # Block weight updates
-                ray.get(self.signal_actor.set_update_weights.remote(False))
-
-                # Generate samples
-                # remote_reward_model is used to get rewards for dynamic sampling
-                rollout_samples = self.generate_samples(
-                    rand_prompts, labels, remote_reward_model=remote_reward_model, **self.generate_kwargs
-                )
-
-                # Allow weight updates after generation is done
-                ray.get(self.signal_actor.set_update_weights.remote(True))
-
-                pbar.update()
-
-                # dynamic filtering
-                pass_rate = None
-                if self.args.dynamic_filtering:
-                    number_of_samples += len(rollout_samples)
-                    # Group individual samples into batches of n_samples size
-                    for i in range(0, len(rollout_samples), self.args.n_samples_per_prompt):
-                        batch_samples = rollout_samples[i : i + self.args.n_samples_per_prompt]
-                        if len(batch_samples) < self.args.n_samples_per_prompt:
-                            continue
-
-                        # Calculate average reward for this batch of samples
-                        avg_reward = sum(sample.scores[0].item() for sample in batch_samples) / len(batch_samples)
-
-                        # Check if average reward is within the specified range
-                        min_reward, max_reward = self.args.dynamic_filtering_reward_range
-                        if min_reward + 1e-6 < avg_reward < max_reward - 1e-6:
-                            filtered_samples.extend(batch_samples)
-
-                    # Continue sampling if filtered samples are insufficient
-                    if len(filtered_samples) / self.args.n_samples_per_prompt < self.args.rollout_batch_size:
-                        logger.info(
-                            f"filtered_samples {len(filtered_samples) / self.args.n_samples_per_prompt} < rollout_batch_size {self.args.rollout_batch_size}, continue sampling"
-                        )
-                        continue
-
-                    pass_rate = len(filtered_samples) / number_of_samples * 100
-                    logger.info(
-                        f"Dynamic filtering pass rate: {pass_rate:.2f}% ({len(filtered_samples)}/{number_of_samples})"
+                # Pause updates while we sample to keep outputs consistent.
+                ray.get(self.signal_actor.acquire_for_generation.remote())
+                try:
+                    # Draw one mini-batch of prompts; stop when loader is exhausted.
+                    rollout_samples, filter_pass_rate, prompts_consumed, is_exhausted = (
+                        self.samples_generator.generate_samples()
                     )
-                    rollout_samples = filtered_samples[: self.args.rollout_batch_size * self.args.n_samples_per_prompt]
-                    filtered_samples = []
-                    number_of_samples = 0
+                    total_consumed_prompts += prompts_consumed
+                finally:
+                    ray.get(self.signal_actor.release_for_generation.remote())
+                if is_exhausted:
+                    break
 
-                queue.put((rollout_samples, episode, self.prompts_dataloader.state_dict(), pass_rate))
-        queue.put("done")
+                # Send the produced batch to the controller for training.
+                client_states = {
+                    "episode": episode,
+                    "total_consumed_prompts": total_consumed_prompts,
+                    "data_loader_state_dict": self.samples_generator.state_dict(),
+                }
+                self.rollout_queue.put((rollout_samples, client_states, filter_pass_rate), block=True)
+                pbar.update(prompts_consumed)
+
+        self.rollout_queue.put("done", block=True)
 
 
 @ray.remote
 class TrainingActor(BasePPOTrainer):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.signal_actor = kwargs.pop("signal_actor")
-        # Assign after super().__init__ to avoid being overwritten by parent
-        self.remote_reward_model = kwargs.pop("remote_reward_model")
+    def __init__(
+        self,
+        pretrain,
+        strategy,
+        actor_model_group,
+        critic_model_group,
+        reward_model_group,
+        reference_model_group,
+        vllm_engines,
+        signal_actor,
+        rollout_queue,
+        rollout_slots,
+    ):
+        tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
 
-        if self.kl_target:
-            self.kl_ctl = AdaptiveKLController(self.init_kl_coef, self.kl_target, self.kl_horizon)
-        else:
-            self.kl_ctl = FixedKLController(self.init_kl_coef)
-
-        self.experience_maker = RemoteExperienceMaker(
-            self.actor_model_group,
-            self.critic_model_group,
-            self.reward_model_group,
-            self.reference_model_group,
-            self.kl_ctl,
-            self.strategy,
-            self.tokenizer,
-            remote_reward_model=self.remote_reward_model,
+        super().__init__(
+            strategy,
+            actor_model_group,
+            critic_model_group,
+            reward_model_group,
+            reference_model_group,
+            vllm_engines,
+            tokenizer,
         )
+        self.signal_actor = signal_actor
+        self.rollout_queue = rollout_queue
+        # Acts like a counting semaphore for rollout_queue capacity (cross-actor safe).
+        self.rollout_slots = rollout_slots
 
-        self._init_wandb()
-        self.eval_dataloader = None
-
-    def _broadcast_to_vllm(self):
-        if self.vllm_engines is not None:
-            # Block generation
-            ray.get(self.signal_actor.set_generating.remote(False))
-            # Wait for weight updates to be allowed
-            ray.get(self.signal_actor.wait_update_weights.remote())
-
-            # Perform weight update
-            ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
-
-            # Allow generation
-            ray.get(self.signal_actor.set_generating.remote(True))
-
-    def fit(self, queue, steps):
-        args = self.args
-
+    def fit(self, global_step):
         while True:
-            output = queue.get()
-            if output == "done":
+            # Draw one mini-batch of prompts; stop when loader is exhausted.
+            payload = self.rollout_queue.get(block=True)
+            if payload == "done":
                 break
-            rollout_samples, episode, data_loader_state_dict, pass_rate = output
+            rollout_samples, client_states, filter_pass_rate = payload
 
-            experiences = self.experience_maker.make_experience_batch(rollout_samples)
-            sample0 = self.tokenizer.batch_decode(experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True)
-            print(sample0)
+            # Release a slot after batch is consumed to unblock generator.
+            self.rollout_slots.put(None, block=True)
 
-            # balance experiences across dp
-            if args.use_dynamic_batch:
-                experiences = balance_experiences(experiences, args)
-
-            refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences)
-            if self.critic_model_group is not None:
-                refs.extend(
-                    self.critic_model_group.async_run_method_batch(method_name="append", experience=experiences)
-                )
-            ray.get(refs)
-
-            status = self.ppo_train(steps)
-
-            if "kl" in status:
-                self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
+            # Run PPO update on this batch and bump the global step counter.
+            status, global_step = self.train_step(rollout_samples, global_step)
 
             # Add generated samples to status dictionary
             if self.args.dynamic_filtering:
-                status["dynamic_filtering_pass_rate"] = pass_rate
-            logger.info(f"✨ Global step {steps}: {status}")
-            status["generated_samples"] = [sample0[0], experiences[0].info["reward"][0]]
+                status["dynamic_filtering_pass_rate"] = filter_pass_rate
+            log_status = {k: v for k, v in status.items() if k not in ["generated_samples"]}
+            logger.info(f"✨ Global step {global_step}: {log_status}")
 
             # logs/checkpoints
-            client_states = {
-                "global_step": steps,
-                "episode": episode,
-                "data_loader_state_dict": data_loader_state_dict,
-            }
-            self.save_logs_and_checkpoints(args, steps, None, status, client_states)
+            client_states.update({"global_step": global_step})
+            self.save_logs_and_checkpoints(global_step, status, client_states)
 
-            steps = steps + 1
+        # Close trackers
+        if self.wandb_logger:
+            self.wandb_logger.close()
+        if self.tensorboard_logger:
+            self.tensorboard_logger.close()
 
-        if self._wandb is not None:
-            self._wandb.finish()
-        if self._tensorboard is not None:
-            self._tensorboard.close()
+    def broadcast_to_vllm(self):
+        ray.get(self.signal_actor.acquire_for_update.remote())
+        try:
+            # broadcast
+            super().broadcast_to_vllm()
+        finally:
+            ray.get(self.signal_actor.release_for_update.remote())
 
 
 @ray.remote
@@ -249,104 +206,79 @@ class PPOTrainerAsync:
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,
         reference_model_group: RayActorGroup,
-        vllm_engines=None,
-        prompt_max_len: int = 120,
-        dataloader_pin_memory: bool = True,
+        vllm_engines,
         prompt_split: str = "train",
         eval_split: str = "test",
         **generate_kwargs,
     ) -> None:
-        super().__init__()
+        args = strategy.args
+        # get eval and save steps
+        if args.eval_steps == -1:
+            args.eval_steps = float("inf")  # do not evaluate
+        if args.save_steps == -1:
+            args.save_steps = float("inf")  # do not save ckpt
 
-        self.args = strategy.args
-        self.strategy = strategy
-        self.actor_model_group = actor_model_group
-        self.critic_model_group = critic_model_group
-        self.reward_model_group = reward_model_group
-        self.reference_model_group = reference_model_group
-        self.vllm_engines = vllm_engines
-        self.prompt_max_len = prompt_max_len
+        queue_size = getattr(args, "async_queue_size", 1)
+        if queue_size <= 0:
+            raise ValueError(f"async_queue_size must be positive, got {queue_size}")
+        logger.info(f"queue_size={queue_size}")
 
-        # Create signal actor for synchronization
+        # Token pool used as a counting semaphore for rollout_queue capacity.
+        self.rollout_slots = Queue(maxsize=queue_size)
+        for _ in range(queue_size):
+            self.rollout_slots.put(None, block=True)
+
+        self.rollout_queue = Queue(maxsize=queue_size)
         self.signal_actor = SignalActor.remote()
 
-        if self.args.remote_rm_url and not self.args.remote_rm_url[0] == "agent":
-            from openrlhf.utils.remote_rm_utils import RemoteRewardModel
-
-            self.remote_reward_model = RemoteRewardModel.remote(self.args, self.args.remote_rm_url)
-        else:
-            self.remote_reward_model = None
-
+        # sample generation
         self.generator_actor = GenerateSamplesActor.remote(
-            pretrain,
-            strategy,
-            actor_model_group,
-            critic_model_group,
-            reward_model_group,
-            reference_model_group,
-            vllm_engines,
-            prompt_max_len,
-            dataloader_pin_memory,
-            prompt_split,
-            eval_split,
+            pretrain=pretrain,
+            strategy=strategy,
+            vllm_engines=vllm_engines,
+            prompt_split=prompt_split,
+            eval_split=eval_split,
             signal_actor=self.signal_actor,
+            rollout_queue=self.rollout_queue,
+            rollout_slots=self.rollout_slots,
             **generate_kwargs,
         )
-
-        # get eval and save steps
-        if self.args.eval_steps == -1:
-            self.args.eval_steps = float("inf")  # do not evaluate
-        if self.args.save_steps == -1:
-            self.args.save_steps = float("inf")  # do not save ckpt
-
+        # train
         self.trainer_actor = TrainingActor.remote(
-            pretrain,
-            strategy,
-            actor_model_group,
-            critic_model_group,
-            reward_model_group,
-            reference_model_group,
-            vllm_engines,
-            prompt_max_len,
-            dataloader_pin_memory,
-            prompt_split,
-            eval_split,
+            pretrain=pretrain,
+            strategy=strategy,
+            actor_model_group=actor_model_group,
+            critic_model_group=critic_model_group,
+            reward_model_group=reward_model_group,
+            reference_model_group=reference_model_group,
+            vllm_engines=vllm_engines,
             signal_actor=self.signal_actor,
-            remote_reward_model=self.remote_reward_model,
-            **generate_kwargs,
+            rollout_queue=self.rollout_queue,
+            rollout_slots=self.rollout_slots,
         )
-
-        from ray.util.queue import Queue
-
-        # the max size is used to control the degree of off-policy
-        self.queue = Queue(maxsize=os.environ.get("OPENRLHF_ASYNC_QUEUE_SIZE", 1))
 
     def fit(self) -> None:
-        args = self.args
-
-        # Update initial weights to vLLM engines
-        ckpt_path = os.path.join(args.ckpt_path, "_actor")
-        if args.load_checkpoint and os.path.exists(ckpt_path):
-            checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
-                0
-            ]
-            logger.info(f"checkpoint_states: {checkpoint_states}")
-            ray.get(self.trainer_actor._broadcast_to_vllm.remote())
-        else:
-            checkpoint_states = {"global_step": 0, "episode": 0, "data_loader_state_dict": {}}
-
-        # Restore step and start_epoch
-        steps = checkpoint_states["global_step"] + 1
-        episode = checkpoint_states["episode"]
-        data_loader_state_dict = checkpoint_states["data_loader_state_dict"]
+        checkpoint_states = ray.get(self.trainer_actor.init_checkpoint_states.remote())
+        # Restore step and epoch
+        start_episode = checkpoint_states["episode"]
+        global_step = checkpoint_states["global_step"]
+        total_consumed_prompts = checkpoint_states["total_consumed_prompts"]
+        # Keep vLLM weights and dataloader states in sync when resuming.
+        if global_step > 0:
+            ray.get(
+                [
+                    self.generator_actor.load_state_dict.remote(checkpoint_states["data_loader_state_dict"]),
+                    self.trainer_actor.broadcast_to_vllm.remote(),
+                ]
+            )
 
         # Launch async training
-        remote_reward_model = self.remote_reward_model if self.args.dynamic_filtering else None
-        generator_actor_ref = self.generator_actor.fit.remote(
-            episode, self.queue, data_loader_state_dict, remote_reward_model
+        ray.get(
+            [
+                self.generator_actor.fit.remote(episode=start_episode, total_consumed_prompts=total_consumed_prompts),
+                self.trainer_actor.fit.remote(global_step=global_step),
+            ]
         )
-        trainer_actor_ref = self.trainer_actor.fit.remote(self.queue, steps)
-        ray.get([generator_actor_ref, trainer_actor_ref])
 
     def get_max_steps(self):
         return ray.get(self.generator_actor.get_max_steps.remote())
