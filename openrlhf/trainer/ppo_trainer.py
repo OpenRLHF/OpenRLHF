@@ -149,9 +149,9 @@ class BasePPOTrainer(ABC):
             if self.tensorboard_logger:
                 self.tensorboard_logger.log_train(global_step, logs_dict)
 
-        # # TODO: Add evaluation mechanism for PPO
-        # if global_step % self.args.eval_steps == 0:
-        #     self._maybe_run_eval(global_step)
+        # TODO: Add evaluation mechanism for PPO
+        # if global_step % args.eval_steps == 0 and self.eval_dataloader and len(self.eval_dataloader) > 0:
+        #     self.evaluate(self.eval_dataloader, global_step, args.eval_temperature, args.eval_n_samples_per_prompt)
 
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity/others on whole dev dataset as metric
