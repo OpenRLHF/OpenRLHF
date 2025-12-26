@@ -65,7 +65,6 @@ def train(args):
             args.vllm_gpu_memory_utilization,
             args.vllm_enable_sleep,
             "processed_logprobs" if args.enable_vllm_is_correction else None,
-            rollout_tasks_per_gpu=args.rollout_tasks_per_gpu,
             agent_func_path=args.agent_func_path,
             remote_rm_url=args.remote_rm_url,
             remote_rm_batch_size=args.micro_rollout_batch_size,
@@ -318,12 +317,6 @@ if __name__ == "__main__":
     parser.add_argument("--rollout_batch_size", type=int, default=1024, help="Batch size for make experience")
     parser.add_argument(
         "--vllm_generate_batch_size", type=int, default=None, help="Batch size for vLLM generating samples"
-    )
-    parser.add_argument(
-        "--rollout_tasks_per_gpu",
-        type=int,
-        default=32,
-        help="Tasks to reserve per GPU for rollout/vLLM actor work",
     )
     parser.add_argument("--micro_rollout_batch_size", type=int, default=8)
     parser.add_argument("--max_epochs", type=int, default=1)

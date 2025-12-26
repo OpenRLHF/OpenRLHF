@@ -210,45 +210,6 @@ class Experience:
         return Experience(**result)
 
 
-def update_samples_with_rewards(rewards_info, samples_list):
-    """Process rewards info and update samples with rewards, scores and extra logs.
-
-    Args:
-        rewards_info: List of reward information dictionaries
-        samples_list: List of Experience objects to update
-    """
-    # Process rewards and scores
-    samples_len = [len(sample.sequences) for sample in samples_list]
-
-    rewards_list = torch.cat([torch.as_tensor(info["rewards"]) for info in rewards_info], dim=0).split(samples_len)
-    if "scores" in rewards_info[0]:
-        scores_list = torch.cat([torch.as_tensor(info["scores"]) for info in rewards_info], dim=0).split(samples_len)
-    else:
-        scores_list = rewards_list
-
-    # Process extra_logs if present
-    if "extra_logs" in rewards_info[0]:
-        # Merge all extra_logs tensors first
-        merged_logs = {
-            key: torch.cat(
-                [torch.as_tensor(logs[key]) for logs in [info["extra_logs"] for info in rewards_info]], dim=0
-            ).split(samples_len)
-            for key in rewards_info[0]["extra_logs"].keys()
-        }
-
-    # Update samples with rewards, scores and extra logs
-    for i, samples in enumerate(samples_list):
-        samples.rewards = rewards_list[i]
-        samples.scores = scores_list[i]
-        samples.info["score"] = scores_list[i]
-        samples.info["reward"] = rewards_list[i]
-        if "extra_logs" in rewards_info[0]:
-            for key, values in merged_logs.items():
-                samples.info[key] = values[i]
-
-    return samples_list
-
-
 def _collect_prompt_batch(dataloader_iter, num_prompts: int):
     """Draw up to `num_prompts` items from the prompt dataloader."""
     prompts, labels = [], []
@@ -323,7 +284,8 @@ class SamplesGenerator:
         if state_dict:
             self.prompts_dataloader.load_state_dict(state_dict)
 
-    def sample_batch(self) -> Tuple[List[Experience], Optional[float], int, bool]:
+    @torch.no_grad()
+    def generate_samples(self) -> Tuple[List[Experience], Optional[float], int, bool]:
         """Produce one batch and indicate if the dataloader is exhausted."""
         if getattr(self, "_dataloader_iter", None) is None:
             self._dataloader_iter = iter(self.prompts_dataloader)
@@ -332,7 +294,7 @@ class SamplesGenerator:
         if self.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
-        experiences, prompts_consumed, exhausted = self._generate_samples(
+        experiences, prompts_consumed, exhausted = self._generate_vllm(
             dataloader_iter=self._dataloader_iter,
             num_prompts=self.args.rollout_batch_size,
             **self.generate_kwargs,
@@ -352,8 +314,7 @@ class SamplesGenerator:
 
         return experiences, filter_pass_rate, prompts_consumed, exhausted
 
-    @torch.no_grad()
-    def _generate_samples(
+    def _generate_vllm(
         self, dataloader_iter, num_prompts: int, **generate_kwargs
     ) -> Tuple[List[Experience], int, bool]:
         """Generate a batch of Experiences with optional reward filtering."""
@@ -367,15 +328,14 @@ class SamplesGenerator:
         prompts_consumed += len(prompts)
 
         accepted_experiences: List[Experience] = []
-        num_samples = num_prompts * self.args.n_samples_per_prompt
         pbar = tqdm(range(num_prompts), desc="Generate samples")
 
         while pending_refs:
             ready_refs, pending_refs = ray.wait(pending_refs, num_returns=1, timeout=10.0)
             for ref in ready_refs:
-                # Build Experience objects for each output returned from this worker.
+                # Build Experience objects for each vLLM response returned from this worker.
                 experiences = [
-                    self._create_experience_from_output(output, **generate_kwargs) for output in ray.get(ref)
+                    self._process_response_into_experience(response, **generate_kwargs) for response in ray.get(ref)
                 ]
 
                 # Drop experiences if the average score falls outside the allowed range.
@@ -410,9 +370,6 @@ class SamplesGenerator:
                         new_refs = self._dispatch_prompts(new_prompts, new_labels, **generate_kwargs)
                         pending_refs.extend(new_refs)
 
-        assert len(accepted_experiences) == num_samples
-        assert len(pending_refs) == 0
-
         return accepted_experiences, prompts_consumed, exhausted
 
     def _dispatch_prompts(self, prompts: List[str], labels: List[str], **generate_kwargs) -> List:
@@ -429,7 +386,7 @@ class SamplesGenerator:
         truncate_length = generate_kwargs.get("prompt_max_len", 1024) + generate_kwargs.get("max_new_tokens", 1024)
 
         # Snapshot current pending rollout counts to balance upcoming work.
-        pending_counts = ray.get([engine.get_num_pending_rollouts.remote() for engine in self.vllm_engines])
+        pending_counts = ray.get([engine.get_num_unfinished_requests.remote() for engine in self.vllm_engines])
         engine_heap = [(count, idx) for idx, count in enumerate(pending_counts)]
         heapq.heapify(engine_heap)
 
@@ -444,7 +401,7 @@ class SamplesGenerator:
         for idx, (prompt, label) in enumerate(zip(prompts, labels)):
             # Spread work across engines/workers in load-aware order.
             llm_engine = self.vllm_engines[engine_indices[idx]]
-            ref = llm_engine.generate_rollouts.remote(
+            ref = llm_engine.generate_responses.remote(
                 prompt=prompt,
                 label=label,
                 sampling_params=sampling_params,
@@ -456,15 +413,15 @@ class SamplesGenerator:
 
         return refs
 
-    def _create_experience_from_output(self, output, **generate_kwargs) -> Experience:
+    def _process_response_into_experience(self, response, **generate_kwargs) -> Experience:
         """Turn a single vLLM response into an Experience."""
         truncate_length = generate_kwargs.get("prompt_max_len", 1024) + generate_kwargs.get("max_new_tokens", 1024)
 
         # Base rollout fields from the output.
-        tokenized_observation = output["observation_tokens"].copy()
-        tokenized_ranges = output["action_ranges"]
-        reward_val = output.get("reward", None)
-        score_val = output.get("scores", None)
+        tokenized_observation = response["observation_tokens"].copy()
+        tokenized_ranges = response["action_ranges"]
+        reward_val = response.get("reward", None)
+        score_val = response.get("scores", None)
 
         sequences = torch.tensor(tokenized_observation, dtype=torch.long)
         attention_mask = torch.tensor([1] * len(tokenized_observation))
@@ -479,8 +436,8 @@ class SamplesGenerator:
         action_mask = action_mask[1:truncate_length].to("cpu")
 
         # Align rollout logprobs with the truncated action span.
-        if output["rollout_log_probs"] is not None:
-            rollout_log_probs = torch.tensor(output["rollout_log_probs"][1:truncate_length]).to("cpu")
+        if response["rollout_log_probs"] is not None:
+            rollout_log_probs = torch.tensor(response["rollout_log_probs"][1:truncate_length]).to("cpu")
         else:
             rollout_log_probs = None
 
@@ -501,7 +458,7 @@ class SamplesGenerator:
             info["score"] = torch.tensor([score_val])
 
         # Convert extra logs to tensors for downstream consumers.
-        extra_logs = output.get("extra_logs", {})
+        extra_logs = response.get("extra_logs", {})
         for key, value in extra_logs.items():
             if isinstance(value, torch.Tensor):
                 value = value.flatten()[0].item()
@@ -512,8 +469,8 @@ class SamplesGenerator:
             attention_mask=attention_mask.unsqueeze(0),
             action_mask=action_mask.unsqueeze(0),
             rollout_log_probs=rollout_log_probs.unsqueeze(0) if rollout_log_probs is not None else None,
-            prompts=[output["prompt"]],
-            labels=[output["label"]],
+            prompts=[response["prompt"]],
+            labels=[response["label"]],
             rewards=torch.tensor([reward_val]) if reward_val is not None else None,
             scores=torch.tensor([score_val]) if score_val is not None else None,
             info=info,

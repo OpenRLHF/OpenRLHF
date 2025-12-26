@@ -12,15 +12,15 @@ from vllm.inputs import TokensPrompt
 from vllm.utils import random_uuid
 
 from openrlhf.utils.rollout import (
-    MultiTurnRolloutExecutor,
-    SingleTurnRewardedRolloutExecutor,
-    SingleTurnRolloutExecutor,
+    MultiTurnExecutor,
+    SingleTurnExecutor,
+    SingleTurnRewardedExecutor,
 )
 
 from .utils import get_bundle_indices, ray_noset_visible_devices
 
 
-class BaseVLLMActor:
+class BaseLLMRayActor:
     """Shared setup for Ray actors backed by vLLM."""
 
     def __init__(self, *args, bundle_indices: list = None, **kwargs):
@@ -73,8 +73,8 @@ class BaseVLLMActor:
 
 
 @ray.remote
-class VLLMRolloutActor(BaseVLLMActor):
-    """Async vLLM-backed actor that serves rollouts via a chosen executor."""
+class LLMRayActor(BaseLLMRayActor):
+    """Async vLLM-backed actor that exposes generation utilities."""
 
     async def __init__(
         self,
@@ -83,25 +83,20 @@ class VLLMRolloutActor(BaseVLLMActor):
         agent_func_path: Optional[str] = None,
         remote_rm_url: Optional[str] = None,
         remote_rm_batch_size: Optional[int] = None,
-        max_rollout_tasks: Optional[int] = None,
         **kwargs,
     ):
         super().__init__(*args, bundle_indices=bundle_indices, **kwargs)
 
         # Execution mode mapping:
         # - multi-turn: agent loop drives tool/step interactions
-        # - single-turn-with-reward: reward model post-processes each rollout
+        # - single-turn-with-reward: reward model post-processes each query
         # - single-turn: plain vLLM generation only
         if agent_func_path:
-            self.rollout_executor = MultiTurnRolloutExecutor(agent_func_path=agent_func_path)
+            self.executor = MultiTurnExecutor(agent_func_path=agent_func_path)
         elif remote_rm_url:
-            self.rollout_executor = SingleTurnRewardedRolloutExecutor(remote_rm_url, remote_rm_batch_size)
+            self.executor = SingleTurnRewardedExecutor(remote_rm_url, remote_rm_batch_size)
         else:
-            self.rollout_executor = SingleTurnRolloutExecutor()
-
-        self.rollout_slots = asyncio.Semaphore(max_rollout_tasks) if max_rollout_tasks else None
-        self._pending_rollout_count = 0
-        self._pending_count_lock = asyncio.Lock()
+            self.executor = SingleTurnExecutor()
 
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
@@ -150,11 +145,11 @@ class VLLMRolloutActor(BaseVLLMActor):
 
         return final_output
 
-    def get_num_pending_rollouts(self) -> int:
-        # Count pending rollout calls (not raw vLLM request count).
-        return int(self._pending_rollout_count)
+    def get_num_unfinished_requests(self) -> int:
+        """Return the number of unfinished requests in the vLLM engine."""
+        return self.llm.engine.get_num_unfinished_requests()
 
-    async def generate_rollouts(
+    async def generate_responses(
         self,
         prompt: str,
         label: str,
@@ -163,47 +158,20 @@ class VLLMRolloutActor(BaseVLLMActor):
         hf_tokenizer,
         num_samples: int = 1,
     ):
-        """Run one or more rollouts for a single prompt."""
-        await self._update_pending_rollouts(num_samples)
-        try:
-            tasks = [
-                self._run_rollout(
+        """Generate responses for a single prompt."""
+        tasks = []
+        for _ in range(num_samples):
+            tasks.append(
+                self.executor.execute(
                     prompt=prompt,
                     label=label,
-                    sampling_params=deepcopy(sampling_params),
+                    sampling_params=sampling_params,
                     max_length=max_length,
                     hf_tokenizer=hf_tokenizer,
+                    llm_engine=self,
                 )
-                for _ in range(num_samples)
-            ]
-            return await asyncio.gather(*tasks)
-        finally:
-            await self._update_pending_rollouts(-num_samples)
-
-    async def _update_pending_rollouts(self, delta: int) -> None:
-        async with self._pending_count_lock:
-            self._pending_rollout_count += delta
-
-    async def _run_rollout(self, prompt, label, sampling_params, max_length, hf_tokenizer):
-        if self.rollout_slots is None:
-            return await self.rollout_executor.execute_rollout(
-                prompt=prompt,
-                label=label,
-                sampling_params=sampling_params,
-                max_length=max_length,
-                hf_tokenizer=hf_tokenizer,
-                llm_engine=self,
             )
-
-        async with self.rollout_slots:
-            return await self.rollout_executor.execute_rollout(
-                prompt=prompt,
-                label=label,
-                sampling_params=sampling_params,
-                max_length=max_length,
-                hf_tokenizer=hf_tokenizer,
-                llm_engine=self,
-            )
+        return await asyncio.gather(*tasks)
 
 
 def create_vllm_engines(
@@ -219,7 +187,6 @@ def create_vllm_engines(
     gpu_memory_utilization=None,
     vllm_enable_sleep=False,
     logprobs_mode=None,
-    rollout_tasks_per_gpu: Optional[int] = None,
     agent_func_path: Optional[str] = None,
     remote_rm_url: Optional[str] = None,
     remote_rm_batch_size: Optional[int] = None,
@@ -273,7 +240,6 @@ def create_vllm_engines(
                 "agent_func_path": agent_func_path,
                 "remote_rm_url": remote_rm_url,
                 "remote_rm_batch_size": remote_rm_batch_size,
-                "max_rollout_tasks": (rollout_tasks_per_gpu * tensor_parallel_size if rollout_tasks_per_gpu else None),
             }
         )
 
@@ -285,7 +251,7 @@ def create_vllm_engines(
             ), "vLLM > 0.10.0 is required for logprobs_mode"
 
         vllm_engines.append(
-            VLLMRolloutActor.options(
+            LLMRayActor.options(
                 num_cpus=num_gpus,
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,

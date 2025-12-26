@@ -12,10 +12,10 @@ from openrlhf.utils.logging_utils import init_logger
 logger = init_logger(__name__)
 
 
-class SingleTurnRolloutExecutor:
-    """Single-turn rollout executor (no reward post-processing)."""
+class SingleTurnExecutor:
+    """Single-turn agent executor (no reward post-processing)."""
 
-    async def execute_rollout(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine):
+    async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine):
         # Tokenize the initial observation.
         prompt_token_ids = hf_tokenizer(prompt, add_special_tokens=False, return_tensors="pt")["input_ids"][0].tolist()
 
@@ -51,8 +51,8 @@ class SingleTurnRolloutExecutor:
         }
 
 
-class SingleTurnRewardedRolloutExecutor(SingleTurnRolloutExecutor):
-    """Single-turn rollout executor with reward post-processing."""
+class SingleTurnRewardedExecutor(SingleTurnExecutor):
+    """Single-turn agent executor with reward post-processing."""
 
     def __init__(self, remote_rm_url, remote_rm_batch_size: Optional[int] = None):
         reward_endpoints = [remote_rm_url] if isinstance(remote_rm_url, str) else remote_rm_url
@@ -70,10 +70,8 @@ class SingleTurnRewardedRolloutExecutor(SingleTurnRolloutExecutor):
             spec.loader.exec_module(reward_module)
             self.reward_func = reward_module.reward_func
 
-    async def execute_rollout(
-        self, prompt: str, label: str, sampling_params, max_length: int, hf_tokenizer, llm_engine
-    ):
-        output = await super().execute_rollout(
+    async def execute(self, prompt: str, label: str, sampling_params, max_length: int, hf_tokenizer, llm_engine):
+        output = await super().execute(
             prompt=prompt,
             label=label,
             sampling_params=sampling_params,
@@ -97,7 +95,7 @@ class SingleTurnRewardedRolloutExecutor(SingleTurnRolloutExecutor):
                     extra_logs=rewards_info.get("extra_logs") or {},
                 )
         except Exception as e:
-            logger.info(f"[SingleTurnRewardedRolloutExecutor] Failed to fetch reward from remote RM: {e}")
+            logger.info(f"[SingleTurnRewardedExecutor] Failed to fetch reward from remote RM: {e}")
 
         return output
 
@@ -157,8 +155,8 @@ class SingleTurnRewardedRolloutExecutor(SingleTurnRolloutExecutor):
         return await asyncio.gather(*tasks)
 
 
-class MultiTurnRolloutExecutor:
-    """Multi-turn rollout executor backed by a user-provided AgentExecutor."""
+class MultiTurnExecutor:
+    """Multi-turn agent executor backed by a user-provided AgentExecutor."""
 
     def __init__(self, agent_func_path: str):
         assert agent_func_path.endswith(".py"), "Agent path must be a Python file"
@@ -173,7 +171,7 @@ class MultiTurnRolloutExecutor:
         assert issubclass(agent_executor_cls, AgentExecutorBase), "AgentExecutor must inherit from AgentExecutorBase"
         self.agent_executor_cls = agent_executor_cls
 
-    async def execute_rollout(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine):
+    async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine):
         agent_executor = self.agent_executor_cls(
             max_length=max_length,
             llm_engine=llm_engine,

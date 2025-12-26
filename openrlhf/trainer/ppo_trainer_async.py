@@ -106,7 +106,7 @@ class GenerateSamplesActor:
                 try:
                     # Draw one mini-batch of prompts; stop when loader is exhausted.
                     rollout_samples, filter_pass_rate, prompts_consumed, is_exhausted = (
-                        self.samples_generator.sample_batch()
+                        self.samples_generator.generate_samples()
                     )
                     total_consumed_prompts += prompts_consumed
                 finally:
