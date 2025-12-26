@@ -147,7 +147,7 @@ class LLMRayActor(BaseLLMRayActor):
 
     def get_num_unfinished_requests(self) -> int:
         """Return the number of unfinished requests in the vLLM engine."""
-        return self.llm.engine.get_num_unfinished_requests()
+        return self.llm.output_processor.get_num_unfinished_requests()
 
     async def generate_responses(
         self,
