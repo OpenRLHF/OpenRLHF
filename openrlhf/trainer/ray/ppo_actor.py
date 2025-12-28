@@ -317,6 +317,22 @@ class ActorPPOTrainer(ABC):
             model = self.actor.model.module
         count, num_params = 0, len(list(model.named_parameters()))
 
+        # Wrapper prefixes that may be added by torch.compile, DDP, FSDP, etc.
+        # Reuse the same list from fsdp_strategy.py for consistency.
+        _WRAPPER_PREFIXES = (
+            "_orig_mod.",  # torch.compile / OptimizedModule
+            "module.",     # DDP
+            "_fsdp_wrapped_module.",  # FSDP v1
+            "_orig_module.",  # FSDP v1 / wrapper
+            "_checkpoint_wrapped_module.",  # PyTorch checkpoint_wrapper
+        )
+
+        def _clean_param_name(name):
+            """Remove wrapper prefixes from parameter name for vLLM compatibility."""
+            for prefix in _WRAPPER_PREFIXES:
+                name = name.replace(prefix, "")
+            return name
+
         def _get_full_tensor(param):
             """Return full tensor for FSDP2 DTensor or regular param."""
             if is_fsdp2:
@@ -333,7 +349,7 @@ class ActorPPOTrainer(ABC):
                 return param.shape  # DTensor reports global shape
             return param.shape if getattr(self.strategy.args, "zero_stage", 2) != 3 else param.ds_shape
 
-        def _broadcast_param(param, count, num_params):
+        def _broadcast_param(param, clean_name, count, num_params):
             use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
 
             # FSDP2 requires all ranks to participate in full_tensor()
@@ -350,7 +366,7 @@ class ActorPPOTrainer(ABC):
                     full_data = _get_full_tensor(param)
 
                 refs = [
-                    engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
+                    engine.update_weight.remote(clean_name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
                     for engine in self.vllm_engines
                 ]
 
@@ -362,7 +378,7 @@ class ActorPPOTrainer(ABC):
                     self._model_update_group.broadcast(full_data, src=0, stream=torch.cuda.current_stream())
                 ray.get(refs)
 
-        def _handle_cuda_ipc(param, count, num_params):
+        def _handle_cuda_ipc(param, clean_name, count, num_params):
             from torch.multiprocessing.reductions import reduce_tensor
 
             # Get full tensor for FSDP2 or regular data
@@ -383,7 +399,7 @@ class ActorPPOTrainer(ABC):
                 shape = _get_param_shape(param)
                 refs = [
                     engine.update_weight_cuda_ipc.remote(
-                        name,
+                        clean_name,
                         dtype=param.dtype,
                         shape=shape,
                         ipc_handles=ipc_handles,
@@ -396,30 +412,32 @@ class ActorPPOTrainer(ABC):
 
         for name, param in model.named_parameters():
             count += 1  # empty_cache at last param
+            # Clean wrapper prefixes (e.g., _orig_mod. from torch.compile)
+            clean_name = _clean_param_name(name)
 
             # broadcast
             if not self.use_cuda_ipc:
                 if is_fsdp2:
-                    _broadcast_param(param, count, num_params)
+                    _broadcast_param(param, clean_name, count, num_params)
                 else:
                     # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
                     if self.strategy.args.ds_tensor_parallel_size > 1:
                         with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
-                            _broadcast_param(param, count, num_params)
+                            _broadcast_param(param, clean_name, count, num_params)
                     else:
                         with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                            _broadcast_param(param, count, num_params)
+                            _broadcast_param(param, clean_name, count, num_params)
             # CUDA IPC
             else:
                 if is_fsdp2:
-                    _handle_cuda_ipc(param, count, num_params)
+                    _handle_cuda_ipc(param, clean_name, count, num_params)
                 else:
                     if self.strategy.args.ds_tensor_parallel_size > 1:
                         with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
-                            _handle_cuda_ipc(param, count, num_params)
+                            _handle_cuda_ipc(param, clean_name, count, num_params)
                     else:
                         with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                            _handle_cuda_ipc(param, count, num_params)
+                            _handle_cuda_ipc(param, clean_name, count, num_params)
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)
@@ -444,6 +462,17 @@ class PolicyModelActor(BaseModelActor):
 
         self._setup_distributed(strategy)
 
+        tp_kwargs = {}
+        if getattr(args, "dist_backend", "deepspeed") == "fsdp2" and int(getattr(args, "ds_tensor_parallel_size", 1) or 1) > 1:
+            tp_device_mesh = getattr(strategy, "fsdp_device_mesh", None)
+            if tp_device_mesh is None:
+                raise RuntimeError("[fsdp2] Tensor parallel requested but device mesh is not initialized.")
+            tp_kwargs = {
+                "tp_plan": "auto",
+                "tp_size": int(args.ds_tensor_parallel_size),
+                "device_mesh": tp_device_mesh,
+            }
+
         actor = Actor(
             pretrain,
             attn_implementation=strategy.args.attn_implementation,
@@ -457,6 +486,7 @@ class PolicyModelActor(BaseModelActor):
             packing_samples=strategy.args.packing_samples,
             temperature=strategy.args.temperature,
             use_liger_kernel=strategy.args.use_liger_kernel,
+            **tp_kwargs,
         )
         strategy.print(actor)
 
@@ -473,6 +503,7 @@ class PolicyModelActor(BaseModelActor):
                 load_in_4bit=strategy.args.load_in_4bit,
                 ds_config=strategy.get_ds_eval_config(offload=True),
                 packing_samples=strategy.args.packing_samples,
+                **tp_kwargs,
             )
         else:
             ema_model = None
