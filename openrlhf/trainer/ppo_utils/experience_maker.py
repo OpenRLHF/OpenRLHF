@@ -258,6 +258,7 @@ class SamplesGenerator:
         experiences, prompts_consumed, exhausted = self._generate_vllm(
             dataloader_iter=self._eval_dataloader_iter,
             num_prompts=len(self.eval_dataloader),
+            dynamic_filtering=False,
             **generate_kwargs,
         )
 
@@ -265,7 +266,7 @@ class SamplesGenerator:
         if self.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "sleep")
 
-        self._dataloader_iter = None
+        self._eval_dataloader_iter = None
 
         return experiences
 
@@ -282,6 +283,7 @@ class SamplesGenerator:
         experiences, prompts_consumed, exhausted = self._generate_vllm(
             dataloader_iter=self._dataloader_iter,
             num_prompts=self.args.rollout_batch_size,
+            dynamic_filtering=self.args.dynamic_filtering,
             **generate_kwargs,
         )
 
@@ -300,7 +302,7 @@ class SamplesGenerator:
         return experiences, filter_pass_rate, prompts_consumed, exhausted
 
     def _generate_vllm(
-        self, dataloader_iter, num_prompts: int, **generate_kwargs
+        self, dataloader_iter, num_prompts: int, dynamic_filtering, **generate_kwargs
     ) -> Tuple[List[Experience], int, bool]:
         """Generate a batch of Experiences with optional reward filtering."""
         prompts_consumed = 0
@@ -324,7 +326,7 @@ class SamplesGenerator:
                 ]
 
                 # Drop experiences if the average score falls outside the allowed range.
-                if self.args.dynamic_filtering and all(e.scores is not None for e in experiences):
+                if dynamic_filtering and all(e.scores is not None for e in experiences):
                     scores = [e.scores[0].item() for e in experiences]
                     avg_reward = sum(scores) / len(scores)
                     min_r, max_r = self.args.dynamic_filtering_reward_range

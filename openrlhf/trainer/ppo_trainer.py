@@ -32,7 +32,7 @@ def prepare_datasets(strategy, tokenizer):
         strategy,
         args.seed,
         max_count=args.max_samples,
-        dataset_split=strategy.prompt_split,
+        dataset_split=args.prompt_split,
     )
 
     # Create train dataset
@@ -345,8 +345,6 @@ class PPOTrainer(BasePPOTrainer):
         # First collect all prompts and labels
         prompt_to_datasource = {}  # Dictionary to store mapping between prompts and their data sources
         for datasources, prompts, labels in eval_dataloader:
-            all_prompts.extend(prompts)
-            all_labels.extend(labels)
             # Create mapping for each prompt to its corresponding data source
             for prompt, datasource in zip(prompts, datasources):
                 prompt_to_datasource[prompt] = datasource
@@ -355,7 +353,7 @@ class PPOTrainer(BasePPOTrainer):
         generate_kwargs = self.generate_kwargs.copy()
         generate_kwargs["temperature"] = temperature
         generate_kwargs["n_samples_per_prompt"] = n_samples_per_prompt
-        samples_list = self.samples_generator.generate_samples(**generate_kwargs)
+        samples_list = self.samples_generator.generate_eval_samples(**generate_kwargs)
 
         # duplicate prompts and labels for each sample
         all_prompts = sum([s.prompts for s in samples_list], [])
@@ -401,7 +399,6 @@ class PPOTrainer(BasePPOTrainer):
         # Log to wandb/tensorboard
         if self.wandb_logger:
             self.wandb_logger.log_eval(global_step, logs)
-
         if self.tensorboard_logger:
             self.tensorboard_logger.log_eval(global_step, logs)
 
