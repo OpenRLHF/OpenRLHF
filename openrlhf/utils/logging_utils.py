@@ -97,6 +97,13 @@ class WandbLogger:
         logs = {"train/%s" % k: v for k, v in {**metrics, "global_step": global_step}.items()}
         self.handle.log(logs)
 
+    def log_eval(self, global_step: int, logs_dict: Dict[str, Any]) -> None:
+        logs_dict = dict(logs_dict)
+
+        metrics = {k: v for k, v in logs_dict.items() if v is not None}
+        logs = {"eval/%s" % k: v for k, v in {**metrics, "global_step": global_step}.items()}
+        self.handle.log(logs)
+
     def close(self) -> None:
         self.handle.finish()
 
@@ -120,6 +127,10 @@ class TensorboardLogger:
                 self.writer.add_text("train/generated_samples", formatted_text, global_step)
             elif v is not None:
                 self.writer.add_scalar(f"train/{k}", v, global_step)
+
+    def log_eval(self, global_step: int, logs_dict: Dict[str, Any]) -> None:
+        for k, v in logs_dict.items():
+            self.writer.add_scalar(f"eval/{k}", v, global_step)
 
     def close(self) -> None:
         self.writer.close()

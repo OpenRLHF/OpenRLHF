@@ -1,10 +1,15 @@
 import os
+import time
 from abc import ABC
+from datetime import timedelta
 from typing import Dict, Tuple
 
 import ray
+import torch
 from tqdm import tqdm
 
+from openrlhf.datasets import PromptDataset
+from openrlhf.datasets.utils import blending_datasets
 from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker, SamplesGenerator
 from openrlhf.trainer.ppo_utils.kl_controller import AdaptiveKLController, FixedKLController
 from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
@@ -15,6 +20,44 @@ from openrlhf.utils.logging_utils import TensorboardLogger, WandbLogger, init_lo
 from openrlhf.utils.utils import get_tokenizer
 
 logger = init_logger(__name__)
+
+
+def prepare_datasets(strategy, tokenizer):
+    args = strategy.args
+
+    # prepare datasets
+    train_data = blending_datasets(
+        args.prompt_data,
+        args.prompt_data_probs,
+        strategy,
+        args.seed,
+        max_count=args.max_samples,
+        dataset_split=strategy.prompt_split,
+    )
+
+    # Create train dataset
+    train_data = train_data.select(range(min(args.max_samples, len(train_data))))
+    prompts_dataset = PromptDataset(train_data, tokenizer, strategy, input_template=args.input_template)
+    prompts_dataloader = strategy.setup_dataloader(prompts_dataset, 1, True, True)
+
+    # Create eval dataset if eval data exists
+    if getattr(args, "eval_dataset", None):
+        eval_data = blending_datasets(
+            args.eval_dataset,
+            None,  # No probability sampling for eval datasets
+            strategy,
+            dataset_split=args.eval_split,
+        )
+        eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
+        eval_dataset = PromptDataset(eval_data, tokenizer, strategy, input_template=args.input_template)
+        eval_dataloader = strategy.setup_dataloader(eval_dataset, 1, True, False)
+    else:
+        eval_dataloader = None
+
+    max_steps = (
+        len(prompts_dataset) * args.n_samples_per_prompt // args.train_batch_size * args.num_episodes * args.max_epochs
+    )
+    return prompts_dataloader, eval_dataloader, max_steps
 
 
 class BasePPOTrainer(ABC):
@@ -149,10 +192,6 @@ class BasePPOTrainer(ABC):
             if self.tensorboard_logger:
                 self.tensorboard_logger.log_train(global_step, logs_dict)
 
-        # TODO: Add evaluation mechanism for PPO
-        # if global_step % args.eval_steps == 0 and self.eval_dataloader and len(self.eval_dataloader) > 0:
-        #     self.evaluate(self.eval_dataloader, global_step, args.eval_temperature, args.eval_n_samples_per_prompt)
-
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity/others on whole dev dataset as metric
         client_states = client_states or {}
@@ -197,25 +236,26 @@ class PPOTrainer(BasePPOTrainer):
         reward_model_group: RayActorGroup,
         reference_model_group: RayActorGroup,
         vllm_engines,
-        prompt_split: str = "train",
-        eval_split: str = "test",
         **generate_kwargs,
     ) -> None:
-        # Tokenizer is shared across the sample generator and trainer to avoid duplicated loads.
-        tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
         # get eval and save steps
         if strategy.args.eval_steps == -1:
             strategy.args.eval_steps = float("inf")  # do not evaluate
         if strategy.args.save_steps == -1:
             strategy.args.save_steps = float("inf")  # do not save ckpt
 
+        # Tokenizer is shared across the sample generator and trainer to avoid duplicated loads.
+        tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
+        self.prompts_dataloader, self.eval_dataloader, self.max_steps = prepare_datasets(strategy, tokenizer)
+        self.generate_kwargs = generate_kwargs
+
         # sample generation
         self.samples_generator = SamplesGenerator(
             strategy=strategy,
+            prompts_dataloader=self.prompts_dataloader,
+            eval_dataloader=self.eval_dataloader,
             tokenizer=tokenizer,
             vllm_engines=vllm_engines,
-            prompt_split=prompt_split,
-            generate_kwargs=generate_kwargs,
         )
 
         # train
@@ -229,6 +269,9 @@ class PPOTrainer(BasePPOTrainer):
             tokenizer,
         )
 
+    def get_max_steps(self):
+        return self.max_steps
+
     def fit(self) -> None:
         checkpoint_states = self.init_checkpoint_states()
         # Restore step and start_epoch
@@ -238,19 +281,21 @@ class PPOTrainer(BasePPOTrainer):
         # Keep vLLM weights and dataloader states in sync when resuming.
         if global_step:
             self.broadcast_to_vllm()
-            self.samples_generator.load_state_dict(checkpoint_states["data_loader_state_dict"])
+            state_dict = checkpoint_states["data_loader_state_dict"]
+            if state_dict:
+                self.prompts_dataloader.load_state_dict(state_dict)
 
         for episode in range(start_episode, self.args.num_episodes):
             dataset_length = len(self.samples_generator.prompts_dataloader)
             pbar = tqdm(
                 range(dataset_length),
                 desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
-                initial=total_consumed_prompts % dataset_length,
+                initial=total_consumed_prompts % max(dataset_length, 1),
             )
             while True:
                 # Draw one mini-batch of prompts; stop when loader is exhausted.
                 rollout_samples, filter_pass_rate, prompts_consumed, is_exhausted = (
-                    self.samples_generator.generate_samples()
+                    self.samples_generator.generate_samples(**self.generate_kwargs)
                 )
                 total_consumed_prompts += prompts_consumed
                 if is_exhausted:
@@ -270,9 +315,18 @@ class PPOTrainer(BasePPOTrainer):
                     "episode": episode,
                     "global_step": global_step,
                     "total_consumed_prompts": total_consumed_prompts,
-                    "data_loader_state_dict": self.samples_generator.state_dict(),
+                    "data_loader_state_dict": self.prompts_dataloader.state_dict(),
                 }
                 self.save_logs_and_checkpoints(global_step, status, client_states)
+
+                # TODO: Add evaluation mechanism for PPO
+                if global_step % self.args.eval_steps == 0 and self.eval_dataloader and len(self.eval_dataloader) > 0:
+                    self.evaluate(
+                        self.eval_dataloader,
+                        global_step,
+                        self.args.eval_temperature,
+                        self.args.eval_n_samples_per_prompt,
+                    )
 
                 pbar.update(prompts_consumed)
 
@@ -282,5 +336,76 @@ class PPOTrainer(BasePPOTrainer):
         if self.tensorboard_logger:
             self.tensorboard_logger.close()
 
-    def get_max_steps(self):
-        return self.samples_generator.max_steps
+    @torch.no_grad()
+    def evaluate(self, eval_dataloader, global_step, temperature=0.6, n_samples_per_prompt=1):
+        """Evaluate model performance on eval dataset."""
+        start_time = time.time()
+        logger.info(f"⏰ Evaluation start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # First collect all prompts and labels
+        prompt_to_datasource = {}  # Dictionary to store mapping between prompts and their data sources
+        for datasources, prompts, labels in eval_dataloader:
+            all_prompts.extend(prompts)
+            all_labels.extend(labels)
+            # Create mapping for each prompt to its corresponding data source
+            for prompt, datasource in zip(prompts, datasources):
+                prompt_to_datasource[prompt] = datasource
+
+        # Generate samples and calculate rewards
+        generate_kwargs = self.generate_kwargs.copy()
+        generate_kwargs["temperature"] = temperature
+        generate_kwargs["n_samples_per_prompt"] = n_samples_per_prompt
+        samples_list = self.samples_generator.generate_samples(**generate_kwargs)
+
+        # duplicate prompts and labels for each sample
+        all_prompts = sum([s.prompts for s in samples_list], [])
+        all_labels = sum([s.labels for s in samples_list], [])
+
+        # Get rewards from samples, such as agent rewards or remote reward models
+        rewards_list = []
+        for samples in samples_list:
+            rewards_list.append(samples.rewards)
+        # Reshape rewards to (num_prompts, n_samples_per_prompt)
+        rewards = torch.tensor(rewards_list).reshape(-1, n_samples_per_prompt)
+
+        # Collect local statistics for each data source
+        global_metrics = {}  # {datasource: {"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}}
+
+        # Process rewards in chunks of n_samples_per_prompt
+        num_prompts = len(all_prompts) // n_samples_per_prompt
+        for i in range(num_prompts):
+            # Get the original prompt (first one in the chunk)
+            original_prompt = all_prompts[i * n_samples_per_prompt]
+            datasource = prompt_to_datasource[original_prompt]  # Get corresponding data source using the mapping
+
+            if datasource not in global_metrics:
+                global_metrics[datasource] = {f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}
+
+            # Get rewards for this chunk
+            chunk_rewards = rewards[i]
+
+            # Calculate pass@k and pass@1
+            if n_samples_per_prompt > 1:
+                global_metrics[datasource][f"pass{n_samples_per_prompt}"] += chunk_rewards.max().float().item()
+            global_metrics[datasource]["pass1"] += chunk_rewards.mean().float().item()
+            global_metrics[datasource]["count"] += 1
+
+        # Calculate global averages
+        logs = {}
+        for datasource, metrics in global_metrics.items():
+            logs[f"eval_{datasource}_pass{n_samples_per_prompt}"] = (
+                metrics[f"pass{n_samples_per_prompt}"] / metrics["count"]
+            )
+            logs[f"eval_{datasource}_pass1"] = metrics["pass1"] / metrics["count"]
+
+        # Log to wandb/tensorboard
+        if self.wandb_logger:
+            self.wandb_logger.log_eval(global_step, logs)
+
+        if self.tensorboard_logger:
+            self.tensorboard_logger.log_eval(global_step, logs)
+
+        end_time = time.time()
+        duration = end_time - start_time
+        time_str = str(timedelta(seconds=duration)).split(".")[0]
+        logger.info(f"✨ Evaluation completed in {time_str}, global_step {global_step}, eval_metrics: {logs}")

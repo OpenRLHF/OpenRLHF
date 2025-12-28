@@ -4,7 +4,7 @@ import ray
 from ray.util.queue import Queue
 from tqdm import tqdm
 
-from openrlhf.trainer.ppo_trainer import BasePPOTrainer
+from openrlhf.trainer.ppo_trainer import BasePPOTrainer, prepare_datasets
 from openrlhf.trainer.ppo_utils.experience_maker import SamplesGenerator
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.deepspeed import DeepspeedStrategy
@@ -35,25 +35,24 @@ class GenerateSamplesActor:
         pretrain,
         strategy,
         vllm_engines,
-        prompt_split="train",
-        eval_split="test",
         *,
         vllm_lock,
         rollout_queue,
         rollout_slots,
         **generate_kwargs,
     ):
-        tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
-
-        self.strategy = strategy
         self.args = strategy.args
+
+        tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
+        self.prompts_dataloader, self.eval_dataloader, self.max_steps = prepare_datasets(strategy, tokenizer)
+        self.generate_kwargs = generate_kwargs
 
         self.samples_generator = SamplesGenerator(
             strategy=strategy,
+            prompts_dataloader=self.prompts_dataloader,
+            eval_dataloader=self.eval_dataloader,
             tokenizer=tokenizer,
             vllm_engines=vllm_engines,
-            prompt_split=prompt_split,
-            generate_kwargs=generate_kwargs,
         )
 
         self.vllm_lock = vllm_lock
@@ -63,21 +62,19 @@ class GenerateSamplesActor:
         self.rollout_slots = rollout_slots
 
     def get_max_steps(self):
-        return self.samples_generator.max_steps
+        return self.max_steps
 
     def load_state_dict(self, state_dict):
-        self.samples_generator.load_state_dict(state_dict)
+        self.prompts_dataloader.load_state_dict(state_dict)
 
     def fit(self, episode: int, total_consumed_prompts: int):
         for episode in range(episode, self.args.num_episodes):
-            dataset_length = len(self.samples_generator.prompts_dataloader)
+            dataset_length = len(self.prompts_dataloader)
             pbar = tqdm(
                 range(dataset_length),
                 desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
                 initial=total_consumed_prompts % max(dataset_length, 1),
-                disable=False,
             )
-
             while True:
                 # Backpressure: only generate if we have queue capacity (token available).
                 self.rollout_slots.get(block=True)
@@ -86,7 +83,7 @@ class GenerateSamplesActor:
                 ray.get(self.vllm_lock.acquire.remote())
                 try:
                     rollout_samples, filter_pass_rate, prompts_consumed, is_exhausted = (
-                        self.samples_generator.generate_samples()
+                        self.samples_generator.generate_samples(**self.generate_kwargs)
                     )
                     total_consumed_prompts += prompts_consumed
                 finally:
@@ -97,7 +94,7 @@ class GenerateSamplesActor:
                     client_states = {
                         "episode": episode,
                         "total_consumed_prompts": total_consumed_prompts,
-                        "data_loader_state_dict": self.samples_generator.state_dict(),
+                        "data_loader_state_dict": self.prompts_dataloader.state_dict(),
                     }
                     self.rollout_queue.put((rollout_samples, client_states, filter_pass_rate), block=True)
                     if prompts_consumed:
@@ -194,29 +191,25 @@ class PPOTrainerAsync:
         reward_model_group: RayActorGroup,
         reference_model_group: RayActorGroup,
         vllm_engines,
-        prompt_split: str = "train",
-        eval_split: str = "test",
         **generate_kwargs,
     ) -> None:
-        args = strategy.args
-
         # get eval and save steps
-        if args.eval_steps == -1:
-            args.eval_steps = float("inf")  # do not evaluate
-        if args.save_steps == -1:
-            args.save_steps = float("inf")  # do not save ckpt
+        if strategy.args.eval_steps == -1:
+            strategy.args.eval_steps = float("inf")  # do not evaluate
+        if strategy.args.save_steps == -1:
+            strategy.args.save_steps = float("inf")  # do not save ckpt
 
-        queue_size = getattr(args, "async_queue_size", 1)
+        queue_size = getattr(strategy.args, "async_queue_size", 1)
         if queue_size <= 0:
             raise ValueError(f"async_queue_size must be positive, got {queue_size}")
         logger.info(f"queue_size={queue_size}")
+
+        self.rollout_queue = Queue(maxsize=queue_size)
 
         # Token pool (counting semaphore) for queue capacity.
         self.rollout_slots = Queue(maxsize=queue_size)
         for _ in range(queue_size):
             self.rollout_slots.put(None, block=True)
-
-        self.rollout_queue = Queue(maxsize=queue_size)
 
         # Cross-actor mutex for vLLM critical section.
         self.vllm_lock = VLLMLock.remote()
@@ -225,8 +218,6 @@ class PPOTrainerAsync:
             pretrain=pretrain,
             strategy=strategy,
             vllm_engines=vllm_engines,
-            prompt_split=prompt_split,
-            eval_split=eval_split,
             vllm_lock=self.vllm_lock,
             rollout_queue=self.rollout_queue,
             rollout_slots=self.rollout_slots,

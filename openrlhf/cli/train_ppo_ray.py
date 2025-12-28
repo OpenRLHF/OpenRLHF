@@ -144,8 +144,6 @@ def train(args):
         reward_model,
         ref_model,
         vllm_engines,
-        prompt_split=args.prompt_split,
-        eval_split=args.eval_split,
         # generate kwargs
         do_sample=True,
         prompt_max_len=args.prompt_max_len,

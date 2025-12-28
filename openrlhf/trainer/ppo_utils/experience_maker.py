@@ -10,8 +10,6 @@ import torch
 from tqdm import tqdm
 from vllm import SamplingParams
 
-from openrlhf.datasets import PromptDataset
-from openrlhf.datasets.utils import blending_datasets
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
@@ -234,58 +232,45 @@ class SamplesGenerator:
     def __init__(
         self,
         strategy,
+        prompts_dataloader,
+        eval_dataloader,
         tokenizer,
         vllm_engines: List,
-        prompt_split: str,
-        generate_kwargs: dict,
     ):
         self.strategy = strategy
         self.args = strategy.args
-        self.generate_kwargs = generate_kwargs
 
         self.tokenizer = tokenizer
         self.vllm_engines = vllm_engines or []
 
-        self.prompts_dataloader, self.max_steps = self.prepare_datasets(
-            prompt_split=prompt_split,
-        )
-
-    def prepare_datasets(self, prompt_split):
-        args = self.args
-        strategy = self.strategy
-
-        # prepare datasets
-        train_data = blending_datasets(
-            args.prompt_data,
-            args.prompt_data_probs,
-            strategy,
-            args.seed,
-            max_count=args.max_samples,
-            dataset_split=prompt_split,
-        )
-        # Create train dataset
-        train_data = train_data.select(range(min(args.max_samples, len(train_data))))
-        prompts_dataset = PromptDataset(train_data, self.tokenizer, strategy, input_template=args.input_template)
-        prompts_dataloader = strategy.setup_dataloader(prompts_dataset, 1, True, True)
-
-        max_steps = (
-            len(prompts_dataset)
-            * args.n_samples_per_prompt
-            // args.train_batch_size
-            * args.num_episodes
-            * args.max_epochs
-        )
-        return prompts_dataloader, max_steps
-
-    def state_dict(self) -> dict:
-        return self.prompts_dataloader.state_dict()
-
-    def load_state_dict(self, state_dict: dict):
-        if state_dict:
-            self.prompts_dataloader.load_state_dict(state_dict)
+        self.prompts_dataloader = prompts_dataloader
+        self.eval_dataloader = eval_dataloader
 
     @torch.no_grad()
-    def generate_samples(self) -> Tuple[List[Experience], Optional[float], int, bool]:
+    def generate_eval_samples(self, **generate_kwargs) -> Tuple[List[Experience], Optional[float], int, bool]:
+        if getattr(self, "_eval_dataloader_iter", None) is None:
+            self._eval_dataloader_iter = iter(self.eval_dataloader)
+
+        # Wake sleeping vLLM engines before dispatching.
+        if self.args.vllm_enable_sleep:
+            batch_vllm_engine_call(self.vllm_engines, "wake_up")
+
+        experiences, prompts_consumed, exhausted = self._generate_vllm(
+            dataloader_iter=self._eval_dataloader_iter,
+            num_prompts=len(self.eval_dataloader),
+            **generate_kwargs,
+        )
+
+        # Put engines back to sleep when enabled.
+        if self.args.vllm_enable_sleep:
+            batch_vllm_engine_call(self.vllm_engines, "sleep")
+
+        self._dataloader_iter = None
+
+        return experiences
+
+    @torch.no_grad()
+    def generate_samples(self, **generate_kwargs) -> Tuple[List[Experience], Optional[float], int, bool]:
         """Produce one batch and indicate if the dataloader is exhausted."""
         if getattr(self, "_dataloader_iter", None) is None:
             self._dataloader_iter = iter(self.prompts_dataloader)
@@ -297,7 +282,7 @@ class SamplesGenerator:
         experiences, prompts_consumed, exhausted = self._generate_vllm(
             dataloader_iter=self._dataloader_iter,
             num_prompts=self.args.rollout_batch_size,
-            **self.generate_kwargs,
+            **generate_kwargs,
         )
 
         # Put engines back to sleep when enabled.
