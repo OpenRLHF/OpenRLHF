@@ -24,7 +24,7 @@ from nemo_gym.server_utils import get_global_config_dict
 from omegaconf import OmegaConf, open_dict
 from vllm import SamplingParams
 
-from openrlhf.utils.agent import AgentExecutorBase, AgentInstanceBase
+from openrlhf.utils.agent import AgentExecutorBase
 
 # Configure logging
 logging.basicConfig()
@@ -68,18 +68,6 @@ def prepare_data(question: str, expected_answer: str, sampling_params: SamplingP
     return data_item
 
 
-class AgentInstance(AgentInstanceBase):
-    """
-    Basic agent instance that passes states through without modification.
-
-    This is a minimal implementation that serves as a placeholder for more
-    complex agent logic if needed in the future.
-    """
-
-    async def step(self, states: dict, **kwargs) -> Dict[str, Any]:
-        return states
-
-
 class AgentExecutor(AgentExecutorBase):
     """
     Agent executor that integrates vLLM inference with NeMo Gym rollout collection.
@@ -87,40 +75,6 @@ class AgentExecutor(AgentExecutorBase):
     This class sets up a vLLM HTTP server compatible with OpenAI API and
     initializes NeMo Gym services for collecting rollouts during RL training.
     """
-
-    def __init__(self, max_length: int, llm_engine, hf_tokenizer):
-        """
-        Initialize the AgentExecutor with vLLM and NeMo Gym services.
-
-        Args:
-            max_length: Maximum sequence length for generation
-            llm_engine: The vLLM engine instance for inference
-            hf_tokenizer: HuggingFace tokenizer for the model
-        """
-        # Configure server endpoints
-        self.vllm_server_host = "127.0.0.1"  # Local vLLM server host
-        self.vllm_server_port = find_open_port()  # Auto-assign available port
-        self.head_server_host = "0.0.0.0"  # NeMo Gym head server host
-        self.head_server_port = find_open_port()  # Auto-assign available port
-
-        # Start vLLM HTTP server with OpenAI-compatible API
-        try:
-            self._start_vllm_server(llm_engine, hf_tokenizer)
-            logger.info("vLLM HTTP server started (OpenAI style /v1/chat/completions)")
-        except Exception as e:
-            logger.error(f"Failed to start vLLM HTTP server: {e}")
-            raise
-
-        # Initialize NeMo Gym services for rollout collection
-        try:
-            self._start_nemogym_services(hf_tokenizer)
-            logger.info("NeMo Gym services started via RunHelper")
-        except Exception as e:
-            logger.error(f"Failed to start NeMo Gym services: {e}")
-            raise
-
-        # Initialize parent class
-        super().__init__(AgentInstance, max_length, llm_engine, hf_tokenizer)
 
     def _wait_for_vllm_server(self) -> bool:
         """
@@ -367,7 +321,9 @@ class AgentExecutor(AgentExecutorBase):
         self.global_config_dict = get_global_config_dict()
         logger.info("NeMo Gym services configuration completed")
 
-    async def execute(self, prompt: str, label: str, sampling_params: SamplingParams):
+    async def execute(
+        self, prompt: str, label: str, sampling_params: SamplingParams, max_length: int, llm_engine, hf_tokenizer
+    ):
         """
         Execute a single rollout for the given prompt and collect results.
 
@@ -379,47 +335,69 @@ class AgentExecutor(AgentExecutorBase):
             label: The expected answer for reward calculation
             sampling_params: vLLM sampling parameters for generation
         """
-        async with self.semaphore:
-            # Configure rollout collection for this execution
-            rch_config_dict = get_global_config_dict()
-            with open_dict(rch_config_dict):
-                rch_config_dict.agent_name = "library_judge_math_simple_agent"
-                rch_config_dict.input_jsonl_fpath = ""
-                rch_config_dict.output_jsonl_fpath = ""
+        if not hasattr(self, "vllm_server_host"):
+            # Configure server endpoints
+            self.vllm_server_host = "127.0.0.1"  # Local vLLM server host
+            self.vllm_server_port = find_open_port()  # Auto-assign available port
+            self.head_server_host = "0.0.0.0"  # NeMo Gym head server host
+            self.head_server_port = find_open_port()  # Auto-assign available port
 
-            rchConfig = RolloutCollectionConfig.model_validate(rch_config_dict)
-            rch = RolloutCollectionHelper(rchConfig=rchConfig)
+            # Start vLLM HTTP server with OpenAI-compatible API
+            try:
+                self._start_vllm_server(llm_engine, hf_tokenizer)
+                logger.info("vLLM HTTP server started (OpenAI style /v1/chat/completions)")
+            except Exception as e:
+                logger.error(f"Failed to start vLLM HTTP server: {e}")
+                raise
 
-            # Prepare data and run rollout
-            data_item = prepare_data(prompt, label, sampling_params)
-            self.sampling_params = sampling_params
+            # Initialize NeMo Gym services for rollout collection
+            try:
+                self._start_nemogym_services(hf_tokenizer)
+                logger.info("NeMo Gym services started via RunHelper")
+            except Exception as e:
+                logger.error(f"Failed to start NeMo Gym services: {e}")
+                raise
 
-            examples = [data_item]
-            rollouts_response = await rch.run_examples(examples)
+        # Configure rollout collection for this execution
+        rch_config_dict = get_global_config_dict()
+        with open_dict(rch_config_dict):
+            rch_config_dict.agent_name = "library_judge_math_simple_agent"
+            rch_config_dict.input_jsonl_fpath = ""
+            rch_config_dict.output_jsonl_fpath = ""
 
-            # Extract rollout information
-            response_output = rollouts_response[0]["response"]["output"][0]
-            observation_tokens = response_output.get("generation_token_ids", [])
-            rollout_log_probs = response_output.get("generation_log_probs", [])
-            action_ranges = [(0, len(observation_tokens))]
-            reward = rollouts_response[0]["library_reward"]
+        rchConfig = RolloutCollectionConfig.model_validate(rch_config_dict)
+        rch = RolloutCollectionHelper(rchConfig=rchConfig)
 
-            # Convert to expected format
-            observation_tokens = torch.tensor(observation_tokens, dtype=torch.long).tolist()
+        # Prepare data and run rollout
+        data_item = prepare_data(prompt, label, sampling_params)
+        self.sampling_params = sampling_params
 
-            # Package final response for training
-            final_response = {
-                "prompt": prompt,
-                "label": label,
-                "observation_tokens": observation_tokens,
-                "reward": reward,
-                "scores": reward,
-                "extra_logs": {},
-                "action_ranges": action_ranges,
-                "rollout_log_probs": rollout_log_probs,
-            }
+        examples = [data_item]
+        rollouts_response = await rch.run_examples(examples)
 
-            return final_response
+        # Extract rollout information
+        response_output = rollouts_response[0]["response"]["output"][0]
+        observation_tokens = response_output.get("generation_token_ids", [])
+        rollout_log_probs = response_output.get("generation_log_probs", [])
+        action_ranges = [(0, len(observation_tokens))]
+        reward = rollouts_response[0]["library_reward"]
+
+        # Convert to expected format
+        observation_tokens = torch.tensor(observation_tokens, dtype=torch.long).tolist()
+
+        # Package final response for training
+        final_response = {
+            "prompt": prompt,
+            "label": label,
+            "observation_tokens": observation_tokens,
+            "reward": reward,
+            "scores": reward,
+            "extra_logs": {},
+            "action_ranges": action_ranges,
+            "rollout_log_probs": rollout_log_probs,
+        }
+
+        return final_response
 
     def shutdown(self):
         """

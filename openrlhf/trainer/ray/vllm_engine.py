@@ -11,18 +11,28 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from vllm.inputs import TokensPrompt
 from vllm.utils import random_uuid
 
-from openrlhf.utils.rollout import (
-    MultiTurnExecutor,
-    SingleTurnExecutor,
-    SingleTurnRewardedExecutor,
-)
+from openrlhf.utils.agent import AgentExecutorBase, SingleTurnAgentExecutor
 
 from .utils import get_bundle_indices, ray_noset_visible_devices
 
 
+def _load_agent_executor(agent_func_path: str) -> AgentExecutorBase:
+    assert agent_func_path.endswith(".py"), "Agent path must be a Python file"
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("agent_module", agent_func_path)
+    agent_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(agent_module)
+
+    assert hasattr(agent_module, "AgentExecutor"), "Agent module must contain AgentExecutor class"
+    agent_executor_cls = agent_module.AgentExecutor
+    assert issubclass(agent_executor_cls, AgentExecutorBase), "AgentExecutor must inherit from AgentExecutorBase"
+    return agent_executor_cls()
+
+
 @ray.remote
 class LLMRayActor:
-    """Async vLLM-backed Ray actor exposing generation utilities."""
+    """Async vLLM-backed actor that exposes generation utilities."""
 
     async def __init__(
         self,
@@ -40,15 +50,12 @@ class LLMRayActor:
         self._configure_vllm_env(version, vllm, kwargs.pop("full_determinism", False))
 
         # Execution mode mapping:
-        # - multi-turn: agent loop drives tool/step interactions
-        # - single-turn-with-reward: reward model post-processes each query
-        # - single-turn: plain vLLM generation only
+        # - custom agent executor: user-provided AgentExecutorBase subclass
+        # - single-turn with optional reward: default executor
         if agent_func_path:
-            self.executor = MultiTurnExecutor(agent_func_path=agent_func_path)
-        elif remote_rm_url:
-            self.executor = SingleTurnRewardedExecutor(remote_rm_url)
+            self.executor = _load_agent_executor(agent_func_path)
         else:
-            self.executor = SingleTurnExecutor()
+            self.executor = SingleTurnAgentExecutor(remote_rm_url)
 
         self.kwargs = kwargs
 
