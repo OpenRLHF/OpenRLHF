@@ -321,7 +321,7 @@ class ActorPPOTrainer(ABC):
         # Reuse the same list from fsdp_strategy.py for consistency.
         _WRAPPER_PREFIXES = (
             "_orig_mod.",  # torch.compile / OptimizedModule
-            "module.",     # DDP
+            "module.",  # DDP
             "_fsdp_wrapped_module.",  # FSDP v1
             "_orig_module.",  # FSDP v1 / wrapper
             "_checkpoint_wrapped_module.",  # PyTorch checkpoint_wrapper
@@ -366,7 +366,9 @@ class ActorPPOTrainer(ABC):
                     full_data = _get_full_tensor(param)
 
                 refs = [
-                    engine.update_weight.remote(clean_name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
+                    engine.update_weight.remote(
+                        clean_name, dtype=param.dtype, shape=shape, empty_cache=count == num_params
+                    )
                     for engine in self.vllm_engines
                 ]
 
@@ -463,7 +465,10 @@ class PolicyModelActor(BaseModelActor):
         self._setup_distributed(strategy)
 
         tp_kwargs = {}
-        if getattr(args, "dist_backend", "deepspeed") == "fsdp2" and int(getattr(args, "ds_tensor_parallel_size", 1) or 1) > 1:
+        if (
+            getattr(args, "dist_backend", "deepspeed") == "fsdp2"
+            and int(getattr(args, "ds_tensor_parallel_size", 1) or 1) > 1
+        ):
             tp_device_mesh = getattr(strategy, "fsdp_device_mesh", None)
             if tp_device_mesh is None:
                 raise RuntimeError("[fsdp2] Tensor parallel requested but device mesh is not initialized.")
