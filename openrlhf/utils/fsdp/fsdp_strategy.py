@@ -30,12 +30,7 @@ ModelOrModelOptimPair = Union[nn.Module, ModelOptimPair]
 
 class FSDPStrategy(ABC):
     _HF_STATE_DICT_WRAPPER_PREFIXES = (
-        # Composable FSDP2 / wrapper prefixes that can leak into state_dict keys.
-        "_fsdp_wrapped_module.",
-        "_orig_module.",
         "_checkpoint_wrapped_module.",
-        # Common wrapper prefixes.
-        "module.",  # DDP
         "_orig_mod.",  # torch.compile / OptimizedModule
     )
 
