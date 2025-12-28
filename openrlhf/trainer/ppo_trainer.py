@@ -286,7 +286,7 @@ class PPOTrainer(BasePPOTrainer):
                 self.prompts_dataloader.load_state_dict(state_dict)
 
         for episode in range(start_episode, self.args.num_episodes):
-            dataset_length = len(self.samples_generator.prompts_dataloader)
+            dataset_length = len(self.prompts_dataloader)
             pbar = tqdm(
                 range(dataset_length),
                 desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
