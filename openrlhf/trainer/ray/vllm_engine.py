@@ -22,7 +22,7 @@ from .utils import get_bundle_indices, ray_noset_visible_devices
 
 @ray.remote
 class LLMRayActor:
-    """Async vLLM-backed actor that exposes generation utilities."""
+    """Async vLLM-backed Ray actor exposing generation utilities."""
 
     async def __init__(
         self,
@@ -39,8 +39,6 @@ class LLMRayActor:
         )
         self._configure_vllm_env(version, vllm, kwargs.pop("full_determinism", False))
 
-        self.kwargs = kwargs
-
         # Execution mode mapping:
         # - multi-turn: agent loop drives tool/step interactions
         # - single-turn-with-reward: reward model post-processes each query
@@ -51,6 +49,8 @@ class LLMRayActor:
             self.executor = SingleTurnRewardedExecutor(remote_rm_url)
         else:
             self.executor = SingleTurnExecutor()
+
+        self.kwargs = kwargs
 
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
@@ -138,7 +138,7 @@ class LLMRayActor:
         return final_output
 
     def get_num_unfinished_requests(self) -> int:
-        """Return the number of unfinished requests in the vLLM engine."""
+        """Number of unfinished requests in vLLM engine."""
         return self.llm.output_processor.get_num_unfinished_requests()
 
     async def generate_responses(
@@ -150,19 +150,18 @@ class LLMRayActor:
         hf_tokenizer,
         num_samples: int = 1,
     ):
-        """Generate responses for a single prompt."""
-        tasks = []
-        for _ in range(num_samples):
-            tasks.append(
-                self.executor.execute(
-                    prompt=prompt,
-                    label=label,
-                    sampling_params=sampling_params,
-                    max_length=max_length,
-                    hf_tokenizer=hf_tokenizer,
-                    llm_engine=self,
-                )
+        """Generate N samples for a single prompt."""
+        tasks = [
+            self.executor.execute(
+                prompt=prompt,
+                label=label,
+                sampling_params=sampling_params,
+                max_length=max_length,
+                hf_tokenizer=hf_tokenizer,
+                llm_engine=self,
             )
+            for _ in range(num_samples)
+        ]
         return await asyncio.gather(*tasks)
 
 
