@@ -324,7 +324,7 @@ class SamplesGenerator:
         if exhausted:
             return [], prompts_consumed, exhausted
 
-        pending_refs = self._dispatch_prompts(prompts, labels, **generate_kwargs)
+        pending_refs = self._dispatch_prompts_to_vllm(prompts, labels, **generate_kwargs)
         prompts_consumed += len(prompts)
 
         accepted_experiences: List[Experience] = []
@@ -367,12 +367,12 @@ class SamplesGenerator:
                         return [], prompts_consumed, True
                     # Otherwise dispatch the new prompt to keep filling the queue.
                     else:
-                        new_refs = self._dispatch_prompts(new_prompts, new_labels, **generate_kwargs)
+                        new_refs = self._dispatch_prompts_to_vllm(new_prompts, new_labels, **generate_kwargs)
                         pending_refs.extend(new_refs)
 
         return accepted_experiences, prompts_consumed, exhausted
 
-    def _dispatch_prompts(self, prompts: List[str], labels: List[str], **generate_kwargs) -> List:
+    def _dispatch_prompts_to_vllm(self, prompts: List[str], labels: List[str], **generate_kwargs) -> List:
         """Send prompts to rollout executors and return Ray object refs."""
         sampling_params = SamplingParams(
             temperature=generate_kwargs.get("temperature", 1.0),

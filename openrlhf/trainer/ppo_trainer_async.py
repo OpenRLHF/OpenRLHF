@@ -15,39 +15,17 @@ logger = init_logger(__name__)
 
 
 @ray.remote(num_cpus=0)
-class SignalActor:
-    """Mutual exclusion gate between generation and weight updates."""
+class VLLMLock:
+    """Cross-actor mutex for vLLM critical section."""
 
     def __init__(self):
-        self._cond = asyncio.Condition()
-        self._generating = False
-        self._updating = False
+        self._lock = asyncio.Lock()
 
-    async def acquire_for_generation(self):
-        """Block until no update is active, then mark generation as active."""
-        async with self._cond:
-            while self._updating:
-                await self._cond.wait()
-            self._generating = True
+    async def acquire(self):
+        await self._lock.acquire()
 
-    async def release_for_generation(self):
-        """Mark generation as inactive and wake any waiting updates."""
-        async with self._cond:
-            self._generating = False
-            self._cond.notify_all()
-
-    async def acquire_for_update(self):
-        """Block until no generation is active, then mark update as active."""
-        async with self._cond:
-            while self._generating:
-                await self._cond.wait()
-            self._updating = True
-
-    async def release_for_update(self):
-        """Mark update as inactive and wake any waiting generators."""
-        async with self._cond:
-            self._updating = False
-            self._cond.notify_all()
+    async def release(self):
+        self._lock.release()
 
 
 @ray.remote
@@ -60,7 +38,7 @@ class GenerateSamplesActor:
         prompt_split="train",
         eval_split="test",
         *,
-        signal_actor,
+        vllm_lock,
         rollout_queue,
         rollout_slots,
         **generate_kwargs,
@@ -78,9 +56,10 @@ class GenerateSamplesActor:
             generate_kwargs=generate_kwargs,
         )
 
-        self.signal_actor = signal_actor
+        self.vllm_lock = vllm_lock
         self.rollout_queue = rollout_queue
-        # Acts like a counting semaphore for rollout_queue capacity (cross-actor safe).
+        # Token bucket: size == rollout_queue capacity.
+        # Generator MUST take a token BEFORE generating; trainer returns token AFTER consuming.
         self.rollout_slots = rollout_slots
 
     def get_max_steps(self):
@@ -89,39 +68,49 @@ class GenerateSamplesActor:
     def load_state_dict(self, state_dict):
         self.samples_generator.load_state_dict(state_dict)
 
-    def fit(self, episode, total_consumed_prompts):
+    def fit(self, episode: int, total_consumed_prompts: int):
         for episode in range(episode, self.args.num_episodes):
             dataset_length = len(self.samples_generator.prompts_dataloader)
             pbar = tqdm(
                 range(dataset_length),
                 desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
-                initial=total_consumed_prompts % dataset_length,
+                initial=total_consumed_prompts % max(dataset_length, 1),
+                disable=False,
             )
+
             while True:
-                # Backpressure: acquire a slot before generating.
+                # Backpressure: only generate if we have queue capacity (token available).
                 self.rollout_slots.get(block=True)
 
-                # Pause updates while we sample to keep outputs consistent.
-                ray.get(self.signal_actor.acquire_for_generation.remote())
+                # vLLM critical section: generation must not overlap with broadcast_to_vllm().
+                ray.get(self.vllm_lock.acquire.remote())
                 try:
-                    # Draw one mini-batch of prompts; stop when loader is exhausted.
                     rollout_samples, filter_pass_rate, prompts_consumed, is_exhausted = (
                         self.samples_generator.generate_samples()
                     )
                     total_consumed_prompts += prompts_consumed
                 finally:
-                    ray.get(self.signal_actor.release_for_generation.remote())
+                    ray.get(self.vllm_lock.release.remote())
+
+                produced = bool(rollout_samples)
+                if produced:
+                    client_states = {
+                        "episode": episode,
+                        "total_consumed_prompts": total_consumed_prompts,
+                        "data_loader_state_dict": self.samples_generator.state_dict(),
+                    }
+                    self.rollout_queue.put((rollout_samples, client_states, filter_pass_rate), block=True)
+                    if prompts_consumed:
+                        pbar.update(prompts_consumed)
+                else:
+                    # Nothing enqueued => trainer will never "consume" this slot,
+                    # so we must return the token here (prevents token leak / deadlock).
+                    self.rollout_slots.put(None, block=True)
+
                 if is_exhausted:
                     break
 
-                # Send the produced batch to the controller for training.
-                client_states = {
-                    "episode": episode,
-                    "total_consumed_prompts": total_consumed_prompts,
-                    "data_loader_state_dict": self.samples_generator.state_dict(),
-                }
-                self.rollout_queue.put((rollout_samples, client_states, filter_pass_rate), block=True)
-                pbar.update(prompts_consumed)
+            pbar.close()
 
         self.rollout_queue.put("done", block=True)
 
@@ -137,7 +126,8 @@ class TrainingActor(BasePPOTrainer):
         reward_model_group,
         reference_model_group,
         vllm_engines,
-        signal_actor,
+        *,
+        vllm_lock,
         rollout_queue,
         rollout_slots,
     ):
@@ -152,48 +142,45 @@ class TrainingActor(BasePPOTrainer):
             vllm_engines,
             tokenizer,
         )
-        self.signal_actor = signal_actor
+
+        self.vllm_lock = vllm_lock
         self.rollout_queue = rollout_queue
-        # Acts like a counting semaphore for rollout_queue capacity (cross-actor safe).
         self.rollout_slots = rollout_slots
 
-    def fit(self, global_step):
+    def fit(self, global_step: int):
         while True:
-            # Draw one mini-batch of prompts; stop when loader is exhausted.
             payload = self.rollout_queue.get(block=True)
             if payload == "done":
                 break
+
             rollout_samples, client_states, filter_pass_rate = payload
 
-            # Release a slot after batch is consumed to unblock generator.
+            # Batch consumed => free one token to allow generator to produce next batch.
             self.rollout_slots.put(None, block=True)
 
-            # Run PPO update on this batch and bump the global step counter.
             status, global_step = self.train_step(rollout_samples, global_step)
 
-            # Add generated samples to status dictionary
             if self.args.dynamic_filtering:
                 status["dynamic_filtering_pass_rate"] = filter_pass_rate
+
             log_status = {k: v for k, v in status.items() if k not in ["generated_samples"]}
             logger.info(f"✨ Global step {global_step}: {log_status}")
 
-            # logs/checkpoints
             client_states.update({"global_step": global_step})
             self.save_logs_and_checkpoints(global_step, status, client_states)
 
-        # Close trackers
         if self.wandb_logger:
             self.wandb_logger.close()
         if self.tensorboard_logger:
             self.tensorboard_logger.close()
 
     def broadcast_to_vllm(self):
-        ray.get(self.signal_actor.acquire_for_update.remote())
+        # vLLM critical section: must not overlap with generation.
+        ray.get(self.vllm_lock.acquire.remote())
         try:
-            # broadcast
             super().broadcast_to_vllm()
         finally:
-            ray.get(self.signal_actor.release_for_update.remote())
+            ray.get(self.vllm_lock.release.remote())
 
 
 @ray.remote
@@ -212,6 +199,7 @@ class PPOTrainerAsync:
         **generate_kwargs,
     ) -> None:
         args = strategy.args
+
         # get eval and save steps
         if args.eval_steps == -1:
             args.eval_steps = float("inf")  # do not evaluate
@@ -223,27 +211,28 @@ class PPOTrainerAsync:
             raise ValueError(f"async_queue_size must be positive, got {queue_size}")
         logger.info(f"queue_size={queue_size}")
 
-        # Token pool used as a counting semaphore for rollout_queue capacity.
+        # Token pool (counting semaphore) for queue capacity.
         self.rollout_slots = Queue(maxsize=queue_size)
         for _ in range(queue_size):
             self.rollout_slots.put(None, block=True)
 
         self.rollout_queue = Queue(maxsize=queue_size)
-        self.signal_actor = SignalActor.remote()
 
-        # sample generation
+        # Cross-actor mutex for vLLM critical section.
+        self.vllm_lock = VLLMLock.remote()
+
         self.generator_actor = GenerateSamplesActor.remote(
             pretrain=pretrain,
             strategy=strategy,
             vllm_engines=vllm_engines,
             prompt_split=prompt_split,
             eval_split=eval_split,
-            signal_actor=self.signal_actor,
+            vllm_lock=self.vllm_lock,
             rollout_queue=self.rollout_queue,
             rollout_slots=self.rollout_slots,
             **generate_kwargs,
         )
-        # train
+
         self.trainer_actor = TrainingActor.remote(
             pretrain=pretrain,
             strategy=strategy,
@@ -252,17 +241,18 @@ class PPOTrainerAsync:
             reward_model_group=reward_model_group,
             reference_model_group=reference_model_group,
             vllm_engines=vllm_engines,
-            signal_actor=self.signal_actor,
+            vllm_lock=self.vllm_lock,
             rollout_queue=self.rollout_queue,
             rollout_slots=self.rollout_slots,
         )
 
     def fit(self) -> None:
         checkpoint_states = ray.get(self.trainer_actor.init_checkpoint_states.remote())
+
         # Restore step and epoch
         start_episode = checkpoint_states["episode"]
         global_step = checkpoint_states["global_step"]
-        total_consumed_prompts = checkpoint_states["total_consumed_prompts"]
+        total_consumed_prompts = checkpoint_states.get("total_consumed_prompts", 0)
         # Keep vLLM weights and dataloader states in sync when resuming.
         if global_step > 0:
             ray.get(

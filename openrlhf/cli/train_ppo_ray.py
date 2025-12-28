@@ -67,7 +67,6 @@ def train(args):
             "processed_logprobs" if args.enable_vllm_is_correction else None,
             agent_func_path=args.agent_func_path,
             remote_rm_url=args.remote_rm_url,
-            remote_rm_batch_size=args.micro_rollout_batch_size,
         )
 
     actor_model = RayActorGroup(

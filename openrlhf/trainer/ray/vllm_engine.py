@@ -20,10 +20,18 @@ from openrlhf.utils.rollout import (
 from .utils import get_bundle_indices, ray_noset_visible_devices
 
 
-class BaseLLMRayActor:
-    """Shared setup for Ray actors backed by vLLM."""
+@ray.remote
+class LLMRayActor:
+    """Async vLLM-backed actor that exposes generation utilities."""
 
-    def __init__(self, *args, bundle_indices: list = None, **kwargs):
+    async def __init__(
+        self,
+        *args,
+        bundle_indices: list = None,
+        agent_func_path: Optional[str] = None,
+        remote_rm_url: Optional[str] = None,
+        **kwargs,
+    ):
         self._configure_device_env(
             backend=kwargs.get("distributed_executor_backend"),
             bundle_indices=bundle_indices,
@@ -32,6 +40,21 @@ class BaseLLMRayActor:
         self._configure_vllm_env(version, vllm, kwargs.pop("full_determinism", False))
 
         self.kwargs = kwargs
+
+        # Execution mode mapping:
+        # - multi-turn: agent loop drives tool/step interactions
+        # - single-turn-with-reward: reward model post-processes each query
+        # - single-turn: plain vLLM generation only
+        if agent_func_path:
+            self.executor = MultiTurnExecutor(agent_func_path=agent_func_path)
+        elif remote_rm_url:
+            self.executor = SingleTurnRewardedExecutor(remote_rm_url)
+        else:
+            self.executor = SingleTurnExecutor()
+
+        engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
+        self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
+        await self.llm.is_sleeping()
 
     def _configure_device_env(self, backend, bundle_indices, num_gpus):
         if backend == "ray":
@@ -70,37 +93,6 @@ class BaseLLMRayActor:
             os.environ["RAY_ADDRESS"] = global_worker.gcs_client.address
 
         os.environ["VLLM_USE_V1"] = "1"
-
-
-@ray.remote
-class LLMRayActor(BaseLLMRayActor):
-    """Async vLLM-backed actor that exposes generation utilities."""
-
-    async def __init__(
-        self,
-        *args,
-        bundle_indices: list = None,
-        agent_func_path: Optional[str] = None,
-        remote_rm_url: Optional[str] = None,
-        remote_rm_batch_size: Optional[int] = None,
-        **kwargs,
-    ):
-        super().__init__(*args, bundle_indices=bundle_indices, **kwargs)
-
-        # Execution mode mapping:
-        # - multi-turn: agent loop drives tool/step interactions
-        # - single-turn-with-reward: reward model post-processes each query
-        # - single-turn: plain vLLM generation only
-        if agent_func_path:
-            self.executor = MultiTurnExecutor(agent_func_path=agent_func_path)
-        elif remote_rm_url:
-            self.executor = SingleTurnRewardedExecutor(remote_rm_url, remote_rm_batch_size)
-        else:
-            self.executor = SingleTurnExecutor()
-
-        engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
-        self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
-        await self.llm.is_sleeping()
 
     async def init_process_group(
         self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray
@@ -189,7 +181,6 @@ def create_vllm_engines(
     logprobs_mode=None,
     agent_func_path: Optional[str] = None,
     remote_rm_url: Optional[str] = None,
-    remote_rm_batch_size: Optional[int] = None,
 ):
     """Spin up a set of vLLM Ray actors with consistent placement."""
     vllm_engines = []
@@ -239,7 +230,6 @@ def create_vllm_engines(
             {
                 "agent_func_path": agent_func_path,
                 "remote_rm_url": remote_rm_url,
-                "remote_rm_batch_size": remote_rm_batch_size,
             }
         )
 

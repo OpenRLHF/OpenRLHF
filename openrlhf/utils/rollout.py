@@ -1,8 +1,9 @@
 """Rollout executors for single-turn, single-turn-with-reward, and multi-turn paths."""
 
+# TODO
+
 import asyncio
 from copy import deepcopy
-from typing import Optional
 
 import aiohttp
 
@@ -54,10 +55,9 @@ class SingleTurnExecutor:
 class SingleTurnRewardedExecutor(SingleTurnExecutor):
     """Single-turn agent executor with reward post-processing."""
 
-    def __init__(self, remote_rm_url, remote_rm_batch_size: Optional[int] = None):
+    def __init__(self, remote_rm_url):
         reward_endpoints = [remote_rm_url] if isinstance(remote_rm_url, str) else remote_rm_url
         self.reward_endpoints = reward_endpoints or []
-        self.reward_batch_size = remote_rm_batch_size or 1
 
         # Optional user-provided reward_func from a Python file.
         self.reward_func = None
@@ -101,7 +101,7 @@ class SingleTurnRewardedExecutor(SingleTurnExecutor):
 
     async def _fetch_rewards_via_func(self, queries_list, prompts_list, labels_list):
         """Compute rewards via user-provided Python function (thread offload)."""
-        batch_size = self.reward_batch_size
+        batch_size = 1
         num_chunks = (len(queries_list) + batch_size - 1) // batch_size
 
         tasks = []
