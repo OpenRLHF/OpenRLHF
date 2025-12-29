@@ -267,15 +267,11 @@ class FSDPStrategy(ABC):
         if self.max_norm and self.max_norm > 0:
             devices = {p.device.type for p in unwrapped.parameters() if p.grad is not None}
             if "cpu" in devices:
-                # CPU offload scenario: use CPU-compatible gradient clipping
-                # Collect all parameters with gradients and perform clipping on CPU
-                params_with_grads = [p for p in unwrapped.parameters() if p.grad is not None]
-                if params_with_grads:
-                    torch.nn.utils.clip_grad_norm_(params_with_grads, self.max_norm)
-            elif hasattr(unwrapped, "clip_grad_norm_"):
-                unwrapped.clip_grad_norm_(self.max_norm)
+                # Avoid DTensor all_reduce on CPU backends; skip clipping when offloaded.
+                self.print("Warning: Gradient clipping is skipped when using FSDP2 CPU offload.")
             else:
-                torch.nn.utils.clip_grad_norm_(unwrapped.parameters(), self.max_norm)
+                # DTensor-aware clipping to handle mixed DeviceMesh grads (e.g. TP + DP-only shards).
+                self._clip_grad_norm_dtensor_safe(unwrapped, float(self.max_norm))
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         if scheduler is not None:
