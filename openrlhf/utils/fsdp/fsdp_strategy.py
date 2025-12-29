@@ -267,8 +267,11 @@ class FSDPStrategy(ABC):
         if self.max_norm and self.max_norm > 0:
             devices = {p.device.type for p in unwrapped.parameters() if p.grad is not None}
             if "cpu" in devices:
-                # Avoid DTensor all_reduce on CPU backends; skip clipping when offloaded.
-                self.print("Warning: Gradient clipping is skipped when using FSDP2 CPU offload.")
+                # CPU offload scenario: use CPU-compatible gradient clipping
+                # Collect all parameters with gradients and perform clipping on CPU
+                params_with_grads = [p for p in unwrapped.parameters() if p.grad is not None]
+                if params_with_grads:
+                    torch.nn.utils.clip_grad_norm_(params_with_grads, self.max_norm)
             elif hasattr(unwrapped, "clip_grad_norm_"):
                 unwrapped.clip_grad_norm_(self.max_norm)
             else:
@@ -425,10 +428,21 @@ class FSDPStrategy(ABC):
     def _maybe_fully_shard_children(self, module: nn.Module) -> None:
         layer_cls_to_wrap = getattr(module, "_no_split_modules", None)
         fsdp_mesh = self._get_fsdp_mesh()
+        # Track sharded modules to avoid double-sharding
+        sharded_module_ids: set = set()
+
+        def _mark_as_sharded(mod: nn.Module) -> None:
+            """Mark module and all its submodules as sharded."""
+            sharded_module_ids.add(id(mod))
+            for submod in mod.modules():
+                sharded_module_ids.add(id(submod))
 
         if layer_cls_to_wrap:
             # Policy-based wrapping for HF models
             for name, child in module.named_modules():
+                # Skip already sharded modules
+                if id(child) in sharded_module_ids or isinstance(child, FSDPModule):
+                    continue
                 if child.__class__.__name__ in layer_cls_to_wrap:
                     fully_shard(
                         child,
@@ -437,6 +451,7 @@ class FSDPStrategy(ABC):
                         offload_policy=self._offload_policy,
                         mp_policy=self._mp_policy,
                     )
+                    _mark_as_sharded(child)
                 # Also wrap Embeddings if not tied (optional, but good practice)
                 elif (
                     isinstance(child, nn.Embedding)
@@ -450,14 +465,14 @@ class FSDPStrategy(ABC):
                         offload_policy=self._offload_policy,
                         mp_policy=self._mp_policy,
                     )
+                    _mark_as_sharded(child)
         else:
             # Fallback: shallow wrapping for non-HF models
             for name, child in module.named_children():
                 if isinstance(child, FSDPModule):
                     continue
                 if isinstance(child, nn.ModuleList):
-                    new_list = []
-                    changed = False
+                    # fully_shard is an in-place operation, no need to recreate ModuleList
                     for sub in child:
                         if isinstance(sub, nn.Module) and not isinstance(sub, FSDPModule):
                             fully_shard(
@@ -467,12 +482,6 @@ class FSDPStrategy(ABC):
                                 offload_policy=self._offload_policy,
                                 mp_policy=self._mp_policy,
                             )
-                            new_list.append(sub)
-                            changed = True
-                        else:
-                            new_list.append(sub)
-                    if changed:
-                        setattr(module, name, nn.ModuleList(new_list))
                     continue
                 if not any(p.requires_grad for p in child.parameters(recurse=True)):
                     continue
