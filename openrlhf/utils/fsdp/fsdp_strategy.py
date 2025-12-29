@@ -2,7 +2,7 @@ import os
 from abc import ABC
 from collections import defaultdict
 from datetime import timedelta
-from typing import List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
@@ -113,40 +113,18 @@ class FSDP2Strategy(ABC):
         self.dp_size = self.world_size // duplicate_factor
 
         # Build device mesh. Always create mesh even for pure DP mode.
-        # HSDP splits dp_size into (ddp_size, fsdp_size) when fsdp2_hsdp_size is specified.
-        hsdp_size = self.fsdp2_hsdp_size
-        use_hsdp = 1 < hsdp_size < self.dp_size and self.dp_size % hsdp_size == 0
+        self._create_device_mesh(duplicate_factor)
 
-        if duplicate_factor > 1:
-            # With SP/TP: create mesh including dp, sp, tp dimensions
-            if use_hsdp:
-                ddp_size = self.dp_size // hsdp_size
-                self.fsdp_device_mesh = init_device_mesh(
-                    "cuda",
-                    (ddp_size, hsdp_size, max(1, self.ring_attn_size), max(1, self.ds_tensor_parallel_size)),
-                    mesh_dim_names=("ddp", "fsdp", "sp", "tp"),
-                )
-            else:
-                self.fsdp_device_mesh = init_device_mesh(
-                    "cuda",
-                    (self.dp_size, max(1, self.ring_attn_size), max(1, self.ds_tensor_parallel_size)),
-                    mesh_dim_names=("fsdp", "sp", "tp"),
-                )
-        else:
-            # Pure DP mode: create simple 1D or 2D mesh
-            if use_hsdp:
-                ddp_size = self.dp_size // hsdp_size
-                self.fsdp_device_mesh = init_device_mesh(
-                    "cuda",
-                    (ddp_size, hsdp_size),
-                    mesh_dim_names=("ddp", "fsdp"),
-                )
-            else:
-                self.fsdp_device_mesh = init_device_mesh(
-                    "cuda",
-                    (self.dp_size,),
-                    mesh_dim_names=("fsdp",),
-                )
+        # For HSDP + ring attention, flatten (ddp, sp) into a single replicate dim.
+        # This lets FSDP2 reduce gradients across SP ranks while keeping parameter sharding on "fsdp".
+        if (
+            self.ring_attn_size > 1
+            and self.fsdp_device_mesh is not None
+            and getattr(self.fsdp_device_mesh, "mesh_dim_names", None) is not None
+            and "ddp" in self.fsdp_device_mesh.mesh_dim_names
+            and "sp" in self.fsdp_device_mesh.mesh_dim_names
+        ):
+            self.fsdp_device_mesh["ddp", "sp"]._flatten(mesh_dim_name="ddp_sp")
 
         # Ring attention group setup (mirrors DeepSpeedStrategy.setup_ring_attn()).
         if self.ring_attn_size > 1:
@@ -181,6 +159,43 @@ class FSDP2Strategy(ABC):
             f"accumulated_gradient={self.accumulated_gradient}, fsdp2_offload={self.fsdp2_offload}"
         )
 
+    def _create_device_mesh(self, duplicate_factor: int) -> None:
+        """Create FSDP device mesh.
+        
+        Simplified version: extract mesh building logic to reduce code duplication.
+        """
+        # Calculate HSDP configuration
+        hsdp_size = self.fsdp2_hsdp_size
+        use_hsdp = 1 < hsdp_size < self.dp_size and self.dp_size % hsdp_size == 0
+
+        # Build mesh dimensions
+        mesh_dims = []
+        mesh_dim_names = []
+
+        if use_hsdp:
+            ddp_size = self.dp_size // hsdp_size
+            mesh_dims.extend([ddp_size, hsdp_size])
+            mesh_dim_names.extend(["ddp", "fsdp"])
+        else:
+            mesh_dims.append(self.dp_size)
+            mesh_dim_names.append("fsdp")
+
+        # Add SP/TP dimensions if enabled
+        if duplicate_factor > 1:
+            if self.ring_attn_size > 1:
+                mesh_dims.append(self.ring_attn_size)
+                mesh_dim_names.append("sp")
+            if self.ds_tensor_parallel_size > 1:
+                mesh_dims.append(self.ds_tensor_parallel_size)
+                mesh_dim_names.append("tp")
+
+        # Create device mesh
+        self.fsdp_device_mesh = init_device_mesh(
+            "cuda",
+            tuple(mesh_dims),
+            mesh_dim_names=tuple(mesh_dim_names),
+        )
+
     @property
     def ring_attn_group(self):
         return get_ring_attn_group()
@@ -200,84 +215,62 @@ class FSDP2Strategy(ABC):
     def _clip_grad_norm_dtensor_safe(self, model: nn.Module, max_norm: float, eps: float = 1e-6) -> float:
         """DTensor-safe global grad clipping.
 
+        Simplified version: use PyTorch built-in functions, only handle DTensor device conversion.
         torch.nn.utils.clip_grad_norm_ may fail when parameters contain DTensor
-        grads backed by different DeviceMesh objects (e.g., TP-sharded weights
-        vs DP-only sharded weights). This implementation avoids stacking DTensor
-        norms by reducing a single scalar across the process group.
+        grads backed by different DeviceMesh objects. This implementation converts
+        DTensor grads to local tensors before clipping.
         """
         if max_norm <= 0:
             return 0.0
         if not dist.is_initialized():
             return float(torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm))
 
-        # Prefer CUDA scalars to avoid slow CPU collectives.
+        # Collect all gradients
+        grads = []
         device = torch.device("cuda", torch.cuda.current_device())
-        total_norm_sq = torch.zeros((), device=device, dtype=torch.float32)
 
-        # Replication accounting across OpenRLHF parallel dims.
-        dp_size = int(getattr(self, "dp_size", dist.get_world_size()) or 1)
-        sp_size = int(getattr(self, "ring_attn_size", 1) or 1)
-        tp_size = int(getattr(self, "ds_tensor_parallel_size", 1) or 1)
-        full_dim_sizes = {"dp": dp_size, "sp": sp_size, "tp": tp_size}
-
-        # Import DTensor/Replicate lazily to keep torch<2.5 compatibility paths intact.
         try:
-            from torch.distributed.tensor import DTensor, Replicate  # type: ignore
+            from torch.distributed.tensor import DTensor
         except Exception:
-            DTensor = None  # type: ignore
-            Replicate = None  # type: ignore
+            DTensor = None
 
-        with torch.no_grad():
+        for param in model.parameters():
+            grad = param.grad
+            if grad is None:
+                continue
+
+            # Handle DTensor: convert to local tensor
+            if DTensor is not None and isinstance(grad, DTensor):
+                local_grad = grad.to_local()
+            else:
+                local_grad = grad
+
+            # Ensure gradient is on the correct device
+            if local_grad.device.type != "cuda":
+                local_grad = local_grad.to(device, non_blocking=True)
+
+            grads.append(local_grad)
+
+        if not grads:
+            return 0.0
+
+        # Use PyTorch built-in gradient clipping
+        from torch.nn.utils.clip_grad import _get_total_norm, _clip_grads_with_norm_
+
+        total_norm = _get_total_norm(grads, norm_type=2.0, error_if_nonfinite=False)
+        total_norm = total_norm.to(device, non_blocking=True)
+
+        # Apply clipping
+        clip_coef = float(max_norm) / (float(total_norm) + float(eps))
+        if clip_coef < 1.0:
             for param in model.parameters():
-                grad = param.grad
-                if grad is None:
-                    continue
-
-                replication_factor = 1
-                if DTensor is not None and isinstance(grad, DTensor):
-                    # Convert to local shard for norm accumulation.
-                    local_grad = grad.to_local()
-
-                    # Dimensions absent from this DTensor mesh are implicitly replicated.
-                    # Only apply this when mesh_dim_names are available to avoid
-                    # mis-scaling on unnamed meshes.
-                    mesh_dim_names = tuple(getattr(grad.device_mesh, "mesh_dim_names", ()) or ())
-                    if mesh_dim_names:
-                        for dim_name, dim_size in full_dim_sizes.items():
-                            if dim_name not in mesh_dim_names:
-                                replication_factor *= int(dim_size)
-
-                    # Dimensions present in the DTensor mesh may still be replicated via placements.
-                    if Replicate is not None:
-                        for mesh_dim, placement in enumerate(grad.placements):
-                            if isinstance(placement, Replicate):
-                                replication_factor *= int(grad.device_mesh.size(mesh_dim))
-                else:
-                    local_grad = grad
-
-                if local_grad.device.type != "cuda":
-                    local_grad = local_grad.to(device, non_blocking=True)
-                local_sum_sq = local_grad.float().pow(2).sum()
-                if replication_factor > 1:
-                    local_sum_sq = local_sum_sq / float(replication_factor)
-                total_norm_sq.add_(local_sum_sq)
-
-            # Sum across all ranks (covers DP/FSDP shards and TP/ring partitions).
-            dist.all_reduce(total_norm_sq, op=dist.ReduceOp.SUM)
-
-            total_norm = float(torch.sqrt(total_norm_sq).item())
-            clip_coef = float(max_norm) / (total_norm + float(eps))
-            if clip_coef < 1.0:
-                scale = torch.tensor(clip_coef, device=device, dtype=torch.float32)
-                for param in model.parameters():
-                    grad = param.grad
-                    if grad is None:
-                        continue
-                    if DTensor is not None and isinstance(grad, DTensor):
-                        param.grad = grad * scale
+                if param.grad is not None:
+                    if DTensor is not None and isinstance(param.grad, DTensor):
+                        param.grad = param.grad * clip_coef
                     else:
-                        grad.mul_(scale)
-            return total_norm
+                        param.grad.mul_(clip_coef)
+
+        return float(total_norm.item())
 
     def backward(self, loss: torch.Tensor, model: nn.Module, optimizer: optim.Optimizer, **kwargs) -> None:
         # Match DeepSpeed semantics: average gradients over accumulation steps.
@@ -376,6 +369,11 @@ class FSDP2Strategy(ABC):
         """Wrap model with FSDP2 fully_shard."""
         try:
             fsdp_mesh = self._get_fsdp_mesh()
+            if fsdp_mesh is None:
+                raise RuntimeError(
+                    "[fsdp2] Device mesh is not initialized. Make sure `strategy.setup_distributed()` "
+                    "is called before `strategy.prepare()`."
+                )
             self._maybe_fully_shard_children(model)
             if not isinstance(model, FSDPModule):
                 model = fully_shard(
@@ -392,28 +390,58 @@ class FSDP2Strategy(ABC):
                 "Please double-check that the model supports composable FSDP."
             ) from exc
 
+    def _get_mesh_info(self) -> Tuple[Optional[tuple], Optional[Any]]:
+        """Get mesh information.
+        
+        Returns (mesh_dim_names, fsdp_device_mesh) tuple.
+        """
+        if not hasattr(self, "fsdp_device_mesh") or self.fsdp_device_mesh is None:
+            return None, None
+        try:
+            mesh_dim_names = self.fsdp_device_mesh.mesh_dim_names
+            return mesh_dim_names, self.fsdp_device_mesh
+        except Exception:
+            return None, None
+
     def _get_fsdp_mesh(self):
         """Return the sharding mesh for FSDP2.
 
         Returns the appropriate mesh dimension for FSDP based on configuration:
         - Pure FSDP: returns mesh["fsdp"] (1D)
-        - HSDP: returns mesh["fsdp"] (FSDP shards within ddp groups)
-        - With SP/TP: returns mesh["fsdp"] slice
+        - Ring attention: returns an HSDP-style (sp, fsdp) mesh so gradients reduce across SP
+        - HSDP: returns mesh["ddp", "fsdp"] (replicate, shard)
+        - HSDP + ring attention: returns (ddp_sp, fsdp) where ddp_sp flattens (ddp, sp)
         """
         if not hasattr(self, "fsdp_device_mesh") or self.fsdp_device_mesh is None:
             return None
-        try:
-            mesh_dim_names = self.fsdp_device_mesh.mesh_dim_names
-            # HSDP: returns 2D mesh (ddp, fsdp) -> (Replicate, Shard)
-            if "ddp" in mesh_dim_names and "fsdp" in mesh_dim_names:
-                return self.fsdp_device_mesh["ddp", "fsdp"]
-            # Pure FSDP or FSDP+TP/SP: returns 1D mesh
-            return self.fsdp_device_mesh["fsdp"]
-        except Exception:
-            return None
+
+        mesh_dim_names = getattr(self.fsdp_device_mesh, "mesh_dim_names", None)
+        if not mesh_dim_names:
+            raise RuntimeError("[fsdp2] DeviceMesh must have named dims to build FSDP/TP submeshes.")
+        if "fsdp" not in mesh_dim_names:
+            raise RuntimeError(f"[fsdp2] DeviceMesh is missing required 'fsdp' dim (got {mesh_dim_names}).")
+
+        has_sp = self.ring_attn_size > 1 and "sp" in mesh_dim_names
+
+        # HSDP: 2D mesh (Replicate, Shard)
+        if "ddp" in mesh_dim_names:
+            if has_sp:
+                try:
+                    return self.fsdp_device_mesh["ddp_sp", "fsdp"]
+                except Exception:
+                    return self.fsdp_device_mesh["ddp", "fsdp"]
+            return self.fsdp_device_mesh["ddp", "fsdp"]
+
+        # Pure FSDP: 1D mesh (Shard), or treat SP as a replicate dim for gradient reduction.
+        if has_sp:
+            return self.fsdp_device_mesh["sp", "fsdp"]
+        return self.fsdp_device_mesh["fsdp"]
 
     def _get_dp_group(self):
         """Return the process group for data-parallel communication.
+
+        Always excludes SP/TP dimensions: ranks that only differ in ring-attn/TP should
+        process the same data and share the same DP rank for sampling/metrics.
 
         For HSDP, returns the combined group spanning both ddp and fsdp dimensions.
         For pure FSDP, returns the fsdp group.
@@ -421,17 +449,16 @@ class FSDP2Strategy(ABC):
         """
         if not hasattr(self, "fsdp_device_mesh") or self.fsdp_device_mesh is None:
             return None
-        try:
-            mesh_dim_names = self.fsdp_device_mesh.mesh_dim_names
-            # HSDP: combine ddp and fsdp dimensions
-            if "ddp" in mesh_dim_names and "fsdp" in mesh_dim_names:
-                return self.fsdp_device_mesh["ddp", "fsdp"].get_group()
-            # Pure FSDP: only fsdp dimension
-            elif "fsdp" in mesh_dim_names:
-                return self.fsdp_device_mesh["fsdp"].get_group()
-        except Exception:
-            pass
-        return None
+
+        mesh_dim_names = getattr(self.fsdp_device_mesh, "mesh_dim_names", None)
+        if not mesh_dim_names:
+            raise RuntimeError("[fsdp2] DeviceMesh must have named dims to build DP groups.")
+        if "fsdp" not in mesh_dim_names:
+            raise RuntimeError(f"[fsdp2] DeviceMesh is missing required 'fsdp' dim (got {mesh_dim_names}).")
+
+        if "ddp" in mesh_dim_names:
+            return self.fsdp_device_mesh["ddp", "fsdp"].get_group()
+        return self.fsdp_device_mesh["fsdp"].get_group()
 
     @staticmethod
     def _coerce_bool(value, default=False):
@@ -484,98 +511,62 @@ class FSDP2Strategy(ABC):
     def _maybe_fully_shard_children(self, module: nn.Module) -> None:
         """Apply FSDP2 fully_shard to transformer layers using a two-phase approach.
 
-        Two-phase sharding strategy (inspired by verl/slime/prime-rl implementations):
+        Simplified version: reference verl/slime implementations, removed complex tail modules optimization.
+        Two-phase sharding strategy:
         1. Phase 1: Collect all modules that need sharding into a list
         2. Phase 2: Iterate through the list and apply sharding
 
         This approach avoids potential issues from modifying module structure during
-        named_modules() traversal. Additionally, lm_head and norm layers are configured
-        with reshard_after_forward=False to reduce tail communication overhead.
+        named_modules() traversal.
         """
         layer_cls_to_wrap = getattr(module, "_no_split_modules", None)
         fsdp_mesh = self._get_fsdp_mesh()
+        if fsdp_mesh is None:
+            raise RuntimeError(
+                "[fsdp2] Device mesh is not initialized. Make sure `strategy.setup_distributed()` "
+                "is called before `strategy.prepare()`."
+            )
 
-        if layer_cls_to_wrap:
-            # Phase 1: Collect modules to shard (transformer layers and untied Embeddings)
-            modules_to_shard = []
-            for name, child in module.named_modules():
-                # Skip already sharded modules
+        if not layer_cls_to_wrap:
+            # Fallback: Simple wrapping for non-HF models
+            for child in module.children():
                 if isinstance(child, FSDPModule):
                     continue
-                # Transformer layers
-                if child.__class__.__name__ in layer_cls_to_wrap:
-                    modules_to_shard.append((child, True))  # (module, use_default_reshard)
-                # Untied Embedding layers
-                elif (
-                    isinstance(child, nn.Embedding)
-                    and hasattr(module, "config")
-                    and not module.config.tie_word_embeddings
-                ):
-                    modules_to_shard.append((child, True))
-
-            # Phase 2: Apply sharding to collected modules
-            for child, use_default_reshard in modules_to_shard:
-                if isinstance(child, FSDPModule):
-                    continue
-                fully_shard(
-                    child,
-                    mesh=fsdp_mesh,
-                    reshard_after_forward=self.fsdp2_reshard_after_forward if use_default_reshard else False,
-                    offload_policy=self._offload_policy,
-                    mp_policy=self._mp_policy,
-                )
-
-            # Optimization: Set reshard_after_forward=False for lm_head and norm layers
-            # These layers are used at the end of forward pass, no need to reshard after forward
-            # This reduces tail communication overhead
-            # Reference: prime_rl/trainer/model.py:153-158
-            if hasattr(module, "config") and not module.config.tie_word_embeddings:
-                tail_modules = []
-                # Collect lm_head
-                if hasattr(module, "lm_head") and not isinstance(module.lm_head, FSDPModule):
-                    tail_modules.append(module.lm_head)
-                # Collect final norm layer (typically model.norm or model.final_layernorm)
-                inner_model = getattr(module, "model", None)
-                if inner_model is not None:
-                    for norm_name in ["norm", "final_layernorm", "ln_f"]:
-                        norm_layer = getattr(inner_model, norm_name, None)
-                        if norm_layer is not None and not isinstance(norm_layer, FSDPModule):
-                            tail_modules.append(norm_layer)
-                            break
-
-                # Apply reshard_after_forward=False optimization to tail modules
-                # Use list form to shard multiple modules as a single FSDP unit (like prime-rl)
-                if tail_modules:
+                if any(p.requires_grad for p in child.parameters(recurse=True)):
                     fully_shard(
-                        tail_modules,  # Pass as list to combine into one FSDP unit
+                        child,
                         mesh=fsdp_mesh,
-                        reshard_after_forward=False,  # Key optimization: reduce tail communication
+                        reshard_after_forward=self.fsdp2_reshard_after_forward,
                         offload_policy=self._offload_policy,
                         mp_policy=self._mp_policy,
                     )
-        else:
-            # Fallback: Shallow wrapping for non-HF models
-            # Collect modules first to avoid modifying structure during traversal
-            children_to_shard = []
-            for name, child in module.named_children():
-                if isinstance(child, FSDPModule):
-                    continue
-                if isinstance(child, nn.ModuleList):
-                    for sub in child:
-                        if isinstance(sub, nn.Module) and not isinstance(sub, FSDPModule):
-                            children_to_shard.append(sub)
-                elif any(p.requires_grad for p in child.parameters(recurse=True)):
-                    children_to_shard.append(child)
+            return
 
-            # Apply sharding to collected modules
-            for child in children_to_shard:
-                fully_shard(
-                    child,
-                    mesh=fsdp_mesh,
-                    reshard_after_forward=self.fsdp2_reshard_after_forward,
-                    offload_policy=self._offload_policy,
-                    mp_policy=self._mp_policy,
-                )
+        # Phase 1: Collect modules to shard (transformer layers and untied Embeddings)
+        modules_to_shard = []
+        for name, child in module.named_modules():
+            if isinstance(child, FSDPModule):
+                continue
+            # Transformer layers
+            if child.__class__.__name__ in layer_cls_to_wrap:
+                modules_to_shard.append(child)
+            # Untied Embedding layers
+            elif (
+                isinstance(child, nn.Embedding)
+                and hasattr(module, "config")
+                and not module.config.tie_word_embeddings
+            ):
+                modules_to_shard.append(child)
+
+        # Phase 2: Apply sharding to collected modules
+        for child in modules_to_shard:
+            fully_shard(
+                child,
+                mesh=fsdp_mesh,
+                reshard_after_forward=self.fsdp2_reshard_after_forward,
+                offload_policy=self._offload_policy,
+                mp_policy=self._mp_policy,
+            )
 
     def prepare(self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False):
         ret: List[ModelOrModelOptimPair] = []
