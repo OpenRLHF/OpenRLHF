@@ -9,9 +9,7 @@ def apply_lora(model_name_or_path, lora_path, output_path, is_rm, precision):
     print(f"Loading the base model from {model_name_or_path}")
     model_cls = AutoModelForCausalLM if not is_rm else AutoModelForSequenceClassification
     torch_dtype = torch.bfloat16 if precision == "bf16" else "auto"
-    base = model_cls.from_pretrained(
-        model_name_or_path, torch_dtype=torch_dtype, low_cpu_mem_usage=True
-    )
+    base = model_cls.from_pretrained(model_name_or_path, torch_dtype=torch_dtype, low_cpu_mem_usage=True)
     base_tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
 
     print(f"Loading the LoRA adapter from {lora_path}")

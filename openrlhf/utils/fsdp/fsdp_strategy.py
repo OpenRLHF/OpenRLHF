@@ -21,8 +21,8 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import enable_full_determinism, set_seed
 
 from openrlhf.models import Actor
-from openrlhf.utils import convert_to_dtype
 from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
+from openrlhf.utils import convert_to_dtype
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 ModelOptimPair = Tuple[nn.Module, Optimizer]
@@ -161,7 +161,7 @@ class FSDP2Strategy(ABC):
 
     def _create_device_mesh(self, duplicate_factor: int) -> None:
         """Create FSDP device mesh.
-        
+
         Simplified version: extract mesh building logic to reduce code duplication.
         """
         # Calculate HSDP configuration
@@ -255,7 +255,7 @@ class FSDP2Strategy(ABC):
             return 0.0
 
         # Use PyTorch built-in gradient clipping
-        from torch.nn.utils.clip_grad import _get_total_norm, _clip_grads_with_norm_
+        from torch.nn.utils.clip_grad import _get_total_norm
 
         total_norm = _get_total_norm(grads, norm_type=2.0, error_if_nonfinite=False)
         total_norm = total_norm.to(device, non_blocking=True)
@@ -392,7 +392,7 @@ class FSDP2Strategy(ABC):
 
     def _get_mesh_info(self) -> Tuple[Optional[tuple], Optional[Any]]:
         """Get mesh information.
-        
+
         Returns (mesh_dim_names, fsdp_device_mesh) tuple.
         """
         if not hasattr(self, "fsdp_device_mesh") or self.fsdp_device_mesh is None:
@@ -552,9 +552,7 @@ class FSDP2Strategy(ABC):
                 modules_to_shard.append(child)
             # Untied Embedding layers
             elif (
-                isinstance(child, nn.Embedding)
-                and hasattr(module, "config")
-                and not module.config.tie_word_embeddings
+                isinstance(child, nn.Embedding) and hasattr(module, "config") and not module.config.tie_word_embeddings
             ):
                 modules_to_shard.append(child)
 

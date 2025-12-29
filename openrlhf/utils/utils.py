@@ -8,6 +8,7 @@ from transformers import AutoTokenizer
 
 _PRECISION_TO_DTYPE = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}
 
+
 def convert_to_dtype(precision: str) -> torch.dtype:
     try:
         return _PRECISION_TO_DTYPE[precision]
