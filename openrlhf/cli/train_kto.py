@@ -34,7 +34,7 @@ def train(args):
     model = Actor(
         args.pretrain,
         attn_implementation=args.attn_implementation,
-        bf16=args.bf16,
+        precision=args.precision,
         load_in_4bit=args.load_in_4bit,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
@@ -53,7 +53,7 @@ def train(args):
     ref_model = Actor(
         args.pretrain,
         attn_implementation=args.attn_implementation,
-        bf16=args.bf16,
+        precision=args.precision,
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
         **tp_kwargs,
@@ -210,7 +210,13 @@ if __name__ == "__main__":
         default=True,
         help="Control fully_shard reshard_after_forward flag",
     )
-    parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
+    parser.add_argument(
+        "--precision",
+        type=str,
+        default="bf16",
+        choices=["bf16", "fp16", "fp32"],
+        help="Model precision",
+    )
     parser.add_argument("--ref_offload", action="store_true", default=False)
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")

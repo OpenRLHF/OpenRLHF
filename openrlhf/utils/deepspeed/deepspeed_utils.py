@@ -8,7 +8,7 @@ def get_train_ds_config(
     offload,
     adam_offload=True,
     stage=2,
-    param_dtype="bf16",
+    precision="bf16",
     max_norm=1.0,
     zpg=8,
     grad_accum_dtype=None,
@@ -46,10 +46,10 @@ def get_train_ds_config(
         "steps_per_print": 100,
         "zero_optimization": zero_opt_dict,
         "bf16": {
-            "enabled": param_dtype == "bf16",
+            "enabled": precision == "bf16",
         },
         "fp16": {
-            "enabled": param_dtype == "fp16",
+            "enabled": precision == "fp16",
         },
         "gradient_clipping": max_norm,
         "prescale_gradients": False,
@@ -70,7 +70,7 @@ def get_train_ds_config(
 def get_eval_ds_config(
     offload,
     stage=0,
-    param_dtype="bf16",
+    precision="bf16",
     deepcompile=False,
     tensor_parallel_size=1,
 ):
@@ -93,10 +93,10 @@ def get_eval_ds_config(
         "steps_per_print": 100,
         "zero_optimization": zero_opt_dict,
         "bf16": {
-            "enabled": param_dtype == "bf16",
+            "enabled": precision == "bf16",
         },
         "fp16": {
-            "enabled": param_dtype == "fp16",
+            "enabled": precision == "fp16",
         },
         "gradient_clipping": 1.0,
         "prescale_gradients": False,

@@ -98,7 +98,7 @@ def batch_generate(args):
     model = Actor(
         args.pretrain,
         attn_implementation=args.attn_implementation,
-        bf16=args.bf16,
+        precision=args.precision,
     )
 
     # configure tokenizer
@@ -210,7 +210,7 @@ def batch_rm_inference(args):
         "reward",
         normalize_reward=True,
         attn_implementation=args.attn_implementation,
-        bf16=args.bf16,
+        precision=args.precision,
         value_head_prefix=args.value_head_prefix,
     )
 
@@ -291,7 +291,13 @@ if __name__ == "__main__":
     )
     parser.add_argument("--zero_stage", type=int, default=0, help="DeepSpeed ZeRO Stage")
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for distributed launch")
-    parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
+    parser.add_argument(
+        "--precision",
+        type=str,
+        default="bf16",
+        choices=["bf16", "fp16", "fp32"],
+        help="Model precision",
+    )
     parser.add_argument(
         "--dist_backend", type=str, default="deepspeed", choices=["deepspeed", "fsdp2"], help="Distributed backend"
     )

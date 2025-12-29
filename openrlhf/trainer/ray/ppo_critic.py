@@ -164,7 +164,6 @@ class CriticPPOTrainer(ABC):
 class CriticModelActor(BaseModelActor):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps):
         args = strategy.args
-        self.disable_ds_ckpt = args.disable_ds_ckpt
 
         self._setup_distributed(strategy)
         tp_kwargs = {}
@@ -185,7 +184,7 @@ class CriticModelActor(BaseModelActor):
             "critic",
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
-            param_dtype=strategy.args.param_dtype,  # default: bf16
+            precision=strategy.args.precision,
             load_in_4bit=strategy.args.load_in_4bit,
             lora_rank=strategy.args.lora_rank,
             lora_alpha=strategy.args.lora_alpha,
@@ -317,16 +316,15 @@ class CriticModelActor(BaseModelActor):
 
     def save_checkpoint(self, tag):
         args = self.strategy.args
-        if not self.disable_ds_ckpt:
-            self.strategy.save_ckpt(
-                self.critic,
-                os.path.join(args.ckpt_path, "_critic"),
-                tag,
-                args.max_ckpt_num,
-                args.max_ckpt_mem,
-                optimizer=self.critic_optim,
-                scheduler=self.critic_scheduler,
-            )
+        self.strategy.save_ckpt(
+            self.critic,
+            os.path.join(args.ckpt_path, "_critic"),
+            tag,
+            args.max_ckpt_num,
+            args.max_ckpt_mem,
+            optimizer=self.critic_optim,
+            scheduler=self.critic_scheduler,
+        )
 
     def reload_states(self):
         if hasattr(self.strategy, "reload_states"):

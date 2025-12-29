@@ -77,7 +77,6 @@ class ActorPPOTrainer(ABC):
             vllm_is_truncated_threshold=(
                 self.args.vllm_is_truncated_threshold if self.args.enable_vllm_is_correction else None
             ),
-            use_icepop=self.args.use_icepop,
         )
 
         # Mixtral 8x7b
@@ -300,7 +299,7 @@ class ActorPPOTrainer(ABC):
                 status[k] = v.float().mean().item()
         return status
 
-    def broadcast_to_vllm(self):
+    def _broadcast_to_vllm(self):
         use_prefix_cache = getattr(self.strategy.args, "enable_prefix_caching", False)
         cache_reset_refs = []
         if use_prefix_cache and torch.distributed.get_rank() == 0:
@@ -481,7 +480,7 @@ class PolicyModelActor(BaseModelActor):
         actor = Actor(
             pretrain,
             attn_implementation=strategy.args.attn_implementation,
-            param_dtype=strategy.args.param_dtype,  # default: bf16
+            precision=strategy.args.precision,
             load_in_4bit=strategy.args.load_in_4bit,
             lora_rank=strategy.args.lora_rank,
             lora_alpha=strategy.args.lora_alpha,
@@ -504,7 +503,7 @@ class PolicyModelActor(BaseModelActor):
             ema_model = Actor(
                 pretrain,
                 attn_implementation=strategy.args.attn_implementation,
-                param_dtype=strategy.args.param_dtype,  # default: bf16
+                precision=strategy.args.precision,
                 load_in_4bit=strategy.args.load_in_4bit,
                 ds_config=strategy.get_ds_eval_config(offload=True),
                 packing_samples=strategy.args.packing_samples,
@@ -568,7 +567,9 @@ class PolicyModelActor(BaseModelActor):
                 optimizer=self.actor_optim,
                 scheduler=self.actor_scheduler,
             )
-            self.checkpoint_states = states
+            self.checkpoint_states["global_step"] = states["global_step"]
+            self.checkpoint_states["episode"] = states["episode"]
+            self.checkpoint_states["data_loader_state_dict"] = states["data_loader_state_dict"]
 
         # initial offload
         if strategy.args.deepspeed_enable_sleep:
@@ -629,7 +630,7 @@ class PolicyModelActor(BaseModelActor):
         return action_log_probs.to("cpu")
 
     def broadcast_to_vllm(self):
-        self.trainer.broadcast_to_vllm()
+        self.trainer._broadcast_to_vllm()
 
     def get_checkpoint_states(self):
         return self.checkpoint_states
@@ -651,17 +652,16 @@ class PolicyModelActor(BaseModelActor):
 
     def save_checkpoint(self, tag, client_states):
         args = self.strategy.args
-        if not self.disable_ds_ckpt:
-            self.strategy.save_ckpt(
-                self.actor.model,
-                os.path.join(args.ckpt_path, "_actor"),
-                tag,
-                args.max_ckpt_num,
-                args.max_ckpt_mem,
-                client_states,
-                optimizer=self.actor_optim,
-                scheduler=self.actor_scheduler,
-            )
+        self.strategy.save_ckpt(
+            self.actor.model,
+            os.path.join(args.ckpt_path, "_actor"),
+            tag,
+            args.max_ckpt_num,
+            args.max_ckpt_mem,
+            client_states,
+            optimizer=self.actor_optim,
+            scheduler=self.actor_scheduler,
+        )
         if self.save_hf_ckpt:
             save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
             self.strategy.save_model(

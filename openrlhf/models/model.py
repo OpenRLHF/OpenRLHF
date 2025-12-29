@@ -10,6 +10,7 @@ from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from openrlhf.utils.logging_utils import init_logger
+from openrlhf.utils.utils import convert_to_dtype
 
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
 
@@ -22,7 +23,7 @@ def get_llm_for_sequence_regression(
     model_name_or_path: str,
     model_type: str,
     *,
-    param_dtype="bf16",
+    precision: str = "bf16",
     load_in_4bit=False,
     lora_rank=0,
     lora_alpha=16,
@@ -47,7 +48,7 @@ def get_llm_for_sequence_regression(
     Args:
         model_name_or_path (str): Path to the pretrained model.
         model_type (str): Type of the model, either "reward" or "critic".
-        param_dtype (str, optional): Model data type ("bf16", "fp16"). Defaults to "bf16".
+        precision (str, optional): One of 'bf16', 'fp16', 'fp32'. Defaults to 'bf16'.
         load_in_4bit (bool, optional): Load the model in 4-bit precision. Defaults to False.
         lora_rank (int, optional): Rank for LoRA adaptation. Defaults to 0.
         lora_alpha (int, optional): Alpha parameter for LoRA. Defaults to 16.
@@ -71,6 +72,7 @@ def get_llm_for_sequence_regression(
     config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
     config.normalize_reward = normalize_reward
     config._attn_implementation = attn_implementation
+    torch_dtype = convert_to_dtype(precision)
 
     # Prioritize using the value_head_prefix in the model configuration.
     value_head_prefix = getattr(config, "value_head_prefix", value_head_prefix)
@@ -90,13 +92,9 @@ def get_llm_for_sequence_regression(
     else:
         dschf = None
 
-    # Determine torch dtype based on param_dtype parameter, default: bf16
-    from openrlhf.utils.utils import convert_to_torch_dtype
-
-    torch_dtype = convert_to_torch_dtype(param_dtype)
-
     if load_in_4bit:
-        assert param_dtype == "bf16", "we only support bnb_4bit_compute_dtype = bf16"
+        if torch_dtype != torch.bfloat16:
+            raise ValueError("4-bit loading requires bf16 precision.")
         nf4_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",

@@ -21,6 +21,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import enable_full_determinism, set_seed
 
 from openrlhf.models import Actor
+from openrlhf.utils import convert_to_dtype
 from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
@@ -41,7 +42,6 @@ class FSDP2Strategy(ABC):
         max_norm: float = 0.0,
         micro_train_batch_size=1,
         train_batch_size=1,
-        bf16=True,
         args=None,
     ) -> None:
         super().__init__()
@@ -49,10 +49,10 @@ class FSDP2Strategy(ABC):
         self.args = args
         self.train_batch_size = train_batch_size
         self.micro_train_batch_size = micro_train_batch_size
-        self.bf16 = bf16
         self.seed = seed
         self.full_determinism = full_determinism
         self.max_norm = max_norm
+        self.precision = getattr(args, "precision", "bf16")
 
         # Keep argument parity with DeepSpeedStrategy for RLHF/ring attention settings.
         self.ring_attn_size = int(getattr(args, "ring_attn_size", 1) or 1)
@@ -456,13 +456,13 @@ class FSDP2Strategy(ABC):
         raise ValueError(f"Unknown fsdp2_offload mode: {self.fsdp2_offload}")
 
     def _build_mixed_precision_policy(self) -> Optional["MixedPrecisionPolicy"]:
-        if not self.bf16:
+        # fp32: no mixed precision policy needed
+        if self.precision == "fp32":
             return None
-        # Determine param_dtype based on args: use fp16 if specified, otherwise bf16
-        fp16 = getattr(self.args, "fp16", False) if self.args else False
-        param_dtype = torch.float16 if fp16 else torch.bfloat16
-        # Use float32 for reduce_dtype to maintain gradient precision during all-reduce
-        return MixedPrecisionPolicy(param_dtype=param_dtype, reduce_dtype=torch.float32, cast_forward_inputs=True)
+        # Use specified precision for param_dtype, but float32 for reduce_dtype
+        # to maintain gradient precision during all-reduce
+        dtype = convert_to_dtype(self.precision)
+        return MixedPrecisionPolicy(param_dtype=dtype, reduce_dtype=torch.float32, cast_forward_inputs=True)
 
     @staticmethod
     def _move_optimizer_state(optimizer: optim.Optimizer, device: torch.device) -> None:
@@ -777,7 +777,7 @@ class FSDP2Strategy(ABC):
                     "ds_tensor_parallel_size": int(getattr(self, "ds_tensor_parallel_size", 1) or 1),
                     "fsdp2_offload": str(getattr(self, "fsdp2_offload", "none") or "none"),
                     "fsdp2_reshard_after_forward": bool(getattr(self, "fsdp2_reshard_after_forward", True)),
-                    "bf16": bool(getattr(self, "bf16", True)),
+                    "precision": self.precision,
                 }
                 with open(os.path.join(output_dir, "fsdp2_runtime.json"), "w", encoding="utf-8") as f:
                     json.dump(metadata, f, indent=2, sort_keys=True)
@@ -835,8 +835,10 @@ class FSDP2Strategy(ABC):
                 is_tensor = False
             is_cpu_tensor = data.device.type == "cpu"
 
-            ret = [torch.zeros_like(data).to(torch.cuda.current_device()) for _ in range(self.world_size)]
-            dist.all_gather(ret, data.to(torch.cuda.current_device()))
+            dp_group = self._get_dp_group()
+            dp_world_size = dist.get_world_size(group=dp_group) if dist.is_initialized() else 1
+            ret = [torch.zeros_like(data).to(torch.cuda.current_device()) for _ in range(dp_world_size)]
+            dist.all_gather(ret, data.to(torch.cuda.current_device()), group=dp_group)
             result = torch.cat(ret).cpu() if is_cpu_tensor else torch.cat(ret)
             # If original input is not a tensor, return list to maintain type consistency
             if not is_tensor:
