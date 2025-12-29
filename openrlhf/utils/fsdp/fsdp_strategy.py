@@ -401,8 +401,11 @@ class FSDPStrategy(ABC):
     def _build_mixed_precision_policy(self) -> Optional["MixedPrecisionPolicy"]:
         if not self.bf16:
             return None
+        # Determine param_dtype based on args: use fp16 if specified, otherwise bf16
+        fp16 = getattr(self.args, "fp16", False) if self.args else False
+        param_dtype = torch.float16 if fp16 else torch.bfloat16
         # Use float32 for reduce_dtype to maintain gradient precision during all-reduce
-        return MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32, cast_forward_inputs=True)
+        return MixedPrecisionPolicy(param_dtype=param_dtype, reduce_dtype=torch.float32, cast_forward_inputs=True)
 
     @staticmethod
     def _move_optimizer_state(optimizer: optim.Optimizer, device: torch.device) -> None:
