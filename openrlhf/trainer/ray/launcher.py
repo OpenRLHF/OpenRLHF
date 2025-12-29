@@ -105,6 +105,18 @@ class BaseModelActor(BaseDistributedActor):
 class ReferenceModelActor(BaseModelActor):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
         self._setup_distributed(strategy)
+        args = strategy.args
+
+        tp_kwargs = {}
+        if getattr(args, "dist_backend", "deepspeed") == "fsdp2" and int(getattr(args, "ds_tensor_parallel_size", 1) or 1) > 1:
+            tp_device_mesh = getattr(strategy, "fsdp_device_mesh", None)
+            if tp_device_mesh is None:
+                raise RuntimeError("[fsdp2] Tensor parallel requested but device mesh is not initialized.")
+            tp_kwargs = {
+                "tp_plan": "auto",
+                "tp_size": int(args.ds_tensor_parallel_size),
+                "device_mesh": tp_device_mesh,
+            }
         model = Actor(
             pretrain,
             attn_implementation=strategy.args.attn_implementation,
@@ -114,6 +126,7 @@ class ReferenceModelActor(BaseModelActor):
             packing_samples=strategy.args.packing_samples,
             temperature=strategy.args.temperature,
             use_liger_kernel=strategy.args.use_liger_kernel,
+            **tp_kwargs,
         )
         strategy.print(model)
 
@@ -147,6 +160,18 @@ class ReferenceModelActor(BaseModelActor):
 class RewardModelActor(BaseModelActor):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
         self._setup_distributed(strategy)
+        args = strategy.args
+
+        tp_kwargs = {}
+        if getattr(args, "dist_backend", "deepspeed") == "fsdp2" and int(getattr(args, "ds_tensor_parallel_size", 1) or 1) > 1:
+            tp_device_mesh = getattr(strategy, "fsdp_device_mesh", None)
+            if tp_device_mesh is None:
+                raise RuntimeError("[fsdp2] Tensor parallel requested but device mesh is not initialized.")
+            tp_kwargs = {
+                "tp_plan": "auto",
+                "tp_size": int(args.ds_tensor_parallel_size),
+                "device_mesh": tp_device_mesh,
+            }
         model = get_llm_for_sequence_regression(
             pretrain,
             "reward",
@@ -157,6 +182,7 @@ class RewardModelActor(BaseModelActor):
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
             value_head_prefix=strategy.args.value_head_prefix,
             packing_samples=strategy.args.packing_samples,
+            **tp_kwargs,
         )
         strategy.print(model)
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))

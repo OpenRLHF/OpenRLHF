@@ -153,7 +153,93 @@ class FSDPStrategy(ABC):
     def create_optimizer(self, model, **kwargs) -> Optimizer:
         if isinstance(model, Actor):
             model = model.model
+        # In TP-only mode (dp_size==1), parameters may mix DTensor and local tensors.
+        # torch.optim foreach kernels are not guaranteed to support this combination.
+        if "foreach" not in kwargs:
+            tp_size = int(getattr(self, "ds_tensor_parallel_size", 1) or 1)
+            dp_size = int(getattr(self, "dp_size", 1) or 1)
+            if tp_size > 1 and dp_size <= 1:
+                kwargs["foreach"] = False
         return optim.AdamW(model.parameters(), **kwargs)
+
+    def _clip_grad_norm_dtensor_safe(self, model: nn.Module, max_norm: float, eps: float = 1e-6) -> float:
+        """DTensor-safe global grad clipping.
+
+        torch.nn.utils.clip_grad_norm_ may fail when parameters contain DTensor
+        grads backed by different DeviceMesh objects (e.g., TP-sharded weights
+        vs DP-only sharded weights). This implementation avoids stacking DTensor
+        norms by reducing a single scalar across the process group.
+        """
+        if max_norm <= 0:
+            return 0.0
+        if not dist.is_initialized():
+            return float(torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm))
+
+        # Prefer CUDA scalars to avoid slow CPU collectives.
+        device = torch.device("cuda", torch.cuda.current_device())
+        total_norm_sq = torch.zeros((), device=device, dtype=torch.float32)
+
+        # Replication accounting across OpenRLHF parallel dims.
+        dp_size = int(getattr(self, "dp_size", dist.get_world_size()) or 1)
+        sp_size = int(getattr(self, "ring_attn_size", 1) or 1)
+        tp_size = int(getattr(self, "ds_tensor_parallel_size", 1) or 1)
+        full_dim_sizes = {"dp": dp_size, "sp": sp_size, "tp": tp_size}
+
+        # Import DTensor/Replicate lazily to keep torch<2.5 compatibility paths intact.
+        try:
+            from torch.distributed.tensor import DTensor, Replicate  # type: ignore
+        except Exception:
+            DTensor = None  # type: ignore
+            Replicate = None  # type: ignore
+
+        with torch.no_grad():
+            for param in model.parameters():
+                grad = param.grad
+                if grad is None:
+                    continue
+
+                replication_factor = 1
+                if DTensor is not None and isinstance(grad, DTensor):
+                    # Convert to local shard for norm accumulation.
+                    local_grad = grad.to_local()
+
+                    # Dimensions absent from this DTensor mesh are implicitly replicated.
+                    mesh_dim_names = tuple(getattr(grad.device_mesh, "mesh_dim_names", ()) or ())
+                    for dim_name, dim_size in full_dim_sizes.items():
+                        if dim_name not in mesh_dim_names:
+                            replication_factor *= int(dim_size)
+
+                    # Dimensions present in the DTensor mesh may still be replicated via placements.
+                    if Replicate is not None:
+                        for mesh_dim, placement in enumerate(grad.placements):
+                            if isinstance(placement, Replicate):
+                                replication_factor *= int(grad.device_mesh.size(mesh_dim))
+                else:
+                    local_grad = grad
+
+                if local_grad.device.type != "cuda":
+                    local_grad = local_grad.to(device, non_blocking=True)
+                local_sum_sq = local_grad.float().pow(2).sum()
+                if replication_factor > 1:
+                    local_sum_sq = local_sum_sq / float(replication_factor)
+                total_norm_sq.add_(local_sum_sq)
+
+            # Sum across all ranks (covers DP/FSDP shards and TP/ring partitions).
+            dist.all_reduce(total_norm_sq, op=dist.ReduceOp.SUM)
+
+            total_norm = float(torch.sqrt(total_norm_sq).item())
+            clip_coef = float(max_norm) / (total_norm + float(eps))
+            if clip_coef < 1.0:
+                scale = torch.tensor(clip_coef, device=device, dtype=torch.float32)
+                for param in model.parameters():
+                    grad = param.grad
+                    if grad is None:
+                        continue
+                    if DTensor is not None and isinstance(grad, DTensor):
+                        param.grad = grad * scale
+                    else:
+                        grad.mul_(scale)
+            return total_norm
 
     def backward(self, loss: torch.Tensor, model: nn.Module, optimizer: optim.Optimizer, **kwargs) -> None:
         # Match DeepSpeed semantics: average gradients over accumulation steps.
@@ -261,10 +347,12 @@ class FSDPStrategy(ABC):
     def _wrap_train_model(self, model: nn.Module) -> nn.Module:
         """Wrap model with FSDP2 fully_shard."""
         try:
+            fsdp_mesh = self._get_fsdp_mesh()
             self._maybe_fully_shard_children(model)
             if not isinstance(model, FSDPModule):
                 model = fully_shard(
                     model,
+                    mesh=fsdp_mesh,
                     reshard_after_forward=self.fsdp2_reshard_after_forward,
                     offload_policy=self._offload_policy,
                     mp_policy=self._mp_policy,
@@ -275,6 +363,19 @@ class FSDPStrategy(ABC):
                 "fully_shard() failed while constructing the FSDP2 model. "
                 "Please double-check that the model supports composable FSDP."
             ) from exc
+
+    def _get_fsdp_mesh(self):
+        """Return the sharding mesh for FSDP2.
+
+        When OpenRLHF uses additional parallel dimensions (ring attention / TP),
+        we only want FSDP to shard over the effective data-parallel dimension.
+        """
+        if hasattr(self, "fsdp_device_mesh"):
+            try:
+                return self.fsdp_device_mesh["dp"]
+            except Exception:
+                return None
+        return None
 
     @staticmethod
     def _coerce_bool(value, default=False):
@@ -323,6 +424,7 @@ class FSDPStrategy(ABC):
 
     def _maybe_fully_shard_children(self, module: nn.Module) -> None:
         layer_cls_to_wrap = getattr(module, "_no_split_modules", None)
+        fsdp_mesh = self._get_fsdp_mesh()
 
         if layer_cls_to_wrap:
             # Policy-based wrapping for HF models
@@ -330,6 +432,7 @@ class FSDPStrategy(ABC):
                 if child.__class__.__name__ in layer_cls_to_wrap:
                     fully_shard(
                         child,
+                        mesh=fsdp_mesh,
                         reshard_after_forward=self.fsdp2_reshard_after_forward,
                         offload_policy=self._offload_policy,
                         mp_policy=self._mp_policy,
@@ -342,6 +445,7 @@ class FSDPStrategy(ABC):
                 ):
                     fully_shard(
                         child,
+                        mesh=fsdp_mesh,
                         reshard_after_forward=self.fsdp2_reshard_after_forward,
                         offload_policy=self._offload_policy,
                         mp_policy=self._mp_policy,
@@ -358,6 +462,7 @@ class FSDPStrategy(ABC):
                         if isinstance(sub, nn.Module) and not isinstance(sub, FSDPModule):
                             fully_shard(
                                 sub,
+                                mesh=fsdp_mesh,
                                 reshard_after_forward=self.fsdp2_reshard_after_forward,
                                 offload_policy=self._offload_policy,
                                 mp_policy=self._mp_policy,
@@ -373,6 +478,7 @@ class FSDPStrategy(ABC):
                     continue
                 fully_shard(
                     child,
+                    mesh=fsdp_mesh,
                     reshard_after_forward=self.fsdp2_reshard_after_forward,
                     offload_policy=self._offload_policy,
                     mp_policy=self._mp_policy,
