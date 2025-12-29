@@ -174,10 +174,18 @@ class CriticModelActor(BaseModelActor):
             tp_device_mesh = getattr(strategy, "fsdp_device_mesh", None)
             if tp_device_mesh is None:
                 raise RuntimeError("[fsdp2] Tensor parallel requested but device mesh is not initialized.")
+            # Transformers TP expects a TP-only DeviceMesh; slice from the global mesh so
+            # FSDP2 and TP share the same parent/root mesh.
+            tp_mesh = tp_device_mesh
+            try:
+                if getattr(tp_device_mesh, "mesh_dim_names", None) and "tp" in tp_device_mesh.mesh_dim_names:
+                    tp_mesh = tp_device_mesh["tp"]
+            except Exception:
+                tp_mesh = tp_device_mesh
             tp_kwargs = {
                 "tp_plan": "auto",
                 "tp_size": int(args.ds_tensor_parallel_size),
-                "device_mesh": tp_device_mesh,
+                "device_mesh": tp_mesh,
             }
         critic = get_llm_for_sequence_regression(
             pretrain,
