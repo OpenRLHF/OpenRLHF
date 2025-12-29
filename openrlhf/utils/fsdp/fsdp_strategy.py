@@ -67,6 +67,10 @@ class FSDPStrategy(ABC):
             getattr(args, "fsdp2_reshard_after_forward", True),
             default=True,
         )
+        # HSDP (Hybrid Sharded Data Parallel) configuration.
+        # -1 or >= dp_size: full FSDP sharding across all DP ranks
+        # 1 < size < dp_size: HSDP with (ddp, fsdp) 2D mesh structure
+        self.fsdp2_hsdp_size = int(getattr(args, "fsdp2_hsdp_size", -1) or -1)
 
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
@@ -108,13 +112,43 @@ class FSDPStrategy(ABC):
             )
         self.dp_size = self.world_size // duplicate_factor
 
-        # Ring attention group setup (mirrors DeepSpeedStrategy.setup_ring_attn()).
+        # Build device mesh. Always create mesh even for pure DP mode.
+        # HSDP splits dp_size into (ddp_size, fsdp_size) when fsdp2_hsdp_size is specified.
+        hsdp_size = self.fsdp2_hsdp_size
+        use_hsdp = 1 < hsdp_size < self.dp_size and self.dp_size % hsdp_size == 0
+
         if duplicate_factor > 1:
-            self.fsdp_device_mesh = init_device_mesh(
-                "cuda",
-                (self.dp_size, max(1, self.ring_attn_size), max(1, self.ds_tensor_parallel_size)),
-                mesh_dim_names=("dp", "sp", "tp"),
-            )
+            # With SP/TP: create mesh including dp, sp, tp dimensions
+            if use_hsdp:
+                ddp_size = self.dp_size // hsdp_size
+                self.fsdp_device_mesh = init_device_mesh(
+                    "cuda",
+                    (ddp_size, hsdp_size, max(1, self.ring_attn_size), max(1, self.ds_tensor_parallel_size)),
+                    mesh_dim_names=("ddp", "fsdp", "sp", "tp"),
+                )
+            else:
+                self.fsdp_device_mesh = init_device_mesh(
+                    "cuda",
+                    (self.dp_size, max(1, self.ring_attn_size), max(1, self.ds_tensor_parallel_size)),
+                    mesh_dim_names=("fsdp", "sp", "tp"),
+                )
+        else:
+            # Pure DP mode: create simple 1D or 2D mesh
+            if use_hsdp:
+                ddp_size = self.dp_size // hsdp_size
+                self.fsdp_device_mesh = init_device_mesh(
+                    "cuda",
+                    (ddp_size, hsdp_size),
+                    mesh_dim_names=("ddp", "fsdp"),
+                )
+            else:
+                self.fsdp_device_mesh = init_device_mesh(
+                    "cuda",
+                    (self.dp_size,),
+                    mesh_dim_names=("fsdp",),
+                )
+
+        # Ring attention group setup (mirrors DeepSpeedStrategy.setup_ring_attn()).
         if self.ring_attn_size > 1:
             group = self.fsdp_device_mesh["sp"].get_group()
             self.ring_attn_rank = dist.get_rank(group=group)
@@ -142,7 +176,8 @@ class FSDPStrategy(ABC):
 
         self.print(
             f"[fsdp2] world_size={self.world_size}, dp_size={getattr(self, 'dp_size', self.world_size)}, "
-            f"ring_attn_size={self.ring_attn_size}, ds_tensor_parallel_size={self.ds_tensor_parallel_size}, "
+            f"hsdp_size={self.fsdp2_hsdp_size}, ring_attn_size={self.ring_attn_size}, "
+            f"ds_tensor_parallel_size={self.ds_tensor_parallel_size}, "
             f"accumulated_gradient={self.accumulated_gradient}, fsdp2_offload={self.fsdp2_offload}"
         )
 
@@ -295,12 +330,7 @@ class FSDPStrategy(ABC):
             # When using ring attention / TP, ranks in the same ring/TP group
             # should process the same data. Mirror DeepSpeedStrategy behavior by
             # sampling only over the effective DP ranks.
-            dp_group = None
-            if hasattr(self, "fsdp_device_mesh"):
-                try:
-                    dp_group = self.fsdp_device_mesh["dp"].get_group()
-                except Exception:
-                    dp_group = None
+            dp_group = self._get_dp_group()
             num_replicas = dist.get_world_size(group=dp_group) if dp_group is not None else dist.get_world_size()
             rank = dist.get_rank(group=dp_group) if dp_group is not None else dist.get_rank()
 
@@ -369,14 +399,37 @@ class FSDPStrategy(ABC):
     def _get_fsdp_mesh(self):
         """Return the sharding mesh for FSDP2.
 
-        When OpenRLHF uses additional parallel dimensions (ring attention / TP),
-        we only want FSDP to shard over the effective data-parallel dimension.
+        Returns the appropriate mesh dimension for FSDP based on configuration:
+        - Pure FSDP: returns mesh["fsdp"] (1D)
+        - HSDP: returns mesh["fsdp"] (FSDP shards within ddp groups)
+        - With SP/TP: returns mesh["fsdp"] slice
         """
-        if hasattr(self, "fsdp_device_mesh"):
-            try:
-                return self.fsdp_device_mesh["dp"]
-            except Exception:
-                return None
+        if not hasattr(self, "fsdp_device_mesh") or self.fsdp_device_mesh is None:
+            return None
+        try:
+            return self.fsdp_device_mesh["fsdp"]
+        except Exception:
+            return None
+
+    def _get_dp_group(self):
+        """Return the process group for data-parallel communication.
+
+        For HSDP, returns the combined group spanning both ddp and fsdp dimensions.
+        For pure FSDP, returns the fsdp group.
+        Used for sampler partitioning and metric reduction.
+        """
+        if not hasattr(self, "fsdp_device_mesh") or self.fsdp_device_mesh is None:
+            return None
+        try:
+            mesh_dim_names = self.fsdp_device_mesh.mesh_dim_names
+            # HSDP: combine ddp and fsdp dimensions
+            if "ddp" in mesh_dim_names and "fsdp" in mesh_dim_names:
+                return self.fsdp_device_mesh["ddp", "fsdp"].get_group()
+            # Pure FSDP: only fsdp dimension
+            elif "fsdp" in mesh_dim_names:
+                return self.fsdp_device_mesh["fsdp"].get_group()
+        except Exception:
+            pass
         return None
 
     @staticmethod
@@ -753,12 +806,7 @@ class FSDPStrategy(ABC):
                 is_tensor = False
             is_cpu_tensor = data.device.type == "cpu"
 
-            dp_group = None
-            if hasattr(self, "fsdp_device_mesh"):
-                try:
-                    dp_group = self.fsdp_device_mesh["dp"].get_group()
-                except Exception:
-                    dp_group = None
+            dp_group = self._get_dp_group()
             dp_world_size = dist.get_world_size(group=dp_group) if dist.is_initialized() else 1
             if is_cpu_tensor:
                 data = data.to(torch.cuda.current_device())
