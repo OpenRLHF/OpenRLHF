@@ -350,7 +350,6 @@ class ActorPPOTrainer(ABC):
             return param.shape if getattr(self.strategy.args, "zero_stage", 2) != 3 else param.ds_shape
 
         def _broadcast_param(param, clean_name, count, num_params):
-        def _broadcast_param(param, clean_name, count, num_params):
             use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
 
             # FSDP2 requires all ranks to participate in full_tensor()
@@ -417,37 +416,29 @@ class ActorPPOTrainer(ABC):
             count += 1  # empty_cache at last param
             # Clean wrapper prefixes (e.g., _orig_mod. from torch.compile)
             clean_name = _clean_param_name(name)
-            # Clean wrapper prefixes (e.g., _orig_mod. from torch.compile)
-            clean_name = _clean_param_name(name)
 
             # broadcast
             if not self.use_cuda_ipc:
                 if is_fsdp2:
-                    _broadcast_param(param, clean_name, count, num_params)
                     _broadcast_param(param, clean_name, count, num_params)
                 else:
                     # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
                     if self.strategy.args.ds_tensor_parallel_size > 1:
                         with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
                             _broadcast_param(param, clean_name, count, num_params)
-                            _broadcast_param(param, clean_name, count, num_params)
                     else:
                         with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                            _broadcast_param(param, clean_name, count, num_params)
                             _broadcast_param(param, clean_name, count, num_params)
             # CUDA IPC
             else:
                 if is_fsdp2:
                     _handle_cuda_ipc(param, clean_name, count, num_params)
-                    _handle_cuda_ipc(param, clean_name, count, num_params)
                 else:
                     if self.strategy.args.ds_tensor_parallel_size > 1:
                         with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
                             _handle_cuda_ipc(param, clean_name, count, num_params)
-                            _handle_cuda_ipc(param, clean_name, count, num_params)
                     else:
                         with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                            _handle_cuda_ipc(param, clean_name, count, num_params)
                             _handle_cuda_ipc(param, clean_name, count, num_params)
 
         if cache_reset_refs:
@@ -501,7 +492,6 @@ class PolicyModelActor(BaseModelActor):
             temperature=strategy.args.temperature,
             use_liger_kernel=strategy.args.use_liger_kernel,
             **tp_kwargs,
-            **tp_kwargs,
         )
         strategy.print(actor)
 
@@ -518,7 +508,6 @@ class PolicyModelActor(BaseModelActor):
                 load_in_4bit=strategy.args.load_in_4bit,
                 ds_config=strategy.get_ds_eval_config(offload=True),
                 packing_samples=strategy.args.packing_samples,
-                **tp_kwargs,
                 **tp_kwargs,
             )
         else:
