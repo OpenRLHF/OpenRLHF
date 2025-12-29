@@ -1,3 +1,3 @@
-from .fsdp_strategy import FSDPStrategy
+from .fsdp_strategy import FSDP2Strategy
 
-__all__ = ["FSDPStrategy"]
+__all__ = ["FSDP2Strategy"]

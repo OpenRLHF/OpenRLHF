@@ -23,7 +23,7 @@ def get_strategy(args):
                 f"FSDP backend requested but not available: {e}. Please use --dist_backend deepspeed or install a recent PyTorch with FSDP."
             )
 
-        strategy = FSDPStrategy(
+        strategy = FSDP2Strategy(
             seed=getattr(args, "seed", 42),
             full_determinism=getattr(args, "full_determinism", False),
             max_norm=getattr(args, "max_norm", 1.0),

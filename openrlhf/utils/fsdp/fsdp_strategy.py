@@ -28,7 +28,7 @@ ModelOptimPair = Tuple[nn.Module, Optimizer]
 ModelOrModelOptimPair = Union[nn.Module, ModelOptimPair]
 
 
-class FSDPStrategy(ABC):
+class FSDP2Strategy(ABC):
     _HF_STATE_DICT_WRAPPER_PREFIXES = (
         "_checkpoint_wrapped_module.",
         "_orig_mod.",  # torch.compile / OptimizedModule
@@ -407,6 +407,11 @@ class FSDPStrategy(ABC):
         if not hasattr(self, "fsdp_device_mesh") or self.fsdp_device_mesh is None:
             return None
         try:
+            mesh_dim_names = self.fsdp_device_mesh.mesh_dim_names
+            # HSDP: returns 2D mesh (ddp, fsdp) -> (Replicate, Shard)
+            if "ddp" in mesh_dim_names and "fsdp" in mesh_dim_names:
+                return self.fsdp_device_mesh["ddp", "fsdp"]
+            # Pure FSDP or FSDP+TP/SP: returns 1D mesh
             return self.fsdp_device_mesh["fsdp"]
         except Exception:
             return None
