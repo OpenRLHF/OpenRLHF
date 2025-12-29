@@ -168,7 +168,10 @@ class CriticModelActor(BaseModelActor):
 
         self._setup_distributed(strategy)
         tp_kwargs = {}
-        if getattr(args, "dist_backend", "deepspeed") == "fsdp2" and int(getattr(args, "ds_tensor_parallel_size", 1) or 1) > 1:
+        if (
+            getattr(args, "dist_backend", "deepspeed") == "fsdp2"
+            and int(getattr(args, "ds_tensor_parallel_size", 1) or 1) > 1
+        ):
             tp_device_mesh = getattr(strategy, "fsdp_device_mesh", None)
             if tp_device_mesh is None:
                 raise RuntimeError("[fsdp2] Tensor parallel requested but device mesh is not initialized.")
