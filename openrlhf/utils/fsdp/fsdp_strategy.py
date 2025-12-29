@@ -204,10 +204,13 @@ class FSDPStrategy(ABC):
                     local_grad = grad.to_local()
 
                     # Dimensions absent from this DTensor mesh are implicitly replicated.
+                    # Only apply this when mesh_dim_names are available to avoid
+                    # mis-scaling on unnamed meshes.
                     mesh_dim_names = tuple(getattr(grad.device_mesh, "mesh_dim_names", ()) or ())
-                    for dim_name, dim_size in full_dim_sizes.items():
-                        if dim_name not in mesh_dim_names:
-                            replication_factor *= int(dim_size)
+                    if mesh_dim_names:
+                        for dim_name, dim_size in full_dim_sizes.items():
+                            if dim_name not in mesh_dim_names:
+                                replication_factor *= int(dim_size)
 
                     # Dimensions present in the DTensor mesh may still be replicated via placements.
                     if Replicate is not None:
@@ -425,65 +428,93 @@ class FSDPStrategy(ABC):
             torch.cuda.synchronize()
 
     def _maybe_fully_shard_children(self, module: nn.Module) -> None:
+        """Apply FSDP2 fully_shard to transformer layers using a two-phase approach.
+
+        Two-phase sharding strategy (inspired by verl/slime/prime-rl implementations):
+        1. Phase 1: Collect all modules that need sharding into a list
+        2. Phase 2: Iterate through the list and apply sharding
+
+        This approach avoids potential issues from modifying module structure during
+        named_modules() traversal. Additionally, lm_head and norm layers are configured
+        with reshard_after_forward=False to reduce tail communication overhead.
+        """
         layer_cls_to_wrap = getattr(module, "_no_split_modules", None)
         fsdp_mesh = self._get_fsdp_mesh()
-        # Track sharded modules to avoid double-sharding
-        sharded_module_ids: set = set()
-
-        def _mark_as_sharded(mod: nn.Module) -> None:
-            """Mark module and all its submodules as sharded."""
-            sharded_module_ids.add(id(mod))
-            for submod in mod.modules():
-                sharded_module_ids.add(id(submod))
 
         if layer_cls_to_wrap:
-            # Policy-based wrapping for HF models
+            # Phase 1: Collect modules to shard (transformer layers and untied Embeddings)
+            modules_to_shard = []
             for name, child in module.named_modules():
                 # Skip already sharded modules
-                if id(child) in sharded_module_ids or isinstance(child, FSDPModule):
+                if isinstance(child, FSDPModule):
                     continue
+                # Transformer layers
                 if child.__class__.__name__ in layer_cls_to_wrap:
-                    fully_shard(
-                        child,
-                        mesh=fsdp_mesh,
-                        reshard_after_forward=self.fsdp2_reshard_after_forward,
-                        offload_policy=self._offload_policy,
-                        mp_policy=self._mp_policy,
-                    )
-                    _mark_as_sharded(child)
-                # Also wrap Embeddings if not tied (optional, but good practice)
+                    modules_to_shard.append((child, True))  # (module, use_default_reshard)
+                # Untied Embedding layers
                 elif (
                     isinstance(child, nn.Embedding)
                     and hasattr(module, "config")
                     and not module.config.tie_word_embeddings
                 ):
+                    modules_to_shard.append((child, True))
+
+            # Phase 2: Apply sharding to collected modules
+            for child, use_default_reshard in modules_to_shard:
+                if isinstance(child, FSDPModule):
+                    continue
+                fully_shard(
+                    child,
+                    mesh=fsdp_mesh,
+                    reshard_after_forward=self.fsdp2_reshard_after_forward if use_default_reshard else False,
+                    offload_policy=self._offload_policy,
+                    mp_policy=self._mp_policy,
+                )
+
+            # Optimization: Set reshard_after_forward=False for lm_head and norm layers
+            # These layers are used at the end of forward pass, no need to reshard after forward
+            # This reduces tail communication overhead
+            # Reference: prime_rl/trainer/model.py:153-158
+            if hasattr(module, "config") and not module.config.tie_word_embeddings:
+                tail_modules = []
+                # Collect lm_head
+                if hasattr(module, "lm_head") and not isinstance(module.lm_head, FSDPModule):
+                    tail_modules.append(module.lm_head)
+                # Collect final norm layer (typically model.norm or model.final_layernorm)
+                inner_model = getattr(module, "model", None)
+                if inner_model is not None:
+                    for norm_name in ["norm", "final_layernorm", "ln_f"]:
+                        norm_layer = getattr(inner_model, norm_name, None)
+                        if norm_layer is not None and not isinstance(norm_layer, FSDPModule):
+                            tail_modules.append(norm_layer)
+                            break
+
+                # Apply reshard_after_forward=False optimization to tail modules
+                # Use list form to shard multiple modules as a single FSDP unit (like prime-rl)
+                if tail_modules:
                     fully_shard(
-                        child,
+                        tail_modules,  # Pass as list to combine into one FSDP unit
                         mesh=fsdp_mesh,
-                        reshard_after_forward=self.fsdp2_reshard_after_forward,
+                        reshard_after_forward=False,  # Key optimization: reduce tail communication
                         offload_policy=self._offload_policy,
                         mp_policy=self._mp_policy,
                     )
-                    _mark_as_sharded(child)
         else:
-            # Fallback: shallow wrapping for non-HF models
+            # Fallback: Shallow wrapping for non-HF models
+            # Collect modules first to avoid modifying structure during traversal
+            children_to_shard = []
             for name, child in module.named_children():
                 if isinstance(child, FSDPModule):
                     continue
                 if isinstance(child, nn.ModuleList):
-                    # fully_shard is an in-place operation, no need to recreate ModuleList
                     for sub in child:
                         if isinstance(sub, nn.Module) and not isinstance(sub, FSDPModule):
-                            fully_shard(
-                                sub,
-                                mesh=fsdp_mesh,
-                                reshard_after_forward=self.fsdp2_reshard_after_forward,
-                                offload_policy=self._offload_policy,
-                                mp_policy=self._mp_policy,
-                            )
-                    continue
-                if not any(p.requires_grad for p in child.parameters(recurse=True)):
-                    continue
+                            children_to_shard.append(sub)
+                elif any(p.requires_grad for p in child.parameters(recurse=True)):
+                    children_to_shard.append(child)
+
+            # Apply sharding to collected modules
+            for child in children_to_shard:
                 fully_shard(
                     child,
                     mesh=fsdp_mesh,
@@ -504,7 +535,6 @@ class FSDPStrategy(ABC):
                 is_actor = isinstance(model, Actor)
                 module = model.model if is_actor else model
                 module = self._wrap_train_model(module)
-                module = module.to(torch.cuda.current_device())
                 self._set_gradient_divide_factor(module)
                 if is_actor:
                     model.model = module
@@ -519,7 +549,6 @@ class FSDPStrategy(ABC):
                 is_actor = isinstance(model, Actor)
                 module = model.model if is_actor else model
                 module = self._wrap_train_model(module)
-                module = module.to(torch.cuda.current_device())
                 self._set_gradient_divide_factor(module)
                 if is_actor:
                     model.model = module
@@ -724,11 +753,22 @@ class FSDPStrategy(ABC):
                 is_tensor = False
             is_cpu_tensor = data.device.type == "cpu"
 
+            dp_group = None
+            if hasattr(self, "fsdp_device_mesh"):
+                try:
+                    dp_group = self.fsdp_device_mesh["dp"].get_group()
+                except Exception:
+                    dp_group = None
+            dp_world_size = dist.get_world_size(group=dp_group) if dist.is_initialized() else 1
             if is_cpu_tensor:
                 data = data.to(torch.cuda.current_device())
             if op == "mean":
-                data = data / self.world_size
-            dist.all_reduce(data, op=dist.ReduceOp.MAX if op == "max" else dist.ReduceOp.SUM)
+                data = data / max(1, dp_world_size)
+            dist.all_reduce(
+                data,
+                op=dist.ReduceOp.MAX if op == "max" else dist.ReduceOp.SUM,
+                group=dp_group,
+            )
             if is_cpu_tensor:
                 data = data.cpu()
             return data.item() if not is_tensor else data
@@ -781,7 +821,7 @@ class FSDPStrategy(ABC):
         tag: Optional[str] = None,
         max_num: int = 3,
         max_mem: int = 1000,
-        client_state: dict = {},
+        client_state: Optional[dict] = None,
         save_latest: bool = True,
         optimizer: Optional[Optimizer] = None,
         scheduler=None,
