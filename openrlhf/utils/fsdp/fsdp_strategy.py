@@ -303,13 +303,9 @@ class FSDP2Strategy(ABC):
         # Unwrap Actor to get the underlying FSDPModule
         unwrapped = self._unwrap_model(model)
         if self.max_norm and self.max_norm > 0:
-            devices = {p.device.type for p in unwrapped.parameters() if p.grad is not None}
-            if "cpu" in devices:
-                # Avoid DTensor all_reduce on CPU backends; skip clipping when offloaded.
-                self.print("Warning: Gradient clipping is skipped when using FSDP2 CPU offload.")
-            else:
-                # DTensor-aware clipping to handle mixed DeviceMesh grads (e.g. TP + DP-only shards).
-                self._clip_grad_norm_dtensor_safe(unwrapped, float(self.max_norm))
+            # DTensor-aware clipping to handle mixed DeviceMesh grads (e.g. TP + DP-only shards).
+            # The _clip_grad_norm_dtensor_safe function handles CPU gradients by moving local shards to GPU.
+            self._clip_grad_norm_dtensor_safe(unwrapped, float(self.max_norm))
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         if scheduler is not None:
