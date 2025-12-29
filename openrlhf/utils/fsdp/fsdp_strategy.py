@@ -402,7 +402,7 @@ class FSDPStrategy(ABC):
         if not self.bf16:
             return None
         # Use float32 for reduce_dtype to maintain gradient precision during all-reduce
-        return MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32, cast_forward_inputs=None)
+        return MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32, cast_forward_inputs=True)
 
     @staticmethod
     def _move_optimizer_state(optimizer: optim.Optimizer, device: torch.device) -> None:
