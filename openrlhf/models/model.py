@@ -3,6 +3,7 @@ from typing import Optional
 import deepspeed
 import torch
 import torch.nn as nn
+from packaging import version
 from peft import LoraConfig, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
@@ -33,6 +34,9 @@ def get_llm_for_sequence_regression(
     init_value_head=False,
     value_head_prefix="score",
     device_map=None,
+    tp_plan=None,
+    tp_size=None,
+    device_mesh=None,
     packing_samples=False,
     **kwargs,
 ) -> nn.Module:
@@ -102,15 +106,41 @@ def get_llm_for_sequence_regression(
     else:
         nf4_config = None
 
-    model = cls_class.from_pretrained(
-        model_name_or_path,
-        config=config,
-        trust_remote_code=True,
-        torch_dtype=torch_dtype,  # default: bf16
-        quantization_config=nf4_config,
-        device_map=device_map,
-        **kwargs,
-    )
+    tp_kwargs = {}
+    if tp_plan is not None:
+        tp_kwargs["tp_plan"] = tp_plan
+    if tp_size is not None:
+        tp_kwargs["tp_size"] = tp_size
+    if device_mesh is not None:
+        tp_kwargs["device_mesh"] = device_mesh
+    if tp_kwargs and device_map is not None:
+        raise ValueError("`tp_plan`/`tp_size`/`device_mesh` and `device_map` are mutually exclusive.")
+    if tp_kwargs:
+        torch_version = version.parse(torch.__version__.split("+")[0])
+        if torch_version < version.parse("2.5.0"):
+            raise RuntimeError(
+                f"Tensor parallel requires torch>=2.5.0. Detected torch=={torch.__version__}. "
+                "Please upgrade PyTorch or disable tensor parallel."
+            )
+
+    try:
+        model = cls_class.from_pretrained(
+            model_name_or_path,
+            config=config,
+            trust_remote_code=True,
+            torch_dtype=torch_dtype,
+            quantization_config=nf4_config,
+            device_map=device_map,
+            **tp_kwargs,
+            **kwargs,
+        )
+    except TypeError as exc:
+        if tp_kwargs:
+            raise RuntimeError(
+                "Tensor parallel loading requested, but the installed Transformers version does not support "
+                "`tp_plan`/`tp_size`/`device_mesh`. Please upgrade Transformers or disable tensor parallel."
+            ) from exc
+        raise
 
     # LoRA
     if lora_rank > 0:
