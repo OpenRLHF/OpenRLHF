@@ -85,7 +85,8 @@ class PolicyLoss(nn.Module):
         token_level_loss: bool = True,
         policy_loss_type: str = "ppo",
         enable_vllm_is_correction: bool = False,
-        vllm_is_truncated_threshold: float = None,
+        vllm_is_truncated_threshold: list = None,
+        use_icepop: bool = False,
     ) -> None:
         super().__init__()
         self.clip_eps_low = clip_eps_low
@@ -95,6 +96,7 @@ class PolicyLoss(nn.Module):
         self.policy_loss_type = policy_loss_type
         self.enable_vllm_is_correction = enable_vllm_is_correction
         self.vllm_is_truncated_threshold = vllm_is_truncated_threshold
+        self.use_icepop = use_icepop
 
         # GSPO requires sequence-level loss
         if policy_loss_type == "gspo":
@@ -143,7 +145,17 @@ class PolicyLoss(nn.Module):
         # Your Efficient RL Framework Secretly Brings You Off-Policy RL Training: https://fengyao.notion.site/off-policy-rl
         vllm_kl = None
         if self.enable_vllm_is_correction and self.policy_loss_type == "ppo":
-            vllm_is = torch.exp(old_log_probs - rollout_log_probs).clamp(max=self.vllm_is_truncated_threshold).detach()
+            low_threshold, high_threshold = self.vllm_is_truncated_threshold
+            if self.use_icepop:
+                # ICEPOP: set coefficients outside the interval to 0
+                vllm_is = torch.exp(old_log_probs - rollout_log_probs).detach()
+                mask = (vllm_is >= low_threshold) & (vllm_is <= high_threshold)
+                vllm_is = vllm_is * mask
+            else:
+                # Standard clamp with low and high thresholds
+                vllm_is = (
+                    torch.exp(old_log_probs - rollout_log_probs).clamp(min=low_threshold, max=high_threshold).detach()
+                )
             loss = vllm_is * loss
             vllm_kl = masked_mean(rollout_log_probs - old_log_probs, action_mask, dim=None)
 
