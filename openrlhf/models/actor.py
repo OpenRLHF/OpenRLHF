@@ -4,9 +4,9 @@ import deepspeed
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+from packaging import version
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
-from packaging import version
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
