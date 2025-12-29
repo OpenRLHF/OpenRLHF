@@ -434,7 +434,7 @@ class FSDP2Strategy(ABC):
 
         # Pure FSDP: 1D mesh (Shard), or treat SP as a replicate dim for gradient reduction.
         if has_sp:
-            return self.fsdp_device_mesh["sp", "fsdp"]
+            return self.fsdp_device_mesh["fsdp", "sp"]
         return self.fsdp_device_mesh["fsdp"]
 
     def _get_dp_group(self):
