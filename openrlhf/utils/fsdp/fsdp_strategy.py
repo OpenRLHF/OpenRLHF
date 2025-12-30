@@ -112,8 +112,6 @@ class FSDP2Strategy(ABC):
         # Build device mesh. Always create mesh even for pure DP mode.
         self._create_device_mesh(duplicate_factor)
 
-
-
         # Ring attention group setup (mirrors DeepSpeedStrategy.setup_ring_attn()).
         if self.ring_attn_size > 1:
             group = self.fsdp_device_mesh["sp"].get_group()
