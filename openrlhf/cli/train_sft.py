@@ -18,22 +18,6 @@ def train(args):
     strategy.setup_distributed()
 
     is_fsdp2 = getattr(args, "dist_backend", "deepspeed") == "fsdp2"
-    tp_kwargs = {}
-    if is_fsdp2 and int(getattr(args, "ds_tensor_parallel_size", 1) or 1) > 1:
-        tp_device_mesh = getattr(strategy, "fsdp_device_mesh", None)
-        if tp_device_mesh is None:
-            raise RuntimeError("[fsdp2] Tensor parallel requested but device mesh is not initialized.")
-        tp_mesh = tp_device_mesh
-        try:
-            if getattr(tp_device_mesh, "mesh_dim_names", None) and "tp" in tp_device_mesh.mesh_dim_names:
-                tp_mesh = tp_device_mesh["tp"]
-        except Exception:
-            tp_mesh = tp_device_mesh
-        tp_kwargs = {
-            "tp_plan": "auto",
-            "tp_size": int(args.ds_tensor_parallel_size),
-            "device_mesh": tp_mesh,
-        }
 
     # configure model
     # load huggingface model
@@ -49,7 +33,6 @@ def train(args):
         ds_config=strategy.get_ds_train_config(is_actor=True),
         packing_samples=args.packing_samples,
         use_liger_kernel=args.use_liger_kernel,
-        **tp_kwargs,
     )
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
@@ -241,7 +224,12 @@ if __name__ == "__main__":
     parser.add_argument("--overlap_comm", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
-    parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed Tensor parallel size")
+    parser.add_argument(
+        "--ds_tensor_parallel_size",
+        type=int,
+        default=1,
+        help="Tensor parallel size (DeepSpeed AutoTP; FSDP2 uses torch-native TP)",
+    )
 
     # SFT
     parser.add_argument("--max_epochs", type=int, default=2)
