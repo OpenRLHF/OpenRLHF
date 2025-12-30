@@ -14,7 +14,7 @@ from torch.distributed.checkpoint.state_dict import (
     get_model_state_dict,
     set_model_state_dict,
 )
-from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 from torch.distributed.fsdp import CPUOffloadPolicy, FSDPModule, MixedPrecisionPolicy, fully_shard
 from torch.optim import Optimizer
 from torchdata.stateful_dataloader import StatefulDataLoader
@@ -168,26 +168,51 @@ class FSDP2Strategy(ABC):
         hsdp_size = self.fsdp2_hsdp_size
         use_hsdp = 1 < hsdp_size < self.dp_size and self.dp_size % hsdp_size == 0
 
-        # Build mesh dimensions
-        mesh_dims = []
-        mesh_dim_names = []
+        mesh_dims: list[int] = []
+        mesh_dim_names: list[str] = []
 
         if use_hsdp:
             ddp_size = self.dp_size // hsdp_size
+            # For 2D HSDP meshes, fully_shard() interprets (Replicate, Shard).
             mesh_dims.extend([ddp_size, hsdp_size])
             mesh_dim_names.extend(["ddp", "fsdp"])
-        else:
-            mesh_dims.append(self.dp_size)
-            mesh_dim_names.append("fsdp")
-
-        # Add SP/TP dimensions if enabled
-        if duplicate_factor > 1:
             if self.ring_attn_size > 1:
                 mesh_dims.append(self.ring_attn_size)
                 mesh_dim_names.append("sp")
-            if self.ds_tensor_parallel_size > 1:
-                mesh_dims.append(self.ds_tensor_parallel_size)
-                mesh_dim_names.append("tp")
+        else:
+            # Pure FSDP. For ring attention, we want a 2D mesh interpreted as
+            # (Replicate=sp, Shard=fsdp). We additionally want the *rank layout*
+            # to match the common (fsdp, sp, tp) row-major convention so the sp
+            # groups stay local/contiguous under typical rank-to-node mappings.
+            if self.ring_attn_size > 1:
+                sp_size = int(self.ring_attn_size)
+                tp_size = int(max(1, self.ds_tensor_parallel_size))
+                if self.world_size != self.dp_size * sp_size * tp_size:
+                    raise RuntimeError(
+                        f"[fsdp2] invalid world_size decomposition: world_size={self.world_size}, "
+                        f"dp_size={self.dp_size}, sp_size={sp_size}, tp_size={tp_size}"
+                    )
+
+                # Start from a (fsdp, sp, tp) rank layout and permute to
+                # (sp, fsdp, tp). For tp_size==1, this yields contiguous sp groups
+                # like [0,1], [2,3], ... instead of striding across nodes.
+                mesh = torch.arange(self.world_size, device="cpu").view(self.dp_size, sp_size, tp_size)
+                mesh = mesh.permute(1, 0, 2).contiguous()
+
+                if tp_size == 1:
+                    mesh = mesh.squeeze(-1)
+                    self.fsdp_device_mesh = DeviceMesh("cuda", mesh, mesh_dim_names=("sp", "fsdp"))
+                    return
+
+                self.fsdp_device_mesh = DeviceMesh("cuda", mesh, mesh_dim_names=("sp", "fsdp", "tp"))
+                return
+
+            mesh_dims.append(self.dp_size)
+            mesh_dim_names.append("fsdp")
+
+        if duplicate_factor > 1 and self.ds_tensor_parallel_size > 1:
+            mesh_dims.append(self.ds_tensor_parallel_size)
+            mesh_dim_names.append("tp")
 
         # Create device mesh
         self.fsdp_device_mesh = init_device_mesh(
@@ -212,64 +237,111 @@ class FSDP2Strategy(ABC):
                 kwargs["foreach"] = False
         return optim.AdamW(model.parameters(), **kwargs)
 
-    def _clip_grad_norm_dtensor_safe(self, model: nn.Module, max_norm: float, eps: float = 1e-6) -> float:
-        """DTensor-safe global grad clipping.
+    def _clip_grad_norm_dtensor_safe(
+        self,
+        model: nn.Module,
+        max_norm: float,
+        norm_type: float = 2.0,
+        error_if_nonfinite: bool = False,
+        foreach: Optional[bool] = None,
+    ) -> float:
+        """DTensor-safe global grad clipping (FSDP2 + optional TP/SP/HSDP).
 
-        Simplified version: use PyTorch built-in functions, only handle DTensor device conversion.
-        torch.nn.utils.clip_grad_norm_ may fail when parameters contain DTensor
-        grads backed by different DeviceMesh objects. This implementation converts
-        DTensor grads to local tensors before clipping.
+        Prefer the native PyTorch implementation (`get_total_norm` +
+        `clip_grads_with_norm_`). When gradients live on multiple DeviceMesh
+        objects (e.g. mixed DTensor meshes), fall back to per-mesh norm
+        computation and combine locally to avoid cross-mesh DTensor ops.
         """
         if max_norm <= 0:
             return 0.0
-        if not dist.is_initialized():
-            return float(torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm))
 
-        # Collect all gradients
-        grads = []
+        if foreach is None:
+            # DTensor gradients may live on different meshes; foreach kernels are
+            # not guaranteed to support that combination.
+            foreach = False
+
+        parameters = [p for p in model.parameters() if p.grad is not None]
+        if not parameters:
+            return 0.0
+
+        if not dist.is_initialized():
+            total_norm = torch.nn.utils.clip_grad_norm_(
+                parameters,
+                max_norm=float(max_norm),
+                norm_type=float(norm_type),
+                error_if_nonfinite=bool(error_if_nonfinite),
+                foreach=bool(foreach),
+            )
+            return float(total_norm)
+
         device = torch.device("cuda", torch.cuda.current_device())
+        grads = [p.grad for p in parameters if p.grad is not None]
 
         try:
             from torch.distributed.tensor import DTensor
         except Exception:
             DTensor = None
 
-        for param in model.parameters():
-            grad = param.grad
-            if grad is None:
-                continue
+        try:
+            total_norm = torch.nn.utils.get_total_norm(
+                grads,
+                norm_type=float(norm_type),
+                error_if_nonfinite=bool(error_if_nonfinite),
+                foreach=bool(foreach),
+            )
+            if DTensor is not None and isinstance(total_norm, DTensor):
+                total_norm = total_norm.full_tensor()
+        except Exception:
+            # Conservative fallback: compute norm per DTensor mesh to avoid
+            # cross-mesh DTensor reductions, then combine locally.
+            mesh_to_grads: dict[tuple, list] = {}
+            local_grads: list = []
+            for grad in grads:
+                if DTensor is not None and isinstance(grad, DTensor):
+                    placements = getattr(grad, "placements", None)
+                    placements_key = None
+                    if placements is not None:
+                        placements_key = tuple((p.__class__.__name__, getattr(p, "dim", None)) for p in placements)
+                    key = (id(grad.device_mesh), placements_key)
+                    mesh_to_grads.setdefault(key, []).append(grad)
+                else:
+                    local_grads.append(grad)
 
-            # Handle DTensor: convert to local tensor
-            if DTensor is not None and isinstance(grad, DTensor):
-                local_grad = grad.to_local()
-            else:
-                local_grad = grad
+            total_norm_sq = torch.zeros((), device=device)
 
-            # Ensure gradient is on the correct device
-            if local_grad.device.type != "cuda":
-                local_grad = local_grad.to(device, non_blocking=True)
+            for group_grads in mesh_to_grads.values():
+                group_norm = torch.nn.utils.get_total_norm(
+                    group_grads,
+                    norm_type=float(norm_type),
+                    error_if_nonfinite=bool(error_if_nonfinite),
+                    foreach=bool(foreach),
+                )
+                if DTensor is not None and isinstance(group_norm, DTensor):
+                    group_norm = group_norm.full_tensor()
+                group_norm = group_norm.to(device, non_blocking=True)
+                total_norm_sq += group_norm.pow(2)
 
-            grads.append(local_grad)
+            if local_grads:
+                local_norm = torch.nn.utils.get_total_norm(
+                    local_grads,
+                    norm_type=float(norm_type),
+                    error_if_nonfinite=bool(error_if_nonfinite),
+                    foreach=bool(foreach),
+                )
+                if DTensor is not None and isinstance(local_norm, DTensor):
+                    local_norm = local_norm.full_tensor()
+                local_norm = local_norm.to(device, non_blocking=True)
+                total_norm_sq += local_norm.pow(2)
 
-        if not grads:
-            return 0.0
+            total_norm = total_norm_sq.sqrt()
 
-        # Use PyTorch built-in gradient clipping
-        from torch.nn.utils.clip_grad import _get_total_norm
-
-        total_norm = _get_total_norm(grads, norm_type=2.0, error_if_nonfinite=False)
         total_norm = total_norm.to(device, non_blocking=True)
-
-        # Apply clipping
-        clip_coef = float(max_norm) / (float(total_norm) + float(eps))
-        if clip_coef < 1.0:
-            for param in model.parameters():
-                if param.grad is not None:
-                    if DTensor is not None and isinstance(param.grad, DTensor):
-                        param.grad = param.grad * clip_coef
-                    else:
-                        param.grad.mul_(clip_coef)
-
+        torch.nn.utils.clip_grads_with_norm_(
+            parameters,
+            max_norm=float(max_norm),
+            total_norm=total_norm,
+            foreach=False,
+        )
         return float(total_norm.item())
 
     def backward(self, loss: torch.Tensor, model: nn.Module, optimizer: optim.Optimizer, **kwargs) -> None:
@@ -434,7 +506,8 @@ class FSDP2Strategy(ABC):
 
         # Pure FSDP: 1D mesh (Shard), or treat SP as a replicate dim for gradient reduction.
         if has_sp:
-            return self.fsdp_device_mesh["fsdp", "sp"]
+            # fully_shard() interprets a 2D mesh as (Replicate, Shard).
+            return self.fsdp_device_mesh["sp", "fsdp"]
         return self.fsdp_device_mesh["fsdp"]
 
     def _get_dp_group(self):
