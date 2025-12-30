@@ -536,7 +536,6 @@ class FSDP2Strategy(ABC):
 
         return float(total_norm.item() if hasattr(total_norm, "item") else total_norm)
 
-
     @staticmethod
     def _move_optimizer_state(optimizer: optim.Optimizer, device: torch.device) -> None:
         """Move optimizer state to the specified device."""
