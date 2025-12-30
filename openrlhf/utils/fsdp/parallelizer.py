@@ -22,16 +22,16 @@ Tensor Parallelism utilities using PyTorch native parallelize_module API.
 
 使用方法:
     from openrlhf.utils.fsdp.parallelizer import apply_tensor_parallel, get_tp_plan
-    
+
     # 1. 加载模型（不带 TP）
     model = AutoModelForCausalLM.from_pretrained(...)
-    
+
     # 2. 获取 TP plan
     tp_plan = get_tp_plan(model)
-    
+
     # 3. 应用 TP
     apply_tensor_parallel(model, tp_mesh, tp_plan)
-    
+
     # 4. 应用 FSDP
     model = fully_shard(model, ...)
 """
@@ -51,6 +51,7 @@ def _is_torch_tp_available() -> bool:
     """检查 PyTorch 版本是否支持 tensor parallel API。"""
     try:
         from packaging import version
+
         torch_version = version.parse(torch.__version__.split("+")[0])
         return torch_version >= version.parse("2.5.0")
     except Exception:
@@ -126,17 +127,13 @@ def get_base_tp_plan(sequence_parallel: bool = False) -> Dict[str, "ParallelStyl
 
     if sequence_parallel:
         sp_plan = {
-            "model.embed_tokens": RowwiseParallel(
-                input_layouts=Replicate(), output_layouts=Shard(1)
-            ),
+            "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
             "model.norm": SequenceParallel(),
             "model.layers.*.input_layernorm": SequenceParallel(),
             "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
             "model.layers.*.post_attention_layernorm": SequenceParallel(),
             "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
-            "lm_head": ColwiseParallel(
-                input_layouts=Shard(1), output_layouts=Replicate()
-            ),
+            "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Replicate()),
         }
         base_plan.update(sp_plan)
 
@@ -278,14 +275,12 @@ def validate_tp_mesh(model: nn.Module, tp_mesh: "DeviceMesh") -> None:
 
     if num_attention_heads > 0:
         assert num_attention_heads % tp_mesh.size() == 0, (
-            f"num_attention_heads ({num_attention_heads}) must be divisible by "
-            f"TP size ({tp_mesh.size()})"
+            f"num_attention_heads ({num_attention_heads}) must be divisible by " f"TP size ({tp_mesh.size()})"
         )
 
     if num_key_value_heads > 0:
         assert num_key_value_heads % tp_mesh.size() == 0, (
-            f"num_key_value_heads ({num_key_value_heads}) must be divisible by "
-            f"TP size ({tp_mesh.size()})"
+            f"num_key_value_heads ({num_key_value_heads}) must be divisible by " f"TP size ({tp_mesh.size()})"
         )
 
     logger.info(
@@ -294,9 +289,7 @@ def validate_tp_mesh(model: nn.Module, tp_mesh: "DeviceMesh") -> None:
     )
 
 
-def _expand_wildcard_plan(
-    plan: Dict[str, "ParallelStyle"], model: nn.Module
-) -> Dict[str, "ParallelStyle"]:
+def _expand_wildcard_plan(plan: Dict[str, "ParallelStyle"], model: nn.Module) -> Dict[str, "ParallelStyle"]:
     """
     展开 plan 中的通配符（*.）为具体的模块名。
 
