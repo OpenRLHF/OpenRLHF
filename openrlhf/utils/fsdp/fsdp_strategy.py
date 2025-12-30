@@ -1,3 +1,4 @@
+import math
 import os
 from abc import ABC
 from collections import defaultdict
@@ -193,11 +194,16 @@ class FSDP2Strategy(ABC):
                         f"dp_size={self.dp_size}, sp_size={sp_size}, tp_size={tp_size}"
                     )
 
-                # Start from a (fsdp, sp, tp) rank layout and permute to
-                # (sp, fsdp, tp). For tp_size==1, this yields contiguous sp groups
-                # like [0,1], [2,3], ... instead of striding across nodes.
-                mesh = torch.arange(self.world_size, device="cpu").view(self.dp_size, sp_size, tp_size)
-                mesh = mesh.permute(1, 0, 2).contiguous()
+                # Keep duplicates (sp * tp) contiguous per FSDP rank so RLHF's Ray
+                # "duplicate_factor" de-duplication stays valid. We also prefer
+                # contiguous SP groups (for each fixed fsdp,tp) to reduce the
+                # chance that ring-attn collectives span nodes.
+                #
+                # Build a (fsdp, tp, sp) rank layout and permute to (sp, fsdp, tp):
+                # - dp blocks are contiguous: [0..sp*tp-1], [sp*tp..2*sp*tp-1], ...
+                # - within each dp block, SP groups are contiguous for each TP coord.
+                mesh = torch.arange(self.world_size, device="cpu").view(self.dp_size, tp_size, sp_size)
+                mesh = mesh.permute(2, 0, 1).contiguous()
 
                 if tp_size == 1:
                     mesh = mesh.squeeze(-1)
@@ -307,33 +313,46 @@ class FSDP2Strategy(ABC):
                 else:
                     local_grads.append(grad)
 
-            total_norm_sq = torch.zeros((), device=device)
+            norm_type_f = float(norm_type)
+            if math.isinf(norm_type_f):
+                total_norm = torch.zeros((), device=device)
+            else:
+                total_norm_pow = torch.zeros((), device=device)
 
             for group_grads in mesh_to_grads.values():
                 group_norm = torch.nn.utils.get_total_norm(
                     group_grads,
-                    norm_type=float(norm_type),
+                    norm_type=norm_type_f,
                     error_if_nonfinite=bool(error_if_nonfinite),
                     foreach=bool(foreach),
                 )
                 if DTensor is not None and isinstance(group_norm, DTensor):
                     group_norm = group_norm.full_tensor()
                 group_norm = group_norm.to(device, non_blocking=True)
-                total_norm_sq += group_norm.pow(2)
+
+                if math.isinf(norm_type_f):
+                    total_norm = torch.maximum(total_norm, group_norm)
+                else:
+                    total_norm_pow += group_norm.pow(norm_type_f)
 
             if local_grads:
                 local_norm = torch.nn.utils.get_total_norm(
                     local_grads,
-                    norm_type=float(norm_type),
+                    norm_type=norm_type_f,
                     error_if_nonfinite=bool(error_if_nonfinite),
                     foreach=bool(foreach),
                 )
                 if DTensor is not None and isinstance(local_norm, DTensor):
                     local_norm = local_norm.full_tensor()
                 local_norm = local_norm.to(device, non_blocking=True)
-                total_norm_sq += local_norm.pow(2)
 
-            total_norm = total_norm_sq.sqrt()
+                if math.isinf(norm_type_f):
+                    total_norm = torch.maximum(total_norm, local_norm)
+                else:
+                    total_norm_pow += local_norm.pow(norm_type_f)
+
+            if not math.isinf(norm_type_f):
+                total_norm = total_norm_pow.pow(1.0 / norm_type_f)
 
         total_norm = total_norm.to(device, non_blocking=True)
         torch.nn.utils.clip_grads_with_norm_(
