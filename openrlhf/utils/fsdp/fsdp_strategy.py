@@ -81,6 +81,11 @@ class FSDP2Strategy(ABC):
                 "FSDP2 backend requires PyTorch >= 2.4 with the fully_shard API. "
                 f"Detected torch=={torch.__version__}. Please upgrade PyTorch or use --dist_backend deepspeed."
             )
+        if self.ds_tensor_parallel_size > 1 and torch_version < version.parse("2.5.0"):
+            raise RuntimeError(
+                f"FSDP2 tensor parallel requires torch>=2.5.0. Detected torch=={torch.__version__}. "
+                "Please upgrade PyTorch or set --ds_tensor_parallel_size 1."
+            )
 
         self._offload_policy: Optional["CPUOffloadPolicy"] = self._build_offload_policy()
         self._mp_policy: Optional["MixedPrecisionPolicy"] = self._build_mixed_precision_policy()
@@ -128,6 +133,8 @@ class FSDP2Strategy(ABC):
         self.dp_size = self.world_size // duplicate_factor
 
         self._create_device_mesh()
+
+        # TP 将在 prepare() 中通过 parallelizer 应用（在 FSDP wrap 之前）
 
         if self.ring_attn_size > 1:
             self._setup_ring_attention()
@@ -228,7 +235,7 @@ class FSDP2Strategy(ABC):
         """Get the mesh for FSDP sharding.
 
         Returns only the dp submesh (1D). CP and TP handle their own gradient
-        synchronization internally (ring_flash_attn for CP, transformers TP for TP).
+        synchronization internally (ring_flash_attn for CP, torch-native TP for TP).
         """
         if not hasattr(self, "fsdp_device_mesh") or self.fsdp_device_mesh is None:
             return None
@@ -240,6 +247,23 @@ class FSDP2Strategy(ABC):
             raise RuntimeError(f"[fsdp2] DeviceMesh is missing required 'dp' dim (got {mesh_dim_names}).")
 
         return self.fsdp_device_mesh["dp"]
+
+    def _get_tp_mesh(self):
+        """Get the mesh for Tensor Parallel.
+
+        Returns the 'tp' submesh if TP is enabled, None otherwise.
+        """
+        if self.ds_tensor_parallel_size <= 1:
+            return None
+
+        if not hasattr(self, "fsdp_device_mesh") or self.fsdp_device_mesh is None:
+            return None
+
+        mesh_dim_names = getattr(self.fsdp_device_mesh, "mesh_dim_names", None)
+        if not mesh_dim_names or "tp" not in mesh_dim_names:
+            return None
+
+        return self.fsdp_device_mesh["tp"]
 
     def _get_dp_group(self):
         """Get the process group for data-parallel communication (metrics, loss reduction)."""
@@ -272,6 +296,8 @@ class FSDP2Strategy(ABC):
                     continue
                 is_actor = isinstance(model, Actor)
                 module = model.model if is_actor else model
+                # 应用 TP（在 FSDP 之前）
+                module = self._maybe_apply_tensor_parallel(module)
                 module = self._wrap_train_model(module)
                 if is_actor:
                     model.model = module
@@ -285,6 +311,8 @@ class FSDP2Strategy(ABC):
                     continue
                 is_actor = isinstance(model, Actor)
                 module = model.model if is_actor else model
+                # 应用 TP（在 FSDP 之前）
+                module = self._maybe_apply_tensor_parallel(module)
                 module = self._wrap_train_model(module)
                 if is_actor:
                     model.model = module
@@ -293,6 +321,32 @@ class FSDP2Strategy(ABC):
                     ret.append(module)
 
         return ret[0] if len(ret) == 1 else ret
+
+    def _maybe_apply_tensor_parallel(self, model: nn.Module) -> nn.Module:
+        """Apply tensor parallelism using PyTorch native parallelize_module.
+
+        This is called BEFORE FSDP wrapping. Uses the parallelizer module which
+        is based on NeMo Automodel's approach.
+        """
+        tp_mesh = self._get_tp_mesh()
+        if tp_mesh is None:
+            return model
+
+        try:
+            from openrlhf.utils.fsdp.parallelizer import apply_tensor_parallel
+
+            self.print(f"[fsdp2] Applying tensor parallel with TP size={tp_mesh.size()}")
+            model = apply_tensor_parallel(
+                model,
+                tp_mesh=tp_mesh,
+                tp_plan=None,  # 自动从 HF 模型获取或使用 base plan
+                sequence_parallel=False,
+                validate=True,
+            )
+            return model
+        except Exception as e:
+            self.print(f"[fsdp2] Warning: Failed to apply tensor parallel: {e}")
+            raise
 
     def _wrap_train_model(self, model: nn.Module) -> nn.Module:
         """Wrap model with FSDP2 fully_shard."""

@@ -463,28 +463,6 @@ class PolicyModelActor(BaseModelActor):
 
         self._setup_distributed(strategy)
 
-        tp_kwargs = {}
-        if (
-            getattr(args, "dist_backend", "deepspeed") == "fsdp2"
-            and int(getattr(args, "ds_tensor_parallel_size", 1) or 1) > 1
-        ):
-            tp_device_mesh = getattr(strategy, "fsdp_device_mesh", None)
-            if tp_device_mesh is None:
-                raise RuntimeError("[fsdp2] Tensor parallel requested but device mesh is not initialized.")
-            # Transformers TP expects a TP-only DeviceMesh; slice from the global mesh so
-            # FSDP2 and TP share the same parent/root mesh.
-            tp_mesh = tp_device_mesh
-            try:
-                if getattr(tp_device_mesh, "mesh_dim_names", None) and "tp" in tp_device_mesh.mesh_dim_names:
-                    tp_mesh = tp_device_mesh["tp"]
-            except Exception:
-                tp_mesh = tp_device_mesh
-            tp_kwargs = {
-                "tp_plan": "auto",
-                "tp_size": int(args.ds_tensor_parallel_size),
-                "device_mesh": tp_mesh,
-            }
-
         actor = Actor(
             pretrain,
             attn_implementation=strategy.args.attn_implementation,
@@ -498,7 +476,6 @@ class PolicyModelActor(BaseModelActor):
             packing_samples=strategy.args.packing_samples,
             temperature=strategy.args.temperature,
             use_liger_kernel=strategy.args.use_liger_kernel,
-            **tp_kwargs,
         )
         strategy.print(actor)
 
@@ -515,7 +492,6 @@ class PolicyModelActor(BaseModelActor):
                 load_in_4bit=strategy.args.load_in_4bit,
                 ds_config=strategy.get_ds_eval_config(offload=True),
                 packing_samples=strategy.args.packing_samples,
-                **tp_kwargs,
             )
         else:
             ema_model = None

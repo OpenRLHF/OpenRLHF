@@ -231,7 +231,12 @@ if __name__ == "__main__":
     parser.add_argument("--overlap_comm", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
-    parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed Tensor parallel size")
+    parser.add_argument(
+        "--ds_tensor_parallel_size",
+        type=int,
+        default=1,
+        help="Tensor parallel size (DeepSpeed AutoTP; FSDP2 uses torch-native TP)",
+    )
 
     # Models
     parser.add_argument("--pretrain", type=str, default=None)

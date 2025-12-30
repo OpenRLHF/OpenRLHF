@@ -302,7 +302,12 @@ if __name__ == "__main__":
         default=False,
         help="Enable sleep mode for deepspeed when using --colocate_all_models",
     )
-    parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed tensor parallel size")
+    parser.add_argument(
+        "--ds_tensor_parallel_size",
+        type=int,
+        default=1,
+        help="Tensor parallel size (DeepSpeed AutoTP; FSDP2 uses torch-native TP)",
+    )
 
     # packing samples using Flash Attention2
     parser.add_argument("--packing_samples", action="store_true", default=False)
