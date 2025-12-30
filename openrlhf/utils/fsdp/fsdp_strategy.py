@@ -418,45 +418,58 @@ class FSDP2Strategy(ABC):
         error_if_nonfinite: bool = False,
         foreach: Optional[bool] = None,
     ) -> float:
-        """DTensor-safe global grad clipping."""
+        """DTensor-safe global grad clipping.
+
+        Uses torch.nn.utils.get_total_norm which automatically handles DTensor
+        gradient norm computation across DP/FSDP/TP dimensions.
+        Reference: TorchTitan's clip_grad_norm_ implementation.
+        """
         if max_norm <= 0:
             return 0.0
-
-        if foreach is None:
-            foreach = False
 
         parameters = [p for p in model.parameters() if p.grad is not None]
         if not parameters:
             return 0.0
 
+        # Non-distributed case: use standard clip_grad_norm_
         if not dist.is_initialized():
             total_norm = torch.nn.utils.clip_grad_norm_(
                 parameters,
                 max_norm=float(max_norm),
                 norm_type=float(norm_type),
                 error_if_nonfinite=bool(error_if_nonfinite),
-                foreach=bool(foreach),
+                foreach=foreach,
             )
             return float(total_norm)
 
-        device = torch.device("cuda", torch.cuda.current_device())
-        grads = [p.grad for p in parameters if p.grad is not None]
+        # Distributed case: use get_total_norm + clip_grads_with_norm_
+        grads = [p.grad for p in parameters]
 
         try:
-            from torch.distributed.tensor import DTensor
-        except Exception:
-            DTensor = None
-
-        try:
+            # get_total_norm handles DTensor automatically (PyTorch 2.4+)
             total_norm = torch.nn.utils.get_total_norm(
                 grads,
                 norm_type=float(norm_type),
                 error_if_nonfinite=bool(error_if_nonfinite),
-                foreach=bool(foreach),
+                foreach=foreach if foreach is not None else False,
             )
-            if DTensor is not None and isinstance(total_norm, DTensor):
-                total_norm = total_norm.full_tensor()
+
+            # If total_norm is a DTensor, reduce it to get the global norm
+            try:
+                from torch.distributed.tensor import DTensor
+
+                if isinstance(total_norm, DTensor):
+                    total_norm = total_norm.full_tensor()
+            except ImportError:
+                pass
         except Exception:
+            # Fallback for mixed DeviceMesh (e.g., TP parts vs non-TP parts)
+            # PyTorch get_total_norm fails when stacking tensors with different meshes
+            try:
+                from torch.distributed.tensor import DTensor
+            except Exception:
+                DTensor = None
+
             mesh_to_grads: dict[tuple, list] = {}
             local_grads: list = []
             for grad in grads:
@@ -500,6 +513,7 @@ class FSDP2Strategy(ABC):
                     foreach=bool(foreach),
                 )
                 if DTensor is not None and isinstance(local_norm, DTensor):
+                    # Should not happen for local grads, but safe check
                     local_norm = local_norm.full_tensor()
                 local_norm = local_norm.to(device, non_blocking=True)
 
@@ -511,14 +525,17 @@ class FSDP2Strategy(ABC):
             if not math.isinf(norm_type_f):
                 total_norm = total_norm_pow.pow(1.0 / norm_type_f)
 
+        # Clip gradients using the computed total norm
         total_norm = total_norm.to(device, non_blocking=True)
         torch.nn.utils.clip_grads_with_norm_(
             parameters,
             max_norm=float(max_norm),
             total_norm=total_norm,
-            foreach=False,
+            foreach=foreach if foreach is not None else False,
         )
-        return float(total_norm.item())
+
+        return float(total_norm.item() if hasattr(total_norm, "item") else total_norm)
+
 
     @staticmethod
     def _move_optimizer_state(optimizer: optim.Optimizer, device: torch.device) -> None:
