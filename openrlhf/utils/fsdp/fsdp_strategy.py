@@ -68,10 +68,6 @@ class FSDP2Strategy(ABC):
             getattr(args, "fsdp2_reshard_after_forward", True),
             default=True,
         )
-        # HSDP (Hybrid Sharded Data Parallel) configuration.
-        # -1 or >= dp_size: full FSDP sharding across all DP ranks
-        # 1 < size < dp_size: HSDP with (ddp, fsdp) 2D mesh structure
-        self.fsdp2_hsdp_size = int(getattr(args, "fsdp2_hsdp_size", -1) or -1)
 
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
@@ -116,16 +112,7 @@ class FSDP2Strategy(ABC):
         # Build device mesh. Always create mesh even for pure DP mode.
         self._create_device_mesh(duplicate_factor)
 
-        # For HSDP + ring attention, flatten (ddp, sp) into a single replicate dim.
-        # This lets FSDP2 reduce gradients across SP ranks while keeping parameter sharding on "fsdp".
-        if (
-            self.ring_attn_size > 1
-            and self.fsdp_device_mesh is not None
-            and getattr(self.fsdp_device_mesh, "mesh_dim_names", None) is not None
-            and "ddp" in self.fsdp_device_mesh.mesh_dim_names
-            and "sp" in self.fsdp_device_mesh.mesh_dim_names
-        ):
-            self.fsdp_device_mesh["ddp", "sp"]._flatten(mesh_dim_name="ddp_sp")
+
 
         # Ring attention group setup (mirrors DeepSpeedStrategy.setup_ring_attn()).
         if self.ring_attn_size > 1:
@@ -155,77 +142,60 @@ class FSDP2Strategy(ABC):
 
         self.print(
             f"[fsdp2] world_size={self.world_size}, dp_size={getattr(self, 'dp_size', self.world_size)}, "
-            f"hsdp_size={self.fsdp2_hsdp_size}, ring_attn_size={self.ring_attn_size}, "
-            f"ds_tensor_parallel_size={self.ds_tensor_parallel_size}, "
+            f"ring_attn_size={self.ring_attn_size}, ds_tensor_parallel_size={self.ds_tensor_parallel_size}, "
             f"accumulated_gradient={self.accumulated_gradient}, fsdp2_offload={self.fsdp2_offload}"
         )
 
     def _create_device_mesh(self, duplicate_factor: int) -> None:
         """Create FSDP device mesh.
 
-        Simplified version: extract mesh building logic to reduce code duplication.
+        Supports the following configurations:
+        - Pure FSDP: 1D mesh ("fsdp",)
+        - FSDP + SP (ring attention): 2D mesh ("sp", "fsdp") - gradients reduce across SP
+        - FSDP + TP: 2D mesh ("fsdp", "tp")
+        - FSDP + SP + TP: 3D mesh ("sp", "fsdp", "tp")
         """
-        # Calculate HSDP configuration
-        hsdp_size = self.fsdp2_hsdp_size
-        use_hsdp = 1 < hsdp_size < self.dp_size and self.dp_size % hsdp_size == 0
+        sp_size = int(self.ring_attn_size) if self.ring_attn_size > 1 else 1
+        tp_size = int(self.ds_tensor_parallel_size) if self.ds_tensor_parallel_size > 1 else 1
 
-        mesh_dims: list[int] = []
-        mesh_dim_names: list[str] = []
+        # Validate world_size decomposition
+        if self.world_size != self.dp_size * sp_size * tp_size:
+            raise RuntimeError(
+                f"[fsdp2] invalid world_size decomposition: world_size={self.world_size}, "
+                f"dp_size={self.dp_size}, sp_size={sp_size}, tp_size={tp_size}"
+            )
 
-        if use_hsdp:
-            ddp_size = self.dp_size // hsdp_size
-            # For 2D HSDP meshes, fully_shard() interprets (Replicate, Shard).
-            mesh_dims.extend([ddp_size, hsdp_size])
-            mesh_dim_names.extend(["ddp", "fsdp"])
-            if self.ring_attn_size > 1:
-                mesh_dims.append(self.ring_attn_size)
-                mesh_dim_names.append("sp")
+        # Case 1: Pure FSDP (no SP, no TP)
+        if sp_size == 1 and tp_size == 1:
+            self.fsdp_device_mesh = init_device_mesh(
+                "cuda",
+                (self.dp_size,),
+                mesh_dim_names=("fsdp",),
+            )
+            return
+
+        # Case 2: FSDP + TP only (no SP)
+        if sp_size == 1 and tp_size > 1:
+            self.fsdp_device_mesh = init_device_mesh(
+                "cuda",
+                (self.dp_size, tp_size),
+                mesh_dim_names=("fsdp", "tp"),
+            )
+            return
+
+        # Case 3 & 4: FSDP + SP (with or without TP)
+        # Build a custom rank layout to keep SP groups contiguous within nodes.
+        # Layout: (fsdp, tp, sp) reshaped to (sp, fsdp, tp) for FSDP2's (Replicate, Shard) interpretation.
+        mesh = torch.arange(self.world_size, device="cpu").view(self.dp_size, tp_size, sp_size)
+        mesh = mesh.permute(2, 0, 1).contiguous()  # (sp, fsdp, tp)
+
+        if tp_size == 1:
+            # FSDP + SP only
+            mesh = mesh.squeeze(-1)  # (sp, fsdp)
+            self.fsdp_device_mesh = DeviceMesh("cuda", mesh, mesh_dim_names=("sp", "fsdp"))
         else:
-            # Pure FSDP. For ring attention, we want a 2D mesh interpreted as
-            # (Replicate=sp, Shard=fsdp). We additionally want the *rank layout*
-            # to match the common (fsdp, sp, tp) row-major convention so the sp
-            # groups stay local/contiguous under typical rank-to-node mappings.
-            if self.ring_attn_size > 1:
-                sp_size = int(self.ring_attn_size)
-                tp_size = int(max(1, self.ds_tensor_parallel_size))
-                if self.world_size != self.dp_size * sp_size * tp_size:
-                    raise RuntimeError(
-                        f"[fsdp2] invalid world_size decomposition: world_size={self.world_size}, "
-                        f"dp_size={self.dp_size}, sp_size={sp_size}, tp_size={tp_size}"
-                    )
-
-                # Keep duplicates (sp * tp) contiguous per FSDP rank so RLHF's Ray
-                # "duplicate_factor" de-duplication stays valid. We also prefer
-                # contiguous SP groups (for each fixed fsdp,tp) to reduce the
-                # chance that ring-attn collectives span nodes.
-                #
-                # Build a (fsdp, tp, sp) rank layout and permute to (sp, fsdp, tp):
-                # - dp blocks are contiguous: [0..sp*tp-1], [sp*tp..2*sp*tp-1], ...
-                # - within each dp block, SP groups are contiguous for each TP coord.
-                mesh = torch.arange(self.world_size, device="cpu").view(self.dp_size, tp_size, sp_size)
-                mesh = mesh.permute(2, 0, 1).contiguous()
-
-                if tp_size == 1:
-                    mesh = mesh.squeeze(-1)
-                    self.fsdp_device_mesh = DeviceMesh("cuda", mesh, mesh_dim_names=("sp", "fsdp"))
-                    return
-
-                self.fsdp_device_mesh = DeviceMesh("cuda", mesh, mesh_dim_names=("sp", "fsdp", "tp"))
-                return
-
-            mesh_dims.append(self.dp_size)
-            mesh_dim_names.append("fsdp")
-
-        if duplicate_factor > 1 and self.ds_tensor_parallel_size > 1:
-            mesh_dims.append(self.ds_tensor_parallel_size)
-            mesh_dim_names.append("tp")
-
-        # Create device mesh
-        self.fsdp_device_mesh = init_device_mesh(
-            "cuda",
-            tuple(mesh_dims),
-            mesh_dim_names=tuple(mesh_dim_names),
-        )
+            # FSDP + SP + TP
+            self.fsdp_device_mesh = DeviceMesh("cuda", mesh, mesh_dim_names=("sp", "fsdp", "tp"))
 
     @property
     def ring_attn_group(self):
@@ -251,7 +221,7 @@ class FSDP2Strategy(ABC):
         error_if_nonfinite: bool = False,
         foreach: Optional[bool] = None,
     ) -> float:
-        """DTensor-safe global grad clipping (FSDP2 + optional TP/SP/HSDP).
+        """DTensor-safe global grad clipping (FSDP2 + optional TP/SP).
 
         Prefer the native PyTorch implementation (`get_total_norm` +
         `clip_grads_with_norm_`). When gradients live on multiple DeviceMesh
@@ -499,9 +469,9 @@ class FSDP2Strategy(ABC):
 
         Returns the appropriate mesh dimension for FSDP based on configuration:
         - Pure FSDP: returns mesh["fsdp"] (1D)
-        - Ring attention: returns an HSDP-style (sp, fsdp) mesh so gradients reduce across SP
-        - HSDP: returns mesh["ddp", "fsdp"] (replicate, shard)
-        - HSDP + ring attention: returns (ddp_sp, fsdp) where ddp_sp flattens (ddp, sp)
+        - FSDP + SP: returns mesh["sp", "fsdp"] (2D) - SP as replicate dim
+        - FSDP + TP: returns mesh["fsdp"] (1D) - TP handled separately
+        - FSDP + SP + TP: returns mesh["sp", "fsdp"] (2D)
         """
         if not hasattr(self, "fsdp_device_mesh") or self.fsdp_device_mesh is None:
             return None
@@ -514,19 +484,11 @@ class FSDP2Strategy(ABC):
 
         has_sp = self.ring_attn_size > 1 and "sp" in mesh_dim_names
 
-        # HSDP: 2D mesh (Replicate, Shard)
-        if "ddp" in mesh_dim_names:
-            if has_sp:
-                try:
-                    return self.fsdp_device_mesh["ddp_sp", "fsdp"]
-                except Exception:
-                    return self.fsdp_device_mesh["ddp", "fsdp"]
-            return self.fsdp_device_mesh["ddp", "fsdp"]
-
-        # Pure FSDP: 1D mesh (Shard), or treat SP as a replicate dim for gradient reduction.
+        # FSDP + SP: 2D mesh (Replicate=sp, Shard=fsdp)
         if has_sp:
-            # fully_shard() interprets a 2D mesh as (Replicate, Shard).
             return self.fsdp_device_mesh["sp", "fsdp"]
+
+        # Pure FSDP or FSDP + TP: 1D mesh (Shard)
         return self.fsdp_device_mesh["fsdp"]
 
     def _get_dp_group(self):
@@ -534,9 +496,6 @@ class FSDP2Strategy(ABC):
 
         Always excludes SP/TP dimensions: ranks that only differ in ring-attn/TP should
         process the same data and share the same DP rank for sampling/metrics.
-
-        For HSDP, returns the combined group spanning both ddp and fsdp dimensions.
-        For pure FSDP, returns the fsdp group.
         Used for sampler partitioning and metric reduction.
         """
         if not hasattr(self, "fsdp_device_mesh") or self.fsdp_device_mesh is None:
@@ -548,8 +507,6 @@ class FSDP2Strategy(ABC):
         if "fsdp" not in mesh_dim_names:
             raise RuntimeError(f"[fsdp2] DeviceMesh is missing required 'fsdp' dim (got {mesh_dim_names}).")
 
-        if "ddp" in mesh_dim_names:
-            return self.fsdp_device_mesh["ddp", "fsdp"].get_group()
         return self.fsdp_device_mesh["fsdp"].get_group()
 
     @staticmethod
