@@ -1015,3 +1015,9 @@ class FSDP2Strategy(ABC):
         if not dist.is_initialized():
             return 0
         return dist.get_rank()
+
+    def get_ds_train_config(self, is_actor):
+        return None
+
+    def get_ds_eval_config(self, offload=False):
+        return None
