@@ -31,10 +31,19 @@ ModelOrModelOptimPair = Union[nn.Module, ModelOptimPair]
 
 
 class FSDP2Strategy(ABC):
-    _HF_STATE_DICT_WRAPPER_PREFIXES = (
-        "_checkpoint_wrapped_module.",
-        "_orig_mod.",  # torch.compile / OptimizedModule
-    )
+    """FSDP2 distributed training strategy.
+
+    Device mesh layout: (dp, cp, tp)
+    - dp: Data Parallel (FSDP sharding) - outer dimension
+    - cp: Context Parallel (ring attention) - middle dimension
+    - tp: Tensor Parallel - inner dimension (most contiguous)
+
+    Supported parallelism combinations:
+    - Pure DP: 1D mesh ("dp",)
+    - DP + CP (ring attention): 2D mesh ("dp", "cp")
+    - DP + TP: 2D mesh ("dp", "tp")
+    - DP + CP + TP: 3D mesh ("dp", "cp", "tp")
+    """
 
     def __init__(
         self,
@@ -55,22 +64,16 @@ class FSDP2Strategy(ABC):
         self.max_norm = max_norm
         self.precision = getattr(args, "precision", "bf16")
 
-        # Keep argument parity with DeepSpeedStrategy for RLHF/ring attention settings.
         self.ring_attn_size = int(getattr(args, "ring_attn_size", 1) or 1)
         self.ds_tensor_parallel_size = int(getattr(args, "ds_tensor_parallel_size", 1) or 1)
 
         self.fsdp2_offload = getattr(args, "fsdp2_offload", "none")
-        self.fsdp2_cpu_offload_pin_memory = self._coerce_bool(
-            getattr(args, "fsdp2_cpu_offload_pin_memory", True),
-            default=True,
-        )
-        self.fsdp2_reshard_after_forward = self._coerce_bool(
-            getattr(args, "fsdp2_reshard_after_forward", True),
-            default=True,
-        )
+        self.fsdp2_cpu_offload_pin_memory = getattr(args, "fsdp2_cpu_offload_pin_memory", True)
+        self.fsdp2_reshard_after_forward = getattr(args, "fsdp2_reshard_after_forward", True)
 
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
+
         torch_version = version.parse(torch.__version__.split("+")[0])
         required_version = version.parse("2.4.0")
         if torch_version < required_version:
@@ -82,7 +85,26 @@ class FSDP2Strategy(ABC):
         self._offload_policy: Optional["CPUOffloadPolicy"] = self._build_offload_policy()
         self._mp_policy: Optional["MixedPrecisionPolicy"] = self._build_mixed_precision_policy()
 
+
+
+    def _build_offload_policy(self) -> Optional["CPUOffloadPolicy"]:
+        """Build CPU offload policy."""
+        offload_mode = (self.fsdp2_offload or "none").lower()
+        if offload_mode == "none":
+            return None
+        if offload_mode == "cpu":
+            return CPUOffloadPolicy(pin_memory=bool(self.fsdp2_cpu_offload_pin_memory))
+        raise ValueError(f"Unknown fsdp2_offload mode: {self.fsdp2_offload}")
+
+    def _build_mixed_precision_policy(self) -> Optional["MixedPrecisionPolicy"]:
+        """Build mixed precision policy."""
+        if self.precision == "fp32":
+            return None
+        dtype = convert_to_dtype(self.precision)
+        return MixedPrecisionPolicy(param_dtype=dtype, reduce_dtype=torch.float32, cast_forward_inputs=True)
+
     def setup_distributed(self, timeout=timedelta(minutes=60)) -> None:
+        """Initialize distributed environment and device mesh."""
         if self.full_determinism:
             enable_full_determinism(self.seed)
         else:
@@ -90,13 +112,11 @@ class FSDP2Strategy(ABC):
 
         if self.args.local_rank != -1:
             os.environ["LOCAL_RANK"] = str(self.args.local_rank)
-
         local_rank = int(os.environ.get("LOCAL_RANK", "-1"))
         if local_rank != -1:
             torch.cuda.set_device(local_rank)
 
         dist.init_process_group(timeout=timeout)
-
         self.world_size = dist.get_world_size()
         self.ring_attn_rank = 0
         set_ring_attn_group(None)
@@ -109,107 +129,292 @@ class FSDP2Strategy(ABC):
             )
         self.dp_size = self.world_size // duplicate_factor
 
-        # Build device mesh. Always create mesh even for pure DP mode.
-        self._create_device_mesh(duplicate_factor)
+        self._create_device_mesh()
 
-        # Ring attention group setup (mirrors DeepSpeedStrategy.setup_ring_attn()).
         if self.ring_attn_size > 1:
-            group = self.fsdp_device_mesh["sp"].get_group()
-            self.ring_attn_rank = dist.get_rank(group=group)
-            set_ring_attn_group(group)
+            self._setup_ring_attention()
 
-            try:
-                from ring_flash_attn import substitute_hf_flash_attn
-
-                ring_head_stride = getattr(self.args, "ring_head_stride", 1)
-                substitute_hf_flash_attn(self.ring_attn_group, ring_head_stride)
-            except Exception as exc:
-                raise RuntimeError(
-                    "ring_attn_size > 1 requires ring_flash_attn. "
-                    "Please install ring_flash_attn or set --ring_attn_size 1."
-                ) from exc
-
-        # Match DeepSpeedStrategy semantics: treat `train_batch_size` as the *effective DP* batch.
-        # When using ring attention / TP, ranks within a ring/TP group process the same data.
-        denom = max(1, self.micro_train_batch_size) * max(1, self.world_size)
-        numerator = self.train_batch_size * max(1, self.ring_attn_size) * max(1, self.ds_tensor_parallel_size)
-        self.accumulated_gradient = max(1, numerator // denom)
-        # Dynamic batch mode manages stepping explicitly (see PPO trainers); disable fixed accumulation.
-        if getattr(self.args, "use_dynamic_batch", False):
-            self.accumulated_gradient = 1
+        self._setup_gradient_accumulation()
 
         self.print(
-            f"[fsdp2] world_size={self.world_size}, dp_size={getattr(self, 'dp_size', self.world_size)}, "
+            f"[fsdp2] world_size={self.world_size}, dp_size={self.dp_size}, "
             f"ring_attn_size={self.ring_attn_size}, ds_tensor_parallel_size={self.ds_tensor_parallel_size}, "
             f"accumulated_gradient={self.accumulated_gradient}, fsdp2_offload={self.fsdp2_offload}"
         )
 
-    def _create_device_mesh(self, duplicate_factor: int) -> None:
-        """Create FSDP device mesh.
+    def _create_device_mesh(self) -> None:
+        """Create device mesh with layout (dp, cp, tp).
 
-        Supports the following configurations:
-        - Pure FSDP: 1D mesh ("fsdp",)
-        - FSDP + SP (ring attention): 2D mesh ("sp", "fsdp") - gradients reduce across SP
-        - FSDP + TP: 2D mesh ("fsdp", "tp")
-        - FSDP + SP + TP: 3D mesh ("sp", "fsdp", "tp")
+        Dimension order (outer to inner) follows communication frequency:
+        - dp: lowest frequency (gradient sync at step boundaries)
+        - cp: medium frequency (ring attention per layer)
+        - tp: highest frequency (intra-layer all-reduce)
+
+        This ensures CP and TP groups have contiguous ranks for efficient communication.
+
+        Supports:
+        - Pure DP: 1D mesh ("dp",)
+        - DP + CP: 2D mesh ("dp", "cp")
+        - DP + TP: 2D mesh ("dp", "tp")
+        - DP + CP + TP: 3D mesh ("dp", "cp", "tp")
         """
-        sp_size = int(self.ring_attn_size) if self.ring_attn_size > 1 else 1
+        cp_size = int(self.ring_attn_size) if self.ring_attn_size > 1 else 1
         tp_size = int(self.ds_tensor_parallel_size) if self.ds_tensor_parallel_size > 1 else 1
 
-        # Validate world_size decomposition
-        if self.world_size != self.dp_size * sp_size * tp_size:
+        if self.world_size != self.dp_size * cp_size * tp_size:
             raise RuntimeError(
                 f"[fsdp2] invalid world_size decomposition: world_size={self.world_size}, "
-                f"dp_size={self.dp_size}, sp_size={sp_size}, tp_size={tp_size}"
+                f"dp_size={self.dp_size}, cp_size={cp_size}, tp_size={tp_size}"
             )
 
-        # Case 1: Pure FSDP (no SP, no TP)
-        if sp_size == 1 and tp_size == 1:
+        # Case 1: Pure DP (no CP, no TP)
+        if cp_size == 1 and tp_size == 1:
             self.fsdp_device_mesh = init_device_mesh(
                 "cuda",
                 (self.dp_size,),
-                mesh_dim_names=("fsdp",),
+                mesh_dim_names=("dp",),
             )
             return
 
-        # Case 2: FSDP + TP only (no SP)
-        if sp_size == 1 and tp_size > 1:
+        # Case 2: DP + TP only (no CP)
+        if cp_size == 1 and tp_size > 1:
             self.fsdp_device_mesh = init_device_mesh(
                 "cuda",
                 (self.dp_size, tp_size),
-                mesh_dim_names=("fsdp", "tp"),
+                mesh_dim_names=("dp", "tp"),
             )
             return
 
-        # Case 3 & 4: FSDP + SP (with or without TP)
-        # Build a custom rank layout to keep SP groups contiguous within nodes.
-        # Layout: (fsdp, tp, sp) reshaped to (sp, fsdp, tp) for FSDP2's (Replicate, Shard) interpretation.
-        mesh = torch.arange(self.world_size, device="cpu").view(self.dp_size, tp_size, sp_size)
-        mesh = mesh.permute(2, 0, 1).contiguous()  # (sp, fsdp, tp)
-
+        # Case 3: DP + CP only (no TP)
         if tp_size == 1:
-            # FSDP + SP only
-            mesh = mesh.squeeze(-1)  # (sp, fsdp)
-            self.fsdp_device_mesh = DeviceMesh("cuda", mesh, mesh_dim_names=("sp", "fsdp"))
-        else:
-            # FSDP + SP + TP
-            self.fsdp_device_mesh = DeviceMesh("cuda", mesh, mesh_dim_names=("sp", "fsdp", "tp"))
+            self.fsdp_device_mesh = init_device_mesh(
+                "cuda",
+                (self.dp_size, cp_size),
+                mesh_dim_names=("dp", "cp"),
+            )
+            return
+
+        # Case 4: DP + CP + TP (full 3D mesh)
+        self.fsdp_device_mesh = init_device_mesh(
+            "cuda",
+            (self.dp_size, cp_size, tp_size),
+            mesh_dim_names=("dp", "cp", "tp"),
+        )
+
+    def _setup_ring_attention(self) -> None:
+        """Setup ring attention process group."""
+        group = self.fsdp_device_mesh["cp"].get_group()
+        self.ring_attn_rank = dist.get_rank(group=group)
+        set_ring_attn_group(group)
+
+        try:
+            from ring_flash_attn import substitute_hf_flash_attn
+
+            ring_head_stride = getattr(self.args, "ring_head_stride", 1)
+            substitute_hf_flash_attn(self.ring_attn_group, ring_head_stride)
+        except Exception as exc:
+            raise RuntimeError(
+                "ring_attn_size > 1 requires ring_flash_attn. "
+                "Please install ring_flash_attn or set --ring_attn_size 1."
+            ) from exc
+
+    def _setup_gradient_accumulation(self) -> None:
+        """Compute gradient accumulation steps."""
+        denom = max(1, self.micro_train_batch_size) * max(1, self.world_size)
+        numerator = self.train_batch_size * max(1, self.ring_attn_size) * max(1, self.ds_tensor_parallel_size)
+        self.accumulated_gradient = max(1, numerator // denom)
+        if getattr(self.args, "use_dynamic_batch", False):
+            self.accumulated_gradient = 1
+
+    def _get_fsdp_mesh(self):
+        """Get the mesh for FSDP sharding.
+
+        Returns only the dp submesh (1D). CP and TP handle their own gradient
+        synchronization internally (ring_flash_attn for CP, transformers TP for TP).
+        """
+        if not hasattr(self, "fsdp_device_mesh") or self.fsdp_device_mesh is None:
+            return None
+
+        mesh_dim_names = getattr(self.fsdp_device_mesh, "mesh_dim_names", None)
+        if not mesh_dim_names:
+            raise RuntimeError("[fsdp2] DeviceMesh must have named dims.")
+        if "dp" not in mesh_dim_names:
+            raise RuntimeError(f"[fsdp2] DeviceMesh is missing required 'dp' dim (got {mesh_dim_names}).")
+
+        return self.fsdp_device_mesh["dp"]
+
+    def _get_dp_group(self):
+        """Get the process group for data-parallel communication (metrics, loss reduction)."""
+        if not hasattr(self, "fsdp_device_mesh") or self.fsdp_device_mesh is None:
+            return None
+
+        mesh_dim_names = getattr(self.fsdp_device_mesh, "mesh_dim_names", None)
+        if not mesh_dim_names:
+            raise RuntimeError("[fsdp2] DeviceMesh must have named dims.")
+        if "dp" not in mesh_dim_names:
+            raise RuntimeError(f"[fsdp2] DeviceMesh is missing required 'dp' dim (got {mesh_dim_names}).")
+
+        return self.fsdp_device_mesh["dp"].get_group()
 
     @property
     def ring_attn_group(self):
+        """Get ring attention process group."""
         return get_ring_attn_group()
 
+    def prepare(self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False):
+        """Prepare models for FSDP2 training."""
+        ret: List[ModelOrModelOptimPair] = []
+        self.is_rlhf = is_rlhf
+
+        for arg in models_or_model_optim_pairs:
+            if isinstance(arg, tuple):
+                model, optim_, scheduler = arg
+                if model is None:
+                    ret.append((None, None, None))
+                    continue
+                is_actor = isinstance(model, Actor)
+                module = model.model if is_actor else model
+                module = self._wrap_train_model(module)
+                if is_actor:
+                    model.model = module
+                    ret.append((model, optim_, scheduler))
+                else:
+                    ret.append((module, optim_, scheduler))
+            else:
+                model = arg
+                if model is None:
+                    ret.append(model)
+                    continue
+                is_actor = isinstance(model, Actor)
+                module = model.model if is_actor else model
+                module = self._wrap_train_model(module)
+                if is_actor:
+                    model.model = module
+                    ret.append(model)
+                else:
+                    ret.append(module)
+
+        return ret[0] if len(ret) == 1 else ret
+
+    def _wrap_train_model(self, model: nn.Module) -> nn.Module:
+        """Wrap model with FSDP2 fully_shard."""
+        try:
+            fsdp_mesh = self._get_fsdp_mesh()
+            if fsdp_mesh is None:
+                raise RuntimeError(
+                    "[fsdp2] Device mesh is not initialized. Make sure `strategy.setup_distributed()` "
+                    "is called before `strategy.prepare()`."
+                )
+            self._maybe_fully_shard_children(model)
+            if not isinstance(model, FSDPModule):
+                model = fully_shard(
+                    model,
+                    mesh=fsdp_mesh,
+                    reshard_after_forward=self.fsdp2_reshard_after_forward,
+                    offload_policy=self._offload_policy,
+                    mp_policy=self._mp_policy,
+                )
+            return model
+        except Exception as exc:
+            raise RuntimeError(
+                "fully_shard() failed while constructing the FSDP2 model. "
+                "Please double-check that the model supports composable FSDP."
+            ) from exc
+
+    def _maybe_fully_shard_children(self, module: nn.Module) -> None:
+        """Apply FSDP2 fully_shard to transformer layers."""
+        layer_cls_to_wrap = getattr(module, "_no_split_modules", None)
+        fsdp_mesh = self._get_fsdp_mesh()
+        if fsdp_mesh is None:
+            raise RuntimeError(
+                "[fsdp2] Device mesh is not initialized. Make sure `strategy.setup_distributed()` "
+                "is called before `strategy.prepare()`."
+            )
+
+        if not layer_cls_to_wrap:
+            for child in module.children():
+                if isinstance(child, FSDPModule):
+                    continue
+                if any(p.requires_grad for p in child.parameters(recurse=True)):
+                    fully_shard(
+                        child,
+                        mesh=fsdp_mesh,
+                        reshard_after_forward=self.fsdp2_reshard_after_forward,
+                        offload_policy=self._offload_policy,
+                        mp_policy=self._mp_policy,
+                    )
+            return
+
+        modules_to_shard = []
+        for name, child in module.named_modules():
+            if isinstance(child, FSDPModule):
+                continue
+            if child.__class__.__name__ in layer_cls_to_wrap:
+                modules_to_shard.append(child)
+            elif (
+                isinstance(child, nn.Embedding) and hasattr(module, "config") and not module.config.tie_word_embeddings
+            ):
+                modules_to_shard.append(child)
+
+        for child in modules_to_shard:
+            fully_shard(
+                child,
+                mesh=fsdp_mesh,
+                reshard_after_forward=self.fsdp2_reshard_after_forward,
+                offload_policy=self._offload_policy,
+                mp_policy=self._mp_policy,
+            )
+
+    def _unwrap_model(self, model) -> nn.Module:
+        """Unwrap Actor wrapper, return the inner model."""
+        if isinstance(model, Actor):
+            return self._unwrap_model(model.model)
+        return model
+
+    # NOTE: FSDP2 uses mean reduce-scatter by default, so we don't need to call
+    # set_gradient_divide_factor(dp_size). Doing so would divide gradients twice.
+    # This is consistent with TorchTitan's approach.
+
     def create_optimizer(self, model, **kwargs) -> Optimizer:
+        """Create optimizer."""
         if isinstance(model, Actor):
             model = model.model
-        # In TP-only mode (dp_size==1), parameters may mix DTensor and local tensors.
-        # torch.optim foreach kernels are not guaranteed to support this combination.
         if "foreach" not in kwargs:
             tp_size = int(getattr(self, "ds_tensor_parallel_size", 1) or 1)
             dp_size = int(getattr(self, "dp_size", 1) or 1)
             if tp_size > 1 and dp_size <= 1:
                 kwargs["foreach"] = False
         return optim.AdamW(model.parameters(), **kwargs)
+
+    def backward(self, loss: torch.Tensor, model: nn.Module, optimizer: optim.Optimizer, **kwargs) -> None:
+        """Backward pass."""
+        accumulation_steps = max(1, int(getattr(self, "accumulated_gradient", 1)))
+        if accumulation_steps > 1:
+            loss = loss / accumulation_steps
+        loss.backward()
+
+    def optimizer_step(
+        self,
+        optimizer: optim.Optimizer,
+        model: nn.Module,
+        scheduler,
+        name="model",
+        **kwargs,
+    ) -> None:
+        """Optimizer step."""
+        micro_step_key = f"optim_micro_step_{name}"
+        self.time_steps[micro_step_key] += 1
+        accumulation_steps = max(1, int(getattr(self, "accumulated_gradient", 1)))
+        if self.time_steps[micro_step_key] % accumulation_steps != 0:
+            return
+
+        unwrapped = self._unwrap_model(model)
+        if self.max_norm and self.max_norm > 0:
+            self._clip_grad_norm_dtensor_safe(unwrapped, float(self.max_norm))
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+        if scheduler is not None:
+            scheduler.step()
 
     def _clip_grad_norm_dtensor_safe(
         self,
@@ -219,19 +424,11 @@ class FSDP2Strategy(ABC):
         error_if_nonfinite: bool = False,
         foreach: Optional[bool] = None,
     ) -> float:
-        """DTensor-safe global grad clipping (FSDP2 + optional TP/SP).
-
-        Prefer the native PyTorch implementation (`get_total_norm` +
-        `clip_grads_with_norm_`). When gradients live on multiple DeviceMesh
-        objects (e.g. mixed DTensor meshes), fall back to per-mesh norm
-        computation and combine locally to avoid cross-mesh DTensor ops.
-        """
+        """DTensor-safe global grad clipping."""
         if max_norm <= 0:
             return 0.0
 
         if foreach is None:
-            # DTensor gradients may live on different meshes; foreach kernels are
-            # not guaranteed to support that combination.
             foreach = False
 
         parameters = [p for p in model.parameters() if p.grad is not None]
@@ -266,8 +463,6 @@ class FSDP2Strategy(ABC):
             if DTensor is not None and isinstance(total_norm, DTensor):
                 total_norm = total_norm.full_tensor()
         except Exception:
-            # Conservative fallback: compute norm per DTensor mesh to avoid
-            # cross-mesh DTensor reductions, then combine locally.
             mesh_to_grads: dict[tuple, list] = {}
             local_grads: list = []
             for grad in grads:
@@ -331,37 +526,23 @@ class FSDP2Strategy(ABC):
         )
         return float(total_norm.item())
 
-    def backward(self, loss: torch.Tensor, model: nn.Module, optimizer: optim.Optimizer, **kwargs) -> None:
-        # Match DeepSpeed semantics: average gradients over accumulation steps.
-        accumulation_steps = max(1, int(getattr(self, "accumulated_gradient", 1)))
-        if accumulation_steps > 1:
-            loss = loss / accumulation_steps
-        loss.backward()
-
-    def optimizer_step(
-        self,
-        optimizer: optim.Optimizer,
-        model: nn.Module,
-        scheduler,
-        name="model",
-        **kwargs,
-    ) -> None:
-        micro_step_key = f"optim_micro_step_{name}"
-        self.time_steps[micro_step_key] += 1
-        accumulation_steps = max(1, int(getattr(self, "accumulated_gradient", 1)))
-        if self.time_steps[micro_step_key] % accumulation_steps != 0:
+    @staticmethod
+    def _move_optimizer_state(optimizer: optim.Optimizer, device: torch.device) -> None:
+        """Move optimizer state to the specified device."""
+        if not optimizer.state:
             return
-
-        # Unwrap Actor to get the underlying FSDPModule
-        unwrapped = self._unwrap_model(model)
-        if self.max_norm and self.max_norm > 0:
-            # DTensor-aware clipping to handle mixed DeviceMesh grads (e.g. TP + DP-only shards).
-            # The _clip_grad_norm_dtensor_safe function handles CPU gradients by moving local shards to GPU.
-            self._clip_grad_norm_dtensor_safe(unwrapped, float(self.max_norm))
-        optimizer.step()
-        optimizer.zero_grad(set_to_none=True)
-        if scheduler is not None:
-            scheduler.step()
+        for param_group in optimizer.param_groups:
+            for param in param_group["params"]:
+                state = optimizer.state.get(param)
+                if state is None:
+                    continue
+                for k, v in state.items():
+                    if torch.is_tensor(v):
+                        state[k] = v.to(device, non_blocking=True)
+                    elif isinstance(v, (list, tuple)):
+                        state[k] = type(v)(t.to(device, non_blocking=True) if torch.is_tensor(t) else t for t in v)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
 
     def setup_dataloader(
         self,
@@ -374,10 +555,8 @@ class FSDP2Strategy(ABC):
         sampler=None,
         consumed_samples=0,
     ):
+        """Setup dataloader."""
         if sampler is None and dist.is_initialized():
-            # When using ring attention / TP, ranks in the same ring/TP group
-            # should process the same data. Mirror DeepSpeedStrategy behavior by
-            # sampling only over the effective DP ranks.
             dp_group = self._get_dp_group()
             num_replicas = dist.get_world_size(group=dp_group) if dp_group is not None else dist.get_world_size()
             rank = dist.get_rank(group=dp_group) if dp_group is not None else dist.get_rank()
@@ -402,260 +581,9 @@ class FSDP2Strategy(ABC):
             pin_memory=pin_memory,
         )
 
-    def _unwrap_model(self, model) -> nn.Module:
-        """Unwrap Actor wrapper, return the inner model."""
-        if isinstance(model, Actor):
-            return self._unwrap_model(model.model)
-        return model
-
-    def _set_gradient_divide_factor(self, model: nn.Module) -> None:
-        """Match DeepSpeed dp semantics when using ring attention / TP duplicates.
-
-        FSDP2's default gradient reduction averages by the FSDP mesh size. In
-        OpenRLHF, ranks in a ring/TP group process the same samples (split by
-        tokens / TP) and should not contribute to the data-parallel averaging
-        factor. We therefore set the divide factor to the effective DP size.
-        """
-        if not dist.is_initialized():
-            return
-        dp_size = int(getattr(self, "dp_size", dist.get_world_size()) or 1)
-        factor = float(max(1, dp_size))
-        for module in model.modules():
-            if isinstance(module, FSDPModule):
-                module.set_gradient_divide_factor(factor)
-
-    def _wrap_train_model(self, model: nn.Module) -> nn.Module:
-        """Wrap model with FSDP2 fully_shard."""
-        try:
-            fsdp_mesh = self._get_fsdp_mesh()
-            if fsdp_mesh is None:
-                raise RuntimeError(
-                    "[fsdp2] Device mesh is not initialized. Make sure `strategy.setup_distributed()` "
-                    "is called before `strategy.prepare()`."
-                )
-            self._maybe_fully_shard_children(model)
-            if not isinstance(model, FSDPModule):
-                model = fully_shard(
-                    model,
-                    mesh=fsdp_mesh,
-                    reshard_after_forward=self.fsdp2_reshard_after_forward,
-                    offload_policy=self._offload_policy,
-                    mp_policy=self._mp_policy,
-                )
-            return model
-        except Exception as exc:
-            raise RuntimeError(
-                "fully_shard() failed while constructing the FSDP2 model. "
-                "Please double-check that the model supports composable FSDP."
-            ) from exc
-
-    def _get_mesh_info(self) -> Tuple[Optional[tuple], Optional[Any]]:
-        """Get mesh information.
-
-        Returns (mesh_dim_names, fsdp_device_mesh) tuple.
-        """
-        if not hasattr(self, "fsdp_device_mesh") or self.fsdp_device_mesh is None:
-            return None, None
-        try:
-            mesh_dim_names = self.fsdp_device_mesh.mesh_dim_names
-            return mesh_dim_names, self.fsdp_device_mesh
-        except Exception:
-            return None, None
-
-    def _get_fsdp_mesh(self):
-        """Return the sharding mesh for FSDP2.
-
-        Returns the appropriate mesh dimension for FSDP based on configuration:
-        - Pure FSDP: returns mesh["fsdp"] (1D)
-        - FSDP + SP: returns mesh["sp", "fsdp"] (2D) - SP as replicate dim
-        - FSDP + TP: returns mesh["fsdp"] (1D) - TP handled separately
-        - FSDP + SP + TP: returns mesh["sp", "fsdp"] (2D)
-        """
-        if not hasattr(self, "fsdp_device_mesh") or self.fsdp_device_mesh is None:
-            return None
-
-        mesh_dim_names = getattr(self.fsdp_device_mesh, "mesh_dim_names", None)
-        if not mesh_dim_names:
-            raise RuntimeError("[fsdp2] DeviceMesh must have named dims to build FSDP/TP submeshes.")
-        if "fsdp" not in mesh_dim_names:
-            raise RuntimeError(f"[fsdp2] DeviceMesh is missing required 'fsdp' dim (got {mesh_dim_names}).")
-
-        has_sp = self.ring_attn_size > 1 and "sp" in mesh_dim_names
-
-        # FSDP + SP: 2D mesh (Replicate=sp, Shard=fsdp)
-        if has_sp:
-            return self.fsdp_device_mesh["sp", "fsdp"]
-
-        # Pure FSDP or FSDP + TP: 1D mesh (Shard)
-        return self.fsdp_device_mesh["fsdp"]
-
-    def _get_dp_group(self):
-        """Return the process group for data-parallel communication.
-
-        Always excludes SP/TP dimensions: ranks that only differ in ring-attn/TP should
-        process the same data and share the same DP rank for sampling/metrics.
-        Used for sampler partitioning and metric reduction.
-        """
-        if not hasattr(self, "fsdp_device_mesh") or self.fsdp_device_mesh is None:
-            return None
-
-        mesh_dim_names = getattr(self.fsdp_device_mesh, "mesh_dim_names", None)
-        if not mesh_dim_names:
-            raise RuntimeError("[fsdp2] DeviceMesh must have named dims to build DP groups.")
-        if "fsdp" not in mesh_dim_names:
-            raise RuntimeError(f"[fsdp2] DeviceMesh is missing required 'fsdp' dim (got {mesh_dim_names}).")
-
-        return self.fsdp_device_mesh["fsdp"].get_group()
-
-    @staticmethod
-    def _coerce_bool(value, default=False):
-        if value is None:
-            return default
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            lowered = value.strip().lower()
-            if lowered in {"true", "1", "yes", "y", "t"}:
-                return True
-            if lowered in {"false", "0", "no", "n", "f"}:
-                return False
-        return bool(value)
-
-    def _build_offload_policy(self) -> Optional["CPUOffloadPolicy"]:
-        offload_mode = (self.fsdp2_offload or "none").lower()
-        if offload_mode == "none":
-            return None
-        if offload_mode == "cpu":
-            return CPUOffloadPolicy(pin_memory=bool(self.fsdp2_cpu_offload_pin_memory))
-        raise ValueError(f"Unknown fsdp2_offload mode: {self.fsdp2_offload}")
-
-    def _build_mixed_precision_policy(self) -> Optional["MixedPrecisionPolicy"]:
-        # fp32: no mixed precision policy needed
-        if self.precision == "fp32":
-            return None
-        # Use specified precision for param_dtype, but float32 for reduce_dtype
-        # to maintain gradient precision during all-reduce
-        dtype = convert_to_dtype(self.precision)
-        return MixedPrecisionPolicy(param_dtype=dtype, reduce_dtype=torch.float32, cast_forward_inputs=True)
-
-    @staticmethod
-    def _move_optimizer_state(optimizer: optim.Optimizer, device: torch.device) -> None:
-        if not optimizer.state:
-            return
-        for param_group in optimizer.param_groups:
-            for param in param_group["params"]:
-                state = optimizer.state.get(param)
-                if state is None:
-                    continue
-                for k, v in state.items():
-                    if torch.is_tensor(v):
-                        state[k] = v.to(device, non_blocking=True)
-                    elif isinstance(v, (list, tuple)):
-                        state[k] = type(v)(t.to(device, non_blocking=True) if torch.is_tensor(t) else t for t in v)
-        if device.type == "cuda":
-            torch.cuda.synchronize()
-
-    def _maybe_fully_shard_children(self, module: nn.Module) -> None:
-        """Apply FSDP2 fully_shard to transformer layers using a two-phase approach.
-
-        Simplified version: reference verl/slime implementations, removed complex tail modules optimization.
-        Two-phase sharding strategy:
-        1. Phase 1: Collect all modules that need sharding into a list
-        2. Phase 2: Iterate through the list and apply sharding
-
-        This approach avoids potential issues from modifying module structure during
-        named_modules() traversal.
-        """
-        layer_cls_to_wrap = getattr(module, "_no_split_modules", None)
-        fsdp_mesh = self._get_fsdp_mesh()
-        if fsdp_mesh is None:
-            raise RuntimeError(
-                "[fsdp2] Device mesh is not initialized. Make sure `strategy.setup_distributed()` "
-                "is called before `strategy.prepare()`."
-            )
-
-        if not layer_cls_to_wrap:
-            # Fallback: Simple wrapping for non-HF models
-            for child in module.children():
-                if isinstance(child, FSDPModule):
-                    continue
-                if any(p.requires_grad for p in child.parameters(recurse=True)):
-                    fully_shard(
-                        child,
-                        mesh=fsdp_mesh,
-                        reshard_after_forward=self.fsdp2_reshard_after_forward,
-                        offload_policy=self._offload_policy,
-                        mp_policy=self._mp_policy,
-                    )
-            return
-
-        # Phase 1: Collect modules to shard (transformer layers and untied Embeddings)
-        modules_to_shard = []
-        for name, child in module.named_modules():
-            if isinstance(child, FSDPModule):
-                continue
-            # Transformer layers
-            if child.__class__.__name__ in layer_cls_to_wrap:
-                modules_to_shard.append(child)
-            # Untied Embedding layers
-            elif (
-                isinstance(child, nn.Embedding) and hasattr(module, "config") and not module.config.tie_word_embeddings
-            ):
-                modules_to_shard.append(child)
-
-        # Phase 2: Apply sharding to collected modules
-        for child in modules_to_shard:
-            fully_shard(
-                child,
-                mesh=fsdp_mesh,
-                reshard_after_forward=self.fsdp2_reshard_after_forward,
-                offload_policy=self._offload_policy,
-                mp_policy=self._mp_policy,
-            )
-
-    def prepare(self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False):
-        ret: List[ModelOrModelOptimPair] = []
-        self.is_rlhf = is_rlhf
-        for arg in models_or_model_optim_pairs:
-            if isinstance(arg, tuple):
-                model, optim_, scheduler = arg
-                if model is None:
-                    ret.append((None, None, None))
-                    continue
-                is_actor = isinstance(model, Actor)
-                module = model.model if is_actor else model
-                module = self._wrap_train_model(module)
-                self._set_gradient_divide_factor(module)
-                if is_actor:
-                    model.model = module
-                    ret.append((model, optim_, scheduler))
-                else:
-                    ret.append((module, optim_, scheduler))
-            else:
-                model = arg
-                if model is None:
-                    ret.append(model)
-                    continue
-                is_actor = isinstance(model, Actor)
-                module = model.model if is_actor else model
-                module = self._wrap_train_model(module)
-                self._set_gradient_divide_factor(module)
-                if is_actor:
-                    model.model = module
-                    ret.append(model)
-                else:
-                    ret.append(module)
-        return ret[0] if len(ret) == 1 else ret
-
     def offload_states(self, model, optimizer=None):
-        """Offload training-only states to CPU.
-
-        Match DeepSpeed sleep semantics: keep model weights on GPU (so forward can still run),
-        but offload optimizer state to free memory when colocating with vLLM.
-        """
+        """Offload training states to CPU."""
         unwrapped = self._unwrap_model(model)
-        # Ensure we don't keep unsharded params resident unnecessarily.
-        # Note: FSDPModule.reshard() is not recursive, so walk all nested FSDP modules.
         for module in unwrapped.modules():
             if isinstance(module, FSDPModule):
                 module.reshard()
@@ -668,18 +596,17 @@ class FSDP2Strategy(ABC):
     def reload_states(self, model, optimizer=None):
         """Reload training states to GPU."""
         device = torch.device("cuda", torch.cuda.current_device())
-        # Keep the model on the current GPU in case it was moved to CPU elsewhere.
         self._unwrap_model(model).to(device)
         if optimizer is not None:
             self._move_optimizer_state(optimizer, device)
-        torch.cuda.synchronize()  # Ensure async operations complete
+        torch.cuda.synchronize()
         if dist.is_initialized():
             dist.barrier()
 
     def moving_average(self, model, model_ema, beta=0.992, device="cpu"):
+        """Update EMA model."""
         self.time_steps["ema"] += 1
         if self.time_steps["ema"] % max(1, self.accumulated_gradient) == 0:
-            # Use _unwrap_model to get the underlying model
             wrapped_model = self._unwrap_model(model)
 
             if not isinstance(wrapped_model, FSDPModule):
@@ -695,7 +622,7 @@ class FSDP2Strategy(ABC):
             self._moving_average_from_state_dict(full_state_dict, model_ema, beta, device)
 
     def _moving_average_from_state_dict(self, state_dict, model_ema, beta, device):
-        """Update EMA model parameters using full state dict."""
+        """Update EMA model using full state dict."""
         with torch.no_grad():
             for name, param_ema in model_ema.named_parameters():
                 if not param_ema.requires_grad:
@@ -713,11 +640,11 @@ class FSDP2Strategy(ABC):
         strict: bool = False,
         key_replace_fn=None,
     ) -> None:
+        """Load model weights."""
         state_dict = torch.load(path, map_location=map_location)
         if key_replace_fn:
             state_dict = key_replace_fn(state_dict)
 
-        # Use _unwrap_model to get the underlying model
         wrapped_model = self._unwrap_model(model)
 
         if not isinstance(wrapped_model, FSDPModule):
@@ -733,17 +660,13 @@ class FSDP2Strategy(ABC):
         )
 
     def save_model(self, model: nn.Module, tokenizer, output_dir, **kwargs) -> None:
+        """Save model to HuggingFace format."""
         if self.is_rank_0():
             os.makedirs(output_dir, exist_ok=True)
 
         fsdp_model = self._unwrap_model(model)
-
-        # If the model is a PEFT wrapper (e.g., LoRA), only save trainable params to avoid
-        # materializing the full base model on rank 0.
         is_peft_model = hasattr(fsdp_model, "peft_config")
 
-        # Some configs may contain invalid keys (e.g., `None`) under `auto_map`, which
-        # breaks JSON serialization in `save_pretrained()` / `to_json_file()`.
         if self.is_rank_0():
             config = getattr(fsdp_model, "config", None)
             if config is not None and hasattr(config, "auto_map") and isinstance(config.auto_map, dict):
@@ -754,151 +677,67 @@ class FSDP2Strategy(ABC):
             model=fsdp_model,
             options=StateDictOptions(full_state_dict=True, cpu_offload=True, ignore_frozen_params=is_peft_model),
         )
-        if model_state:
-            # Ensure HF-compatible keys by stripping PyTorch wrapper prefixes that can appear
-            # with composable FSDP2 (and other wrappers like torch.compile/DDP).
-            cleaned_state: dict = {}
-            duplicated = 0
-            for key, value in model_state.items():
-                clean_key = key
-                for prefix in self._HF_STATE_DICT_WRAPPER_PREFIXES:
-                    clean_key = clean_key.replace(prefix, "")
-                if clean_key in cleaned_state:
-                    duplicated += 1
-                    continue
-                cleaned_state[clean_key] = value
-            model_state = cleaned_state
-            if duplicated and self.is_rank_0():
-                self.print(f"[fsdp2] warning: dropped {duplicated} duplicated keys after HF key normalization.")
+
         if self.is_rank_0():
             fsdp_model.save_pretrained(output_dir, state_dict=model_state, **kwargs)
-            config = getattr(fsdp_model, "config", None)
-            if config is not None:
-                # Prefer the HF helper to ensure any auxiliary files are written
-                # consistently (mirrors verl checkpoint manager behavior).
-                try:
-                    config.save_pretrained(output_dir)
-                except Exception:
-                    config.to_json_file(os.path.join(output_dir, "config.json"))
-
-                # If the model was loaded with trust_remote_code, persist custom
-                # code so the checkpoint can be loaded offline.
-                try:
-                    if getattr(config, "auto_map", None):
-                        from transformers.dynamic_module_utils import custom_object_save
-
-                        custom_object_save(fsdp_model, output_dir, config=config)
-                except Exception as exc:
-                    self.print(f"[fsdp2] warning: failed to save custom code: {exc}")
-
-            generation_config = getattr(fsdp_model, "generation_config", None)
-            if generation_config is not None:
-                try:
-                    generation_config.save_pretrained(output_dir)
-                except Exception:
-                    pass
-
-            if tokenizer is not None:
-                tokenizer.save_pretrained(output_dir)
-
-            # Save minimal runtime metadata to aid debugging/repro.
-            try:
-                import json
-
-                metadata = {
-                    "backend": "fsdp2",
-                    "world_size": int(getattr(self, "world_size", 1) or 1),
-                    "dp_size": int(getattr(self, "dp_size", getattr(self, "world_size", 1)) or 1),
-                    "ring_attn_size": int(getattr(self, "ring_attn_size", 1) or 1),
-                    "ds_tensor_parallel_size": int(getattr(self, "ds_tensor_parallel_size", 1) or 1),
-                    "fsdp2_offload": str(getattr(self, "fsdp2_offload", "none") or "none"),
-                    "fsdp2_reshard_after_forward": bool(getattr(self, "fsdp2_reshard_after_forward", True)),
-                    "precision": self.precision,
-                }
-                with open(os.path.join(output_dir, "fsdp2_runtime.json"), "w", encoding="utf-8") as f:
-                    json.dump(metadata, f, indent=2, sort_keys=True)
-            except Exception:
-                pass
+            self._save_model_configs(fsdp_model, output_dir, tokenizer)
 
         if dist.is_initialized():
             dist.barrier()
 
-        # Explicitly release memory to avoid rank-0 CPU spikes post-save.
         del model_state
         import gc
-
         gc.collect()
 
-    def all_reduce(self, data, op="mean"):
-        assert op in ("mean", "max", "sum")
-        if isinstance(data, dict):
-            ret = {}
-            for k, v in data.items():
-                ret[k] = self.all_reduce(v, op)
-            return ret
-        else:
-            is_tensor = True
-            if not isinstance(data, torch.Tensor):
-                data = torch.tensor([data])
-                is_tensor = False
-            is_cpu_tensor = data.device.type == "cpu"
+    def _save_model_configs(self, fsdp_model, output_dir, tokenizer):
+        """Save model configs and related files."""
+        config = getattr(fsdp_model, "config", None)
+        if config is not None:
+            try:
+                config.save_pretrained(output_dir)
+            except Exception:
+                config.to_json_file(os.path.join(output_dir, "config.json"))
 
-            dp_group = self._get_dp_group()
-            dp_world_size = dist.get_world_size(group=dp_group) if dist.is_initialized() else 1
-            if is_cpu_tensor:
-                data = data.to(torch.cuda.current_device())
-            if op == "mean":
-                data = data / max(1, dp_world_size)
-            dist.all_reduce(
-                data,
-                op=dist.ReduceOp.MAX if op == "max" else dist.ReduceOp.SUM,
-                group=dp_group,
-            )
-            if is_cpu_tensor:
-                data = data.cpu()
-            return data.item() if not is_tensor else data
+            try:
+                if getattr(config, "auto_map", None):
+                    from transformers.dynamic_module_utils import custom_object_save
+                    custom_object_save(fsdp_model, output_dir, config=config)
+            except Exception as exc:
+                self.print(f"[fsdp2] warning: failed to save custom code: {exc}")
 
-    def all_gather(self, data):
-        if isinstance(data, dict):
-            ret = {}
-            for k, v in data.items():
-                ret[k] = self.all_gather(v)
-            return ret
-        else:
-            is_tensor = True
-            if not isinstance(data, torch.Tensor):
-                data = torch.tensor([data])
-                is_tensor = False
-            is_cpu_tensor = data.device.type == "cpu"
+        generation_config = getattr(fsdp_model, "generation_config", None)
+        if generation_config is not None:
+            try:
+                generation_config.save_pretrained(output_dir)
+            except Exception:
+                pass
 
-            dp_group = self._get_dp_group()
-            dp_world_size = dist.get_world_size(group=dp_group) if dist.is_initialized() else 1
-            ret = [torch.zeros_like(data).to(torch.cuda.current_device()) for _ in range(dp_world_size)]
-            dist.all_gather(ret, data.to(torch.cuda.current_device()), group=dp_group)
-            result = torch.cat(ret).cpu() if is_cpu_tensor else torch.cat(ret)
-            # If original input is not a tensor, return list to maintain type consistency
-            if not is_tensor:
-                return result.tolist()
-            return result
+        if tokenizer is not None:
+            tokenizer.save_pretrained(output_dir)
 
-    def print(self, *msg):
-        if self.is_rank_0():
-            print(*msg)
-
-    def is_rank_0(self) -> bool:
-        if not dist.is_initialized():
-            return True
-        return dist.get_rank() == 0
-
-    def get_rank(self) -> int:
-        if not dist.is_initialized():
-            return 0
-        return dist.get_rank()
+        try:
+            import json
+            metadata = {
+                "backend": "fsdp2",
+                "world_size": int(getattr(self, "world_size", 1) or 1),
+                "dp_size": int(getattr(self, "dp_size", getattr(self, "world_size", 1)) or 1),
+                "ring_attn_size": int(getattr(self, "ring_attn_size", 1) or 1),
+                "ds_tensor_parallel_size": int(getattr(self, "ds_tensor_parallel_size", 1) or 1),
+                "fsdp2_offload": str(getattr(self, "fsdp2_offload", "none") or "none"),
+                "fsdp2_reshard_after_forward": bool(getattr(self, "fsdp2_reshard_after_forward", True)),
+                "precision": self.precision,
+            }
+            with open(os.path.join(output_dir, "fsdp2_runtime.json"), "w", encoding="utf-8") as f:
+                json.dump(metadata, f, indent=2, sort_keys=True)
+        except Exception:
+            pass
 
     def save_ckpt(self, *args, **kwargs):
+        """Save distributed checkpoint."""
         return self._save_ckpt_impl(*args, **kwargs)
 
     def load_ckpt(self, *args, **kwargs):
+        """Load distributed checkpoint."""
         return self._load_ckpt_impl(*args, **kwargs)
 
     def _save_ckpt_impl(
@@ -914,16 +753,9 @@ class FSDP2Strategy(ABC):
         scheduler=None,
         **kwargs,
     ):
-        """Save a distributed checkpoint for FSDP2 models.
-
-        This follows the same high-level contract as DeepSpeedEngine.save_checkpoint():
-        - checkpoints are written under `save_dir/<tag>/`
-        - an optional `save_dir/latest` file points to the latest tag
-        - `client_state` is saved and returned by load_ckpt()
-        """
+        """Save FSDP2 distributed checkpoint."""
         import shutil
         import warnings
-
         import torch.distributed.checkpoint as dcp
         from torch.distributed.checkpoint.state_dict import get_state_dict
         from torch.distributed.checkpoint.stateful import Stateful
@@ -933,42 +765,8 @@ class FSDP2Strategy(ABC):
 
         os.makedirs(save_dir, exist_ok=True)
 
-        # Basic retention policy, similar to DeepspeedStrategy.save_ckpt().
         if self.is_rank_0():
-            max_size_bytes = max_mem * 1024**3  # GB -> bytes
-
-            def _list_ckpt_dirs():
-                entries = []
-                for name in os.listdir(save_dir):
-                    path = os.path.join(save_dir, name)
-                    if os.path.isdir(path):
-                        entries.append((path, os.path.getmtime(path)))
-                entries.sort(key=lambda x: x[1])
-                return entries
-
-            def _dir_size_bytes(path: str) -> int:
-                total = 0
-                for dirpath, _dirnames, filenames in os.walk(path):
-                    for filename in filenames:
-                        fp = os.path.join(dirpath, filename)
-                        try:
-                            total += os.path.getsize(fp)
-                        except OSError:
-                            pass
-                return total
-
-            while True:
-                subdirs = _list_ckpt_dirs()
-                total_size = sum(_dir_size_bytes(subdir) for subdir, _ in subdirs)
-                if len(subdirs) >= max_num or total_size > max_size_bytes:
-                    oldest_dir = subdirs[0][0] if subdirs else None
-                    if oldest_dir and os.path.exists(oldest_dir):
-                        shutil.rmtree(oldest_dir, ignore_errors=True)
-                        self.print(f"Deleted oldest ckpt {oldest_dir}")
-                    else:
-                        break
-                else:
-                    break
+            self._cleanup_old_checkpoints(save_dir, max_num, max_mem)
 
         if dist.is_initialized():
             dist.barrier()
@@ -976,7 +774,6 @@ class FSDP2Strategy(ABC):
         fsdp_model = self._unwrap_model(model)
         ckpt_path = os.path.join(save_dir, tag)
 
-        # Torch DCP stores state from objects implementing Stateful.
         class AppState(Stateful):
             def __init__(self, model_, optimizer_, scheduler_, client_state_):
                 self.model = model_
@@ -1019,6 +816,45 @@ class FSDP2Strategy(ABC):
             with open(latest_path, "w", encoding="utf-8") as f:
                 f.write(str(tag))
 
+    def _cleanup_old_checkpoints(self, save_dir: str, max_num: int, max_mem: int):
+        """Cleanup old checkpoints."""
+        import shutil
+
+        max_size_bytes = max_mem * 1024**3
+
+        def _list_ckpt_dirs():
+            entries = []
+            for name in os.listdir(save_dir):
+                path = os.path.join(save_dir, name)
+                if os.path.isdir(path):
+                    entries.append((path, os.path.getmtime(path)))
+            entries.sort(key=lambda x: x[1])
+            return entries
+
+        def _dir_size_bytes(path: str) -> int:
+            total = 0
+            for dirpath, _dirnames, filenames in os.walk(path):
+                for filename in filenames:
+                    fp = os.path.join(dirpath, filename)
+                    try:
+                        total += os.path.getsize(fp)
+                    except OSError:
+                        pass
+            return total
+
+        while True:
+            subdirs = _list_ckpt_dirs()
+            total_size = sum(_dir_size_bytes(subdir) for subdir, _ in subdirs)
+            if len(subdirs) >= max_num or total_size > max_size_bytes:
+                oldest_dir = subdirs[0][0] if subdirs else None
+                if oldest_dir and os.path.exists(oldest_dir):
+                    shutil.rmtree(oldest_dir, ignore_errors=True)
+                    self.print(f"Deleted oldest ckpt {oldest_dir}")
+                else:
+                    break
+            else:
+                break
+
     def _load_ckpt_impl(
         self,
         model: nn.Module,
@@ -1032,12 +868,8 @@ class FSDP2Strategy(ABC):
         scheduler=None,
         **kwargs,
     ):
-        """Load a distributed checkpoint for FSDP2 models.
-
-        Returns `(load_path, client_state)` similar to DeepSpeedEngine.load_checkpoint().
-        """
+        """Load FSDP2 distributed checkpoint."""
         import warnings
-
         import torch.distributed.checkpoint as dcp
         from torch.distributed.checkpoint.state_dict import StateDictOptions, set_state_dict
         from torch.distributed.checkpoint.stateful import Stateful
@@ -1052,7 +884,6 @@ class FSDP2Strategy(ABC):
                 with open(latest_path, "r", encoding="utf-8") as f:
                     resolved_tag = f.read().strip()
             else:
-                # Fallback: pick the most recently modified subdir.
                 subdirs = [
                     os.path.join(load_dir, d) for d in os.listdir(load_dir) if os.path.isdir(os.path.join(load_dir, d))
                 ]
@@ -1069,11 +900,9 @@ class FSDP2Strategy(ABC):
 
         fsdp_model = self._unwrap_model(model)
 
-        # Respect load flags.
         if load_module_only:
             load_optimizer_states = False
             load_lr_scheduler_states = False
-
         if optimizer is None:
             load_optimizer_states = False
         if scheduler is None:
@@ -1112,6 +941,7 @@ class FSDP2Strategy(ABC):
 
         app_state = AppState(fsdp_model, optimizer, scheduler)
         state_dict = {"app": app_state}
+
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=FutureWarning, module="torch.distributed")
             warnings.filterwarnings("ignore", category=UserWarning, module="torch.distributed.*")
@@ -1122,8 +952,66 @@ class FSDP2Strategy(ABC):
 
         return ckpt_path, app_state.client_state
 
-    def get_ds_train_config(self, is_actor):
-        return None
+    def all_reduce(self, data, op="mean"):
+        """All-reduce operation."""
+        assert op in ("mean", "max", "sum")
+        if isinstance(data, dict):
+            return {k: self.all_reduce(v, op) for k, v in data.items()}
 
-    def get_ds_eval_config(self, offload=False):
-        return None
+        is_tensor = True
+        if not isinstance(data, torch.Tensor):
+            data = torch.tensor([data])
+            is_tensor = False
+        is_cpu_tensor = data.device.type == "cpu"
+
+        dp_group = self._get_dp_group()
+        dp_world_size = dist.get_world_size(group=dp_group) if dist.is_initialized() else 1
+        if is_cpu_tensor:
+            data = data.to(torch.cuda.current_device())
+        if op == "mean":
+            data = data / max(1, dp_world_size)
+        dist.all_reduce(
+            data,
+            op=dist.ReduceOp.MAX if op == "max" else dist.ReduceOp.SUM,
+            group=dp_group,
+        )
+        if is_cpu_tensor:
+            data = data.cpu()
+        return data.item() if not is_tensor else data
+
+    def all_gather(self, data):
+        """All-gather operation."""
+        if isinstance(data, dict):
+            return {k: self.all_gather(v) for k, v in data.items()}
+
+        is_tensor = True
+        if not isinstance(data, torch.Tensor):
+            data = torch.tensor([data])
+            is_tensor = False
+        is_cpu_tensor = data.device.type == "cpu"
+
+        dp_group = self._get_dp_group()
+        dp_world_size = dist.get_world_size(group=dp_group) if dist.is_initialized() else 1
+        ret = [torch.zeros_like(data).to(torch.cuda.current_device()) for _ in range(dp_world_size)]
+        dist.all_gather(ret, data.to(torch.cuda.current_device()), group=dp_group)
+        result = torch.cat(ret).cpu() if is_cpu_tensor else torch.cat(ret)
+        if not is_tensor:
+            return result.tolist()
+        return result
+
+    def print(self, *msg):
+        """Print only on rank 0."""
+        if self.is_rank_0():
+            print(*msg)
+
+    def is_rank_0(self) -> bool:
+        """Check if current rank is 0."""
+        if not dist.is_initialized():
+            return True
+        return dist.get_rank() == 0
+
+    def get_rank(self) -> int:
+        """Get current rank."""
+        if not dist.is_initialized():
+            return 0
+        return dist.get_rank()
