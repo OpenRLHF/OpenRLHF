@@ -3,7 +3,7 @@ import os
 from abc import ABC
 from collections import defaultdict
 from datetime import timedelta
-from typing import Any, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
@@ -15,7 +15,7 @@ from torch.distributed.checkpoint.state_dict import (
     get_model_state_dict,
     set_model_state_dict,
 )
-from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
+from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import CPUOffloadPolicy, FSDPModule, MixedPrecisionPolicy, fully_shard
 from torch.optim import Optimizer
 from torchdata.stateful_dataloader import StatefulDataLoader
@@ -84,8 +84,6 @@ class FSDP2Strategy(ABC):
 
         self._offload_policy: Optional["CPUOffloadPolicy"] = self._build_offload_policy()
         self._mp_policy: Optional["MixedPrecisionPolicy"] = self._build_mixed_precision_policy()
-
-
 
     def _build_offload_policy(self) -> Optional["CPUOffloadPolicy"]:
         """Build CPU offload policy."""
@@ -687,6 +685,7 @@ class FSDP2Strategy(ABC):
 
         del model_state
         import gc
+
         gc.collect()
 
     def _save_model_configs(self, fsdp_model, output_dir, tokenizer):
@@ -701,6 +700,7 @@ class FSDP2Strategy(ABC):
             try:
                 if getattr(config, "auto_map", None):
                     from transformers.dynamic_module_utils import custom_object_save
+
                     custom_object_save(fsdp_model, output_dir, config=config)
             except Exception as exc:
                 self.print(f"[fsdp2] warning: failed to save custom code: {exc}")
@@ -717,6 +717,7 @@ class FSDP2Strategy(ABC):
 
         try:
             import json
+
             metadata = {
                 "backend": "fsdp2",
                 "world_size": int(getattr(self, "world_size", 1) or 1),
@@ -754,7 +755,6 @@ class FSDP2Strategy(ABC):
         **kwargs,
     ):
         """Save FSDP2 distributed checkpoint."""
-        import shutil
         import warnings
         import torch.distributed.checkpoint as dcp
         from torch.distributed.checkpoint.state_dict import get_state_dict
