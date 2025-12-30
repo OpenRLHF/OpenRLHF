@@ -369,10 +369,6 @@ class FSDP2Strategy(ABC):
             return self._unwrap_model(model.model)
         return model
 
-    # NOTE: FSDP2 uses mean reduce-scatter by default, so we don't need to call
-    # set_gradient_divide_factor(dp_size). Doing so would divide gradients twice.
-    # This is consistent with TorchTitan's approach.
-
     def create_optimizer(self, model, **kwargs) -> Optimizer:
         """Create optimizer."""
         if isinstance(model, Actor):
