@@ -12,7 +12,7 @@ from transformers.integrations.deepspeed import HfDeepSpeedConfig
 from openrlhf.utils.utils import convert_to_dtype
 
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
-from .utils import compute_entropy, log_probs_from_logits
+from .utils import _ensure_full_tensor, compute_entropy, log_probs_from_logits
 
 
 class Actor(nn.Module):
@@ -205,7 +205,8 @@ class Actor(nn.Module):
 
         if return_entropy:
             assert return_output
-            entropy = compute_entropy(output["logits"])
+            # Ensure logits is full tensor for entropy computation (TP compatibility)
+            entropy = compute_entropy(_ensure_full_tensor(output["logits"]))
             if self.packing_samples:
                 entropy = gather_and_pad_tensor(entropy, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
             setattr(output, "entropy", entropy[:, :-1])
