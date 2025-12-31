@@ -96,9 +96,7 @@ def _compute_mixed_norm(grads, device, norm_type):
 # -----------------------------------------------------------------------------
 
 
-def moving_average_fsdp(
-    model: nn.Module, model_ema: nn.Module, unwrap_fn, beta: float = 0.992, device: str = "cpu"
-):
+def moving_average_fsdp(model: nn.Module, model_ema: nn.Module, unwrap_fn, beta: float = 0.992, device: str = "cpu"):
     """Update EMA model from FSDP-wrapped source model.
 
     Efficient implementation that:
