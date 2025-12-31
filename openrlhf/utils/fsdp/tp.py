@@ -71,12 +71,6 @@ class RowwiseParallelLora(RowwiseParallel):
                 _shard_param(t, "weight", device_mesh, [Shard(1)], self.src_data_rank)
 
 
-class SequenceParallelLora(SequenceParallel):
-    """SequenceParallel with LoRA support."""
-
-    src_data_rank: int = 0
-
-
 class SequenceParallelAllGather(SequenceParallel):
     """SequenceParallel that all-gathers output."""
 
@@ -105,24 +99,16 @@ def _add_allgather_hook(module: nn.Module):
 
 def translate_to_lora(style):
     """Convert parallel style to LoRA-aware version."""
+    def _copy_attrs(src, dst):
+        dst.output_layouts, dst.input_layouts, dst.use_local_output = (
+            src.output_layouts, src.input_layouts, src.use_local_output
+        )
+        return dst
+
     if isinstance(style, ColwiseParallel) and not isinstance(style, ColwiseParallelLora):
-        s = ColwiseParallelLora()
-        s.output_layouts, s.input_layouts, s.use_local_output = (
-            style.output_layouts,
-            style.input_layouts,
-            style.use_local_output,
-        )
-        return s
+        return _copy_attrs(style, ColwiseParallelLora())
     if isinstance(style, RowwiseParallel) and not isinstance(style, RowwiseParallelLora):
-        s = RowwiseParallelLora()
-        s.output_layouts, s.input_layouts, s.use_local_output = (
-            style.output_layouts,
-            style.input_layouts,
-            style.use_local_output,
-        )
-        return s
-    if isinstance(style, SequenceParallel) and not isinstance(style, SequenceParallelLora):
-        return SequenceParallelLora()
+        return _copy_attrs(style, RowwiseParallelLora())
     return style
 
 
