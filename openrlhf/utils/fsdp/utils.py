@@ -2,7 +2,6 @@
 FSDP2 Utilities
 ===============
 
-- unwrap_actor: Extract inner model from Actor wrapper
 - clip_grad_norm_dtensor: DTensor-safe gradient clipping
 - moving_average_fsdp: EMA update for FSDP models
 - move_optimizer_state: Move optimizer state between devices
@@ -12,23 +11,6 @@ import math
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-
-
-# -----------------------------------------------------------------------------
-# Actor Unwrapping
-# -----------------------------------------------------------------------------
-
-
-def unwrap_actor(model: nn.Module) -> nn.Module:
-    """Recursively unwrap Actor wrapper to get the inner model."""
-    try:
-        from openrlhf.models import Actor
-
-        if isinstance(model, Actor):
-            return unwrap_actor(model.model)
-    except ImportError:
-        pass
-    return model
 
 
 # -----------------------------------------------------------------------------
@@ -114,7 +96,9 @@ def _compute_mixed_norm(grads, device, norm_type):
 # -----------------------------------------------------------------------------
 
 
-def moving_average_fsdp(model: nn.Module, model_ema: nn.Module, beta: float = 0.992, device: str = "cpu"):
+def moving_average_fsdp(
+    model: nn.Module, model_ema: nn.Module, unwrap_fn, beta: float = 0.992, device: str = "cpu"
+):
     """Update EMA model from FSDP-wrapped source model.
 
     Efficient implementation that:
@@ -125,11 +109,12 @@ def moving_average_fsdp(model: nn.Module, model_ema: nn.Module, beta: float = 0.
     Args:
         model: Source model (FSDP-wrapped actor)
         model_ema: Target EMA model (may be Actor wrapper)
+        unwrap_fn: Function to unwrap model (e.g., strategy._unwrap_model)
         beta: EMA decay factor
         device: Fallback device (used only if EMA param device detection fails)
     """
-    src = unwrap_actor(model)
-    ema = unwrap_actor(model_ema)
+    src = unwrap_fn(model)
+    ema = unwrap_fn(model_ema)
     ema_params = dict(ema.named_parameters())
 
     with torch.no_grad():
