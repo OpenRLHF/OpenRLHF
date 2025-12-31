@@ -350,7 +350,9 @@ class FSDP2Strategy(ABC):
         try:
             from openrlhf.utils.fsdp.parallelizer import apply_tensor_parallel
 
-            self.print(f"[fsdp2] Applying tensor parallel with TP size={tp_mesh.size()}, sequence_parallel={self.sequence_parallel}")
+            self.print(
+                f"[fsdp2] Applying tensor parallel with TP size={tp_mesh.size()}, sequence_parallel={self.sequence_parallel}"
+            )
             model = apply_tensor_parallel(
                 model,
                 tp_mesh=tp_mesh,
@@ -430,7 +432,7 @@ class FSDP2Strategy(ABC):
         num_modules = len(modules_to_shard)
         for idx, child in enumerate(modules_to_shard):
             # Last transformer layer should not reshard (optimization from Automodel)
-            is_last_layer = (idx == num_modules - 1)
+            is_last_layer = idx == num_modules - 1
             reshard = self.fsdp2_reshard_after_forward and not is_last_layer
             fully_shard(
                 child,

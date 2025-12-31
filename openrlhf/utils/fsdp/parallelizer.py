@@ -23,16 +23,16 @@ transformers built-in implementation:
 
 Usage:
     from openrlhf.utils.fsdp.parallelizer import apply_tensor_parallel, get_tp_plan
-    
+
     # 1. Load model (without TP)
     model = AutoModelForCausalLM.from_pretrained(...)
-    
+
     # 2. Get TP plan
     tp_plan = get_tp_plan(model)
-    
+
     # 3. Apply TP
     apply_tensor_parallel(model, tp_mesh, tp_plan)
-    
+
     # 4. Apply FSDP
     model = fully_shard(model, ...)
 """
@@ -243,6 +243,7 @@ def get_tp_plan(
     # 2. Try using optimized model-specific plan
     try:
         from openrlhf.utils.fsdp.optimized_tp_plans import get_optimized_tp_plan
+
         optimized_plan = get_optimized_tp_plan(model, sequence_parallel)
         if optimized_plan:
             logger.info("[parallelizer] Using optimized TP plan")
@@ -377,6 +378,7 @@ def apply_tensor_parallel(
     # This follows Automodel's approach where translate_to_lora is called unconditionally
     try:
         from openrlhf.utils.fsdp.parallel_styles import translate_to_lora
+
         tp_plan = {k: translate_to_lora(v) for k, v in tp_plan.items()}
     except ImportError:
         pass

@@ -12,7 +12,7 @@ Supported models:
 """
 
 import logging
-from typing import Callable, Dict, Optional, Type, Union, cast
+from typing import Callable, Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -24,6 +24,7 @@ def _is_torch_tp_available() -> bool:
     """Check if PyTorch version supports tensor parallel API."""
     try:
         from packaging import version
+
         torch_version = version.parse(torch.__version__.split("+")[0])
         return torch_version >= version.parse("2.5.0")
     except Exception:
@@ -44,11 +45,11 @@ if _is_torch_tp_available():
 class SequenceParallelAllGatherActivation(SequenceParallel):
     """
     SequenceParallel with all-gather on activations.
-    
+
     Performs all-gather on output to ensure activations are complete after LayerNorm.
     Used in conjunction with RowwiseParallel attention/mlp layers.
     """
-    
+
     @staticmethod
     def _prepare_output_fn(use_local_output, mod, outputs, device_mesh):
         """Redistribute output to Replicate."""
@@ -67,23 +68,23 @@ def _parallelize_llama(
 ) -> Dict[str, "ParallelStyle"]:
     """
     Generate optimized TP plan for LLaMA series models.
-    
+
     LLaMA architecture characteristics:
     - Separate Q/K/V projections
     - Optional fused QKV (qkv_proj)
     - GatedMLP with separate gate/up (gate_proj, up_proj) or fused (gate_up_proj)
     - RMSNorm
-    
+
     Args:
         model: LLaMA model
         sequence_parallel: Whether to enable Sequence Parallel
-        
+
     Returns:
         TP plan dictionary
     """
     if not _is_torch_tp_available():
         raise RuntimeError("Tensor parallel requires PyTorch >= 2.5.0")
-    
+
     base_plan: Dict[str, ParallelStyle] = {
         # Embedding: shard along embedding_dim, input Replicate
         "model.embed_tokens": RowwiseParallel(input_layouts=Replicate()),
@@ -101,7 +102,7 @@ def _parallelize_llama(
         # lm_head: Colwise sharding, keep output Shard to reduce communication
         "lm_head": ColwiseParallel(output_layouts=Shard(-1), use_local_output=False),
     }
-    
+
     if sequence_parallel:
         sp_plan = {
             # Embedding output changed to Shard(1) to initiate SP
@@ -124,7 +125,7 @@ def _parallelize_llama(
             ),
         }
         base_plan.update(sp_plan)
-    
+
     return base_plan
 
 
@@ -134,26 +135,27 @@ def _parallelize_qwen(
 ) -> Dict[str, "ParallelStyle"]:
     """
     Generate optimized TP plan for Qwen2/Qwen3 series models.
-    
+
     Qwen architecture characteristics:
     - Similar to LLaMA structure
     - Qwen3 has q_norm and k_norm (QK LayerNorm)
     - May have fused QKV (qkv_proj)
-    
+
     Args:
         model: Qwen model
         sequence_parallel: Whether to enable Sequence Parallel
-        
+
     Returns:
         TP plan dictionary
     """
     if not _is_torch_tp_available():
         raise RuntimeError("Tensor parallel requires PyTorch >= 2.5.0")
-    
+
     if sequence_parallel:
         # Special handling for Qwen3 QK Norm
         class Qwen3QKNorm(SequenceParallel):
             """Qwen3 Q/K LayerNorm, input is already sharded by head."""
+
             @staticmethod
             def _prepare_input_fn(sequence_sharding, mod, inputs, device_mesh):
                 input_tensor = inputs[0]
@@ -171,7 +173,7 @@ def _parallelize_qwen(
                     )
                 else:
                     raise ValueError(f"Unexpected input type: {type(input_tensor)}")
-        
+
         base_plan: Dict[str, ParallelStyle] = {
             "lm_head": ColwiseParallel(
                 input_layouts=Shard(1),
@@ -211,7 +213,7 @@ def _parallelize_qwen(
             "model.layers.*.mlp.gate_up_proj": ColwiseParallel(),
             "model.layers.*.mlp.down_proj": RowwiseParallel(),
         }
-    
+
     return base_plan
 
 
@@ -237,19 +239,19 @@ def get_optimized_tp_plan(
 ) -> Optional[Dict[str, "ParallelStyle"]]:
     """
     Get optimized TP plan for a model.
-    
+
     If the model type is registered in PARALLELIZE_FUNCTIONS, returns the optimized plan;
     otherwise returns None, and the caller should use base plan or HF plan.
-    
+
     Args:
         model: Model to parallelize
         sequence_parallel: Whether to enable Sequence Parallel
-        
+
     Returns:
         Optimized TP plan dictionary, or None if not supported
     """
     model_cls_name = type(model).__name__
-    
+
     if model_cls_name in PARALLELIZE_FUNCTIONS:
         try:
             plan_fn = PARALLELIZE_FUNCTIONS[model_cls_name]
@@ -259,7 +261,7 @@ def get_optimized_tp_plan(
         except Exception as e:
             logger.warning(f"[optimized_tp_plans] Failed to generate optimized plan for {model_cls_name}: {e}")
             return None
-    
+
     return None
 
 
@@ -269,7 +271,7 @@ def register_tp_plan(
 ) -> None:
     """
     Register a custom model's TP plan function.
-    
+
     Args:
         model_cls_name: Model class name (string)
         plan_fn: Function to generate TP plan, signature: (model, sequence_parallel) -> Dict[str, ParallelStyle]

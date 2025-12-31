@@ -20,7 +20,7 @@ to ensure LoRA adapter layers are correctly handled during TP sharding.
 
 Usage:
     from openrlhf.utils.fsdp.parallel_styles import translate_to_lora
-    
+
     # Convert plan to LoRA-aware version before applying TP
     tp_plan = {k: translate_to_lora(v) for k, v in original_plan.items()}
 """
@@ -38,6 +38,7 @@ def _is_torch_tp_available() -> bool:
     """Check if PyTorch version supports tensor parallel API."""
     try:
         from packaging import version
+
         torch_version = version.parse(torch.__version__.split("+")[0])
         return torch_version >= version.parse("2.5.0")
     except Exception:
@@ -45,6 +46,7 @@ def _is_torch_tp_available() -> bool:
 
 
 if _is_torch_tp_available():
+    from torch.distributed.device_mesh import DeviceMesh
     from torch.distributed.tensor import DTensor, Replicate, Shard, distribute_tensor
     from torch.distributed.tensor.parallel import (
         ColwiseParallel,
@@ -52,7 +54,6 @@ if _is_torch_tp_available():
         RowwiseParallel,
         SequenceParallel,
     )
-    from torch.distributed.device_mesh import DeviceMesh
 
 
 def _distribute_param(
@@ -64,7 +65,7 @@ def _distribute_param(
 ) -> None:
     """
     Distribute a module's parameter to the specified device mesh.
-    
+
     Args:
         module: Target module
         name: Parameter name
@@ -83,18 +84,19 @@ def _distribute_param(
 class ColwiseParallelLora(ColwiseParallel):
     """
     LoRA-aware ColwiseParallel.
-    
+
     For standard Linear layers, uses ColwiseParallel's default behavior (weight Shard(0)).
     For LoRA layers (lora_A, lora_B), correctly handles sharding and adds hooks to gather output.
     """
-    
+
     def _partition_linear_fn(self, name: str, module: nn.Module, device_mesh: "DeviceMesh") -> None:
         """
         Handle Linear layer sharding, including LoRA adapters.
-        
+
         ColwiseParallel shards weight along dim=0 (row-wise split),
         meaning in Linear(input * weight^T), output is sharded along dim=-1.
         """
+
         def _get_module_and_name(module: nn.Module, param_name: str):
             """Get LoRA submodule and parameter name."""
             if param_name.endswith("lora_A.weight"):
@@ -138,7 +140,7 @@ class ColwiseParallelLora(ColwiseParallel):
     def _partition_embedding_fn(self, name: str, module: nn.Module, device_mesh: "DeviceMesh") -> None:
         """
         Handle Embedding layer sharding.
-        
+
         ColwiseParallel uses Shard(1) for Embedding, i.e., split along embedding_dim.
         """
         for param_name, param in module.named_parameters():
@@ -148,15 +150,15 @@ class ColwiseParallelLora(ColwiseParallel):
 class RowwiseParallelLora(RowwiseParallel):
     """
     LoRA-aware RowwiseParallel.
-    
+
     For standard Linear layers, uses RowwiseParallel's default behavior (weight Shard(1)).
     For LoRA layers (lora_A, lora_B), both are sharded along dim=1.
     """
-    
+
     def _partition_linear_fn(self, name: str, module: nn.Module, device_mesh: "DeviceMesh") -> None:
         """
         Handle Linear layer sharding, including LoRA adapters.
-        
+
         RowwiseParallel shards weight along dim=1 (column-wise split),
         input needs to be sharded along dim=-1, output is complete after all-reduce.
         """
@@ -164,7 +166,7 @@ class RowwiseParallelLora(RowwiseParallel):
         _distribute_param(module, "weight", device_mesh, [Shard(1)], self.src_data_rank)
         if getattr(module, "bias", None) is not None:
             _distribute_param(module, "bias", device_mesh, [Replicate()], self.src_data_rank)
-        
+
         # LoRA layers: both lora_A and lora_B are sharded with Shard(1)
         if hasattr(module, "lora_A"):
             _distribute_param(module.lora_A, "weight", device_mesh, [Shard(1)], self.src_data_rank)
@@ -176,7 +178,7 @@ class RowwiseParallelLora(RowwiseParallel):
     def _partition_embedding_fn(self, name: str, module: nn.Module, device_mesh: "DeviceMesh") -> None:
         """
         Handle Embedding layer sharding.
-        
+
         RowwiseParallel uses Shard(0) for Embedding, i.e., split along vocab.
         """
         for param_name, param in module.named_parameters():
@@ -186,14 +188,14 @@ class RowwiseParallelLora(RowwiseParallel):
 class SequenceParallelLora(SequenceParallel):
     """
     LoRA-aware SequenceParallel.
-    
+
     Used for modules requiring sequence parallel, such as LayerNorm/RMSNorm.
     """
-    
+
     def _replicate_module_fn(self, name: str, module: nn.Module, device_mesh: "DeviceMesh") -> None:
         """
         Replicate module parameters to all TP ranks.
-        
+
         For LayerNorm/RMSNorm, parameters need to be consistent across all ranks.
         """
         for p_name, param in module.named_parameters():
@@ -206,6 +208,7 @@ class SequenceParallelLora(SequenceParallel):
 
 # LoRA class mapping
 _LORA_CLS_MAP = {}
+
 
 def _init_lora_cls_map():
     """Lazily initialize LoRA class mapping."""
@@ -221,35 +224,35 @@ def _init_lora_cls_map():
 def translate_to_lora(plan: "ParallelStyle") -> "ParallelStyle":
     """
     Convert standard ParallelStyle to LoRA-aware version.
-    
+
     This function converts by modifying the object's __class__,
     preserving original configuration (like output_layouts, use_local_output, etc.).
-    
+
     Args:
         plan: Original ParallelStyle object
-        
+
     Returns:
         Converted LoRA-aware ParallelStyle object
     """
     if not _is_torch_tp_available():
         return plan
-    
+
     _init_lora_cls_map()
-    
+
     plan_type = type(plan)
     if plan_type in _LORA_CLS_MAP:
         plan.__class__ = _LORA_CLS_MAP[plan_type]
-    
+
     return plan
 
 
 def is_lora_model(model: nn.Module) -> bool:
     """
     Detect whether a model contains LoRA adapters.
-    
+
     Args:
         model: Model to check
-        
+
     Returns:
         True if the model contains LoRA adapters
     """
