@@ -70,6 +70,7 @@ class FSDP2Strategy(ABC):
         self.fsdp2_offload = getattr(args, "fsdp2_offload", "none")
         self.fsdp2_cpu_offload_pin_memory = getattr(args, "fsdp2_cpu_offload_pin_memory", True)
         self.fsdp2_reshard_after_forward = getattr(args, "fsdp2_reshard_after_forward", True)
+        self.sequence_parallel = getattr(args, "sequence_parallel", False)
 
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
@@ -104,7 +105,13 @@ class FSDP2Strategy(ABC):
         if self.precision == "fp32":
             return None
         dtype = convert_to_dtype(self.precision)
-        return MixedPrecisionPolicy(param_dtype=dtype, reduce_dtype=torch.float32, cast_forward_inputs=True)
+        # output_dtype=torch.float32 ensures numerical stability (following Automodel)
+        return MixedPrecisionPolicy(
+            param_dtype=dtype,
+            reduce_dtype=torch.float32,
+            output_dtype=torch.float32,
+            cast_forward_inputs=True,
+        )
 
     def setup_distributed(self, timeout=timedelta(minutes=60)) -> None:
         """Initialize distributed environment and device mesh."""
@@ -134,7 +141,7 @@ class FSDP2Strategy(ABC):
 
         self._create_device_mesh()
 
-        # TP 将在 prepare() 中通过 parallelizer 应用（在 FSDP wrap 之前）
+        # TP will be applied via parallelizer in prepare() (before FSDP wrap)
 
         if self.ring_attn_size > 1:
             self._setup_ring_attention()
@@ -234,8 +241,16 @@ class FSDP2Strategy(ABC):
     def _get_fsdp_mesh(self):
         """Get the mesh for FSDP sharding.
 
-        Returns only the dp submesh (1D). CP and TP handle their own gradient
-        synchronization internally (ring_flash_attn for CP, torch-native TP for TP).
+        Returns only the dp submesh (1D). CP and TP handle their own
+        communication internally:
+        - CP: ring_flash_attn for sequence/context parallel
+        - TP: torch-native TP for tensor parallel
+
+        Note: Unlike Automodel which flattens (dp_shard, cp) for FSDP,
+        we follow slime's approach where CP groups hold independent parameter
+        copies and only DP is used for FSDP sharding. This is because:
+        1. ring_flash_attn already handles CP communication
+        2. Each CP group needs independent parameters for attention computation
         """
         if not hasattr(self, "fsdp_device_mesh") or self.fsdp_device_mesh is None:
             return None
@@ -296,7 +311,7 @@ class FSDP2Strategy(ABC):
                     continue
                 is_actor = isinstance(model, Actor)
                 module = model.model if is_actor else model
-                # 应用 TP（在 FSDP 之前）
+                # Apply TP (before FSDP)
                 module = self._maybe_apply_tensor_parallel(module)
                 module = self._wrap_train_model(module)
                 if is_actor:
@@ -311,7 +326,7 @@ class FSDP2Strategy(ABC):
                     continue
                 is_actor = isinstance(model, Actor)
                 module = model.model if is_actor else model
-                # 应用 TP（在 FSDP 之前）
+                # Apply TP (before FSDP)
                 module = self._maybe_apply_tensor_parallel(module)
                 module = self._wrap_train_model(module)
                 if is_actor:
@@ -335,12 +350,12 @@ class FSDP2Strategy(ABC):
         try:
             from openrlhf.utils.fsdp.parallelizer import apply_tensor_parallel
 
-            self.print(f"[fsdp2] Applying tensor parallel with TP size={tp_mesh.size()}")
+            self.print(f"[fsdp2] Applying tensor parallel with TP size={tp_mesh.size()}, sequence_parallel={self.sequence_parallel}")
             model = apply_tensor_parallel(
                 model,
                 tp_mesh=tp_mesh,
-                tp_plan=None,  # 自动从 HF 模型获取或使用 base plan
-                sequence_parallel=False,
+                tp_plan=None,  # Auto-select from optimized plan/HF model or use base plan
+                sequence_parallel=self.sequence_parallel,
                 validate=True,
             )
             return model
@@ -359,10 +374,12 @@ class FSDP2Strategy(ABC):
                 )
             self._maybe_fully_shard_children(model)
             if not isinstance(model, FSDPModule):
+                # Root model should not reshard after forward because its parameters
+                # will be used in backward immediately (following Automodel best practice)
                 model = fully_shard(
                     model,
                     mesh=fsdp_mesh,
-                    reshard_after_forward=self.fsdp2_reshard_after_forward,
+                    reshard_after_forward=False,
                     offload_policy=self._offload_policy,
                     mp_policy=self._mp_policy,
                 )
@@ -408,11 +425,17 @@ class FSDP2Strategy(ABC):
             ):
                 modules_to_shard.append(child)
 
-        for child in modules_to_shard:
+        # Apply FSDP to each layer
+        # Optimization: last layer doesn't reshard after forward since FSDP prefetches immediately for backward
+        num_modules = len(modules_to_shard)
+        for idx, child in enumerate(modules_to_shard):
+            # Last transformer layer should not reshard (optimization from Automodel)
+            is_last_layer = (idx == num_modules - 1)
+            reshard = self.fsdp2_reshard_after_forward and not is_last_layer
             fully_shard(
                 child,
                 mesh=fsdp_mesh,
-                reshard_after_forward=self.fsdp2_reshard_after_forward,
+                reshard_after_forward=reshard,
                 offload_policy=self._offload_policy,
                 mp_policy=self._mp_policy,
             )
