@@ -21,9 +21,9 @@ def get_strategy(args):
 
     if dist_backend == "fsdp2":
         torch_version = version.parse(torch.__version__.split("+")[0])
-        if torch_version < version.parse("2.4.0"):
+        if torch_version < version.parse("2.7.0"):
             raise RuntimeError(
-                f"FSDP2 backend requires torch>=2.4.0. Detected torch=={torch.__version__}. "
+                f"FSDP2 backend requires torch>=2.7.0. Detected torch=={torch.__version__}. "
                 "Please upgrade PyTorch or use --dist_backend deepspeed."
             )
         try:

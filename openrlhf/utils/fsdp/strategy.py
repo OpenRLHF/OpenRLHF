@@ -549,6 +549,10 @@ class FSDP2Strategy(ABC):
     def get_world_size(self) -> int:
         return dist.get_world_size() if dist.is_initialized() else 1
 
+    def get_ds_train_config(self, is_actor: bool = False):
+        """DeepSpeed compatibility - returns None for FSDP2."""
+        return None
+
     def get_ds_eval_config(self, offload: bool = False):
         """DeepSpeed compatibility - returns None for FSDP2."""
         return None
