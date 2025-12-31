@@ -370,9 +370,7 @@ class PPOTrainer(BasePPOTrainer):
             original_prompt = all_prompts[i * n_samples_per_prompt]
             datasource = prompt_to_datasource[original_prompt]  # Get corresponding data source using the mapping
             if datasource not in global_metrics:
-                global_metrics[datasource] = {
-                    f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0
-                }
+                global_metrics[datasource] = {f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}
 
             # Get rewards for this chunk
             chunk_rewards = rewards[i]
