@@ -5,19 +5,7 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .utils import masked_mean
-
-
-def _ensure_full_tensor(tensor: torch.Tensor) -> torch.Tensor:
-    """Convert DTensor to full tensor if needed (for TP compatibility)."""
-    try:
-        from torch.distributed.tensor import DTensor
-
-        if isinstance(tensor, DTensor):
-            return tensor.full_tensor()
-    except ImportError:
-        pass
-    return tensor
+from .utils import _ensure_full_tensor, masked_mean
 
 
 class GPTLMLoss(nn.Module):
