@@ -145,97 +145,83 @@ def _str_to_style(style: str) -> ParallelStyle:
     return styles[style]
 
 
+def _base_attn_mlp_plan() -> Dict[str, ParallelStyle]:
+    """Base plan for attention and MLP layers (shared by all models)."""
+    return {
+        "model.layers.*.self_attn.q_proj": ColwiseParallel(),
+        "model.layers.*.self_attn.k_proj": ColwiseParallel(),
+        "model.layers.*.self_attn.v_proj": ColwiseParallel(),
+        "model.layers.*.self_attn.qkv_proj": ColwiseParallel(),
+        "model.layers.*.self_attn.o_proj": RowwiseParallel(),
+        "model.layers.*.mlp.gate_proj": ColwiseParallel(),
+        "model.layers.*.mlp.up_proj": ColwiseParallel(),
+        "model.layers.*.mlp.gate_up_proj": ColwiseParallel(),
+        "model.layers.*.mlp.down_proj": RowwiseParallel(),
+    }
+
+
 def get_base_tp_plan(sequence_parallel: bool = False) -> Dict[str, ParallelStyle]:
     """Generic TP plan for LLaMA-style models."""
     plan = {
         "model.embed_tokens": RowwiseParallel(input_layouts=Replicate()),
-        "model.layers.*.self_attn.q_proj": ColwiseParallel(),
-        "model.layers.*.self_attn.k_proj": ColwiseParallel(),
-        "model.layers.*.self_attn.v_proj": ColwiseParallel(),
-        "model.layers.*.self_attn.qkv_proj": ColwiseParallel(),
-        "model.layers.*.self_attn.o_proj": RowwiseParallel(),
-        "model.layers.*.mlp.gate_proj": ColwiseParallel(),
-        "model.layers.*.mlp.up_proj": ColwiseParallel(),
-        "model.layers.*.mlp.gate_up_proj": ColwiseParallel(),
-        "model.layers.*.mlp.down_proj": RowwiseParallel(),
         "lm_head": ColwiseParallel(output_layouts=Shard(-1), use_local_output=False),
+        **_base_attn_mlp_plan(),
     }
     if sequence_parallel:
-        plan.update(
-            {
-                "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
-                "model.norm": SequenceParallel(),
-                "model.layers.*.input_layernorm": SequenceParallel(),
-                "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
-                "model.layers.*.post_attention_layernorm": SequenceParallel(),
-                "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
-                "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Replicate()),
-            }
-        )
+        plan.update({
+            "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
+            "model.norm": SequenceParallel(),
+            "model.layers.*.input_layernorm": SequenceParallel(),
+            "model.layers.*.post_attention_layernorm": SequenceParallel(),
+            "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
+            "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
+            "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Replicate()),
+        })
     return plan
 
 
 def _llama_plan(model, sp: bool) -> Dict[str, ParallelStyle]:
-    """Optimized plan for LLaMA."""
+    """LLaMA plan (uses SequenceParallelAllGather for better performance)."""
     plan = get_base_tp_plan(False)
     if sp:
-        plan.update(
-            {
-                "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
-                "model.norm": SequenceParallel(),
-                "model.layers.*.input_layernorm": SequenceParallelAllGather(use_local_output=False),
-                "model.layers.*.post_attention_layernorm": SequenceParallelAllGather(use_local_output=False),
-                "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
-                "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
-                "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Shard(-1), use_local_output=False),
-            }
-        )
+        plan.update({
+            "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
+            "model.norm": SequenceParallel(),
+            "model.layers.*.input_layernorm": SequenceParallelAllGather(use_local_output=False),
+            "model.layers.*.post_attention_layernorm": SequenceParallelAllGather(use_local_output=False),
+            "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
+            "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
+            "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Shard(-1), use_local_output=False),
+        })
     return plan
 
 
 def _qwen_plan(model, sp: bool) -> Dict[str, ParallelStyle]:
-    """Optimized plan for Qwen."""
+    """Qwen plan (adds q_norm/k_norm handling)."""
+    plan = {
+        "model.embed_tokens": RowwiseParallel(input_layouts=Replicate()),
+        "lm_head": ColwiseParallel(output_layouts=Shard(-1), use_local_output=False),
+        **_base_attn_mlp_plan(),
+    }
     if sp:
-
         class Qwen3QKNorm(SequenceParallel):
             @staticmethod
             def _prepare_input_fn(seq_shard, mod, inputs, mesh):
                 t = inputs[0]
-                if isinstance(t, DTensor):
-                    return t
-                return DTensor.from_local(t, mesh, seq_shard, run_check=False)
+                return t if isinstance(t, DTensor) else DTensor.from_local(t, mesh, seq_shard, run_check=False)
 
-        return {
-            "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Shard(-1), use_local_output=False),
+        plan.update({
             "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
             "model.norm": SequenceParallel(),
             "model.layers.*.input_layernorm": SequenceParallelAllGather(),
-            "model.layers.*.self_attn.q_proj": ColwiseParallel(),
-            "model.layers.*.self_attn.k_proj": ColwiseParallel(),
-            "model.layers.*.self_attn.v_proj": ColwiseParallel(),
-            "model.layers.*.self_attn.qkv_proj": ColwiseParallel(),
+            "model.layers.*.post_attention_layernorm": SequenceParallelAllGather(),
             "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
             "model.layers.*.self_attn.q_norm": Qwen3QKNorm(),
             "model.layers.*.self_attn.k_norm": Qwen3QKNorm(),
-            "model.layers.*.post_attention_layernorm": SequenceParallelAllGather(),
-            "model.layers.*.mlp.up_proj": ColwiseParallel(),
-            "model.layers.*.mlp.gate_proj": ColwiseParallel(),
-            "model.layers.*.mlp.gate_up_proj": ColwiseParallel(),
             "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
-        }
-    return {
-        "lm_head": ColwiseParallel(output_layouts=Shard(-1), use_local_output=False),
-        "model.embed_tokens": RowwiseParallel(input_layouts=Replicate()),
-        "model.layers.*.self_attn.q_proj": ColwiseParallel(),
-        "model.layers.*.self_attn.k_proj": ColwiseParallel(),
-        "model.layers.*.self_attn.v_proj": ColwiseParallel(),
-        "model.layers.*.self_attn.qkv_proj": ColwiseParallel(),
-        "model.layers.*.self_attn.o_proj": RowwiseParallel(),
-        "model.layers.*.mlp.up_proj": ColwiseParallel(),
-        "model.layers.*.mlp.gate_proj": ColwiseParallel(),
-        "model.layers.*.mlp.gate_up_proj": ColwiseParallel(),
-        "model.layers.*.mlp.down_proj": RowwiseParallel(),
-    }
+            "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Shard(-1), use_local_output=False),
+        })
+    return plan
 
 
 _MODEL_PLANS: Dict[str, Callable] = {

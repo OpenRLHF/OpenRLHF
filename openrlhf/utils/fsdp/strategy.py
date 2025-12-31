@@ -37,29 +37,14 @@ from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_g
 from openrlhf.utils import convert_to_dtype
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
+from . import MESH_DIM_CP, MESH_DIM_DP, MESH_DIM_TP
 from .checkpoint import (
     load_distributed_checkpoint,
     load_hf_model,
     save_distributed_checkpoint,
     save_hf_model,
 )
-from .utils import clip_grad_norm_dtensor, get_runtime_metadata, move_optimizer_state, moving_average_fsdp
-
-MESH_DIM_DP = "dp"
-MESH_DIM_CP = "cp"
-MESH_DIM_TP = "tp"
-
-
-def _unwrap_actor(model: nn.Module) -> nn.Module:
-    """Unwrap Actor wrapper to get inner model."""
-    try:
-        from openrlhf.models import Actor
-
-        if isinstance(model, Actor):
-            return _unwrap_actor(model.model)
-    except ImportError:
-        pass
-    return model
+from .utils import barrier, clip_grad_norm_dtensor, get_runtime_metadata, move_optimizer_state, moving_average_fsdp, unwrap_actor
 
 
 class FSDP2Strategy(ABC):
@@ -271,7 +256,7 @@ class FSDP2Strategy(ABC):
 
     def _prepare_single(self, model: nn.Module) -> nn.Module:
         """Prepare a single model: unwrap -> TP -> FSDP -> rewrap."""
-        inner = _unwrap_actor(model)
+        inner = unwrap_actor(model)
         is_actor = inner is not model
 
         # Apply TP before FSDP (following Automodel/slime pattern)
@@ -343,7 +328,7 @@ class FSDP2Strategy(ABC):
 
     def create_optimizer(self, model, **kwargs) -> Optimizer:
         """Create AdamW optimizer."""
-        inner = _unwrap_actor(model)
+        inner = unwrap_actor(model)
         if "foreach" not in kwargs and self.tp_size > 1 and self.dp_size <= 1:
             kwargs["foreach"] = False
         return optim.AdamW(inner.parameters(), **kwargs)
@@ -358,7 +343,7 @@ class FSDP2Strategy(ABC):
             loss = loss / self.accumulated_gradient
 
         # Defer gradient sync until final micro-batch (optimization from Automodel)
-        inner = _unwrap_actor(model)
+        inner = unwrap_actor(model)
         is_final = self._is_final_micro_batch(kwargs.get("name", "model"))
         if isinstance(inner, FSDPModule) and self.accumulated_gradient > 1:
             inner.set_requires_gradient_sync(is_final)
@@ -379,7 +364,7 @@ class FSDP2Strategy(ABC):
             return
 
         if self.max_norm > 0:
-            clip_grad_norm_dtensor(_unwrap_actor(model), self.max_norm)
+            clip_grad_norm_dtensor(unwrap_actor(model), self.max_norm)
 
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
@@ -440,22 +425,22 @@ class FSDP2Strategy(ABC):
 
     def offload_states(self, model, optimizer=None) -> None:
         """Offload states to CPU."""
-        for m in _unwrap_actor(model).modules():
+        for m in unwrap_actor(model).modules():
             if isinstance(m, FSDPModule):
                 m.reshard()
         if optimizer:
             move_optimizer_state(optimizer, torch.device("cpu"))
         torch.cuda.empty_cache()
-        self._barrier()
+        barrier()
 
     def reload_states(self, model, optimizer=None) -> None:
         """Reload states to GPU."""
         device = torch.device("cuda", torch.cuda.current_device())
-        _unwrap_actor(model).to(device)
+        unwrap_actor(model).to(device)
         if optimizer:
             move_optimizer_state(optimizer, device)
         torch.cuda.synchronize()
-        self._barrier()
+        barrier()
 
     # =========================================================================
     # Checkpointing
@@ -464,20 +449,20 @@ class FSDP2Strategy(ABC):
     def save_model(self, model: nn.Module, tokenizer, output_dir: str, **kwargs) -> None:
         """Save model to HuggingFace format."""
         save_hf_model(
-            model, tokenizer, output_dir, self.is_rank_0(), _unwrap_actor, get_runtime_metadata(self), **kwargs
+            model, tokenizer, output_dir, self.is_rank_0(), unwrap_actor, get_runtime_metadata(self), **kwargs
         )
 
     def load_model(self, model: nn.Module, path: str, **kwargs) -> None:
         """Load model weights."""
-        load_hf_model(model, path, _unwrap_actor, **kwargs)
+        load_hf_model(model, path, unwrap_actor, **kwargs)
 
     def save_ckpt(self, model: nn.Module, save_dir: str, tag: Optional[str] = None, **kwargs) -> None:
         """Save distributed checkpoint."""
-        save_distributed_checkpoint(model, save_dir, tag, _unwrap_actor, self.is_rank_0(), **kwargs)
+        save_distributed_checkpoint(model, save_dir, tag, unwrap_actor, self.is_rank_0(), **kwargs)
 
     def load_ckpt(self, model: nn.Module, load_dir: str, **kwargs) -> Tuple[str, dict]:
         """Load distributed checkpoint."""
-        return load_distributed_checkpoint(model, load_dir, _unwrap_actor, **kwargs)
+        return load_distributed_checkpoint(model, load_dir, unwrap_actor, **kwargs)
 
     # =========================================================================
     # Communication
@@ -535,11 +520,6 @@ class FSDP2Strategy(ABC):
         if self.is_rank_0():
             print(*msg)
 
-    def _barrier(self) -> None:
-        """Distributed barrier."""
-        if dist.is_initialized():
-            dist.barrier()
-
     def is_rank_0(self) -> bool:
         return not dist.is_initialized() or dist.get_rank() == 0
 
@@ -559,4 +539,4 @@ class FSDP2Strategy(ABC):
 
     # Backward compatibility aliases
     def _unwrap_model(self, model) -> nn.Module:
-        return _unwrap_actor(model)
+        return unwrap_actor(model)
