@@ -12,10 +12,12 @@ import torch.nn as nn
 # Actor Unwrapping
 # =============================================================================
 
+
 def unwrap_actor(model: nn.Module) -> nn.Module:
     """Unwrap Actor wrapper to get inner model."""
     try:
         from openrlhf.models import Actor
+
         if isinstance(model, Actor):
             return unwrap_actor(model.model)
     except ImportError:
@@ -26,6 +28,7 @@ def unwrap_actor(model: nn.Module) -> nn.Module:
 # =============================================================================
 # Gradient Clipping
 # =============================================================================
+
 
 def clip_grad_norm_dtensor(
     model: nn.Module,
@@ -43,17 +46,13 @@ def clip_grad_norm_dtensor(
         return 0.0
 
     if not dist.is_initialized():
-        return float(torch.nn.utils.clip_grad_norm_(
-            params, max_norm, norm_type, error_if_nonfinite, foreach
-        ))
+        return float(torch.nn.utils.clip_grad_norm_(params, max_norm, norm_type, error_if_nonfinite, foreach))
 
     grads = [p.grad for p in params]
     device = grads[0].device if grads else torch.device("cuda")
 
     try:
-        total_norm = torch.nn.utils.get_total_norm(
-            grads, norm_type, error_if_nonfinite, foreach or False
-        )
+        total_norm = torch.nn.utils.get_total_norm(grads, norm_type, error_if_nonfinite, foreach or False)
         total_norm = _reduce_dtensor(total_norm)
     except Exception:
         total_norm = _compute_mixed_norm(grads, device, norm_type, error_if_nonfinite, foreach)
@@ -67,6 +66,7 @@ def _reduce_dtensor(tensor: torch.Tensor) -> torch.Tensor:
     """Convert DTensor to regular tensor."""
     try:
         from torch.distributed.tensor import DTensor
+
         if isinstance(tensor, DTensor):
             return tensor.full_tensor()
     except ImportError:
@@ -87,9 +87,10 @@ def _compute_mixed_norm(grads, device, norm_type, error_if_nonfinite, foreach):
     for grad in grads:
         if DTensor and isinstance(grad, DTensor):
             placements = getattr(grad, "placements", None)
-            key = (id(grad.device_mesh), tuple(
-                (p.__class__.__name__, getattr(p, "dim", None)) for p in placements
-            ) if placements else None)
+            key = (
+                id(grad.device_mesh),
+                tuple((p.__class__.__name__, getattr(p, "dim", None)) for p in placements) if placements else None,
+            )
             mesh_groups.setdefault(key, []).append(grad)
         else:
             local_grads.append(grad)
@@ -119,6 +120,7 @@ def _compute_mixed_norm(grads, device, norm_type, error_if_nonfinite, foreach):
 # EMA
 # =============================================================================
 
+
 def moving_average_fsdp(
     model: nn.Module,
     model_ema: nn.Module,
@@ -140,6 +142,7 @@ def moving_average_fsdp(
 # =============================================================================
 # Optimizer State
 # =============================================================================
+
 
 def move_optimizer_state(optimizer, device: torch.device) -> None:
     """Move optimizer state to specified device."""

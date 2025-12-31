@@ -49,10 +49,12 @@ MESH_DIM_DP = "dp"
 MESH_DIM_CP = "cp"
 MESH_DIM_TP = "tp"
 
+
 def _unwrap_actor(model: nn.Module) -> nn.Module:
     """Unwrap Actor wrapper to get inner model."""
     try:
         from openrlhf.models import Actor
+
         if isinstance(model, Actor):
             return _unwrap_actor(model.model)
     except ImportError:
@@ -62,7 +64,7 @@ def _unwrap_actor(model: nn.Module) -> nn.Module:
 
 class FSDP2Strategy(ABC):
     """FSDP2 distributed training strategy.
-    
+
     Supports DP, CP (ring attention), and TP with device mesh layout (dp, cp, tp).
     Compatible with slime and Automodel parallelization approaches.
     """
@@ -77,7 +79,7 @@ class FSDP2Strategy(ABC):
         args=None,
     ) -> None:
         super().__init__()
-        
+
         # Core config
         self.args = args
         self.seed = seed
@@ -90,7 +92,7 @@ class FSDP2Strategy(ABC):
         # Parallelism sizes
         self.ring_attn_size = max(1, int(getattr(args, "ring_attn_size", 1) or 1))
         self.tp_size = max(1, int(getattr(args, "ds_tensor_parallel_size", 1) or 1))
-        
+
         # For backward compatibility
         self.ds_tensor_parallel_size = self.tp_size
 
@@ -176,7 +178,7 @@ class FSDP2Strategy(ABC):
 
     def _create_device_mesh(self) -> None:
         """Create device mesh with layout (dp, cp, tp).
-        
+
         Following slime's approach: FSDP shards only on dp dimension,
         CP groups hold full parameter copies for ring_flash_attn.
         """
@@ -202,6 +204,7 @@ class FSDP2Strategy(ABC):
 
         try:
             from ring_flash_attn import substitute_hf_flash_attn
+
             stride = getattr(self.args, "ring_head_stride", 1)
             substitute_hf_flash_attn(cp_group, stride)
         except ImportError as e:
@@ -248,7 +251,7 @@ class FSDP2Strategy(ABC):
 
     def prepare(self, *models, is_rlhf: bool = False):
         """Prepare models for FSDP2 training.
-        
+
         Applies TP first (if enabled), then FSDP wrapping.
         """
         self.is_rlhf = is_rlhf
@@ -287,10 +290,9 @@ class FSDP2Strategy(ABC):
             return model
 
         from .tp import apply_tensor_parallel
+
         self._log(f"Applying TP (size={tp_mesh.size()}, SP={self.sequence_parallel})")
-        return apply_tensor_parallel(
-            model, tp_mesh, sequence_parallel=self.sequence_parallel, validate=True
-        )
+        return apply_tensor_parallel(model, tp_mesh, sequence_parallel=self.sequence_parallel, validate=True)
 
     def _apply_fsdp(self, model: nn.Module) -> nn.Module:
         """Apply FSDP2 wrapping."""
@@ -302,15 +304,18 @@ class FSDP2Strategy(ABC):
         self._shard_layers(model, mesh)
         if not isinstance(model, FSDPModule):
             model = fully_shard(
-                model, mesh=mesh, reshard_after_forward=False,
-                offload_policy=self._offload_policy, mp_policy=self._mp_policy,
+                model,
+                mesh=mesh,
+                reshard_after_forward=False,
+                offload_policy=self._offload_policy,
+                mp_policy=self._mp_policy,
             )
         return model
 
     def _shard_layers(self, model: nn.Module, mesh) -> None:
         """Shard transformer layers with FSDP."""
         layer_classes = getattr(model, "_no_split_modules", None) or []
-        
+
         to_shard = []
         for name, child in model.named_modules():
             if isinstance(child, FSDPModule):
@@ -325,7 +330,8 @@ class FSDP2Strategy(ABC):
         for i, layer in enumerate(to_shard):
             is_last = i == len(to_shard) - 1
             fully_shard(
-                layer, mesh=mesh,
+                layer,
+                mesh=mesh,
                 reshard_after_forward=self.fsdp2_reshard_after_forward and not is_last,
                 offload_policy=self._offload_policy,
                 mp_policy=self._mp_policy,
@@ -348,9 +354,7 @@ class FSDP2Strategy(ABC):
             loss = loss / self.accumulated_gradient
         loss.backward()
 
-    def optimizer_step(
-        self, optimizer: Optimizer, model: nn.Module, scheduler, name: str = "model", **kwargs
-    ) -> None:
+    def optimizer_step(self, optimizer: Optimizer, model: nn.Module, scheduler, name: str = "model", **kwargs) -> None:
         """Optimizer step with gradient accumulation."""
         key = f"micro_step_{name}"
         self.time_steps[key] += 1
@@ -398,14 +402,20 @@ class FSDP2Strategy(ABC):
                 dataset,
                 num_replicas=dist.get_world_size(dp_group) if dp_group else dist.get_world_size(),
                 rank=dist.get_rank(dp_group) if dp_group else dist.get_rank(),
-                shuffle=shuffle, seed=self.seed, drop_last=drop_last,
+                shuffle=shuffle,
+                seed=self.seed,
+                drop_last=drop_last,
                 consumed_samples=consumed_samples,
             )
 
         return StatefulDataLoader(
-            dataset, batch_size=batch_size, sampler=sampler,
-            drop_last=drop_last, shuffle=shuffle if sampler is None else False,
-            collate_fn=collate_fn, pin_memory=pin_memory,
+            dataset,
+            batch_size=batch_size,
+            sampler=sampler,
+            drop_last=drop_last,
+            shuffle=shuffle if sampler is None else False,
+            collate_fn=collate_fn,
+            pin_memory=pin_memory,
         )
 
     # =========================================================================
@@ -438,8 +448,7 @@ class FSDP2Strategy(ABC):
     def save_model(self, model: nn.Module, tokenizer, output_dir: str, **kwargs) -> None:
         """Save model to HuggingFace format."""
         save_hf_model(
-            model, tokenizer, output_dir, self.is_rank_0(),
-            _unwrap_actor, get_runtime_metadata(self), **kwargs
+            model, tokenizer, output_dir, self.is_rank_0(), _unwrap_actor, get_runtime_metadata(self), **kwargs
         )
 
     def load_model(self, model: nn.Module, path: str, **kwargs) -> None:
