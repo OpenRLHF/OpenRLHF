@@ -99,9 +99,12 @@ def _add_allgather_hook(module: nn.Module):
 
 def translate_to_lora(style):
     """Convert parallel style to LoRA-aware version."""
+
     def _copy_attrs(src, dst):
         dst.output_layouts, dst.input_layouts, dst.use_local_output = (
-            src.output_layouts, src.input_layouts, src.use_local_output
+            src.output_layouts,
+            src.input_layouts,
+            src.use_local_output,
         )
         return dst
 
