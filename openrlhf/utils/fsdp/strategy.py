@@ -543,7 +543,3 @@ class FSDP2Strategy(ABC):
     def get_ds_eval_config(self, offload: bool = False):
         """DeepSpeed compatibility - returns None for FSDP2."""
         return None
-
-    # Backward compatibility aliases
-    def _unwrap_model(self, model) -> nn.Module:
-        return unwrap_actor(model)
