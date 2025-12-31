@@ -21,8 +21,10 @@ logger = logging.getLogger(__name__)
 # LoRA-Aware Parallel Styles
 # =============================================================================
 
+
 class ColwiseParallelLora(ColwiseParallel):
     """ColwiseParallel with LoRA support - shards lora_B along dim 0."""
+
     src_data_rank: int = 0
 
     def _partition_linear_fn(self, name, module, device_mesh):
@@ -34,11 +36,16 @@ class ColwiseParallelLora(ColwiseParallel):
                 _shard_param(m, "weight", device_mesh, [Shard(0)])
         if lora_a:
             for m in (lora_a.values() if isinstance(lora_a, nn.ModuleDict) else [lora_a]):
-                m.register_forward_hook(lambda mod, inp, out: out.redistribute(placements=[Replicate()]) if isinstance(out, DTensor) else out)
+                m.register_forward_hook(
+                    lambda mod, inp, out: (
+                        out.redistribute(placements=[Replicate()]) if isinstance(out, DTensor) else out
+                    )
+                )
 
 
 class RowwiseParallelLora(RowwiseParallel):
     """RowwiseParallel with LoRA support - shards lora_A along dim 1."""
+
     src_data_rank: int = 0
 
     def _partition_linear_fn(self, name, module, device_mesh):
@@ -51,6 +58,7 @@ class RowwiseParallelLora(RowwiseParallel):
 
 class SequenceParallelAllGather(SequenceParallel):
     """SequenceParallel that all-gathers output (for LayerNorm before attention)."""
+
     @staticmethod
     def _prepare_output_fn(use_local_output, mod, outputs, device_mesh):
         if isinstance(outputs, DTensor) and any(isinstance(p, Shard) for p in outputs.placements):
@@ -62,18 +70,30 @@ def _shard_param(module, name, mesh, placements):
     """Distribute a parameter across the mesh."""
     param = getattr(module, name, None)
     if param is not None and not isinstance(param, DTensor):
-        setattr(module, name, nn.Parameter(distribute_tensor(param, mesh, placements, 0), requires_grad=param.requires_grad))
+        setattr(
+            module,
+            name,
+            nn.Parameter(distribute_tensor(param, mesh, placements, 0), requires_grad=param.requires_grad),
+        )
 
 
 def _to_lora(style):
     """Convert parallel style to LoRA-aware version, preserving layouts."""
     if isinstance(style, ColwiseParallel) and not isinstance(style, ColwiseParallelLora):
         new = ColwiseParallelLora()
-        new.output_layouts, new.input_layouts, new.use_local_output = style.output_layouts, style.input_layouts, style.use_local_output
+        new.output_layouts, new.input_layouts, new.use_local_output = (
+            style.output_layouts,
+            style.input_layouts,
+            style.use_local_output,
+        )
         return new
     if isinstance(style, RowwiseParallel) and not isinstance(style, RowwiseParallelLora):
         new = RowwiseParallelLora()
-        new.output_layouts, new.input_layouts, new.use_local_output = style.output_layouts, style.input_layouts, style.use_local_output
+        new.output_layouts, new.input_layouts, new.use_local_output = (
+            style.output_layouts,
+            style.input_layouts,
+            style.use_local_output,
+        )
         return new
     return style
 
@@ -104,15 +124,17 @@ def _base_plan(sequence_parallel=False, layernorm_cls=SequenceParallel):
         **_ATTN_MLP_PLAN,
     }
     if sequence_parallel:
-        plan.update({
-            "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
-            "model.norm": SequenceParallel(),
-            "model.layers.*.input_layernorm": layernorm_cls(use_local_output=False),
-            "model.layers.*.post_attention_layernorm": layernorm_cls(use_local_output=False),
-            "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
-            "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
-            "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Shard(-1), use_local_output=False),
-        })
+        plan.update(
+            {
+                "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
+                "model.norm": SequenceParallel(),
+                "model.layers.*.input_layernorm": layernorm_cls(use_local_output=False),
+                "model.layers.*.post_attention_layernorm": layernorm_cls(use_local_output=False),
+                "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
+                "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
+                "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Shard(-1), use_local_output=False),
+            }
+        )
     return plan
 
 
@@ -125,11 +147,13 @@ def _qwen_plan(model, sequence_parallel):
     """Qwen plan: adds q_norm/k_norm handling."""
     plan = _base_plan(sequence_parallel, SequenceParallelAllGather)
     if sequence_parallel:
+
         class QwenQKNorm(SequenceParallel):
             @staticmethod
             def _prepare_input_fn(seq_shard, mod, inputs, mesh):
                 t = inputs[0]
                 return t if isinstance(t, DTensor) else DTensor.from_local(t, mesh, seq_shard, run_check=False)
+
         plan["model.layers.*.self_attn.q_norm"] = QwenQKNorm()
         plan["model.layers.*.self_attn.k_norm"] = QwenQKNorm()
     return plan
@@ -196,6 +220,7 @@ def _get_hf_plan(model):
 # =============================================================================
 # Application
 # =============================================================================
+
 
 def validate_tp_mesh(model, tp_mesh):
     """Validate attention heads divisible by TP size."""
