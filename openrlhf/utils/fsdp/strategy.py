@@ -97,11 +97,9 @@ class FSDP2Strategy(ABC):
         self.mesh = init_device_mesh("cuda", shape, mesh_dim_names=names)
 
         # Setup ring attention
-        self.ring_attn_rank = 0
         set_ring_attn_group(None)
         if self.ring_attn_size > 1:
             cp_group = self.mesh[MESH_DIM_CP].get_group()
-            self.ring_attn_rank = dist.get_rank(group=cp_group)
             set_ring_attn_group(cp_group)
             from ring_flash_attn import substitute_hf_flash_attn
 
