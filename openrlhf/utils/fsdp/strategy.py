@@ -325,40 +325,36 @@ class FSDP2Strategy(ABC):
     # Communication
     # -------------------------------------------------------------------------
 
+    def _dp_group(self):
+        return self.mesh[MESH_DIM_DP].get_group() if self.mesh else None
+
     def all_reduce(self, data, op="mean"):
         """All-reduce across DP group."""
         if isinstance(data, dict):
             return {k: self.all_reduce(v, op) for k, v in data.items()}
 
-        dp_group = self.mesh[MESH_DIM_DP].get_group() if self.mesh else None
-        dp_size = dist.get_world_size(dp_group) if dist.is_initialized() else 1
+        group, size = self._dp_group(), dist.get_world_size(self._dp_group()) if dist.is_initialized() else 1
+        is_tensor, on_cpu = isinstance(data, torch.Tensor), False
+        t = data if is_tensor else torch.tensor(data)
+        if t.device.type == "cpu":
+            on_cpu, t = True, t.cuda()
 
-        t = data if isinstance(data, torch.Tensor) else torch.tensor(data)
-        on_cpu = t.device.type == "cpu"
-        t = t.cuda() if on_cpu else t
-
-        ops = {"mean": dist.ReduceOp.SUM, "max": dist.ReduceOp.MAX, "sum": dist.ReduceOp.SUM}
-        dist.all_reduce(t, op=ops[op], group=dp_group)
+        dist.all_reduce(t, op={"mean": dist.ReduceOp.SUM, "max": dist.ReduceOp.MAX, "sum": dist.ReduceOp.SUM}[op], group=group)
         if op == "mean":
-            t = t / dp_size
-
-        t = t.cpu() if on_cpu else t
-        return t if isinstance(data, torch.Tensor) else t.item()
+            t = t / size
+        return (t.cpu() if on_cpu else t) if is_tensor else (t.cpu() if on_cpu else t).item()
 
     def all_gather(self, data):
         """All-gather across DP group."""
-        dp_group = self.mesh[MESH_DIM_DP].get_group() if self.mesh else None
-        dp_size = dist.get_world_size(dp_group) if dist.is_initialized() else 1
-
-        t = data if isinstance(data, torch.Tensor) else torch.tensor(data)
+        group, size = self._dp_group(), dist.get_world_size(self._dp_group()) if dist.is_initialized() else 1
+        is_tensor = isinstance(data, torch.Tensor)
+        t = data if is_tensor else torch.tensor(data)
         on_cpu = t.device.type == "cpu"
 
-        out = [torch.zeros_like(t).cuda() for _ in range(dp_size)]
-        dist.all_gather(out, t.cuda(), group=dp_group)
+        out = [torch.zeros_like(t).cuda() for _ in range(size)]
+        dist.all_gather(out, t.cuda(), group=group)
         result = torch.cat(out)
-
-        result = result.cpu() if on_cpu else result
-        return result if isinstance(data, torch.Tensor) else result.tolist()
+        return (result.cpu() if on_cpu else result) if is_tensor else result.tolist()
 
     # -------------------------------------------------------------------------
     # Utilities
