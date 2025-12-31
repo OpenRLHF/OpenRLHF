@@ -37,6 +37,7 @@ class CriticPPOTrainer(ABC):
     ):
         self.strategy = strategy
         self.args = strategy.args
+        self.disable_ds_ckpt = self.args.disable_ds_ckpt
         self.critic = critic
         self.critic_optim = critic_optim
         self.critic_scheduler = critic_scheduler
@@ -301,15 +302,16 @@ class CriticModelActor(BaseModelActor):
 
     def save_checkpoint(self, tag):
         args = self.strategy.args
-        self.strategy.save_ckpt(
-            self.critic,
-            os.path.join(args.ckpt_path, "_critic"),
-            tag,
-            max_num=args.max_ckpt_num,
-            max_mem=args.max_ckpt_mem,
-            optimizer=self.critic_optim,
-            scheduler=self.critic_scheduler,
-        )
+        if not self.disable_ds_ckpt:
+            self.strategy.save_ckpt(
+                self.critic,
+                os.path.join(args.ckpt_path, "_critic"),
+                tag,
+                max_num=args.max_ckpt_num,
+                max_mem=args.max_ckpt_mem,
+                optimizer=self.critic_optim,
+                scheduler=self.critic_scheduler,
+            )
 
     def reload_states(self):
         if hasattr(self.strategy, "reload_states"):
