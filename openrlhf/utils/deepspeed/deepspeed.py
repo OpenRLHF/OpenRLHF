@@ -72,7 +72,6 @@ class DeepspeedStrategy(ABC):
             assert deepspeed.version >= "0.16.4", "DeepSpeed version must be >= 0.16.4 for tensor parallel training"
             assert self.precision == "bf16", "BF16 is required for tensor parallel training"
 
-        self.is_rlhf = False
         self.time_steps = defaultdict(int)
 
     def setup_distributed(self, timeout=timedelta(minutes=60)) -> None:
@@ -202,10 +201,9 @@ class DeepspeedStrategy(ABC):
             return model
 
     def prepare(
-        self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False
+        self, *models_or_model_optim_pairs: ModelOrModelOptimPair
     ) -> Union[List[ModelOrModelOptimPair], ModelOrModelOptimPair]:
         ret = []
-        self.is_rlhf = is_rlhf
         for arg in models_or_model_optim_pairs:
             if isinstance(arg, tuple):
                 assert len(arg) == 3, f'Expect (model, optimizer, scheduler) pair, got a tuple with size "{len(arg)}"'
