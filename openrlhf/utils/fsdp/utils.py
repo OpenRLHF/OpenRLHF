@@ -120,15 +120,24 @@ def moving_average_fsdp(model: nn.Module, model_ema: nn.Module, beta: float = 0.
     Efficient implementation that:
     - Uses full_tensor() to handle sharded params
     - Only updates trainable params that exist in both models
+    - Handles device placement correctly (uses EMA param's actual device)
+
+    Args:
+        model: Source model (FSDP-wrapped actor)
+        model_ema: Target EMA model (may be Actor wrapper)
+        beta: EMA decay factor
+        device: Fallback device (used only if EMA param device detection fails)
     """
     src = unwrap_actor(model)
-    ema_params = dict(model_ema.named_parameters())
+    ema = unwrap_actor(model_ema)
+    ema_params = dict(ema.named_parameters())
 
     with torch.no_grad():
         for name, param in src.named_parameters():
             if param.requires_grad and name in ema_params:
                 data = param.full_tensor() if hasattr(param, "full_tensor") else param.data
-                ema_params[name].data.mul_(beta).add_(data.to(device), alpha=1 - beta)
+                target_device = ema_params[name].device
+                ema_params[name].data.mul_(beta).add_(data.to(target_device), alpha=1 - beta)
 
 
 # -----------------------------------------------------------------------------
