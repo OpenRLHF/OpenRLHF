@@ -154,4 +154,3 @@ def get_runtime_metadata(strategy) -> dict:
         "tp_size": getattr(strategy, "tp_size", 1),
         "precision": getattr(strategy, "precision", "bf16"),
     }
-
