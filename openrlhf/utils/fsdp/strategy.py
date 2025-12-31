@@ -241,31 +241,16 @@ class FSDP2Strategy(ABC):
     # =========================================================================
 
     def prepare(self, *models, is_rlhf: bool = False):
-        """Prepare models for FSDP2 training.
-
-        Applies TP first (if enabled), then FSDP wrapping.
-        """
+        """Prepare models for FSDP2 training (TP -> FSDP)."""
         self.is_rlhf = is_rlhf
-        results = []
-
-        for arg in models:
-            if isinstance(arg, tuple):
-                model, opt, sched = arg
-                if model is None:
-                    results.append((None, None, None))
-                else:
-                    results.append((self._prepare_single(model), opt, sched))
-            else:
-                results.append(self._prepare_single(arg) if arg else None)
-
+        results = [self._wrap_model(m) if m else None for m in models]
         return results[0] if len(results) == 1 else results
 
-    def _prepare_single(self, model: nn.Module) -> nn.Module:
-        """Prepare a single model: unwrap -> TP -> FSDP -> rewrap."""
+    def _wrap_model(self, model: nn.Module) -> nn.Module:
+        """Apply TP + FSDP to model, preserving Actor wrapper."""
         inner = unwrap_actor(model)
         is_actor = inner is not model
 
-        # Apply TP before FSDP
         inner = self._apply_tp(inner)
         inner = self._apply_fsdp(inner)
 
