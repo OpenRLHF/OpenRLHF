@@ -32,7 +32,6 @@ from .utils import (
     get_runtime_metadata,
     move_optimizer_state,
     moving_average_fsdp,
-    unwrap_actor,
 )
 
 
@@ -130,7 +129,7 @@ class FSDP2Strategy(ABC):
 
     def _wrap(self, model):
         """Wrap model with TP + FSDP, preserving Actor wrapper."""
-        inner, is_actor = unwrap_actor(model), model
+        inner, is_actor = self._unwrap_model(model), model
         is_actor = inner is not model
 
         # TP before FSDP
@@ -199,14 +198,14 @@ class FSDP2Strategy(ABC):
         """Create AdamW optimizer."""
         if "foreach" not in kwargs and self.tp_size > 1 and self.dp_size <= 1:
             kwargs["foreach"] = False
-        return optim.AdamW(unwrap_actor(model).parameters(), **kwargs)
+        return optim.AdamW(self._unwrap_model(model).parameters(), **kwargs)
 
     def backward(self, loss, model, optimizer, **kwargs):
         """Backward with gradient accumulation and deferred sync."""
         if self.accumulated_gradient > 1:
             loss = loss / self.accumulated_gradient
 
-        inner = unwrap_actor(model)
+        inner = self._unwrap_model(model)
         if isinstance(inner, FSDPModule) and self.accumulated_gradient > 1:
             is_final = (
                 self.time_steps.get(f"step_{kwargs.get('name', 'model')}", 0) + 1
@@ -223,7 +222,7 @@ class FSDP2Strategy(ABC):
             return
 
         if self.max_norm > 0:
-            clip_grad_norm_dtensor(unwrap_actor(model), self.max_norm)
+            clip_grad_norm_dtensor(self._unwrap_model(model), self.max_norm)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         if scheduler:
@@ -233,7 +232,7 @@ class FSDP2Strategy(ABC):
         """Update EMA model."""
         self.time_steps["ema"] += 1
         if self.time_steps["ema"] % max(1, self.accumulated_gradient) == 0:
-            moving_average_fsdp(model, model_ema, beta, device)
+            moving_average_fsdp(model, model_ema, self._unwrap_model, beta, device)
 
     # -------------------------------------------------------------------------
     # Data
@@ -279,7 +278,7 @@ class FSDP2Strategy(ABC):
 
     def offload_states(self, model, optimizer=None):
         """Offload to CPU."""
-        for m in unwrap_actor(model).modules():
+        for m in self._unwrap_model(model).modules():
             if isinstance(m, FSDPModule):
                 m.reshard()
         if optimizer:
@@ -290,7 +289,7 @@ class FSDP2Strategy(ABC):
     def reload_states(self, model, optimizer=None):
         """Reload to GPU."""
         device = torch.device("cuda", torch.cuda.current_device())
-        unwrap_actor(model).to(device)
+        self._unwrap_model(model).to(device)
         if optimizer:
             move_optimizer_state(optimizer, device)
         torch.cuda.synchronize()
@@ -302,17 +301,17 @@ class FSDP2Strategy(ABC):
 
     def save_model(self, model, tokenizer, output_dir, **kwargs):
         save_hf_model(
-            model, tokenizer, output_dir, self.is_rank_0(), unwrap_actor, get_runtime_metadata(self), **kwargs
+            model, tokenizer, output_dir, self.is_rank_0(), self._unwrap_model, get_runtime_metadata(self), **kwargs
         )
 
     def load_model(self, model, path, **kwargs):
-        load_hf_model(model, path, unwrap_actor, **kwargs)
+        load_hf_model(model, path, self._unwrap_model, **kwargs)
 
     def save_ckpt(self, model, save_dir, tag=None, **kwargs):
-        save_distributed_checkpoint(model, save_dir, tag, unwrap_actor, self.is_rank_0(), **kwargs)
+        save_distributed_checkpoint(model, save_dir, tag, self._unwrap_model, self.is_rank_0(), **kwargs)
 
     def load_ckpt(self, model, load_dir, **kwargs):
-        return load_distributed_checkpoint(model, load_dir, unwrap_actor, **kwargs)
+        return load_distributed_checkpoint(model, load_dir, self._unwrap_model, **kwargs)
 
     # -------------------------------------------------------------------------
     # Communication
@@ -373,6 +372,17 @@ class FSDP2Strategy(ABC):
         return dist.get_world_size() if dist.is_initialized() else 1
 
     # DeepSpeed compatibility stubs
+    def _unwrap_model(self, model):
+        """Unwrap model (compatible with DeepspeedStrategy)."""
+        try:
+            from openrlhf.models import Actor
+
+            if isinstance(model, Actor):
+                return self._unwrap_model(model.model)
+        except ImportError:
+            pass
+        return model
+
     def get_ds_train_config(self, is_actor=False):
         return None
 
