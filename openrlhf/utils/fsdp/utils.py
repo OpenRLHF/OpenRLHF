@@ -163,3 +163,14 @@ def get_runtime_metadata(strategy) -> Dict[str, Any]:
         "precision": getattr(strategy, "precision", "bf16"),
         "fsdp2_offload": getattr(strategy, "fsdp2_offload", "none"),
     }
+
+
+# =============================================================================
+# Distributed
+# =============================================================================
+
+
+def barrier() -> None:
+    """Distributed barrier."""
+    if dist.is_initialized():
+        dist.barrier()

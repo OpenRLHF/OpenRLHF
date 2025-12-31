@@ -11,7 +11,6 @@ import warnings
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
-import torch.distributed as dist
 import torch.nn as nn
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
@@ -20,6 +19,8 @@ from torch.distributed.checkpoint.state_dict import (
 )
 from torch.distributed.fsdp import FSDPModule
 from torch.optim import Optimizer
+
+from .utils import barrier
 
 UnwrapFn = Callable[[nn.Module], nn.Module]
 
@@ -61,7 +62,7 @@ def save_hf_model(
         fsdp_model.save_pretrained(output_dir, state_dict=state, **kwargs)
         _save_configs(fsdp_model, output_dir, tokenizer, metadata)
 
-    _barrier()
+    barrier()
     del state
     gc.collect()
 
@@ -162,7 +163,7 @@ def save_distributed_checkpoint(
     os.makedirs(save_dir, exist_ok=True)
     if is_rank_0:
         _cleanup_old_checkpoints(save_dir, max_num, max_mem_gb)
-    _barrier()
+    barrier()
 
     fsdp_model = unwrap_fn(model)
     ckpt_path = os.path.join(save_dir, tag)
@@ -187,13 +188,13 @@ def save_distributed_checkpoint(
 
     if is_rank_0:
         os.makedirs(ckpt_path, exist_ok=True)
-    _barrier()
+    barrier()
 
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=(FutureWarning, UserWarning))
         dcp.save({"app": AppState()}, checkpoint_id=ckpt_path)
 
-    _barrier()
+    barrier()
 
     if save_latest and is_rank_0:
         with open(os.path.join(save_dir, "latest"), "w") as f:
@@ -279,11 +280,6 @@ def load_distributed_checkpoint(
 # =============================================================================
 # Helpers
 # =============================================================================
-
-
-def _barrier() -> None:
-    if dist.is_initialized():
-        dist.barrier()
 
 
 def _cleanup_old_checkpoints(save_dir: str, max_num: int, max_mem_gb: int) -> None:
