@@ -30,7 +30,6 @@ from .checkpoint import load_distributed_checkpoint, load_hf_model, save_distrib
 from .strategy import FSDP2Strategy
 from .tp import apply_tensor_parallel, get_tp_plan, validate_tp_mesh
 from .utils import (
-    barrier,
     clip_grad_norm_dtensor,
     get_runtime_metadata,
     move_optimizer_state,
@@ -55,7 +54,6 @@ __all__ = [
     "clip_grad_norm_dtensor",
     "moving_average_fsdp",
     "move_optimizer_state",
-    "barrier",
     "get_runtime_metadata",
     # Constants
     "MESH_DIM_DP",
