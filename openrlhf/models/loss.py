@@ -8,6 +8,17 @@ import torch.nn.functional as F
 from .utils import masked_mean
 
 
+def _ensure_full_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    """Convert DTensor to full tensor if needed (for TP compatibility)."""
+    try:
+        from torch.distributed.tensor import DTensor
+        if isinstance(tensor, DTensor):
+            return tensor.full_tensor()
+    except ImportError:
+        pass
+    return tensor
+
+
 class GPTLMLoss(nn.Module):
     """
     GPT Language Model Loss
@@ -24,6 +35,9 @@ class GPTLMLoss(nn.Module):
             self.ring_attn_world_size = dist.get_world_size(self.ring_attn_group)
 
     def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        # Handle DTensor from Tensor Parallel (convert to full tensor before loss computation)
+        logits = _ensure_full_tensor(logits)
+        
         # RingAttention
         if self.ring_attn_group is not None:
             total_seq_len = labels.size(-1)

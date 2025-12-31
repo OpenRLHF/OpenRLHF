@@ -4,6 +4,17 @@ import torch
 import torch.nn.functional as F
 
 
+def _ensure_full_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    """Convert DTensor to full tensor if needed (for TP compatibility)."""
+    try:
+        from torch.distributed.tensor import DTensor
+        if isinstance(tensor, DTensor):
+            return tensor.full_tensor()
+    except ImportError:
+        pass
+    return tensor
+
+
 def compute_approx_kl(
     log_probs: torch.Tensor,
     log_probs_base: torch.Tensor,
@@ -83,6 +94,9 @@ def _logsumexp_by_chunk(logits: torch.Tensor, chunk_size: int = 1024) -> torch.T
 
 
 def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:
+    # Handle DTensor from Tensor Parallel (convert to full tensor before log_probs computation)
+    logits = _ensure_full_tensor(logits)
+    
     if temperature != 1.0:
         logits.div_(temperature)
     # https://github.com/OpenRLHF/OpenRLHF/pull/718#issuecomment-2641081881
