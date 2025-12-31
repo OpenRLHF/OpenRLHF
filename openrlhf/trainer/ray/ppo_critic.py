@@ -200,7 +200,7 @@ class CriticModelActor(BaseModelActor):
         is_fsdp2 = getattr(args, "dist_backend", "deepspeed") == "fsdp2"
         if is_fsdp2:
             # FSDP2: wrap/shard model before building optimizer/scheduler (params become DTensor/sharded).
-            self.critic = strategy.prepare(critic, is_rlhf=True)
+            self.critic = strategy.prepare(critic)
             self.critic_optim = strategy.create_optimizer(
                 self.critic, lr=args.critic_learning_rate, betas=args.adam_betas, weight_decay=args.l2
             )
@@ -227,7 +227,6 @@ class CriticModelActor(BaseModelActor):
             # prepare models/optimizers...
             self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare(
                 (critic, critic_optim, critic_scheduler),
-                is_rlhf=True,
             )
 
         # load checkpoint

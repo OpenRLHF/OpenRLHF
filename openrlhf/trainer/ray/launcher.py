@@ -121,7 +121,7 @@ class ReferenceModelActor(BaseModelActor):
         if strategy.args.ref_reward_offload:
             model._offload = True
 
-        self.model = self.strategy.prepare(model, is_rlhf=True)
+        self.model = self.strategy.prepare(model)
         self.model.eval()
 
     def forward(
@@ -167,7 +167,7 @@ class RewardModelActor(BaseModelActor):
         if strategy.args.ref_reward_offload:
             model._offload = True
 
-        self.model = self.strategy.prepare(model, is_rlhf=True)
+        self.model = self.strategy.prepare(model)
         self.model.eval()
 
     def forward(

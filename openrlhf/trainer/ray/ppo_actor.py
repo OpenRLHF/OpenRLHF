@@ -504,7 +504,7 @@ class PolicyModelActor(BaseModelActor):
         is_fsdp2 = getattr(args, "dist_backend", "deepspeed") == "fsdp2"
         if is_fsdp2:
             # FSDP2: wrap/shard model before building optimizer/scheduler (params become DTensor/sharded).
-            self.actor = strategy.prepare(actor, is_rlhf=True)
+            self.actor = strategy.prepare(actor)
             self.actor_optim = strategy.create_optimizer(
                 self.actor, lr=args.actor_learning_rate, betas=strategy.args.adam_betas, weight_decay=args.l2
             )
@@ -531,12 +531,11 @@ class PolicyModelActor(BaseModelActor):
             # prepare models/optimizers...
             self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare(
                 (actor, actor_optim, actor_scheduler),
-                is_rlhf=True,
             )
 
         if ema_model:
             ema_model._offload = True
-            self.ema_model = strategy.prepare(ema_model, is_rlhf=True)
+            self.ema_model = strategy.prepare(ema_model)
         else:
             self.ema_model = None
 
