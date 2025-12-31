@@ -128,6 +128,7 @@ def moving_average_fsdp(model: nn.Module, model_ema: nn.Module, unwrap_fn, beta:
 # -----------------------------------------------------------------------------
 
 
+@torch.no_grad()
 def move_optimizer_state(optimizer, device: torch.device):
     """Move all optimizer state tensors to specified device."""
     if not optimizer.state:
