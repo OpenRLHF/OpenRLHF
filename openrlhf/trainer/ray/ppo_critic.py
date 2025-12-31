@@ -305,8 +305,8 @@ class CriticModelActor(BaseModelActor):
             self.critic,
             os.path.join(args.ckpt_path, "_critic"),
             tag,
-            args.max_ckpt_num,
-            args.max_ckpt_mem,
+            max_num=args.max_ckpt_num,
+            max_mem=args.max_ckpt_mem,
             optimizer=self.critic_optim,
             scheduler=self.critic_scheduler,
         )

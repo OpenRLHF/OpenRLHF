@@ -639,9 +639,9 @@ class PolicyModelActor(BaseModelActor):
             self.actor.model,
             os.path.join(args.ckpt_path, "_actor"),
             tag,
-            args.max_ckpt_num,
-            args.max_ckpt_mem,
-            client_states,
+            max_num=args.max_ckpt_num,
+            max_mem=args.max_ckpt_mem,
+            client_state=client_states,
             optimizer=self.actor_optim,
             scheduler=self.actor_scheduler,
         )
