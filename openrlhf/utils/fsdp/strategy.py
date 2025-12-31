@@ -350,7 +350,7 @@ class FSDP2Strategy(ABC):
 
     def backward(self, loss: torch.Tensor, model: nn.Module, optimizer: Optimizer, **kwargs) -> None:
         """Backward pass with gradient accumulation.
-        
+
         Uses FSDP2's set_requires_gradient_sync to defer gradient sync
         until the final micro-batch for better performance.
         """
