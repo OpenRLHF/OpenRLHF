@@ -168,15 +168,17 @@ def get_base_tp_plan(sequence_parallel: bool = False) -> Dict[str, ParallelStyle
         **_base_attn_mlp_plan(),
     }
     if sequence_parallel:
-        plan.update({
-            "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
-            "model.norm": SequenceParallel(),
-            "model.layers.*.input_layernorm": SequenceParallel(),
-            "model.layers.*.post_attention_layernorm": SequenceParallel(),
-            "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
-            "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
-            "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Replicate()),
-        })
+        plan.update(
+            {
+                "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
+                "model.norm": SequenceParallel(),
+                "model.layers.*.input_layernorm": SequenceParallel(),
+                "model.layers.*.post_attention_layernorm": SequenceParallel(),
+                "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
+                "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
+                "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Replicate()),
+            }
+        )
     return plan
 
 
@@ -184,15 +186,17 @@ def _llama_plan(model, sp: bool) -> Dict[str, ParallelStyle]:
     """LLaMA plan (uses SequenceParallelAllGather for better performance)."""
     plan = get_base_tp_plan(False)
     if sp:
-        plan.update({
-            "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
-            "model.norm": SequenceParallel(),
-            "model.layers.*.input_layernorm": SequenceParallelAllGather(use_local_output=False),
-            "model.layers.*.post_attention_layernorm": SequenceParallelAllGather(use_local_output=False),
-            "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
-            "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
-            "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Shard(-1), use_local_output=False),
-        })
+        plan.update(
+            {
+                "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
+                "model.norm": SequenceParallel(),
+                "model.layers.*.input_layernorm": SequenceParallelAllGather(use_local_output=False),
+                "model.layers.*.post_attention_layernorm": SequenceParallelAllGather(use_local_output=False),
+                "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
+                "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
+                "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Shard(-1), use_local_output=False),
+            }
+        )
     return plan
 
 
@@ -204,23 +208,26 @@ def _qwen_plan(model, sp: bool) -> Dict[str, ParallelStyle]:
         **_base_attn_mlp_plan(),
     }
     if sp:
+
         class Qwen3QKNorm(SequenceParallel):
             @staticmethod
             def _prepare_input_fn(seq_shard, mod, inputs, mesh):
                 t = inputs[0]
                 return t if isinstance(t, DTensor) else DTensor.from_local(t, mesh, seq_shard, run_check=False)
 
-        plan.update({
-            "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
-            "model.norm": SequenceParallel(),
-            "model.layers.*.input_layernorm": SequenceParallelAllGather(),
-            "model.layers.*.post_attention_layernorm": SequenceParallelAllGather(),
-            "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
-            "model.layers.*.self_attn.q_norm": Qwen3QKNorm(),
-            "model.layers.*.self_attn.k_norm": Qwen3QKNorm(),
-            "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
-            "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Shard(-1), use_local_output=False),
-        })
+        plan.update(
+            {
+                "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
+                "model.norm": SequenceParallel(),
+                "model.layers.*.input_layernorm": SequenceParallelAllGather(),
+                "model.layers.*.post_attention_layernorm": SequenceParallelAllGather(),
+                "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
+                "model.layers.*.self_attn.q_norm": Qwen3QKNorm(),
+                "model.layers.*.self_attn.k_norm": Qwen3QKNorm(),
+                "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
+                "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Shard(-1), use_local_output=False),
+            }
+        )
     return plan
 
 
