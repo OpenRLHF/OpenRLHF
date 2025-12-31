@@ -349,10 +349,26 @@ class FSDP2Strategy(ABC):
         return optim.AdamW(inner.parameters(), **kwargs)
 
     def backward(self, loss: torch.Tensor, model: nn.Module, optimizer: Optimizer, **kwargs) -> None:
-        """Backward pass with gradient accumulation."""
+        """Backward pass with gradient accumulation.
+        
+        Uses FSDP2's set_requires_gradient_sync to defer gradient sync
+        until the final micro-batch for better performance.
+        """
         if self.accumulated_gradient > 1:
             loss = loss / self.accumulated_gradient
+
+        # Defer gradient sync until final micro-batch (optimization from Automodel)
+        inner = _unwrap_actor(model)
+        is_final = self._is_final_micro_batch(kwargs.get("name", "model"))
+        if isinstance(inner, FSDPModule) and self.accumulated_gradient > 1:
+            inner.set_requires_gradient_sync(is_final)
+
         loss.backward()
+
+    def _is_final_micro_batch(self, name: str = "model") -> bool:
+        """Check if this is the final micro-batch before optimizer step."""
+        key = f"micro_step_{name}"
+        return (self.time_steps.get(key, 0) + 1) % self.accumulated_gradient == 0
 
     def optimizer_step(self, optimizer: Optimizer, model: nn.Module, scheduler, name: str = "model", **kwargs) -> None:
         """Optimizer step with gradient accumulation."""
