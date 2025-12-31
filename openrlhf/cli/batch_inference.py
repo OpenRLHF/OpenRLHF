@@ -302,17 +302,10 @@ if __name__ == "__main__":
         "--dist_backend", type=str, default="deepspeed", choices=["deepspeed", "fsdp2"], help="Distributed backend"
     )
     parser.add_argument(
-        "--fsdp2_offload",
-        type=str,
-        default="none",
-        choices=["none", "cpu"],
-        help="Fully-Sharded Data Parallel offload policy",
-    )
-    parser.add_argument(
-        "--fsdp2_cpu_offload_pin_memory",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Pin CPU memory when fsdp2_offload=cpu",
+        "--fsdp2_cpu_offload",
+        action="store_true",
+        default=False,
+        help="Offload FSDP2 params/grads/optimizer to CPU",
     )
     parser.add_argument(
         "--fsdp2_reshard_after_forward",

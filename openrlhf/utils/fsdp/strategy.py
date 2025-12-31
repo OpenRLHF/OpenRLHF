@@ -55,8 +55,7 @@ class FSDP2Strategy(ABC):
 
         # FSDP config
         self.precision = getattr(args, "precision", "bf16")
-        self.fsdp2_offload = getattr(args, "fsdp2_offload", "none")
-        self.fsdp2_offload_pin_memory = getattr(args, "fsdp2_cpu_offload_pin_memory", True)
+        self.fsdp2_cpu_offload = getattr(args, "fsdp2_cpu_offload", False)
         self.fsdp2_reshard_after_forward = getattr(args, "fsdp2_reshard_after_forward", True)
         self.sequence_parallel = getattr(args, "sequence_parallel", False)
 
@@ -168,7 +167,7 @@ class FSDP2Strategy(ABC):
                 cast_forward_inputs=True,
             )
         )
-        offload = CPUOffloadPolicy(pin_memory=self.fsdp2_offload_pin_memory) if self.fsdp2_offload == "cpu" else None
+        offload = CPUOffloadPolicy(pin_memory=True) if self.fsdp2_cpu_offload else None
 
         # Shard transformer layers
         layer_cls = getattr(model, "_no_split_modules", None) or []
