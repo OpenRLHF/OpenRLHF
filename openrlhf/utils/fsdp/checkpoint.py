@@ -162,7 +162,7 @@ def save_distributed_checkpoint(
     scheduler=None,
     client_state: Optional[Dict] = None,
     max_num: int = 3,
-    max_mem_gb: int = 1000,
+    max_mem: int = 1000,
     save_latest: bool = True,
 ):
     """Save FSDP2 distributed checkpoint.
@@ -176,7 +176,7 @@ def save_distributed_checkpoint(
     Args:
         tag: Checkpoint name (e.g., "step_1000")
         max_num: Maximum number of checkpoints to keep
-        max_mem_gb: Maximum total checkpoint size in GB
+        max_mem: Maximum total checkpoint size in GB
     """
     import torch.distributed.checkpoint as dcp
     from torch.distributed.checkpoint.state_dict import get_state_dict
@@ -187,7 +187,7 @@ def save_distributed_checkpoint(
 
     os.makedirs(save_dir, exist_ok=True)
     if is_rank_0:
-        _cleanup_old_checkpoints(save_dir, max_num, max_mem_gb)
+        _cleanup_old_checkpoints(save_dir, max_num, max_mem)
     dist.barrier()
 
     fsdp_model = unwrap_fn(model)
@@ -307,9 +307,9 @@ def load_distributed_checkpoint(
 # =============================================================================
 
 
-def _cleanup_old_checkpoints(save_dir: str, max_num: int, max_mem_gb: int):
+def _cleanup_old_checkpoints(save_dir: str, max_num: int, max_mem: int):
     """Remove old checkpoints to stay within count and size limits."""
-    max_bytes = max_mem_gb * 1024**3
+    max_bytes = max_mem * 1024**3
 
     # Get checkpoint entries sorted by modification time
     entries = []
