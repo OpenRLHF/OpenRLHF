@@ -44,7 +44,14 @@ from .checkpoint import (
     save_distributed_checkpoint,
     save_hf_model,
 )
-from .utils import barrier, clip_grad_norm_dtensor, get_runtime_metadata, move_optimizer_state, moving_average_fsdp, unwrap_actor
+from .utils import (
+    barrier,
+    clip_grad_norm_dtensor,
+    get_runtime_metadata,
+    move_optimizer_state,
+    moving_average_fsdp,
+    unwrap_actor,
+)
 
 
 class FSDP2Strategy(ABC):
