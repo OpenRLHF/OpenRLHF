@@ -4,7 +4,6 @@ import deepspeed
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from packaging import version
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
@@ -49,9 +48,6 @@ class Actor(nn.Module):
         target_modules=None,
         ds_config=None,
         device_map=None,
-        tp_plan=None,
-        tp_size=None,
-        device_mesh=None,
         packing_samples=False,
         temperature=1.0,
         use_liger_kernel=False,
@@ -91,40 +87,14 @@ class Actor(nn.Module):
             else:
                 model_class = AutoModelForCausalLM
 
-            tp_kwargs = {}
-            if tp_plan is not None:
-                tp_kwargs["tp_plan"] = tp_plan
-            if tp_size is not None:
-                tp_kwargs["tp_size"] = tp_size
-            if device_mesh is not None:
-                tp_kwargs["device_mesh"] = device_mesh
-            if tp_kwargs and device_map is not None:
-                raise ValueError("`tp_plan`/`tp_size`/`device_mesh` and `device_map` are mutually exclusive.")
-            if tp_kwargs:
-                torch_version = version.parse(torch.__version__.split("+")[0])
-                if torch_version < version.parse("2.5.0"):
-                    raise RuntimeError(
-                        f"Tensor parallel requires torch>=2.5.0. Detected torch=={torch.__version__}. "
-                        "Please upgrade PyTorch or disable tensor parallel."
-                    )
-
-            try:
-                self.model = model_class.from_pretrained(
-                    pretrain_or_model,
-                    trust_remote_code=True,
-                    attn_implementation=attn_impl,
-                    quantization_config=nf4_config,
-                    torch_dtype=torch_dtype,
-                    device_map=device_map,
-                    **tp_kwargs,
-                )
-            except TypeError as exc:
-                if tp_kwargs:
-                    raise RuntimeError(
-                        "Tensor parallel loading requested, but the installed Transformers version does not support "
-                        "`tp_plan`/`tp_size`/`device_mesh`. Please upgrade Transformers or disable tensor parallel."
-                    ) from exc
-                raise
+            self.model = model_class.from_pretrained(
+                pretrain_or_model,
+                trust_remote_code=True,
+                attn_implementation=attn_impl,
+                quantization_config=nf4_config,
+                torch_dtype=torch_dtype,
+                device_map=device_map,
+            )
 
             # LoRA
             if lora_rank > 0:
