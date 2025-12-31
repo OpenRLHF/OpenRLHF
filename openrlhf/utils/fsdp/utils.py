@@ -6,7 +6,6 @@ FSDP2 Utilities
 - clip_grad_norm_dtensor: DTensor-safe gradient clipping
 - moving_average_fsdp: EMA update for FSDP models
 - move_optimizer_state: Move optimizer state between devices
-- barrier: Distributed synchronization barrier
 """
 
 import math
@@ -156,13 +155,3 @@ def get_runtime_metadata(strategy) -> dict:
         "precision": getattr(strategy, "precision", "bf16"),
     }
 
-
-# -----------------------------------------------------------------------------
-# Distributed
-# -----------------------------------------------------------------------------
-
-
-def barrier():
-    """Synchronization barrier across all processes."""
-    if dist.is_initialized():
-        dist.barrier()

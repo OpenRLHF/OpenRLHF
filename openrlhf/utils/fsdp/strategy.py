@@ -28,7 +28,6 @@ from openrlhf.utils.distributed_sampler import DistributedSampler
 from . import MESH_DIM_CP, MESH_DIM_DP, MESH_DIM_TP
 from .checkpoint import load_distributed_checkpoint, load_hf_model, save_distributed_checkpoint, save_hf_model
 from .utils import (
-    barrier,
     clip_grad_norm_dtensor,
     get_runtime_metadata,
     move_optimizer_state,
@@ -286,7 +285,7 @@ class FSDP2Strategy(ABC):
         if optimizer:
             move_optimizer_state(optimizer, torch.device("cpu"))
         torch.cuda.empty_cache()
-        barrier()
+        dist.barrier()
 
     def reload_states(self, model, optimizer=None):
         """Reload to GPU."""
@@ -295,7 +294,7 @@ class FSDP2Strategy(ABC):
         if optimizer:
             move_optimizer_state(optimizer, device)
         torch.cuda.synchronize()
-        barrier()
+        dist.barrier()
 
     # -------------------------------------------------------------------------
     # Checkpointing
