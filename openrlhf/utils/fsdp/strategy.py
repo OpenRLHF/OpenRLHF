@@ -129,7 +129,7 @@ class FSDP2Strategy(ABC):
 
     def prepare_ref(self, model):
         """Apply FSDP with forced CPUOffloadPolicy for Reference model.
-        
+
         Reference models are only used for inference during training, so we always
         enable CPUOffloadPolicy to save GPU memory. This is more efficient than
         manually calling model.cpu()/model.cuda().
@@ -138,7 +138,7 @@ class FSDP2Strategy(ABC):
 
     def _wrap(self, model, force_cpu_offload=False):
         """Wrap model with TP + FSDP, preserving Actor wrapper.
-        
+
         Args:
             model: Model to wrap
             force_cpu_offload: If True, force CPUOffloadPolicy (for Reference models)
@@ -165,7 +165,7 @@ class FSDP2Strategy(ABC):
 
     def _apply_fsdp(self, model, force_cpu_offload=False):
         """Apply FSDP2 sharding.
-        
+
         Args:
             model: Model to shard
             force_cpu_offload: If True, force CPUOffloadPolicy regardless of self.fsdp2_cpu_offload
