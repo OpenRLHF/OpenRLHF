@@ -165,7 +165,6 @@ class FSDP2Strategy(ABC):
             else MixedPrecisionPolicy(
                 param_dtype=convert_to_dtype(self.precision),
                 reduce_dtype=torch.float32,
-                output_dtype=torch.float32,
                 cast_forward_inputs=True,
             )
         )
