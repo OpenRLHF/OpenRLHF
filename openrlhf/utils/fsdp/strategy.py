@@ -58,7 +58,6 @@ class FSDP2Strategy(ABC):
     """FSDP2 distributed training strategy.
 
     Supports DP, CP (ring attention), and TP with device mesh layout (dp, cp, tp).
-    Compatible with slime and Automodel parallelization approaches.
     """
 
     def __init__(
@@ -171,7 +170,7 @@ class FSDP2Strategy(ABC):
     def _create_device_mesh(self) -> None:
         """Create device mesh with layout (dp, cp, tp).
 
-        Following slime's approach: FSDP shards only on dp dimension,
+        FSDP shards only on dp dimension,
         CP groups hold full parameter copies for ring_flash_attn.
         """
         cp = self.ring_attn_size if self.ring_attn_size > 1 else 1
@@ -266,7 +265,7 @@ class FSDP2Strategy(ABC):
         inner = unwrap_actor(model)
         is_actor = inner is not model
 
-        # Apply TP before FSDP (following Automodel/slime pattern)
+        # Apply TP before FSDP
         inner = self._apply_tp(inner)
         inner = self._apply_fsdp(inner)
 
