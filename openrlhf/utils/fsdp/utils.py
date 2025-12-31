@@ -19,10 +19,12 @@ import torch.nn as nn
 # Actor Unwrapping
 # -----------------------------------------------------------------------------
 
+
 def unwrap_actor(model: nn.Module) -> nn.Module:
     """Recursively unwrap Actor wrapper to get the inner model."""
     try:
         from openrlhf.models import Actor
+
         if isinstance(model, Actor):
             return unwrap_actor(model.model)
     except ImportError:
@@ -34,9 +36,10 @@ def unwrap_actor(model: nn.Module) -> nn.Module:
 # Gradient Clipping (DTensor-safe)
 # -----------------------------------------------------------------------------
 
+
 def clip_grad_norm_dtensor(model: nn.Module, max_norm: float, norm_type: float = 2.0) -> float:
     """Clip gradients, handling DTensor from FSDP/TP correctly.
-    
+
     Unlike torch.nn.utils.clip_grad_norm_, this handles:
     - DTensor gradients (from FSDP2/TP) that need full_tensor() reduction
     - Mixed scenarios with both DTensor and regular tensors
@@ -72,6 +75,7 @@ def _to_full_tensor(tensor: torch.Tensor) -> torch.Tensor:
     """Convert DTensor to full tensor if needed."""
     try:
         from torch.distributed.tensor import DTensor
+
         if isinstance(tensor, DTensor):
             return tensor.full_tensor()
     except ImportError:
@@ -110,9 +114,10 @@ def _compute_mixed_norm(grads, device, norm_type):
 # EMA (Exponential Moving Average)
 # -----------------------------------------------------------------------------
 
+
 def moving_average_fsdp(model: nn.Module, model_ema: nn.Module, beta: float = 0.992, device: str = "cpu"):
     """Update EMA model from FSDP-wrapped source model.
-    
+
     Efficient implementation that:
     - Uses full_tensor() to handle sharded params
     - Only updates trainable params that exist in both models
@@ -130,6 +135,7 @@ def moving_average_fsdp(model: nn.Module, model_ema: nn.Module, beta: float = 0.
 # -----------------------------------------------------------------------------
 # Optimizer State Management
 # -----------------------------------------------------------------------------
+
 
 def move_optimizer_state(optimizer, device: torch.device):
     """Move all optimizer state tensors to specified device."""
@@ -154,6 +160,7 @@ def get_runtime_metadata(strategy) -> dict:
 # -----------------------------------------------------------------------------
 # Distributed
 # -----------------------------------------------------------------------------
+
 
 def barrier():
     """Synchronization barrier across all processes."""

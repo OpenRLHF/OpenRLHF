@@ -33,10 +33,18 @@ UnwrapFn = Callable[[nn.Module], nn.Module]
 # HuggingFace Format
 # =============================================================================
 
-def save_hf_model(model: nn.Module, tokenizer, output_dir: str, is_rank_0: bool,
-                  unwrap_fn: UnwrapFn, metadata: Optional[Dict] = None, **kwargs):
+
+def save_hf_model(
+    model: nn.Module,
+    tokenizer,
+    output_dir: str,
+    is_rank_0: bool,
+    unwrap_fn: UnwrapFn,
+    metadata: Optional[Dict] = None,
+    **kwargs,
+):
     """Save model to HuggingFace format.
-    
+
     Gathers full state dict to rank 0 and saves using model.save_pretrained().
     Also saves tokenizer, config, and optional runtime metadata.
     """
@@ -48,8 +56,8 @@ def save_hf_model(model: nn.Module, tokenizer, output_dir: str, is_rank_0: bool,
 
     # Get full state dict (gathered to rank 0)
     state = get_model_state_dict(
-        fsdp_model,
-        options=StateDictOptions(full_state_dict=True, cpu_offload=True, ignore_frozen_params=is_peft))
+        fsdp_model, options=StateDictOptions(full_state_dict=True, cpu_offload=True, ignore_frozen_params=is_peft)
+    )
 
     if is_rank_0:
         # Clean up auto_map if corrupted
@@ -65,11 +73,16 @@ def save_hf_model(model: nn.Module, tokenizer, output_dir: str, is_rank_0: bool,
     gc.collect()
 
 
-def load_hf_model(model: nn.Module, path: str, unwrap_fn: UnwrapFn,
-                  map_location: str = "cpu", strict: bool = False,
-                  key_replace_fn: Optional[Callable] = None):
+def load_hf_model(
+    model: nn.Module,
+    path: str,
+    unwrap_fn: UnwrapFn,
+    map_location: str = "cpu",
+    strict: bool = False,
+    key_replace_fn: Optional[Callable] = None,
+):
     """Load model weights from a saved checkpoint file.
-    
+
     Args:
         path: Path to saved weights (e.g., pytorch_model.bin)
         key_replace_fn: Optional function to transform state dict keys
@@ -82,8 +95,9 @@ def load_hf_model(model: nn.Module, path: str, unwrap_fn: UnwrapFn,
     if not isinstance(wrapped, FSDPModule):
         raise RuntimeError("Model not FSDP-wrapped. Call strategy.prepare() first.")
 
-    set_model_state_dict(wrapped, state,
-                         options=StateDictOptions(full_state_dict=True, cpu_offload=True, strict=strict))
+    set_model_state_dict(
+        wrapped, state, options=StateDictOptions(full_state_dict=True, cpu_offload=True, strict=strict)
+    )
 
 
 def _save_extras(model, output_dir: str, tokenizer, metadata: Optional[Dict]):
@@ -105,6 +119,7 @@ def _save_extras(model, output_dir: str, tokenizer, metadata: Optional[Dict]):
         if getattr(cfg, "auto_map", None):
             try:
                 from transformers.dynamic_module_utils import custom_object_save
+
                 custom_object_save(model, output_dir, config=cfg)
             except Exception:
                 pass
@@ -137,18 +152,28 @@ def _save_extras(model, output_dir: str, tokenizer, metadata: Optional[Dict]):
 # Distributed Checkpoints (PyTorch DCP)
 # =============================================================================
 
-def save_distributed_checkpoint(model: nn.Module, save_dir: str, tag: str, unwrap_fn: UnwrapFn,
-                                is_rank_0: bool, optimizer: Optional[Optimizer] = None, scheduler=None,
-                                client_state: Optional[Dict] = None, max_num: int = 3, max_mem_gb: int = 1000,
-                                save_latest: bool = True):
+
+def save_distributed_checkpoint(
+    model: nn.Module,
+    save_dir: str,
+    tag: str,
+    unwrap_fn: UnwrapFn,
+    is_rank_0: bool,
+    optimizer: Optional[Optimizer] = None,
+    scheduler=None,
+    client_state: Optional[Dict] = None,
+    max_num: int = 3,
+    max_mem_gb: int = 1000,
+    save_latest: bool = True,
+):
     """Save FSDP2 distributed checkpoint.
-    
+
     Each rank saves its own shard. Supports:
     - Model state (always saved)
     - Optimizer state (optional)
     - Scheduler state (optional)
     - Custom client state (e.g., consumed_samples)
-    
+
     Args:
         tag: Checkpoint name (e.g., "step_1000")
         max_num: Maximum number of checkpoints to keep
@@ -197,17 +222,24 @@ def save_distributed_checkpoint(model: nn.Module, save_dir: str, tag: str, unwra
             f.write(tag)
 
 
-def load_distributed_checkpoint(model: nn.Module, load_dir: str, unwrap_fn: UnwrapFn,
-                                tag: Optional[str] = None, optimizer: Optional[Optimizer] = None,
-                                scheduler=None, load_optimizer_states: bool = True,
-                                load_lr_scheduler_states: bool = True, load_module_strict: bool = True,
-                                load_module_only: bool = False) -> Tuple[str, Dict[str, Any]]:
+def load_distributed_checkpoint(
+    model: nn.Module,
+    load_dir: str,
+    unwrap_fn: UnwrapFn,
+    tag: Optional[str] = None,
+    optimizer: Optional[Optimizer] = None,
+    scheduler=None,
+    load_optimizer_states: bool = True,
+    load_lr_scheduler_states: bool = True,
+    load_module_strict: bool = True,
+    load_module_only: bool = False,
+) -> Tuple[str, Dict[str, Any]]:
     """Load FSDP2 distributed checkpoint.
-    
+
     Args:
         tag: Checkpoint tag (reads 'latest' file if None)
         load_module_only: If True, skip optimizer/scheduler
-    
+
     Returns:
         (tag, client_state) tuple
     """
@@ -226,9 +258,10 @@ def load_distributed_checkpoint(model: nn.Module, load_dir: str, unwrap_fn: Unwr
             with open(latest_file) as f:
                 resolved = f.read().strip()
         else:
-            subdirs = sorted([d for d in os.listdir(load_dir)
-                              if os.path.isdir(os.path.join(load_dir, d)) and d != "latest"],
-                             key=lambda d: os.path.getmtime(os.path.join(load_dir, d)))
+            subdirs = sorted(
+                [d for d in os.listdir(load_dir) if os.path.isdir(os.path.join(load_dir, d)) and d != "latest"],
+                key=lambda d: os.path.getmtime(os.path.join(load_dir, d)),
+            )
             resolved = subdirs[-1] if subdirs else None
 
     if not resolved:
@@ -252,10 +285,12 @@ def load_distributed_checkpoint(model: nn.Module, load_dir: str, unwrap_fn: Unwr
 
         def load_state_dict(self, state):
             set_state_dict(
-                fsdp_model, [optimizer] if load_opt else [],
+                fsdp_model,
+                [optimizer] if load_opt else [],
                 model_state_dict=state.get("model"),
                 optim_state_dict=state.get("optimizers") if load_opt else {},
-                options=StateDictOptions(strict=load_module_strict))
+                options=StateDictOptions(strict=load_module_strict),
+            )
             if load_sched and "scheduler" in state:
                 scheduler.load_state_dict(state["scheduler"])
             self.client_state = state.get("client_state", {})
@@ -271,6 +306,7 @@ def load_distributed_checkpoint(model: nn.Module, load_dir: str, unwrap_fn: Unwr
 # =============================================================================
 # Helpers
 # =============================================================================
+
 
 def _cleanup_old_checkpoints(save_dir: str, max_num: int, max_mem_gb: int):
     """Remove old checkpoints to stay within count and size limits."""
@@ -288,8 +324,7 @@ def _cleanup_old_checkpoints(save_dir: str, max_num: int, max_mem_gb: int):
     entries.sort(key=lambda x: x[2])
 
     def get_size(path):
-        return sum(os.path.getsize(os.path.join(r, f))
-                   for r, _, files in os.walk(path) for f in files)
+        return sum(os.path.getsize(os.path.join(r, f)) for r, _, files in os.walk(path) for f in files)
 
     # Remove by count
     while len(entries) > max_num:

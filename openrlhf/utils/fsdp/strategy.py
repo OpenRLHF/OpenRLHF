@@ -27,14 +27,22 @@ from openrlhf.utils.distributed_sampler import DistributedSampler
 
 from . import MESH_DIM_CP, MESH_DIM_DP, MESH_DIM_TP
 from .checkpoint import load_distributed_checkpoint, load_hf_model, save_distributed_checkpoint, save_hf_model
-from .utils import barrier, clip_grad_norm_dtensor, get_runtime_metadata, move_optimizer_state, moving_average_fsdp, unwrap_actor
+from .utils import (
+    barrier,
+    clip_grad_norm_dtensor,
+    get_runtime_metadata,
+    move_optimizer_state,
+    moving_average_fsdp,
+    unwrap_actor,
+)
 
 
 class FSDP2Strategy(ABC):
     """FSDP2 strategy with DP/CP/TP support."""
 
-    def __init__(self, seed=42, full_determinism=False, max_norm=0.0,
-                 micro_train_batch_size=1, train_batch_size=1, args=None):
+    def __init__(
+        self, seed=42, full_determinism=False, max_norm=0.0, micro_train_batch_size=1, train_batch_size=1, args=None
+    ):
         self.args = args
         self.seed, self.full_determinism, self.max_norm = seed, full_determinism, max_norm
         self.train_batch_size = train_batch_size
@@ -76,8 +84,9 @@ class FSDP2Strategy(ABC):
 
         # Validate and compute parallelism sizes
         parallel_factor = self.ring_attn_size * self.tp_size
-        assert self.world_size % parallel_factor == 0, \
-            f"world_size({self.world_size}) not divisible by ring_attn*tp({parallel_factor})"
+        assert (
+            self.world_size % parallel_factor == 0
+        ), f"world_size({self.world_size}) not divisible by ring_attn*tp({parallel_factor})"
         self.dp_size = self.world_size // parallel_factor
 
         # Create mesh: (dp, cp, tp) - only include dimensions > 1
@@ -97,15 +106,19 @@ class FSDP2Strategy(ABC):
             self.ring_attn_rank = dist.get_rank(group=cp_group)
             set_ring_attn_group(cp_group)
             from ring_flash_attn import substitute_hf_flash_attn
+
             substitute_hf_flash_attn(cp_group, getattr(self.args, "ring_head_stride", 1))
 
         # Gradient accumulation
         effective_batch = self.micro_train_batch_size * self.world_size
-        self.accumulated_gradient = 1 if getattr(self.args, "use_dynamic_batch", False) \
-            else max(1, self.train_batch_size // effective_batch)
+        self.accumulated_gradient = (
+            1 if getattr(self.args, "use_dynamic_batch", False) else max(1, self.train_batch_size // effective_batch)
+        )
 
-        self._log(f"world={self.world_size} dp={self.dp_size} cp={self.ring_attn_size} "
-                  f"tp={self.tp_size} grad_accum={self.accumulated_gradient}")
+        self._log(
+            f"world={self.world_size} dp={self.dp_size} cp={self.ring_attn_size} "
+            f"tp={self.tp_size} grad_accum={self.accumulated_gradient}"
+        )
 
     @property
     def ring_attn_group(self):
@@ -129,9 +142,11 @@ class FSDP2Strategy(ABC):
         # TP before FSDP
         if self.tp_size > 1 and MESH_DIM_TP in self.mesh.mesh_dim_names:
             from .tp import apply_tensor_parallel
+
             self._log(f"Applying TP (size={self.tp_size})")
-            inner = apply_tensor_parallel(inner, self.mesh[MESH_DIM_TP],
-                                          sequence_parallel=self.sequence_parallel, validate=True)
+            inner = apply_tensor_parallel(
+                inner, self.mesh[MESH_DIM_TP], sequence_parallel=self.sequence_parallel, validate=True
+            )
 
         # FSDP
         inner = self._apply_fsdp(inner)
@@ -144,21 +159,39 @@ class FSDP2Strategy(ABC):
     def _apply_fsdp(self, model):
         """Apply FSDP2 sharding."""
         mesh = self.mesh[MESH_DIM_DP]
-        mp = None if self.precision == "fp32" else MixedPrecisionPolicy(
-            param_dtype=convert_to_dtype(self.precision),
-            reduce_dtype=torch.float32, output_dtype=torch.float32, cast_forward_inputs=True)
+        mp = (
+            None
+            if self.precision == "fp32"
+            else MixedPrecisionPolicy(
+                param_dtype=convert_to_dtype(self.precision),
+                reduce_dtype=torch.float32,
+                output_dtype=torch.float32,
+                cast_forward_inputs=True,
+            )
+        )
         offload = CPUOffloadPolicy(pin_memory=self.fsdp2_offload_pin_memory) if self.fsdp2_offload == "cpu" else None
 
         # Shard transformer layers
         layer_cls = getattr(model, "_no_split_modules", None) or []
-        layers = [m for m in model.modules()
-                  if m.__class__.__name__ in layer_cls or
-                  (isinstance(m, nn.Embedding) and not getattr(getattr(model, "config", None), "tie_word_embeddings", True))]
+        layers = [
+            m
+            for m in model.modules()
+            if m.__class__.__name__ in layer_cls
+            or (
+                isinstance(m, nn.Embedding)
+                and not getattr(getattr(model, "config", None), "tie_word_embeddings", True)
+            )
+        ]
 
         for i, layer in enumerate(layers):
             if not isinstance(layer, FSDPModule):
-                fully_shard(layer, mesh=mesh, mp_policy=mp, offload_policy=offload,
-                            reshard_after_forward=self.fsdp2_reshard_after_forward and i < len(layers) - 1)
+                fully_shard(
+                    layer,
+                    mesh=mesh,
+                    mp_policy=mp,
+                    offload_policy=offload,
+                    reshard_after_forward=self.fsdp2_reshard_after_forward and i < len(layers) - 1,
+                )
 
         # Shard root
         if not isinstance(model, FSDPModule):
@@ -182,7 +215,9 @@ class FSDP2Strategy(ABC):
 
         inner = unwrap_actor(model)
         if isinstance(inner, FSDPModule) and self.accumulated_gradient > 1:
-            is_final = (self.time_steps.get(f"step_{kwargs.get('name', 'model')}", 0) + 1) % self.accumulated_gradient == 0
+            is_final = (
+                self.time_steps.get(f"step_{kwargs.get('name', 'model')}", 0) + 1
+            ) % self.accumulated_gradient == 0
             inner.set_requires_gradient_sync(is_final)
 
         loss.backward()
@@ -211,8 +246,17 @@ class FSDP2Strategy(ABC):
     # Data
     # -------------------------------------------------------------------------
 
-    def setup_dataloader(self, dataset, batch_size, pin_memory=False, shuffle=True,
-                         collate_fn=None, drop_last=True, sampler=None, consumed_samples=0):
+    def setup_dataloader(
+        self,
+        dataset,
+        batch_size,
+        pin_memory=False,
+        shuffle=True,
+        collate_fn=None,
+        drop_last=True,
+        sampler=None,
+        consumed_samples=0,
+    ):
         """Create distributed dataloader."""
         if sampler is None and dist.is_initialized():
             dp_group = self.mesh[MESH_DIM_DP].get_group() if self.mesh else None
@@ -220,11 +264,21 @@ class FSDP2Strategy(ABC):
                 dataset,
                 num_replicas=dist.get_world_size(dp_group) if dp_group else dist.get_world_size(),
                 rank=dist.get_rank(dp_group) if dp_group else dist.get_rank(),
-                shuffle=shuffle, seed=self.seed, drop_last=drop_last, consumed_samples=consumed_samples)
+                shuffle=shuffle,
+                seed=self.seed,
+                drop_last=drop_last,
+                consumed_samples=consumed_samples,
+            )
 
-        return StatefulDataLoader(dataset, batch_size=batch_size, sampler=sampler,
-                                  drop_last=drop_last, shuffle=shuffle if sampler is None else False,
-                                  collate_fn=collate_fn, pin_memory=pin_memory)
+        return StatefulDataLoader(
+            dataset,
+            batch_size=batch_size,
+            sampler=sampler,
+            drop_last=drop_last,
+            shuffle=shuffle if sampler is None else False,
+            collate_fn=collate_fn,
+            pin_memory=pin_memory,
+        )
 
     # -------------------------------------------------------------------------
     # State Management
@@ -254,7 +308,9 @@ class FSDP2Strategy(ABC):
     # -------------------------------------------------------------------------
 
     def save_model(self, model, tokenizer, output_dir, **kwargs):
-        save_hf_model(model, tokenizer, output_dir, self.is_rank_0(), unwrap_actor, get_runtime_metadata(self), **kwargs)
+        save_hf_model(
+            model, tokenizer, output_dir, self.is_rank_0(), unwrap_actor, get_runtime_metadata(self), **kwargs
+        )
 
     def load_model(self, model, path, **kwargs):
         load_hf_model(model, path, unwrap_actor, **kwargs)
