@@ -267,8 +267,3 @@ def _expand_wildcards(plan, model):
             regex = re.compile(f"^{pattern.replace('.', r'\.').replace('*', r'\\d+')}$")
             result.update({n: style for n in names if regex.match(n)})
     return result
-
-
-def register_tp_plan(model_cls_name, plan_fn):
-    """Register custom TP plan for a model class."""
-    _MODEL_PLANS[model_cls_name] = plan_fn
