@@ -60,7 +60,6 @@ class FSDP2Strategy(ABC):
         self.sequence_parallel = getattr(args, "sequence_parallel", False)
 
         # State
-        self.is_rlhf = False
         self.time_steps = defaultdict(int)
         self.mesh = None
 
@@ -127,9 +126,8 @@ class FSDP2Strategy(ABC):
     # Model Preparation
     # -------------------------------------------------------------------------
 
-    def prepare(self, *models, is_rlhf=False):
+    def prepare(self, *models):
         """Apply TP + FSDP to models."""
-        self.is_rlhf = is_rlhf
         results = [self._wrap(m) if m else None for m in models]
         return results[0] if len(results) == 1 else results
 
