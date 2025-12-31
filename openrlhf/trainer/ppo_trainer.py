@@ -320,13 +320,11 @@ class PPOTrainer(BasePPOTrainer):
                 self.save_logs_and_checkpoints(global_step, status, client_states)
 
                 # TODO: Add evaluation mechanism for PPO
-                if global_step % self.args.eval_steps == 0 and self.eval_dataloader and len(self.eval_dataloader) > 0:
-                    self.evaluate(
-                        self.eval_dataloader,
-                        global_step,
-                        self.args.eval_temperature,
-                        self.args.eval_n_samples_per_prompt,
-                    )
+                if global_step % self.args.eval_steps == 0 and self.eval_dataloader:
+                    eval_generate_kwargs = self.generate_kwargs.copy()
+                    eval_generate_kwargs["temperature"] = self.args.eval_temperature
+                    eval_generate_kwargs["n_samples_per_prompt"] = self.args.eval_n_samples_per_prompt
+                    self.evaluate(global_step, **eval_generate_kwargs)
 
                 pbar.update(prompts_consumed)
 
@@ -337,27 +335,23 @@ class PPOTrainer(BasePPOTrainer):
             self.tensorboard_logger.close()
 
     @torch.no_grad()
-    def evaluate(self, eval_dataloader, global_step, temperature=0.6, n_samples_per_prompt=1):
+    def evaluate(self, global_step, **generate_kwargs):
         """Evaluate model performance on eval dataset."""
         start_time = time.time()
         logger.info(f"⏰ Evaluation start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
         # First collect all prompts and labels
         prompt_to_datasource = {}  # Dictionary to store mapping between prompts and their data sources
-        for datasources, prompts, labels in eval_dataloader:
+        for datasources, prompts, labels in self.eval_dataloader:
             # Create mapping for each prompt to its corresponding data source
             for prompt, datasource in zip(prompts, datasources):
                 prompt_to_datasource[prompt] = datasource
 
         # Generate samples and calculate rewards
-        generate_kwargs = self.generate_kwargs.copy()
-        generate_kwargs["temperature"] = temperature
-        generate_kwargs["n_samples_per_prompt"] = n_samples_per_prompt
         samples_list = self.samples_generator.generate_eval_samples(**generate_kwargs)
 
         # duplicate prompts and labels for each sample
         all_prompts = sum([s.prompts for s in samples_list], [])
-        all_labels = sum([s.labels for s in samples_list], [])
 
         # Get rewards from samples, such as agent rewards or remote reward models
         rewards_list = []
@@ -375,9 +369,10 @@ class PPOTrainer(BasePPOTrainer):
             # Get the original prompt (first one in the chunk)
             original_prompt = all_prompts[i * n_samples_per_prompt]
             datasource = prompt_to_datasource[original_prompt]  # Get corresponding data source using the mapping
-
             if datasource not in global_metrics:
-                global_metrics[datasource] = {f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}
+                global_metrics[datasource] = {
+                    f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0
+                }
 
             # Get rewards for this chunk
             chunk_rewards = rewards[i]
