@@ -1,59 +1,44 @@
 """
-FSDP2 module for OpenRLHF. Requires PyTorch >= 2.7.0
+FSDP2 Module for OpenRLHF
+=========================
 
-Structure:
-- strategy.py   : Core FSDP2Strategy class
-- tp.py         : Tensor Parallelism (plans, styles, application)
+Requires: PyTorch >= 2.7.0
+
+Files:
+- strategy.py   : FSDP2Strategy class (main entry point)
+- tp.py         : Tensor Parallelism
 - checkpoint.py : Save/load checkpoints
-- utils.py      : Utilities (gradient clipping, EMA, optimizer state)
+- utils.py      : Gradient clipping, EMA, optimizer utils
 """
 
 import torch
 from packaging import version
 
-# Version check at import time
-_v = version.parse(torch.__version__.split("+")[0])
-if _v < version.parse("2.7.0"):
+# Fail fast if PyTorch version is too old
+_torch_ver = version.parse(torch.__version__.split("+")[0])
+if _torch_ver < version.parse("2.7.0"):
     raise RuntimeError(f"FSDP2 requires PyTorch >= 2.7.0, found {torch.__version__}")
 
-# Mesh dimension names
-MESH_DIM_DP = "dp"
-MESH_DIM_CP = "cp"
-MESH_DIM_TP = "tp"
+# Device mesh dimension names
+MESH_DIM_DP = "dp"  # Data Parallel
+MESH_DIM_CP = "cp"  # Context Parallel (ring attention)
+MESH_DIM_TP = "tp"  # Tensor Parallel
 
-from .checkpoint import (
-    load_distributed_checkpoint,
-    load_hf_model,
-    save_distributed_checkpoint,
-    save_hf_model,
-)
+# Public API
 from .strategy import FSDP2Strategy
+from .checkpoint import save_hf_model, load_hf_model, save_distributed_checkpoint, load_distributed_checkpoint
 from .tp import apply_tensor_parallel, get_tp_plan, validate_tp_mesh
-from .utils import (
-    barrier,
-    clip_grad_norm_dtensor,
-    get_runtime_metadata,
-    move_optimizer_state,
-    moving_average_fsdp,
-    unwrap_actor,
-)
+from .utils import unwrap_actor, clip_grad_norm_dtensor, moving_average_fsdp, move_optimizer_state, barrier, get_runtime_metadata
 
 __all__ = [
+    # Core
     "FSDP2Strategy",
-    "apply_tensor_parallel",
-    "get_tp_plan",
-    "validate_tp_mesh",
-    "save_hf_model",
-    "load_hf_model",
-    "save_distributed_checkpoint",
-    "load_distributed_checkpoint",
-    "barrier",
-    "clip_grad_norm_dtensor",
-    "move_optimizer_state",
-    "moving_average_fsdp",
-    "unwrap_actor",
-    "get_runtime_metadata",
-    "MESH_DIM_DP",
-    "MESH_DIM_CP",
-    "MESH_DIM_TP",
+    # Tensor Parallelism
+    "apply_tensor_parallel", "get_tp_plan", "validate_tp_mesh",
+    # Checkpointing
+    "save_hf_model", "load_hf_model", "save_distributed_checkpoint", "load_distributed_checkpoint",
+    # Utilities
+    "unwrap_actor", "clip_grad_norm_dtensor", "moving_average_fsdp", "move_optimizer_state", "barrier", "get_runtime_metadata",
+    # Constants
+    "MESH_DIM_DP", "MESH_DIM_CP", "MESH_DIM_TP",
 ]

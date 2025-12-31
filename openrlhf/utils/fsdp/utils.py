@@ -1,23 +1,28 @@
-"""FSDP2 utilities: gradient clipping, EMA, optimizer state management."""
+"""
+FSDP2 Utilities
+===============
+
+- unwrap_actor: Extract inner model from Actor wrapper
+- clip_grad_norm_dtensor: DTensor-safe gradient clipping
+- moving_average_fsdp: EMA update for FSDP models
+- move_optimizer_state: Move optimizer state between devices
+- barrier: Distributed synchronization barrier
+"""
 
 import math
-from typing import Any, Dict, Optional
-
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # Actor Unwrapping
-# =============================================================================
-
+# -----------------------------------------------------------------------------
 
 def unwrap_actor(model: nn.Module) -> nn.Module:
-    """Unwrap Actor wrapper to get inner model."""
+    """Recursively unwrap Actor wrapper to get the inner model."""
     try:
         from openrlhf.models import Actor
-
         if isinstance(model, Actor):
             return unwrap_actor(model.model)
     except ImportError:
@@ -25,19 +30,17 @@ def unwrap_actor(model: nn.Module) -> nn.Module:
     return model
 
 
-# =============================================================================
-# Gradient Clipping
-# =============================================================================
+# -----------------------------------------------------------------------------
+# Gradient Clipping (DTensor-safe)
+# -----------------------------------------------------------------------------
 
-
-def clip_grad_norm_dtensor(
-    model: nn.Module,
-    max_norm: float,
-    norm_type: float = 2.0,
-    error_if_nonfinite: bool = False,
-    foreach: Optional[bool] = None,
-) -> float:
-    """DTensor-safe gradient clipping."""
+def clip_grad_norm_dtensor(model: nn.Module, max_norm: float, norm_type: float = 2.0) -> float:
+    """Clip gradients, handling DTensor from FSDP/TP correctly.
+    
+    Unlike torch.nn.utils.clip_grad_norm_, this handles:
+    - DTensor gradients (from FSDP2/TP) that need full_tensor() reduction
+    - Mixed scenarios with both DTensor and regular tensors
+    """
     if max_norm <= 0:
         return 0.0
 
@@ -45,28 +48,30 @@ def clip_grad_norm_dtensor(
     if not params:
         return 0.0
 
+    # Non-distributed: use standard clipping
     if not dist.is_initialized():
-        return float(torch.nn.utils.clip_grad_norm_(params, max_norm, norm_type, error_if_nonfinite, foreach))
+        return float(torch.nn.utils.clip_grad_norm_(params, max_norm, norm_type))
 
     grads = [p.grad for p in params]
-    device = grads[0].device if grads else torch.device("cuda")
+    device = grads[0].device
 
+    # Try standard API first (works for uniform DTensor)
     try:
-        total_norm = torch.nn.utils.get_total_norm(grads, norm_type, error_if_nonfinite, foreach or False)
-        total_norm = _reduce_dtensor(total_norm)
+        total_norm = torch.nn.utils.get_total_norm(grads, norm_type, False, False)
+        total_norm = _to_full_tensor(total_norm)
     except Exception:
-        total_norm = _compute_mixed_norm(grads, device, norm_type, error_if_nonfinite, foreach)
+        # Fallback for mixed DTensor/regular tensor scenarios
+        total_norm = _compute_mixed_norm(grads, device, norm_type)
 
     total_norm = total_norm.to(device, non_blocking=True)
-    torch.nn.utils.clip_grads_with_norm_(params, max_norm, total_norm, foreach or False)
-    return float(total_norm.item() if hasattr(total_norm, "item") else total_norm)
+    torch.nn.utils.clip_grads_with_norm_(params, max_norm, total_norm, False)
+    return float(total_norm)
 
 
-def _reduce_dtensor(tensor: torch.Tensor) -> torch.Tensor:
-    """Convert DTensor to regular tensor."""
+def _to_full_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    """Convert DTensor to full tensor if needed."""
     try:
         from torch.distributed.tensor import DTensor
-
         if isinstance(tensor, DTensor):
             return tensor.full_tensor()
     except ImportError:
@@ -74,86 +79,68 @@ def _reduce_dtensor(tensor: torch.Tensor) -> torch.Tensor:
     return tensor
 
 
-def _compute_mixed_norm(grads, device, norm_type, error_if_nonfinite, foreach):
-    """Compute gradient norm for mixed DTensor scenarios."""
+def _compute_mixed_norm(grads, device, norm_type):
+    """Compute norm for mixed DTensor/regular tensor gradients."""
     try:
         from torch.distributed.tensor import DTensor
     except ImportError:
         DTensor = None
 
-    mesh_groups: Dict[Any, list] = {}
-    local_grads = []
-
-    for grad in grads:
-        if DTensor and isinstance(grad, DTensor):
-            placements = getattr(grad, "placements", None)
-            key = (
-                id(grad.device_mesh),
-                tuple((p.__class__.__name__, getattr(p, "dim", None)) for p in placements) if placements else None,
-            )
-            mesh_groups.setdefault(key, []).append(grad)
+    # Group by mesh for correct reduction
+    mesh_groups, local = {}, []
+    for g in grads:
+        if DTensor and isinstance(g, DTensor):
+            key = id(g.device_mesh)
+            mesh_groups.setdefault(key, []).append(g)
         else:
-            local_grads.append(grad)
+            local.append(g)
 
     is_inf = math.isinf(norm_type)
     total = torch.zeros((), device=device)
-    total_pow = torch.zeros((), device=device)
 
-    def add_norm(norm):
-        nonlocal total, total_pow
-        norm = _reduce_dtensor(norm).to(device, non_blocking=True)
-        if is_inf:
-            total = torch.maximum(total, norm)
-        else:
-            total_pow += norm.pow(norm_type)
+    for group in list(mesh_groups.values()) + ([local] if local else []):
+        norm = torch.nn.utils.get_total_norm(group, norm_type, False, False)
+        norm = _to_full_tensor(norm).to(device)
+        total = torch.maximum(total, norm) if is_inf else total + norm.pow(norm_type)
 
-    for group in mesh_groups.values():
-        add_norm(torch.nn.utils.get_total_norm(group, norm_type, error_if_nonfinite, bool(foreach)))
-
-    if local_grads:
-        add_norm(torch.nn.utils.get_total_norm(local_grads, norm_type, error_if_nonfinite, bool(foreach)))
-
-    return total if is_inf else total_pow.pow(1.0 / norm_type)
+    return total if is_inf else total.pow(1.0 / norm_type)
 
 
-# =============================================================================
-# EMA
-# =============================================================================
+# -----------------------------------------------------------------------------
+# EMA (Exponential Moving Average)
+# -----------------------------------------------------------------------------
 
-
-def moving_average_fsdp(
-    model: nn.Module,
-    model_ema: nn.Module,
-    beta: float = 0.992,
-    device: str = "cpu",
-) -> None:
-    """Update EMA model efficiently."""
-    wrapped = unwrap_actor(model)
+def moving_average_fsdp(model: nn.Module, model_ema: nn.Module, beta: float = 0.992, device: str = "cpu"):
+    """Update EMA model from FSDP-wrapped source model.
+    
+    Efficient implementation that:
+    - Uses full_tensor() to handle sharded params
+    - Only updates trainable params that exist in both models
+    """
+    src = unwrap_actor(model)
     ema_params = dict(model_ema.named_parameters())
 
     with torch.no_grad():
-        for name, param in wrapped.named_parameters():
-            if not param.requires_grad or name not in ema_params:
-                continue
-            data = param.full_tensor() if hasattr(param, "full_tensor") else param.data
-            ema_params[name].data.mul_(beta).add_(data.to(device), alpha=1 - beta)
+        for name, param in src.named_parameters():
+            if param.requires_grad and name in ema_params:
+                data = param.full_tensor() if hasattr(param, "full_tensor") else param.data
+                ema_params[name].data.mul_(beta).add_(data.to(device), alpha=1 - beta)
 
 
-# =============================================================================
-# Optimizer State
-# =============================================================================
+# -----------------------------------------------------------------------------
+# Optimizer State Management
+# -----------------------------------------------------------------------------
 
-
-def move_optimizer_state(optimizer, device: torch.device) -> None:
-    """Move optimizer state to specified device."""
+def move_optimizer_state(optimizer, device: torch.device):
+    """Move all optimizer state tensors to specified device."""
     for state in optimizer.state.values():
         for k, v in state.items():
             if isinstance(v, torch.Tensor):
                 state[k] = v.to(device, non_blocking=True)
 
 
-def get_runtime_metadata(strategy) -> Dict[str, Any]:
-    """Get runtime metadata for checkpointing."""
+def get_runtime_metadata(strategy) -> dict:
+    """Get runtime metadata for checkpoint saving."""
     return {
         "backend": "fsdp2",
         "world_size": getattr(strategy, "world_size", 1),
@@ -161,16 +148,14 @@ def get_runtime_metadata(strategy) -> Dict[str, Any]:
         "ring_attn_size": getattr(strategy, "ring_attn_size", 1),
         "tp_size": getattr(strategy, "tp_size", 1),
         "precision": getattr(strategy, "precision", "bf16"),
-        "fsdp2_offload": getattr(strategy, "fsdp2_offload", "none"),
     }
 
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # Distributed
-# =============================================================================
+# -----------------------------------------------------------------------------
 
-
-def barrier() -> None:
-    """Distributed barrier."""
+def barrier():
+    """Synchronization barrier across all processes."""
     if dist.is_initialized():
         dist.barrier()
