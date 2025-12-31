@@ -28,6 +28,7 @@ UnwrapFn = Callable[[nn.Module], nn.Module]
 # HuggingFace Format
 # =============================================================================
 
+
 def save_hf_model(
     model: nn.Module,
     tokenizer,
@@ -83,7 +84,8 @@ def load_hf_model(
         raise RuntimeError("Model not wrapped. Call prepare() first.")
 
     set_model_state_dict(
-        wrapped, state,
+        wrapped,
+        state,
         options=StateDictOptions(full_state_dict=True, cpu_offload=True, strict=strict),
     )
 
@@ -105,6 +107,7 @@ def _save_configs(model, output_dir: str, tokenizer, metadata: Optional[Dict] = 
         if getattr(config, "auto_map", None):
             try:
                 from transformers.dynamic_module_utils import custom_object_save
+
                 custom_object_save(model, output_dir, config=config)
             except Exception:
                 pass
@@ -133,6 +136,7 @@ def _save_configs(model, output_dir: str, tokenizer, metadata: Optional[Dict] = 
 # =============================================================================
 # Distributed Checkpoints
 # =============================================================================
+
 
 def save_distributed_checkpoint(
     model: nn.Module,
@@ -226,7 +230,7 @@ def load_distributed_checkpoint(
         else:
             subdirs = sorted(
                 [d for d in os.listdir(load_dir) if os.path.isdir(os.path.join(load_dir, d))],
-                key=lambda d: os.path.getmtime(os.path.join(load_dir, d))
+                key=lambda d: os.path.getmtime(os.path.join(load_dir, d)),
             )
             resolved = subdirs[-1] if subdirs else None
 
@@ -254,7 +258,8 @@ def load_distributed_checkpoint(
         def load_state_dict(self, state):
             opts = [self.optimizer] if load_opt else []
             set_state_dict(
-                self.model, opts,
+                self.model,
+                opts,
                 model_state_dict=state.get("model"),
                 optim_state_dict=state.get("optimizers") if load_opt else {},
                 options=StateDictOptions(strict=load_module_strict),
@@ -274,6 +279,7 @@ def load_distributed_checkpoint(
 # =============================================================================
 # Helpers
 # =============================================================================
+
 
 def _barrier() -> None:
     if dist.is_initialized():
