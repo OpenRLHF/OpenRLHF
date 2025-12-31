@@ -127,8 +127,22 @@ class FSDP2Strategy(ABC):
         results = [self._wrap(m) if m else None for m in models]
         return results[0] if len(results) == 1 else results
 
-    def _wrap(self, model):
-        """Wrap model with TP + FSDP, preserving Actor wrapper."""
+    def prepare_ref(self, model):
+        """Apply FSDP with forced CPUOffloadPolicy for Reference model.
+        
+        Reference models are only used for inference during training, so we always
+        enable CPUOffloadPolicy to save GPU memory. This is more efficient than
+        manually calling model.cpu()/model.cuda().
+        """
+        return self._wrap(model, force_cpu_offload=True)
+
+    def _wrap(self, model, force_cpu_offload=False):
+        """Wrap model with TP + FSDP, preserving Actor wrapper.
+        
+        Args:
+            model: Model to wrap
+            force_cpu_offload: If True, force CPUOffloadPolicy (for Reference models)
+        """
         inner, is_actor = self._unwrap_model(model), model
         is_actor = inner is not model
 
@@ -141,16 +155,21 @@ class FSDP2Strategy(ABC):
                 inner, self.mesh[MESH_DIM_TP], sequence_parallel=self.sequence_parallel, validate=True
             )
 
-        # FSDP
-        inner = self._apply_fsdp(inner)
+        # FSDP (force_cpu_offload overrides self.fsdp2_cpu_offload)
+        inner = self._apply_fsdp(inner, force_cpu_offload=force_cpu_offload)
 
         if is_actor:
             model.model = inner
             return model
         return inner
 
-    def _apply_fsdp(self, model):
-        """Apply FSDP2 sharding."""
+    def _apply_fsdp(self, model, force_cpu_offload=False):
+        """Apply FSDP2 sharding.
+        
+        Args:
+            model: Model to shard
+            force_cpu_offload: If True, force CPUOffloadPolicy regardless of self.fsdp2_cpu_offload
+        """
         mesh = self.mesh[MESH_DIM_DP]
         mp = (
             None
@@ -161,7 +180,8 @@ class FSDP2Strategy(ABC):
                 cast_forward_inputs=True,
             )
         )
-        offload = CPUOffloadPolicy(pin_memory=True) if self.fsdp2_cpu_offload else None
+        use_cpu_offload = force_cpu_offload or self.fsdp2_cpu_offload
+        offload = CPUOffloadPolicy(pin_memory=True) if use_cpu_offload else None
 
         # Shard transformer layers
         layer_cls = getattr(model, "_no_split_modules", None) or []
@@ -278,9 +298,8 @@ class FSDP2Strategy(ABC):
 
     def offload_states(self, model, optimizer=None):
         """Offload to CPU."""
-        for m in self._unwrap_model(model).modules():
-            if isinstance(m, FSDPModule):
-                m.reshard()
+        inner = self._unwrap_model(model)
+        inner.cpu()
         if optimizer:
             move_optimizer_state(optimizer, torch.device("cpu"))
         torch.cuda.empty_cache()
