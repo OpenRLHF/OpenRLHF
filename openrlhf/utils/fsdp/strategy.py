@@ -283,9 +283,9 @@ class FSDP2Strategy(ABC):
                 m.reshard()
         if optimizer:
             move_optimizer_state(optimizer, torch.device("cpu"))
-        torch.cuda.synchronize()
         torch.cuda.empty_cache()
-        dist.barrier()
+        torch.distributed.barrier()
+        torch.cuda.synchronize()
 
     def reload_states(self, model, optimizer=None):
         """Reload to GPU."""
