@@ -339,7 +339,9 @@ class FSDP2Strategy(ABC):
         if t.device.type == "cpu":
             on_cpu, t = True, t.cuda()
 
-        dist.all_reduce(t, op={"mean": dist.ReduceOp.SUM, "max": dist.ReduceOp.MAX, "sum": dist.ReduceOp.SUM}[op], group=group)
+        dist.all_reduce(
+            t, op={"mean": dist.ReduceOp.SUM, "max": dist.ReduceOp.MAX, "sum": dist.ReduceOp.SUM}[op], group=group
+        )
         if op == "mean":
             t = t / size
         return (t.cpu() if on_cpu else t) if is_tensor else (t.cpu() if on_cpu else t).item()
