@@ -228,9 +228,9 @@ class RewardModelTrainer(ABC):
                     self.model,
                     args.ckpt_path,
                     tag,
-                    args.max_ckpt_num,
-                    args.max_ckpt_mem,
-                    client_states,
+                    max_num=args.max_ckpt_num,
+                    max_mem=args.max_ckpt_mem,
+                    client_state=client_states,
                     optimizer=self.optimizer,
                     scheduler=self.scheduler,
                 )
