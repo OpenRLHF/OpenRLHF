@@ -88,8 +88,8 @@ class LLMRayActor(BaseLLMRayActor):
     def sleep(self, level=1):
         self.llm.sleep(level=level)
 
-    def wake_up(self):
-        self.llm.wake_up()
+    def wake_up(self, tags=None):
+        self.llm.wake_up(tags=tags)
 
     def add_requests(self, sampling_params, prompt_token_ids):
         """
