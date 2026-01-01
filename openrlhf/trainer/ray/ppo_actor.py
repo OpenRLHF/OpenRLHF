@@ -379,6 +379,13 @@ class ActorPPOTrainer(ABC):
                     self._model_update_group.broadcast(full_data, src=0, stream=torch.cuda.current_stream())
                 ray.get(refs)
 
+            # FSDP2 fix: explicitly release full_tensor memory to avoid OOM during vLLM wake_up
+            if is_fsdp2:
+                del full_data
+                # Periodically empty cache to prevent memory accumulation
+                if count % 50 == 0 or count == num_params:
+                    torch.cuda.empty_cache()
+
         def _handle_cuda_ipc(param, clean_name, count, num_params):
             from torch.multiprocessing.reductions import reduce_tensor
 
@@ -410,6 +417,13 @@ class ActorPPOTrainer(ABC):
                 ]
                 ray.get(refs)
             torch_dist_barrier_and_cuda_sync()
+
+            # FSDP2 fix: explicitly release temporary tensors to avoid OOM during vLLM wake_up
+            if is_fsdp2:
+                del full_data, weight
+                # Periodically empty cache to prevent memory accumulation
+                if count % 50 == 0 or count == num_params:
+                    torch.cuda.empty_cache()
 
         for name, param in model.named_parameters():
             count += 1  # empty_cache at last param
