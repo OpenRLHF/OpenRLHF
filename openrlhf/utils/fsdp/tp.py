@@ -8,10 +8,12 @@ Usage:
 """
 
 import logging
+from functools import partial
 
 import torch.nn as nn
 from torch.distributed.tensor import DTensor, Replicate, Shard, distribute_tensor
 from torch.distributed.tensor.parallel import ColwiseParallel, RowwiseParallel, SequenceParallel, parallelize_module
+from torch.distributed.tensor.parallel.style import distribute_module
 
 logger = logging.getLogger(__name__)
 
@@ -21,25 +23,96 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
+def _iter_modules(x):
+    if x is None:
+        return []
+    if isinstance(x, nn.ModuleDict):
+        return list(x.values())
+    return [x]
+
+
+def _get_base_linear(module: nn.Module) -> nn.Linear | None:
+    base = getattr(module, "get_base_layer", None)
+    if callable(base):
+        try:
+            base_layer = module.get_base_layer()
+        except Exception:
+            base_layer = None
+        if isinstance(base_layer, nn.Linear):
+            return base_layer
+    return module if isinstance(module, nn.Linear) else None
+
+
+def _distribute_param(module, name, mesh, placements, *, src_data_rank: int = 0):
+    param = getattr(module, name, None)
+    if param is None or isinstance(param, DTensor):
+        return
+    setattr(
+        module,
+        name,
+        nn.Parameter(
+            distribute_tensor(param, mesh, placements, src_data_rank=src_data_rank),
+            requires_grad=param.requires_grad,
+        ),
+    )
+
+
 class ColwiseParallelLora(ColwiseParallel):
     """ColwiseParallel with LoRA support - shards lora_B along dim 0."""
 
     src_data_rank: int = 0
 
+    def _apply(self, module: nn.Module, device_mesh):
+        if isinstance(module, nn.Embedding):
+            partition_fn = self._partition_embedding_fn
+        elif _get_base_linear(module) is not None:
+            partition_fn = self._partition_linear_fn
+        else:
+            raise NotImplementedError(
+                f"{type(self).__name__} only supports nn.Linear/nn.Embedding (and PEFT LoRA Linear wrappers), got {type(module)}"
+            )
+
+        return distribute_module(
+            module,
+            device_mesh,
+            partition_fn,
+            partial(self._prepare_input_fn, self.input_layouts, self.desired_input_layouts),
+            partial(self._prepare_output_fn, self.output_layouts, self.use_local_output),
+        )
+
     def _partition_linear_fn(self, name, module, device_mesh):
-        super()._partition_linear_fn(name, module, device_mesh)
+        base_layer = _get_base_linear(module)
+        if base_layer is None:
+            # Called by distribute_module on non-linear submodules (e.g., ModuleDict).
+            return
+
+        # Base weight/bias
+        _distribute_param(base_layer, "weight", device_mesh, [Shard(0)], src_data_rank=self.src_data_rank)
+        if getattr(base_layer, "bias", None) is not None:
+            _distribute_param(base_layer, "bias", device_mesh, [Shard(0)], src_data_rank=self.src_data_rank)
+
         lora_b = getattr(module, "lora_B", None) or getattr(module, "lora_b", None)
         lora_a = getattr(module, "lora_A", None) or getattr(module, "lora_a", None)
         if lora_b:
-            for m in (lora_b.values() if isinstance(lora_b, nn.ModuleDict) else [lora_b]):
-                _shard_param(m, "weight", device_mesh, [Shard(0)])
+            for m in _iter_modules(lora_b):
+                _distribute_param(m, "weight", device_mesh, [Shard(0)], src_data_rank=self.src_data_rank)
+                if getattr(m, "bias", None) is not None:
+                    _distribute_param(m, "bias", device_mesh, [Shard(0)], src_data_rank=self.src_data_rank)
         if lora_a:
-            for m in (lora_a.values() if isinstance(lora_a, nn.ModuleDict) else [lora_a]):
+            for m in _iter_modules(lora_a):
+                # Keep LoRA-A replicated (avoids needing rank-dim divisibility) and ensure its output is replicated.
+                _distribute_param(m, "weight", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
+                if getattr(m, "bias", None) is not None:
+                    _distribute_param(m, "bias", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
                 m.register_forward_hook(
                     lambda mod, inp, out: (
                         out.redistribute(placements=[Replicate()]) if isinstance(out, DTensor) else out
                     )
                 )
+
+    def _partition_embedding_fn(self, name, module, device_mesh):
+        # Colwise sharding for embeddings: shard weight on dim 1, preserve requires_grad.
+        _distribute_param(module, "weight", device_mesh, [Shard(1)], src_data_rank=self.src_data_rank)
 
 
 class RowwiseParallelLora(RowwiseParallel):
@@ -47,15 +120,76 @@ class RowwiseParallelLora(RowwiseParallel):
 
     src_data_rank: int = 0
 
+    def _apply(self, module: nn.Module, device_mesh):
+        if isinstance(module, nn.Embedding):
+            partition_fn = self._partition_embedding_fn
+            self.desired_input_layouts = (Replicate(),)
+        elif _get_base_linear(module) is not None:
+            partition_fn = self._partition_linear_fn
+            self.desired_input_layouts = (Shard(-1),)
+        else:
+            raise NotImplementedError(
+                f"{type(self).__name__} only supports nn.Linear/nn.Embedding (and PEFT LoRA Linear wrappers), got {type(module)}"
+            )
+
+        return distribute_module(
+            module,
+            device_mesh,
+            partition_fn,
+            partial(self._prepare_input_fn, self.input_layouts, self.desired_input_layouts),
+            partial(self._prepare_output_fn, self.output_layouts, self.use_local_output),
+        )
+
     def _partition_linear_fn(self, name, module, device_mesh):
-        super()._partition_linear_fn(name, module, device_mesh)
+        base_layer = _get_base_linear(module)
+        if base_layer is None:
+            # Called by distribute_module on non-linear submodules (e.g., ModuleDict).
+            return
+
+        # Base weight/bias
+        _distribute_param(base_layer, "weight", device_mesh, [Shard(1)], src_data_rank=self.src_data_rank)
+        if getattr(base_layer, "bias", None) is not None:
+            _distribute_param(base_layer, "bias", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
+
         lora_a = getattr(module, "lora_A", None) or getattr(module, "lora_a", None)
+        lora_b = getattr(module, "lora_B", None) or getattr(module, "lora_b", None)
         if lora_a:
-            for m in (lora_a.values() if isinstance(lora_a, nn.ModuleDict) else [lora_a]):
-                _shard_param(m, "weight", device_mesh, [Shard(1)])
+            for m in _iter_modules(lora_a):
+                _distribute_param(m, "weight", device_mesh, [Shard(1)], src_data_rank=self.src_data_rank)
+                if getattr(m, "bias", None) is not None:
+                    _distribute_param(m, "bias", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
+                m.register_forward_hook(
+                    lambda mod, inp, out: (
+                        out.redistribute(placements=[Replicate()]) if isinstance(out, DTensor) else out
+                    )
+                )
+        if lora_b:
+            for m in _iter_modules(lora_b):
+                # Keep LoRA-B replicated for rowwise base sharding (avoids needing rank-dim divisibility).
+                _distribute_param(m, "weight", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
+                if getattr(m, "bias", None) is not None:
+                    _distribute_param(m, "bias", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
+
+    def _partition_embedding_fn(self, name, module, device_mesh):
+        # Rowwise sharding for embeddings: shard weight on dim 0, preserve requires_grad.
+        _distribute_param(module, "weight", device_mesh, [Shard(0)], src_data_rank=self.src_data_rank)
 
 
-class SequenceParallelAllGather(SequenceParallel):
+class SequenceParallelPreserveGrad(SequenceParallel):
+    """SequenceParallel that preserves requires_grad when re-wrapping parameters."""
+
+    def _replicate_module_fn(self, name: str, module: nn.Module, device_mesh):
+        for p_name, param in module.named_parameters():
+            module.register_parameter(
+                p_name,
+                nn.Parameter(
+                    DTensor.from_local(param, device_mesh, [Replicate()], run_check=False),
+                    requires_grad=param.requires_grad,
+                ),
+            )
+
+
+class SequenceParallelAllGather(SequenceParallelPreserveGrad):
     """SequenceParallel that all-gathers output (for LayerNorm before attention)."""
 
     @staticmethod
@@ -65,35 +199,14 @@ class SequenceParallelAllGather(SequenceParallel):
         return SequenceParallel._prepare_output_fn(use_local_output, mod, outputs, device_mesh)
 
 
-def _shard_param(module, name, mesh, placements):
-    """Distribute a parameter across the mesh."""
-    param = getattr(module, name, None)
-    if param is not None and not isinstance(param, DTensor):
-        setattr(
-            module,
-            name,
-            nn.Parameter(distribute_tensor(param, mesh, placements, 0), requires_grad=param.requires_grad),
-        )
-
-
 def _to_lora(style):
     """Convert parallel style to LoRA-aware version, preserving layouts."""
     if isinstance(style, ColwiseParallel) and not isinstance(style, ColwiseParallelLora):
-        new = ColwiseParallelLora()
-        new.output_layouts, new.input_layouts, new.use_local_output = (
-            style.output_layouts,
-            style.input_layouts,
-            style.use_local_output,
-        )
-        return new
+        style.__class__ = ColwiseParallelLora
+        return style
     if isinstance(style, RowwiseParallel) and not isinstance(style, RowwiseParallelLora):
-        new = RowwiseParallelLora()
-        new.output_layouts, new.input_layouts, new.use_local_output = (
-            style.output_layouts,
-            style.input_layouts,
-            style.use_local_output,
-        )
-        return new
+        style.__class__ = RowwiseParallelLora
+        return style
     return style
 
 
@@ -126,7 +239,7 @@ def _base_plan(sequence_parallel=False, layernorm_cls=SequenceParallel):
         plan.update(
             {
                 "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
-                "model.norm": SequenceParallel(),
+                "model.norm": SequenceParallelPreserveGrad(),
                 "model.layers.*.input_layernorm": layernorm_cls(use_local_output=False),
                 "model.layers.*.post_attention_layernorm": layernorm_cls(use_local_output=False),
                 "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
@@ -147,7 +260,7 @@ def _qwen_plan(model, sequence_parallel):
     plan = _base_plan(sequence_parallel, SequenceParallelAllGather)
     if sequence_parallel:
 
-        class QwenQKNorm(SequenceParallel):
+        class QwenQKNorm(SequenceParallelPreserveGrad):
             @staticmethod
             def _prepare_input_fn(seq_shard, mod, inputs, mesh):
                 t = inputs[0]
@@ -194,7 +307,7 @@ def _str_to_style(s):
         "rowwise": RowwiseParallel(),
         "colwise_rep": ColwiseParallel(output_layouts=Replicate()),
         "rowwise_rep": RowwiseParallel(input_layouts=Replicate()),
-        "sequence_parallel": SequenceParallel(),
+        "sequence_parallel": SequenceParallelPreserveGrad(),
     }
     return styles[s]
 
@@ -241,13 +354,25 @@ def apply_tensor_parallel(model, tp_mesh, tp_plan=None, sequence_parallel=False,
     """Apply Tensor Parallelism to model."""
     if tp_mesh.size() == 1:
         return model
+
+    # If using PEFT, apply TP on the underlying HF model (keys like `model.layers.*`),
+    # but keep returning the original wrapper.
+    tp_root = model
+    try:
+        from peft import PeftModel
+
+        if isinstance(model, PeftModel):
+            tp_root = model.get_base_model()
+    except Exception:
+        tp_root = model
+
     if validate:
-        validate_tp_mesh(model, tp_mesh)
+        validate_tp_mesh(tp_root, tp_mesh)
     if tp_plan is None:
-        tp_plan = get_tp_plan(model, sequence_parallel)
+        tp_plan = get_tp_plan(tp_root, sequence_parallel)
 
     # Convert to LoRA-aware styles and rely on parallelize_module's fnmatch-based
     # wildcard matching (e.g., 'model.layers.*.self_attn.q_proj').
     tp_plan = {k: _to_lora(v) for k, v in tp_plan.items()}
-    parallelize_module(model, tp_mesh, tp_plan)
+    parallelize_module(tp_root, tp_mesh, tp_plan)
     return model
