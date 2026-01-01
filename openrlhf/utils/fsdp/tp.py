@@ -8,7 +8,6 @@ Usage:
 """
 
 import logging
-import re
 
 import torch.nn as nn
 from torch.distributed.tensor import DTensor, Replicate, Shard, distribute_tensor
@@ -247,23 +246,8 @@ def apply_tensor_parallel(model, tp_mesh, tp_plan=None, sequence_parallel=False,
     if tp_plan is None:
         tp_plan = get_tp_plan(model, sequence_parallel)
 
-    # Convert to LoRA-aware and expand wildcards
+    # Convert to LoRA-aware styles and rely on parallelize_module's fnmatch-based
+    # wildcard matching (e.g., 'model.layers.*.self_attn.q_proj').
     tp_plan = {k: _to_lora(v) for k, v in tp_plan.items()}
-    expanded = _expand_wildcards(tp_plan, model)
-    if expanded:
-        parallelize_module(model, tp_mesh, expanded)
+    parallelize_module(model, tp_mesh, tp_plan)
     return model
-
-
-def _expand_wildcards(plan, model):
-    """Expand 'model.layers.*' patterns to actual module names."""
-    names = {n for n, _ in model.named_modules()}
-    result = {}
-    for pattern, style in plan.items():
-        if "*" not in pattern:
-            if pattern in names:
-                result[pattern] = style
-        else:
-            regex = re.compile(f"^{pattern.replace('.', r'\.').replace('*', r'\\d+')}$")
-            result.update({n: style for n in names if regex.match(n)})
-    return result
