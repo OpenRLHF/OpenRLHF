@@ -160,19 +160,19 @@ class BasePPOTrainer(ABC):
 
     def _broadcast_to_vllm(self, is_fsdp2: bool = False):
         """Broadcast actor weights to vLLM engines.
-        
+
         For FSDP2 + vllm_enable_sleep (slime-style):
         The key insight from slime is: offload training model BEFORE waking up vLLM!
-        
+
         1. Offload FSDP2 model to CPU (free GPU memory)
         2. Wake up vLLM (now GPU has space for vLLM weights!)
         3. Broadcast weights (params moved from CPU to GPU one by one for redistribute)
         4. Sleep vLLM (free GPU memory for next training iteration)
-        
+
         For DeepSpeed (original):
         The model stays on GPU during broadcast (sharded params are small enough).
         1. Wake up vLLM
-        2. Broadcast weights  
+        2. Broadcast weights
         3. Sleep vLLM
         """
         from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
@@ -181,13 +181,13 @@ class BasePPOTrainer(ABC):
             # === FSDP2 path (slime-style) ===
             # Step 1: Offload FSDP2 model to CPU FIRST (this is the key!)
             ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
-            
+
             # Step 2: Now wake up vLLM (GPU has space since model is on CPU!)
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
-            
+
             # Step 3: Broadcast weights (params moved from CPU to GPU one by one)
             ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
-            
+
             # Step 4: Sleep vLLM to free GPU memory for next training iteration
             batch_vllm_engine_call(self.vllm_engines, "sleep")
         else:
