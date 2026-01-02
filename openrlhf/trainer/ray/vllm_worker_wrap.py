@@ -54,6 +54,49 @@ class WorkerWrap:
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
 
+    def batch_update_weights(self, names, dtypes, shapes, empty_cache=False):
+        """Batch broadcast weights - reduces RPC overhead by processing multiple params at once.
+        
+        This method receives metadata for multiple parameters, broadcasts them all using
+        async operations, then loads them into the model in one batch.
+        """
+        import torch
+
+        if torch.distributed.get_rank() == 0:
+            print(f"batch_update_weights: {len(names)} params")
+
+        # Allocate buffers and start async broadcasts
+        weights = []
+        handles = []
+        for name, dtype, shape in zip(names, dtypes, shapes):
+            assert dtype == self.model_config.dtype, f"mismatch dtype: src {dtype}, dst {self.model_config.dtype}"
+            weight = torch.empty(shape, dtype=dtype, device="cuda")
+            
+            if self._model_update_with_ray:
+                import ray.util.collective as collective
+                collective.broadcast(weight, 0, group_name=self._model_update_group)
+                handles.append(None)  # Ray collective is sync
+            else:
+                handle = self._model_update_group.broadcast(
+                    weight, src=0, stream=torch.cuda.current_stream(), async_op=True
+                )
+                handles.append(handle)
+            weights.append((name, weight))
+
+        # Wait for all async broadcasts to complete
+        for handle in handles:
+            if handle is not None:
+                handle.wait()
+
+        # Batch load all weights at once
+        self.model_runner.model.load_weights(weights=weights)
+
+        # Cleanup
+        del weights, handles
+        if empty_cache:
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+
     def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handles=None, empty_cache=False):
         import torch
         from openrlhf.trainer.ray.utils import get_physical_gpu_id
@@ -75,3 +118,4 @@ class WorkerWrap:
         torch.cuda.synchronize()
         if empty_cache:
             torch.cuda.empty_cache()
+
