@@ -28,7 +28,9 @@ class WorkerWrap:
             f"init_process_group: master_address={master_address}, master_port={master_port}, ",
             f"rank={rank}, world_size={world_size}, group_name={group_name}",
         )
-        print(f"[WorkerWrap] Initialized _model_update_with_ray={use_ray}, _model_update_group={self._model_update_group}")
+        print(
+            f"[WorkerWrap] Initialized _model_update_with_ray={use_ray}, _model_update_group={self._model_update_group}"
+        )
 
     def update_weight(self, name, dtype, shape, empty_cache=False):
         import torch
