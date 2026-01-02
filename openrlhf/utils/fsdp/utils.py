@@ -130,14 +130,36 @@ def moving_average_fsdp(model: nn.Module, model_ema: nn.Module, unwrap_fn, beta:
 
 @torch.no_grad()
 def move_optimizer_state(optimizer, device: torch.device):
-    """Move all optimizer state tensors to specified device."""
+    """Move all optimizer state tensors to specified device.
+    
+    This properly handles all tensor types in optimizer state,
+    including nested lists/tuples (e.g., for AdamW's exp_avg, exp_avg_sq).
+    """
     if not optimizer.state:
         return
 
-    for state in optimizer.state.values():
-        for k, v in state.items():
-            if isinstance(v, torch.Tensor):
-                state[k] = v.to(device, non_blocking=True)
+    for param_group in optimizer.param_groups:
+        for param in param_group["params"]:
+            state = optimizer.state.get(param)
+            if state is None:
+                continue
+            for k, v in state.items():
+                if torch.is_tensor(v):
+                    state[k] = v.to(device, non_blocking=True)
+                elif isinstance(v, (list, tuple)):
+                    # Handle nested tensors in lists/tuples
+                    state[k] = type(v)(
+                        t.to(device, non_blocking=True) if torch.is_tensor(t) else t 
+                        for t in v
+                    )
+    
+    # Ensure all transfers complete before proceeding
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    else:
+        # For CPU offload, also sync to ensure memory is freed on GPU
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
 
 
 # -----------------------------------------------------------------------------
@@ -157,7 +179,13 @@ def offload_fsdp_model_to_cpu(model: nn.Module, empty_cache: bool = True):
         model: FSDP2-wrapped model
         empty_cache: Whether to empty CUDA cache after offloading
     """
+    # Move model to CPU
     model.cpu()
+    
+    # CRITICAL: Synchronize to ensure all GPU->CPU transfers complete
+    # before we try to free GPU memory
+    torch.cuda.synchronize()
+    
     if empty_cache:
         torch.cuda.empty_cache()
 
