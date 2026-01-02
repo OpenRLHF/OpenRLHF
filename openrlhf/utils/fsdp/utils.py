@@ -148,11 +148,11 @@ def move_optimizer_state(optimizer, device: torch.device):
 @torch.no_grad()
 def offload_fsdp_model_to_cpu(model: nn.Module, empty_cache: bool = True):
     """Offload FSDP2 model parameters to CPU.
-    
+
     This is critical for vLLM sleep/wake_up mode to work with FSDP2.
     When vLLM wakes up, it needs to allocate CUDA memory for its model weights.
     If FSDP2 model is still on GPU, it causes CUDA OOM.
-    
+
     Args:
         model: FSDP2-wrapped model
         empty_cache: Whether to empty CUDA cache after offloading
@@ -165,7 +165,7 @@ def offload_fsdp_model_to_cpu(model: nn.Module, empty_cache: bool = True):
 @torch.no_grad()
 def load_fsdp_model_to_gpu(model: nn.Module, device_id: int = None):
     """Load FSDP2 model parameters back to GPU.
-    
+
     Args:
         model: FSDP2-wrapped model (currently on CPU)
         device_id: Target CUDA device ID. If None, uses current device.
