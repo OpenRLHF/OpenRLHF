@@ -316,18 +316,6 @@ class ActorPPOTrainer(ABC):
             model = self.actor.model.module
         count, num_params = 0, len(list(model.named_parameters()))
 
-        # Wrapper prefixes that may be added by torch.compile, DDP, FSDP, etc.
-        _WRAPPER_PREFIXES = (
-            "_orig_mod.",  # torch.compile / OptimizedModule
-            "_checkpoint_wrapped_module.",  # PyTorch checkpoint_wrapper
-        )
-
-        def _clean_param_name(name):
-            """Remove wrapper prefixes from parameter name for vLLM compatibility."""
-            for prefix in _WRAPPER_PREFIXES:
-                name = name.replace(prefix, "")
-            return name
-
         # --- FSDP2: Slime-style bucketed async weight sync ---
         if is_fsdp2:
             from torch.distributed.tensor import DTensor, Replicate
@@ -352,12 +340,10 @@ class ActorPPOTrainer(ABC):
 
                 # Broadcast each parameter in the bucket
                 for name, param_data in processed:
-                    clean_name = _clean_param_name(name)
-
                     if torch.distributed.get_rank() == 0:
                         refs = [
                             engine.update_weight.remote(
-                                clean_name,
+                                name,
                                 dtype=param_data.dtype,
                                 shape=param_data.shape,
                                 empty_cache=is_last_bucket,
