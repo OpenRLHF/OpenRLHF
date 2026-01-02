@@ -333,9 +333,7 @@ class ActorPPOTrainer(ABC):
             from torch.distributed.tensor import DTensor, Replicate
 
             # Buffer size for bucketing (512 MB default, can be configured)
-            update_weight_buffer_size = getattr(
-                self.strategy.args, "update_weight_buffer_size", 512 * 1024 * 1024
-            )
+            update_weight_buffer_size = getattr(self.strategy.args, "update_weight_buffer_size", 512 * 1024 * 1024)
             use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
 
             def _process_bucket(bucket, is_last_bucket=False):
@@ -421,13 +419,16 @@ class ActorPPOTrainer(ABC):
 
         # --- DeepSpeed path (original code) ---
         else:
+
             def _broadcast_param(param, count, num_params):
                 use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
                 # Fire all vllm engines for broadcast
                 if torch.distributed.get_rank() == 0:
                     shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
                     refs = [
-                        engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
+                        engine.update_weight.remote(
+                            name, dtype=param.dtype, shape=shape, empty_cache=count == num_params
+                        )
                         for engine in self.vllm_engines
                     ]
 
