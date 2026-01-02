@@ -140,14 +140,15 @@ class BasePPOTrainer(ABC):
             actor_status_ref = self.actor_model_group.async_run_method(method_name="fit", kl_ctl=self.kl_ctl.value)
             status.update(ray.get(actor_status_ref)[0])
 
-            # For FSDP2 with vllm_enable_sleep: offload optimizer first, then broadcast,
-            # then offload model (so vLLM wake_up has enough GPU memory)
+            # For FSDP2 + vllm_enable_sleep: offload optimizer first, then broadcast,
+            # then offload model inside _broadcast_to_vllm (slime/verl-style)
             is_fsdp2 = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2"
             if self.strategy.args.deepspeed_enable_sleep:
                 # Offload optimizer states (model stays on GPU for weight sync)
                 ray.get(self.actor_model_group.async_run_method(method_name="offload_states"))
 
             # 4. broadcast weights to vllm engines
+            # For FSDP2: this will also offload model after broadcast
             if self.vllm_engines is not None:
                 self._broadcast_to_vllm(is_fsdp2=is_fsdp2)
 
@@ -159,36 +160,36 @@ class BasePPOTrainer(ABC):
 
     def _broadcast_to_vllm(self, is_fsdp2: bool = False):
         """Broadcast actor weights to vLLM engines.
-
-        For FSDP2 with vllm_enable_sleep, we follow verl's approach:
-        1. Collect params (model on GPU)
-        2. Offload model to CPU
-        3. Wake up vLLM weights (now GPU has space)
-        4. Broadcast weights
-        5. Sleep vLLM weights
-        6. In generate_samples, wake up full vLLM (weights + kv_cache)
+        
+        For FSDP2 + vllm_enable_sleep (slime-style):
+        The key insight from slime is: offload training model BEFORE waking up vLLM!
+        
+        1. Offload FSDP2 model to CPU (free GPU memory)
+        2. Wake up vLLM (now GPU has space for vLLM weights!)
+        3. Broadcast weights (params moved from CPU to GPU one by one for redistribute)
+        4. Sleep vLLM (free GPU memory for next training iteration)
+        
+        For DeepSpeed (original):
+        The model stays on GPU during broadcast (sharded params are small enough).
+        1. Wake up vLLM
+        2. Broadcast weights  
+        3. Sleep vLLM
         """
         from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 
         if is_fsdp2 and self.strategy.args.vllm_enable_sleep:
-            # === FSDP2 path (verl-style) ===
-            # Step 1: Collect params into CPU buffer (model still on GPU)
-            ray.get(self.actor_model_group.async_run_method(method_name="collect_params_to_cpu"))
-
-            # Step 2: Offload model to CPU to free GPU memory
+            # === FSDP2 path (slime-style) ===
+            # Step 1: Offload FSDP2 model to CPU FIRST (this is the key!)
             ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
-
-            # Step 3: Now wake up vLLM weights (GPU has space since model is on CPU)
-            batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["weights"])
-
-            # Step 4: Broadcast weights from CPU buffer to vLLM
-            ray.get(self.actor_model_group.async_run_method(method_name="broadcast_cached_params_to_vllm"))
-
-            # Step 5: Sleep vLLM weights to free GPU memory for kv_cache
-            batch_vllm_engine_call(self.vllm_engines, "sleep", tags=["weights"])
-
-            # Clear partial wakeup flag - next generate_samples should wake up full vLLM
-            setattr(self.strategy.args, "_vllm_partial_wakeup", False)
+            
+            # Step 2: Now wake up vLLM (GPU has space since model is on CPU!)
+            batch_vllm_engine_call(self.vllm_engines, "wake_up")
+            
+            # Step 3: Broadcast weights (params moved from CPU to GPU one by one)
+            ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
+            
+            # Step 4: Sleep vLLM to free GPU memory for next training iteration
+            batch_vllm_engine_call(self.vllm_engines, "sleep")
         else:
             # === DeepSpeed path (original) ===
             if self.strategy.args.vllm_enable_sleep:
@@ -198,7 +199,6 @@ class BasePPOTrainer(ABC):
 
             if self.strategy.args.vllm_enable_sleep:
                 batch_vllm_engine_call(self.vllm_engines, "sleep")
-                setattr(self.strategy.args, "_vllm_partial_wakeup", False)
 
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         if global_step % args.logging_steps == 0:
