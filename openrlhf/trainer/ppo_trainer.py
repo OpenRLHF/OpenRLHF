@@ -183,16 +183,16 @@ class BasePPOTrainer(ABC):
             # 1. vLLM's sleep() + wake_up() in quick succession causes CUDA errors
             # 2. Keeping vLLM awake avoids the state inconsistency issue
             # 3. generate_samples will detect vLLM is already awake and skip wake_up
-            
+
             # Step 1: Offload FSDP2 model to CPU to free GPU memory
             ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
-            
+
             # Step 2: Wake up vLLM (full wake_up to ensure consistent state)
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
-            
+
             # Step 3: Broadcast weights (params moved from CPU to GPU one by one)
             ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
-            
+
             # Note: Do NOT sleep vLLM here. Keep it awake for generate_samples().
             # This avoids the CUDA error from rapid sleep/wake_up cycles.
             setattr(self.strategy.args, "_vllm_already_awake", True)
