@@ -30,8 +30,10 @@ from .checkpoint import load_distributed_checkpoint, load_hf_model, save_distrib
 from .utils import (
     clip_grad_norm_dtensor,
     get_runtime_metadata,
+    load_fsdp_model_to_gpu,
     move_optimizer_state,
     moving_average_fsdp,
+    offload_fsdp_model_to_cpu,
 )
 
 
@@ -303,13 +305,15 @@ class FSDP2Strategy(ABC):
     # -------------------------------------------------------------------------
 
     def offload_states(self, model, optimizer=None):
-        """Offload optimizer states to CPU, keep model params on GPU (sharded).
+        """Offload optimizer states to CPU, optionally offload model too.
 
-        This matches DeepSpeed's behavior where lp_params stay on GPU in sharded state,
-        only optimizer states (hp_params, optim_states, grads) are offloaded.
+        For FSDP2 with vLLM sleep mode:
+        - Optimizer states are offloaded to CPU
+        - Model params stay on GPU (sharded) for weight sync with vLLM
+        - After weight sync, call offload_model() to offload model to CPU
 
         Note: When fsdp2_cpu_offload is enabled, optimizer runs on CPU and states
-        are already in CPU memory, so this function becomes a no-op.
+        are already in CPU memory, so optimizer offload is skipped.
         """
         # Skip if using CPUOffloadPolicy - optimizer state is already on CPU
         if self.fsdp2_cpu_offload:
@@ -324,13 +328,43 @@ class FSDP2Strategy(ABC):
         torch.distributed.barrier()
         torch.cuda.synchronize()
 
-    def reload_states(self, model, optimizer=None):
-        """Reload optimizer states to GPU.
+    def offload_model(self, model):
+        """Offload model to CPU (separate from optimizer offload).
+        
+        This should be called AFTER weight sync with vLLM to free GPU memory
+        for vLLM's wake_up operation.
+        """
+        inner = self._unwrap_model(model)
+        offload_fsdp_model_to_cpu(inner, empty_cache=True)
 
-        Model params are already on GPU in sharded state, no need to reload.
+        if self.is_rank_0():
+            print("[FSDP2 offload_model] Model offloaded to CPU")
+
+        torch.distributed.barrier()
+        torch.cuda.synchronize()
+
+    def reload_model(self, model):
+        """Reload model to GPU (separate from optimizer reload).
+        
+        This should be called BEFORE training when model was offloaded.
+        """
+        inner = self._unwrap_model(model)
+        load_fsdp_model_to_gpu(inner, device_id=torch.cuda.current_device())
+
+        if self.is_rank_0():
+            print("[FSDP2 reload_model] Model reloaded to GPU")
+
+        torch.cuda.synchronize()
+        dist.barrier()
+
+    def reload_states(self, model, optimizer=None):
+        """Reload model params and optimizer states to GPU.
+
+        This must be called before training to restore the states from CPU.
+        Also reloads the model if it was offloaded via offload_model().
 
         Note: When fsdp2_cpu_offload is enabled, optimizer runs on CPU and states
-        are already in CPU memory, so this function becomes a no-op.
+        are already in CPU memory, so optimizer reload is skipped.
         """
         # Skip if using CPUOffloadPolicy - optimizer state stays on CPU
         if self.fsdp2_cpu_offload:
@@ -339,6 +373,15 @@ class FSDP2Strategy(ABC):
             return
 
         device = torch.device("cuda", torch.cuda.current_device())
+
+        # Reload model to GPU if it was offloaded
+        inner = self._unwrap_model(model)
+        if next(inner.parameters()).device.type == "cpu":
+            load_fsdp_model_to_gpu(inner, device_id=torch.cuda.current_device())
+            if self.is_rank_0():
+                print("[FSDP2 reload_states] Model reloaded to GPU")
+
+        # Reload optimizer states
         if optimizer:
             move_optimizer_state(optimizer, device)
 

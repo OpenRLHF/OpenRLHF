@@ -140,12 +140,20 @@ class BasePPOTrainer(ABC):
             actor_status_ref = self.actor_model_group.async_run_method(method_name="fit", kl_ctl=self.kl_ctl.value)
             status.update(ray.get(actor_status_ref)[0])
 
+            # For FSDP2 with vllm_enable_sleep: offload optimizer first, then broadcast,
+            # then offload model (so vLLM wake_up has enough GPU memory)
+            is_fsdp2 = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2"
             if self.strategy.args.deepspeed_enable_sleep:
+                # Offload optimizer states (model stays on GPU for weight sync)
                 ray.get(self.actor_model_group.async_run_method(method_name="offload_states"))
 
             # 4. broadcast weights to vllm engines
             if self.vllm_engines is not None:
                 self._broadcast_to_vllm()
+
+            # For FSDP2: offload model to CPU after weight sync, so vLLM can wake up kv_cache
+            if self.strategy.args.deepspeed_enable_sleep and is_fsdp2:
+                ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
 
         # 5. wait remote critic model training done
         if self.critic_model_group and not self.strategy.args.colocate_all_models:
@@ -154,14 +162,20 @@ class BasePPOTrainer(ABC):
         return status
 
     def _broadcast_to_vllm(self):
+        is_fsdp2 = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2"
+
         if self.strategy.args.vllm_enable_sleep:
             from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 
-            is_fsdp2 = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2"
-            # Only wake weights for weight-sync (KV-cache is only needed for generation).
             if is_fsdp2:
+                # For FSDP2 with vllm_enable_sleep + deepspeed_enable_sleep:
+                # 1. FSDP2 model is still on GPU (only optimizer offloaded in offload_states)
+                # 2. Wake up vLLM weights for weight sync
+                # 3. After broadcast, offload_model() will move model to CPU
+                # 4. This allows vLLM to have enough GPU memory for kv_cache wake_up later
                 batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["weights"])
             else:
+                # DeepSpeed path: model is still on GPU (just optimizer offloaded)
                 batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
         ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
@@ -172,7 +186,7 @@ class BasePPOTrainer(ABC):
             # and would leave weights mapped, which can break the next wake_up(None)
             # with CUDA "invalid argument" (double cuMemMap). We keep the executor in
             # "partial wake" state and only wake "kv_cache" right before generation.
-            if getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2":
+            if is_fsdp2:
                 setattr(self.strategy.args, "_vllm_partial_wakeup", True)
             else:
                 batch_vllm_engine_call(self.vllm_engines, "sleep")
