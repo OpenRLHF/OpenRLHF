@@ -330,7 +330,7 @@ class FSDP2Strategy(ABC):
 
     def offload_model(self, model):
         """Offload model to CPU (separate from optimizer offload).
-        
+
         This should be called AFTER weight sync with vLLM to free GPU memory
         for vLLM's wake_up operation.
         """
@@ -345,7 +345,7 @@ class FSDP2Strategy(ABC):
 
     def reload_model(self, model):
         """Reload model to GPU (separate from optimizer reload).
-        
+
         This should be called BEFORE training when model was offloaded.
         """
         inner = self._unwrap_model(model)
