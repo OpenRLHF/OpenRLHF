@@ -6,8 +6,8 @@ class WorkerWrap:
         import torch
         from openrlhf.utils.distributed_util import stateless_init_process_group
 
-        assert torch.distributed.is_initialized(), f"default torch process group must be initialized"
-        assert group_name != "", f"group name must not be empty"
+        assert torch.distributed.is_initialized(), "default torch process group must be initialized"
+        assert group_name != "", "group name must not be empty"
 
         rank = torch.distributed.get_rank() + rank_offset
         self._model_update_with_ray = use_ray
@@ -28,6 +28,7 @@ class WorkerWrap:
             f"init_process_group: master_address={master_address}, master_port={master_port}, ",
             f"rank={rank}, world_size={world_size}, group_name={group_name}",
         )
+        print(f"[WorkerWrap] Initialized _model_update_with_ray={use_ray}, _model_update_group={self._model_update_group}")
 
     def update_weight(self, name, dtype, shape, empty_cache=False):
         import torch
