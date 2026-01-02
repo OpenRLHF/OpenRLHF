@@ -157,12 +157,18 @@ class BasePPOTrainer(ABC):
         if self.strategy.args.vllm_enable_sleep:
             from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 
-            batch_vllm_engine_call(self.vllm_engines, "wake_up")
+            is_fsdp2 = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2"
+            # Only wake weights for weight-sync (KV-cache is only needed for generation).
+            if is_fsdp2:
+                batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["weights"])
+            else:
+                batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
         ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
 
         if self.strategy.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "sleep")
+
 
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         if global_step % args.logging_steps == 0:

@@ -121,7 +121,10 @@ class ReferenceModelActor(BaseModelActor):
         if strategy.args.ref_reward_offload:
             model._offload = True
 
-        self.model = self.strategy.prepare(model)
+        if hasattr(self.strategy, "prepare_ref"):
+            self.model = self.strategy.prepare_ref(model)
+        else:
+            self.model = self.strategy.prepare(model)
         self.model.eval()
 
     def forward(

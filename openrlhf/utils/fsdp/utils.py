@@ -133,6 +133,7 @@ def move_optimizer_state(optimizer, device: torch.device):
     """Move all optimizer state tensors to specified device."""
     if not optimizer.state:
         return
+
     for state in optimizer.state.values():
         for k, v in state.items():
             if isinstance(v, torch.Tensor):
