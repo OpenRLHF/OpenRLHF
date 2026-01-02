@@ -167,7 +167,16 @@ class BasePPOTrainer(ABC):
         ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
 
         if self.strategy.args.vllm_enable_sleep:
-            batch_vllm_engine_call(self.vllm_engines, "sleep")
+            # If we only woke up "weights", vLLM executor is still considered sleeping
+            # (the "kv_cache" tag is still asleep). Calling sleep again would be a no-op
+            # and would leave weights mapped, which can break the next wake_up(None)
+            # with CUDA "invalid argument" (double cuMemMap). We keep the executor in
+            # "partial wake" state and only wake "kv_cache" right before generation.
+            if getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2":
+                setattr(self.strategy.args, "_vllm_partial_wakeup", True)
+            else:
+                batch_vllm_engine_call(self.vllm_engines, "sleep")
+                setattr(self.strategy.args, "_vllm_partial_wakeup", False)
 
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         if global_step % args.logging_steps == 0:
