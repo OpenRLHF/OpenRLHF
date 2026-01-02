@@ -361,6 +361,7 @@ class ActorPPOTrainer(ABC):
                     for name, param_data in processed:
                         if use_ray:
                             import ray.util.collective as collective
+
                             collective.broadcast(param_data, 0, group_name=self._model_update_group)
                         else:
                             handle = self._model_update_group.broadcast(
