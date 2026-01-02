@@ -56,7 +56,7 @@ class WorkerWrap:
 
     def batch_update_weights(self, names, dtypes, shapes, empty_cache=False):
         """Batch broadcast weights - reduces RPC overhead by processing multiple params at once.
-        
+
         This method receives metadata for multiple parameters, broadcasts them all using
         async operations, then loads them into the model in one batch.
         """
@@ -71,9 +71,10 @@ class WorkerWrap:
         for name, dtype, shape in zip(names, dtypes, shapes):
             assert dtype == self.model_config.dtype, f"mismatch dtype: src {dtype}, dst {self.model_config.dtype}"
             weight = torch.empty(shape, dtype=dtype, device="cuda")
-            
+
             if self._model_update_with_ray:
                 import ray.util.collective as collective
+
                 collective.broadcast(weight, 0, group_name=self._model_update_group)
                 handles.append(None)  # Ray collective is sync
             else:
@@ -118,4 +119,3 @@ class WorkerWrap:
         torch.cuda.synchronize()
         if empty_cache:
             torch.cuda.empty_cache()
-
