@@ -28,7 +28,6 @@ from openrlhf.utils.distributed_sampler import DistributedSampler
 from . import MESH_DIM_CP, MESH_DIM_DP, MESH_DIM_TP
 from .checkpoint import load_distributed_checkpoint, load_hf_model, save_distributed_checkpoint, save_hf_model
 from .utils import (
-    clip_grad_norm_dtensor,
     get_runtime_metadata,
     load_fsdp_model_to_gpu,
     move_optimizer_state,
@@ -59,9 +58,17 @@ class FSDP2Strategy(ABC):
         self.fsdp2_reshard_after_forward = getattr(args, "fsdp2_reshard_after_forward", True)
         self.sequence_parallel = getattr(args, "sequence_parallel", False)
 
+        # CPUOffloadPolicy and manual offload are mutually exclusive (ref: slime)
+        # When fsdp2_cpu_offload is enabled, FSDP2 manages CPU offload automatically,
+        # so deepspeed_enable_sleep (manual offload) should be disabled.
+        if self.fsdp2_cpu_offload and getattr(args, "deepspeed_enable_sleep", False):
+            args.deepspeed_enable_sleep = False
+            print("[FSDP2] Warning: deepspeed_enable_sleep disabled because fsdp2_cpu_offload is enabled")
+
         # State
         self.time_steps = defaultdict(int)
         self.mesh = None
+        self._gloo_group = None  # Gloo group for CPU-safe barriers
 
     # -------------------------------------------------------------------------
     # Distributed Setup
@@ -79,6 +86,11 @@ class FSDP2Strategy(ABC):
 
         dist.init_process_group(timeout=timeout)
         self.world_size = dist.get_world_size()
+
+        # Initialize Gloo group for CPU-safe barriers (ref: slime)
+        # NCCL barriers require GPU tensors, which fail when model is offloaded to CPU.
+        # Gloo works with CPU tensors and is safe to use after model offload.
+        self._gloo_group = dist.new_group(backend="gloo")
 
         # Validate and compute parallelism sizes
         parallel_factor = self.ring_attn_size * self.tp_size
@@ -250,7 +262,7 @@ class FSDP2Strategy(ABC):
             return
 
         if self.max_norm > 0:
-            clip_grad_norm_dtensor(self._unwrap_model(model), self.max_norm)
+            torch.nn.utils.clip_grad_norm_(self._unwrap_model(model).parameters(), self.max_norm)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         if scheduler:
@@ -321,11 +333,20 @@ class FSDP2Strategy(ABC):
                 print("[FSDP2 offload_states] Skipping - CPUOffloadPolicy already manages state on CPU")
             return
 
+        # Ensure we don't keep unsharded params resident unnecessarily.
+        # Note: FSDPModule.reshard() is not recursive, so walk all nested FSDP modules.
+        inner = self._unwrap_model(model)
+        for module in inner.modules():
+            if isinstance(module, FSDPModule):
+                module.reshard()
+
         if optimizer:
             move_optimizer_state(optimizer, torch.device("cpu"))
 
         torch.cuda.empty_cache()
-        torch.distributed.barrier()
+        # Use Gloo barrier instead of NCCL - NCCL may fail when model is on CPU (ref: slime)
+        if dist.is_initialized() and self._gloo_group is not None:
+            dist.barrier(group=self._gloo_group)
         torch.cuda.synchronize()
 
     def offload_model(self, model):
@@ -340,7 +361,9 @@ class FSDP2Strategy(ABC):
         if self.is_rank_0():
             print("[FSDP2 offload_model] Model offloaded to CPU")
 
-        torch.distributed.barrier()
+        # Use Gloo barrier - model is now on CPU, NCCL requires GPU tensors (ref: slime)
+        if self._gloo_group is not None:
+            dist.barrier(group=self._gloo_group)
         torch.cuda.synchronize()
 
     def reload_model(self, model):
@@ -355,7 +378,9 @@ class FSDP2Strategy(ABC):
             print("[FSDP2 reload_model] Model reloaded to GPU")
 
         torch.cuda.synchronize()
-        dist.barrier()
+        # Use Gloo barrier for consistency (ref: slime)
+        if self._gloo_group is not None:
+            dist.barrier(group=self._gloo_group)
 
     def reload_states(self, model, optimizer=None):
         """Reload model params and optimizer states to GPU.
@@ -386,7 +411,9 @@ class FSDP2Strategy(ABC):
             move_optimizer_state(optimizer, device)
 
         torch.cuda.synchronize()
-        dist.barrier()
+        # Use Gloo barrier for consistency (ref: slime)
+        if self._gloo_group is not None:
+            dist.barrier(group=self._gloo_group)
 
     # -------------------------------------------------------------------------
     # Checkpointing

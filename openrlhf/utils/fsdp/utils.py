@@ -2,93 +2,12 @@
 FSDP2 Utilities
 ===============
 
-- clip_grad_norm_dtensor: DTensor-safe gradient clipping
 - moving_average_fsdp: EMA update for FSDP models
 - move_optimizer_state: Move optimizer state between devices
 """
 
-import math
 import torch
-import torch.distributed as dist
 import torch.nn as nn
-
-
-# -----------------------------------------------------------------------------
-# Gradient Clipping (DTensor-safe)
-# -----------------------------------------------------------------------------
-
-
-def clip_grad_norm_dtensor(model: nn.Module, max_norm: float, norm_type: float = 2.0) -> float:
-    """Clip gradients, handling DTensor from FSDP/TP correctly.
-
-    Unlike torch.nn.utils.clip_grad_norm_, this handles:
-    - DTensor gradients (from FSDP2/TP) that need full_tensor() reduction
-    - Mixed scenarios with both DTensor and regular tensors
-    """
-    if max_norm <= 0:
-        return 0.0
-
-    params = [p for p in model.parameters() if p.grad is not None]
-    if not params:
-        return 0.0
-
-    # Non-distributed: use standard clipping
-    if not dist.is_initialized():
-        return float(torch.nn.utils.clip_grad_norm_(params, max_norm, norm_type))
-
-    grads = [p.grad for p in params]
-    device = grads[0].device
-
-    # Try standard API first (works for uniform DTensor)
-    try:
-        total_norm = torch.nn.utils.get_total_norm(grads, norm_type, False, False)
-        total_norm = _to_full_tensor(total_norm)
-    except Exception:
-        # Fallback for mixed DTensor/regular tensor scenarios
-        total_norm = _compute_mixed_norm(grads, device, norm_type)
-
-    total_norm = total_norm.to(device, non_blocking=True)
-    torch.nn.utils.clip_grads_with_norm_(params, max_norm, total_norm, False)
-    return float(total_norm)
-
-
-def _to_full_tensor(tensor: torch.Tensor) -> torch.Tensor:
-    """Convert DTensor to full tensor if needed."""
-    try:
-        from torch.distributed.tensor import DTensor
-
-        if isinstance(tensor, DTensor):
-            return tensor.full_tensor()
-    except ImportError:
-        pass
-    return tensor
-
-
-def _compute_mixed_norm(grads, device, norm_type):
-    """Compute norm for mixed DTensor/regular tensor gradients."""
-    try:
-        from torch.distributed.tensor import DTensor
-    except ImportError:
-        DTensor = None
-
-    # Group by mesh for correct reduction
-    mesh_groups, local = {}, []
-    for g in grads:
-        if DTensor and isinstance(g, DTensor):
-            key = id(g.device_mesh)
-            mesh_groups.setdefault(key, []).append(g)
-        else:
-            local.append(g)
-
-    is_inf = math.isinf(norm_type)
-    total = torch.zeros((), device=device)
-
-    for group in list(mesh_groups.values()) + ([local] if local else []):
-        norm = torch.nn.utils.get_total_norm(group, norm_type, False, False)
-        norm = _to_full_tensor(norm).to(device)
-        total = torch.maximum(total, norm) if is_inf else total + norm.pow(norm_type)
-
-    return total if is_inf else total.pow(1.0 / norm_type)
 
 
 # -----------------------------------------------------------------------------
@@ -99,10 +18,10 @@ def _compute_mixed_norm(grads, device, norm_type):
 def moving_average_fsdp(model: nn.Module, model_ema: nn.Module, unwrap_fn, beta: float = 0.992, device: str = "cpu"):
     """Update EMA model from FSDP-wrapped source model.
 
-    Efficient implementation that:
-    - Uses full_tensor() to handle sharded params
-    - Only updates trainable params that exist in both models
-    - Handles device placement correctly (uses EMA param's actual device)
+    Optimization strategies (ref: slime):
+    1. If beta == 1.0: Use state_dict() copy (no communication needed)
+    2. If EMA model is also FSDP-wrapped: Use state_dict() for sharded EMA
+    3. Otherwise: Use full_tensor() with async redistribution to reduce blocking
 
     Args:
         model: Source model (FSDP-wrapped actor)
@@ -111,14 +30,66 @@ def moving_average_fsdp(model: nn.Module, model_ema: nn.Module, unwrap_fn, beta:
         beta: EMA decay factor
         device: Fallback device (used only if EMA param device detection fails)
     """
+    from torch.distributed.fsdp import FSDPModule
+
     src = unwrap_fn(model)
     ema = unwrap_fn(model_ema)
+
+    # Strategy 1: If beta == 1.0, just copy state_dict (no EMA, just copy)
+    # This is the slime approach - most efficient, no all-gather needed
+    if beta == 1.0:
+        state = src.state_dict()
+        ema.load_state_dict(state)
+        return
+
+    # Strategy 2: If EMA model is also FSDP-wrapped, operate on sharded params
+    # This avoids full_tensor() all-gather by working with local shards only
+    ema_is_fsdp = isinstance(ema, FSDPModule)
+    if ema_is_fsdp:
+        # Both models are FSDP-wrapped, use state_dict approach
+        # Get sharded state dicts (no all-gather)
+        src_state = src.state_dict()
+        ema_state = ema.state_dict()
+
+        with torch.no_grad():
+            for name in src_state:
+                if name in ema_state:
+                    src_data = src_state[name]
+                    ema_data = ema_state[name]
+                    # EMA update on sharded data (no communication)
+                    ema_data.mul_(beta).add_(src_data.to(ema_data.device), alpha=1 - beta)
+
+        # Load updated state back
+        ema.load_state_dict(ema_state)
+        return
+
+    # Strategy 3: Fallback - EMA model is not FSDP-wrapped
+    # Use async redistribution to reduce blocking (ref: slime update_weight_utils.py)
+    try:
+        from torch.distributed.tensor import DTensor, Replicate
+    except ImportError:
+        DTensor = None
+
     ema_params = dict(ema.named_parameters())
 
     with torch.no_grad():
         for name, param in src.named_parameters():
             if param.requires_grad and name in ema_params:
-                data = param.full_tensor() if hasattr(param, "full_tensor") else param.data
+                # Use async redistribution instead of blocking full_tensor() (ref: slime)
+                if DTensor is not None and isinstance(param, DTensor):
+                    # Async version: redistribute with async_op=True, then wait
+                    data = param.redistribute(
+                        placements=[Replicate()] * param.device_mesh.ndim,
+                        async_op=True,
+                    ).to_local()
+                    # Wait for the async operation
+                    if hasattr(data, "wait"):
+                        data = data.wait()
+                elif hasattr(param, "full_tensor"):
+                    data = param.full_tensor()
+                else:
+                    data = param.data
+
                 target_device = ema_params[name].device
                 ema_params[name].data.mul_(beta).add_(data.to(target_device), alpha=1 - beta)
 
