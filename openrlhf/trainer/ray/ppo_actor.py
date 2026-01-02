@@ -325,11 +325,11 @@ class ActorPPOTrainer(ABC):
             use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
 
             def _process_bucket(bucket, is_last_bucket=False):
-                """Wait for async ops and broadcast a bucket of parameters."""
+                """Wait for async ops and broadcast a bucket of parameters using batch RPC."""
                 if not bucket:
                     return
 
-                # Wait for all async redistribute operations
+                # Wait for all async redistribute operations (all ranks participate in redistribute)
                 processed = []
                 for name, param_async in bucket:
                     if hasattr(param_async, "wait"):
@@ -338,31 +338,45 @@ class ActorPPOTrainer(ABC):
                         param_data = param_async
                     processed.append((name, param_data))
 
-                # Broadcast each parameter in the bucket
-                for name, param_data in processed:
-                    if torch.distributed.get_rank() == 0:
-                        refs = [
-                            engine.update_weight.remote(
-                                name,
-                                dtype=param_data.dtype,
-                                shape=param_data.shape,
-                                empty_cache=is_last_bucket,
-                            )
-                            for engine in self.vllm_engines
-                        ]
+                # Only rank 0 does RPC and broadcast (only rank 0 has _model_update_group)
+                if torch.distributed.get_rank() == 0:
+                    # Prepare batch metadata
+                    names = [name for name, _ in processed]
+                    dtypes = [p.dtype for _, p in processed]
+                    shapes = [p.shape for _, p in processed]
 
+                    # Single RPC per bucket (instead of per-param)
+                    refs = [
+                        engine.batch_update_weights.remote(
+                            names=names,
+                            dtypes=dtypes,
+                            shapes=shapes,
+                            empty_cache=is_last_bucket,
+                        )
+                        for engine in self.vllm_engines
+                    ]
+
+                    # Async broadcast all params in this bucket
+                    handles = []
+                    for name, param_data in processed:
                         if use_ray:
                             import ray.util.collective as collective
-
                             collective.broadcast(param_data, 0, group_name=self._model_update_group)
                         else:
-                            self._model_update_group.broadcast(
-                                param_data.contiguous(), src=0, stream=torch.cuda.current_stream()
+                            handle = self._model_update_group.broadcast(
+                                param_data.contiguous(), src=0, stream=torch.cuda.current_stream(), async_op=True
                             )
-                        ray.get(refs)
+                            handles.append(handle)
 
-                    # Sync for collective participation on other ranks
-                    torch.distributed.barrier()
+                    # Wait for all async broadcasts
+                    for handle in handles:
+                        handle.wait()
+
+                    # Wait for vLLM to finish loading
+                    ray.get(refs)
+
+                # Single barrier per bucket (instead of per-param)
+                torch.distributed.barrier()
 
                 # Clean up bucket memory
                 del processed

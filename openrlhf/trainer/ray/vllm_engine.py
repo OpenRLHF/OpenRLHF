@@ -79,6 +79,10 @@ class LLMRayActor(BaseLLMRayActor):
     def update_weight(self, name, dtype, shape, empty_cache=False):
         return self.llm.collective_rpc("update_weight", args=(name, dtype, shape, empty_cache))
 
+    def batch_update_weights(self, names, dtypes, shapes, empty_cache=False):
+        """Batch update multiple weights at once - reduces RPC overhead."""
+        return self.llm.collective_rpc("batch_update_weights", args=(names, dtypes, shapes, empty_cache))
+
     def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handles, empty_cache=False):
         return self.llm.collective_rpc("update_weight_cuda_ipc", args=(name, dtype, shape, ipc_handles, empty_cache))
 
