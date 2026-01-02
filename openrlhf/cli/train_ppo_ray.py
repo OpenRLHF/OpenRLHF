@@ -300,7 +300,7 @@ if __name__ == "__main__":
         "--deepspeed_enable_sleep",
         action="store_true",
         default=False,
-        help="Enable sleep mode for deepspeed when using --colocate_all_models",
+        help="Enable sleep mode for training models (DeepSpeed/FSDP2) when using --colocate_all_models",
     )
     parser.add_argument(
         "--ds_tensor_parallel_size",
