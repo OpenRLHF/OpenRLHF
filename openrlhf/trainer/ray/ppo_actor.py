@@ -658,6 +658,10 @@ class PolicyModelActor(BaseModelActor):
         # initial offload
         if strategy.args.deepspeed_enable_sleep:
             self.offload_states()
+            # For FSDP2: also offload model to CPU for first vLLM wake_up
+            is_fsdp2 = getattr(strategy.args, "dist_backend", "deepspeed") == "fsdp2"
+            if is_fsdp2:
+                self.offload_model()
 
         # configure Trainer
         self.trainer = ActorPPOTrainer(
@@ -733,6 +737,11 @@ class PolicyModelActor(BaseModelActor):
             self.strategy.offload_states(self.actor, self.actor_optim)
         else:
             offload_deepspeed_states(self.actor.model)
+
+    def offload_model(self):
+        """Offload model to CPU (for FSDP2 with vLLM sleep mode)."""
+        if hasattr(self.strategy, "offload_model"):
+            self.strategy.offload_model(self.actor)
 
     def save_checkpoint(self, tag, client_states):
         args = self.strategy.args
