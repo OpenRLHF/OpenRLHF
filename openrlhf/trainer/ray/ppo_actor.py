@@ -745,16 +745,16 @@ class PolicyModelActor(BaseModelActor):
 
     def collect_params_to_cpu(self):
         """Collect FSDP2 model params to CPU buffer (verl-style).
-        
+
         This collects full tensors from sharded DTensor params while model is on GPU,
         then stores them in a CPU buffer. This allows us to offload the model to CPU
         before waking up vLLM, avoiding memory contention.
         """
         from torch.distributed.tensor import DTensor, Replicate
-        
+
         model = self.actor.model
         self._cached_params = {}
-        
+
         for name, param in model.state_dict().items():
             if isinstance(param, DTensor):
                 # Redistribute to get full tensor (requires GPU)
@@ -766,45 +766,45 @@ class PolicyModelActor(BaseModelActor):
                 self._cached_params[name] = full_param.to("cpu", non_blocking=True)
             else:
                 self._cached_params[name] = param.to("cpu", non_blocking=True)
-        
+
         torch.cuda.synchronize()
 
     def broadcast_cached_params_to_vllm(self):
         """Broadcast cached params from CPU buffer to vLLM engines.
-        
+
         Called after collect_params_to_cpu() and after vLLM wake_up().
         The model should already be offloaded to CPU at this point.
         """
         if not hasattr(self, "_cached_params") or self._cached_params is None:
             raise RuntimeError("No cached params. Call collect_params_to_cpu() first.")
-        
+
         use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
         update_weight_buffer_size = getattr(self.strategy.args, "update_weight_buffer_size", 512 * 1024 * 1024)
-        
+
         # Process in buckets to avoid memory spikes
         bucket = []
         bucket_size = 0
         param_items = list(self._cached_params.items())
         num_params = len(param_items)
-        
+
         for idx, (name, param) in enumerate(param_items):
             param_size = param.numel() * param.element_size()
-            
+
             # Flush bucket if adding this param would exceed buffer size
             if bucket and bucket_size + param_size >= update_weight_buffer_size:
                 self._broadcast_param_bucket(bucket, is_last=False, use_ray=use_ray)
                 bucket = []
                 bucket_size = 0
-            
+
             # Move param to GPU for broadcast
             param_gpu = param.to(torch.cuda.current_device(), non_blocking=True)
             bucket.append((name, param_gpu))
             bucket_size += param_size
-        
+
         # Process remaining bucket
         if bucket:
             self._broadcast_param_bucket(bucket, is_last=True, use_ray=use_ray)
-        
+
         # Clear cache
         del self._cached_params
         self._cached_params = None
@@ -814,10 +814,10 @@ class PolicyModelActor(BaseModelActor):
         """Broadcast a bucket of parameters to vLLM engines."""
         if not bucket:
             return
-        
+
         # Wait for all async GPU transfers
         torch.cuda.synchronize()
-        
+
         for idx, (name, param) in enumerate(bucket):
             if torch.distributed.get_rank() == 0:
                 refs = [
@@ -829,18 +829,19 @@ class PolicyModelActor(BaseModelActor):
                     )
                     for engine in self.vllm_engines
                 ]
-                
+
                 if use_ray:
                     import ray.util.collective as collective
+
                     collective.broadcast(param.data, 0, group_name=self._model_update_group)
                 else:
                     self._model_update_group.broadcast(param.data, src=0, stream=torch.cuda.current_stream())
-                
+
                 ray.get(refs)
-        
+
         # Single barrier per bucket
         torch.distributed.barrier()
-        
+
         # Clean up
         del bucket
         torch.cuda.empty_cache()
