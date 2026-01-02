@@ -324,7 +324,7 @@ class ActorPPOTrainer(ABC):
             update_weight_buffer_size = getattr(self.strategy.args, "update_weight_buffer_size", 512 * 1024 * 1024)
             use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
 
-            def _process_bucket(bucket, is_last_bucket=False):
+            def _process_bucket_broadcast(bucket, is_last_bucket=False):
                 """Wait for async ops and broadcast a bucket of parameters using batch RPC."""
                 if not bucket:
                     return
@@ -382,6 +382,56 @@ class ActorPPOTrainer(ABC):
                 # Clean up bucket memory
                 del processed
                 torch.cuda.empty_cache()
+
+            def _process_bucket_cuda_ipc(bucket, is_last_bucket=False):
+                """Process bucket using CUDA IPC for collocated scenario."""
+                from torch.multiprocessing.reductions import reduce_tensor
+
+                if not bucket:
+                    return
+
+                # Wait for all async redistribute operations
+                processed = []
+                for name, param_async in bucket:
+                    if hasattr(param_async, "wait"):
+                        param_data = param_async.wait()
+                    else:
+                        param_data = param_async
+                    processed.append((name, param_data))
+
+                # Process each parameter with CUDA IPC
+                for idx, (name, param_data) in enumerate(processed):
+                    weight = param_data.data.clone()
+                    ipc_handle = reduce_tensor(weight)
+
+                    ipc_handle = {get_physical_gpu_id(): ipc_handle}
+                    ipc_handle_list = [None] * torch.distributed.get_world_size()
+                    torch.distributed.all_gather_object(ipc_handle_list, ipc_handle)
+
+                    if torch.distributed.get_rank() == 0:
+                        ipc_handles = {}
+                        for d in ipc_handle_list:
+                            ipc_handles.update(d)
+
+                        refs = [
+                            engine.update_weight_cuda_ipc.remote(
+                                name,
+                                dtype=param_data.dtype,
+                                shape=param_data.shape,
+                                ipc_handles=ipc_handles,
+                                empty_cache=(is_last_bucket and idx == len(processed) - 1),
+                            )
+                            for engine in self.vllm_engines
+                        ]
+                        ray.get(refs)
+                    torch_dist_barrier_and_cuda_sync()
+
+                # Clean up bucket memory
+                del processed
+                torch.cuda.empty_cache()
+
+            # Choose processing function based on CUDA IPC mode
+            _process_bucket = _process_bucket_cuda_ipc if self.use_cuda_ipc else _process_bucket_broadcast
 
             # Collect parameters into buckets
             bucket = []
