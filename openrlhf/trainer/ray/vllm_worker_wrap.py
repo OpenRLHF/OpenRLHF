@@ -48,9 +48,11 @@ class WorkerWrap:
         self.model_runner.model.load_weights(weights=[(name, weight)])
 
         del weight
-        # TODO: should we empty cache if all weights have updated?
-        # if empty_cache:
-        #     torch.cuda.empty_cache()
+        # Important for vLLM sleep/wake-up: release PyTorch caching allocator blocks so
+        # vLLM's CuMemAllocator can reserve large KV-cache regions without OOM.
+        if empty_cache:
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
 
     def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handles=None, empty_cache=False):
         import torch
@@ -71,3 +73,5 @@ class WorkerWrap:
         weight = func(*list_args)
         self.model_runner.model.load_weights(weights=[(name, weight)])
         torch.cuda.synchronize()
+        if empty_cache:
+            torch.cuda.empty_cache()

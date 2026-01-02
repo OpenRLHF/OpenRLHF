@@ -264,13 +264,23 @@ class SamplesGenerator:
         if self.strategy.args.vllm_enable_sleep:
             from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 
-            batch_vllm_engine_call(self.vllm_engines, "wake_up")
+            # If the previous step only woke up "weights" for weight sync,
+            # vLLM is left in a partial-sleep state where only "kv_cache" is asleep.
+            # In that case, wake up only "kv_cache" to avoid double-mapping weights
+            # (which can trigger CuMemAllocator "invalid argument").
+            tags = ["kv_cache"] if getattr(self.strategy.args, "_vllm_partial_wakeup", False) else None
+            if tags is None:
+                batch_vllm_engine_call(self.vllm_engines, "wake_up")
+            else:
+                batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=tags)
+            setattr(self.strategy.args, "_vllm_partial_wakeup", False)
 
         rollout_samples = self._generate_vllm(all_prompts, all_labels, **generate_kwargs)
 
         # vLLM offload when vllm_enable_sleep
         if self.strategy.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "sleep")
+            setattr(self.strategy.args, "_vllm_partial_wakeup", False)
 
         return rollout_samples
 
