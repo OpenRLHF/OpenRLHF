@@ -182,21 +182,21 @@ class BasePPOTrainer(ABC):
             # The key insight from slime: staged wake_up to minimize memory usage!
             # vLLM has two memory regions: weights (~14 GiB) and KV cache (~46 GiB)
             # We only need to wake up weights for the update, not KV cache.
-            
+
             # Step 1: Offload FSDP2 model to CPU FIRST
             ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
-            
+
             # Step 2: Wake up ONLY vLLM weights (NOT KV cache!)
             # This saves ~46 GiB of GPU memory for redistribute operations
             batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["weights"])
-            
+
             # Step 3: Broadcast weights (params moved from CPU to GPU one by one)
             ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
-            
+
             # Step 4: Sleep vLLM (vLLM sleep doesn't support tags, so sleep everything)
             # Note: vLLM sleep() only supports level parameter, not tags
             batch_vllm_engine_call(self.vllm_engines, "sleep")
-            
+
             # Tell generate_samples to wake up everything (since we slept everything)
             # The next generate will do a full wake_up
             setattr(self.strategy.args, "_vllm_partial_wakeup", False)
