@@ -131,7 +131,7 @@ def moving_average_fsdp(model: nn.Module, model_ema: nn.Module, unwrap_fn, beta:
 @torch.no_grad()
 def move_optimizer_state(optimizer, device: torch.device):
     """Move all optimizer state tensors to specified device.
-    
+
     This properly handles all tensor types in optimizer state,
     including nested lists/tuples (e.g., for AdamW's exp_avg, exp_avg_sq).
     """
@@ -148,11 +148,8 @@ def move_optimizer_state(optimizer, device: torch.device):
                     state[k] = v.to(device, non_blocking=True)
                 elif isinstance(v, (list, tuple)):
                     # Handle nested tensors in lists/tuples
-                    state[k] = type(v)(
-                        t.to(device, non_blocking=True) if torch.is_tensor(t) else t 
-                        for t in v
-                    )
-    
+                    state[k] = type(v)(t.to(device, non_blocking=True) if torch.is_tensor(t) else t for t in v)
+
     # Ensure all transfers complete before proceeding
     if device.type == "cuda":
         torch.cuda.synchronize()
@@ -181,11 +178,11 @@ def offload_fsdp_model_to_cpu(model: nn.Module, empty_cache: bool = True):
     """
     # Move model to CPU
     model.cpu()
-    
+
     # CRITICAL: Synchronize to ensure all GPU->CPU transfers complete
     # before we try to free GPU memory
     torch.cuda.synchronize()
-    
+
     if empty_cache:
         torch.cuda.empty_cache()
 
