@@ -159,7 +159,7 @@ class BasePPOTrainer(ABC):
 
     def _broadcast_to_vllm(self, is_fsdp2: bool = False):
         """Broadcast actor weights to vLLM engines.
-        
+
         For FSDP2 with vllm_enable_sleep, we follow verl's approach:
         1. Collect params (model on GPU)
         2. Offload model to CPU
@@ -174,19 +174,19 @@ class BasePPOTrainer(ABC):
             # === FSDP2 path (verl-style) ===
             # Step 1: Collect params into CPU buffer (model still on GPU)
             ray.get(self.actor_model_group.async_run_method(method_name="collect_params_to_cpu"))
-            
+
             # Step 2: Offload model to CPU to free GPU memory
             ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
-            
+
             # Step 3: Now wake up vLLM weights (GPU has space since model is on CPU)
             batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["weights"])
-            
+
             # Step 4: Broadcast weights from CPU buffer to vLLM
             ray.get(self.actor_model_group.async_run_method(method_name="broadcast_cached_params_to_vllm"))
-            
+
             # Step 5: Sleep vLLM weights to free GPU memory for kv_cache
             batch_vllm_engine_call(self.vllm_engines, "sleep", tags=["weights"])
-            
+
             # Clear partial wakeup flag - next generate_samples should wake up full vLLM
             setattr(self.strategy.args, "_vllm_partial_wakeup", False)
         else:
