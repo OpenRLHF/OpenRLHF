@@ -317,12 +317,8 @@ class ActorPPOTrainer(ABC):
         count, num_params = 0, len(list(model.named_parameters()))
 
         # Wrapper prefixes that may be added by torch.compile, DDP, FSDP, etc.
-        # Reuse the same list from fsdp_strategy.py for consistency.
         _WRAPPER_PREFIXES = (
             "_orig_mod.",  # torch.compile / OptimizedModule
-            "module.",  # DDP
-            "_fsdp_wrapped_module.",  # FSDP v1
-            "_orig_module.",  # FSDP v1 / wrapper
             "_checkpoint_wrapped_module.",  # PyTorch checkpoint_wrapper
         )
 
@@ -332,127 +328,166 @@ class ActorPPOTrainer(ABC):
                 name = name.replace(prefix, "")
             return name
 
-        def _get_full_tensor(param):
-            """Return full tensor for FSDP2 DTensor or regular param."""
-            if is_fsdp2:
-                if hasattr(param, "full_tensor"):
-                    # ensure on CUDA before materializing
-                    if param.device.type == "cpu":
-                        param = param.to(torch.cuda.current_device())
-                    return param.full_tensor().data
-                return param.data if param.device.type != "cpu" else param.data.to(torch.cuda.current_device())
-            return param.data
+        # --- FSDP2: Slime-style bucketed async weight sync ---
+        if is_fsdp2:
+            from torch.distributed.tensor import DTensor, Replicate
 
-        def _get_param_shape(param):
-            if is_fsdp2:
-                return param.shape  # DTensor reports global shape
-            return param.shape if getattr(self.strategy.args, "zero_stage", 2) != 3 else param.ds_shape
-
-        def _broadcast_param(param, clean_name, count, num_params):
+            # Buffer size for bucketing (512 MB default, can be configured)
+            update_weight_buffer_size = getattr(
+                self.strategy.args, "update_weight_buffer_size", 512 * 1024 * 1024
+            )
             use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
 
-            # FSDP2 requires all ranks to participate in full_tensor()
-            full_data = None
-            if is_fsdp2:
-                full_data = _get_full_tensor(param)
+            def _process_bucket(bucket, is_last_bucket=False):
+                """Wait for async ops and broadcast a bucket of parameters."""
+                if not bucket:
+                    return
 
-            # Fire all vllm engines for broadcast
-            if torch.distributed.get_rank() == 0:
-                # Get proper shape and full tensor data
-                shape = _get_param_shape(param)
-                # ZeRO-3 or others don't need collective participation here
-                if not is_fsdp2:
-                    full_data = _get_full_tensor(param)
+                # Wait for all async redistribute operations
+                processed = []
+                for name, param_async in bucket:
+                    if hasattr(param_async, "wait"):
+                        param_data = param_async.wait()
+                    else:
+                        param_data = param_async
+                    processed.append((name, param_data))
 
-                refs = [
-                    engine.update_weight.remote(
-                        clean_name, dtype=param.dtype, shape=shape, empty_cache=count == num_params
-                    )
-                    for engine in self.vllm_engines
-                ]
+                # Broadcast each parameter in the bucket
+                for name, param_data in processed:
+                    clean_name = _clean_param_name(name)
 
-                if use_ray:
-                    import ray.util.collective as collective
+                    if torch.distributed.get_rank() == 0:
+                        refs = [
+                            engine.update_weight.remote(
+                                clean_name,
+                                dtype=param_data.dtype,
+                                shape=param_data.shape,
+                                empty_cache=is_last_bucket,
+                            )
+                            for engine in self.vllm_engines
+                        ]
 
-                    collective.broadcast(full_data, 0, group_name=self._model_update_group)
+                        if use_ray:
+                            import ray.util.collective as collective
+
+                            collective.broadcast(param_data, 0, group_name=self._model_update_group)
+                        else:
+                            self._model_update_group.broadcast(
+                                param_data.contiguous(), src=0, stream=torch.cuda.current_stream()
+                            )
+                        ray.get(refs)
+
+                    # Sync for collective participation on other ranks
+                    torch.distributed.barrier()
+
+                # Clean up bucket memory
+                del processed
+                torch.cuda.empty_cache()
+
+            # Collect parameters into buckets
+            bucket = []
+            bucket_size = 0
+            param_items = list(model.state_dict().items())
+            num_params = len(param_items)
+
+            for idx, (name, param) in enumerate(param_items):
+                param_size = param.numel() * param.element_size()
+
+                # Flush bucket if adding this param would exceed buffer size
+                if bucket and bucket_size + param_size >= update_weight_buffer_size:
+                    _process_bucket(bucket, is_last_bucket=False)
+                    bucket = []
+                    bucket_size = 0
+
+                # Move to CUDA if needed
+                if param.device.type == "cpu":
+                    param = param.to(torch.cuda.current_device())
+
+                # For DTensor: use async redistribute (Slime's key optimization)
+                if isinstance(param, DTensor):
+                    param_async = param.redistribute(
+                        placements=[Replicate()] * param.device_mesh.ndim,
+                        async_op=True,  # Async to allow overlap
+                    ).to_local()
+                    bucket.append((name, param_async))
                 else:
-                    self._model_update_group.broadcast(full_data, src=0, stream=torch.cuda.current_stream())
-                ray.get(refs)
+                    bucket.append((name, param))
 
-            # FSDP2 fix: explicitly release full_tensor memory to avoid OOM during vLLM wake_up
-            if is_fsdp2:
-                del full_data
-                # Periodically empty cache to prevent memory accumulation
-                if count % 50 == 0 or count == num_params:
-                    torch.cuda.empty_cache()
+                bucket_size += param_size
 
-        def _handle_cuda_ipc(param, clean_name, count, num_params):
-            from torch.multiprocessing.reductions import reduce_tensor
+            # Process remaining bucket
+            if bucket:
+                _process_bucket(bucket, is_last_bucket=True)
 
-            # Get full tensor for FSDP2 or regular data
-            full_data = _get_full_tensor(param)
-            # detach() is required to avoid "Cowardly refusing to serialize non-leaf tensor"
-            weight = full_data.clone().detach()
-            ipc_handle = reduce_tensor(weight)
+        # --- DeepSpeed path (original code) ---
+        else:
+            def _broadcast_param(param, count, num_params):
+                use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
+                # Fire all vllm engines for broadcast
+                if torch.distributed.get_rank() == 0:
+                    shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
+                    refs = [
+                        engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
+                        for engine in self.vllm_engines
+                    ]
 
-            ipc_handle = {get_physical_gpu_id(): ipc_handle}
-            ipc_handle_list = [None] * torch.distributed.get_world_size()
-            torch.distributed.all_gather_object(ipc_handle_list, ipc_handle)
+                    if use_ray:
+                        import ray.util.collective as collective
 
-            if torch.distributed.get_rank() == 0:
-                ipc_handles = {}
-                for d in ipc_handle_list:
-                    ipc_handles.update(d)
+                        collective.broadcast(param.data, 0, group_name=self._model_update_group)
+                    else:
+                        self._model_update_group.broadcast(param.data, src=0, stream=torch.cuda.current_stream())
+                    ray.get(refs)
 
-                shape = _get_param_shape(param)
-                refs = [
-                    engine.update_weight_cuda_ipc.remote(
-                        clean_name,
-                        dtype=param.dtype,
-                        shape=shape,
-                        ipc_handles=ipc_handles,
-                        empty_cache=count == num_params,
-                    )
-                    for engine in self.vllm_engines
-                ]
-                ray.get(refs)
-            torch_dist_barrier_and_cuda_sync()
+            def _handle_cuda_ipc(param, count, num_params):
+                from torch.multiprocessing.reductions import reduce_tensor
 
-            # FSDP2 fix: explicitly release temporary tensors to avoid OOM during vLLM wake_up
-            if is_fsdp2:
-                del full_data, weight
-                # Periodically empty cache to prevent memory accumulation
-                if count % 50 == 0 or count == num_params:
-                    torch.cuda.empty_cache()
+                weight = param.data.clone()
+                ipc_handle = reduce_tensor(weight)
 
-        for name, param in model.named_parameters():
-            count += 1  # empty_cache at last param
-            # Clean wrapper prefixes (e.g., _orig_mod. from torch.compile)
-            clean_name = _clean_param_name(name)
+                ipc_handle = {get_physical_gpu_id(): ipc_handle}
+                ipc_handle_list = [None] * torch.distributed.get_world_size()
+                torch.distributed.all_gather_object(ipc_handle_list, ipc_handle)
 
-            # broadcast
-            if not self.use_cuda_ipc:
-                if is_fsdp2:
-                    _broadcast_param(param, clean_name, count, num_params)
-                else:
+                if torch.distributed.get_rank() == 0:
+                    ipc_handles = {}
+                    for d in ipc_handle_list:
+                        ipc_handles.update(d)
+
+                    shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
+                    refs = [
+                        engine.update_weight_cuda_ipc.remote(
+                            name,
+                            dtype=param.dtype,
+                            shape=shape,
+                            ipc_handles=ipc_handles,
+                            empty_cache=count == num_params,
+                        )
+                        for engine in self.vllm_engines
+                    ]
+                    ray.get(refs)
+                torch_dist_barrier_and_cuda_sync()
+
+            for name, param in model.named_parameters():
+                count += 1  # empty_cache at last param
+
+                # broadcast
+                if not self.use_cuda_ipc:
                     # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
                     if self.strategy.args.ds_tensor_parallel_size > 1:
                         with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
-                            _broadcast_param(param, clean_name, count, num_params)
+                            _broadcast_param(param, count, num_params)
                     else:
                         with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                            _broadcast_param(param, clean_name, count, num_params)
-            # CUDA IPC
-            else:
-                if is_fsdp2:
-                    _handle_cuda_ipc(param, clean_name, count, num_params)
+                            _broadcast_param(param, count, num_params)
+                # CUDA IPC
                 else:
                     if self.strategy.args.ds_tensor_parallel_size > 1:
                         with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
-                            _handle_cuda_ipc(param, clean_name, count, num_params)
+                            _handle_cuda_ipc(param, count, num_params)
                     else:
                         with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                            _handle_cuda_ipc(param, clean_name, count, num_params)
+                            _handle_cuda_ipc(param, count, num_params)
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)
