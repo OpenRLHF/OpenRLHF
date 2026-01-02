@@ -149,11 +149,7 @@ class BasePPOTrainer(ABC):
 
             # 4. broadcast weights to vllm engines
             if self.vllm_engines is not None:
-                self._broadcast_to_vllm()
-
-            # For FSDP2: offload model to CPU after weight sync, so vLLM can wake up kv_cache
-            if self.strategy.args.deepspeed_enable_sleep and is_fsdp2:
-                ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
+                self._broadcast_to_vllm(is_fsdp2=is_fsdp2)
 
         # 5. wait remote critic model training done
         if self.critic_model_group and not self.strategy.args.colocate_all_models:
@@ -161,34 +157,46 @@ class BasePPOTrainer(ABC):
 
         return status
 
-    def _broadcast_to_vllm(self):
-        is_fsdp2 = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2"
+    def _broadcast_to_vllm(self, is_fsdp2: bool = False):
+        """Broadcast actor weights to vLLM engines.
+        
+        For FSDP2 with vllm_enable_sleep, we follow verl's approach:
+        1. Collect params (model on GPU)
+        2. Offload model to CPU
+        3. Wake up vLLM weights (now GPU has space)
+        4. Broadcast weights
+        5. Sleep vLLM weights
+        6. In generate_samples, wake up full vLLM (weights + kv_cache)
+        """
+        from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 
-        if self.strategy.args.vllm_enable_sleep:
-            from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
-
-            if is_fsdp2:
-                # For FSDP2 with vllm_enable_sleep + deepspeed_enable_sleep:
-                # 1. FSDP2 model is still on GPU (only optimizer offloaded in offload_states)
-                # 2. Wake up vLLM weights for weight sync
-                # 3. After broadcast, offload_model() will move model to CPU
-                # 4. This allows vLLM to have enough GPU memory for kv_cache wake_up later
-                batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["weights"])
-            else:
-                # DeepSpeed path: model is still on GPU (just optimizer offloaded)
+        if is_fsdp2 and self.strategy.args.vllm_enable_sleep:
+            # === FSDP2 path (verl-style) ===
+            # Step 1: Collect params into CPU buffer (model still on GPU)
+            ray.get(self.actor_model_group.async_run_method(method_name="collect_params_to_cpu"))
+            
+            # Step 2: Offload model to CPU to free GPU memory
+            ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
+            
+            # Step 3: Now wake up vLLM weights (GPU has space since model is on CPU)
+            batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["weights"])
+            
+            # Step 4: Broadcast weights from CPU buffer to vLLM
+            ray.get(self.actor_model_group.async_run_method(method_name="broadcast_cached_params_to_vllm"))
+            
+            # Step 5: Sleep vLLM weights to free GPU memory for kv_cache
+            batch_vllm_engine_call(self.vllm_engines, "sleep", tags=["weights"])
+            
+            # Clear partial wakeup flag - next generate_samples should wake up full vLLM
+            setattr(self.strategy.args, "_vllm_partial_wakeup", False)
+        else:
+            # === DeepSpeed path (original) ===
+            if self.strategy.args.vllm_enable_sleep:
                 batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
-        ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
+            ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
 
-        if self.strategy.args.vllm_enable_sleep:
-            # If we only woke up "weights", vLLM executor is still considered sleeping
-            # (the "kv_cache" tag is still asleep). Calling sleep again would be a no-op
-            # and would leave weights mapped, which can break the next wake_up(None)
-            # with CUDA "invalid argument" (double cuMemMap). We keep the executor in
-            # "partial wake" state and only wake "kv_cache" right before generation.
-            if is_fsdp2:
-                setattr(self.strategy.args, "_vllm_partial_wakeup", True)
-            else:
+            if self.strategy.args.vllm_enable_sleep:
                 batch_vllm_engine_call(self.vllm_engines, "sleep")
                 setattr(self.strategy.args, "_vllm_partial_wakeup", False)
 
