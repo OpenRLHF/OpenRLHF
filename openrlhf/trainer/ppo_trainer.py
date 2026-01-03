@@ -167,7 +167,7 @@ class BasePPOTrainer(ABC):
         1. Wake up vLLM
         2. Broadcast weights (model stays on GPU in sharded state)
         3. Sleep vLLM (free GPU memory for next training iteration)
-        
+
         Note: FSDP2 sharded params are small (~1.75 GiB per GPU for 7B model with 8 GPUs),
         so both vLLM + sharded model + redistribute temp memory fits in GPU.
         """
@@ -178,7 +178,7 @@ class BasePPOTrainer(ABC):
             # Keep model on GPU (sharded state), only optimizer states are offloaded.
             # FSDP2 sharded params are small (~1.75 GiB per GPU for 7B model with 8 GPUs).
             # vLLM wake_up + sharded model + redistribute temp memory fits in GPU.
-            
+
             # Wake up vLLM *weights only* for weight sync.
             # This avoids allocating KV cache during weight update and prevents OOM in colocated training.
             # See vLLM sleep mode docs: wake_up(tags=["weights"]) then wake_up(tags=["kv_cache","weights"]) before generation.
@@ -487,12 +487,7 @@ class PPOTrainer(BasePPOTrainer):
 
         # For colocated vLLM + FSDP2 + sleep mode, offload actor params before the
         # first rollout so vLLM can wake up KV cache without OOM (verl-style).
-        if (
-            is_fsdp2
-            and self.vllm_engines is not None
-            and args.vllm_enable_sleep
-            and args.deepspeed_enable_sleep
-        ):
+        if is_fsdp2 and self.vllm_engines is not None and args.vllm_enable_sleep and args.deepspeed_enable_sleep:
             ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
 
         # Restore step and start_epoch
