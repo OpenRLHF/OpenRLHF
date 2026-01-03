@@ -86,16 +86,28 @@ def load_hf_model(
         path: Path to saved weights (e.g., pytorch_model.bin)
         key_replace_fn: Optional function to transform state dict keys
     """
-    state = torch.load(path, map_location=map_location)
-    if key_replace_fn:
-        state = key_replace_fn(state)
+    # Avoid loading full weights on every rank in FSDP2; let rank 0 load
+    # and broadcast to others (verl-style).
+    if dist.is_initialized() and dist.get_rank() != 0:
+        state = {}
+    else:
+        state = torch.load(path, map_location=map_location)
+        if key_replace_fn:
+            state = key_replace_fn(state)
 
     wrapped = unwrap_fn(model)
     if not isinstance(wrapped, FSDPModule):
         raise RuntimeError("Model not FSDP-wrapped. Call strategy.prepare() first.")
 
     set_model_state_dict(
-        wrapped, state, options=StateDictOptions(full_state_dict=True, cpu_offload=True, strict=strict)
+        wrapped,
+        state,
+        options=StateDictOptions(
+            full_state_dict=True,
+            cpu_offload=True,
+            strict=strict,
+            broadcast_from_rank0=dist.is_initialized(),
+        ),
     )
 
 
@@ -164,6 +176,7 @@ def save_distributed_checkpoint(
     max_num: int = 3,
     max_mem: int = 1000,
     save_latest: bool = True,
+    process_group: Optional[dist.ProcessGroup] = None,
 ):
     """Save FSDP2 distributed checkpoint.
 
@@ -188,7 +201,7 @@ def save_distributed_checkpoint(
     os.makedirs(save_dir, exist_ok=True)
     if is_rank_0:
         _cleanup_old_checkpoints(save_dir, max_num, max_mem)
-    dist.barrier()
+    dist.barrier(group=process_group) if process_group is not None else dist.barrier()
 
     fsdp_model = unwrap_fn(model)
     ckpt_path = os.path.join(save_dir, tag)
@@ -207,19 +220,23 @@ def save_distributed_checkpoint(
 
     if is_rank_0:
         os.makedirs(ckpt_path, exist_ok=True)
-    dist.barrier()
+    dist.barrier(group=process_group) if process_group is not None else dist.barrier()
 
     with warnings.catch_warnings():
         # `warnings.filterwarnings` expects `category` to be a Warning subclass,
         # not a tuple (Python 3.12 asserts this).
         warnings.filterwarnings("ignore", category=FutureWarning)
         warnings.filterwarnings("ignore", category=UserWarning)
-        dcp.save({"app": AppState()}, checkpoint_id=ckpt_path)
+        dcp.save({"app": AppState()}, checkpoint_id=ckpt_path, process_group=process_group)
 
-    dist.barrier()
+    dist.barrier(group=process_group) if process_group is not None else dist.barrier()
 
     # Update 'latest' marker
     if save_latest and is_rank_0:
+        # Mark checkpoint as complete to avoid picking up partial directories
+        # when resolving checkpoints by mtime (prime-rl style).
+        with open(os.path.join(ckpt_path, "STABLE"), "w") as f:
+            f.write("ok\n")
         with open(os.path.join(save_dir, "latest"), "w") as f:
             f.write(tag)
 
@@ -235,6 +252,7 @@ def load_distributed_checkpoint(
     load_lr_scheduler_states: bool = True,
     load_module_strict: bool = True,
     load_module_only: bool = False,
+    process_group: Optional[dist.ProcessGroup] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """Load FSDP2 distributed checkpoint.
 
@@ -264,6 +282,10 @@ def load_distributed_checkpoint(
                 [d for d in os.listdir(load_dir) if os.path.isdir(os.path.join(load_dir, d)) and d != "latest"],
                 key=lambda d: os.path.getmtime(os.path.join(load_dir, d)),
             )
+            # Prefer completed checkpoints if STABLE markers exist.
+            stable_subdirs = [d for d in subdirs if os.path.isfile(os.path.join(load_dir, d, "STABLE"))]
+            if stable_subdirs:
+                subdirs = stable_subdirs
             resolved = subdirs[-1] if subdirs else None
 
     if not resolved:
@@ -301,7 +323,7 @@ def load_distributed_checkpoint(
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=FutureWarning)
         warnings.filterwarnings("ignore", category=UserWarning)
-        dcp.load({"app": app}, checkpoint_id=ckpt_path)
+        dcp.load({"app": app}, checkpoint_id=ckpt_path, process_group=process_group)
 
     return resolved, app.client_state
 

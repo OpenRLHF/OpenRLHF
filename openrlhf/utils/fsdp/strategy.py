@@ -428,10 +428,21 @@ class FSDP2Strategy(ABC):
         load_hf_model(model, path, self._unwrap_model, **kwargs)
 
     def save_ckpt(self, model, save_dir, tag=None, **kwargs):
-        save_distributed_checkpoint(model, save_dir, tag, self._unwrap_model, self.is_rank_0(), **kwargs)
+        # Use a Gloo process group for checkpoint collectives. This is more
+        # robust when parameters or optimizer states may live on CPU (e.g.,
+        # CPUOffloadPolicy / manual offload), since NCCL requires CUDA tensors.
+        save_distributed_checkpoint(
+            model,
+            save_dir,
+            tag,
+            self._unwrap_model,
+            self.is_rank_0(),
+            process_group=self._gloo_group,
+            **kwargs,
+        )
 
     def load_ckpt(self, model, load_dir, **kwargs):
-        return load_distributed_checkpoint(model, load_dir, self._unwrap_model, **kwargs)
+        return load_distributed_checkpoint(model, load_dir, self._unwrap_model, process_group=self._gloo_group, **kwargs)
 
     # -------------------------------------------------------------------------
     # Communication
