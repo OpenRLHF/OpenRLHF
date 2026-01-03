@@ -442,7 +442,9 @@ class FSDP2Strategy(ABC):
         )
 
     def load_ckpt(self, model, load_dir, **kwargs):
-        return load_distributed_checkpoint(model, load_dir, self._unwrap_model, process_group=self._gloo_group, **kwargs)
+        return load_distributed_checkpoint(
+            model, load_dir, self._unwrap_model, process_group=self._gloo_group, **kwargs
+        )
 
     # -------------------------------------------------------------------------
     # Communication
