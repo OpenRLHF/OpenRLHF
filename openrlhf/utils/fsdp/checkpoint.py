@@ -210,7 +210,10 @@ def save_distributed_checkpoint(
     dist.barrier()
 
     with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=(FutureWarning, UserWarning))
+        # `warnings.filterwarnings` expects `category` to be a Warning subclass,
+        # not a tuple (Python 3.12 asserts this).
+        warnings.filterwarnings("ignore", category=FutureWarning)
+        warnings.filterwarnings("ignore", category=UserWarning)
         dcp.save({"app": AppState()}, checkpoint_id=ckpt_path)
 
     dist.barrier()
@@ -296,7 +299,8 @@ def load_distributed_checkpoint(
 
     app = AppState()
     with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=(FutureWarning, UserWarning))
+        warnings.filterwarnings("ignore", category=FutureWarning)
+        warnings.filterwarnings("ignore", category=UserWarning)
         dcp.load({"app": app}, checkpoint_id=ckpt_path)
 
     return resolved, app.client_state
