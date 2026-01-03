@@ -52,13 +52,7 @@ class LLMRayActorAsync(BaseLLMRayActor):
         await self.llm.sleep(level=level)
 
     async def wake_up(self, tags=None):
-        # vLLM sleep mode supports waking up specific components (e.g., weights, kv_cache).
-        # Keep this API aligned with the sync engine wrapper.
-        try:
-            await self.llm.wake_up(tags=tags)
-        except TypeError:
-            # Backward compat for older vLLM that doesn't accept `tags`.
-            await self.llm.wake_up()
+        await self.llm.wake_up(tags=tags)
 
     async def add_requests(self, sampling_params, prompts, labels, max_length, hf_tokenizer=None, max_steps=10000):
         """
