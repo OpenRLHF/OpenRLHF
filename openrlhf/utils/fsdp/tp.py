@@ -100,13 +100,14 @@ class ColwiseParallelLora(ColwiseParallel):
                     _distribute_param(m, "bias", device_mesh, [Shard(0)], src_data_rank=self.src_data_rank)
         if lora_a:
             for m in _iter_modules(lora_a):
-                # Keep LoRA-A replicated (avoids needing rank-dim divisibility) and ensure its output is replicated.
-                _distribute_param(m, "weight", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
+                # Shard LoRA-A like base weight (Automodel style) - requires rank divisible by TP size
+                _distribute_param(m, "weight", device_mesh, [Shard(0)], src_data_rank=self.src_data_rank)
                 if getattr(m, "bias", None) is not None:
-                    _distribute_param(m, "bias", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
+                    _distribute_param(m, "bias", device_mesh, [Shard(0)], src_data_rank=self.src_data_rank)
+                # All-gather LoRA-A output so LoRA-B (also sharded) gets replicated input
                 m.register_forward_hook(
-                    lambda mod, inp, out: (
-                        out.redistribute(placements=[Replicate()]) if isinstance(out, DTensor) else out
+                    lambda mod, inp, out, mesh=device_mesh: (
+                        out.redistribute(mesh, [Replicate()]) if isinstance(out, DTensor) else out
                     )
                 )
 
@@ -159,8 +160,8 @@ class RowwiseParallelLora(RowwiseParallel):
                 if getattr(m, "bias", None) is not None:
                     _distribute_param(m, "bias", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
                 m.register_forward_hook(
-                    lambda mod, inp, out: (
-                        out.redistribute(placements=[Replicate()]) if isinstance(out, DTensor) else out
+                    lambda mod, inp, out, mesh=device_mesh: (
+                        out.redistribute(mesh, [Replicate()]) if isinstance(out, DTensor) else out
                     )
                 )
         if lora_b:
