@@ -339,7 +339,7 @@ def validate_tp_mesh(model, tp_mesh):
 
 def apply_tensor_parallel(model, tp_mesh, tp_plan=None, sequence_parallel=False, validate=True, ring_attn_group=None):
     """Apply Tensor Parallelism to model.
-    
+
     Args:
         model: Model to parallelize
         tp_mesh: DeviceMesh for TP
@@ -372,12 +372,12 @@ def apply_tensor_parallel(model, tp_mesh, tp_plan=None, sequence_parallel=False,
     # wildcard matching (e.g., 'model.layers.*.self_attn.q_proj').
     tp_plan = {k: _to_lora(v) for k, v in tp_plan.items()}
     parallelize_module(tp_root, tp_mesh, tp_plan)
-    
+
     # Register hooks for Ring Attention (CP) compatibility
     if ring_attn_group is not None:
         _register_attention_hooks(tp_root, tp_mesh)
         logger.info(f"Registered DTensor conversion hooks for TP+CP compatibility")
-    
+
     return model
 
 
@@ -388,21 +388,21 @@ def apply_tensor_parallel(model, tp_mesh, tp_plan=None, sequence_parallel=False,
 
 class AttentionDTensorHook:
     """Hook to convert DTensor to local tensor before attention for Ring Attention compatibility.
-    
+
     Ring Attention (ring_flash_attn) requires regular Tensors, not DTensor.
     This hook converts DTensor inputs to local tensors before attention,
     and converts the output back to DTensor afterward.
     """
-    
+
     def __init__(self, tp_mesh):
         self.tp_mesh = tp_mesh
         self._saved_placements = None
-    
+
     def pre_forward(self, module, args, kwargs):
         """Convert DTensor inputs to local tensor before attention."""
         if not args:
             return args, kwargs
-        
+
         hidden_states = args[0]
         if isinstance(hidden_states, DTensor):
             # Save placements for post-forward reconstruction
@@ -411,18 +411,18 @@ class AttentionDTensorHook:
             local_hidden = hidden_states.to_local()
             return (local_hidden, *args[1:]), kwargs
         return args, kwargs
-    
+
     def post_forward(self, module, args, output):
         """Convert local tensor output back to DTensor after attention."""
         if self._saved_placements is None:
             return output
-        
+
         # Handle tuple output (attn_output, attn_weights, past_key_value)
         if isinstance(output, tuple):
             attn_output = output[0]
         else:
             attn_output = output
-        
+
         # Reconstruct DTensor from local tensor
         if not isinstance(attn_output, DTensor):
             attn_output = DTensor.from_local(
@@ -431,10 +431,10 @@ class AttentionDTensorHook:
                 self._saved_placements,
                 run_check=False,
             )
-        
+
         # Clear saved state
         self._saved_placements = None
-        
+
         if isinstance(output, tuple):
             return (attn_output, *output[1:])
         return attn_output
@@ -442,7 +442,7 @@ class AttentionDTensorHook:
 
 def _register_attention_hooks(model, tp_mesh):
     """Register DTensor conversion hooks on attention modules for Ring Attention compatibility.
-    
+
     This finds all attention modules (matching 'self_attn' in name, excluding projections)
     and registers pre/post forward hooks to handle DTensor<->Tensor conversion.
     """
@@ -450,15 +450,17 @@ def _register_attention_hooks(model, tp_mesh):
     for name, module in model.named_modules():
         # Match attention modules like 'model.layers.0.self_attn'
         # Exclude sub-modules like 'self_attn.q_proj', 'self_attn.k_norm'
-        if 'self_attn' in name and not any(x in name for x in ['.q_proj', '.k_proj', '.v_proj', '.o_proj', '.q_norm', '.k_norm', '_proj', '_norm']):
+        if "self_attn" in name and not any(
+            x in name for x in [".q_proj", ".k_proj", ".v_proj", ".o_proj", ".q_norm", ".k_norm", "_proj", "_norm"]
+        ):
             # Check if this is the attention module itself (has forward method and proj attributes)
-            if hasattr(module, 'q_proj') or hasattr(module, 'qkv_proj'):
+            if hasattr(module, "q_proj") or hasattr(module, "qkv_proj"):
                 hook = AttentionDTensorHook(tp_mesh)
                 module.register_forward_pre_hook(hook.pre_forward, with_kwargs=True)
                 module.register_forward_hook(hook.post_forward)
                 hook_count += 1
                 logger.debug(f"Registered DTensor hook on: {name}")
-    
+
     if hook_count == 0:
         logger.warning("No attention modules found for DTensor hook registration")
     else:

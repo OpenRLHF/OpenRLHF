@@ -174,9 +174,9 @@ class FSDP2Strategy(ABC):
             self._log(f"Applying TP (size={self.tp_size})")
             print(f"[FSDP2 wrap_model] TP mesh: {self.mesh['tp']}")
             inner = apply_tensor_parallel(
-                inner, 
-                self.mesh["tp"], 
-                sequence_parallel=self.sequence_parallel, 
+                inner,
+                self.mesh["tp"],
+                sequence_parallel=self.sequence_parallel,
                 validate=True,
                 ring_attn_group=self.ring_attn_group if self.ring_attn_size > 1 else None,
             )
@@ -263,31 +263,31 @@ class FSDP2Strategy(ABC):
 
     def _get_grad_norm(self, model, norm_type=2.0, dtype=torch.float32):
         """Calculate gradient norm across all parallel groups.
-        
+
         Reference: Automodel/nemo_automodel/components/distributed/grad_utils.py
         """
         inner = self._unwrap_model(model)
         parameters = [p for p in inner.parameters() if p.grad is not None]
-        
+
         if len(parameters) == 0:
             return 0.0
-        
+
         # Get local gradients (convert DTensor to local tensor)
         grads = [
             (p.grad.detach().to_local() if isinstance(p.grad, DTensor) else p.grad.detach()).to(dtype)
             for p in parameters
         ]
-        
+
         norm_type = float(norm_type)
-        
-        if norm_type == float('inf'):
+
+        if norm_type == float("inf"):
             total_norm = max(g.abs().max().item() for g in grads)
             total_norm = torch.tensor([total_norm], dtype=torch.float, device="cuda")
             dist.all_reduce(total_norm, op=dist.ReduceOp.MAX, group=self.dp_cp_group)
             if self.tp_group:
                 dist.all_reduce(total_norm, op=dist.ReduceOp.MAX, group=self.tp_group)
             return total_norm[0].item()
-        
+
         # L2 or other norms
         total_norm = sum(torch.norm(g, norm_type) ** norm_type for g in grads)
         total_norm = torch.tensor(total_norm, device="cuda")
@@ -295,20 +295,20 @@ class FSDP2Strategy(ABC):
         if self.tp_group:
             dist.all_reduce(total_norm, op=dist.ReduceOp.SUM, group=self.tp_group)
         return total_norm.item() ** (1.0 / norm_type)
-    
+
     def _clip_grad_norm(self, model, max_norm, norm_type=2.0):
         """Clip gradients by total norm (aligned with Automodel)."""
         total_norm = self._get_grad_norm(model, norm_type)
         if total_norm == 0.0:
             return total_norm
-        
+
         clip_coef = max_norm / (total_norm + 1e-6)
         if clip_coef < 1.0:
             for p in self._unwrap_model(model).parameters():
                 if p.grad is not None:
                     g = p.grad.detach()
                     (g.to_local() if isinstance(g, DTensor) else g).mul_(clip_coef)
-        
+
         return total_norm
 
     def optimizer_step(self, optimizer, model, scheduler, name="model", **kwargs):
