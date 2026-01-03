@@ -358,20 +358,27 @@ class ActorPPOTrainer(ABC):
 
                     # Async broadcast all params in this bucket
                     handles = []
-                    for name, param_data in processed:
+                    # Keep any temporary contiguous tensors alive until their
+                    # async broadcasts complete; otherwise CUDA/NCCL may read
+                    # freed memory and cause undefined behavior.
+                    broadcast_tensors = []
+                    for _, param_data in processed:
                         if use_ray:
                             import ray.util.collective as collective
 
                             collective.broadcast(param_data, 0, group_name=self._model_update_group)
                         else:
+                            tensor = param_data if param_data.is_contiguous() else param_data.contiguous()
+                            broadcast_tensors.append(tensor)
                             handle = self._model_update_group.broadcast(
-                                param_data.contiguous(), src=0, stream=torch.cuda.current_stream(), async_op=True
+                                tensor, src=0, stream=torch.cuda.current_stream(), async_op=True
                             )
                             handles.append(handle)
 
                     # Wait for all async broadcasts
                     for handle in handles:
                         handle.wait()
+                    del broadcast_tensors
 
                     # Wait for vLLM to finish loading
                     ray.get(refs)

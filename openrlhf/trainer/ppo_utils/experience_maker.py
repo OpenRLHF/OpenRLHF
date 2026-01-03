@@ -265,6 +265,11 @@ class SamplesGenerator:
             from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 
             # For generation, we need both weights and KV cache.
+            # Note: vLLM sleep mode tracks sleeping tags separately. To avoid
+            # running requests while weights are still sleeping (which can
+            # crash or produce undefined behavior), explicitly wake weights
+            # and KV cache.
+            batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["weights"])
             batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["kv_cache"])
 
         rollout_samples = self._generate_vllm(all_prompts, all_labels, **generate_kwargs)

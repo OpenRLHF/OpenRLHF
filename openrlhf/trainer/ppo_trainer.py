@@ -118,6 +118,7 @@ class BasePPOTrainer(ABC):
 
     def ppo_train(self, global_steps):
         status = {}
+        is_fsdp2 = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2"
 
         # triger remote critic model training
         if self.critic_model_group is not None:
@@ -140,7 +141,6 @@ class BasePPOTrainer(ABC):
             actor_status_ref = self.actor_model_group.async_run_method(method_name="fit", kl_ctl=self.kl_ctl.value)
             status.update(ray.get(actor_status_ref)[0])
 
-            is_fsdp2 = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2"
             if self.strategy.args.deepspeed_enable_sleep:
                 # Offload optimizer states (model stays on GPU for weight sync)
                 ray.get(self.actor_model_group.async_run_method(method_name="offload_states"))
@@ -151,7 +151,23 @@ class BasePPOTrainer(ABC):
 
             # For colocated vLLM + FSDP2: offload training model after weight sync so
             # vLLM can wake up KV cache for the next rollout without OOM.
-            if is_fsdp2 and self.strategy.args.vllm_enable_sleep and self.strategy.args.deepspeed_enable_sleep:
+            if (
+                is_fsdp2
+                and self.vllm_engines is not None
+                and self.strategy.args.vllm_enable_sleep
+                and self.strategy.args.deepspeed_enable_sleep
+            ):
+                ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
+        else:
+            # If actor training is skipped (e.g. freezing_actor_steps), we still
+            # need to offload the actor params for the next rollout when using
+            # colocated vLLM + FSDP2 sleep mode; otherwise vLLM wake_up may OOM.
+            if (
+                is_fsdp2
+                and self.vllm_engines is not None
+                and self.strategy.args.vllm_enable_sleep
+                and self.strategy.args.deepspeed_enable_sleep
+            ):
                 ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
 
         # 5. wait remote critic model training done
@@ -486,7 +502,7 @@ class PPOTrainer(BasePPOTrainer):
             checkpoint_states = {"global_step": 0, "episode": 0, "data_loader_state_dict": {}}
 
         # For colocated vLLM + FSDP2 + sleep mode, offload actor params before the
-        # first rollout so vLLM can wake up KV cache without OOM (verl-style).
+        # first rollout so vLLM can wake up KV cache without OOM
         if is_fsdp2 and self.vllm_engines is not None and args.vllm_enable_sleep and args.deepspeed_enable_sleep:
             ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
 
@@ -513,16 +529,6 @@ class PPOTrainer(BasePPOTrainer):
                     rand_prompts, labels, remote_reward_model=remote_reward_model, **self.generate_kwargs
                 )
                 pbar.update()
-
-                # vLLM is slept at the end of generate_samples(); reload actor params
-                # for experience making (actor forward) if we offloaded it for vLLM.
-                if (
-                    is_fsdp2
-                    and self.vllm_engines is not None
-                    and args.vllm_enable_sleep
-                    and args.deepspeed_enable_sleep
-                ):
-                    ray.get(self.actor_model_group.async_run_method(method_name="reload_model"))
 
                 # dynamic filtering
                 pass_rate = None
@@ -556,6 +562,19 @@ class PPOTrainer(BasePPOTrainer):
                     rollout_samples = filtered_samples[: self.args.rollout_batch_size * self.args.n_samples_per_prompt]
                     filtered_samples = []
                     number_of_samples = 0
+
+                # vLLM is slept at the end of generate_samples(); reload actor params
+                # for experience making (actor forward) if we offloaded it for vLLM.
+                # Important: do this AFTER dynamic filtering so we don't reload
+                # the actor to GPU and then immediately continue sampling (which
+                # can reduce available GPU memory for vLLM wake_up).
+                if (
+                    is_fsdp2
+                    and self.vllm_engines is not None
+                    and args.vllm_enable_sleep
+                    and args.deepspeed_enable_sleep
+                ):
+                    ray.get(self.actor_model_group.async_run_method(method_name="reload_model"))
 
                 experiences = self.experience_maker.make_experience_batch(rollout_samples)
                 sample0 = self.tokenizer.batch_decode(
