@@ -6,8 +6,8 @@ class WorkerWrap:
         import torch
         from openrlhf.utils.distributed_util import stateless_init_process_group
 
-        assert torch.distributed.is_initialized(), f"default torch process group must be initialized"
-        assert group_name != "", f"group name must not be empty"
+        assert torch.distributed.is_initialized(), "default torch process group must be initialized"
+        assert group_name != "", "group name must not be empty"
 
         rank = torch.distributed.get_rank() + rank_offset
         self._model_update_with_ray = use_ray
@@ -27,6 +27,9 @@ class WorkerWrap:
         print(
             f"init_process_group: master_address={master_address}, master_port={master_port}, ",
             f"rank={rank}, world_size={world_size}, group_name={group_name}",
+        )
+        print(
+            f"[WorkerWrap] Initialized _model_update_with_ray={use_ray}, _model_update_group={self._model_update_group}"
         )
 
     def update_weight(self, name, dtype, shape, empty_cache=False):
@@ -48,9 +51,55 @@ class WorkerWrap:
         self.model_runner.model.load_weights(weights=[(name, weight)])
 
         del weight
-        # TODO: should we empty cache if all weights have updated?
-        # if empty_cache:
-        #     torch.cuda.empty_cache()
+        # Important for vLLM sleep/wake-up: release PyTorch caching allocator blocks so
+        # vLLM's CuMemAllocator can reserve large KV-cache regions without OOM.
+        if empty_cache:
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+
+    def batch_update_weights(self, names, dtypes, shapes, empty_cache=False):
+        """Batch broadcast weights - reduces RPC overhead by processing multiple params at once.
+
+        This method receives metadata for multiple parameters, broadcasts them all using
+        async operations, then loads them into the model in one batch.
+        """
+        import torch
+
+        if torch.distributed.get_rank() == 0:
+            print(f"batch_update_weights: {len(names)} params")
+
+        # Allocate buffers and start async broadcasts
+        weights = []
+        handles = []
+        for name, dtype, shape in zip(names, dtypes, shapes):
+            assert dtype == self.model_config.dtype, f"mismatch dtype: src {dtype}, dst {self.model_config.dtype}"
+            weight = torch.empty(shape, dtype=dtype, device="cuda")
+
+            if self._model_update_with_ray:
+                import ray.util.collective as collective
+
+                collective.broadcast(weight, 0, group_name=self._model_update_group)
+                handles.append(None)  # Ray collective is sync
+            else:
+                handle = self._model_update_group.broadcast(
+                    weight, src=0, stream=torch.cuda.current_stream(), async_op=True
+                )
+                handles.append(handle)
+            weights.append((name, weight))
+
+        # Wait for all async broadcasts to complete
+        for handle in handles:
+            if handle is not None:
+                handle.wait()
+
+        # Batch load all weights at once
+        self.model_runner.model.load_weights(weights=weights)
+
+        # Cleanup
+        del weights, handles
+        if empty_cache:
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
 
     def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handles=None, empty_cache=False):
         import torch
@@ -71,3 +120,5 @@ class WorkerWrap:
         weight = func(*list_args)
         self.model_runner.model.load_weights(weights=[(name, weight)])
         torch.cuda.synchronize()
+        if empty_cache:
+            torch.cuda.empty_cache()

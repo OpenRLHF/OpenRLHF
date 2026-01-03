@@ -285,7 +285,13 @@ if __name__ == "__main__":
     parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--deepcompile", action="store_true", default=False)
-    parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
+    parser.add_argument(
+        "--precision",
+        type=str,
+        default="bf16",
+        choices=["bf16", "fp16", "fp32"],
+        help="Model precision",
+    )
     ## Make EMA as an optional feature
     parser.add_argument("--enable_ema", action="store_true", help="Enable EMA checkpoint for the model.")
     parser.add_argument("--ema_beta", type=float, default=0.992, help="EMA beta coefficient")
@@ -307,9 +313,14 @@ if __name__ == "__main__":
         "--deepspeed_enable_sleep",
         action="store_true",
         default=False,
-        help="Enable sleep mode for deepspeed when using --colocate_all_models",
+        help="Enable sleep mode for training models (DeepSpeed/FSDP2) when using --colocate_all_models",
     )
-    parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed tensor parallel size")
+    parser.add_argument(
+        "--ds_tensor_parallel_size",
+        type=int,
+        default=1,
+        help="Tensor parallel size (DeepSpeed AutoTP; FSDP2 uses torch-native TP)",
+    )
 
     # packing samples using Flash Attention2
     parser.add_argument("--packing_samples", action="store_true", default=False)
@@ -340,6 +351,21 @@ if __name__ == "__main__":
     parser.add_argument("--max_len", type=int, default=None, help="deprecated max_len")
     parser.add_argument("--max_samples", type=int, default=1e8, help="Max number of samples")
     parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
+    parser.add_argument(
+        "--dist_backend", type=str, default="deepspeed", choices=["deepspeed", "fsdp2"], help="Distributed backend"
+    )
+    parser.add_argument(
+        "--fsdp2_cpu_offload",
+        action="store_true",
+        default=False,
+        help="Offload FSDP2 params/grads/optimizer to CPU",
+    )
+    parser.add_argument(
+        "--fsdp2_reshard_after_forward",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Control fully_shard reshard_after_forward flag",
+    )
     parser.add_argument("--l2", type=float, default=0.0, help="weight decay loss")
     parser.add_argument("--ptx_coef", type=float, default=0.05, help="PPO-ptx loss coef")
     parser.add_argument("--eps_clip", type=float, default=0.2, help="PPO clip range")

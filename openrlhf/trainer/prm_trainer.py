@@ -38,6 +38,8 @@ class ProcessRewardModelTrainer(ABC):
         batch_size: int = 1,
         max_epochs: int = 2,
         tokenizer=None,
+        save_hf_ckpt: bool = False,
+        disable_ds_ckpt: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -51,6 +53,8 @@ class ProcessRewardModelTrainer(ABC):
         self.tokenizer = tokenizer
         self.optimizer = optim
         self.args = strategy.args
+        self.save_hf_ckpt = save_hf_ckpt
+        self.disable_ds_ckpt = disable_ds_ckpt
 
         # set placeholder token
         self.placeholder_token_id = convert_token_to_id(strategy.args.placeholder_token, self.tokenizer)
@@ -203,7 +207,14 @@ class ProcessRewardModelTrainer(ABC):
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
             self.strategy.save_ckpt(
-                self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+                self.model.model,
+                args.ckpt_path,
+                tag,
+                max_num=args.max_ckpt_num,
+                max_mem=args.max_ckpt_mem,
+                client_state=client_states,
+                optimizer=self.optimizer,
+                scheduler=self.scheduler,
             )
 
     def evaluate(self, eval_dataloader, steps=0):

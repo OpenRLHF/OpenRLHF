@@ -5,7 +5,7 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .utils import masked_mean
+from .utils import _ensure_full_tensor, masked_mean
 
 
 class GPTLMLoss(nn.Module):
@@ -24,6 +24,9 @@ class GPTLMLoss(nn.Module):
             self.ring_attn_world_size = dist.get_world_size(self.ring_attn_group)
 
     def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        # Handle DTensor from Tensor Parallel (convert to full tensor before loss computation)
+        logits = _ensure_full_tensor(logits)
+
         # RingAttention
         if self.ring_attn_group is not None:
             total_seq_len = labels.size(-1)

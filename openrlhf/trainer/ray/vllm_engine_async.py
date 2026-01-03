@@ -51,8 +51,8 @@ class LLMRayActorAsync(BaseLLMRayActor):
     async def sleep(self, level=1):
         await self.llm.sleep(level=level)
 
-    async def wake_up(self):
-        await self.llm.wake_up()
+    async def wake_up(self, tags=None):
+        await self.llm.wake_up(tags=tags)
 
     async def add_requests(self, sampling_params, prompts, labels, max_length, hf_tokenizer=None, max_steps=10000):
         """
