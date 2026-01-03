@@ -240,16 +240,15 @@ class FSDP2Strategy(ABC):
             kwargs["foreach"] = False
         return optim.AdamW(self._unwrap_model(model).parameters(), **kwargs)
 
-    def backward(self, loss, model, optimizer, **kwargs):
+    def backward(self, loss, model, optimizer, name="model", **kwargs):
         """Backward with gradient accumulation and deferred sync."""
         if self.accumulated_gradient > 1:
             loss = loss / self.accumulated_gradient
 
         inner = self._unwrap_model(model)
         if isinstance(inner, FSDPModule) and self.accumulated_gradient > 1:
-            is_final = (
-                self.time_steps.get(f"step_{kwargs.get('name', 'model')}", 0) + 1
-            ) % self.accumulated_gradient == 0
+            key = f"step_{name}"
+            is_final = (self.time_steps.get(key, 0) + 1) % self.accumulated_gradient == 0
             inner.set_requires_gradient_sync(is_final)
 
         loss.backward()
