@@ -324,8 +324,3 @@ class CriticModelActor(BaseModelActor):
             self.strategy.offload_states(self.critic, self.critic_optim)
         else:
             offload_deepspeed_states(self.critic)
-
-    def offload_model(self):
-        """Offload model to CPU (for FSDP2 with vLLM sleep mode)."""
-        if hasattr(self.strategy, "offload_model"):
-            self.strategy.offload_model(self.critic)

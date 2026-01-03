@@ -333,13 +333,6 @@ class FSDP2Strategy(ABC):
                 print("[FSDP2 offload_states] Skipping - CPUOffloadPolicy already manages state on CPU")
             return
 
-        # Ensure we don't keep unsharded params resident unnecessarily.
-        # Note: FSDPModule.reshard() is not recursive, so walk all nested FSDP modules.
-        inner = self._unwrap_model(model)
-        for module in inner.modules():
-            if isinstance(module, FSDPModule):
-                module.reshard()
-
         if optimizer:
             move_optimizer_state(optimizer, torch.device("cpu"))
 
@@ -356,10 +349,14 @@ class FSDP2Strategy(ABC):
         for vLLM's wake_up operation.
         """
         inner = self._unwrap_model(model)
-        offload_fsdp_model_to_cpu(inner, empty_cache=True)
-
-        if self.is_rank_0():
-            print("[FSDP2 offload_model] Model offloaded to CPU")
+        already_on_cpu = next(inner.parameters()).device.type == "cpu"
+        if not already_on_cpu:
+            offload_fsdp_model_to_cpu(inner, empty_cache=True)
+            if self.is_rank_0():
+                print("[FSDP2 offload_model] Model offloaded to CPU")
+        else:
+            if self.is_rank_0():
+                print("[FSDP2 offload_model] Model already on CPU (skip)")
 
         # Use Gloo barrier - model is now on CPU, NCCL requires GPU tensors (ref: slime)
         if self._gloo_group is not None:
@@ -372,10 +369,14 @@ class FSDP2Strategy(ABC):
         This should be called BEFORE training when model was offloaded.
         """
         inner = self._unwrap_model(model)
-        load_fsdp_model_to_gpu(inner, device_id=torch.cuda.current_device())
-
-        if self.is_rank_0():
-            print("[FSDP2 reload_model] Model reloaded to GPU")
+        already_on_cuda = next(inner.parameters()).device.type == "cuda"
+        if not already_on_cuda:
+            load_fsdp_model_to_gpu(inner, device_id=torch.cuda.current_device())
+            if self.is_rank_0():
+                print("[FSDP2 reload_model] Model reloaded to GPU")
+        else:
+            if self.is_rank_0():
+                print("[FSDP2 reload_model] Model already on GPU (skip)")
 
         torch.cuda.synchronize()
         # Use Gloo barrier for consistency (ref: slime)
