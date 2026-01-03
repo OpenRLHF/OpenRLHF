@@ -25,7 +25,7 @@ from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_g
 from openrlhf.utils import convert_to_dtype
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
-from . import MESH_DIM_CP, MESH_DIM_DP, MESH_DIM_TP
+
 from .checkpoint import load_distributed_checkpoint, load_hf_model, save_distributed_checkpoint, save_hf_model
 from .utils import (
     get_runtime_metadata,
@@ -99,19 +99,25 @@ class FSDP2Strategy(ABC):
         ), f"world_size({self.world_size}) not divisible by ring_attn*tp({parallel_factor})"
         self.dp_size = self.world_size // parallel_factor
 
-        # Create mesh: (dp, cp, tp) - only include dimensions > 1
-        dims = [(MESH_DIM_DP, self.dp_size)]
-        if self.ring_attn_size > 1:
-            dims.append((MESH_DIM_CP, self.ring_attn_size))
-        if self.tp_size > 1:
-            dims.append((MESH_DIM_TP, self.tp_size))
-        names, shape = zip(*dims)
-        self.mesh = init_device_mesh("cuda", shape, mesh_dim_names=names)
+        # Create fixed 3D mesh: (dp, cp, tp) - always include all dimensions even if size=1
+        # This ensures all parameters use the same mesh structure, avoiding mesh mismatch issues
+        # in operations like clip_grad_norm that aggregate across all parameters
+        self.mesh = init_device_mesh(
+            "cuda",
+            (self.dp_size, self.ring_attn_size, self.tp_size),
+            mesh_dim_names=("dp", "cp", "tp"),
+        )
+
+        # Pre-create process groups for gradient norm computation (aligned with Automodel)
+        # Use _flatten to create 1D mesh from 2D dp+cp submesh
+        self.mesh["dp", "cp"]._flatten(mesh_dim_name="dp_cp")
+        self.dp_cp_group = self.mesh["dp_cp"].get_group()
+        self.tp_group = self.mesh["tp"].get_group() if self.tp_size > 1 else None
 
         # Setup ring attention
         set_ring_attn_group(None)
         if self.ring_attn_size > 1:
-            cp_group = self.mesh[MESH_DIM_CP].get_group()
+            cp_group = self.mesh["cp"].get_group()
             set_ring_attn_group(cp_group)
             from ring_flash_attn import substitute_hf_flash_attn
 
@@ -162,18 +168,20 @@ class FSDP2Strategy(ABC):
 
         # TP before FSDP
         print(f"[FSDP2 wrap_model] tp_size={self.tp_size}, mesh_dim_names={self.mesh.mesh_dim_names}")
-        if self.tp_size > 1 and MESH_DIM_TP in self.mesh.mesh_dim_names:
+        if self.tp_size > 1:
             from .tp import apply_tensor_parallel
 
             self._log(f"Applying TP (size={self.tp_size})")
-            print(f"[FSDP2 wrap_model] TP mesh: {self.mesh[MESH_DIM_TP]}")
+            print(f"[FSDP2 wrap_model] TP mesh: {self.mesh['tp']}")
             inner = apply_tensor_parallel(
-                inner, self.mesh[MESH_DIM_TP], sequence_parallel=self.sequence_parallel, validate=True
+                inner, 
+                self.mesh["tp"], 
+                sequence_parallel=self.sequence_parallel, 
+                validate=True,
+                ring_attn_group=self.ring_attn_group if self.ring_attn_size > 1 else None,
             )
         else:
-            print(
-                f"[FSDP2 wrap_model] Skipping TP: tp_size={self.tp_size}, MESH_DIM_TP in mesh={MESH_DIM_TP in self.mesh.mesh_dim_names}"
-            )
+            print(f"[FSDP2 wrap_model] Skipping TP: tp_size={self.tp_size}")
 
         # FSDP (force_cpu_offload overrides self.fsdp2_cpu_offload)
         inner = self._apply_fsdp(inner, force_cpu_offload=force_cpu_offload)
@@ -190,7 +198,7 @@ class FSDP2Strategy(ABC):
             model: Model to shard
             force_cpu_offload: If True, force CPUOffloadPolicy regardless of self.fsdp2_cpu_offload
         """
-        mesh = self.mesh[MESH_DIM_DP]
+        mesh = self.mesh["dp"]
         mp = (
             None
             if self.precision == "fp32"
@@ -253,6 +261,56 @@ class FSDP2Strategy(ABC):
 
         loss.backward()
 
+    def _get_grad_norm(self, model, norm_type=2.0, dtype=torch.float32):
+        """Calculate gradient norm across all parallel groups.
+        
+        Reference: Automodel/nemo_automodel/components/distributed/grad_utils.py
+        """
+        inner = self._unwrap_model(model)
+        parameters = [p for p in inner.parameters() if p.grad is not None]
+        
+        if len(parameters) == 0:
+            return 0.0
+        
+        # Get local gradients (convert DTensor to local tensor)
+        grads = [
+            (p.grad.detach().to_local() if isinstance(p.grad, DTensor) else p.grad.detach()).to(dtype)
+            for p in parameters
+        ]
+        
+        norm_type = float(norm_type)
+        
+        if norm_type == float('inf'):
+            total_norm = max(g.abs().max().item() for g in grads)
+            total_norm = torch.tensor([total_norm], dtype=torch.float, device="cuda")
+            dist.all_reduce(total_norm, op=dist.ReduceOp.MAX, group=self.dp_cp_group)
+            if self.tp_group:
+                dist.all_reduce(total_norm, op=dist.ReduceOp.MAX, group=self.tp_group)
+            return total_norm[0].item()
+        
+        # L2 or other norms
+        total_norm = sum(torch.norm(g, norm_type) ** norm_type for g in grads)
+        total_norm = torch.tensor(total_norm, device="cuda")
+        dist.all_reduce(total_norm, op=dist.ReduceOp.SUM, group=self.dp_cp_group)
+        if self.tp_group:
+            dist.all_reduce(total_norm, op=dist.ReduceOp.SUM, group=self.tp_group)
+        return total_norm.item() ** (1.0 / norm_type)
+    
+    def _clip_grad_norm(self, model, max_norm, norm_type=2.0):
+        """Clip gradients by total norm (aligned with Automodel)."""
+        total_norm = self._get_grad_norm(model, norm_type)
+        if total_norm == 0.0:
+            return total_norm
+        
+        clip_coef = max_norm / (total_norm + 1e-6)
+        if clip_coef < 1.0:
+            for p in self._unwrap_model(model).parameters():
+                if p.grad is not None:
+                    g = p.grad.detach()
+                    (g.to_local() if isinstance(g, DTensor) else g).mul_(clip_coef)
+        
+        return total_norm
+
     def optimizer_step(self, optimizer, model, scheduler, name="model", **kwargs):
         """Optimizer step with gradient accumulation."""
         key = f"step_{name}"
@@ -261,7 +319,9 @@ class FSDP2Strategy(ABC):
             return
 
         if self.max_norm > 0:
-            torch.nn.utils.clip_grad_norm_(self._unwrap_model(model).parameters(), self.max_norm)
+            # Use DTensor-compatible gradient clipping for TP+FSDP
+            # Standard clip_grad_norm_ fails when params have different meshes
+            self._clip_grad_norm(model, self.max_norm)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         if scheduler:
@@ -290,7 +350,7 @@ class FSDP2Strategy(ABC):
     ):
         """Create distributed dataloader."""
         if sampler is None and dist.is_initialized():
-            dp_group = self.mesh[MESH_DIM_DP].get_group() if self.mesh else None
+            dp_group = self.mesh["dp"].get_group() if self.mesh else None
             sampler = DistributedSampler(
                 dataset,
                 num_replicas=dist.get_world_size(dp_group) if dp_group else dist.get_world_size(),
@@ -451,7 +511,7 @@ class FSDP2Strategy(ABC):
     # -------------------------------------------------------------------------
 
     def _dp_group(self):
-        return self.mesh[MESH_DIM_DP].get_group() if self.mesh else None
+        return self.mesh["dp"].get_group() if self.mesh else None
 
     def all_reduce(self, data, op="mean"):
         """All-reduce across DP group."""

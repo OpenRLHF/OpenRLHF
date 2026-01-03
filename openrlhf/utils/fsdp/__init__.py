@@ -19,11 +19,6 @@ _torch_ver = version.parse(torch.__version__.split("+")[0])
 if _torch_ver < version.parse("2.7.0"):
     raise RuntimeError(f"FSDP2 requires PyTorch >= 2.7.0, found {torch.__version__}")
 
-# Device mesh dimension names
-MESH_DIM_DP = "dp"  # Data Parallel
-MESH_DIM_CP = "cp"  # Context Parallel (ring attention)
-MESH_DIM_TP = "tp"  # Tensor Parallel
-
 from .checkpoint import load_distributed_checkpoint, load_hf_model, save_distributed_checkpoint, save_hf_model
 
 # Public API
@@ -51,8 +46,4 @@ __all__ = [
     "moving_average_fsdp",
     "move_optimizer_state",
     "get_runtime_metadata",
-    # Constants
-    "MESH_DIM_DP",
-    "MESH_DIM_CP",
-    "MESH_DIM_TP",
 ]
