@@ -154,20 +154,15 @@ class RowwiseParallelLora(RowwiseParallel):
 
         lora_a = getattr(module, "lora_A", None) or getattr(module, "lora_a", None)
         lora_b = getattr(module, "lora_B", None) or getattr(module, "lora_b", None)
+        # Automodel style: both LoRA-A and LoRA-B use Shard(1), no hook needed
         if lora_a:
             for m in _iter_modules(lora_a):
                 _distribute_param(m, "weight", device_mesh, [Shard(1)], src_data_rank=self.src_data_rank)
                 if getattr(m, "bias", None) is not None:
                     _distribute_param(m, "bias", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
-                m.register_forward_hook(
-                    lambda mod, inp, out, mesh=device_mesh: (
-                        out.redistribute(mesh, [Replicate()]) if isinstance(out, DTensor) else out
-                    )
-                )
         if lora_b:
             for m in _iter_modules(lora_b):
-                # Keep LoRA-B replicated for rowwise base sharding (avoids needing rank-dim divisibility).
-                _distribute_param(m, "weight", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
+                _distribute_param(m, "weight", device_mesh, [Shard(1)], src_data_rank=self.src_data_rank)
                 if getattr(m, "bias", None) is not None:
                     _distribute_param(m, "bias", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
 
