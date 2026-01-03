@@ -145,7 +145,7 @@ class CriticPPOTrainer(ABC):
         if self.args.use_dynamic_batch:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
 
-        self.strategy.backward(loss, self.critic, self.critic_optim)
+        self.strategy.backward(loss, self.critic, self.critic_optim, name="critic")
         if self.args.use_dynamic_batch:
             if self.replay_buffer.dynamic_optimizer_step[step]:
                 self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")

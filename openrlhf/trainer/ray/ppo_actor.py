@@ -272,7 +272,7 @@ class ActorPPOTrainer(ABC):
         if self.args.use_dynamic_batch:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
 
-        self.strategy.backward(loss, self.actor, self.actor_optim)
+        self.strategy.backward(loss, self.actor, self.actor_optim, name="actor")
         if self.args.use_dynamic_batch:
             if self.replay_buffer.dynamic_optimizer_step[step]:
                 self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
