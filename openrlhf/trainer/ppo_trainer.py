@@ -140,17 +140,19 @@ class BasePPOTrainer(ABC):
             actor_status_ref = self.actor_model_group.async_run_method(method_name="fit", kl_ctl=self.kl_ctl.value)
             status.update(ray.get(actor_status_ref)[0])
 
-            # For FSDP2 + vllm_enable_sleep: offload optimizer first, then broadcast,
-            # then offload model inside _broadcast_to_vllm (slime/verl-style)
             is_fsdp2 = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2"
             if self.strategy.args.deepspeed_enable_sleep:
                 # Offload optimizer states (model stays on GPU for weight sync)
                 ray.get(self.actor_model_group.async_run_method(method_name="offload_states"))
 
             # 4. broadcast weights to vllm engines
-            # For FSDP2: this will also offload model after broadcast
             if self.vllm_engines is not None:
                 self._broadcast_to_vllm(is_fsdp2=is_fsdp2)
+
+            # For colocated vLLM + FSDP2: offload training model after weight sync so
+            # vLLM can wake up KV cache for the next rollout without OOM.
+            if is_fsdp2 and self.strategy.args.vllm_enable_sleep and self.strategy.args.deepspeed_enable_sleep:
+                ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
 
         # 5. wait remote critic model training done
         if self.critic_model_group and not self.strategy.args.colocate_all_models:
@@ -161,45 +163,38 @@ class BasePPOTrainer(ABC):
     def _broadcast_to_vllm(self, is_fsdp2: bool = False):
         """Broadcast actor weights to vLLM engines.
 
-        For FSDP2 + vllm_enable_sleep (slime-style):
-        The key insight from slime is: offload training model BEFORE waking up vLLM!
-
-        1. Offload FSDP2 model to CPU (free GPU memory)
-        2. Wake up vLLM (now GPU has space for vLLM weights!)
-        3. Broadcast weights (params moved from CPU to GPU one by one for redistribute)
-        4. Sleep vLLM (free GPU memory for next training iteration)
-
-        For DeepSpeed (original):
-        The model stays on GPU during broadcast (sharded params are small enough).
+        For both FSDP2 and DeepSpeed:
         1. Wake up vLLM
-        2. Broadcast weights
-        3. Sleep vLLM
+        2. Broadcast weights (model stays on GPU in sharded state)
+        3. Sleep vLLM (free GPU memory for next training iteration)
+        
+        Note: FSDP2 sharded params are small (~1.75 GiB per GPU for 7B model with 8 GPUs),
+        so both vLLM + sharded model + redistribute temp memory fits in GPU.
         """
         from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 
         if is_fsdp2 and self.strategy.args.vllm_enable_sleep:
             # === FSDP2 path ===
-            # For FSDP2, we don't call sleep after broadcast because:
-            # 1. vLLM's sleep() + wake_up() in quick succession causes CUDA errors
-            # 2. Keeping vLLM awake avoids the state inconsistency issue
-            # 3. generate_samples will detect vLLM is already awake and skip wake_up
+            # Keep model on GPU (sharded state), only optimizer states are offloaded.
+            # FSDP2 sharded params are small (~1.75 GiB per GPU for 7B model with 8 GPUs).
+            # vLLM wake_up + sharded model + redistribute temp memory fits in GPU.
+            
+            # Wake up vLLM *weights only* for weight sync.
+            # This avoids allocating KV cache during weight update and prevents OOM in colocated training.
+            # See vLLM sleep mode docs: wake_up(tags=["weights"]) then wake_up(tags=["kv_cache","weights"]) before generation.
+            batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["weights"])
 
-            # Step 1: Offload FSDP2 model to CPU to free GPU memory
-            ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
-
-            # Step 2: Wake up vLLM (full wake_up to ensure consistent state)
-            batch_vllm_engine_call(self.vllm_engines, "wake_up")
-
-            # Step 3: Broadcast weights (params moved from CPU to GPU one by one)
+            # Broadcast weights (model stays on GPU in sharded state)
             ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
 
-            # Note: Do NOT sleep vLLM here. Keep it awake for generate_samples().
-            # This avoids the CUDA error from rapid sleep/wake_up cycles.
-            setattr(self.strategy.args, "_vllm_already_awake", True)
+            # NOTE (verl alignment):
+            # Keep vLLM awake (weights only) after weight sync. vLLM will be fully
+            # slept after rollout generation in SamplesGenerator.generate_samples().
         else:
             # === DeepSpeed path (original) ===
             if self.strategy.args.vllm_enable_sleep:
-                batch_vllm_engine_call(self.vllm_engines, "wake_up")
+                # Wake weights only for weight sync; kv_cache will be woken for generation.
+                batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["weights"])
 
             ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
 
@@ -477,6 +472,7 @@ class PPOTrainer(BasePPOTrainer):
         self,
     ) -> None:
         args = self.args
+        is_fsdp2 = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2"
 
         # broadcast init checkpoint to vllm
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
@@ -488,6 +484,16 @@ class PPOTrainer(BasePPOTrainer):
             self._broadcast_to_vllm()
         else:
             checkpoint_states = {"global_step": 0, "episode": 0, "data_loader_state_dict": {}}
+
+        # For colocated vLLM + FSDP2 + sleep mode, offload actor params before the
+        # first rollout so vLLM can wake up KV cache without OOM (verl-style).
+        if (
+            is_fsdp2
+            and self.vllm_engines is not None
+            and args.vllm_enable_sleep
+            and args.deepspeed_enable_sleep
+        ):
+            ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
 
         # Restore step and start_epoch
         steps = checkpoint_states["global_step"] + 1
@@ -512,6 +518,16 @@ class PPOTrainer(BasePPOTrainer):
                     rand_prompts, labels, remote_reward_model=remote_reward_model, **self.generate_kwargs
                 )
                 pbar.update()
+
+                # vLLM is slept at the end of generate_samples(); reload actor params
+                # for experience making (actor forward) if we offloaded it for vLLM.
+                if (
+                    is_fsdp2
+                    and self.vllm_engines is not None
+                    and args.vllm_enable_sleep
+                    and args.deepspeed_enable_sleep
+                ):
+                    ray.get(self.actor_model_group.async_run_method(method_name="reload_model"))
 
                 # dynamic filtering
                 pass_rate = None

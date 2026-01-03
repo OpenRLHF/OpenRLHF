@@ -658,10 +658,9 @@ class PolicyModelActor(BaseModelActor):
         # initial offload
         if strategy.args.deepspeed_enable_sleep:
             self.offload_states()
-            # For FSDP2: also offload model to CPU for first vLLM wake_up
-            is_fsdp2 = getattr(strategy.args, "dist_backend", "deepspeed") == "fsdp2"
-            if is_fsdp2:
-                self.offload_model()
+            # Note: For FSDP2, do NOT offload model to CPU here!
+            # FSDP2 sharded params are small (~1.75 GiB per GPU for 7B/8GPU).
+            # Keeping model on GPU avoids OOM during broadcast when vLLM is awake.
 
         # configure Trainer
         self.trainer = ActorPPOTrainer(
@@ -732,6 +731,15 @@ class PolicyModelActor(BaseModelActor):
         else:
             reload_deepspeed_states(self.actor.model)
 
+    def reload_model(self):
+        """Reload model parameters to GPU (FSDP2-only).
+
+        Used to bring the actor back to GPU for inference/experience making after
+        it was offloaded via offload_model(), without reloading optimizer states.
+        """
+        if hasattr(self.strategy, "reload_model"):
+            self.strategy.reload_model(self.actor)
+
     def offload_states(self):
         if hasattr(self.strategy, "offload_states"):
             self.strategy.offload_states(self.actor, self.actor_optim)
@@ -739,7 +747,11 @@ class PolicyModelActor(BaseModelActor):
             offload_deepspeed_states(self.actor.model)
 
     def offload_model(self):
-        """Offload model to CPU (for FSDP2 with vLLM sleep mode)."""
+        """Offload model parameters to CPU (FSDP2-only).
+
+        This is useful in colocated vLLM + training setups to free GPU memory
+        before waking up vLLM KV cache.
+        """
         if hasattr(self.strategy, "offload_model"):
             self.strategy.offload_model(self.actor)
 
