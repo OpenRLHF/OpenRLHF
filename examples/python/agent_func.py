@@ -2,7 +2,8 @@ import random
 from typing import Any, Dict
 
 import torch
-from openrlhf.utils.agent import AgentExecutorBase, AgentInstanceBase
+
+from openrlhf.utils.agent import AgentInstanceBase, MultiTurnAgentExecutor
 
 
 # A simple n-step random environment
@@ -66,10 +67,6 @@ class AgentInstance(AgentInstanceBase):
         }
 
 
-class AgentExecutor(AgentExecutorBase):
-    def __init__(self, max_steps, max_length, llm_engine, hf_tokenizer, result_queue):
-        super().__init__(AgentInstance, max_steps, max_length, llm_engine, hf_tokenizer, result_queue)
-
-    async def execute(self, prompt, label, sampling_params):
-        # You could override the execute function of AgentExecutorBase to add custom agent running logic
-        return await super().execute(prompt, label, sampling_params)
+class AgentExecutor(MultiTurnAgentExecutor):
+    def __init__(self):
+        super().__init__(AgentInstance)
