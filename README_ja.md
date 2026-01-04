@@ -433,7 +433,7 @@ class AgentExecutor(MultiTurnAgentExecutor):
 ```
 
 > [!NOTE]
-> 完全にカスタムなトークンレベル実行を行う場合は `AgentExecutorBase` を継承し、`execute(self, prompt, label, sampling_params, max_length, hf_tokenizer, llm_engine)` を実装して、`prompt`、`label`、`observation_tokens`、`action_ranges`、`reward/scores`、`rollout_log_probs`、`extra_logs` を含む dict を返してください。この設計は**token-in-token-out原則**に従い、サンプリングとトレーニングサンプル間の一貫性を確保し、テキストレベルの処理で発生する可能性のある不整合を回避します。
+> 完全にカスタムなトークンレベル実行を行う場合は `AgentExecutorBase` を継承して `execute` を実装してください。この設計は**token-in-token-out原則**に従い、サンプリングとトレーニングの整合性を保ち、テキストレベルの不一致を避けます。
 
 
 > [!NOTE] 
