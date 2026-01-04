@@ -439,8 +439,7 @@ class AgentExecutor(MultiTurnAgentExecutor):
 ```
 
 > [!NOTE]
-> For a fully custom token-level execution flow, inherit `AgentExecutorBase` and implement `execute(self, prompt, label, sampling_params, max_length, hf_tokenizer, llm_engine)`, returning a dict with `prompt`, `label`, `observation_tokens`, `action_ranges`, `reward/scores`, `rollout_log_probs`, and `extra_logs`. This design follows the **token-in-token-out principle** to keep sampling and training consistent and avoid text-level mismatch.
-
+> For a fully custom token-level execution flow, inherit `AgentExecutorBase` and implement `execute`. This design follows the **token-in-token-out principle** to keep sampling and training consistent and avoid text-level mismatch.
 
 
 > [!NOTE] 
