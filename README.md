@@ -438,6 +438,8 @@ class AgentExecutor(MultiTurnAgentExecutor):
         super().__init__(AgentInstance)
 ```
 
+You can set the async sampler-trainer buffer size with `--async_queue_size` (e.g. `--async_queue_size 1`; larger means more off-policy, default 1).
+
 > [!NOTE]
 > For a fully custom token-level execution flow, inherit `AgentExecutorBase` and implement `execute`. This design follows the **token-in-token-out principle** to keep sampling and training consistent and avoid text-level mismatch.
 

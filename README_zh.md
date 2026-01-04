@@ -435,6 +435,8 @@ class AgentExecutor(MultiTurnAgentExecutor):
         super().__init__(AgentInstance)
 ```
 
+异步采样-训练缓冲区大小可通过 `--async_queue_size` 设置（例如 `--async_queue_size 1`，数值越大越 off-policy，默认 1）。
+
 > [!NOTE]
 > 如果需要完全自定义的 token 级执行过程，请继承 `AgentExecutorBase` 并实现 `execute` 函数。该设计遵循 **token-in-token-out 原则**，确保采样和训练样本之间的一致性，避免文本级处理可能出现的潜在不匹配问题。
 

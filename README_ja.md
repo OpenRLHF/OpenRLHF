@@ -432,6 +432,8 @@ class AgentExecutor(MultiTurnAgentExecutor):
         super().__init__(AgentInstance)
 ```
 
+非同期サンプラーとトレーナのバッファサイズは `--async_queue_size` で設定できます（例: `--async_queue_size 1`、大きいほどオフポリシー、デフォルト1）。
+
 > [!NOTE]
 > 完全にカスタムなトークンレベル実行を行う場合は `AgentExecutorBase` を継承して `execute` を実装してください。この設計は**token-in-token-out原則**に従い、サンプリングとトレーニングの整合性を保ち、テキストレベルの不一致を避けます。
 
