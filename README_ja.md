@@ -337,7 +337,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 ### 強化学習によるファインチューニング (RFT)
 
-OpenRLHFは、便利で効率的な強化学習によるファインチューニングをサポートしています。カスタム`reward_func`関数を含む[ファイル](./examples/scripts/reward_func.py)を実装し、そのパスを`remote_rm_url`パラメータに渡すだけで済みます。`--agent_func_path` を指定しない場合、`--remote_rm_url` は `SingleTurnAgentExecutor` がサンプリング時に利用し、ローカルの reward model をスキップします。多段 Agent は `step` で `rewards/scores` を返してください。例えば：
+OpenRLHFは、便利で効率的な強化学習によるファインチューニングをサポートしています。カスタム`reward_func`関数を含む[ファイル](./examples/scripts/reward_func.py)を実装し、そのパスを`remote_rm_url`パラメータに渡すだけで済みます。例えば：
 
 ```python
 # reward_func.py

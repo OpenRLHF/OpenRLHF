@@ -343,7 +343,7 @@ The launch scripts and documents for supported algorithms are in [example/script
 
 ## Reinforced Fine-tuning
 
-OpenRLHF supports convenient and efficient Reinforced Fine-tuning. You only need to implement a [file containing the custom `reward_func` function](./examples/scripts/reward_func.py) and pass its path to the `remote_rm_url` parameter. When `--agent_func_path` is not set, `--remote_rm_url` is consumed by `SingleTurnAgentExecutor` during sampling and bypasses the local reward model; multi-turn agents should return `rewards/scores` in `step`. Such as
+OpenRLHF supports convenient and efficient Reinforced Fine-tuning. You only need to implement a [file containing the custom `reward_func` function](./examples/scripts/reward_func.py) and pass its path to the `remote_rm_url` parameter. Such as
 
 ```python
 # reward_func.py
