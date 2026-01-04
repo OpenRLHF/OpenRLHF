@@ -71,7 +71,7 @@ OpenRLHF 是第一个基于 Ray、vLLM、ZeRO-3 和 HuggingFace Transformers 构
 - 支持基于 Ray 和 Hybrid Engine 的 [PPO](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh) 和 [REINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh) (`--colocate_all_models`, `--vllm_enable_sleep` and `--vllm_gpu_memory_utilization 0.5`)
 - [Ray-based Reinforced Finetuning](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
 - 集成 [NeMo Gym](./examples/scripts/train_reinforce_nemogym.sh)，支持基于外部评估环境的智能体 RLHF（通过 `--agent_func_path` 配合 NeMo Gym 集成）
-- 支持 Dynamic Sampling from DAPO(`--dynamic_filtering` and `--dynamic_filtering_reward_range`)
+- 支持基于动态过滤的 DAPO 采样（示例脚本见 [train_ppo_ray_streaming.sh](./examples/scripts/train_ppo_ray_streaming.sh)，`--dynamic_filtering` 和 `--dynamic_filtering_reward_range`）
 - 支持 [DeepSpeed AutoTP 训练](./examples/scripts/train_sft_llama_tensor_parallelism.sh) (`--ds_tensor_parallel_size`)
 - 集成 vLLM，加速 RLHF 任务中的样本生成（`--vllm_num_engines`）。  
 - 支持多个奖励模型（`--reward_pretrain model1,model2...`）和远程奖励模型（`--remote_rm_url`）。  
@@ -375,11 +375,12 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 其中`label_key`参数用于向奖励函数传递额外的样本信息，如答案。
 
-## 异步RLHF和Agent RLHF
+## Agent RLHF
 
-OpenRLHF为异步RLHF和基于Agent的RLHF实现提供了全面的支持。要使用这些功能，只需在训练配置中包含`--async_train`和`--agent_func_path`参数即可。
+OpenRLHF 将所有训练执行流程视为 Agent，采样阶段统一通过 `AgentExecutorBase` 产出 token-in-token-out 轨迹。仓库内置两种执行器：`SingleTurnAgentExecutor`（单轮生成，可选 `--remote_rm_url` 获取奖励，可参考上面的 `reward_func` 示例）与 `MultiTurnAgentExecutor`（多轮交互，配合 `AgentInstanceBase` 实现环境 `reset/step`，可参考下面的 `agent_func` 示例）。
+使用 `--async_train` 开启异步流水线；使用 `--agent_func_path` 加载自定义 `AgentExecutor`（多轮场景）或保持默认单轮执行器。
 
-Agent API已经重新设计为使用基于类的方法，采用`AgentInstanceBase`和`AgentExecutorBase`类，以提供更好的模块化和可扩展性。
+Agent API 以 `AgentExecutorBase` 为核心：单轮场景使用 `SingleTurnAgentExecutor`；多轮场景使用 `AgentInstanceBase` + `MultiTurnAgentExecutor`，你只需实现环境的 `reset/step` 并在模块中导出 `AgentExecutor` 类即可。
 
 ```python
 # agent_func.py
@@ -387,7 +388,7 @@ import random
 from typing import Any, Dict
 
 import torch
-from openrlhf.utils.agent import AgentExecutorBase, AgentInstanceBase
+from openrlhf.utils.agent import AgentInstanceBase, MultiTurnAgentExecutor
 
 
 # A simple n-step random environment
@@ -429,21 +430,15 @@ class AgentInstance(AgentInstanceBase):
         }
 
 
-class AgentExecutor(AgentExecutorBase):
-    def __init__(self, max_steps, max_length, llm_engine, hf_tokenizer, result_queue):
-        super().__init__(AgentInstance, max_steps, max_length, llm_engine, hf_tokenizer, result_queue)
-
-    async def execute(self, prompt, label, sampling_params):
-        # You could override the execute function of AgentExecutorBase to add custom agent running logic
-        return await super().execute(prompt, label, sampling_params)
+class AgentExecutor(MultiTurnAgentExecutor):
+    def __init__(self):
+        super().__init__(AgentInstance)
 ```
 
-您还可以通过设置`export OPENRLHF_ASYNC_NUM_TASKS=128`来配置每个vLLM引擎的最大并发代理数。
-此外，您可以通过在环境中设置`export OPENRLHF_ASYNC_QUEUE_SIZE=1`（此参数控制缓冲区最多可以存储多少批数据）来控制离策略采样的程度。
+异步采样-训练缓冲区大小可通过 `--async_queue_size` 设置（例如 `--async_queue_size 1`，数值越大越 off-policy，默认 1）。
 
 > [!NOTE]
-> 通过重写 `AgentExecutorBase` 的 `execute` 函数，您可以实现完全自定义的代理运行过程。该设计遵循 **token-in-token-out 原则**，确保采样和训练样本之间的一致性，避免文本级处理可能出现的潜在不匹配问题。
-
+> 如果需要完全自定义的 token 级执行过程，请继承 `AgentExecutorBase` 并实现 `execute` 函数。该设计遵循 **token-in-token-out 原则**，确保采样和训练样本之间的一致性，避免文本级处理可能出现的潜在不匹配问题。
 
 
 > [!NOTE] 

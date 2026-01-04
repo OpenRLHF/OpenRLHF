@@ -68,7 +68,7 @@ More details are in [Slides](https://docs.google.com/presentation/d/1JRhB1d7csof
 - [Ray-based Reinforced Finetuning](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
 - Integration with [NeMo Gym](./examples/scripts/train_reinforce_nemogym.sh) for agent-based RLHF with external evaluation environments (`--agent_func_path` with NeMo Gym integration)
 - Integration with vLLM for accelerated generation in RLHF tasks (`--vllm_num_engines`).  
-- Support RL Dynamic Sampling from DAPO(`--dynamic_filtering` and `--dynamic_filtering_reward_range`)
+- Support DAPO sampling with dynamic filtering (see [train_ppo_ray_streaming.sh](./examples/scripts/train_ppo_ray_streaming.sh), `--dynamic_filtering` and `--dynamic_filtering_reward_range`)
 - Support [DeepSpeed AutoTP training](./examples/scripts/train_sft_llama_tensor_parallelism.sh) (`--ds_tensor_parallel_size`)
 - Implementation of [RingAttention](./examples/scripts/train_dpo_ring_llama.sh) (`--ring_attn_size`, `--ring_head_stride`).  
 - Implementation of [DPO (Direct Preference Optimization)/IPO/cDPO](./examples/scripts/train_dpo_llama.sh) and [Kahneman-Tversky Optimization (KTO)](./examples/scripts/train_kto_llama.sh).  
@@ -378,11 +378,12 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 where the `label_key` parameter is used to pass additional sample information such as answer to the reward function.
 
-## Async RLHF & Agent RLHF
+## Agent RLHF
 
-OpenRLHF provides comprehensive support for both Asynchronous RLHF and Agent-based RLHF implementations. To utilize these features, simply include the `--async_train` and `--agent_func_path` parameters in your training configuration. 
+OpenRLHF treats every training run as an Agent execution pipeline. Sampling always goes through `AgentExecutorBase` and produces token-in-token-out trajectories. The repo ships two executors: `SingleTurnAgentExecutor` (single-turn generation, optionally with `--remote_rm_url` reward; see the `reward_func` example above) and `MultiTurnAgentExecutor` (multi-turn interaction with `AgentInstanceBase` `reset/step`; see the `agent_func` example below).
+Use `--async_train` to enable the async pipeline; use `--agent_func_path` to load a custom `AgentExecutor` (multi-turn) or keep the default single-turn executor.
 
-The Agent API has been redesigned to use a class-based approach with `AgentInstanceBase` and `AgentExecutorBase` classes for better modularity and extensibility.
+The Agent API centers on `AgentExecutorBase`: single-turn uses `SingleTurnAgentExecutor`; multi-turn uses `AgentInstanceBase` + `MultiTurnAgentExecutor`, and you only need to implement `reset/step` and export an `AgentExecutor` class.
 
 ```python
 # agent_func.py
@@ -390,7 +391,7 @@ import random
 from typing import Any, Dict
 
 import torch
-from openrlhf.utils.agent import AgentExecutorBase, AgentInstanceBase
+from openrlhf.utils.agent import AgentInstanceBase, MultiTurnAgentExecutor
 
 
 # A simple n-step random environment
@@ -432,21 +433,15 @@ class AgentInstance(AgentInstanceBase):
         }
 
 
-class AgentExecutor(AgentExecutorBase):
-    def __init__(self, max_steps, max_length, llm_engine, hf_tokenizer, result_queue):
-        super().__init__(AgentInstance, max_steps, max_length, llm_engine, hf_tokenizer, result_queue)
-
-    async def execute(self, prompt, label, sampling_params):
-        # You could override the execute function of AgentExecutorBase to add custom agent running logic
-        return await super().execute(prompt, label, sampling_params)
+class AgentExecutor(MultiTurnAgentExecutor):
+    def __init__(self):
+        super().__init__(AgentInstance)
 ```
 
-You can also configure the maximum number of concurrent agents per vLLM engine by setting `export OPENRLHF_ASYNC_NUM_TASKS=128`. 
-Additionally, you can control the degree of off-policy sampling by setting `export OPENRLHF_ASYNC_QUEUE_SIZE=1` (this parameter controls how many batches of data can be stored in the buffer at most) in your environment.
+You can set the async sampler-trainer buffer size with `--async_queue_size` (e.g. `--async_queue_size 1`; larger means more off-policy, default 1).
 
 > [!NOTE]
-> By overriding the `execute` function of `AgentExecutorBase`, you can implement completely custom agent running processes. The design follows the **token-in-token-out principle** to ensure consistency between sampling and training samples, avoiding potential mismatches that could occur with text-level processing.
-
+> For a fully custom token-level execution flow, inherit `AgentExecutorBase` and implement `execute`. This design follows the **token-in-token-out principle** to keep sampling and training consistent and avoid text-level mismatch.
 
 
 > [!NOTE] 

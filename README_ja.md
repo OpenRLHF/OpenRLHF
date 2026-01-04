@@ -65,7 +65,7 @@ OpenRLHFは、Ray、vLLM、ZeRO-3、およびHuggingFace Transformersを基盤�
 - [Ray-based Reinforced Finetuning](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
 - RayとHybrid Engineに基づく[PPO](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh)および[REINFORCE++/REINFORCE++-baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh)のサポート (`--colocate_all_models`, `--vllm_enable_sleep` and `--vllm_gpu_memory_utilization 0.5`)
 - [NeMo Gym](./examples/scripts/train_reinforce_nemogym.sh) との統合により、外部評価環境を使用したエージェントベースの RLHF をサポート（`--agent_func_path` と NeMo Gym の統合）
-- DAPOからのRL Dynamic Samplingのサポート(`--dynamic_filtering` and `--dynamic_filtering_reward_range`)
+- 動的フィルタリングによる DAPO サンプリングのサポート（例: [train_ppo_ray_streaming.sh](./examples/scripts/train_ppo_ray_streaming.sh)、`--dynamic_filtering` と `--dynamic_filtering_reward_range`）
 - [DeepSpeed AutoTP トレーニング](./examples/scripts/train_sft_llama_tensor_parallelism.sh)のサポート (`--ds_tensor_parallel_size`)
 - [70億以上のパラメータを持つモデル](./examples/scripts/train_ppo_llama_ray_70b.sh)の完全なRLHF微調整のサポート。
 - RLHFタスクでの生成を加速するためのvLLMの統合（`--vllm_num_engines`）。
@@ -372,11 +372,12 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 ここで、`label_key`パラメータは、答えなどの追加のサンプル情報を報酬関数に渡すために使用されます。
 
-## 非同期RLHFとAgent RLHF
+## Agent RLHF
 
-OpenRLHFは、非同期RLHFとエージェントベースのRLHF実装の両方を包括的にサポートしています。これらの機能を使用するには、トレーニング設定に`--async_train`と`--agent_func_path`パラメータを含めるだけです。
+OpenRLHFはすべての学習実行フローをAgentとして扱い、サンプリングは `AgentExecutorBase` を通して token-in-token-out の軌跡を生成します。内蔵の実行器は2つあります。`SingleTurnAgentExecutor`（単発生成、必要なら `--remote_rm_url` で報酬取得。上の `reward_func` 例を参照）と、`MultiTurnAgentExecutor`（`AgentInstanceBase` の `reset/step` を使う多段対話。下の `agent_func` 例を参照）です。
+`--async_train` で非同期パイプラインを有効化し、`--agent_func_path` でカスタム `AgentExecutor`（多段）を読み込むか、デフォルトの単発実行器を使います。
 
-Agent APIは、より良いモジュール性と拡張性を提供するために、`AgentInstanceBase`と`AgentExecutorBase`クラスを使用したクラスベースのアプローチに再設計されました。
+Agent APIの中心は `AgentExecutorBase` です。単発は `SingleTurnAgentExecutor`、多段は `AgentInstanceBase` + `MultiTurnAgentExecutor` を使い、`reset/step` を実装して `AgentExecutor` クラスをエクスポートすれば利用できます。
 
 ```python
 # agent_func.py
@@ -384,7 +385,7 @@ import random
 from typing import Any, Dict
 
 import torch
-from openrlhf.utils.agent import AgentExecutorBase, AgentInstanceBase
+from openrlhf.utils.agent import AgentInstanceBase, MultiTurnAgentExecutor
 
 
 # A simple n-step random environment
@@ -426,22 +427,15 @@ class AgentInstance(AgentInstanceBase):
         }
 
 
-# You could override the execute function of AgentExecutorBase to add custom agent running logic
-class AgentExecutor(AgentExecutorBase):
-    def __init__(self, max_steps, max_length, llm_engine, hf_tokenizer, result_queue):
-        super().__init__(AgentInstance, max_steps, max_length, llm_engine, hf_tokenizer, result_queue)
-
-    async def execute(self, prompt, label, sampling_params):
-        # You could override the execute function of AgentExecutorBase to add custom agent running logic
-        return await super().execute(prompt, label, sampling_params)
+class AgentExecutor(MultiTurnAgentExecutor):
+    def __init__(self):
+        super().__init__(AgentInstance)
 ```
 
-また、`export OPENRLHF_ASYNC_NUM_TASKS=128`を設定することで、vLLMエンジンごとの最大同時エージェント数を設定できます。
-さらに、環境で`export OPENRLHF_ASYNC_QUEUE_SIZE=1`（このパラメータはバッファに保存できるデータのバッチ数を制御します）を設定することで、オフポリシーサンプリングの程度を制御できます。
+非同期サンプラーとトレーナのバッファサイズは `--async_queue_size` で設定できます（例: `--async_queue_size 1`、大きいほどオフポリシー、デフォルト1）。
 
 > [!NOTE]
-> `AgentExecutorBase`の`execute`関数をオーバーライドすることで、完全にカスタマイズされたエージェント実行プロセスを実装できます。この設計は**token-in-token-out原則**に従い、サンプリングとトレーニングサンプル間の一貫性を確保し、テキストレベルの処理で発生する可能性のある不整合を回避します。
-
+> 完全にカスタムなトークンレベル実行を行う場合は `AgentExecutorBase` を継承して `execute` を実装してください。この設計は**token-in-token-out原則**に従い、サンプリングとトレーニングの整合性を保ち、テキストレベルの不一致を避けます。
 
 
 > [!NOTE] 
