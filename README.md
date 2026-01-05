@@ -142,6 +142,9 @@ OpenRLHF **unifies generation and training through token-in-token-out agent exec
 
 ### Core Design Principles
 
+<details>
+<summary>Show core design principles</summary>
+
 | Principle | Description | Benefit |
 |-----------|-------------|---------|
 | **Token-in-Token-out** | All sampling produces token-level trajectories | Zero text-level mismatch |
@@ -149,6 +152,8 @@ OpenRLHF **unifies generation and training through token-in-token-out agent exec
 | **Algorithm-Agnostic** | RL algorithms (PPO, REINFORCE++, etc.) are decoupled from agent executors | Any algorithm works with any mode |
 | **Extensible** | Plug in custom rewards/environments easily | Rapid experimentation |
 | **Production-Ready** | Sync/Async/Hybrid Engine support | From research to deployment |
+
+</details>
 
 ### Two Execution Modes (Orthogonal to RL Algorithms)
 
@@ -167,6 +172,9 @@ OpenRLHF implements **PPO, REINFORCE++, REINFORCE++-baseline, GRPO, RLOO** with 
 
 **Key Design**: RL algorithms are **decoupled from agent execution modes**. All algorithms work seamlessly with both single-turn and multi-turn agent executors, running through the unified token-in-token-out pipeline for consistent behavior.
 
+<details>
+<summary>Show algorithm comparison table</summary>
+
 | Algorithm | `--advantage_estimator` | Key Feature | Best Use Case |
 |-----------|------------------------|-------------|---------------|
 | **PPO** | (default) | Full critic network | Stable training, proven results |
@@ -175,6 +183,8 @@ OpenRLHF implements **PPO, REINFORCE++, REINFORCE++-baseline, GRPO, RLOO** with 
 | **RLOO** | `rloo` | Per-token KL + PPO-clip | Multi-sample training |
 | **GRPO** | `group_norm` | Group normalization | Batch-based training |
 | **Dr. GRPO** | `dr_grpo` | Simplified GRPO | Removes local `/std` norm |
+
+</details>
 
 References: [Zhihu article](https://zhuanlan.zhihu.com/p/622134699) | [Notion best practices](https://hijkzzz.notion.site/rlhf-implementation-tricks?v=158d9a33ecc98132bf9e000c39227361)
 
@@ -185,6 +195,9 @@ References: [Zhihu article](https://zhuanlan.zhihu.com/p/622134699) | [Notion be
 OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 
 ### 🎯 Agent-Based RL Training (Core Innovation)
+
+<details>
+<summary>Show agent-based RL training details</summary>
 
 **Single-Turn Mode** (Default - 99% of use cases)
 - One-shot generation per prompt
@@ -199,7 +212,12 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 - [NeMo Gym integration](./examples/scripts/train_reinforce_nemogym.sh) for external environments
 - [Async pipeline](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh) (`--async_train`) for higher throughput
 
+</details>
+
 ### 🎓 Supervised Training & Preference Learning
+
+<details>
+<summary>Show supervised training & preference learning table</summary>
 
 | Method | Script | Description |
 |--------|--------|-------------|
@@ -213,7 +231,12 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 | **Conditional SFT** | [train_conditional_llama.sh](./examples/scripts/train_conditional_llama.sh) | Quality-conditioned training |
 | **Distillation** | [train_knowledge_distillation.sh](./examples/scripts/train_knowledge_distillation.sh) | Knowledge transfer |
 
+</details>
+
 ### ⚡ Advanced Capabilities
+
+<details>
+<summary>Show advanced capabilities</summary>
 
 **Efficiency Optimizations**
 - Sample packing (`--packing_samples`) for all training modes
@@ -235,6 +258,8 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 - Wandb (`--use_wandb`) and TensorBoard (`--use_tensorboard`) logging
 - Checkpoint recovery (`--load_checkpoint`, `--save_steps`)
 - Evaluation datasets (`--eval_dataset`)
+
+</details>
 
 ---
 

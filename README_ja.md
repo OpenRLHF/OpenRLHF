@@ -142,6 +142,9 @@ OpenRLHFは**token-in-token-outエージェント実行を通じて生成と学�
 
 ### コア設計原則
 
+<details>
+<summary>コア設計原則を表示</summary>
+
 | 原則 | 説明 | 利点 |
 |------|------|------|
 | **Token-in-Token-out** | すべてのサンプリングがトークンレベルの軌跡を生成 | テキストレベルのミスマッチゼロ |
@@ -149,6 +152,8 @@ OpenRLHFは**token-in-token-outエージェント実行を通じて生成と学�
 | **アルゴリズム非依存** | RLアルゴリズム（PPO、REINFORCE++等）がエージェント実行器から分離 | 任意のアルゴリズムが任意のモードで動作 |
 | **拡張可能** | カスタム報酬/環境を簡単にプラグイン | 迅速な実験 |
 | **本番環境対応** | 同期/非同期/ハイブリッドエンジンサポート | 研究から展開まで |
+
+</details>
 
 ### 2つの実行モード（RLアルゴリズムと直交）
 
@@ -167,6 +172,9 @@ OpenRLHFは、実践ガイドとコミュニティのベストプラクティス
 
 **重要な設計**：RLアルゴリズムはエージェント実行モードから**分離**されています。すべてのアルゴリズムは、統一されたtoken-in-token-outパイプラインを通じて実行され、シングルターンとマルチターンの両方のエージェント実行器とシームレスに連携し、一貫した動作を保証します。
 
+<details>
+<summary>アルゴリズム比較表を表示</summary>
+
 | アルゴリズム | `--advantage_estimator` | 主な特徴 | 最適なユースケース |
 |------------|------------------------|---------|------------------|
 | **PPO** | (デフォルト) | 完全なcriticネットワーク | 安定した学習、実証済みの結果 |
@@ -175,6 +183,8 @@ OpenRLHFは、実践ガイドとコミュニティのベストプラクティス
 | **RLOO** | `rloo` | トークンごとのKL + PPO-clip | マルチサンプル学習 |
 | **GRPO** | `group_norm` | グループ正規化 | バッチベースの学習 |
 | **Dr. GRPO** | `dr_grpo` | 簡略化されたGRPO | ローカル`/std`正規化の削除 |
+
+</details>
 
 参考：[Zhihu記事](https://zhuanlan.zhihu.com/p/622134699) | [Notionベストプラクティス](https://hijkzzz.notion.site/rlhf-implementation-tricks?v=158d9a33ecc98132bf9e000c39227361)
 
@@ -190,6 +200,9 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 
 ### 🎯 エージェントベースのRL学習（コアイノベーション）
 
+<details>
+<summary>エージェントベースRL学習の詳細を表示</summary>
+
 **シングルターンモード**（デフォルト - 99%のユースケース）
 - プロンプトごとに1回の生成
 - すべてのRLアルゴリズムで動作：[PPO](./examples/scripts/train_ppo_llama_ray.sh)、[REINFORCE++/baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh)
@@ -203,7 +216,12 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 - 外部環境用の[NeMo Gym統合](./examples/scripts/train_reinforce_nemogym.sh)
 - スループット向上のための[非同期パイプライン](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh)（`--async_train`）
 
+</details>
+
 ### 🎓 教師あり学習と選好学習
+
+<details>
+<summary>教師あり学習と選好学習の表を表示</summary>
 
 | 手法 | スクリプト | 説明 |
 |------|-----------|------|
@@ -217,7 +235,12 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 | **条件付きSFT** | [train_conditional_llama.sh](./examples/scripts/train_conditional_llama.sh) | 品質条件付き学習 |
 | **蒸留** | [train_knowledge_distillation.sh](./examples/scripts/train_knowledge_distillation.sh) | 知識転移 |
 
+</details>
+
 ### ⚡ 高度な機能
+
+<details>
+<summary>高度な機能を表示</summary>
 
 **効率の最適化**
 - すべての学習モードでのサンプルパッキング（`--packing_samples`）
@@ -239,6 +262,8 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 - Wandb（`--use_wandb`）とTensorBoard（`--use_tensorboard`）ロギング
 - チェックポイント復旧（`--load_checkpoint`、`--save_steps`）
 - 評価データセット（`--eval_dataset`）
+
+</details>
 
 ---
 

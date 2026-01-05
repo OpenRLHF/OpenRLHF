@@ -142,6 +142,9 @@ OpenRLHF **通过 token-in-token-out 的 Agent 执行统一生成和训练**，�
 
 ### 核心设计原则
 
+<details>
+<summary>展开核心设计原则</summary>
+
 | 原则 | 描述 | 优势 |
 |------|------|------|
 | **Token-in-Token-out** | 所有采样产生 token 级轨迹 | 零文本级不匹配 |
@@ -149,6 +152,8 @@ OpenRLHF **通过 token-in-token-out 的 Agent 执行统一生成和训练**，�
 | **算法无关** | RL 算法（PPO、REINFORCE++ 等）与 Agent 执行器解耦 | 任何算法适用于任何模式 |
 | **可扩展** | 轻松插入自定义奖励/环境 | 快速实验 |
 | **生产就绪** | 支持同步/异步/混合引擎 | 从研究到部署 |
+
+</details>
 
 ### 两种执行模式（与 RL 算法正交）
 
@@ -167,6 +172,9 @@ OpenRLHF 实现了 **PPO、REINFORCE++、REINFORCE++-baseline、GRPO、RLOO**，
 
 **关键设计**：RL 算法与 Agent 执行模式**解耦**。所有算法都可以与单轮和多轮 Agent 执行器无缝配合，通过统一的 token-in-token-out 流程运行，确保行为一致。
 
+<details>
+<summary>展开算法对比表</summary>
+
 | 算法 | `--advantage_estimator` | 关键特性 | 最佳用例 |
 |------|-------------------------|---------|---------|
 | **PPO** | (默认) | 完整 critic 网络 | 稳定训练，成熟结果 |
@@ -175,6 +183,8 @@ OpenRLHF 实现了 **PPO、REINFORCE++、REINFORCE++-baseline、GRPO、RLOO**，
 | **RLOO** | `rloo` | Per-token KL + PPO-clip | 多样本训练 |
 | **GRPO** | `group_norm` | 组归一化 | 基于批次的训练 |
 | **Dr. GRPO** | `dr_grpo` | 简化的 GRPO | 移除局部 `/std` 归一化 |
+
+</details>
 
 参考：[知乎文章](https://zhuanlan.zhihu.com/p/622134699) | [Notion 最佳实践](https://hijkzzz.notion.site/rlhf-implementation-tricks?v=158d9a33ecc98132bf9e000c39227361)
 
@@ -186,6 +196,9 @@ OpenRLHF 实现了 **PPO、REINFORCE++、REINFORCE++-baseline、GRPO、RLOO**，
 OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 
 ### 🎯 基于 Agent 的 RL 训练（核心创新）
+
+<details>
+<summary>展开基于 Agent 的 RL 训练细节</summary>
 
 **单轮模式**（默认 - 99% 的用例）
 - 每个提示单次生成
@@ -200,7 +213,12 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 - [NeMo Gym 集成](./examples/scripts/train_reinforce_nemogym.sh)用于外部环境
 - [异步流水线](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh)（`--async_train`）提高吞吐量
 
+</details>
+
 ### 🎓 监督训练和偏好学习
+
+<details>
+<summary>展开监督训练与偏好学习表</summary>
 
 | 方法 | 脚本 | 描述 |
 |------|------|------|
@@ -214,7 +232,12 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 | **条件 SFT** | [train_conditional_llama.sh](./examples/scripts/train_conditional_llama.sh) | 质量条件训练 |
 | **蒸馏** | [train_knowledge_distillation.sh](./examples/scripts/train_knowledge_distillation.sh) | 知识迁移 |
 
+</details>
+
 ### ⚡ 高级能力
+
+<details>
+<summary>展开高级能力</summary>
 
 **效率优化**
 - 所有训练模式的样本打包（`--packing_samples`）
@@ -236,6 +259,8 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 - Wandb（`--use_wandb`）和 TensorBoard（`--use_tensorboard`）日志
 - 检查点恢复（`--load_checkpoint`、`--save_steps`）
 - 评估数据集（`--eval_dataset`）
+
+</details>
 
 ---
 
