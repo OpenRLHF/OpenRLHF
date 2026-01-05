@@ -57,7 +57,7 @@ OpenRLHFは、**Ray + vLLM分散アーキテクチャ**と**統一エージェ�
 - [2025/8] [ProRL V2](https://hijkzzz.notion.site/prorl-v2) がREINFORCE++-baselineを使用して最先端の1.5B推論モデルを学習し、ブログ記事 [REINFORCE++-baseline is all you need in RLVR](https://medium.com/@janhu9527/reinforce-baseline-is-all-you-need-in-rlvr-f5406930aa85) をリリース。
 - [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) がREINFORCE++-baselineと非常に類似した手法を用いて推論モデルを学習。
 - [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) がOpenRLHFのフォークとしてリリース。集中型マルチエージェント相互作用と分散ポリシー学習を統合することで、LLMベースのマルチエージェントシステムをRLで学習することを目的としています。
-- [2025/5] OpenRLHF 0.8.0が[非同期パイプラインRLHF](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh)（`--async_train`）と[非同期エージェントRLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)（`--agent_func_path`）をサポートし、クラスベースのエージェントAPIを再設計
+- [2025/5] OpenRLHF 0.8.0が[非同期パイプラインRLHF](./examples/test_scripts/train_reinforce_llama_ray_async.sh)（`--async_train`）と[非同期エージェントRLHF](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)（`--agent_func_path`）をサポートし、クラスベースのエージェントAPIを再設計
 - [2025/4] ブログ記事 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html) を公開
 - [2025/4] Clean OpenRLHF：単一コントローラと統一パッキングサンプルに基づいてソースコードをリファクタリング
 - [2025/3] CMUの[Advanced Natural Language Processing Spring 2025](https://cmu-l3.github.io/anlp-spring2025/)コースでOpenRLHFがRLHFフレームワーク教材として採用されました。
@@ -205,16 +205,16 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 
 **シングルターンモード**（デフォルト - 99%のユースケース）
 - プロンプトごとに1回の生成
-- すべてのRLアルゴリズムで動作：[PPO](./examples/scripts/train_ppo_llama_ray.sh)、[REINFORCE++/baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh)
-- [カスタム報酬関数](./examples/scripts/train_ppo_llama_with_reward_fn.sh)（`--remote_rm_url`）
-- GPU使用率を最大化する[ハイブリッドエンジン](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh)
+- すべてのRLアルゴリズムで動作：[PPO](./examples/scripts/train_ppo_ray_hybrid_engine.sh)、[REINFORCE++/baseline/GRPO/RLOO](./examples/scripts/train_reinforce_baseline_hybrid_engine.sh)
+- [カスタム報酬関数](./examples/scripts/train_ppo_with_reward_fn.sh)（`--remote_rm_url`）
+- GPU使用率を最大化する[ハイブリッドエンジン](./examples/scripts/train_ppo_ray_hybrid_engine.sh)
 
 **マルチターンモード**（高度 - インタラクティブタスク）
 - 環境フィードバックとのマルチステップ相互作用
 - すべてのRLアルゴリズムで動作
-- [カスタムエージェント関数](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)（`--agent_func_path`）
-- 外部環境用の[NeMo Gym統合](./examples/scripts/train_reinforce_nemogym.sh)
-- スループット向上のための[非同期パイプライン](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh)（`--async_train`）
+- [カスタムエージェント関数](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)（`--agent_func_path`）
+- NeMo Gym統合：NeMo Gym rollouts と統合する agent executor の例として `examples/python/agent_func_nemogym_executor.py` を参照
+- スループット向上のための[非同期パイプライン](./examples/test_scripts/train_reinforce_llama_ray_async.sh)（`--async_train`）
 
 </details>
 
@@ -225,14 +225,14 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 
 | 手法 | スクリプト | 説明 |
 |------|-----------|------|
-| **SFT** | [train_sft_llama.sh](./examples/scripts/train_sft_llama.sh) | パッキング付き教師あり微調整 |
+| **SFT** | [train_sft.sh](./examples/scripts/train_sft.sh) | パッキング付き教師あり微調整 |
 | **DPO/IPO/cDPO** | [train_dpo_llama.sh](./examples/scripts/train_dpo_llama.sh) | 直接選好最適化 |
 | **KTO** | [train_kto_llama.sh](./examples/scripts/train_kto_llama.sh) | Kahneman-Tversky最適化 |
-| **反復DPO** | [train_iterative_dpo_llama.sh](./examples/scripts/train_iterative_dpo_llama.sh) | オンライン選好学習 |
-| **報酬モデル** | [train_rm_llama.sh](./examples/scripts/train_rm_llama.sh) | 報酬モデルの学習 |
+| **反復DPO** | [train_iterative_dpo.sh](./examples/scripts/train_iterative_dpo.sh) | オンライン選好学習 |
+| **報酬モデル** | [train_rm.sh](./examples/scripts/train_rm.sh) | 報酬モデルの学習 |
 | **プロセス報酬モデル** | [train_prm_mistral.sh](./examples/scripts/train_prm_mistral.sh) | ステップバイステップ報酬モデル |
 | **リジェクションサンプリング** | [train_rejection_sampling_llama.sh](./examples/scripts/train_rejection_sampling_llama.sh) | Best-of-Nサンプリング |
-| **条件付きSFT** | [train_conditional_llama.sh](./examples/scripts/train_conditional_llama.sh) | 品質条件付き学習 |
+| **条件付きSFT** | [train_conditional.sh](./examples/scripts/train_conditional.sh) | 品質条件付き学習 |
 | **蒸留** | [train_knowledge_distillation.sh](./examples/scripts/train_knowledge_distillation.sh) | 知識転移 |
 
 </details>
@@ -246,16 +246,16 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 - すべての学習モードでのサンプルパッキング（`--packing_samples`）
 - 高速生成のためのvLLM加速（`--vllm_num_engines`）
 - TIS（vLLM 重要度サンプリング補正）/ ICEPOP：`--enable_vllm_is_correction`、`--vllm_is_truncated_threshold 0.5 5.0`、`--use_icepop`（PPO のみ）
-- DAPO [動的フィルタリング](./examples/scripts/train_ppo_ray_streaming.sh)（`--dynamic_filtering`）
+- DAPO [動的フィルタリング](./examples/scripts/train_dapo_ray_hybrid_engine.sh)（`--dynamic_filtering`）
 
 **スケーラビリティ**
-- テンソル並列化のための[DeepSpeed AutoTP](./examples/scripts/train_sft_llama_tensor_parallelism.sh)
-- 長文脈のための[RingAttention](./examples/scripts/train_dpo_ring_llama.sh)（`--ring_attn_size`）
-- [SLURM](./examples/scripts/train_ppo_llama_ray_slurm.sh)を使用したマルチノード学習
+- DeepSpeed AutoTP（テンソル並列化）は、学習スクリプト内の `--ds_tensor_parallel_size` を参照
+- 長文脈のための[RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh)（`--ring_attn_size`）
+- [SLURM](./examples/scripts/train_ppo_ray_slurm.sh)を使用したマルチノード学習
 
 **モデルサポート**
 - [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--lora_rank`、`--load_in_4bit`）
-- [専門家混合（MoE）](./examples/test_scripts/train_sft_mixtral_lora.sh)（`--aux_loss_coef`）
+- [専門家混合（MoE）](./examples/test_scripts/train_sft_moe.sh)（`--aux_loss_coef`）
 - FlashAttention（`--attn_implementation`）
 - HuggingFaceチャットテンプレート（`--apply_chat_template`）
 

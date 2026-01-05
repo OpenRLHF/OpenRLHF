@@ -57,7 +57,7 @@ OpenRLHF is **the first** high-performance, production-ready open-source RLHF fr
 - [2025/8] [ProRL V2](https://hijkzzz.notion.site/prorl-v2) uses REINFORCE++-baseline to train a state-of-the-art 1.5B reasoning model and releases the blog post [REINFORCE++-baseline is all you need in RLVR](https://medium.com/@janhu9527/reinforce-baseline-is-all-you-need-in-rlvr-f5406930aa85).
 - [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) uses the method quite similar to REINFORCE++-baseline to train the reasoning models.
 - [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) has been released as a fork of OpenRLHF. It is designed to train LLM-based multi-agent systems using RL, by integrating centralized multi-agent interactions with distributed policy training.
-- [2025/5] OpenRLHF 0.8.0 supports [Async Pipeline RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh) (`--async_train`) and [Async Agent RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)(`--agent_func_path`) with redesigned class-based Agent API
+- [2025/5] OpenRLHF 0.8.0 supports [Async Pipeline RLHF](./examples/test_scripts/train_reinforce_llama_ray_async.sh) (`--async_train`) and [Async Agent RLHF](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh) (`--agent_func_path`) with redesigned class-based Agent API
 - [2025/4] Post the blog [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html)
 - [2025/4] Clean OpenRLHF: Refactored the source code based on Single Controller and Unified Packing Samples
 - [2025/3] The CMU [Advanced Natural Language Processing Spring 2025](https://cmu-l3.github.io/anlp-spring2025/) course uses OpenRLHF as the RLHF framework teaching case.
@@ -201,16 +201,16 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 
 **Single-Turn Mode** (Default - 99% of use cases)
 - One-shot generation per prompt
-- Works with all RL algorithms: [PPO](./examples/scripts/train_ppo_llama_ray.sh), [REINFORCE++/baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh)
-- [Custom reward functions](./examples/scripts/train_ppo_llama_with_reward_fn.sh) (`--remote_rm_url`)
-- [Hybrid Engine](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh) for maximum GPU utilization
+- Works with all RL algorithms: [PPO](./examples/scripts/train_ppo_ray_hybrid_engine.sh), [REINFORCE++/baseline/GRPO/RLOO](./examples/scripts/train_reinforce_baseline_hybrid_engine.sh)
+- [Custom reward functions](./examples/scripts/train_ppo_with_reward_fn.sh) (`--remote_rm_url`)
+- [Hybrid Engine](./examples/scripts/train_ppo_ray_hybrid_engine.sh) for maximum GPU utilization
 
 **Multi-Turn Mode** (Advanced - Interactive tasks)
 - Multi-step interactions with environment feedback
 - Works with all RL algorithms
-- [Custom agent functions](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh) (`--agent_func_path`)
-- [NeMo Gym integration](./examples/scripts/train_reinforce_nemogym.sh) for external environments
-- [Async pipeline](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh) (`--async_train`) for higher throughput
+- [Custom agent functions](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh) (`--agent_func_path`)
+- NeMo Gym integration: see `examples/python/agent_func_nemogym_executor.py` for an agent executor that integrates NeMo Gym rollouts
+- [Async pipeline](./examples/test_scripts/train_reinforce_llama_ray_async.sh) (`--async_train`) for higher throughput
 
 </details>
 
@@ -221,14 +221,14 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 
 | Method | Script | Description |
 |--------|--------|-------------|
-| **SFT** | [train_sft_llama.sh](./examples/scripts/train_sft_llama.sh) | Supervised fine-tuning with packing |
+| **SFT** | [train_sft.sh](./examples/scripts/train_sft.sh) | Supervised fine-tuning with packing |
 | **DPO/IPO/cDPO** | [train_dpo_llama.sh](./examples/scripts/train_dpo_llama.sh) | Direct preference optimization |
 | **KTO** | [train_kto_llama.sh](./examples/scripts/train_kto_llama.sh) | Kahneman-Tversky optimization |
-| **Iterative DPO** | [train_iterative_dpo_llama.sh](./examples/scripts/train_iterative_dpo_llama.sh) | Online preference learning |
-| **Reward Model** | [train_rm_llama.sh](./examples/scripts/train_rm_llama.sh) | Train reward models |
+| **Iterative DPO** | [train_iterative_dpo.sh](./examples/scripts/train_iterative_dpo.sh) | Online preference learning |
+| **Reward Model** | [train_rm.sh](./examples/scripts/train_rm.sh) | Train reward models |
 | **Process RM** | [train_prm_mistral.sh](./examples/scripts/train_prm_mistral.sh) | Step-by-step reward models |
 | **Rejection Sampling** | [train_rejection_sampling_llama.sh](./examples/scripts/train_rejection_sampling_llama.sh) | Best-of-N sampling |
-| **Conditional SFT** | [train_conditional_llama.sh](./examples/scripts/train_conditional_llama.sh) | Quality-conditioned training |
+| **Conditional SFT** | [train_conditional.sh](./examples/scripts/train_conditional.sh) | Quality-conditioned training |
 | **Distillation** | [train_knowledge_distillation.sh](./examples/scripts/train_knowledge_distillation.sh) | Knowledge transfer |
 
 </details>
@@ -241,16 +241,16 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 **Efficiency Optimizations**
 - Sample packing (`--packing_samples`) for all training modes
 - vLLM acceleration (`--vllm_num_engines`) for fast generation
-- DAPO [dynamic filtering](./examples/scripts/train_ppo_ray_streaming.sh) (`--dynamic_filtering`)
+- DAPO [dynamic filtering](./examples/scripts/train_dapo_ray_hybrid_engine.sh) (`--dynamic_filtering`)
 
 **Scalability**
-- [DeepSpeed AutoTP](./examples/scripts/train_sft_llama_tensor_parallelism.sh) for tensor parallelism
-- [RingAttention](./examples/scripts/train_dpo_ring_llama.sh) for long context (`--ring_attn_size`)
-- Multi-node training with [SLURM](./examples/scripts/train_ppo_llama_ray_slurm.sh)
+- DeepSpeed AutoTP for tensor parallelism (see `--ds_tensor_parallel_size` in training scripts)
+- [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh) for long context (`--ring_attn_size`)
+- Multi-node training with [SLURM](./examples/scripts/train_ppo_ray_slurm.sh)
 
 **Model Support**
 - [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh) (`--lora_rank`, `--load_in_4bit`)
-- [Mixture of Experts (MoE)](./examples/test_scripts/train_sft_mixtral_lora.sh) (`--aux_loss_coef`)
+- [Mixture of Experts (MoE)](./examples/test_scripts/train_sft_moe.sh) (`--aux_loss_coef`)
 - FlashAttention (`--attn_implementation`)
 - HuggingFace chat templates (`--apply_chat_template`)
 
@@ -559,7 +559,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 > [!TIP]
 > **Use Cases**: Code generation (execute tests), Math (verify solutions), Formatting (check structure), Multi-objective (combine multiple signals)
 
-📖 **Full Example**: [examples/scripts/train_ppo_llama_with_reward_fn.sh](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
+📖 **Full Example**: [examples/scripts/train_ppo_with_reward_fn.sh](./examples/scripts/train_ppo_with_reward_fn.sh)
 
 ---
 
@@ -654,10 +654,10 @@ ray job submit --address="http://127.0.0.1:8265" \
 > Asynchronous training may affect training stability. Use it only when throughput is critical and convergence is validated.
 
 📚 **Examples**:
-- Single-turn: [train_ppo_llama_ray.sh](./examples/scripts/train_ppo_llama_ray.sh)
-- Custom reward: [train_ppo_llama_with_reward_fn.sh](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
-- Multi-turn: [train_reinforce_baseline_llama_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)
-- NeMo Gym: [train_reinforce_nemogym.sh](./examples/scripts/train_reinforce_nemogym.sh)
+- Single-turn: [train_ppo_ray_hybrid_engine.sh](./examples/scripts/train_ppo_ray_hybrid_engine.sh)
+- Custom reward: [train_ppo_with_reward_fn.sh](./examples/scripts/train_ppo_with_reward_fn.sh)
+- Multi-turn: [train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)
+- NeMo Gym: `examples/python/agent_func_nemogym_executor.py`
 
 ---
 

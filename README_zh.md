@@ -57,7 +57,7 @@ OpenRLHF 是**首个**结合 **Ray + vLLM 分布式架构**与**统一 Agent 设
 - [2025/8] [ProRL V2](https://hijkzzz.notion.site/prorl-v2) 使用 REINFORCE++-baseline 训练最先进的 1.5B 推理模型，并发布博文 [REINFORCE++-baseline is all you need in RLVR](https://medium.com/@janhu9527/reinforce-baseline-is-all-you-need-in-rlvr-f5406930aa85)。
 - [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) 使用与 REINFORCE++-baseline 非常相似的方法训练推理模型。
 - [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) 作为 OpenRLHF 的分支发布。它旨在通过集成中心化多智能体交互与分布式策略训练来训练基于 LLM 的多智能体系统。
-- [2025/5] OpenRLHF 0.8.0 支持[异步流水线 RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh)（`--async_train`）和[异步 Agent RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)（`--agent_func_path`），并重新设计了基于类的 Agent API
+- [2025/5] OpenRLHF 0.8.0 支持[异步流水线 RLHF](./examples/test_scripts/train_reinforce_llama_ray_async.sh)（`--async_train`）和[异步 Agent RLHF](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)（`--agent_func_path`），并重新设计了基于类的 Agent API
 - [2025/4] 发布博客 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html)
 - [2025/4] Clean OpenRLHF：基于单控制器和统一打包样本重构了源代码
 - [2025/3] CMU [高级自然语言处理 2025 春季](https://cmu-l3.github.io/anlp-spring2025/)课程使用 OpenRLHF 作为 RLHF 框架教学案例。
@@ -202,16 +202,16 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 
 **单轮模式**（默认 - 99% 的用例）
 - 每个提示单次生成
-- 适用于所有 RL 算法：[PPO](./examples/scripts/train_ppo_llama_ray.sh)、[REINFORCE++/baseline/GRPO/RLOO](./examples/scripts/train_reinforce_llama_ray_hybrid_engine.sh)
-- [自定义奖励函数](./examples/scripts/train_ppo_llama_with_reward_fn.sh)（`--remote_rm_url`）
-- [混合引擎](./examples/scripts/train_ppo_llama_ray_hybrid_engine.sh)以最大化 GPU 利用率
+- 适用于所有 RL 算法：[PPO](./examples/scripts/train_ppo_ray_hybrid_engine.sh)、[REINFORCE++/baseline/GRPO/RLOO](./examples/scripts/train_reinforce_baseline_hybrid_engine.sh)
+- [自定义奖励函数](./examples/scripts/train_ppo_with_reward_fn.sh)（`--remote_rm_url`）
+- [混合引擎](./examples/scripts/train_ppo_ray_hybrid_engine.sh)以最大化 GPU 利用率
 
 **多轮模式**（高级 - 交互式任务）
 - 与环境反馈的多步交互
 - 适用于所有 RL 算法
-- [自定义 Agent 函数](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)（`--agent_func_path`）
-- [NeMo Gym 集成](./examples/scripts/train_reinforce_nemogym.sh)用于外部环境
-- [异步流水线](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh)（`--async_train`）提高吞吐量
+- [自定义 Agent 函数](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)（`--agent_func_path`）
+- NeMo Gym 集成：参见 `examples/python/agent_func_nemogym_executor.py`（集成 NeMo Gym rollout 的 agent executor 示例）
+- [异步流水线](./examples/test_scripts/train_reinforce_llama_ray_async.sh)（`--async_train`）提高吞吐量
 
 </details>
 
@@ -222,14 +222,14 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 
 | 方法 | 脚本 | 描述 |
 |------|------|------|
-| **SFT** | [train_sft_llama.sh](./examples/scripts/train_sft_llama.sh) | 带打包的监督微调 |
+| **SFT** | [train_sft.sh](./examples/scripts/train_sft.sh) | 带打包的监督微调 |
 | **DPO/IPO/cDPO** | [train_dpo_llama.sh](./examples/scripts/train_dpo_llama.sh) | 直接偏好优化 |
 | **KTO** | [train_kto_llama.sh](./examples/scripts/train_kto_llama.sh) | Kahneman-Tversky 优化 |
-| **迭代 DPO** | [train_iterative_dpo_llama.sh](./examples/scripts/train_iterative_dpo_llama.sh) | 在线偏好学习 |
-| **奖励模型** | [train_rm_llama.sh](./examples/scripts/train_rm_llama.sh) | 训练奖励模型 |
+| **迭代 DPO** | [train_iterative_dpo.sh](./examples/scripts/train_iterative_dpo.sh) | 在线偏好学习 |
+| **奖励模型** | [train_rm.sh](./examples/scripts/train_rm.sh) | 训练奖励模型 |
 | **过程奖励模型** | [train_prm_mistral.sh](./examples/scripts/train_prm_mistral.sh) | 逐步奖励模型 |
 | **拒绝采样** | [train_rejection_sampling_llama.sh](./examples/scripts/train_rejection_sampling_llama.sh) | Best-of-N 采样 |
-| **条件 SFT** | [train_conditional_llama.sh](./examples/scripts/train_conditional_llama.sh) | 质量条件训练 |
+| **条件 SFT** | [train_conditional.sh](./examples/scripts/train_conditional.sh) | 质量条件训练 |
 | **蒸馏** | [train_knowledge_distillation.sh](./examples/scripts/train_knowledge_distillation.sh) | 知识迁移 |
 
 </details>
@@ -242,16 +242,16 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 **效率优化**
 - 所有训练模式的样本打包（`--packing_samples`）
 - 快速生成的 vLLM 加速（`--vllm_num_engines`）
-- DAPO [动态过滤](./examples/scripts/train_ppo_ray_streaming.sh)（`--dynamic_filtering`）
+- DAPO [动态过滤](./examples/scripts/train_dapo_ray_hybrid_engine.sh)（`--dynamic_filtering`）
 
 **可扩展性**
-- 张量并行的 [DeepSpeed AutoTP](./examples/scripts/train_sft_llama_tensor_parallelism.sh)
-- 长上下文的 [RingAttention](./examples/scripts/train_dpo_ring_llama.sh)（`--ring_attn_size`）
-- 使用 [SLURM](./examples/scripts/train_ppo_llama_ray_slurm.sh) 的多节点训练
+- 张量并行的 DeepSpeed AutoTP（参见训练脚本中的 `--ds_tensor_parallel_size`）
+- 长上下文的 [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh)（`--ring_attn_size`）
+- 使用 [SLURM](./examples/scripts/train_ppo_ray_slurm.sh) 的多节点训练
 
 **模型支持**
 - [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--lora_rank`、`--load_in_4bit`）
-- [专家混合（MoE）](./examples/test_scripts/train_sft_mixtral_lora.sh)（`--aux_loss_coef`）
+- [专家混合（MoE）](./examples/test_scripts/train_sft_moe.sh)（`--aux_loss_coef`）
 - FlashAttention（`--attn_implementation`）
 - HuggingFace 聊天模板（`--apply_chat_template`）
 
@@ -558,7 +558,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 > [!TIP]
 > **使用案例**：代码生成（执行测试）、数学（验证解决方案）、格式化（检查结构）、多目标（组合多个信号）
 
-📖 **完整示例**：[examples/scripts/train_ppo_llama_with_reward_fn.sh](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
+📖 **完整示例**：[examples/scripts/train_ppo_with_reward_fn.sh](./examples/scripts/train_ppo_with_reward_fn.sh)
 
 ---
 
@@ -653,10 +653,10 @@ ray job submit --address="http://127.0.0.1:8265" \
 > 异步训练可能会影响训练稳定性。仅在吞吐量至关重要且收敛已验证时使用。
 
 📚 **示例**：
-- 单轮：[train_ppo_llama_ray.sh](./examples/scripts/train_ppo_llama_ray.sh)
-- 自定义奖励：[train_ppo_llama_with_reward_fn.sh](./examples/scripts/train_ppo_llama_with_reward_fn.sh)
-- 多轮：[train_reinforce_baseline_llama_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)
-- NeMo Gym：[train_reinforce_nemogym.sh](./examples/scripts/train_reinforce_nemogym.sh)
+- 单轮：[train_ppo_ray_hybrid_engine.sh](./examples/scripts/train_ppo_ray_hybrid_engine.sh)
+- 自定义奖励：[train_ppo_with_reward_fn.sh](./examples/scripts/train_ppo_with_reward_fn.sh)
+- 多轮：[train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)
+- NeMo Gym：`examples/python/agent_func_nemogym_executor.py`
 
 ---
 

@@ -87,6 +87,8 @@ OPTIMIZER_ARGS=(
    --init_kl_coef 1e-5
    --use_kl_loss
    --kl_estimator k2
+   --enable_vllm_is_correction
+   --use_icepop
 )
 
 LOG_ARGS=(
