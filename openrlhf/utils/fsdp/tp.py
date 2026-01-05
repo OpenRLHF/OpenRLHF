@@ -5,17 +5,81 @@ Tensor Parallelism for FSDP2
 Usage:
     model = apply_tensor_parallel(model, tp_mesh, sequence_parallel=True)
     model = fully_shard(model, ...)  # Apply FSDP after TP
+
+Reference: AReaL (areal/utils/fsdp/parallel.py)
 """
 
 import logging
 from functools import partial
 
 import torch.nn as nn
+from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor, Replicate, Shard, distribute_tensor
-from torch.distributed.tensor.parallel import ColwiseParallel, RowwiseParallel, SequenceParallel, parallelize_module
-from torch.distributed.tensor.parallel.style import distribute_module
+from torch.distributed.tensor.parallel import (
+    ColwiseParallel,
+    RowwiseParallel,
+    SequenceParallel,
+    parallelize_module,
+)
+from torch.distributed.tensor.parallel.style import ParallelStyle, distribute_module
+from torch.distributed.tensor.placement_types import Placement
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# ReplicateParallel Style (from AReaL)
+# =============================================================================
+
+
+class ReplicateParallel(ParallelStyle):
+    """Replicate computation style for modules like Q/K norm and score layers.
+
+    This wrapping ensures:
+    1. Module parameters are DTensors on the given mesh (for gradient norm clipping)
+    2. Proper input/output conversion between Tensor and DTensor
+
+    Reference: AReaL (areal/utils/fsdp/parallel.py)
+    """
+
+    def __init__(
+        self,
+        *,
+        input_layout: Placement | None = None,
+        desired_input_layout: Placement | None = None,
+        output_layout: Placement | None = None,
+        use_local_output: bool = True,
+    ):
+        super().__init__()
+        self.input_layout = input_layout or Replicate()
+        self.output_layout = output_layout or Replicate()
+        self.desired_input_layout = desired_input_layout or Replicate()
+        self.use_local_output = use_local_output
+
+    @staticmethod
+    def _prepare_input_fn(input_layout, desired_input_layout, mod, inputs, device_mesh):
+        input_tensor = inputs[0]
+        if not isinstance(input_tensor, DTensor):
+            input_tensor = DTensor.from_local(input_tensor, device_mesh, (input_layout,), run_check=False)
+
+        if input_layout != desired_input_layout:
+            input_tensor = input_tensor.redistribute(placements=(desired_input_layout,), async_op=True)
+        return (input_tensor, *inputs[1:])
+
+    @staticmethod
+    def _prepare_output_fn(output_layout, use_local_output, mod, outputs, device_mesh):
+        if outputs.placements != (output_layout,):
+            outputs = outputs.redistribute(placements=(output_layout,), async_op=True)
+        return outputs.to_local() if use_local_output else outputs
+
+    def _apply(self, module: nn.Module, device_mesh: DeviceMesh) -> nn.Module:
+        return distribute_module(
+            module,
+            device_mesh,
+            None,
+            partial(self._prepare_input_fn, self.input_layout, self.desired_input_layout),
+            partial(self._prepare_output_fn, self.output_layout, self.use_local_output),
+        )
 
 
 # =============================================================================
@@ -252,10 +316,24 @@ def _llama_plan(model, sequence_parallel):
 
 
 def _qwen_plan(model, sequence_parallel):
-    """Qwen plan: uses SequenceParallelAllGather for LayerNorm."""
-    # q_norm/k_norm don't need special handling: they receive Head-sharded input
-    # from ColwiseParallel q_proj/k_proj and RMSNorm computes per-token independently.
-    return _base_plan(sequence_parallel, SequenceParallelAllGather)
+    """Qwen plan: adds ReplicateParallel for Q/K norm.
+
+    Q/K norms (Qwen3) receive head-sharded input from ColwiseParallel q_proj/k_proj.
+    They compute per-token independently, but need ReplicateParallel to:
+    1. Ensure parameters are DTensors on the TP mesh (for gradient norm clipping)
+    2. Ensure consistent mesh structure across all parameters
+
+    Reference: AReaL (areal/utils/fsdp/parallel.py)
+    """
+    plan = _base_plan(sequence_parallel, SequenceParallelAllGather)
+    # Add Q/K norm handling for Qwen3 - ReplicateParallel ensures DTensor wrapping
+    plan.update(
+        {
+            "model.layers.*.self_attn.q_norm": ReplicateParallel(),
+            "model.layers.*.self_attn.k_norm": ReplicateParallel(),
+        }
+    )
+    return plan
 
 
 # Model class -> plan function
@@ -295,8 +373,35 @@ def _str_to_style(s):
         "colwise_rep": ColwiseParallel(output_layouts=Replicate()),
         "rowwise_rep": RowwiseParallel(input_layouts=Replicate()),
         "sequence_parallel": SequenceParallelPreserveGrad(),
+        "replicate": ReplicateParallel(),
     }
     return styles[s]
+
+
+def _add_score_layer_plan(model, plan):
+    """Add score layer handling for Critic models (PPO).
+
+    The score layer in Critic models outputs scalar values per token.
+    With Ring Attention CP, each rank has [B, S/cp, H] input.
+    ReplicateParallel ensures:
+    1. Parameters are DTensors on the TP mesh (for gradient norm clipping)
+    2. Output is properly formatted
+
+    Reference: AReaL (areal/utils/fsdp/parallel.py)
+    """
+    if hasattr(model, "score") and isinstance(model.score, nn.Module):
+        # For PPO's critic model's score layer:
+        # - Input is [B, S, H] (or [B, S/cp, H] with Ring Attention)
+        # - Score is a linear layer with replicated weights
+        # - Output should be replicated across TP ranks
+        plan["score"] = ReplicateParallel(
+            input_layout=Replicate(),
+            desired_input_layout=Replicate(),
+            output_layout=Replicate(),
+            use_local_output=True,
+        )
+        logger.info("Added ReplicateParallel for score layer (Critic model)")
+    return plan
 
 
 def _get_hf_plan(model):
@@ -344,10 +449,17 @@ def apply_tensor_parallel(model, tp_mesh, tp_plan=None, sequence_parallel=False,
         model: Model to parallelize
         tp_mesh: DeviceMesh for TP
         tp_plan: Optional custom TP plan
-        sequence_parallel: Whether to use sequence parallelism
+        sequence_parallel: Whether to use sequence parallelism (False for Ring Attention)
         validate: Whether to validate head divisibility
         ring_attn_group: If provided, register hooks for DTensor<->Tensor conversion
                          to support Ring Attention (CP) with TP
+
+    Note on Ring Attention + TP:
+        When using Ring Attention (ring_attn_group is not None), sequence_parallel
+        should typically be False because:
+        - Ring Attention handles sequence distribution across CP ranks
+        - Each CP rank independently computes LayerNorm on [B, S/cp, H]
+        - No Megatron-style SequenceParallel communication needed for LayerNorm
     """
     if tp_mesh.size() == 1:
         return model
@@ -368,6 +480,9 @@ def apply_tensor_parallel(model, tp_mesh, tp_plan=None, sequence_parallel=False,
     if tp_plan is None:
         tp_plan = get_tp_plan(tp_root, sequence_parallel)
 
+    # Add score layer handling for Critic models (PPO)
+    tp_plan = _add_score_layer_plan(model, tp_plan)
+
     # Convert to LoRA-aware styles and rely on parallelize_module's fnmatch-based
     # wildcard matching (e.g., 'model.layers.*.self_attn.q_proj').
     tp_plan = {k: _to_lora(v) for k, v in tp_plan.items()}
@@ -376,7 +491,7 @@ def apply_tensor_parallel(model, tp_mesh, tp_plan=None, sequence_parallel=False,
     # Register hooks for Ring Attention (CP) compatibility
     if ring_attn_group is not None:
         _register_attention_hooks(tp_root, tp_mesh)
-        logger.info(f"Registered DTensor conversion hooks for TP+CP compatibility")
+        logger.info("Registered DTensor conversion hooks for TP+CP compatibility")
 
     return model
 
