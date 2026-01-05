@@ -34,26 +34,9 @@ OpenRLHF is **the first** high-performance, production-ready open-source RLHF fr
 
 OpenRLHF is **the first RLHF framework** built on Ray + vLLM distributed architecture, orchestrating multiple components across GPUs efficiently:
 
-```
-                    ┌─────────────────────────────────┐
-                    │      RAY Framework              │
-                    │  Distributed Scheduler          │
-                    │  and Controller                 │
-                    └─────────────────────────────────┘
-                         ↑ Data & Control ↓
-         ┌───────────────┴──────────┬──────────────────┐
-         ↓                          ↓                  ↓
-┌─────────────────┐    ┌─────────────────────┐  ┌──────────────────────┐
-│  vLLM Engine    │    │   Transformers      │  │    Training Engine         │
-│                 │    │                     │  │  (ZeRO/AutoTP/       │
-│ Inference       │←───│ Model Weight Format │←─│   RingAttn)          │
-│ (AutoTP/PP)     │    │ and States          │  │                      │
-└─────────────────┘    └─────────────────────┘  │ • Critic Model       │
-         ↑                                       │ • Reward Model       │
-         └─────────── NCCL / CUDA IPC ──────────│ • Actor Model        │
-                                                 │ • Reference Model    │
-                                                 └──────────────────────┘
-```
+<div align="center">
+  <img alt="OpenRLHF Architecture (Ray + vLLM)" src="./docs/openrlhf_architecture.svg" style="max-width: 100%; height: auto;" />
+</div>
 
 ### Core Infrastructure Components
 
@@ -415,10 +398,9 @@ ray job submit --address="http://127.0.0.1:8265" \
    --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
    --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
    --save_hf_ckpt \
-   --micro_train_batch_size 8 \
    --train_batch_size 128 \
-   --micro_rollout_batch_size 16 \
    --rollout_batch_size 1024 \
+   --use_dynamic_batch \
    --n_samples_per_prompt 1 \
    --max_epochs 1 \
    --prompt_max_len 1024 \
@@ -438,7 +420,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_sync_backend nccl \
    --enforce_eager \
    --vllm_enable_sleep \
-   --deepspeed_enable_sleep
+   --deepspeed_enable_sleep \
    --use_wandb {wandb_token}
 
 # Algorithm Variants (all use single-turn agent execution):
@@ -519,6 +501,7 @@ ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
   --pretrain meta-llama/Meta-Llama-3-8B \
+  --use_dynamic_batch \
   --remote_rm_url /path/to/reward_func.py \
   --label_key answer \
   --prompt_data your_prompt_dataset \
@@ -602,6 +585,7 @@ ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
   ...
+  --use_dynamic_batch \
   --agent_func_path /path/to/agent_func.py \
   --async_train  # Optional: enable async pipeline
 ```
@@ -619,9 +603,6 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 > [!NOTE]
 > For fully custom token-level execution, inherit `AgentExecutorBase` and implement `execute()`. This design enforces the **token-in-token-out principle** to keep sampling and training consistent.
-
-> [!TIP] 
-> **Recommended Priority**: Hybrid Engine > Synchronous > Asynchronous training for best stability-throughput balance.
 
 > [!WARNING] 
 > Asynchronous training may affect training stability. Use it only when throughput is critical and convergence is validated.

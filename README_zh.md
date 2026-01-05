@@ -34,25 +34,9 @@ OpenRLHF 是**首个**结合 **Ray + vLLM 分布式架构**与**统一 Agent 设
 
 OpenRLHF 是**首个**基于 Ray + vLLM 分布式架构构建的 RLHF 框架，可高效地跨 GPU 编排多个组件：
 
-```
-                    ┌─────────────────────────────────┐
-                    │      RAY 框架                   │
-                    │  分布式调度器和控制器            │
-                    └─────────────────────────────────┘
-                         ↑ 数据与控制 ↓
-         ┌───────────────┴──────────┬──────────────────┐
-         ↓                          ↓                  ↓
-┌─────────────────┐    ┌─────────────────────┐  ┌──────────────────────┐
-│  vLLM 引擎      │    │   Transformers      │  │    Training         │
-│                 │    │                     │  │  (ZeRO/AutoTP/       │
-│ 推理            │←───│ 模型权重格式        │←─│   RingAttn)          │
-│ (AutoTP/PP)     │    │ 和状态              │  │                      │
-└─────────────────┘    └─────────────────────┘  │ • Critic 模型        │
-         ↑                                       │ • Reward 模型        │
-         └─────────── NCCL / CUDA IPC ──────────│ • Actor 模型         │
-                                                 │ • Reference 模型     │
-                                                 └──────────────────────┘
-```
+<div align="center">
+  <img alt="OpenRLHF 架构（Ray + vLLM）" src="./docs/openrlhf_architecture.svg" style="max-width: 100%; height: auto;" />
+</div>
 
 ### 核心基础设施组件
 
@@ -414,10 +398,9 @@ ray job submit --address="http://127.0.0.1:8265" \
    --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
    --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
    --save_hf_ckpt \
-   --micro_train_batch_size 8 \
    --train_batch_size 128 \
-   --micro_rollout_batch_size 16 \
    --rollout_batch_size 1024 \
+   --use_dynamic_batch \
    --n_samples_per_prompt 1 \
    --max_epochs 1 \
    --prompt_max_len 1024 \
@@ -437,7 +420,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_sync_backend nccl \
    --enforce_eager \
    --vllm_enable_sleep \
-   --deepspeed_enable_sleep
+   --deepspeed_enable_sleep \
    --use_wandb {wandb_token}
 
 # 算法变体（所有算法都使用单轮 Agent 执行）：
@@ -518,6 +501,7 @@ ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
   --pretrain meta-llama/Meta-Llama-3-8B \
+  --use_dynamic_batch \
   --remote_rm_url /path/to/reward_func.py \
   --label_key answer \
   --prompt_data your_prompt_dataset \
@@ -601,6 +585,7 @@ ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
   ...
+  --use_dynamic_batch \
   --agent_func_path /path/to/agent_func.py \
   --async_train  # 可选：启用异步流水线
 ```
@@ -618,9 +603,6 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 > [!NOTE]
 > 对于完全自定义的 token 级执行，继承 `AgentExecutorBase` 并实现 `execute()`。此设计强制执行 **token-in-token-out 原则**以保持采样和训练一致。
-
-> [!TIP] 
-> **推荐优先级**：混合引擎 > 同步 > 异步训练，以获得最佳的稳定性-吞吐量平衡。
 
 > [!WARNING] 
 > 异步训练可能会影响训练稳定性。仅在吞吐量至关重要且收敛已验证时使用。
