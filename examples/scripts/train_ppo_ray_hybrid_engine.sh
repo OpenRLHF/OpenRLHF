@@ -1,8 +1,6 @@
 set -x
 
-ray job submit --address="http://127.0.0.1:8265" \
-   --runtime-env-json='{"working_dir": "/openrlhf"}' \
-   -- python3 -m openrlhf.cli.train_ppo_ray \
+python3 -m openrlhf.cli.train_ppo_ray \
    --ref_num_nodes 1 \
    --ref_num_gpus_per_node 8 \
    --reward_num_nodes 1 \
@@ -20,16 +18,14 @@ ray job submit --address="http://127.0.0.1:8265" \
    --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
    --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
    --save_hf_ckpt \
-   --micro_train_batch_size 8 \
    --train_batch_size 128 \
-   --micro_rollout_batch_size 16 \
    --rollout_batch_size 1024 \
    --n_samples_per_prompt 1 \
    --max_epochs 1 \
    --prompt_max_len 1024 \
    --max_samples 100000 \
    --generate_max_len 1024 \
-   --zero_stage 2 \
+   --zero_stage 3 \
    --bf16 \
    --actor_learning_rate 5e-7 \
    --critic_learning_rate 9e-6 \
@@ -43,6 +39,14 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_sync_backend nccl \
    --enforce_eager \
    --vllm_enable_sleep \
-   --ds_tensor_parallel_size 2 \
-   --adam_offload
+   --deepspeed_enable_sleep \
+   --use_dynamic_batch \
+   --train_max_tokens_per_gpu 16384 \
+   --enable_vllm_is_correction
 
+# Enable tensor parallelism for DeepSpeed
+#    --ds_tensor_parallel_size 2 \
+
+# Enable Ring-Attention
+#    --ring_attn_size 4 \
+#    --ring_head_stride 2 \

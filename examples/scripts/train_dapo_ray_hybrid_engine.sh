@@ -16,7 +16,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --advantage_estimator group_norm \
    --dynamic_filtering \
    --dynamic_filtering_reward_range 0 1 \
-   --eps_clip_low_high 0.2 0.3 \
+   --eps_clip_low_high 0.2 0.27 \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
    --remote_rm_url /openrlhf/examples/python/reward_func.py \
    --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
@@ -43,7 +43,8 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --vllm_sync_backend nccl \
    --enforce_eager \
    --vllm_enable_sleep \
-   --deepspeed_enable_sleep
+   --deepspeed_enable_sleep \
+   --vllm_enable_is_correction
 
 # You could also try
 #   --kl_estimator k2 \
