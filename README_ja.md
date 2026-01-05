@@ -2,7 +2,7 @@
     <img alt="OpenRLHF logo" src="./docs/logo.png" style="height: 140px;" />
 </div>
 <div align="center">
-<parameter name="p align="center">
+<p align="center">
       <a href="https://github.com/OpenRLHF/OpenRLHF/graphs/contributors">
         <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/OpenRLHF/OpenRLHF" />
       </a>
@@ -14,6 +14,7 @@
       </a>
       <a href="https://github.com/OpenRLHF/OpenRLHF/pulls">
         <img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/OpenRLHF/OpenRLHF?color=0088ff" />
+      </a>
       <a href="https://github.com/OpenRLHF/OpenRLHF/stargazers">
         <img alt="GitHub stars" src="https://img.shields.io/github/stars/OpenRLHF/OpenRLHF?color=ccf" />
       </a>
@@ -21,7 +22,6 @@
       <br>
       <em>オープンソース / 包括的 / 軽量 / 使いやすい</em>
     </p>
-</p>
 </div>
 
 <hr>
@@ -29,6 +29,49 @@
 <span>[ <a href="README.md">English</a> | <a href="README_zh.md">中文</a> | 日本語 ]</span>
 
 OpenRLHFは、**Ray + vLLM分散アーキテクチャ**と**統一エージェントベース設計パラダイム**を組み合わせた**最初の**高性能で本番環境対応のオープンソースRLHFフレームワークです。
+
+📚 **詳細はこちら**：[ドキュメント](https://openrlhf.readthedocs.io/) | [スライド](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [技術レポート](https://www.researchgate.net/publication/393414548_OpenRLHF_An_Easy-to-use_Scalable_and_High-performance_RLHF_Framework)
+
+## 📖 目次
+
+- [🗞️ ニュース](#ニュース)
+- [🏗️ アーキテクチャ基盤](#アーキテクチャ基盤ray--vllm分散) - Ray + vLLM + DeepSpeed分散インフラ
+- [🎯 設計パラダイム](#設計パラダイムエージェントベースの実行) - 統一エージェント実行パイプライン
+- [🚀 RLアルゴリズム](#最先端のrlアルゴリズム) - PPO、REINFORCE++、GRPO、RLOO
+- [📋 機能概要](#包括的な機能) - 完全なRLHFパイプライン機能
+- [🎬 クイックスタート](#クイックスタート) - インストールと一般的なワークフロー
+- [🎓 学習ガイド](#教師あり微調整) - SFT、報酬モデル、RL学習
+- [🎯 シングルターンエージェント](#シングルターンエージェントカスタム報酬による強化微調整) - カスタム報酬関数
+- [🤖 マルチターンエージェント](#マルチターンエージェント複雑な環境相互作用) - 複雑な環境
+- [🔧 高度なトピック](#高度なトピック) - LoRA、パフォーマンスチューニング
+
+---
+
+## ニュース
+
+<details>
+<summary>ニュースを表示</summary>
+
+- [2025/11] [NeMo Gym](https://github.com/NVIDIA-NeMo/Gym) OpenRLHFがNeMo-Gymとの統合をサポートし、外部評価環境を用いた高度なエージェントベースRLHF学習が可能になりました。
+- [2025/10] [ScaleRL](https://arxiv.org/abs/2510.13786) が大規模学習シナリオにおけるREINFORCE++-baselineの有効性を検証。[REINFORCE++スライド](https://docs.google.com/presentation/d/1stieP_3PM1z4Hq1YWR3GywFkxcHEAlstXMaS23KlGN4)をリリース
+- [2025/8] [ProRL V2](https://hijkzzz.notion.site/prorl-v2) がREINFORCE++-baselineを使用して最先端の1.5B推論モデルを学習し、ブログ記事 [REINFORCE++-baseline is all you need in RLVR](https://medium.com/@janhu9527/reinforce-baseline-is-all-you-need-in-rlvr-f5406930aa85) をリリース。
+- [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) がREINFORCE++-baselineと非常に類似した手法を用いて推論モデルを学習。
+- [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) がOpenRLHFのフォークとしてリリース。集中型マルチエージェント相互作用と分散ポリシー学習を統合することで、LLMベースのマルチエージェントシステムをRLで学習することを目的としています。
+- [2025/5] OpenRLHF 0.8.0が[非同期パイプラインRLHF](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh)（`--async_train`）と[非同期エージェントRLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)（`--agent_func_path`）をサポートし、クラスベースのエージェントAPIを再設計
+- [2025/4] ブログ記事 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html) を公開
+- [2025/4] Clean OpenRLHF：単一コントローラと統一パッキングサンプルに基づいてソースコードをリファクタリング
+- [2025/3] CMUの[Advanced Natural Language Processing Spring 2025](https://cmu-l3.github.io/anlp-spring2025/)コースでOpenRLHFがRLHFフレームワーク教材として採用されました。
+- [2025/2] [Logic-RL](https://arxiv.org/abs/2502.14768) と [PRIME](https://arxiv.org/abs/2502.01456) が、REINFORCE++がGRPOと比較してより安定し、PPOよりも高速であることを実証。
+- [2025/2] [LMM-R1](https://github.com/TideDra/lmm-r1) がOpenRLHFのフォークとしてリリース。マルチモーダルタスクにおけるDeepSeek-R1の再現のための高性能RLインフラを提供することを目的としています。
+- [2025/2] MITとMicrosoftがOpenRLHFを使用して [On the Emergence of Thinking in LLMs I: Searching for the Right Intuition](https://arxiv.org/pdf/2502.06773) を提案
+- [2025/1] HKUSTがOpenRLHFを使用して[小規模モデルでのDeepSeek-R1-ZeroとDeepSeek-R1学習](https://github.com/hkust-nlp/simpleRL-reason)を再現
+- [2024/12] 私たちが"提案"しました😊 [REINFORCE++: A Simple and Efficient Approach for Aligning Large Language Models](https://www.researchgate.net/publication/387487679_REINFORCE_An_Efficient_RLHF_Algorithm_with_Robustnessto_Both_Prompt_and_Reward_Models)。
+- [2024/12] PPO、REINFORCE++、GRPO、RLOOを [Notionブログ記事](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05) で分析しました。
+- [2023/8] OpenRLHFがオープンソース化されました。
+
+</details>
+
+---
 
 ## 🏗️ アーキテクチャ基盤：Ray + vLLM分散
 
@@ -139,40 +182,7 @@ OpenRLHFは、実践ガイドとコミュニティのベストプラクティス
 
 ---
 
-## 📖 目次
-
-- [🏗️ アーキテクチャ基盤](#️-アーキテクチャ基盤ray--vllm分散) - Ray + vLLM + DeepSpeed分散インフラ
-- [🎯 設計パラダイム](#-設計パラダイムエージェントベースの実行) - 統一エージェント実行パイプライン
-- [🚀 RLアルゴリズム](#-最先端のrlアルゴリズム) - PPO、REINFORCE++、GRPO、RLOO
-- [📋 機能概要](#-包括的な機能) - 完全なRLHFパイプライン機能
-- [🎬 クイックスタート](#-クイックスタート) - インストールと一般的なワークフロー
-- [🎓 学習ガイド](#教師あり微調整) - SFT、報酬モデル、RL学習
-- [🎯 シングルターンエージェント](#-シングルターンエージェントカスタム報酬による強化微調整) - カスタム報酬関数
-- [🤖 マルチターンエージェント](#-マルチターンエージェント複雑な環境相互作用) - 複雑な環境
-- [🔧 高度なトピック](#-高度なトピック) - LoRA、パフォーマンスチューニング
-
----
-
-## ニュース
-
-- [2025/11] [NeMo Gym](https://github.com/NVIDIA-NeMo/Gym) OpenRLHFがNeMo-Gymとの統合をサポートし、外部評価環境を用いた高度なエージェントベースRLHF学習が可能になりました。
-- [2025/10] [ScaleRL](https://arxiv.org/abs/2510.13786) が大規模学習シナリオにおけるREINFORCE++-baselineの有効性を検証。[REINFORCE++スライド](https://docs.google.com/presentation/d/1stieP_3PM1z4Hq1YWR3GywFkxcHEAlstXMaS23KlGN4)をリリース
-- [2025/8] [ProRL V2](https://hijkzzz.notion.site/prorl-v2) がREINFORCE++-baselineを使用して最先端の1.5B推論モデルを学習し、ブログ記事 [REINFORCE++-baseline is all you need in RLVR](https://medium.com/@janhu9527/reinforce-baseline-is-all-you-need-in-rlvr-f5406930aa85) をリリース。
-- [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) がREINFORCE++-baselineと非常に類似した手法を用いて推論モデルを学習。
-- [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) がOpenRLHFのフォークとしてリリース。集中型マルチエージェント相互作用と分散ポリシー学習を統合することで、LLMベースのマルチエージェントシステムをRLで学習することを目的としています。
-- [2025/5] OpenRLHF 0.8.0が[非同期パイプラインRLHF](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh)（`--async_train`）と[非同期エージェントRLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)（`--agent_func_path`）をサポートし、クラスベースのエージェントAPIを再設計
-- [2025/4] ブログ記事 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html) を公開
-- [2025/4] Clean OpenRLHF：単一コントローラと統一パッキングサンプルに基づいてソースコードをリファクタリング
-- [2025/3] CMUの[Advanced Natural Language Processing Spring 2025](https://cmu-l3.github.io/anlp-spring2025/)コースでOpenRLHFがRLHFフレームワーク教材として採用されました。
-- [2025/2] [Logic-RL](https://arxiv.org/abs/2502.14768) と [PRIME](https://arxiv.org/abs/2502.01456) が、REINFORCE++がGRPOと比較してより安定し、PPOよりも高速であることを実証。
-- [2025/2] [LMM-R1](https://github.com/TideDra/lmm-r1) がOpenRLHFのフォークとしてリリース。マルチモーダルタスクにおけるDeepSeek-R1の再現のための高性能RLインフラを提供することを目的としています。
-- [2025/2] MITとMicrosoftがOpenRLHFを使用して [On the Emergence of Thinking in LLMs I: Searching for the Right Intuition](https://arxiv.org/pdf/2502.06773) を提案
-- [2025/1] HKUSTがOpenRLHFを使用して[小規模モデルでのDeepSeek-R1-ZeroとDeepSeek-R1学習](https://github.com/hkust-nlp/simpleRL-reason)を再現
-- [2024/12] 私たちが"提案"しました😊 [REINFORCE++: A Simple and Efficient Approach for Aligning Large Language Models](https://www.researchgate.net/publication/387487679_REINFORCE_An_Efficient_RLHF_Algorithm_with_Robustnessto_Both_Prompt_and_Reward_Models)。
-- [2024/12] PPO、REINFORCE++、GRPO、RLOOを [Notionブログ記事](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05) で分析しました。
-- [2023/8] OpenRLHFがオープンソース化されました。
-
----
+ 
 
 ## 📋 包括的な機能
 

@@ -14,6 +14,7 @@
       </a>
       <a href="https://github.com/OpenRLHF/OpenRLHF/pulls">
         <img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/OpenRLHF/OpenRLHF?color=0088ff" />
+      </a>
       <a href="https://github.com/OpenRLHF/OpenRLHF/stargazers">
         <img alt="GitHub stars" src="https://img.shields.io/github/stars/OpenRLHF/OpenRLHF?color=ccf" />
       </a>
@@ -21,7 +22,6 @@
       <br>
       <em>Open-source / Comprehensive / Lightweight / Easy-to-use</em>
     </p>
-</p>
 </div>
 
 <hr>
@@ -29,6 +29,49 @@
 <span>[ English | <a href="README_zh.md">中文</a> | <a href="README_ja.md">日本語</a> ]</span>
 
 OpenRLHF is **the first** high-performance, production-ready open-source RLHF framework that combines **Ray + vLLM distributed architecture** with a **unified agent-based design paradigm** for scalable and extensible reinforcement learning from human feedback.
+
+📚 **Learn More**: [Documentation](https://openrlhf.readthedocs.io/) | [Slides](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [Technical Report](https://www.researchgate.net/publication/393414548_OpenRLHF_An_Easy-to-use_Scalable_and_High-performance_RLHF_Framework)
+
+## 📖 Table of Contents
+
+- [🗞️ News](#news)
+- [🏗️ Architecture Foundation](#architecture-foundation-ray--vllm-distribution) - Ray + vLLM + DeepSpeed distributed infrastructure
+- [🎯 Design Paradigm](#design-paradigm-agent-based-execution) - Unified agent-based execution pipeline
+- [🚀 RL Algorithms](#state-of-the-art-rl-algorithms) - PPO, REINFORCE++, GRPO, RLOO
+- [📋 Features Overview](#comprehensive-features) - Complete RLHF pipeline capabilities
+- [🎬 Quick Start](#quick-start) - Installation and typical workflow
+- [🎓 Training Guide](#supervised-fine-tuning) - SFT, Reward Model, RL Training
+- [🎯 Single-Turn Agent](#single-turn-agent-reinforced-fine-tuning-with-custom-rewards) - Custom reward functions
+- [🤖 Multi-Turn Agent](#multi-turn-agent-complex-environment-interactions) - Complex environments
+- [🔧 Advanced Topics](#advanced-topics) - LoRA, performance tuning
+
+---
+
+## News
+
+<details>
+<summary>Show News</summary>
+
+- [2025/11] [NeMo Gym](https://github.com/NVIDIA-NeMo/Gym) OpenRLHF now supports integration with NeMo-Gym for advanced agent-based RLHF training with external evaluation environments.
+- [2025/10] [ScaleRL](https://arxiv.org/abs/2510.13786) validates the effectiveness of REINFORCE++-baseline in large-scale training scenarios. Releases [REINFORCE++ slides](https://docs.google.com/presentation/d/1stieP_3PM1z4Hq1YWR3GywFkxcHEAlstXMaS23KlGN4)
+- [2025/8] [ProRL V2](https://hijkzzz.notion.site/prorl-v2) uses REINFORCE++-baseline to train a state-of-the-art 1.5B reasoning model and releases the blog post [REINFORCE++-baseline is all you need in RLVR](https://medium.com/@janhu9527/reinforce-baseline-is-all-you-need-in-rlvr-f5406930aa85).
+- [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) uses the method quite similar to REINFORCE++-baseline to train the reasoning models.
+- [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) has been released as a fork of OpenRLHF. It is designed to train LLM-based multi-agent systems using RL, by integrating centralized multi-agent interactions with distributed policy training.
+- [2025/5] OpenRLHF 0.8.0 supports [Async Pipeline RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh) (`--async_train`) and [Async Agent RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)(`--agent_func_path`) with redesigned class-based Agent API
+- [2025/4] Post the blog [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html)
+- [2025/4] Clean OpenRLHF: Refactored the source code based on Single Controller and Unified Packing Samples
+- [2025/3] The CMU [Advanced Natural Language Processing Spring 2025](https://cmu-l3.github.io/anlp-spring2025/) course uses OpenRLHF as the RLHF framework teaching case.
+- [2025/2] [Logic-RL](https://arxiv.org/abs/2502.14768) and [PRIME](https://arxiv.org/abs/2502.01456) demonstrate that REINFORCE++ is more stable in training compared to GRPO and faster than PPO.
+- [2025/2] [LMM-R1](https://github.com/TideDra/lmm-r1) is a fork of OpenRLHF, aimed at providing high-performance RL infrastructure for reproduction of DeepSeek-R1 on multimodal tasks.
+- [2025/2] MIT & Microsoft proposed the [On the Emergence of Thinking in LLMs I: Searching for the Right Intuition](https://arxiv.org/pdf/2502.06773) using OpenRLHF
+- [2025/1] HKUST reproduced the [DeepSeek-R1-Zero and DeepSeek-R1 training on small models using OpenRLHF](https://github.com/hkust-nlp/simpleRL-reason)
+- [2024/12] We "proposed" 😊 the [REINFORCE++: A Simple and Efficient Approach for Aligning Large Language Models](https://www.researchgate.net/publication/387487679_REINFORCE_An_Efficient_RLHF_Algorithm_with_Robustnessto_Both_Prompt_and_Reward_Models).
+- [2024/12] We analyzed the PPO, REINFORCE++, GRPO and RLOO in the [Notion Blogpost](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05).
+- [2023/8] OpenRLHF was open-sourced.
+
+</details>
+
+---
 
 ## 🏗️ Architecture Foundation: Ray + vLLM Distribution
 
@@ -134,42 +177,6 @@ OpenRLHF implements **PPO, REINFORCE++, REINFORCE++-baseline, GRPO, RLOO** with 
 | **Dr. GRPO** | `dr_grpo` | Simplified GRPO | Removes local `/std` norm |
 
 References: [Zhihu article](https://zhuanlan.zhihu.com/p/622134699) | [Notion best practices](https://hijkzzz.notion.site/rlhf-implementation-tricks?v=158d9a33ecc98132bf9e000c39227361)
-
-📚 **Learn More**: [Slides](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [Technical Report](https://www.researchgate.net/publication/393414548_OpenRLHF_An_Easy-to-use_Scalable_and_High-performance_RLHF_Framework) | [Documentation](https://openrlhf.readthedocs.io/)
-
----
-
-## 📖 Table of Contents
-
-- [🏗️ Architecture Foundation](#️-architecture-foundation-ray--vllm-distribution) - Ray + vLLM + DeepSpeed distributed infrastructure
-- [🎯 Design Paradigm](#-design-paradigm-agent-based-execution) - Unified agent-based execution pipeline
-- [🚀 RL Algorithms](#-state-of-the-art-rl-algorithms) - PPO, REINFORCE++, GRPO, RLOO
-- [📋 Features Overview](#-comprehensive-features) - Complete RLHF pipeline capabilities
-- [🎬 Quick Start](#-quick-start) - Installation and typical workflow
-- [🎓 Training Guide](#supervised-fine-tuning) - SFT, Reward Model, RL Training
-- [🎯 Single-Turn Agent](#-single-turn-agent-reinforced-fine-tuning-with-custom-rewards) - Custom reward functions
-- [🤖 Multi-Turn Agent](#-multi-turn-agent-complex-environment-interactions) - Complex environments
-- [🔧 Advanced Topics](#-advanced-topics) - LoRA, performance tuning
-
----
-
-## News
-- [2025/11] [NeMo Gym](https://github.com/NVIDIA-NeMo/Gym) OpenRLHF now supports integration with NeMo-Gym for advanced agent-based RLHF training with external evaluation environments.
-- [2025/10] [ScaleRL](https://arxiv.org/abs/2510.13786) validates the effectiveness of REINFORCE++-baseline in large-scale training scenarios. Releases [REINFORCE++ slides](https://docs.google.com/presentation/d/1stieP_3PM1z4Hq1YWR3GywFkxcHEAlstXMaS23KlGN4)
-- [2025/8] [ProRL V2](https://hijkzzz.notion.site/prorl-v2) uses REINFORCE++-baseline to train a state-of-the-art 1.5B reasoning model and releases the blog post [REINFORCE++-baseline is all you need in RLVR](https://medium.com/@janhu9527/reinforce-baseline-is-all-you-need-in-rlvr-f5406930aa85).
-- [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) uses the method quite similar to REINFORCE++-baseline to train the reasoning models.
-- [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) has been released as a fork of OpenRLHF. It is designed to train LLM-based multi-agent systems using RL, by integrating centralized multi-agent interactions with distributed policy training.
-- [2025/5] OpenRLHF 0.8.0 supports [Async Pipeline RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_async.sh) (`--async_train`) and [Async Agent RLHF](./examples/scripts/train_reinforce_baseline_llama_ray_agent_async.sh)(`--agent_func_path`) with redesigned class-based Agent API
-- [2025/4] Post the blog [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html)
-- [2025/4] Clean OpenRLHF: Refactored the source code based on Single Controller and Unified Packing Samples
-- [2025/3] The CMU [Advanced Natural Language Processing Spring 2025](https://cmu-l3.github.io/anlp-spring2025/) course uses OpenRLHF as the RLHF framework teaching case.
-- [2025/2] [Logic-RL](https://arxiv.org/abs/2502.14768) and [PRIME](https://arxiv.org/abs/2502.01456) demonstrate that REINFORCE++ is more stable in training compared to GRPO and faster than PPO.
-- [2025/2] [LMM-R1](https://github.com/TideDra/lmm-r1) is a fork of OpenRLHF, aimed at providing high-performance RL infrastructure for reproduction of DeepSeek-R1 on multimodal tasks.
-- [2025/2] MIT & Microsoft proposed the [On the Emergence of Thinking in LLMs I: Searching for the Right Intuition](https://arxiv.org/pdf/2502.06773) using OpenRLHF
-- [2025/1] HKUST reproduced the [DeepSeek-R1-Zero and DeepSeek-R1 training on small models using OpenRLHF](https://github.com/hkust-nlp/simpleRL-reason)
-- [2024/12] We "proposed" 😊 the [REINFORCE++: A Simple and Efficient Approach for Aligning Large Language Models](https://www.researchgate.net/publication/387487679_REINFORCE_An_Efficient_RLHF_Algorithm_with_Robustnessto_Both_Prompt_and_Reward_Models).
-- [2024/12] We analyzed the PPO, REINFORCE++, GRPO and RLOO in the [Notion Blogpost](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05).
-- [2023/8] OpenRLHF was open-sourced. 
 
 ---
 
@@ -296,7 +303,10 @@ OpenRLHF's model checkpoint is fully compatible with HuggingFace models. You can
 
 Then you can use the startup scripts we provide in the [examples/scripts](./examples/scripts/) directory, or start the training using the following commands.
 
-```bash 
+<details>
+<summary>SFT command</summary>
+
+```bash
 deepspeed --module openrlhf.cli.train_sft \
    --max_len 4096 \
    --dataset Open-Orca/OpenOrca \
@@ -326,8 +336,14 @@ deepspeed --module openrlhf.cli.train_sft \
 # --pretrain_mode                      # Continued pre-training mode
 ```
 
+</details>
+
 
 ### Reward Model Training
+
+<details>
+<summary>Reward model training command</summary>
+
 ```bash
 deepspeed --module openrlhf.cli.train_rm \
    --save_path ./checkpoint/llama3-8b-rm \
@@ -351,6 +367,8 @@ deepspeed --module openrlhf.cli.train_rm \
    --use_wandb {wandb_token}
 
 ```
+
+</details>
 
 It is recommended to set the `--value_prefix_head` option of the Reward Model to `score`, so that we can load the model using `AutoModelForSequenceClassification`:
 
@@ -445,7 +463,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 > [!NOTE]
 > **Troubleshooting GPU index errors**: Set `export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1` if you encounter DeepSpeed GPU device setup issues.
 
-📚 **More Examples**: See [example/scripts](./examples/scripts/) and [Documentation](https://openrlhf.readthedocs.io/en/latest/usage.html)
+📚 **More Examples**: See [examples/scripts](./examples/scripts/) and [Documentation](https://openrlhf.readthedocs.io/en/latest/usage.html)
 
 ---
 
@@ -748,6 +766,7 @@ Our project would like to thank [Netmind.AI](https://www.netmind.ai/) for the GP
 
 ## Citation
 OpenRLHF
+
 ```
 @article{hu2024openrlhf,
   title={OpenRLHF: An Easy-to-use, Scalable and High-performance RLHF Framework},
