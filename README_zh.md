@@ -47,6 +47,7 @@ OpenRLHF 是**首个**结合 **Ray + vLLM 分布式架构**与**统一 Agent 设
 
 ---
 
+<a id="新闻"></a>
 ## 新闻
 
 <details>
@@ -73,6 +74,7 @@ OpenRLHF 是**首个**结合 **Ray + vLLM 分布式架构**与**统一 Agent 设
 
 ---
 
+<a id="架构基础ray--vllm-分布式"></a>
 ## 🏗️ 架构基础：Ray + vLLM 分布式
 
 OpenRLHF 是**首个**基于 Ray + vLLM 分布式架构构建的 RLHF 框架，可高效地跨 GPU 编排多个组件：
@@ -102,6 +104,7 @@ RLHF 训练中 **80% 的时间**花在样本生成上。通过 [vLLM](https://gi
 
 ---
 
+<a id="设计范式基于-agent-的执行"></a>
 ## 🎯 设计范式：基于 Agent 的执行
 
 **在 Ray 分布式架构之上**，OpenRLHF 是**首个**实现**统一 Agent 范式**的 RLHF 框架。无论是标准 PPO 还是复杂的多轮推理，每次训练运行都遵循一致的 Agent 执行流程。
@@ -166,6 +169,7 @@ Agent 执行模式与您选择的 RL 算法**独立**。您可以将**任何算�
 
 ---
 
+<a id="最先进的-rl-算法"></a>
 ## 🚀 最先进的 RL 算法
 
 OpenRLHF 实现了 **PPO、REINFORCE++、REINFORCE++-baseline、GRPO、RLOO**，采用受实践指南和社区最佳实践启发的高级优化技巧。
@@ -191,6 +195,7 @@ OpenRLHF 实现了 **PPO、REINFORCE++、REINFORCE++-baseline、GRPO、RLOO**，
 ---
  
 
+<a id="全面特性"></a>
 ## 📋 全面特性
 
 OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
@@ -243,6 +248,11 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 - 所有训练模式的样本打包（`--packing_samples`）
 - 快速生成的 vLLM 加速（`--vllm_num_engines`）
 - DAPO [动态过滤](./examples/scripts/train_dapo_ray_hybrid_engine.sh)（`--dynamic_filtering`）
+  - 🎲 Dynamic Sampling：对每个 prompt 生成多条响应，并根据奖励函数/Agent 返回的 **0–1 `scores`** 信号进行过滤
+    - 开启：`--dynamic_filtering`
+    - 设置分数范围：`--dynamic_filtering_reward_range 0.0 1.0`
+    - 前置条件：`--n_samples_per_prompt > 1`，并提供 `--remote_rm_url`（奖励函数）或 `--agent_func_path`（Agent）
+    - 示例：`./examples/scripts/train_dapo_ray_hybrid_engine.sh`
 
 **可扩展性**
 - 张量并行的 DeepSpeed AutoTP（参见训练脚本中的 `--ds_tensor_parallel_size`）
@@ -264,6 +274,7 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 
 ---
 
+<a id="快速开始"></a>
 ## 🎬 快速开始
 
 ### 安装
@@ -323,6 +334,7 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 > [!NOTE]
 > JSON 键选项因数据集类型而异。参见[奖励数据集](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/reward_dataset.py#L10)、[SFT 数据集](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/sft_dataset.py#L9)和[提示数据集](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/prompts_dataset.py#L6)
 
+<a id="监督微调"></a>
 ### 监督微调
 
 OpenRLHF 的模型检查点与 HuggingFace 模型完全兼容。您可以使用 `--pretrain {name or path}`、`--reward_pretrain {name or path}` 和 `--critic_pretrain {name or path}` 指定模型名称或路径。我们在 [HuggingFace OpenRLHF](https://huggingface.co/OpenRLHF) 上提供了一些预训练检查点和数据集。
@@ -494,6 +506,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 ---
 
+<a id="单轮-agent强化微调与自定义奖励"></a>
 ## 🎯 单轮 Agent：强化微调与自定义奖励
 
 **单轮 Agent 执行**（默认模式）支持自定义奖励函数——非常适合无需训练奖励模型的强化微调。您可以提供一个 Python 函数来即时计算奖励，而不是使用预训练的奖励模型。
@@ -562,6 +575,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 ---
 
+<a id="多轮-agent复杂环境交互"></a>
 ## 🤖 多轮 Agent：复杂环境交互
 
 对于需要**多步交互**（推理链、带反馈的编码、游戏）的任务，OpenRLHF 提供**多轮 Agent 执行**模式。
@@ -660,6 +674,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 ---
 
+<a id="高级主题"></a>
 ## 🔧 高级主题
 
 ### LoRA：合并适配器
@@ -701,18 +716,6 @@ python -m openrlhf.cli.lora_combiner \
 | **重叠通信** | `--overlap_comm` | GPU 内存充足 |
 | **动态批次** | `--use_dynamic_batch` | 可变序列长度 |
 | **前缀缓存** | vLLM 配置 | `n_samples_per_prompt` > 1 |
-
-#### 🎲 Dynamic Sampling（DAPO 动态过滤）
-
-OpenRLHF 支持在 rollout 阶段进行 **dynamic sampling**（通过 **dynamic filtering** 实现）：对每个 prompt 生成多条响应，然后依据你的奖励函数/Agent 返回的 **0–1 `scores`** 信号筛选出更高质量的样本用于训练。
-
-- **开启**：`--dynamic_filtering`
-- **设置分数范围**：`--dynamic_filtering_reward_range 0.0 1.0`
-- **前置条件**：
-  - `--n_samples_per_prompt > 1`
-  - 需要提供 `--remote_rm_url`（奖励函数）或 `--agent_func_path`（Agent）
-
-📖 **示例**：`./examples/scripts/train_dapo_ray_hybrid_engine.sh`（已包含 `--dynamic_filtering`）
 
 #### 💾 内存管理
 

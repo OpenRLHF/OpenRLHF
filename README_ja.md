@@ -47,6 +47,7 @@ OpenRLHFは、**Ray + vLLM分散アーキテクチャ**と**統一エージェ�
 
 ---
 
+<a id="ニュース"></a>
 ## ニュース
 
 <details>
@@ -73,6 +74,7 @@ OpenRLHFは、**Ray + vLLM分散アーキテクチャ**と**統一エージェ�
 
 ---
 
+<a id="アーキテクチャ基盤ray--vllm分散"></a>
 ## 🏗️ アーキテクチャ基盤：Ray + vLLM分散
 
 OpenRLHFは、Ray + vLLM分散アーキテクチャをベースに構築された**最初のRLHFフレームワーク**であり、GPU全体で複数のコンポーネントを効率的にオーケストレーションします：
@@ -102,6 +104,7 @@ HuggingFace Transformersとのネイティブ統合により、シームレス�
 
 ---
 
+<a id="設計パラダイムエージェントベースの実行"></a>
 ## 🎯 設計パラダイム：エージェントベースの実行
 
 **Ray分散アーキテクチャの上に**、OpenRLHFは**統一エージェントパラダイム**を実装した**最初のRLHFフレームワーク**です。標準的なPPOでも複雑なマルチターン推論でも、すべての学習実行は一貫したエージェント実行パイプラインに従います。
@@ -166,6 +169,7 @@ OpenRLHFは**token-in-token-outエージェント実行を通じて生成と学�
 
 ---
 
+<a id="最先端のrlアルゴリズム"></a>
 ## 🚀 最先端のRLアルゴリズム
 
 OpenRLHFは、実践ガイドとコミュニティのベストプラクティスに触発された高度な最適化トリックを用いて、**PPO、REINFORCE++、REINFORCE++-baseline、GRPO、RLOO**を実装しています。
@@ -194,6 +198,7 @@ OpenRLHFは、実践ガイドとコミュニティのベストプラクティス
 
  
 
+<a id="包括的な機能"></a>
 ## 📋 包括的な機能
 
 OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHFパイプラインを提供します：
@@ -220,6 +225,7 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 
 ### 🎓 教師あり学習と選好学習
 
+<a id="教師あり微調整"></a>
 <details>
 <summary>教師あり学習と選好学習の表を表示</summary>
 
@@ -247,6 +253,11 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 - 高速生成のためのvLLM加速（`--vllm_num_engines`）
 - TIS（vLLM 重要度サンプリング補正）/ ICEPOP：`--enable_vllm_is_correction`、`--vllm_is_truncated_threshold 0.5 5.0`、`--use_icepop`（PPO のみ）
 - DAPO [動的フィルタリング](./examples/scripts/train_dapo_ray_hybrid_engine.sh)（`--dynamic_filtering`）
+  - 🎲 Dynamic Sampling：各プロンプトに対して複数の応答を生成し、報酬関数/エージェントが返す **0–1 `scores`** に基づいてフィルタリング
+    - 有効化：`--dynamic_filtering`
+    - スコア範囲：`--dynamic_filtering_reward_range 0.0 1.0`
+    - 要件：`--n_samples_per_prompt > 1`、かつ `--remote_rm_url`（報酬関数）または `--agent_func_path`（エージェント）を指定
+    - 例：`./examples/scripts/train_dapo_ray_hybrid_engine.sh`
 
 **スケーラビリティ**
 - DeepSpeed AutoTP（テンソル並列化）は、学習スクリプト内の `--ds_tensor_parallel_size` を参照
@@ -268,6 +279,7 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 
 ---
 
+<a id="クイックスタート"></a>
 ## 🎬 クイックスタート
 
 ### インストール
@@ -304,6 +316,7 @@ pip install -e .
 
 ---
 
+<a id="シングルターンエージェントカスタム報酬による強化微調整"></a>
 ## 🎯 シングルターンエージェント：カスタム報酬による強化微調整
 
 **シングルターンエージェント実行**（デフォルトモード）はカスタム報酬関数をサポートし、学習済み報酬モデルなしで強化微調整を行うのに最適です。
@@ -312,6 +325,7 @@ pip install -e .
 
 ---
 
+<a id="マルチターンエージェント複雑な環境相互作用"></a>
 ## 🤖 マルチターンエージェント：複雑な環境相互作用
 
 **マルチステップ相互作用**（推論チェーン、フィードバック付きコーディング、ゲームプレイ）が必要なタスクには、OpenRLHFが**マルチターンエージェント実行**モードを提供します。
@@ -320,6 +334,7 @@ pip install -e .
 
 ---
 
+<a id="高度なトピック"></a>
 ## 🔧 高度なトピック
 
 ### LoRA：アダプターのマージ

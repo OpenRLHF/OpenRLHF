@@ -47,6 +47,7 @@ OpenRLHF is **the first** high-performance, production-ready open-source RLHF fr
 
 ---
 
+<a id="news"></a>
 ## News
 
 <details>
@@ -73,6 +74,7 @@ OpenRLHF is **the first** high-performance, production-ready open-source RLHF fr
 
 ---
 
+<a id="architecture-foundation-ray--vllm-distribution"></a>
 ## 🏗️ Architecture Foundation: Ray + vLLM Distribution
 
 OpenRLHF is **the first RLHF framework** built on Ray + vLLM distributed architecture, orchestrating multiple components across GPUs efficiently:
@@ -102,6 +104,7 @@ Efficient inter-GPU communication for distributed training and inference.
 
 ---
 
+<a id="design-paradigm-agent-based-execution"></a>
 ## 🎯 Design Paradigm: Agent-Based Execution
 
 **On top of the Ray distributed architecture**, OpenRLHF is **the first RLHF framework** to implement a **unified agent-based paradigm**. Every training run—whether standard PPO or complex multi-turn reasoning—follows a consistent agent execution pipeline.
@@ -166,6 +169,7 @@ The agent execution mode is **independent** of the RL algorithm you choose. You 
 
 ---
 
+<a id="state-of-the-art-rl-algorithms"></a>
 ## 🚀 State-of-the-Art RL Algorithms
 
 OpenRLHF implements **PPO, REINFORCE++, REINFORCE++-baseline, GRPO, RLOO** with advanced optimization tricks inspired by practical guides and community best practices. 
@@ -190,6 +194,7 @@ References: [Zhihu article](https://zhuanlan.zhihu.com/p/622134699) | [Notion be
 
 ---
 
+<a id="comprehensive-features"></a>
 ## 📋 Comprehensive Features
 
 OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
@@ -242,6 +247,11 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 - Sample packing (`--packing_samples`) for all training modes
 - vLLM acceleration (`--vllm_num_engines`) for fast generation
 - DAPO [dynamic filtering](./examples/scripts/train_dapo_ray_hybrid_engine.sh) (`--dynamic_filtering`)
+  - 🎲 Dynamic Sampling: for each prompt, generate multiple responses and **filter** them by your reward / agent **0–1 `scores`** signal
+    - Enable: `--dynamic_filtering`
+    - Score range: `--dynamic_filtering_reward_range 0.0 1.0`
+    - Requires: `--n_samples_per_prompt > 1` and either `--remote_rm_url` or `--agent_func_path`
+    - Example: `./examples/scripts/train_dapo_ray_hybrid_engine.sh`
 
 **Scalability**
 - DeepSpeed AutoTP for tensor parallelism (see `--ds_tensor_parallel_size` in training scripts)
@@ -263,6 +273,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 
 ---
 
+<a id="quick-start"></a>
 ## 🎬 Quick Start
 
 ### Installation
@@ -322,6 +333,7 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 > [!NOTE]
 > JSON key options vary by dataset type. See [Reward Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/reward_dataset.py#L10), [SFT Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/sft_dataset.py#L9), and [Prompt Dataset](https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/datasets/prompts_dataset.py#L6)
 
+<a id="supervised-fine-tuning"></a>
 ### Supervised Fine-tuning
 
 OpenRLHF's model checkpoint is fully compatible with HuggingFace models. You can specify the model name or path using `--pretrain  {name or path}`, `--reward_pretrain  {name or path}` and `--critic_pretrain  {name or path}`. We have provided some pre-trained checkpoints and datasets on [HuggingFace OpenRLHF](https://huggingface.co/OpenRLHF).
@@ -495,6 +507,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 ---
 
+<a id="single-turn-agent-reinforced-fine-tuning-with-custom-rewards"></a>
 ## 🎯 Single-Turn Agent: Reinforced Fine-tuning with Custom Rewards
 
 The **single-turn agent execution** (default mode) supports custom reward functions—perfect for reinforced fine-tuning without a trained reward model. Instead of using a pre-trained reward model, you provide a Python function that computes rewards on-the-fly.
@@ -563,6 +576,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 ---
 
+<a id="multi-turn-agent-complex-environment-interactions"></a>
 ## 🤖 Multi-Turn Agent: Complex Environment Interactions
 
 For tasks requiring **multi-step interactions** (reasoning chains, coding with feedback, game playing), OpenRLHF provides the **Multi-Turn Agent Execution** mode.
@@ -661,6 +675,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 ---
 
+<a id="advanced-topics"></a>
 ## 🔧 Advanced Topics
 
 ### LoRA: Merging Adapters
@@ -702,18 +717,6 @@ Optimize OpenRLHF for your hardware and workload with these recommendations:
 | **Overlap Comm** | `--overlap_comm` | Sufficient GPU memory |
 | **Dynamic Batch** | `--use_dynamic_batch` | Variable sequence lengths |
 | **Prefix Caching** | vLLM config | `n_samples_per_prompt` > 1 |
-
-#### 🎲 Dynamic Sampling (DAPO Dynamic Filtering)
-
-OpenRLHF supports **dynamic sampling** during rollouts via **dynamic filtering**: for each prompt, generate multiple responses and keep higher-quality ones based on a **0–1 `scores`** signal from your reward function / agent.
-
-- **Enable**: `--dynamic_filtering`
-- **Set score range**: `--dynamic_filtering_reward_range 0.0 1.0`
-- **Requirements**:
-  - `--n_samples_per_prompt > 1`
-  - Provide either `--remote_rm_url` (reward function) or `--agent_func_path` (agent)
-
-📖 **Example**: `./examples/scripts/train_dapo_ray_hybrid_engine.sh` (includes `--dynamic_filtering`)
 
 #### 💾 Memory Management
 
