@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SCRIPT_DIR="$(dirname "$0")"
-WORK_DIR="$(realpath "$SCRIPT_DIR/../..")"
+WORK_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
 
 set -x
 
