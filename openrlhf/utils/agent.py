@@ -44,6 +44,18 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             "input_ids"
         ][0].tolist()
 
+        # Truncate initial observation if it's too long to leave room for generation
+        min_generation_tokens = sampling_params.max_tokens if hasattr(sampling_params, "max_tokens") else 1
+        max_initial_length = max_length - min_generation_tokens
+        if len(current_obs_tokens) > max_initial_length:
+            logger.warning(
+                f"Initial observation length ({len(current_obs_tokens)}) exceeds max_initial_length ({max_initial_length}). "
+                f"Truncating to fit within max_length ({max_length})."
+            )
+            current_obs_tokens = current_obs_tokens[-max_initial_length:]
+            # Also update observation_text to match truncated tokens
+            observation_text = hf_tokenizer.decode(current_obs_tokens, skip_special_tokens=False)
+
         # Initialize tracking variables
         action_ranges = []
         total_reward = 0
@@ -148,6 +160,15 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
     async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine):
         # Tokenize the initial observation.
         prompt_token_ids = hf_tokenizer(prompt, add_special_tokens=False, return_tensors="pt")["input_ids"][0].tolist()
+
+        # Truncate prompt if it's too long to leave room for generation
+        max_prompt_length = max_length - sampling_params.max_tokens
+        if len(prompt_token_ids) > max_prompt_length:
+            logger.warning(
+                f"Prompt length ({len(prompt_token_ids)}) exceeds max_prompt_length ({max_prompt_length}). "
+                f"Truncating to fit within max_length ({max_length}) with max_tokens ({sampling_params.max_tokens})."
+            )
+            prompt_token_ids = prompt_token_ids[-max_prompt_length:]
 
         # Generate one continuation from the engine.
         request_output = await llm_engine.generate(prompt_token_ids, deepcopy(sampling_params))
