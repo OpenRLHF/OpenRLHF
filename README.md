@@ -477,6 +477,9 @@ ray job submit --address="http://127.0.0.1:8265" \
 # --init_kl_coef 0                      # No reference model
 # --remote_rm_url http://host:5000/get_reward  # HTTP reward model
 # --n_samples_per_prompt 4              # Multiple samples per prompt
+# --enable_vllm_is_correction           # TIS (vLLM importance sampling correction) for off-policy rollouts (PPO only)
+# --vllm_is_truncated_threshold 0.5 5.0 # TIS truncation interval: [low, high]
+# --use_icepop                          # ICEPOP: set coefficients outside [low, high] to 0 (instead of clamp)
 ```
 
 > [!TIP]

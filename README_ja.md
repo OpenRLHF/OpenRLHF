@@ -245,6 +245,7 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 **効率の最適化**
 - すべての学習モードでのサンプルパッキング（`--packing_samples`）
 - 高速生成のためのvLLM加速（`--vllm_num_engines`）
+- TIS（vLLM 重要度サンプリング補正）/ ICEPOP：`--enable_vllm_is_correction`、`--vllm_is_truncated_threshold 0.5 5.0`、`--use_icepop`（PPO のみ）
 - DAPO [動的フィルタリング](./examples/scripts/train_ppo_ray_streaming.sh)（`--dynamic_filtering`）
 
 **スケーラビリティ**

@@ -476,6 +476,9 @@ ray job submit --address="http://127.0.0.1:8265" \
 # --init_kl_coef 0                      # 无参考模型
 # --remote_rm_url http://host:5000/get_reward  # HTTP 奖励模型
 # --n_samples_per_prompt 4              # 每个提示多个样本
+# --enable_vllm_is_correction           # TIS（vLLM 重要性采样修正）：用于 off-policy rollout（仅 PPO 生效）
+# --vllm_is_truncated_threshold 0.5 5.0 # TIS 截断区间：[low, high]
+# --use_icepop                          # ICEPOP：将区间外系数置 0（而不是 clamp）
 ```
 
 > [!TIP]
