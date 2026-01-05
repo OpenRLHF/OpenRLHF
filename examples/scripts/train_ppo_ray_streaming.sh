@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SCRIPT_DIR="$(dirname "$0")"
-WORK_DIR="$(realpath "$SCRIPT_DIR/..")"
+WORK_DIR="$(realpath "$SCRIPT_DIR/../..")"
 
 set -x
 
@@ -15,7 +15,7 @@ AGENT_FUNC_PATH="examples/python/agent_func.py"
 # For demo
 # git clone https://github.com/Freder-chen/OpenRLHF-Agent.git
 # cd OpenRLHF-Agent && pip install -e .
-# AGENT_FUNC_PATH="{OpenRLHF-Agent/examples/qwen3/train_openrlhf/agent_func_math.py}"
+# AGENT_FUNC_PATH="{OpenRLHF-Agent/examples/examples/single_turn/agent_func.py}"
 
 CKPT_ARGS=(
    --pretrain ${MODEL_PATH}
