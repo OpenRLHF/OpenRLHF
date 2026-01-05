@@ -139,6 +139,29 @@ class DeepspeedStrategy(ABC):
         return optim
 
     def backward(self, loss: torch.Tensor, model: nn.Module, optimizer: optim.Optimizer, **kwargs) -> None:
+        """Backward pass.
+        
+        Note on CP (Context Parallelism) + gradient scaling:
+        - Ring Attention rebuilds full-sequence tensors on every CP rank via
+          `flash_attn.utils.distributed.all_gather` before loss computation.
+        - `all_gather` autograd uses reduce_scatter(SUM) in backward, which introduces a `cp_size`
+          factor into the local gradients.
+        - DeepSpeed averages gradients across its data-parallel group (which includes CP when
+          enabled), dividing by (dp_size * cp_size); the `cp_size` factor from `all_gather` cancels
+          this, yielding an effective "dp average, cp sum" without explicitly scaling the loss.
+
+        MoE aux_loss handling:
+        - Trainers combine main_loss and aux_loss before calling backward:
+          loss = main_loss + aux_loss * aux_loss_coef
+        - aux_loss is computed locally on each CP rank based on the tokens it processes.
+        - DeepSpeed's AVG correctly averages aux_loss across all ranks.
+        - No special handling needed here - both losses flow through the same backward().
+
+        Args:
+            loss: Combined loss (main_loss + aux_loss * coef if MoE)
+            model: Model being trained
+            optimizer: Optimizer (unused, kept for API compatibility)
+        """
         if isinstance(model, Actor):
             model = model.model
         model.backward(loss)

@@ -163,11 +163,15 @@ def load_fsdp_model_to_gpu(model: nn.Module, device_id: int = None):
 
 def get_runtime_metadata(strategy) -> dict:
     """Get runtime metadata for checkpoint saving."""
+    dp_size = getattr(strategy, "dp_size", 1)
+    ring_attn_size = getattr(strategy, "ring_attn_size", 1)
     return {
         "backend": "fsdp2",
         "world_size": getattr(strategy, "world_size", 1),
-        "dp_size": getattr(strategy, "dp_size", 1),
-        "ring_attn_size": getattr(strategy, "ring_attn_size", 1),
+        "dp_size": dp_size,
+        "ring_attn_size": ring_attn_size,
         "tp_size": getattr(strategy, "tp_size", 1),
         "precision": getattr(strategy, "precision", "bf16"),
+        # FSDP mesh size = dp * cp (used for gradient aggregation)
+        "fsdp_mesh_size": dp_size * ring_attn_size,
     }

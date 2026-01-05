@@ -2,9 +2,17 @@
 FSDP2 distributed training strategy for OpenRLHF.
 
 Device mesh layout: (dp, cp, tp)
-- dp: data parallelism (FSDP sharding)
-- cp: context parallelism (ring attention)
-- tp: tensor parallelism
+- dp: data parallelism (data sharding across replicas)
+- cp: context parallelism (ring attention for long sequences)
+- tp: tensor parallelism (parameter sharding within a model)
+
+FSDP sharding uses merged dp_cp mesh:
+- FSDP reduce-scatter covers all DP+CP ranks
+- This ensures gradients are correctly aggregated across both DP and CP
+- Ring Attention only aggregates dK/dV (activation gradients), NOT parameter gradients
+- Without merging DP+CP, different CP ranks would have divergent parameters!
+
+Reference: Automodel, torchtitan both merge DP+CP for FSDP mesh.
 """
 
 import os
@@ -100,7 +108,7 @@ class FSDP2Strategy(ABC):
         ), f"world_size({self.world_size}) not divisible by ring_attn*tp({parallel_factor})"
         self.dp_size = self.world_size // parallel_factor
 
-        # Create fixed 3D mesh: (dp, cp, tp) - always include all dimensions even if size=1
+        # Create 3D mesh: (dp, cp, tp) - always include all dimensions even if size=1
         # This ensures all parameters use the same mesh structure, avoiding mesh mismatch issues
         # in operations like clip_grad_norm that aggregate across all parameters
         self.mesh = init_device_mesh(
@@ -109,30 +117,44 @@ class FSDP2Strategy(ABC):
             mesh_dim_names=("dp", "cp", "tp"),
         )
 
-        # Pre-create process groups for gradient norm computation (aligned with Automodel)
-        # Use _flatten to create 1D mesh from 2D dp+cp submesh
-        self.mesh["dp", "cp"]._flatten(mesh_dim_name="dp_cp")
-        self.dp_cp_group = self.mesh["dp_cp"].get_group()
-        self.tp_group = self.mesh["tp"].get_group() if self.tp_size > 1 else None
+        # Create FSDP mesh by merging DP and CP dimensions
+        # This is CRITICAL for Ring Attention correctness:
+        # - Ring Attention backward only aggregates dK, dV (activation gradients)
+        # - Parameter gradients (dW_q, dW_k, dW_v, etc.) are NOT aggregated by Ring Attention
+        # - FSDP's reduce-scatter must cover all DP+CP ranks to aggregate parameter gradients
+        # - Without this, different CP ranks would have divergent parameters!
+        # Reference: Automodel and torchtitan both use this approach
+        self.fsdp_mesh = self.mesh["dp", "cp"]._flatten(mesh_dim_name="dp_cp")
 
-        # Setup ring attention
+        # Process groups for different purposes:
+        # - dp_cp_group: for metrics reduction across all FSDP ranks (DP + CP)
+        # - dp_group: for data sampling (only DP, CP ranks share same data)
+        # - cp_group: for Ring Attention KV communication
+        # Note: tp_group is no longer needed for grad norm (DTensor handles it)
+        self.dp_cp_group = self.fsdp_mesh.get_group()
+        self.dp_group = self.mesh["dp"].get_group()
+        self.cp_group = self.mesh["cp"].get_group()
+
+        # Setup ring attention using CP group
         set_ring_attn_group(None)
         if self.ring_attn_size > 1:
-            cp_group = self.mesh["cp"].get_group()
-            set_ring_attn_group(cp_group)
+            set_ring_attn_group(self.cp_group)
             from ring_flash_attn import substitute_hf_flash_attn
 
-            substitute_hf_flash_attn(cp_group, getattr(self.args, "ring_head_stride", 1))
+            substitute_hf_flash_attn(self.cp_group, getattr(self.args, "ring_head_stride", 1))
 
         # Gradient accumulation
-        effective_batch = self.micro_train_batch_size * self.world_size
+        # Only DP contributes to batch size - CP processes same sequence chunks, TP processes same batch
+        # This matches DeepSpeed formula: train_batch_size / (micro_train_batch_size * dp_size)
+        effective_batch = self.micro_train_batch_size * self.dp_size
         self.accumulated_gradient = (
             1 if getattr(self.args, "use_dynamic_batch", False) else max(1, self.train_batch_size // effective_batch)
         )
 
         self._log(
             f"world={self.world_size} dp={self.dp_size} cp={self.ring_attn_size} "
-            f"tp={self.tp_size} grad_accum={self.accumulated_gradient}"
+            f"tp={self.tp_size} grad_accum={self.accumulated_gradient} "
+            f"fsdp_mesh_size={self.dp_size * self.ring_attn_size}"
         )
 
     @property
@@ -168,7 +190,8 @@ class FSDP2Strategy(ABC):
         is_actor = inner is not model
 
         # TP before FSDP
-        print(f"[FSDP2 wrap_model] tp_size={self.tp_size}, mesh_dim_names={self.mesh.mesh_dim_names}")
+        print(f"[FSDP2 wrap_model] tp_size={self.tp_size}, mesh_dim_names={self.mesh.mesh_dim_names}, "
+              f"fsdp_mesh_size={self.dp_size * self.ring_attn_size} (dp={self.dp_size} × cp={self.ring_attn_size})")
         if self.tp_size > 1:
             from .tp import apply_tensor_parallel
 
@@ -193,13 +216,19 @@ class FSDP2Strategy(ABC):
         return inner
 
     def _apply_fsdp(self, model, force_cpu_offload=False):
-        """Apply FSDP2 sharding.
+        """Apply FSDP2 sharding with merged DP+CP mesh.
 
         Args:
             model: Model to shard
             force_cpu_offload: If True, force CPUOffloadPolicy regardless of self.fsdp2_cpu_offload
+
+        Note:
+            Uses fsdp_mesh (dp_cp flattened) instead of mesh["dp"] to ensure
+            FSDP reduce-scatter covers all DP+CP ranks. This is essential for
+            Ring Attention because it only aggregates dK/dV, not parameter gradients.
         """
-        mesh = self.mesh["dp"]
+        # Use merged DP+CP mesh for FSDP - critical for Ring Attention correctness
+        mesh = self.fsdp_mesh
         mp = (
             None
             if self.precision == "fp32"
@@ -250,7 +279,32 @@ class FSDP2Strategy(ABC):
         return optim.AdamW(self._unwrap_model(model).parameters(), **kwargs)
 
     def backward(self, loss, model, optimizer, name="model", **kwargs):
-        """Backward with gradient accumulation and deferred sync."""
+        """Backward with gradient accumulation and deferred sync.
+
+        Note on loss scaling with CP (Context Parallelism):
+        - Ring Attention slices the sequence across CP ranks for the forward pass,
+          then uses `flash_attn.utils.distributed.all_gather` to rebuild full-sequence tensors
+          (log_probs / values / etc.) on EVERY CP rank before loss computation.
+        - `all_gather` autograd uses reduce_scatter(SUM) in backward, which introduces a `cp_size`
+          factor into the local gradients.
+        - FSDP2 then averages gradients across the flattened `dp_cp` mesh, dividing by
+          (dp_size * cp_size); the `cp_size` factor from `all_gather` cancels this, yielding an
+          effective "dp average, cp sum" without explicitly scaling the loss here.
+
+        MoE aux_loss handling:
+        - Trainers combine main_loss and aux_loss before calling backward:
+          loss = main_loss + aux_loss * aux_loss_coef
+        - aux_loss is computed locally on each CP rank based on the tokens it processes.
+        - FSDP2's AVG across (dp_size * cp_size) correctly averages aux_loss across all ranks,
+          giving us the global load balance metric we want.
+        - No special handling needed here - both losses flow through the same backward().
+
+        Args:
+            loss: Combined loss (main_loss + aux_loss * coef if MoE)
+            model: Model being trained
+            optimizer: Optimizer
+            name: Name for gradient sync tracking
+        """
         if self.accumulated_gradient > 1:
             loss = loss / self.accumulated_gradient
 
@@ -262,55 +316,69 @@ class FSDP2Strategy(ABC):
 
         loss.backward()
 
-    def _get_grad_norm(self, model, norm_type=2.0, dtype=torch.float32):
-        """Calculate gradient norm across all parallel groups.
+    @torch.no_grad()
+    def _clip_grad_norm(self, model, max_norm, norm_type=2.0):
+        """Clip gradients for FSDP2 + TP models.
 
-        Reference: Automodel/nemo_automodel/components/distributed/grad_utils.py
+        With FSDP mesh = dp_cp, parameters are DTensors distributed across multiple
+        dimensions. get_total_norm + full_tensor handles aggregation automatically:
+        - Shard placements: full_tensor() aggregates across the sharded dimension
+        - Replicate placements: full_tensor() returns as-is (already complete)
+
+        This is much simpler than manual all_reduce because DTensor tracks the
+        correct aggregation logic based on placements.
+
+        Reference: Automodel's _clip_grad_norm_impl uses the same approach.
         """
-        inner = self._unwrap_model(model)
-        parameters = [p for p in inner.parameters() if p.grad is not None]
+        import math
 
-        if len(parameters) == 0:
+        parameters = [p for p in self._unwrap_model(model).parameters() if p.grad is not None]
+        if not parameters:
             return 0.0
-
-        # Get local gradients (convert DTensor to local tensor)
-        grads = [
-            (p.grad.detach().to_local() if isinstance(p.grad, DTensor) else p.grad.detach()).to(dtype)
-            for p in parameters
-        ]
 
         norm_type = float(norm_type)
 
-        if norm_type == float("inf"):
-            total_norm = max(g.abs().max().item() for g in grads)
-            total_norm = torch.tensor([total_norm], dtype=torch.float, device="cuda")
-            dist.all_reduce(total_norm, op=dist.ReduceOp.MAX, group=self.dp_cp_group)
-            if self.tp_group:
-                dist.all_reduce(total_norm, op=dist.ReduceOp.MAX, group=self.tp_group)
-            return total_norm[0].item()
+        # Group parameters by their sharding pattern (mesh + placements)
+        # Different sharding patterns must be handled separately for clip_grads_with_norm_
+        sharding_groups = {}
+        for p in parameters:
+            if isinstance(p, DTensor):
+                key = (id(p.device_mesh), tuple(str(pl) for pl in p.placements))
+            else:
+                key = ("regular", "regular")
+            sharding_groups.setdefault(key, []).append(p)
 
-        # L2 or other norms
-        total_norm = sum(torch.norm(g, norm_type) ** norm_type for g in grads)
-        total_norm = torch.tensor(total_norm, device="cuda")
-        dist.all_reduce(total_norm, op=dist.ReduceOp.SUM, group=self.dp_cp_group)
-        if self.tp_group:
-            dist.all_reduce(total_norm, op=dist.ReduceOp.SUM, group=self.tp_group)
-        return total_norm.item() ** (1.0 / norm_type)
+        # Compute norm for each sharding group
+        group_norms = []
+        for group_params in sharding_groups.values():
+            grads = [p.grad for p in group_params]
+            norm = torch.nn.utils.get_total_norm(grads, norm_type, error_if_nonfinite=False)
 
-    def _clip_grad_norm(self, model, max_norm, norm_type=2.0):
-        """Clip gradients by total norm (aligned with Automodel)."""
-        total_norm = self._get_grad_norm(model, norm_type)
-        if total_norm == 0.0:
-            return total_norm
+            # Convert DTensor norm to regular tensor via full_tensor()
+            # This automatically handles aggregation across all mesh dimensions
+            if isinstance(norm, DTensor):
+                norm = norm.full_tensor()
 
-        clip_coef = max_norm / (total_norm + 1e-6)
-        if clip_coef < 1.0:
-            for p in self._unwrap_model(model).parameters():
-                if p.grad is not None:
-                    g = p.grad.detach()
-                    (g.to_local() if isinstance(g, DTensor) else g).mul_(clip_coef)
+            norm = norm.float().cuda().clone().detach()
+            group_norms.append(norm)
 
-        return total_norm
+        # Combine norms across groups
+        if len(group_norms) == 0:
+            total_norm = torch.tensor(0.0, device="cuda")
+        elif len(group_norms) == 1:
+            total_norm = group_norms[0]
+        else:
+            if math.isinf(norm_type):
+                total_norm = torch.stack(group_norms).max()
+            else:
+                # Combine p-norms: (sum of p-th powers)^(1/p)
+                total_norm = sum(gn ** norm_type for gn in group_norms) ** (1.0 / norm_type)
+
+        # Clip gradients for each sharding group separately
+        for group_params in sharding_groups.values():
+            torch.nn.utils.clip_grads_with_norm_(group_params, max_norm, total_norm)
+
+        return total_norm.item()
 
     def optimizer_step(self, optimizer, model, scheduler, name="model", **kwargs):
         """Optimizer step with gradient accumulation."""
@@ -349,9 +417,17 @@ class FSDP2Strategy(ABC):
         sampler=None,
         consumed_samples=0,
     ):
-        """Create distributed dataloader."""
+        """Create distributed dataloader.
+
+        Note:
+            Data is sharded only across DP dimension, not CP.
+            CP ranks within the same DP group see the same data but process different
+            sequence chunks. This is essential for Ring Attention to work correctly.
+        """
         if sampler is None and dist.is_initialized():
-            dp_group = self.mesh["dp"].get_group() if self.mesh else None
+            # Use dp_group for data sharding - CP ranks share the same data
+            # This ensures all CP ranks in the same DP group see identical samples
+            dp_group = self.dp_group if hasattr(self, 'dp_group') and self.dp_group else None
             sampler = DistributedSampler(
                 dataset,
                 num_replicas=dist.get_world_size(dp_group) if dp_group else dist.get_world_size(),
@@ -512,14 +588,30 @@ class FSDP2Strategy(ABC):
     # -------------------------------------------------------------------------
 
     def _dp_group(self):
-        return self.mesh["dp"].get_group() if self.mesh else None
+        """Return DP process group (for data-related operations, not FSDP)."""
+        return self.dp_group if hasattr(self, 'dp_group') and self.dp_group else None
 
-    def all_reduce(self, data, op="mean"):
-        """All-reduce across DP group."""
+    def all_reduce(self, data, op="mean", with_context_parallel=True):
+        """All-reduce across DP group (optionally including CP).
+
+        Args:
+            data: Data to reduce (tensor, scalar, or dict)
+            op: Reduction operation ("mean", "max", "sum")
+            with_context_parallel: If True, reduce across both DP and CP (for metrics).
+                                   If False, reduce across DP only (for data partitioning).
+                                   Follows slime's convention.
+        """
         if isinstance(data, dict):
-            return {k: self.all_reduce(v, op) for k, v in data.items()}
+            return {k: self.all_reduce(v, op, with_context_parallel) for k, v in data.items()}
 
-        group, size = self._dp_group(), dist.get_world_size(self._dp_group()) if dist.is_initialized() else 1
+        # Use dp_cp_group for metrics (like slime's with_context_parallel=True)
+        # Use dp_group only for data-related operations
+        if with_context_parallel and self.ring_attn_size > 1:
+            group = self.dp_cp_group
+            size = self.dp_size * self.ring_attn_size
+        else:
+            group = self._dp_group()
+            size = dist.get_world_size(self._dp_group()) if dist.is_initialized() else 1
         is_tensor, on_cpu = isinstance(data, torch.Tensor), False
         t = data if is_tensor else torch.tensor(data)
         if t.device.type == "cpu":
