@@ -57,7 +57,7 @@ OpenRLHF 是**首个**结合 **Ray + vLLM 分布式架构**与**统一 Agent 设
 - [2025/8] [ProRL V2](https://hijkzzz.notion.site/prorl-v2) 使用 REINFORCE++-baseline 训练最先进的 1.5B 推理模型，并发布博文 [REINFORCE++-baseline is all you need in RLVR](https://medium.com/@janhu9527/reinforce-baseline-is-all-you-need-in-rlvr-f5406930aa85)。
 - [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) 使用与 REINFORCE++-baseline 非常相似的方法训练推理模型。
 - [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) 作为 OpenRLHF 的分支发布。它旨在通过集成中心化多智能体交互与分布式策略训练来训练基于 LLM 的多智能体系统。
-- [2025/5] OpenRLHF 0.8.0 支持[异步流水线 RLHF](./examples/test_scripts/train_reinforce_llama_ray_async.sh)（`--async_train`）和[异步 Agent RLHF](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)（`--agent_func_path`），并重新设计了基于类的 Agent API
+- [2025/5] OpenRLHF 0.8.0 支持通过 `--async_train` 启用异步 RLHF 训练，并通过 `--agent_func_path` 启用异步 Agent RLHF。可运行示例见 [train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)。
 - [2025/4] 发布博客 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html)
 - [2025/4] Clean OpenRLHF：基于单控制器和统一打包样本重构了源代码
 - [2025/3] CMU [高级自然语言处理 2025 春季](https://cmu-l3.github.io/anlp-spring2025/)课程使用 OpenRLHF 作为 RLHF 框架教学案例。
@@ -211,7 +211,7 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 - 适用于所有 RL 算法
 - [自定义 Agent 函数](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)（`--agent_func_path`）
 - NeMo Gym 集成：参见 `examples/python/agent_func_nemogym_executor.py`（集成 NeMo Gym rollout 的 agent executor 示例）
-- [异步流水线](./examples/test_scripts/train_reinforce_llama_ray_async.sh)（`--async_train`）提高吞吐量
+- 异步流水线（`--async_train`）提高吞吐量：[train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)
 
 </details>
 
@@ -701,6 +701,18 @@ python -m openrlhf.cli.lora_combiner \
 | **重叠通信** | `--overlap_comm` | GPU 内存充足 |
 | **动态批次** | `--use_dynamic_batch` | 可变序列长度 |
 | **前缀缓存** | vLLM 配置 | `n_samples_per_prompt` > 1 |
+
+#### 🎲 Dynamic Sampling（DAPO 动态过滤）
+
+OpenRLHF 支持在 rollout 阶段进行 **dynamic sampling**（通过 **dynamic filtering** 实现）：对每个 prompt 生成多条响应，然后依据你的奖励函数/Agent 返回的 **0–1 `scores`** 信号筛选出更高质量的样本用于训练。
+
+- **开启**：`--dynamic_filtering`
+- **设置分数范围**：`--dynamic_filtering_reward_range 0.0 1.0`
+- **前置条件**：
+  - `--n_samples_per_prompt > 1`
+  - 需要提供 `--remote_rm_url`（奖励函数）或 `--agent_func_path`（Agent）
+
+📖 **示例**：`./examples/scripts/train_dapo_ray_hybrid_engine.sh`（已包含 `--dynamic_filtering`）
 
 #### 💾 内存管理
 

@@ -57,7 +57,7 @@ OpenRLHF is **the first** high-performance, production-ready open-source RLHF fr
 - [2025/8] [ProRL V2](https://hijkzzz.notion.site/prorl-v2) uses REINFORCE++-baseline to train a state-of-the-art 1.5B reasoning model and releases the blog post [REINFORCE++-baseline is all you need in RLVR](https://medium.com/@janhu9527/reinforce-baseline-is-all-you-need-in-rlvr-f5406930aa85).
 - [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) uses the method quite similar to REINFORCE++-baseline to train the reasoning models.
 - [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) has been released as a fork of OpenRLHF. It is designed to train LLM-based multi-agent systems using RL, by integrating centralized multi-agent interactions with distributed policy training.
-- [2025/5] OpenRLHF 0.8.0 supports [Async Pipeline RLHF](./examples/test_scripts/train_reinforce_llama_ray_async.sh) (`--async_train`) and [Async Agent RLHF](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh) (`--agent_func_path`) with redesigned class-based Agent API
+- [2025/5] OpenRLHF 0.8.0 supports async RLHF training via `--async_train` and async agent RLHF via `--agent_func_path`. See [train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh) for a runnable example.
 - [2025/4] Post the blog [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html)
 - [2025/4] Clean OpenRLHF: Refactored the source code based on Single Controller and Unified Packing Samples
 - [2025/3] The CMU [Advanced Natural Language Processing Spring 2025](https://cmu-l3.github.io/anlp-spring2025/) course uses OpenRLHF as the RLHF framework teaching case.
@@ -210,7 +210,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 - Works with all RL algorithms
 - [Custom agent functions](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh) (`--agent_func_path`)
 - NeMo Gym integration: see `examples/python/agent_func_nemogym_executor.py` for an agent executor that integrates NeMo Gym rollouts
-- [Async pipeline](./examples/test_scripts/train_reinforce_llama_ray_async.sh) (`--async_train`) for higher throughput
+- Async pipeline (`--async_train`) for higher throughput: [train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)
 
 </details>
 
@@ -702,6 +702,18 @@ Optimize OpenRLHF for your hardware and workload with these recommendations:
 | **Overlap Comm** | `--overlap_comm` | Sufficient GPU memory |
 | **Dynamic Batch** | `--use_dynamic_batch` | Variable sequence lengths |
 | **Prefix Caching** | vLLM config | `n_samples_per_prompt` > 1 |
+
+#### 🎲 Dynamic Sampling (DAPO Dynamic Filtering)
+
+OpenRLHF supports **dynamic sampling** during rollouts via **dynamic filtering**: for each prompt, generate multiple responses and keep higher-quality ones based on a **0–1 `scores`** signal from your reward function / agent.
+
+- **Enable**: `--dynamic_filtering`
+- **Set score range**: `--dynamic_filtering_reward_range 0.0 1.0`
+- **Requirements**:
+  - `--n_samples_per_prompt > 1`
+  - Provide either `--remote_rm_url` (reward function) or `--agent_func_path` (agent)
+
+📖 **Example**: `./examples/scripts/train_dapo_ray_hybrid_engine.sh` (includes `--dynamic_filtering`)
 
 #### 💾 Memory Management
 
