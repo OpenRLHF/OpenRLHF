@@ -31,9 +31,11 @@ class AgentInstanceBase(ABC):
 class MultiTurnAgentExecutor(AgentExecutorBase):
     def __init__(self, agent_instance_cls):
         assert issubclass(agent_instance_cls, AgentInstanceBase), "AgentInstance must inherit from AgentInstanceBase"
-        self.agent_instance = agent_instance_cls()
+        self.agent_instance_cls = agent_instance_cls
 
     async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine):
+        agent_instance = self.agent_instance_cls()
+
         # Initialize with reset function
         initial_states = {"observation": prompt, "label": label}
         reset_result = await self.agent_instance.reset(initial_states)
