@@ -9,7 +9,7 @@ openrlhf.cli.train_prm \
    --train_batch_size 256 \
    --micro_train_batch_size 8 \
    --pretrain mistralai/Mistral-7B-v0.1  \
-   --model_data_type bf16 \
+   --param_dtype bf16 \
    --max_epochs 1 \
    --max_len 8192 \
    --zero_stage 3 \

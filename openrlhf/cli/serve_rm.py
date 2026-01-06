@@ -19,7 +19,7 @@ class RewardModelProxy:
             "reward",
             normalize_reward=args.normalize_reward,
             attn_implementation=args.attn_implementation,
-            model_data_type=args.model_data_type, # default: bf16
+            param_dtype=args.param_dtype, # default: bf16
             load_in_4bit=args.load_in_4bit,
             value_head_prefix=args.value_head_prefix,
             device_map="auto",
@@ -79,7 +79,7 @@ if __name__ == "__main__":
     # Performance
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
     parser.add_argument(
-        "--model_data_type",
+        "--param_dtype",
         type=str,
         default="bf16",
         choices=["bf16", "fp16", "fp32"],

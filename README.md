@@ -361,7 +361,7 @@ deepspeed --module openrlhf.cli.train_sft \
    --zero_stage 2 \
    --max_epochs 1 \
    --packing_samples \
-   --model_data_type bf16 \
+   --param_dtype bf16 \
    --learning_rate 5e-6 \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
@@ -390,7 +390,7 @@ deepspeed --module openrlhf.cli.train_rm \
    --train_batch_size 256 \
    --micro_train_batch_size 1 \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-   --model_data_type bf16 \
+   --param_dtype bf16 \
    --max_epochs 1 \
    --max_len 8192 \
    --zero_stage 3 \
@@ -462,7 +462,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --max_samples 100000 \
    --generate_max_len 1024 \
    --zero_stage 3 \
-   --model_data_type bf16 \
+   --param_dtype bf16 \
    --actor_learning_rate 5e-7 \
    --critic_learning_rate 9e-6 \
    --init_kl_coef 0.01 \
@@ -688,7 +688,7 @@ python -m openrlhf.cli.lora_combiner \
     --lora_path ./checkpoint/llama3-8b-rm \
     --output_path ./checkpoint/llama-3-8b-rm-combined \
     --is_rm \
-    --model_data_type bf16
+    --param_dtype bf16
 ```
 
 ### Performance Tuning Guide

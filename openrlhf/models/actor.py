@@ -22,7 +22,7 @@ class Actor(nn.Module):
     Args:
         pretrain_or_model (nn.Module): A pretrained model or a new model instance to be used as the actor.
         attn_implementation (str, optional): Attention mechanism implementation to use. Defaults to "flash_attention_2".
-        model_data_type (str, optional): Model data type ("bf16", "fp16", "fp32"). Defaults to "bf16".
+        param_dtype (str, optional): Model data type ("bf16", "fp16", "fp32"). Defaults to "bf16".
         load_in_4bit (bool, optional): Load the model in 4-bit precision. Defaults to False.
         lora_rank (int, optional): Rank for LoRA adaptation. Defaults to 0.
         lora_alpha (int, optional): Alpha parameter for LoRA. Defaults to 16.
@@ -39,7 +39,7 @@ class Actor(nn.Module):
         self,
         pretrain_or_model,
         attn_implementation="flash_attention_2",
-        model_data_type="bf16",
+        param_dtype="bf16",
         load_in_4bit=False,
         lora_rank=0,
         lora_alpha=16,
@@ -66,12 +66,12 @@ class Actor(nn.Module):
             else:
                 dschf = None
 
-            # Determine torch dtype based on model_data_type parameter, default: bf16
+            # Determine torch dtype based on param_dtype parameter, default: bf16
             from openrlhf.utils.utils import convert_to_torch_dtype
-            torch_dtype = convert_to_torch_dtype(model_data_type)
+            torch_dtype = convert_to_torch_dtype(param_dtype)
 
             if load_in_4bit:
-                assert model_data_type == "bf16", "we only support bnb_4bit_compute_dtype = bf16"
+                assert param_dtype == "bf16", "we only support bnb_4bit_compute_dtype = bf16"
                 nf4_config = BitsAndBytesConfig(
                     load_in_4bit=True,
                     bnb_4bit_quant_type="nf4",

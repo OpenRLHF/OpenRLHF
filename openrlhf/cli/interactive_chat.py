@@ -18,7 +18,7 @@ def generate(args):
     model = Actor(
         args.pretrain,
         attn_implementation=args.attn_implementation,
-        model_data_type=args.model_data_type, # default: bf16
+        param_dtype=args.param_dtype, # default: bf16
         load_in_4bit=args.load_in_4bit,
         device_map="auto",
     )
@@ -91,7 +91,7 @@ def generate(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--model_data_type",
+        "--param_dtype",
         type=str,
         default="bf16",
         choices=["bf16", "fp16", "fp32"],

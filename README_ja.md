@@ -347,7 +347,7 @@ python -m openrlhf.cli.lora_combiner \
     --lora_path ./checkpoint/llama3-8b-rm \
     --output_path ./checkpoint/llama-3-8b-rm-combined \
     --is_rm \
-    --model_data_type bf16
+    --param_dtype bf16
 ```
 
 ### パフォーマンスチューニングガイド

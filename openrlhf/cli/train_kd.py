@@ -22,7 +22,7 @@ def train(args):
     model = Actor(
         args.pretrain,
         attn_implementation=args.attn_implementation,
-        model_data_type=args.model_data_type, # default: bf16
+        param_dtype=args.param_dtype, # default: bf16
         load_in_4bit=args.load_in_4bit,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
@@ -36,7 +36,7 @@ def train(args):
     teacher_model = Actor(
         args.teacher_model,
         attn_implementation=args.attn_implementation,
-        model_data_type=args.model_data_type, # default: bf16
+        param_dtype=args.param_dtype, # default: bf16
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=args.teacher_offload),
     )
@@ -182,7 +182,7 @@ if __name__ == "__main__":
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
     parser.add_argument(
-        "--model_data_type",
+        "--param_dtype",
         type=str,
         default="bf16",
         choices=["bf16", "fp16", "fp32"],

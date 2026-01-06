@@ -171,7 +171,7 @@ class CriticModelActor(BaseModelActor):
             "critic",
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
-            model_data_type=strategy.args.model_data_type, # default: bf16
+            param_dtype=strategy.args.param_dtype, # default: bf16
             load_in_4bit=strategy.args.load_in_4bit,
             lora_rank=strategy.args.lora_rank,
             lora_alpha=strategy.args.lora_alpha,

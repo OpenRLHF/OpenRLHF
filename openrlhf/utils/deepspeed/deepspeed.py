@@ -54,7 +54,7 @@ class DeepspeedStrategy(ABC):
         self.stage = zero_stage
         self.train_batch_size = train_batch_size
         self.micro_train_batch_size = micro_train_batch_size
-        self.model_data_type = args.model_data_type  # default: bf16
+        self.param_dtype = args.param_dtype  # default: bf16
         self.seed = seed
         self.full_determinism = full_determinism
         self.max_norm = max_norm
@@ -71,7 +71,7 @@ class DeepspeedStrategy(ABC):
 
         if self.ds_tensor_parallel_size > 1:
             assert deepspeed.version >= "0.16.4", "DeepSpeed version must be >= 0.16.4 for tensor parallel training"
-            assert self.model_data_type == "bf16", "BF16 is required for tensor parallel training"
+            assert self.param_dtype == "bf16", "BF16 is required for tensor parallel training"
 
         self.is_rlhf = False
         self.time_steps = defaultdict(int)
@@ -255,7 +255,7 @@ class DeepspeedStrategy(ABC):
             offload=False,
             adam_offload=self.adam_offload,
             stage=self.stage,
-            model_data_type=self.model_data_type,
+            param_dtype=self.param_dtype,
             max_norm=self.max_norm,
             zpg=self.zpg,
             grad_accum_dtype=self.grad_accum_dtype,
@@ -307,7 +307,7 @@ class DeepspeedStrategy(ABC):
         ds_config = get_eval_ds_config(
             offload=offload,
             stage=self.stage if self.stage == 3 else 0,
-            model_data_type=self.model_data_type,
+            param_dtype=self.param_dtype,
             deepcompile=self.deepcompile,
             tensor_parallel_size=self.ds_tensor_parallel_size,
         )

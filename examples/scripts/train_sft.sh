@@ -16,7 +16,7 @@ openrlhf.cli.train_sft \
    --eval_steps -1 \
    --zero_stage 2 \
    --max_epochs 1 \
-   --model_data_type bf16 \
+   --param_dtype bf16 \
    --attn_implementation flash_attention_2 \
    --learning_rate 5e-6 \
    --load_checkpoint \
