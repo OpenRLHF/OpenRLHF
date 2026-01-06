@@ -34,11 +34,12 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
         self.agent_instance_cls = agent_instance_cls
 
     async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine):
+        # Treat each AgentInstance as an isolated environment; bind every prompt to its own independent instance
         agent_instance = self.agent_instance_cls()
 
         # Initialize with reset function
         initial_states = {"observation": prompt, "label": label}
-        reset_result = await self.agent_instance.reset(initial_states)
+        reset_result = await agent_instance.reset(initial_states)
         observation_text = reset_result["observation"]
 
         # Tokenize the initial observation
@@ -94,7 +95,7 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
                 "label": label,
                 "sampling_params": sampling_params,
             }
-            step_result = await self.agent_instance.step(states)
+            step_result = await agent_instance.step(states)
 
             total_reward += step_result["rewards"].item()
             final_scores = step_result.get("scores", total_reward)
