@@ -150,9 +150,6 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
         reward_endpoints = [remote_rm_url] if isinstance(remote_rm_url, str) else remote_rm_url
         self.reward_endpoints = reward_endpoints or []
 
-        # Round-robin index for selecting reward endpoints.
-        self._reward_endpoint_idx = 0
-
         # Optional user-provided reward_func from a Python file.
         self.reward_func = None
         if self.reward_endpoints and self.reward_endpoints[0].endswith(".py"):
@@ -171,6 +168,11 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
                 raise TypeError("reward_func must be an async function; define it with `async def reward_func(...)`.")
 
             self.reward_func = reward_func
+        
+        # Optional user-provided reward_endpoints from URLs.
+        if self.reward_func is None:
+            # Round-robin index for selecting reward endpoints.
+            self._reward_endpoint_idx = 0
 
     async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine):
         # Tokenize the initial observation.
@@ -226,7 +228,7 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
                     # Pick the next endpoint in round-robin order.
                     endpoint = self.reward_endpoints[self._reward_endpoint_idx % len(self.reward_endpoints)]
                     self._reward_endpoint_idx = (self._reward_endpoint_idx + 1) % len(self.reward_endpoints)
-                    rewards_info = await self._post_request(endpoint, query, prompt, label)
+                    rewards_info = await self._post_request(endpoint, [query], [prompt], [label])
 
                 if rewards_info:
                     output.update(
@@ -239,12 +241,12 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
 
         return output
 
-    async def _post_request(self, url, query, prompt, label, try_max_times=3):
+    async def _post_request(self, url, queries_list, prompts_list, labels_list, try_max_times=3):
         timeout = aiohttp.ClientTimeout(total=180)
         payload = {
-            "query": [query],
-            "prompts": [prompt],
-            "labels": [label],
+            "query": queries_list,
+            "prompts": prompts_list,
+            "labels": labels_list,
         }
         for _ in range(try_max_times):
             try:
