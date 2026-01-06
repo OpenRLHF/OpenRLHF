@@ -1,11 +1,16 @@
 from typing import Optional, Tuple, Union
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 
 
 def _ensure_full_tensor(tensor: torch.Tensor) -> torch.Tensor:
-    """Convert DTensor to full tensor if needed (for TP compatibility)."""
+    """Convert DTensor to full tensor if needed (for TP compatibility).
+
+    WARNING: This is inefficient for large tensors (e.g., logits with large vocab).
+    Consider using vocab_parallel_logprobs() instead for TP-friendly loss computation.
+    """
     try:
         from torch.distributed.tensor import DTensor
 
@@ -94,12 +99,57 @@ def _logsumexp_by_chunk(logits: torch.Tensor, chunk_size: int = 1024) -> torch.T
     return logsumexp_values
 
 
-def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:
-    # Handle DTensor from Tensor Parallel (convert to full tensor before log_probs computation)
+def log_probs_from_logits(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    temperature: float = 1.0,
+    tp_group: dist.ProcessGroup | None = None,
+) -> torch.Tensor:
+    """Compute log probabilities from logits.
+
+    Args:
+        logits: Model logits with shape [..., vocab_size] or [..., vocab_size/tp]
+            when tensor parallelism is enabled. Can be DTensor with Shard(-1).
+        labels: Token indices with shape [...] for which to compute log probabilities.
+        temperature: Softmax temperature scaling. Default is 1.0.
+        tp_group: If provided with tp_size > 1, uses vocab-parallel computation
+            to avoid gathering the full vocab dimension across TP ranks.
+            This is much more memory-efficient for large vocabularies.
+
+    Returns:
+        Log probabilities at the label positions with shape [...].
+    """
+    # Check if we should use vocab parallel path
+    use_vocab_parallel = tp_group is not None and dist.get_world_size(tp_group) > 1
+
+    # Also check if logits is a DTensor with Shard(-1) placement
+    try:
+        from torch.distributed.tensor import DTensor, Shard
+
+        if isinstance(logits, DTensor):
+            placements = logits.placements
+            if any(isinstance(p, Shard) and p.dim == logits.ndim - 1 for p in placements):
+                use_vocab_parallel = True
+                # Get TP group from DTensor if not provided
+                if tp_group is None:
+                    tp_group = logits.device_mesh.get_group()
+    except ImportError:
+        pass
+
+    # Use vocab parallel path for TP
+    if use_vocab_parallel:
+        from openrlhf.utils.fsdp.vocab_parallel import vocab_parallel_logprobs
+
+        return vocab_parallel_logprobs(
+            logits, labels, tp_group=tp_group, temperature=temperature
+        )
+
+    # Legacy path: convert DTensor to full tensor (inefficient for large vocab)
     logits = _ensure_full_tensor(logits)
 
     if temperature != 1.0:
-        logits.div_(temperature)
+        logits = logits / temperature  # avoid in-place to preserve original
+
     # https://github.com/OpenRLHF/OpenRLHF/pull/718#issuecomment-2641081881
     if logits.dtype in [torch.float32, torch.float64]:
         batch_dim = logits.shape[:-1]
@@ -122,6 +172,54 @@ def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor, temperatur
             log_probs_labels.append(row_log_probs_labels)
         log_probs_labels = torch.stack(log_probs_labels)
     return log_probs_labels
+
+
+def log_probs_and_entropy_from_logits(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    temperature: float = 1.0,
+    tp_group: dist.ProcessGroup | None = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Compute log probabilities and entropy from logits.
+
+    This computes both values in a single pass, sharing intermediate results
+    to reduce redundant computation and communication.
+
+    Args:
+        logits: Model logits with shape [..., vocab_size] or [..., vocab_size/tp].
+        labels: Token indices with shape [...].
+        temperature: Softmax temperature scaling. Default is 1.0.
+        tp_group: If provided with tp_size > 1, uses vocab-parallel computation.
+
+    Returns:
+        A tuple of (logprobs, entropy).
+    """
+    # Check if we should use vocab parallel path
+    use_vocab_parallel = tp_group is not None and dist.get_world_size(tp_group) > 1
+
+    try:
+        from torch.distributed.tensor import DTensor, Shard
+
+        if isinstance(logits, DTensor):
+            placements = logits.placements
+            if any(isinstance(p, Shard) and p.dim == logits.ndim - 1 for p in placements):
+                use_vocab_parallel = True
+                if tp_group is None:
+                    tp_group = logits.device_mesh.get_group()
+    except ImportError:
+        pass
+
+    if use_vocab_parallel:
+        from openrlhf.utils.fsdp.vocab_parallel import vocab_parallel_logprobs_entropy
+
+        return vocab_parallel_logprobs_entropy(
+            logits, labels, tp_group=tp_group, temperature=temperature
+        )
+
+    # Fallback to separate computation
+    logprobs = log_probs_from_logits(logits, labels, temperature, tp_group=None)
+    entropy = compute_entropy(_ensure_full_tensor(logits) / temperature if temperature != 1.0 else _ensure_full_tensor(logits))
+    return logprobs, entropy
 
 
 def masked_mean(tensor: torch.Tensor, mask: Optional[torch.Tensor], dim: int = None) -> torch.Tensor:

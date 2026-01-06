@@ -5,10 +5,11 @@ FSDP2 Module for OpenRLHF
 Requires: PyTorch >= 2.7.0
 
 Files:
-- strategy.py   : FSDP2Strategy class (main entry point)
-- tp.py         : Tensor Parallelism
-- checkpoint.py : Save/load checkpoints
-- utils.py      : Gradient clipping, EMA, optimizer utils
+- strategy.py       : FSDP2Strategy class (main entry point)
+- tp.py             : Tensor Parallelism
+- vocab_parallel.py : TP-friendly distributed loss computation
+- checkpoint.py     : Save/load checkpoints
+- utils.py          : Gradient clipping, EMA, optimizer utils
 """
 
 import torch
@@ -29,6 +30,11 @@ from .utils import (
     move_optimizer_state,
     moving_average_fsdp,
 )
+from .vocab_parallel import (
+    vocab_parallel_cross_entropy,
+    vocab_parallel_logprobs,
+    vocab_parallel_logprobs_entropy,
+)
 
 __all__ = [
     # Core
@@ -37,6 +43,10 @@ __all__ = [
     "apply_tensor_parallel",
     "get_tp_plan",
     "validate_tp_mesh",
+    # Vocab Parallel Loss
+    "vocab_parallel_logprobs",
+    "vocab_parallel_logprobs_entropy",
+    "vocab_parallel_cross_entropy",
     # Checkpointing
     "save_hf_model",
     "load_hf_model",
