@@ -33,7 +33,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --max_samples 20000 \
    --generate_max_len 1024 \
    --zero_stage 3 \
-   --bf16 \
+   --model_data_type bf16 \
    --actor_learning_rate 5e-7 \
    --prompt_data OpenRLHF/prompt-collection-v0.1 \
    --input_key context_messages \

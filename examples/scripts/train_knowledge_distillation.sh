@@ -17,7 +17,7 @@ openrlhf.cli.train_kd \
    --eval_steps -1 \
    --zero_stage 3 \
    --max_epochs 1 \
-   --bf16 \
+   --model_data_type bf16 \
    --attn_implementation flash_attention_2 \
    --kd_coef 0.4 \
    --learning_rate 5e-6 \

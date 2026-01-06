@@ -5,10 +5,10 @@ from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 
-def apply_lora(model_name_or_path, lora_path, output_path, is_rm, data_type):
+def apply_lora(model_name_or_path, lora_path, output_path, is_rm, model_data_type):
     print(f"Loading the base model from {model_name_or_path}")
     model_cls = AutoModelForCausalLM if not is_rm else AutoModelForSequenceClassification
-    torch_dtype = torch.bfloat16 if data_type == "bf16" else "auto"
+    torch_dtype = torch.bfloat16 if model_data_type == "bf16" else "auto"
     base = model_cls.from_pretrained(model_name_or_path, torch_dtype=torch_dtype, low_cpu_mem_usage=True)
     base_tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
 
@@ -40,11 +40,11 @@ if __name__ == "__main__":
         help="Whether to treat the model as a reward model (AutoModelForSequenceClassification)",
     )
     parser.add_argument(
-        "--data_type",
+        "--model_data_type",
         type=str,
         default="bf16",
         choices=["auto", "bf16"],
         help="Model data type: 'auto' uses model's original dtype, 'bf16' uses bfloat16",
     )
     args = parser.parse_args()
-    apply_lora(args.model_path, args.lora_path, args.output_path, args.is_rm, args.data_type)
+    apply_lora(args.model_path, args.lora_path, args.output_path, args.is_rm, args.model_data_type)

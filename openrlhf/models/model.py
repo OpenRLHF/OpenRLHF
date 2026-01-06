@@ -21,7 +21,7 @@ def get_llm_for_sequence_regression(
     model_name_or_path: str,
     model_type: str,
     *,
-    data_type="bf16",
+    model_data_type="bf16",
     load_in_4bit=False,
     lora_rank=0,
     lora_alpha=16,
@@ -43,7 +43,7 @@ def get_llm_for_sequence_regression(
     Args:
         model_name_or_path (str): Path to the pretrained model.
         model_type (str): Type of the model, either "reward" or "critic".
-        data_type (str, optional): Model data type ("bf16", "fp16", "fp32"). Defaults to "bf16".
+        model_data_type (str, optional): Model data type ("bf16", "fp16", "fp32"). Defaults to "bf16".
         load_in_4bit (bool, optional): Load the model in 4-bit precision. Defaults to False.
         lora_rank (int, optional): Rank for LoRA adaptation. Defaults to 0.
         lora_alpha (int, optional): Alpha parameter for LoRA. Defaults to 16.
@@ -86,12 +86,12 @@ def get_llm_for_sequence_regression(
     else:
         dschf = None
 
-    # Determine torch dtype based on data_type parameter, default: bf16
-    from openrlhf.utils.utils import convert_to_dtype
-    torch_dtype = convert_to_dtype(data_type)
+    # Determine torch dtype based on model_data_type parameter, default: bf16
+    from openrlhf.utils.utils import convert_to_torch_dtype
+    torch_dtype = convert_to_torch_dtype(model_data_type)
 
     if load_in_4bit:
-        assert data_type == "bf16", "we only support bnb_4bit_compute_dtype = bf16"
+        assert model_data_type == "bf16", "we only support bnb_4bit_compute_dtype = bf16"
         nf4_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",

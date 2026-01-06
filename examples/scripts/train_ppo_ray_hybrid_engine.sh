@@ -26,7 +26,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --max_samples 100000 \
    --generate_max_len 1024 \
    --zero_stage 3 \
-   --bf16 \
+   --model_data_type bf16 \
    --actor_learning_rate 5e-7 \
    --critic_learning_rate 9e-6 \
    --init_kl_coef 0.01 \

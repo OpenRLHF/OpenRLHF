@@ -5,18 +5,18 @@ import torch.nn.functional as F
 from transformers import AutoTokenizer
 
 
-def convert_to_dtype(data_type: str) -> torch.dtype:
-    """Convert data_type string to torch.dtype.
+def convert_to_torch_dtype(model_data_type: str) -> torch.dtype:
+    """Convert model_data_type string to torch.dtype.
     
     Args:
-        data_type: One of "bf16", "fp16", "fp32"
+        model_data_type: One of "bf16", "fp16", "fp32"
         
     Returns:
         Corresponding torch.dtype (bfloat16, float16, float32)
     """
-    if data_type == "bf16":
+    if model_data_type == "bf16":
         return torch.bfloat16
-    elif data_type == "fp16":
+    elif model_data_type == "fp16":
         return torch.float16
     else:
         return torch.float32

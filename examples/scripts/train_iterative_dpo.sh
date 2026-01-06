@@ -58,7 +58,7 @@ EOF
 openrlhf.cli.batch_inference
    --eval_task rm \
    --pretrain OpenRLHF/Llama-3-8b-rm-mixture \
-   --bf16 \
+   --model_data_type bf16 \
    --max_len 4096 \
    --dataset $GENERATE_OUTPUT  \
    --dataset_probs 1.0 \
@@ -84,7 +84,7 @@ openrlhf.cli.train_dpo \
    --save_path $MODEL_OUTPUT_PATH \
    --zero_stage 3 \
    --max_epochs 1 \
-   --bf16 \
+   --model_data_type bf16 \
    --learning_rate 5e-7 \
    --gradient_checkpointing
 EOF

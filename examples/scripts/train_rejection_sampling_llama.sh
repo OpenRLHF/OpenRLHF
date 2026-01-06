@@ -35,7 +35,7 @@ while (($iter < $TRAINING_ITERS)); do
 openrlhf.cli.batch_inference
    --eval_task generate_vllm \
    --pretrain $POLICY_MODEL_PATH \
-   --bf16 \
+   --model_data_type bf16 \
    --max_new_tokens 2048 \
    --prompt_max_len 2048 \
    --dataset OpenRLHF/prompt-collection-v0.1 \
@@ -59,7 +59,7 @@ EOF
 openrlhf.cli.batch_inference
    --eval_task rm \
    --pretrain OpenRLHF/Llama-3-8b-rm-mixture \
-   --bf16 \
+   --model_data_type bf16 \
    --max_len 4096 \
    --dataset $GENERATE_OUTPUT  \
    --dataset_probs 1.0 \
@@ -84,7 +84,7 @@ openrlhf.cli.train_sft \
    --input_template "" \
    --zero_stage 2 \
    --max_epochs 1 \
-   --bf16 \
+   --model_data_type bf16 \
    --learning_rate 2e-6 \
    --gradient_checkpointing
 EOF
