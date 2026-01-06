@@ -1,7 +1,7 @@
 import torch
 
 
-def reward_func(queries, prompts, labels, **kwargs):
+async def reward_func(queries, prompts, labels, **kwargs):
     """
     Reward function for calculating rewards of model outputs.
 

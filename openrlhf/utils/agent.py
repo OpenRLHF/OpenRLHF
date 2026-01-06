@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from abc import ABC, abstractmethod
 from copy import deepcopy
 
@@ -149,6 +150,9 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
         reward_endpoints = [remote_rm_url] if isinstance(remote_rm_url, str) else remote_rm_url
         self.reward_endpoints = reward_endpoints or []
 
+        # Round-robin index for selecting reward endpoints.
+        self._reward_endpoint_idx = 0
+
         # Optional user-provided reward_func from a Python file.
         self.reward_func = None
         if self.reward_endpoints and self.reward_endpoints[0].endswith(".py"):
@@ -158,7 +162,15 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
             spec = importlib.util.spec_from_file_location("reward_func", self.reward_endpoints[0])
             reward_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(reward_module)
-            self.reward_func = reward_module.reward_func
+
+            # Ensure the module exposes an async reward_func we can await.
+            reward_func = getattr(reward_module, "reward_func", None)
+            if reward_func is None:
+                raise AttributeError(f"Missing reward_func in {self.reward_endpoints[0]}")
+            if not inspect.iscoroutinefunction(reward_func):
+                raise TypeError("reward_func must be an async function; define it with `async def reward_func(...)`.")
+
+            self.reward_func = reward_func
 
     async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine):
         # Tokenize the initial observation.
@@ -209,10 +221,13 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
             try:
                 query = hf_tokenizer.decode(output["observation_tokens"], skip_special_tokens=False)
                 if self.reward_func:
-                    rewards_info_list = await self._fetch_rewards_via_func([query], [prompt], [label])
+                    rewards_info = await self.reward_func([query], [prompt], [label])
                 else:
-                    rewards_info_list = await self._fetch_rewards_via_http([query], [prompt], [label])
-                rewards_info = rewards_info_list[0] if rewards_info_list else None
+                    # Pick the next endpoint in round-robin order.
+                    endpoint = self.reward_endpoints[self._reward_endpoint_idx % len(self.reward_endpoints)]
+                    self._reward_endpoint_idx = (self._reward_endpoint_idx + 1) % len(self.reward_endpoints)
+                    rewards_info = await self._post_request(endpoint, query, prompt, label)
+
                 if rewards_info:
                     output.update(
                         reward=rewards_info.get("rewards"),
@@ -224,57 +239,23 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
 
         return output
 
-    async def _fetch_rewards_via_func(self, queries_list, prompts_list, labels_list):
-        """Compute rewards via user-provided Python function (thread offload)."""
-        batch_size = 1
-        num_chunks = (len(queries_list) + batch_size - 1) // batch_size
-
-        tasks = []
-        for i in range(num_chunks):
-            start_idx = i * batch_size
-            end_idx = min((i + 1) * batch_size, len(queries_list))
-            tasks.append(
-                asyncio.to_thread(
-                    self.reward_func,
-                    queries_list[start_idx:end_idx],
-                    prompts_list[start_idx:end_idx],
-                    labels_list[start_idx:end_idx],
-                )
-            )
-        return await asyncio.gather(*tasks)
-
-    async def _fetch_rewards_via_http(self, queries_list, prompts_list, labels_list):
-        """HTTP fallback: shard requests across servers."""
-        num_servers = len(self.reward_endpoints)
-        batch_size = (len(queries_list) + num_servers - 1) // num_servers
+    async def _post_request(self, url, query, prompt, label, try_max_times=3):
         timeout = aiohttp.ClientTimeout(total=180)
+        payload = {
+            "query": [query],
+            "prompts": [prompt],
+            "labels": [label],
+        }
+        for _ in range(try_max_times):
+            try:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(url, json=payload) as response:
+                        response.raise_for_status()
+                        return await response.json()
+            except aiohttp.ClientError as e:
+                logger.info(f"Request error, please check: {e}")
+            except Exception as e:  # pragma: no cover - defensive
+                logger.info(f"Unexpected error, please check: {e}")
+            await asyncio.sleep(1)
 
-        tasks = []
-        for i, rm in enumerate(self.reward_endpoints):
-            start_idx = i * batch_size
-            end_idx = min((i + 1) * batch_size, len(queries_list))
-            payload = {
-                "query": queries_list[start_idx:end_idx],
-                "prompts": prompts_list[start_idx:end_idx],
-                "labels": labels_list[start_idx:end_idx],
-            }
-
-            async def _post_request(url, data, try_max_times=5):
-                for _ in range(try_max_times):
-                    try:
-                        async with aiohttp.ClientSession(timeout=timeout) as session:
-                            async with session.post(url, json=data) as response:
-                                response.raise_for_status()
-                                return await response.json()
-                    except aiohttp.ClientError as e:
-                        logger.info(f"Request error, please check: {e}")
-                    except Exception as e:  # pragma: no cover - defensive
-                        logger.info(f"Unexpected error, please check: {e}")
-                    await asyncio.sleep(1)
-
-                raise RuntimeError(
-                    f"Request error for {try_max_times} times, returning None. Please check the API server."
-                )
-
-            tasks.append(asyncio.create_task(_post_request(rm, payload)))
-        return await asyncio.gather(*tasks)
+        raise RuntimeError(f"Request error for {try_max_times} times, returning None. Please check the API server.")

@@ -523,7 +523,7 @@ The **single-turn agent execution** (default mode) supports custom reward functi
 # reward_func.py
 import torch
 
-def reward_func(queries, prompts, labels):
+async def reward_func(queries, prompts, labels):
     """
     Compute custom rewards for generated responses.
     
