@@ -173,6 +173,7 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
         if self.reward_func is None:
             # Round-robin index for selecting reward endpoints.
             self._reward_endpoint_idx = 0
+            self._endpoint_lock = asyncio.Lock()
 
     async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine):
         # Tokenize the initial observation.
@@ -226,9 +227,10 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
                     rewards_info = await self.reward_func([query], [prompt], [label])
                 else:
                     # Pick the next endpoint in round-robin order.
-                    endpoint = self.reward_endpoints[self._reward_endpoint_idx % len(self.reward_endpoints)]
-                    self._reward_endpoint_idx = (self._reward_endpoint_idx + 1) % len(self.reward_endpoints)
-                    rewards_info = await self._post_request(endpoint, [query], [prompt], [label])
+                    async with self._endpoint_lock:
+                        idx = self._reward_endpoint_idx % len(self.reward_endpoints)
+                        self._reward_endpoint_idx = idx + 1
+                    rewards_info = await self._post_request(self.reward_endpoints[idx], [query], [prompt], [label])
 
                 if rewards_info:
                     output.update(
@@ -241,7 +243,7 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
 
         return output
 
-    async def _post_request(self, url, queries_list, prompts_list, labels_list, try_max_times=3):
+    async def _post_request(self, url, queries_list, prompts_list, labels_list, try_max_times=5):
         timeout = aiohttp.ClientTimeout(total=180)
         payload = {
             "query": queries_list,
