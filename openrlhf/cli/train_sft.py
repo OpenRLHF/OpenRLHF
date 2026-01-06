@@ -179,7 +179,7 @@ if __name__ == "__main__":
         "--param_dtype",
         type=str,
         default="bf16",
-        choices=["bf16", "fp16", "fp32"],
+        choices=["bf16", "fp16"],
         help="Model data type",
     )
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")

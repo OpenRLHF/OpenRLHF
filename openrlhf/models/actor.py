@@ -22,7 +22,7 @@ class Actor(nn.Module):
     Args:
         pretrain_or_model (nn.Module): A pretrained model or a new model instance to be used as the actor.
         attn_implementation (str, optional): Attention mechanism implementation to use. Defaults to "flash_attention_2".
-        param_dtype (str, optional): Model data type ("bf16", "fp16", "fp32"). Defaults to "bf16".
+        param_dtype (str, optional): Model data type ("bf16", "fp16"). Defaults to "bf16".
         load_in_4bit (bool, optional): Load the model in 4-bit precision. Defaults to False.
         lora_rank (int, optional): Rank for LoRA adaptation. Defaults to 0.
         lora_alpha (int, optional): Alpha parameter for LoRA. Defaults to 16.

@@ -43,7 +43,7 @@ def get_llm_for_sequence_regression(
     Args:
         model_name_or_path (str): Path to the pretrained model.
         model_type (str): Type of the model, either "reward" or "critic".
-        param_dtype (str, optional): Model data type ("bf16", "fp16", "fp32"). Defaults to "bf16".
+        param_dtype (str, optional): Model data type ("bf16", "fp16"). Defaults to "bf16".
         load_in_4bit (bool, optional): Load the model in 4-bit precision. Defaults to False.
         lora_rank (int, optional): Rank for LoRA adaptation. Defaults to 0.
         lora_alpha (int, optional): Alpha parameter for LoRA. Defaults to 16.

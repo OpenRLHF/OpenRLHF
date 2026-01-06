@@ -284,7 +284,7 @@ if __name__ == "__main__":
         "--param_dtype",
         type=str,
         default="bf16",
-        choices=["bf16", "fp16", "fp32"],
+        choices=["bf16", "fp16"],
         help="Model data type",
     )
     ## Make EMA as an optional feature

@@ -4,11 +4,13 @@ import torch
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
+from openrlhf.utils.utils import convert_to_torch_dtype
+
 
 def apply_lora(model_name_or_path, lora_path, output_path, is_rm, param_dtype):
     print(f"Loading the base model from {model_name_or_path}")
     model_cls = AutoModelForCausalLM if not is_rm else AutoModelForSequenceClassification
-    torch_dtype = torch.bfloat16 if param_dtype == "bf16" else "auto"
+    torch_dtype = convert_to_torch_dtype(param_dtype)
     base = model_cls.from_pretrained(model_name_or_path, torch_dtype=torch_dtype, low_cpu_mem_usage=True)
     base_tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
 
@@ -43,8 +45,8 @@ if __name__ == "__main__":
         "--param_dtype",
         type=str,
         default="bf16",
-        choices=["auto", "bf16"],
-        help="Model data type: 'auto' uses model's original dtype, 'bf16' uses bfloat16",
+        choices=["bf16", "fp16"],
+        help="Model data type: 'bf16' uses bfloat16, 'fp16' uses float16",
     )
     args = parser.parse_args()
     apply_lora(args.model_path, args.lora_path, args.output_path, args.is_rm, args.param_dtype)
