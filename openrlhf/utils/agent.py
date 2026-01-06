@@ -168,7 +168,7 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
                 raise TypeError("reward_func must be an async function; define it with `async def reward_func(...)`.")
 
             self.reward_func = reward_func
-        
+
         # Optional user-provided reward_endpoints from URLs.
         if self.reward_func is None:
             # Round-robin index for selecting reward endpoints.
