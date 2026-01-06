@@ -62,7 +62,7 @@ class FSDP2Strategy(ABC):
         self.ds_tensor_parallel_size = self.tp_size  # backward compat
 
         # FSDP config
-        self.precision = getattr(args, "precision", "bf16")
+        self.precision = getattr(args, "data_type", "bf16")
         self.fsdp2_cpu_offload = getattr(args, "fsdp2_cpu_offload", False)
         self.fsdp2_reshard_after_forward = getattr(args, "fsdp2_reshard_after_forward", True)
         self.sequence_parallel = getattr(args, "sequence_parallel", False)

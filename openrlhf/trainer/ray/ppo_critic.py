@@ -172,7 +172,7 @@ class CriticModelActor(BaseModelActor):
             "critic",
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
-            precision=strategy.args.precision,
+            precision=strategy.args.data_type,
             load_in_4bit=strategy.args.load_in_4bit,
             lora_rank=strategy.args.lora_rank,
             lora_alpha=strategy.args.lora_alpha,

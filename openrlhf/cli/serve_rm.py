@@ -19,7 +19,7 @@ class RewardModelProxy:
             "reward",
             normalize_reward=args.normalize_reward,
             attn_implementation=args.attn_implementation,
-            precision=args.precision,
+            precision=args.data_type,
             load_in_4bit=args.load_in_4bit,
             value_head_prefix=args.value_head_prefix,
             device_map="auto",
@@ -78,11 +78,11 @@ if __name__ == "__main__":
 
     # Performance
     parser.add_argument(
-        "--precision",
+        "--data_type",
         type=str,
         default="bf16",
         choices=["bf16", "fp16", "fp32"],
-        help="Model precision",
+        help="Model data type",
     )
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
     parser.add_argument(

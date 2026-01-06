@@ -40,11 +40,11 @@ if __name__ == "__main__":
         help="Whether to treat the model as a reward model (AutoModelForSequenceClassification)",
     )
     parser.add_argument(
-        "--precision",
+        "--data_type",
         type=str,
         default="auto",
         choices=["auto", "bf16"],
-        help="Model precision: 'auto' uses model's original dtype, 'bf16' uses bfloat16",
+        help="Model data type: 'auto' uses model's original dtype, 'bf16' uses bfloat16",
     )
     args = parser.parse_args()
-    apply_lora(args.model_path, args.lora_path, args.output_path, args.is_rm, args.precision)
+    apply_lora(args.model_path, args.lora_path, args.output_path, args.is_rm, args.data_type)

@@ -109,7 +109,7 @@ class ReferenceModelActor(BaseModelActor):
         model = Actor(
             pretrain,
             attn_implementation=strategy.args.attn_implementation,
-            precision=strategy.args.precision,
+            precision=strategy.args.data_type,
             load_in_4bit=strategy.args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
             packing_samples=strategy.args.packing_samples,
@@ -157,7 +157,7 @@ class RewardModelActor(BaseModelActor):
             "reward",
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
-            precision=strategy.args.precision,
+            precision=strategy.args.data_type,
             load_in_4bit=strategy.args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
             value_head_prefix=strategy.args.value_head_prefix,

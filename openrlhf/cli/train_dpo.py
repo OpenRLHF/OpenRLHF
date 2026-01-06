@@ -24,7 +24,7 @@ def train(args):
     model = Actor(
         args.pretrain,
         attn_implementation=args.attn_implementation,
-        precision=args.precision,
+        precision=args.data_type,
         load_in_4bit=args.load_in_4bit,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
@@ -43,7 +43,7 @@ def train(args):
     ref_model = Actor(
         args.ref_pretrain,
         attn_implementation=args.attn_implementation,
-        precision=args.precision,
+        precision=args.data_type,
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
         packing_samples=args.packing_samples,
@@ -215,11 +215,11 @@ if __name__ == "__main__":
         help="Control fully_shard reshard_after_forward flag",
     )
     parser.add_argument(
-        "--precision",
+        "--data_type",
         type=str,
         default="bf16",
         choices=["bf16", "fp16", "fp32"],
-        help="Model precision",
+        help="Model data type",
     )
     parser.add_argument("--ref_offload", action="store_true", default=False)
     parser.add_argument("--learning_rate", type=float, default=1e-5)

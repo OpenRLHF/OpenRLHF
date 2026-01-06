@@ -57,7 +57,7 @@ class DeepspeedStrategy(ABC):
         self.seed = seed
         self.full_determinism = full_determinism
         self.max_norm = max_norm
-        self.precision = getattr(args, "precision", "bf16")
+        self.precision = getattr(args, "data_type", "bf16")
         self.adam_offload = getattr(args, "adam_offload", False)
         self.zpg = getattr(args, "zpg", 1)
         self.use_ds_universal_ckpt = getattr(args, "use_ds_universal_ckpt", False)
