@@ -98,7 +98,7 @@ def batch_generate(args):
     model = Actor(
         args.pretrain,
         attn_implementation=args.attn_implementation,
-        param_dtype=args.param_dtype, # default: bf16
+        param_dtype=args.param_dtype,  # default: bf16
     )
 
     # configure tokenizer
@@ -210,7 +210,7 @@ def batch_rm_inference(args):
         "reward",
         normalize_reward=True,
         attn_implementation=args.attn_implementation,
-        param_dtype=args.param_dtype, # default: bf16
+        param_dtype=args.param_dtype,  # default: bf16
         value_head_prefix=args.value_head_prefix,
     )
 

@@ -68,6 +68,7 @@ class Actor(nn.Module):
 
             # Determine torch dtype based on param_dtype parameter, default: bf16
             from openrlhf.utils.utils import convert_to_torch_dtype
+
             torch_dtype = convert_to_torch_dtype(param_dtype)
 
             if load_in_4bit:
@@ -93,7 +94,7 @@ class Actor(nn.Module):
                 trust_remote_code=True,
                 attn_implementation=attn_impl,
                 quantization_config=nf4_config,
-                torch_dtype=torch_dtype, # default: bf16
+                torch_dtype=torch_dtype,  # default: bf16
                 device_map=device_map,
             )
 

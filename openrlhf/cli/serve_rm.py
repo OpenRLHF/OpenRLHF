@@ -19,7 +19,7 @@ class RewardModelProxy:
             "reward",
             normalize_reward=args.normalize_reward,
             attn_implementation=args.attn_implementation,
-            param_dtype=args.param_dtype, # default: bf16
+            param_dtype=args.param_dtype,  # default: bf16
             load_in_4bit=args.load_in_4bit,
             value_head_prefix=args.value_head_prefix,
             device_map="auto",

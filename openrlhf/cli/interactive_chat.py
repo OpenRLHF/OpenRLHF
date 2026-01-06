@@ -18,7 +18,7 @@ def generate(args):
     model = Actor(
         args.pretrain,
         attn_implementation=args.attn_implementation,
-        param_dtype=args.param_dtype, # default: bf16
+        param_dtype=args.param_dtype,  # default: bf16
         load_in_4bit=args.load_in_4bit,
         device_map="auto",
     )

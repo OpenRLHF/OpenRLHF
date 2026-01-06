@@ -1,6 +1,5 @@
 import argparse
 
-import torch
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
@@ -19,7 +18,7 @@ def apply_lora(model_name_or_path, lora_path, output_path, is_rm, param_dtype):
     lora_model = PeftModel.from_pretrained(
         base,
         lora_path,
-        torch_dtype=torch_dtype, # default: bf16
+        torch_dtype=torch_dtype,  # default: bf16
     )
 
     print("Applying and merging the LoRA weights")

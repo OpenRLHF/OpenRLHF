@@ -88,6 +88,7 @@ def get_llm_for_sequence_regression(
 
     # Determine torch dtype based on param_dtype parameter, default: bf16
     from openrlhf.utils.utils import convert_to_torch_dtype
+
     torch_dtype = convert_to_torch_dtype(param_dtype)
 
     if load_in_4bit:
@@ -105,7 +106,7 @@ def get_llm_for_sequence_regression(
         model_name_or_path,
         config=config,
         trust_remote_code=True,
-        torch_dtype=torch_dtype, # default: bf16
+        torch_dtype=torch_dtype,  # default: bf16
         quantization_config=nf4_config,
         device_map=device_map,
         **kwargs,

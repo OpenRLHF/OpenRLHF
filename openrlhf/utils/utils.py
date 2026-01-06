@@ -7,10 +7,10 @@ from transformers import AutoTokenizer
 
 def convert_to_torch_dtype(param_dtype: str) -> torch.dtype:
     """Convert param_dtype string to torch.dtype.
-    
+
     Args:
         param_dtype: One of "bf16", "fp16"
-        
+
     Returns:
         Corresponding torch.dtype (bfloat16, float16)
     """

@@ -23,7 +23,7 @@ def train(args):
         args.pretrain,
         "reward",
         attn_implementation=args.attn_implementation,
-        param_dtype=args.param_dtype, # default: bf16
+        param_dtype=args.param_dtype,  # default: bf16
         load_in_4bit=args.load_in_4bit,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
