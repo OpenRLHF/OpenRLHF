@@ -78,7 +78,7 @@ ENGINE_ARGS=(
    # --adam_offload
    --ring_attn_size 2
    --ring_head_stride 2
-   --bf16
+   --param_dtype bf16
 )
 
 OPTIMIZER_ARGS=(

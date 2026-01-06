@@ -14,7 +14,7 @@ read -r -d '' get_rewards_commands <<EOF
 openrlhf.cli.batch_inference \
     --eval_task rm \
     --pretrain OpenRLHF/Llama-3-8b-rm-mixture \
-    --bf16 \
+    --param_dtype bf16 \
     --max_len 4096 \
     --dataset OpenRLHF/preference_dataset_mixture2_and_safe_pku \
     --input_key chosen \
@@ -38,7 +38,7 @@ openrlhf.cli.train_sft \
     --save_path ./checkpoint/llama-3-8b-csft \
     --zero_stage 2 \
     --max_epochs 1 \
-    --bf16 \
+    --param_dtype bf16 \
     --learning_rate 5e-6 \
     --gradient_checkpointing
 EOF
