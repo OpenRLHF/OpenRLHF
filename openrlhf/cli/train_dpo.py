@@ -22,7 +22,7 @@ def train(args):
     model = Actor(
         args.pretrain,
         attn_implementation=args.attn_implementation,
-        bf16=args.bf16,
+        data_type=args.data_type, # default: bf16
         load_in_4bit=args.load_in_4bit,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
@@ -41,7 +41,7 @@ def train(args):
     ref_model = Actor(
         args.ref_pretrain,
         attn_implementation=args.attn_implementation,
-        bf16=args.bf16,
+        data_type=args.data_type, # default: bf16
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
         packing_samples=args.packing_samples,
@@ -192,7 +192,13 @@ if __name__ == "__main__":
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
-    parser.add_argument("--bf16", action="store_true", default=False, help="Enable bfloat16")
+    parser.add_argument(
+        "--data_type",
+        type=str,
+        default="bf16",
+        choices=["bf16", "fp16", "fp32"],
+        help="Model data type",
+    )
     parser.add_argument("--ref_offload", action="store_true", default=False)
     parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
