@@ -12,6 +12,7 @@ from tqdm import tqdm
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
 from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils.fsdp2 import FSDP2Strategy
 
 
 class BaseDistributedActor:
@@ -52,7 +53,7 @@ class BaseDistributedActor:
 
 
 class BaseModelActor(BaseDistributedActor):
-    def _setup_distributed(self, strategy: DeepspeedStrategy):
+    def _setup_distributed(self, strategy: Union[DeepspeedStrategy, FSDP2Strategy]):
         # configure strategy
         self.strategy = strategy
         strategy.setup_distributed()
@@ -103,7 +104,7 @@ class BaseModelActor(BaseDistributedActor):
 
 @ray.remote(num_gpus=1)
 class ReferenceModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+    def init_model_from_pretrained(self, strategy: Union[DeepspeedStrategy, FSDP2Strategy], pretrain):
         self._setup_distributed(strategy)
         model = Actor(
             pretrain,
@@ -145,7 +146,7 @@ class ReferenceModelActor(BaseModelActor):
 
 @ray.remote(num_gpus=1)
 class RewardModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+    def init_model_from_pretrained(self, strategy: Union[DeepspeedStrategy, FSDP2Strategy], pretrain):
         self._setup_distributed(strategy)
         model = get_llm_for_sequence_regression(
             pretrain,

@@ -8,6 +8,7 @@ from openrlhf.trainer.ppo_trainer import BasePPOTrainer, prepare_datasets
 from openrlhf.trainer.ppo_utils.experience_maker import SamplesGenerator
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils.fsdp2 import FSDP2Strategy
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.utils import get_tokenizer
 
@@ -185,7 +186,7 @@ class PPOTrainerAsync:
     def __init__(
         self,
         pretrain: str,
-        strategy: DeepspeedStrategy,
+        strategy: Union[DeepspeedStrategy, FSDP2Strategy],
         actor_model_group: RayActorGroup,
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,
