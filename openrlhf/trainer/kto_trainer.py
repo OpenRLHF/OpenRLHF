@@ -26,6 +26,8 @@ class KTOTrainer(ABC):
         max_norm (float, defaults to 0.5): Maximum gradient norm for gradient clipping.
         beta (float, defaults to 0.01): Coefficient for regularizing the preference loss.
         max_epochs (int, defaults to 2): Maximum number of training epochs.
+        save_hf_ckpt (bool): Whether to save huggingface-format model weight.
+        disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight.
     """
 
     def __init__(
@@ -41,6 +43,8 @@ class KTOTrainer(ABC):
         max_norm=0.5,
         beta=0.01,
         max_epochs: int = 2,
+        save_hf_ckpt: bool = False,
+        disable_ds_ckpt: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -54,6 +58,8 @@ class KTOTrainer(ABC):
         self.optimizer = optim
         self.tokenizer = tokenizer
         self.args = strategy.args
+        self.save_hf_ckpt = save_hf_ckpt
+        self.disable_ds_ckpt = disable_ds_ckpt
 
         self.beta = beta
         self.loss_fn = KTOLoss(

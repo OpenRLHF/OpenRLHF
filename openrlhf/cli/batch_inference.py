@@ -371,14 +371,14 @@ if __name__ == "__main__":
     parser.add_argument("--use_ms", action="store_true", default=False)
 
     args = parser.parse_args()
-    if args.eval_task and args.eval_task == "generate":
+    if args.eval_task == "generate":
         batch_generate(args)
-    if args.eval_task and args.eval_task == "generate_vllm":
+    if args.eval_task == "generate_vllm":
         batch_generate_vllm(args)
-    elif args.eval_task and args.eval_task == "rm":
+    elif args.eval_task == "rm":
         batch_rm_inference(args)
     else:
-        print("Invalid or missing '--eval_task' argument. Please specify either 'generate' or 'rm'.")
+        print("Invalid or missing '--eval_task' argument. Please specify 'generate', 'generate_vllm', or 'rm'.")
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub
