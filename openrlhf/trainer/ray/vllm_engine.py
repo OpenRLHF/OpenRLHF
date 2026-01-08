@@ -127,8 +127,17 @@ class LLMRayActor:
     async def sleep(self, level=1):
         await self.llm.sleep(level=level)
 
-    async def wake_up(self):
-        await self.llm.wake_up()
+    async def wake_up(self, tags=["weights", "kv_cache"]):
+        """Wake up the engine from sleep mode.
+
+        Args:
+            tags: Optional list of tags to selectively wake up.
+                  Use ["weights"] to wake up only model weights (for weight sync).
+                  Use ["kv_cache"] to wake up only KV cache (after weight sync).
+                  Use None to wake up everything.
+        """
+        for tag in tags:
+            await self.llm.wake_up(tags=[tag])
 
     async def generate(self, prompt_token_ids, sampling_params):
         """Token-level generation for rollout executors."""

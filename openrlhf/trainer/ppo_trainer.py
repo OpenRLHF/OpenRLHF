@@ -176,13 +176,25 @@ class BasePPOTrainer(ABC):
         return status
 
     def broadcast_to_vllm(self) -> None:
+        """Broadcast actor weights to vLLM engines.
+
+        When vllm_enable_sleep is enabled, we use fine-grained control:
+        1. Wake up only weights (not KV cache) to minimize GPU memory during weight sync
+        2. Broadcast weights from actor model to vLLM
+        3. Keep vLLM in weights-only state; KV cache will be woken up later before generation
+
+        This approach reduces peak GPU memory during gradient sync by avoiding
+        simultaneous allocation of both weights and KV cache.
+        """
         if self.args.vllm_enable_sleep:
-            batch_vllm_engine_call(self.vllm_engines, "wake_up")
+            # Wake up only weights for weight sync (not KV cache)
+            # This avoids allocating KV cache memory during weight update
+            batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["weights"])
 
         ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
 
-        if self.args.vllm_enable_sleep:
-            batch_vllm_engine_call(self.vllm_engines, "sleep")
+        # NOTE: We keep vLLM in weights-only state after weight sync.
+        # KV cache will be woken up before generation in SamplesGenerator.
 
     def save_logs_and_checkpoints(self, global_step: int, logs_dict=None, client_states=None) -> None:
         logs_dict = logs_dict or {}
