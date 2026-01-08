@@ -522,7 +522,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 # reward_func.py
 import torch
 
-def reward_func(queries, prompts, labels):
+async def reward_func(queries, prompts, labels):
     """
     计算生成响应的自定义奖励。
     

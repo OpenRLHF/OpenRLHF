@@ -1,7 +1,7 @@
 # /openrlhf/examples/scripts/reward_func.py
 # import torch
 
-# def reward_func(queries, prompts, labels):
+# async def reward_func(queries, prompts, labels):
 #     # queries is prompts + responses
 #     # labels is answers
 #     print(queries)
@@ -46,4 +46,3 @@ ray job submit --address="http://127.0.0.1:8265" \
    --attn_implementation flash_attention_2 \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
-
