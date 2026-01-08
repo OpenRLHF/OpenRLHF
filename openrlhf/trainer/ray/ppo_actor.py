@@ -549,14 +549,15 @@ class PolicyModelActor(BaseModelActor):
 
     def save_checkpoint(self, tag, client_states):
         args = self.strategy.args
-        self.strategy.save_ckpt(
-            self.actor.model,
-            os.path.join(args.ckpt_path, "_actor"),
-            tag,
-            args.max_ckpt_num,
-            args.max_ckpt_mem,
-            client_states,
-        )
+        if not self.disable_ds_ckpt:
+            self.strategy.save_ckpt(
+                self.actor.model,
+                os.path.join(args.ckpt_path, "_actor"),
+                tag,
+                args.max_ckpt_num,
+                args.max_ckpt_mem,
+                client_states,
+            )
         if self.save_hf_ckpt:
             save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
             self.strategy.save_model(

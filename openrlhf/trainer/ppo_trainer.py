@@ -365,6 +365,8 @@ class PPOTrainer(BasePPOTrainer):
         # duplicate prompts and labels for each sample
         all_prompts = sum([s.prompts for s in samples_list], [])
 
+        n_samples_per_prompt = generate_kwargs["n_samples_per_prompt"]
+
         # Get rewards from samples, such as agent rewards or remote reward models
         rewards_list = []
         for samples in samples_list:

@@ -164,6 +164,7 @@ class CriticPPOTrainer(ABC):
 class CriticModelActor(BaseModelActor):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps):
         args = strategy.args
+        self.disable_ds_ckpt = args.disable_ds_ckpt
 
         self._setup_distributed(strategy)
         critic = get_llm_for_sequence_regression(
@@ -284,9 +285,10 @@ class CriticModelActor(BaseModelActor):
 
     def save_checkpoint(self, tag):
         args = self.strategy.args
-        self.strategy.save_ckpt(
-            self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
-        )
+        if not self.disable_ds_ckpt:
+            self.strategy.save_ckpt(
+                self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
+            )
 
     def reload_states(self):
         reload_deepspeed_states(self.critic)
