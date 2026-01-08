@@ -2,7 +2,7 @@ import os
 import time
 from abc import ABC
 from datetime import timedelta
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 
 import ray
 import torch
@@ -19,6 +19,7 @@ from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils.fsdp2 import FSDP2Strategy
 from openrlhf.utils.logging_utils import TensorboardLogger, WandbLogger, init_logger
 from openrlhf.utils.utils import get_tokenizer
 
@@ -68,7 +69,7 @@ class BasePPOTrainer(ABC):
 
     def __init__(
         self,
-        strategy: DeepspeedStrategy,
+        strategy: Union[DeepspeedStrategy, FSDP2Strategy],
         actor_model_group: RayActorGroup,
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,
