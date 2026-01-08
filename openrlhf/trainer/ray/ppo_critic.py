@@ -289,6 +289,7 @@ class CriticModelActor(BaseModelActor):
             self.strategy.save_ckpt(
                 self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
             )
+
     def reload_states(self):
         reload_deepspeed_states(self.critic)
 
