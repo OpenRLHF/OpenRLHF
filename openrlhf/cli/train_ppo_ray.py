@@ -278,6 +278,21 @@ if __name__ == "__main__":
     # DeepSpeed
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
+    parser.add_argument(
+        "--dist_backend", type=str, default="deepspeed", choices=["deepspeed", "fsdp2"], help="Distributed backend"
+    )
+    parser.add_argument(
+        "--fsdp2_cpu_offload",
+        action="store_true",
+        default=False,
+        help="Offload FSDP2 params/grads/optimizer to CPU",
+    )
+    parser.add_argument(
+        "--fsdp2_reshard_after_forward",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Control fully_shard reshard_after_forward flag",
+    )
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--deepcompile", action="store_true", default=False)
     parser.add_argument(

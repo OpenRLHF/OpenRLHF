@@ -17,6 +17,8 @@ def train(args):
     strategy = get_strategy(args)
     strategy.setup_distributed()
 
+    is_fsdp2 = getattr(args, "dist_backend", "deepspeed") == "fsdp2"
+
     # configure model
     # load huggingface model
     model = Actor(
@@ -41,6 +43,10 @@ def train(args):
         model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
         )
+
+    # FSDP2: wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
+    if is_fsdp2:
+        model = strategy.prepare(model)
 
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
@@ -110,13 +116,14 @@ def train(args):
         scheduler_specific_kwargs={"min_lr": args.learning_rate * 0.1},
     )
 
-    # prepare models
-    (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
+    # prepare models (DeepSpeed path expects optimizer/scheduler passed in)
+    if not is_fsdp2:
+        (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
 
     # load checkpoint
     consumed_samples = 0
     if args.load_checkpoint and os.path.exists(args.ckpt_path):
-        _, states = strategy.load_ckpt(model.model, args.ckpt_path)
+        _, states = strategy.load_ckpt(model.model, args.ckpt_path, optimizer=optim, scheduler=scheduler)
         consumed_samples = states["consumed_samples"]
         strategy.print(f"Loaded the checkpoint: {args.ckpt_path}, consumed_samples: {consumed_samples}")
 
@@ -175,6 +182,21 @@ if __name__ == "__main__":
     )
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
+    parser.add_argument(
+        "--dist_backend", type=str, default="deepspeed", choices=["deepspeed", "fsdp2"], help="Distributed backend"
+    )
+    parser.add_argument(
+        "--fsdp2_cpu_offload",
+        action="store_true",
+        default=False,
+        help="Offload FSDP2 params/grads/optimizer to CPU",
+    )
+    parser.add_argument(
+        "--fsdp2_reshard_after_forward",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Control fully_shard reshard_after_forward flag",
+    )
     parser.add_argument(
         "--param_dtype",
         type=str,

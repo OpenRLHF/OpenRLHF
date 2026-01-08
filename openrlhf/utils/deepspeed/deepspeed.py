@@ -458,7 +458,18 @@ class DeepspeedStrategy(ABC):
             return 0
         return dist.get_rank()
 
-    def save_ckpt(self, model, save_dir, tag=None, max_num=3, max_mem=1000, client_state={}, save_latest=True):
+    def save_ckpt(
+        self,
+        model,
+        save_dir,
+        tag=None,
+        max_num=3,
+        max_mem=1000,
+        client_state={},
+        save_latest=True,
+        optimizer=None,
+        scheduler=None,
+    ):
         assert isinstance(model, deepspeed.DeepSpeedEngine)
         if self.is_rank_0():
             os.makedirs(save_dir, exist_ok=True)
@@ -505,6 +516,8 @@ class DeepspeedStrategy(ABC):
         load_optimizer_states=True,
         load_lr_scheduler_states=True,
         load_module_only=False,
+        optimizer=None,
+        scheduler=None,
     ):
         assert isinstance(model, deepspeed.DeepSpeedEngine)
         load_path, states = model.load_checkpoint(

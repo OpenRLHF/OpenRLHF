@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Union
 
 import torch
 import torch.nn.functional as F
@@ -23,6 +23,20 @@ def convert_to_torch_dtype(param_dtype: str) -> torch.dtype:
 
 
 def get_strategy(args):
+    dist_backend = getattr(args, "dist_backend", "deepspeed")
+
+    if dist_backend == "fsdp2":
+        from openrlhf.utils.fsdp2 import FSDP2Strategy
+        strategy = FSDP2Strategy(
+            seed=getattr(args, "seed", 42),
+            full_determinism=getattr(args, "full_determinism", False),
+            max_norm=getattr(args, "max_norm", 1.0),
+            micro_train_batch_size=getattr(args, "micro_train_batch_size", 1),
+            train_batch_size=getattr(args, "train_batch_size", 128),
+            args=args,
+        )
+        return strategy
+
     from openrlhf.utils.deepspeed import DeepspeedStrategy
 
     strategy = DeepspeedStrategy(
