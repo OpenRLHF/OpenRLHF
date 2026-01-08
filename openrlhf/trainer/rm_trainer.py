@@ -315,7 +315,10 @@ class RewardModelTrainer(ABC):
         """
         input_ids, att_masks = self.concatenated_inputs(chosen_ids, c_mask, reject_ids, r_mask)
         all_values, output = model(
-            input_ids, attention_mask=att_masks, return_output=True, ring_attn_group=self.strategy.ring_attn_group
+            input_ids,
+            attention_mask=att_masks,
+            return_output=True,
+            ring_attn_group=self.strategy.ring_attn_group,
         )
         chosen_rewards = all_values[: chosen_ids.shape[0]]
         rejected_rewards = all_values[chosen_ids.shape[0] :]
