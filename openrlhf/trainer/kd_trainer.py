@@ -131,7 +131,12 @@ class KDTrainer(ABC):
             for inputs, attention_masks, loss_masks in self.train_dataloader:
                 inputs = inputs.squeeze(1).to(torch.cuda.current_device())
                 attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
-                output = self.model(inputs, attention_mask=attention_mask, return_output=True)
+                output = self.model(
+                    inputs,
+                    attention_mask=attention_mask,
+                    return_output=True,
+                    ring_attn_group=self.strategy.ring_attn_group,
+                )
                 prompts_id_len = (loss_masks != 0).int().argmax(dim=-1).squeeze(-1)
 
                 # loss function
@@ -148,9 +153,12 @@ class KDTrainer(ABC):
                 gpt_loss = self.loss_fn(output.logits, labels)
 
                 with torch.no_grad():
-                    teacher_logits = self.teacher_model(inputs, attention_mask=attention_mask, return_output=True)[
-                        "logits"
-                    ]
+                    teacher_logits = self.teacher_model(
+                        inputs,
+                        attention_mask=attention_mask,
+                        return_output=True,
+                        ring_attn_group=self.strategy.ring_attn_group,
+                    )["logits"]
                 distil_loss = self.kd_loss(output.logits, teacher_logits, labels)
 
                 loss = gpt_loss * (1 - self.args.kd_coef) + distil_loss * self.args.kd_coef
@@ -236,7 +244,12 @@ class KDTrainer(ABC):
             for inputs, attention_masks, loss_masks in eval_dataloader:
                 inputs = inputs.squeeze(1).to(torch.cuda.current_device())
                 attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
-                logits = self.model(inputs, attention_mask=attention_mask, return_output=True)["logits"]
+                logits = self.model(
+                    inputs,
+                    attention_mask=attention_mask,
+                    return_output=True,
+                    ring_attn_group=self.strategy.ring_attn_group,
+                )["logits"]
                 prompts_id_len = (loss_masks != 0).int().argmax(dim=-1).squeeze(-1)
 
                 labels = torch.where(

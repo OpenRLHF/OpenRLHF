@@ -300,7 +300,12 @@ class KTOTrainer(ABC):
         )
 
         # latter half
-        output = model(input_ids[hsize:], attention_mask=attention_mask[hsize:], return_output=True)
+        output = model(
+            input_ids[hsize:],
+            attention_mask=attention_mask[hsize:],
+            return_output=True,
+            ring_attn_group=self.strategy.ring_attn_group,
+        )
         all_logits = output["logits"]
         KL_logps = self._get_batch_logps(
             all_logits,
@@ -312,7 +317,12 @@ class KTOTrainer(ABC):
         return chosen_logps, reject_logps, KL_logps, aux_loss
 
     def compute_model_logps(self, model, input_ids, attention_mask, labels, prompt_id_lens):
-        output = model(input_ids, attention_mask=attention_mask, return_output=True)
+        output = model(
+            input_ids,
+            attention_mask=attention_mask,
+            return_output=True,
+            ring_attn_group=self.strategy.ring_attn_group,
+        )
         all_logits = output["logits"]
         all_logps = self._get_batch_logps(
             all_logits, input_ids, attention_mask=attention_mask, average_log_prob=False, prompt_id_lens=prompt_id_lens
