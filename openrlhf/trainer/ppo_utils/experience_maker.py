@@ -253,8 +253,7 @@ class SamplesGenerator:
 
         # Wake sleeping vLLM engines before dispatching.
         if self.args.vllm_enable_sleep:
-            batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["weights"])
-            batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["kv_cache"])
+            batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
         experiences, prompts_consumed, exhausted = self._generate_vllm(
             dataloader_iter=self._eval_dataloader_iter,
@@ -279,8 +278,7 @@ class SamplesGenerator:
 
         # Wake sleeping vLLM engines before dispatching.
         if self.args.vllm_enable_sleep:
-            batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["weights"])
-            batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["kv_cache"])
+            batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
         experiences, prompts_consumed, exhausted = self._generate_vllm(
             dataloader_iter=self._dataloader_iter,
