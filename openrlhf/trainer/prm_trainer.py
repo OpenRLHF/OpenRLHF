@@ -148,6 +148,7 @@ class ProcessRewardModelTrainer(ABC):
                     attention_mask=attention_mask,
                     return_output=True,
                     allgather_logits=True,
+                    ring_attn_group=self.strategy.ring_attn_group,
                 )
 
                 # mixtral
@@ -210,7 +211,14 @@ class ProcessRewardModelTrainer(ABC):
             tag = f"global_step{global_step}"
             if not self.disable_ds_ckpt:
                 self.strategy.save_ckpt(
-                    self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+                    self.model.model,
+                    args.ckpt_path,
+                    tag,
+                    args.max_ckpt_num,
+                    args.max_ckpt_mem,
+                    client_states,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
                 )
             if self.save_hf_ckpt:
                 save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
@@ -239,6 +247,7 @@ class ProcessRewardModelTrainer(ABC):
                     attention_mask=attention_mask,
                     return_output=True,
                     allgather_logits=True,
+                    ring_attn_group=self.strategy.ring_attn_group,
                 )
 
                 loss, acc = self.loss_fn(inputs, output.logits, labels, return_acc=True)
