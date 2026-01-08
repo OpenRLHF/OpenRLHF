@@ -1,7 +1,7 @@
 import logging
 import os
 import socket
-from typing import Dict, Optional, Type
+from typing import Dict, Optional, Type, Union
 
 import ray
 import torch
@@ -118,10 +118,15 @@ class ReferenceModelActor(BaseModelActor):
         )
         strategy.print(model)
 
-        if strategy.args.ref_reward_offload:
+        is_fsdp2 = isinstance(strategy, FSDP2Strategy)
+        if not is_fsdp2 and strategy.args.ref_reward_offload:
             model._offload = True
 
-        self.model = self.strategy.prepare(model, is_rlhf=True)
+        # FSDP2: use prepare_ref for reference models (enables CPU offload)
+        if is_fsdp2 and strategy.args.ref_reward_offload:
+            self.model = self.strategy.prepare_ref(model)
+        else:
+            self.model = self.strategy.prepare(model)
         self.model.eval()
 
     def forward(
@@ -163,10 +168,15 @@ class RewardModelActor(BaseModelActor):
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
         strategy.print("mean: {}, std {}".format(model.mean, model.std))
 
-        if strategy.args.ref_reward_offload:
+        is_fsdp2 = isinstance(strategy, FSDP2Strategy)
+        if not is_fsdp2 and strategy.args.ref_reward_offload:
             model._offload = True
 
-        self.model = self.strategy.prepare(model, is_rlhf=True)
+        # FSDP2: use prepare_ref for reward models (enables CPU offload)
+        if is_fsdp2 and strategy.args.ref_reward_offload:
+            self.model = self.strategy.prepare_ref(model)
+        else:
+            self.model = self.strategy.prepare(model)
         self.model.eval()
 
     def forward(

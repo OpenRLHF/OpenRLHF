@@ -18,7 +18,7 @@ from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
-from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
+from openrlhf.utils.fsdp2 import FSDP2Strategy
 from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.logging_utils import init_logger
 
@@ -309,7 +309,16 @@ class ActorPPOTrainer(ABC):
                 cache_reset_refs.append(engine.reset_prefix_cache.remote())
 
         torch.cuda.empty_cache()
-        model = self.actor.model.module
+
+        model = self.actor.model
+        if hasattr(model, "module"):
+            model = model.module
+
+        dist_backend = getattr(self.strategy.args, "dist_backend", "deepspeed")
+
+        if dist_backend == "fsdp2":
+            return self._broadcast_to_vllm_fsdp2(model, cache_reset_refs)
+
         count, num_params = 0, len(list(model.named_parameters()))
 
         def _broadcast_param(param, count, num_params):
@@ -388,7 +397,7 @@ class ActorPPOTrainer(ABC):
 
 @ray.remote(num_gpus=1)
 class PolicyModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps=None, vllm_engines=None):
+    def init_model_from_pretrained(self, strategy: Union[DeepspeedStrategy, FSDP2Strategy], pretrain, max_steps=None, vllm_engines=None):
         args = strategy.args
         self.save_hf_ckpt = args.save_hf_ckpt
         self.disable_ds_ckpt = args.disable_ds_ckpt
@@ -436,7 +445,21 @@ class PolicyModelActor(BaseModelActor):
         else:
             ema_model = None
 
-        # configure optimizer
+        if args.gradient_checkpointing:
+            actor.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
+            )
+
+        is_fsdp2 = isinstance(strategy, FSDP2Strategy)
+
+        # FSDP2: wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
+        if is_fsdp2:
+            actor = strategy.prepare(actor)
+            if ema_model:
+                # FSDP2 uses prepare_ref() for CPU offload, no need for _offload attribute
+                ema_model = strategy.prepare_ref(ema_model)
+
+        # configure optimizer (after model wrapping for FSDP2)
         actor_optim = strategy.create_optimizer(
             actor, lr=args.actor_learning_rate, betas=strategy.args.adam_betas, weight_decay=args.l2
         )
@@ -449,34 +472,35 @@ class PolicyModelActor(BaseModelActor):
             scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
         )
 
-        if args.gradient_checkpointing:
-            actor.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
+        # prepare models/optimizers (DeepSpeed path expects optimizer/scheduler passed in)
+        if not is_fsdp2:
+            self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare(
+                (actor, actor_optim, actor_scheduler),
             )
-
-        # prepare models/optimizers...
-        self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare(
-            (actor, actor_optim, actor_scheduler),
-            is_rlhf=True,
-        )
-
-        if ema_model:
-            ema_model._offload = True
-            self.ema_model = strategy.prepare(ema_model, is_rlhf=True)
+            if ema_model:
+                ema_model._offload = True
+                self.ema_model = strategy.prepare(ema_model)
+            else:
+                self.ema_model = None
         else:
-            self.ema_model = None
+            self.actor = actor
+            self.actor_optim = actor_optim
+            self.actor_scheduler = actor_scheduler
+            self.ema_model = ema_model
 
         # load checkpoint
         self.checkpoint_states = {}
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
+            _, states = strategy.load_ckpt(
+                self.actor.model, ckpt_path, optimizer=self.actor_optim, scheduler=self.actor_scheduler
+            )
             self.checkpoint_states = states
 
         # initial offload
         if strategy.args.deepspeed_enable_sleep:
-            offload_deepspeed_states(self.actor.model)
+            self.offload_states()
 
         # configure Trainer
         self.trainer = ActorPPOTrainer(
@@ -542,10 +566,10 @@ class PolicyModelActor(BaseModelActor):
         self.trainer.replay_buffer.append(experience)
 
     def reload_states(self):
-        reload_deepspeed_states(self.actor.model)
+        self.strategy.reload_states(self.actor, self.actor_optim)
 
     def offload_states(self):
-        offload_deepspeed_states(self.actor.model)
+        self.strategy.offload_states(self.actor, self.actor_optim)
 
     def save_checkpoint(self, tag, client_states):
         args = self.strategy.args
@@ -557,7 +581,9 @@ class PolicyModelActor(BaseModelActor):
                 args.max_ckpt_num,
                 args.max_ckpt_mem,
                 client_states,
-            )
+                optimizer=self.actor_optim,
+                scheduler=self.actor_scheduler,
+        )
         if self.save_hf_ckpt:
             save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
             self.strategy.save_model(
