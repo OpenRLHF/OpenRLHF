@@ -373,7 +373,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.eval_task == "generate":
         batch_generate(args)
-    if args.eval_task == "generate_vllm":
+    elif args.eval_task == "generate_vllm":
         batch_generate_vllm(args)
     elif args.eval_task == "rm":
         batch_rm_inference(args)
