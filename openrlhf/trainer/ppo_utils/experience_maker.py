@@ -658,9 +658,12 @@ class RemoteExperienceMaker:
                     base_action_log_probs,
                     kl_estimator=self.strategy.args.kl_estimator,
                 )
+                logprobs_diff = action_log_probs.float() - base_action_log_probs.float()
             else:
                 kl = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
+                logprobs_diff = torch.zeros_like(action_log_probs, dtype=action_log_probs.dtype, device=device)
             kl_mean = masked_mean(kl, samples.action_mask, dim=-1)
+            logprobs_diff_mean = masked_mean(logprobs_diff, samples.action_mask, dim=-1)
 
             if not args.use_kl_loss:
                 base_action_log_probs = None
@@ -671,6 +674,7 @@ class RemoteExperienceMaker:
             samples.values = value
             samples.kl = kl
             samples.info["kl"] = kl_mean
+            samples.info["logprobs_diff"] = logprobs_diff_mean
 
         end_time = time.time()
         duration = end_time - start_time
