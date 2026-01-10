@@ -1,0 +1,140 @@
+"""
+FSDP2 Utilities
+===============
+
+- moving_average_fsdp2: EMA update for FSDP2 models
+- move_optimizer_state: Move optimizer state between devices
+"""
+
+from typing import Callable
+
+import torch
+import torch.nn as nn
+from torch.distributed.tensor import DTensor
+
+# -----------------------------------------------------------------------------
+# EMA (Exponential Moving Average) - Helper Functions
+# -----------------------------------------------------------------------------
+
+
+def _dtensor_to_local(t: torch.Tensor) -> torch.Tensor:
+    """Extract local shard from DTensor, or return tensor as-is.
+
+    Under no_grad, DTensor.to_local() directly returns _local_tensor (no async).
+    """
+    return t.to_local() if isinstance(t, DTensor) else t
+
+
+# -----------------------------------------------------------------------------
+# EMA (Exponential Moving Average) - Main Function
+# -----------------------------------------------------------------------------
+
+
+@torch.no_grad()
+def moving_average_fsdp2(model: nn.Module, model_ema: nn.Module, unwrap_fn: Callable, beta: float = 0.992) -> None:
+    """Update EMA model from a (typically) FSDP2-wrapped source model.
+
+    Formula: ema = beta * ema + (1 - beta) * src
+
+    Args:
+        model: Source model (may be FSDP2-wrapped).
+        model_ema: EMA model to update in-place.
+        unwrap_fn: Function to unwrap model (e.g., get underlying module).
+        beta: EMA decay factor in (0, 1). Default 0.992.
+
+    Notes:
+        - Assumes src/ema use the same sharding/layout; updates local shards in-place (no all-gather).
+        - Supports cross-device/cross-dtype updates (e.g., CUDA actor -> CPU-offloaded EMA) via per-tensor cast/copy.
+        - Buffers are copied (not EMA'd) to stay in sync with source.
+        - beta must be in (0, 1); values outside this range are rejected.
+    """
+    if not 0.0 < beta < 1.0:
+        raise ValueError(f"beta must be in (0, 1), got {beta}")
+
+    src = unwrap_fn(model)
+    ema = unwrap_fn(model_ema)
+
+    lerp_weight = 1.0 - beta  # ema = ema + w * (src - ema) == (1-w)*ema + w*src
+
+    def _update_tensor(name: str, dst_t: torch.Tensor, src_t: torch.Tensor, *, do_ema: bool) -> None:
+        dst = _dtensor_to_local(dst_t)
+        src_local = _dtensor_to_local(src_t)
+        if dst.shape != src_local.shape:
+            raise RuntimeError(
+                f"EMA tensor shape mismatch for '{name}': ema={tuple(dst.shape)} src={tuple(src_local.shape)}"
+            )
+        if src_local.device != dst.device or src_local.dtype != dst.dtype:
+            src_local = src_local.to(device=dst.device, dtype=dst.dtype, non_blocking=True)
+
+        if do_ema:
+            dst.lerp_(src_local, lerp_weight)
+        else:
+            dst.copy_(src_local)
+
+    ema_params = dict(ema.named_parameters())
+    for name, src_p in src.named_parameters():
+        ema_p = ema_params.get(name)
+        if ema_p is None:
+            continue
+        if not src_p.requires_grad:
+            continue
+        _update_tensor(name, ema_p, src_p, do_ema=True)
+
+    ema_buffers = dict(ema.named_buffers())
+    for name, src_b in src.named_buffers():
+        ema_b = ema_buffers.get(name)
+        if ema_b is None:
+            continue
+        _update_tensor(name, ema_b, src_b, do_ema=False)
+
+
+# -----------------------------------------------------------------------------
+# Optimizer State Management
+# -----------------------------------------------------------------------------
+
+
+@torch.no_grad()
+def move_optimizer_state(optimizer: torch.optim.Optimizer, device: str | torch.device) -> None:
+    """Move optimizer state tensors to specified device.
+
+    Args:
+        optimizer: PyTorch optimizer with state to move.
+        device: Target device ("cpu", "cuda", or torch.device).
+
+    Notes:
+        Uses non_blocking transfer and synchronizes CUDA to ensure completion.
+    """
+    if not optimizer.state:
+        return
+
+    for param_group in optimizer.param_groups:
+        for param in param_group["params"]:
+            state = optimizer.state.get(param)
+            if state is None:
+                continue
+            for key, val in state.items():
+                if isinstance(val, torch.Tensor):
+                    state[key] = val.to(device, non_blocking=True)
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+
+# -----------------------------------------------------------------------------
+# Checkpoint Metadata
+# -----------------------------------------------------------------------------
+
+
+def get_checkpoint_metadata(strategy) -> dict:
+    """Build metadata for FSDP2 checkpoint (saved as fsdp2_runtime.json)."""
+    dp_size = getattr(strategy, "dp_size", 1)
+    cp_size = getattr(strategy, "ring_attn_size", 1)
+    return {
+        "backend": "fsdp2",
+        "world_size": getattr(strategy, "world_size", 1),
+        "dp_size": dp_size,
+        "ring_attn_size": cp_size,
+        "tp_size": getattr(strategy, "tp_size", 1),
+        "param_dtype": getattr(strategy, "param_dtype", getattr(strategy, "precision", "bf16")),
+        "fsdp2_mesh_size": dp_size * cp_size,
+    }
