@@ -1,5 +1,6 @@
 import torch
 import torch.distributed as dist
+from torch.distributed.tensor import DTensor
 from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
 from flash_attn.utils.distributed import all_gather
 
@@ -159,9 +160,18 @@ def gather_and_pad_tensor(tensor, ring_attn_group, ring_attn_pad_len, indices, b
     Returns:
         Padded tensor
     """
+    is_dtensor = isinstance(tensor, DTensor)
+    if is_dtensor:
+        mesh = tensor.device_mesh
+        placements = tensor.placements
+        tensor = tensor.to_local()
+
     if ring_attn_group is not None:
         tensor = all_gather(tensor.transpose(0, 1), ring_attn_group).transpose(0, 1)  # (1, total_seqs)
         if ring_attn_pad_len > 0:
             tensor = tensor[:, :-ring_attn_pad_len]
     tensor = pad_input(tensor.transpose(0, 1), indices, batch, seqlen).squeeze(-1)  # (batch, seqlen)
+    if is_dtensor:
+        # Preserve TP sharding metadata (typically Shard(-1) on vocab dim).
+        return DTensor.from_local(tensor, mesh, placements, run_check=False)
     return tensor
