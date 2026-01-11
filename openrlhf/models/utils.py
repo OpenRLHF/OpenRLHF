@@ -140,9 +140,7 @@ def log_probs_from_logits(
     if use_vocab_parallel:
         from openrlhf.utils.fsdp.vocab_parallel import vocab_parallel_logprobs
 
-        return vocab_parallel_logprobs(
-            logits, labels, tp_group=tp_group, temperature=temperature
-        )
+        return vocab_parallel_logprobs(logits, labels, tp_group=tp_group, temperature=temperature)
 
     # Legacy path: convert DTensor to full tensor (inefficient for large vocab)
     logits = _ensure_full_tensor(logits)
@@ -212,13 +210,13 @@ def log_probs_and_entropy_from_logits(
     if use_vocab_parallel:
         from openrlhf.utils.fsdp.vocab_parallel import vocab_parallel_logprobs_entropy
 
-        return vocab_parallel_logprobs_entropy(
-            logits, labels, tp_group=tp_group, temperature=temperature
-        )
+        return vocab_parallel_logprobs_entropy(logits, labels, tp_group=tp_group, temperature=temperature)
 
     # Fallback to separate computation
     logprobs = log_probs_from_logits(logits, labels, temperature, tp_group=None)
-    entropy = compute_entropy(_ensure_full_tensor(logits) / temperature if temperature != 1.0 else _ensure_full_tensor(logits))
+    entropy = compute_entropy(
+        _ensure_full_tensor(logits) / temperature if temperature != 1.0 else _ensure_full_tensor(logits)
+    )
     return logprobs, entropy
 
 

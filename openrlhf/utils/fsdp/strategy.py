@@ -190,8 +190,10 @@ class FSDP2Strategy(ABC):
         is_actor = inner is not model
 
         # TP before FSDP
-        print(f"[FSDP2 wrap_model] tp_size={self.tp_size}, mesh_dim_names={self.mesh.mesh_dim_names}, "
-              f"fsdp_mesh_size={self.dp_size * self.ring_attn_size} (dp={self.dp_size} × cp={self.ring_attn_size})")
+        print(
+            f"[FSDP2 wrap_model] tp_size={self.tp_size}, mesh_dim_names={self.mesh.mesh_dim_names}, "
+            f"fsdp_mesh_size={self.dp_size * self.ring_attn_size} (dp={self.dp_size} × cp={self.ring_attn_size})"
+        )
         if self.tp_size > 1:
             from .tp import apply_tensor_parallel
 
@@ -372,7 +374,7 @@ class FSDP2Strategy(ABC):
                 total_norm = torch.stack(group_norms).max()
             else:
                 # Combine p-norms: (sum of p-th powers)^(1/p)
-                total_norm = sum(gn ** norm_type for gn in group_norms) ** (1.0 / norm_type)
+                total_norm = sum(gn**norm_type for gn in group_norms) ** (1.0 / norm_type)
 
         # Clip gradients for each sharding group separately
         for group_params in sharding_groups.values():
@@ -427,7 +429,7 @@ class FSDP2Strategy(ABC):
         if sampler is None and dist.is_initialized():
             # Use dp_group for data sharding - CP ranks share the same data
             # This ensures all CP ranks in the same DP group see identical samples
-            dp_group = self.dp_group if hasattr(self, 'dp_group') and self.dp_group else None
+            dp_group = self.dp_group if hasattr(self, "dp_group") and self.dp_group else None
             sampler = DistributedSampler(
                 dataset,
                 num_replicas=dist.get_world_size(dp_group) if dp_group else dist.get_world_size(),
@@ -589,7 +591,7 @@ class FSDP2Strategy(ABC):
 
     def _dp_group(self):
         """Return DP process group (for data-related operations, not FSDP)."""
-        return self.dp_group if hasattr(self, 'dp_group') and self.dp_group else None
+        return self.dp_group if hasattr(self, "dp_group") and self.dp_group else None
 
     def all_reduce(self, data, op="mean", with_context_parallel=True):
         """All-reduce across DP group (optionally including CP).

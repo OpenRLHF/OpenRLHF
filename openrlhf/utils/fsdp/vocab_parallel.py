@@ -30,9 +30,7 @@ T = TypeVar("T", torch.Tensor, tuple[torch.Tensor, torch.Tensor])
 # =============================================================================
 
 
-def _gather_logprobs(
-    logits: torch.Tensor, labels: torch.Tensor, temperature: float = 1.0
-) -> torch.Tensor:
+def _gather_logprobs(logits: torch.Tensor, labels: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:
     """Compute log probabilities for single-GPU case."""
     log_probs = F.log_softmax(logits.float() / temperature, dim=-1)
     log_probs_labels = log_probs.gather(dim=-1, index=labels.unsqueeze(-1)).squeeze(-1)
@@ -250,9 +248,7 @@ class _VocabParallelLogProbsEntropy(torch.autograd.Function):
         dist.all_reduce(predicted_logits, op=dist.ReduceOp.SUM, group=tp_group)
 
         # Step 5: For entropy - compute sum(softmax * logits)
-        sum_softmax_times_logits = (softmax * vocab_parallel_logits).sum(
-            dim=-1, keepdim=True
-        )
+        sum_softmax_times_logits = (softmax * vocab_parallel_logits).sum(dim=-1, keepdim=True)
         dist.all_reduce(sum_softmax_times_logits, op=dist.ReduceOp.SUM, group=tp_group)
 
         # Step 6: Compute final results
@@ -545,4 +541,3 @@ def vocab_parallel_cross_entropy(
         return loss.sum() / valid_tokens.clamp(min=1)
     else:
         raise ValueError(f"Invalid reduction: {reduction}")
-

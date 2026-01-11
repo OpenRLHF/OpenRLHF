@@ -140,7 +140,7 @@ class DeepspeedStrategy(ABC):
 
     def backward(self, loss: torch.Tensor, model: nn.Module, optimizer: optim.Optimizer, **kwargs) -> None:
         """Backward pass.
-        
+
         Note on CP (Context Parallelism) + gradient scaling:
         - Ring Attention rebuilds full-sequence tensors on every CP rank via
           `flash_attn.utils.distributed.all_gather` before loss computation.
