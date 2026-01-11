@@ -32,7 +32,7 @@ def train(args):
             assert (
                 args.actor_num_nodes == args.ref_num_nodes
                 and args.actor_num_gpus_per_node == args.ref_num_gpus_per_node
-            ), "num_nodes and num_gpus_per_node must be the same when colocate actor and ref model."
+            ), f"num_nodes and num_gpus_per_node must be the same when colocate actor and ref model."
 
         bundles = [{"GPU": 1, "CPU": 1} for _ in range(args.actor_num_nodes * args.actor_num_gpus_per_node)]
         pg = placement_group(bundles, strategy="PACK")
@@ -52,6 +52,11 @@ def train(args):
                 f"and {args.vllm_num_engines * args.vllm_tensor_parallel_size}"
             )
 
+        if args.agent_func_path:
+            from openrlhf.trainer.ray.vllm_engine_async import LLMRayActorAsync as LLMRayActor
+        else:
+            from openrlhf.trainer.ray.vllm_engine import LLMRayActor
+
         vllm_engines = create_vllm_engines(
             args.vllm_num_engines,
             args.vllm_tensor_parallel_size,
@@ -64,9 +69,9 @@ def train(args):
             pg if args.colocate_all_models and not args.async_train else None,
             args.vllm_gpu_memory_utilization,
             args.vllm_enable_sleep,
+            LLMRayActor,
             "processed_logprobs" if args.enable_vllm_is_correction else None,
-            agent_func_path=args.agent_func_path,
-            remote_rm_url=args.remote_rm_url,
+            args.agent_func_path,
         )
 
     actor_model = RayActorGroup(
@@ -78,7 +83,9 @@ def train(args):
         duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
     )
 
-    if args.init_kl_coef > 0:
+    if args.init_kl_coef <= 0:
+        ref_model = None
+    else:
         ref_model = RayActorGroup(
             args.ref_num_nodes,
             args.ref_num_gpus_per_node,
@@ -87,8 +94,6 @@ def train(args):
             num_gpus_per_actor=0.2 if pg else 1,
             duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
         )
-    else:
-        ref_model = None
 
     if not args.colocate_all_models:
         pg = None
@@ -98,7 +103,7 @@ def train(args):
         assert (
             args.critic_num_nodes == args.reward_num_nodes
             and args.critic_num_gpus_per_node == args.reward_num_gpus_per_node
-        ), "num_nodes and num_gpus_per_node must be the same when colocate critic and reward model."
+        ), f"num_nodes and num_gpus_per_node must be the same when colocate critic and reward model."
 
         bundles = [{"GPU": 1, "CPU": 1} for _ in range(args.critic_num_nodes * args.critic_num_gpus_per_node)]
         pg = placement_group(bundles, strategy="PACK")
@@ -118,6 +123,7 @@ def train(args):
 
     # multiple reward models
     if not args.remote_rm_url:
+        reward_pretrain = args.reward_pretrain
         reward_model = RayActorGroup(
             args.reward_num_nodes,
             args.reward_num_gpus_per_node,
@@ -129,7 +135,6 @@ def train(args):
     else:
         reward_model = None
 
-    # Select trainer by mode
     if args.async_train:
         from openrlhf.trainer.ppo_trainer_async import PPOTrainerAsync as PPOTrainer
     else:
@@ -144,6 +149,8 @@ def train(args):
         reward_model,
         ref_model,
         vllm_engines,
+        prompt_split=args.prompt_split,
+        eval_split=args.eval_split,
         # generate kwargs
         do_sample=True,
         prompt_max_len=args.prompt_max_len,
@@ -152,20 +159,19 @@ def train(args):
         temperature=args.temperature,
         top_p=args.top_p,
     )
-
     # training update steps
     max_steps = ray.get(ppo_trainer.get_max_steps.remote())
 
-    # init actor/reference/reward model
+    # init reference/reward/actor model
     refs = []
-    refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.pretrain, max_steps, vllm_engines))
     if ref_model is not None:
         refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.pretrain))
-    if reward_model is not None and args.reward_pretrain:
-        refs.extend(reward_model.async_init_model_from_pretrained(strategy, args.reward_pretrain))
+    refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.pretrain, max_steps, vllm_engines))
+    if not args.remote_rm_url:
+        refs.extend(reward_model.async_init_model_from_pretrained(strategy, reward_pretrain))
     ray.get(refs)
 
-    if critic_model is not None and args.critic_pretrain:
+    if args.critic_pretrain:
         # critic scheduler initialization depends on max_step, so we have to init critic after actor
         # TODO: use first reward model as critic model
         refs.extend(critic_model.async_init_model_from_pretrained(strategy, args.critic_pretrain, max_steps))
@@ -177,7 +183,7 @@ def train(args):
     # save model
     ray.get(actor_model.async_save_model())
 
-    if args.critic_pretrain and args.save_value_network and critic_model is not None:
+    if args.critic_pretrain and args.save_value_network:
         ray.get(critic_model.async_save_model())
 
 
@@ -242,24 +248,10 @@ if __name__ == "__main__":
     )
     # Your Efficient RL Framework Secretly Brings You Off-Policy RL Training: https://fengyao.notion.site/off-policy-rl
     parser.add_argument("--enable_vllm_is_correction", action="store_true", default=False)
-    parser.add_argument(
-        "--vllm_is_truncated_threshold",
-        type=float,
-        nargs=2,
-        default=[0.5, 5.0],
-        help="Low and high thresholds for vllm importance sampling truncation",
-    )
-    # https://www.emergentmind.com/topics/icepop
-    parser.add_argument(
-        "--use_icepop",
-        action="store_true",
-        default=False,
-        help="Use ICEPOP mode: set vllm_is coefficients outside the threshold interval to 0",
-    )
+    parser.add_argument("--vllm_is_truncated_threshold", type=float, default=2)
 
     # Async training using ray
     parser.add_argument("--async_train", action="store_true", default=False, help="Enable async training")
-    parser.add_argument("--async_queue_size", type=int, default=1, help="Queue size for async sampler<->trainer")
 
     # Checkpoints
     parser.add_argument("--eval_steps", type=int, default=-1)
@@ -281,10 +273,10 @@ if __name__ == "__main__":
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--deepcompile", action="store_true", default=False)
     parser.add_argument(
-        "--param_dtype",
+        "--data_type",
         type=str,
         default="bf16",
-        choices=["bf16", "fp16"],
+        choices=["bf16", "fp16", "fp32"],
         help="Model data type",
     )
     ## Make EMA as an optional feature
@@ -308,9 +300,14 @@ if __name__ == "__main__":
         "--deepspeed_enable_sleep",
         action="store_true",
         default=False,
-        help="Enable sleep mode for deepspeed when using --colocate_all_models",
+        help="Enable sleep mode for training models (DeepSpeed/FSDP2) when using --colocate_all_models",
     )
-    parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed tensor parallel size")
+    parser.add_argument(
+        "--ds_tensor_parallel_size",
+        type=int,
+        default=1,
+        help="Tensor parallel size (DeepSpeed AutoTP; FSDP2 uses torch-native TP)",
+    )
 
     # packing samples using Flash Attention2
     parser.add_argument("--packing_samples", action="store_true", default=False)
@@ -341,6 +338,21 @@ if __name__ == "__main__":
     parser.add_argument("--max_len", type=int, default=None, help="deprecated max_len")
     parser.add_argument("--max_samples", type=int, default=1e8, help="Max number of samples")
     parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
+    parser.add_argument(
+        "--dist_backend", type=str, default="deepspeed", choices=["deepspeed", "fsdp2"], help="Distributed backend"
+    )
+    parser.add_argument(
+        "--fsdp2_cpu_offload",
+        action="store_true",
+        default=False,
+        help="Offload FSDP2 params/grads/optimizer to CPU",
+    )
+    parser.add_argument(
+        "--fsdp2_reshard_after_forward",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Control fully_shard reshard_after_forward flag",
+    )
     parser.add_argument("--l2", type=float, default=0.0, help="weight decay loss")
     parser.add_argument("--ptx_coef", type=float, default=0.05, help="PPO-ptx loss coef")
     parser.add_argument("--eps_clip", type=float, default=0.2, help="PPO clip range")

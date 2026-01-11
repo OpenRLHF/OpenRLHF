@@ -2,27 +2,48 @@ from typing import List
 
 import torch
 import torch.nn.functional as F
+from packaging import version
 from transformers import AutoTokenizer
 
 
-def convert_to_torch_dtype(param_dtype: str) -> torch.dtype:
-    """Convert param_dtype string to torch.dtype.
+_PRECISION_TO_DTYPE = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}
 
-    Args:
-        param_dtype: One of "bf16", "fp16"
 
-    Returns:
-        Corresponding torch.dtype (bfloat16, float16)
-    """
-    if param_dtype == "bf16":
-        return torch.bfloat16
-    elif param_dtype == "fp16":
-        return torch.float16
-    else:
-        raise ValueError(f"Invalid param_dtype: {param_dtype}")
+def convert_to_dtype(precision: str) -> torch.dtype:
+    try:
+        return _PRECISION_TO_DTYPE[precision]
+    except KeyError as exc:
+        raise ValueError(f"Invalid precision: {precision!r}. Expected one of {tuple(_PRECISION_TO_DTYPE)}.") from exc
 
 
 def get_strategy(args):
+    dist_backend = getattr(args, "dist_backend", "deepspeed")
+
+    if dist_backend == "fsdp2":
+        torch_version = version.parse(torch.__version__.split("+")[0])
+        if torch_version < version.parse("2.7.0"):
+            raise RuntimeError(
+                f"FSDP2 backend requires torch>=2.7.0. Detected torch=={torch.__version__}. "
+                "Please upgrade PyTorch or use --dist_backend deepspeed."
+            )
+        try:
+            from openrlhf.utils.fsdp import FSDP2Strategy  # type: ignore
+        except Exception as e:
+            raise RuntimeError(
+                f"FSDP2 backend requested but not available: {e}. Please use --dist_backend deepspeed or install a recent PyTorch with FSDP2."
+            )
+
+        strategy = FSDP2Strategy(
+            seed=getattr(args, "seed", 42),
+            full_determinism=getattr(args, "full_determinism", False),
+            max_norm=getattr(args, "max_norm", 1.0),
+            micro_train_batch_size=getattr(args, "micro_train_batch_size", 1),
+            train_batch_size=getattr(args, "train_batch_size", 128),
+            args=args,
+        )
+        return strategy
+
+    # default: deepspeed
     from openrlhf.utils.deepspeed import DeepspeedStrategy
 
     strategy = DeepspeedStrategy(
@@ -31,7 +52,7 @@ def get_strategy(args):
         max_norm=getattr(args, "max_norm", 1.0),
         micro_train_batch_size=getattr(args, "micro_train_batch_size", 1),
         train_batch_size=getattr(args, "train_batch_size", 128),
-        zero_stage=args.zero_stage,
+        zero_stage=getattr(args, "zero_stage", 2),
         args=args,
     )
     return strategy

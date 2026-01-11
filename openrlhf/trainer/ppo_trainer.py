@@ -2,7 +2,6 @@ import os
 import time
 from abc import ABC
 from datetime import timedelta
-from typing import Dict, Tuple
 
 import ray
 import torch
@@ -10,226 +9,405 @@ from tqdm import tqdm
 
 from openrlhf.datasets import PromptDataset
 from openrlhf.datasets.utils import blending_datasets
-from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker, SamplesGenerator
-from openrlhf.trainer.ppo_utils.kl_controller import AdaptiveKLController, FixedKLController
+from openrlhf.trainer.ppo_utils import AdaptiveKLController, FixedKLController
+from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
 from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ray.launcher import RayActorGroup
-from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils.deepspeed import DeepspeedStrategy
-from openrlhf.utils.logging_utils import TensorboardLogger, WandbLogger, init_logger
+from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.utils import get_tokenizer
 
 logger = init_logger(__name__)
 
 
-def prepare_datasets(strategy, tokenizer):
-    args = strategy.args
-
-    # prepare datasets
-    train_data = blending_datasets(
-        args.prompt_data,
-        args.prompt_data_probs,
-        strategy,
-        args.seed,
-        max_count=args.max_samples,
-        dataset_split=args.prompt_split,
-    )
-
-    # Create train dataset
-    train_data = train_data.select(range(min(args.max_samples, len(train_data))))
-    prompts_dataset = PromptDataset(train_data, tokenizer, strategy, input_template=args.input_template)
-    prompts_dataloader = strategy.setup_dataloader(prompts_dataset, 1, True, True)
-
-    # Create eval dataset if eval data exists
-    if getattr(args, "eval_dataset", None):
-        eval_data = blending_datasets(
-            args.eval_dataset,
-            None,  # No probability sampling for eval datasets
-            strategy,
-            dataset_split=args.eval_split,
-        )
-        eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
-        eval_dataset = PromptDataset(eval_data, tokenizer, strategy, input_template=args.input_template)
-        eval_dataloader = strategy.setup_dataloader(eval_dataset, 1, True, False)
-    else:
-        eval_dataloader = None
-
-    max_steps = (
-        len(prompts_dataset) * args.n_samples_per_prompt // args.train_batch_size * args.num_episodes * args.max_epochs
-    )
-    return prompts_dataloader, eval_dataloader, max_steps
-
-
 class BasePPOTrainer(ABC):
-    """Training-side base class: model orchestration, logging/eval, PPO steps."""
-
     def __init__(
         self,
+        pretrain: str,
         strategy: DeepspeedStrategy,
         actor_model_group: RayActorGroup,
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,
         reference_model_group: RayActorGroup,
-        vllm_engines,
-        tokenizer,
+        vllm_engines=None,
+        prompt_max_len: int = 120,
+        dataloader_pin_memory: bool = True,
+        prompt_split: str = "train",
+        eval_split: str = "test",
+        **generate_kwargs,
     ) -> None:
+        super().__init__()
+
         self.strategy = strategy
         self.args = strategy.args
 
+        self.tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not self.args.disable_fast_tokenizer)
         self.actor_model_group = actor_model_group
         self.critic_model_group = critic_model_group
         self.reward_model_group = reward_model_group
         self.reference_model_group = reference_model_group
+        self.dataloader_pin_memory = dataloader_pin_memory
         self.vllm_engines = vllm_engines
-        self.tokenizer = tokenizer
 
-        if self.args.kl_target:
-            self.kl_ctl = AdaptiveKLController(self.args.init_kl_coef, self.args.kl_target, self.args.kl_horizon)
+        self.prompt_split = prompt_split
+        self.eval_split = eval_split
+
+        self.prompt_max_len = prompt_max_len
+        self.generate_kwargs = generate_kwargs
+
+        self.max_epochs = self.args.max_epochs
+        self.remote_rm_url = self.args.remote_rm_url
+        self.init_kl_coef = self.args.init_kl_coef
+        self.kl_target = self.args.kl_target
+        self.kl_horizon = self.args.kl_horizon
+
+        self.freezing_actor_steps = getattr(self.args, "freezing_actor_steps", -1)
+
+        # Init dummy variables
+        self.prompts_dataloader = None
+        self.eval_dataloader = None
+        self.max_steps = None
+
+        self.samples_generator = None
+        self.experience_maker = None
+        self.remote_reward_model = None
+
+        if self.args.agent_func_path:
+            from openrlhf.trainer.ppo_utils.experience_maker_async import SamplesGeneratorAsync as SamplesGenerator
         else:
-            self.kl_ctl = FixedKLController(self.args.init_kl_coef)
+            from openrlhf.trainer.ppo_utils.experience_maker import SamplesGenerator
 
-        self.experience_maker = RemoteExperienceMaker(
-            self.actor_model_group,
-            self.critic_model_group,
-            self.reward_model_group,
-            self.reference_model_group,
-            self.kl_ctl,
-            self.strategy,
-            tokenizer,
-        )
+        self.generator_cls = SamplesGenerator
 
-        # Tracking backends
-        self.wandb_logger = WandbLogger(self.args) if self.args.use_wandb else None
-        self.tensorboard_logger = TensorboardLogger(self.args) if self.args.use_tensorboard else None
+    def _init_wandb(self):
+        # wandb/tensorboard setting
+        self._wandb = None
+        self._tensorboard = None
+        self.generated_samples_table = None
+        if self.strategy.args.use_wandb:
+            import wandb
+
+            self._wandb = wandb
+            if not wandb.api.api_key:
+                wandb.login(key=self.strategy.args.use_wandb)
+            wandb.init(
+                entity=self.strategy.args.wandb_org,
+                project=self.strategy.args.wandb_project,
+                group=self.strategy.args.wandb_group,
+                name=self.strategy.args.wandb_run_name,
+                config=self.strategy.args.__dict__,
+                reinit=True,
+            )
+
+            wandb.define_metric("train/global_step")
+            wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
+            wandb.define_metric("eval/epoch")
+            wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
+            self.generated_samples_table = wandb.Table(columns=["global_step", "text", "reward"])
+
+        # Initialize TensorBoard writer if wandb is not available
+        if self.strategy.args.use_tensorboard and self._wandb is None:
+            from torch.utils.tensorboard import SummaryWriter
+
+            os.makedirs(self.strategy.args.use_tensorboard, exist_ok=True)
+            log_dir = os.path.join(self.strategy.args.use_tensorboard, self.strategy.args.wandb_run_name)
+            self._tensorboard = SummaryWriter(log_dir=log_dir)
 
     def fit(self):
         raise NotImplementedError("fit method is not implemented")
 
-    def train_step(self, rollout_samples, global_step: int) -> Tuple[Dict, int]:
-        # Turn raw rollouts into PPO-ready trajectories with rewards.
-        experiences = self.experience_maker.make_experience_batch(rollout_samples)
+    def ppo_train(self, global_steps):
+        status = {}
+        is_fsdp2 = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2"
 
-        # Peek at the first decoded sample for quick sanity check.
-        sample0 = [
-            self.tokenizer.batch_decode(experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True)[0],
-            experiences[0].info["reward"][0].item(),
-        ]
-        print(sample0)
-
-        # Balance experiences across DP ranks if needed.
-        if self.args.use_dynamic_batch:
-            experiences = balance_experiences(experiences, self.args)
-
-        # Push experiences to actor (and critic) shards before PPO.
-        refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences)
+        # triger remote critic model training
         if self.critic_model_group is not None:
-            refs.extend(self.critic_model_group.async_run_method_batch(method_name="append", experience=experiences))
-        ray.get(refs)
+            # sync for deepspeed_enable_sleep
+            if self.strategy.args.deepspeed_enable_sleep:
+                ray.get(self.critic_model_group.async_run_method(method_name="reload_states"))
 
-        # Perform PPO optimization for actor/critic and gather metrics.
-        status = self.ppo_train(global_step)
+            critic_status_ref = self.critic_model_group.async_run_method(method_name="fit")
 
-        # Sync weights to vLLM.
-        if self.vllm_engines is not None:
-            self.broadcast_to_vllm()
+            if self.strategy.args.colocate_all_models or self.strategy.args.deepspeed_enable_sleep:
+                status.update(ray.get(critic_status_ref)[0])
+            if self.strategy.args.deepspeed_enable_sleep:
+                ray.get(self.critic_model_group.async_run_method(method_name="offload_states"))
 
-        # Refresh KL controller with the latest measurement.
-        if "kl" in status:
-            # TODO: KL controller must be FixedKLController; AdaptiveKLController is incompatible here.
-            self.kl_ctl.update(status["kl"], self.args.rollout_batch_size * self.args.n_samples_per_prompt)
+        # actor model training
+        if global_steps > self.freezing_actor_steps:
+            if self.strategy.args.deepspeed_enable_sleep:
+                ray.get(self.actor_model_group.async_run_method(method_name="reload_states"))
 
-        status["generated_samples"] = sample0
-        return status, global_step + 1
+            actor_status_ref = self.actor_model_group.async_run_method(method_name="fit", kl_ctl=self.kl_ctl.value)
+            status.update(ray.get(actor_status_ref)[0])
 
-    def ppo_train(self, global_steps: int) -> Dict:
-        """Run one PPO train step for critic + actor and return merged status dict."""
-        status: dict = {}
+            if self.strategy.args.deepspeed_enable_sleep:
+                # Offload optimizer states (model stays on GPU for weight sync)
+                ray.get(self.actor_model_group.async_run_method(method_name="offload_states"))
 
-        # Decide whether to train critic/actor this round (actor can be frozen initially).
-        run_critic = self.critic_model_group is not None
-        run_actor = global_steps > self.args.freezing_actor_steps and self.actor_model_group is not None
+            # 4. broadcast weights to vllm engines
+            if self.vllm_engines is not None:
+                self._broadcast_to_vllm(is_fsdp2=is_fsdp2)
 
-        def _run_sleep(group, **kwargs):
-            # Sleep mode: reload -> fit -> offload (smaller GPU memory).
-            ray.get(group.async_run_method(method_name="reload_states"))
-            ref = group.async_run_method(method_name="fit", **kwargs)
-            status.update(ray.get(ref)[0])
-            ray.get(group.async_run_method(method_name="offload_states"))
-
-        if self.args.deepspeed_enable_sleep:
-            # Colocated/sleeping: run critic first, then actor.
-            if run_critic:
-                _run_sleep(self.critic_model_group)
-            if run_actor:
-                _run_sleep(self.actor_model_group, kl_ctl=self.kl_ctl.value)
+            # For colocated vLLM + FSDP2: offload training model after weight sync so
+            # vLLM can wake up KV cache for the next rollout without OOM.
+            if (
+                is_fsdp2
+                and self.vllm_engines is not None
+                and self.strategy.args.vllm_enable_sleep
+                and self.strategy.args.deepspeed_enable_sleep
+            ):
+                ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
         else:
-            # Async: start jobs first, then wait and merge results.
-            refs = []
-            if run_critic:
-                refs += self.critic_model_group.async_run_method(method_name="fit")
-            if run_actor:
-                refs += self.actor_model_group.async_run_method(method_name="fit", kl_ctl=self.kl_ctl.value)
+            # If actor training is skipped (e.g. freezing_actor_steps), we still
+            # need to offload the actor params for the next rollout when using
+            # colocated vLLM + FSDP2 sleep mode; otherwise vLLM wake_up may OOM.
+            if (
+                is_fsdp2
+                and self.vllm_engines is not None
+                and self.strategy.args.vllm_enable_sleep
+                and self.strategy.args.deepspeed_enable_sleep
+            ):
+                ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
 
-            for result in ray.get(refs):
-                status.update(result)
+        # 5. wait remote critic model training done
+        if self.critic_model_group and not self.strategy.args.colocate_all_models:
+            status.update(ray.get(critic_status_ref)[0])
 
         return status
 
-    def broadcast_to_vllm(self) -> None:
+    def _broadcast_to_vllm(self, is_fsdp2: bool = False):
         """Broadcast actor weights to vLLM engines.
 
-        When vllm_enable_sleep is enabled, we use fine-grained control:
-        1. Wake up only weights (not KV cache) to minimize GPU memory during weight sync
-        2. Broadcast weights from actor model to vLLM
-        3. Keep vLLM in weights-only state; KV cache will be woken up later before generation
+        For both FSDP2 and DeepSpeed:
+        1. Wake up vLLM
+        2. Broadcast weights (model stays on GPU in sharded state)
+        3. Sleep vLLM (free GPU memory for next training iteration)
 
-        This approach reduces peak GPU memory during gradient sync by avoiding
-        simultaneous allocation of both weights and KV cache.
+        Note: FSDP2 sharded params are small (~1.75 GiB per GPU for 7B model with 8 GPUs),
+        so both vLLM + sharded model + redistribute temp memory fits in GPU.
         """
-        if self.args.vllm_enable_sleep:
-            # Wake up only weights for weight sync (not KV cache)
-            # This avoids allocating KV cache memory during weight update
+        from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
+
+        if is_fsdp2 and self.strategy.args.vllm_enable_sleep:
+            # === FSDP2 path ===
+            # Keep model on GPU (sharded state), only optimizer states are offloaded.
+            # FSDP2 sharded params are small (~1.75 GiB per GPU for 7B model with 8 GPUs).
+            # vLLM wake_up + sharded model + redistribute temp memory fits in GPU.
+
+            # Wake up vLLM *weights only* for weight sync.
+            # This avoids allocating KV cache during weight update and prevents OOM in colocated training.
+            # See vLLM sleep mode docs: wake_up(tags=["weights"]) then wake_up(tags=["kv_cache","weights"]) before generation.
             batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["weights"])
 
-        ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
+            # Broadcast weights (model stays on GPU in sharded state)
+            ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
 
-        # NOTE: We keep vLLM in weights-only state after weight sync.
-        # KV cache will be woken up before generation in SamplesGenerator.
+            # NOTE (verl alignment):
+            # Keep vLLM awake (weights only) after weight sync. vLLM will be fully
+            # slept after rollout generation in SamplesGenerator.generate_samples().
+        else:
+            # === DeepSpeed path (original) ===
+            if self.strategy.args.vllm_enable_sleep:
+                # Wake weights only for weight sync; kv_cache will be woken for generation.
+                batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["weights"])
 
-    def save_logs_and_checkpoints(self, global_step: int, logs_dict=None, client_states=None) -> None:
-        logs_dict = logs_dict or {}
-        if global_step % self.args.logging_steps == 0:
-            if self.wandb_logger:
-                self.wandb_logger.log_train(global_step, logs_dict)
-            if self.tensorboard_logger:
-                self.tensorboard_logger.log_train(global_step, logs_dict)
+            ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
 
+            if self.strategy.args.vllm_enable_sleep:
+                batch_vllm_engine_call(self.vllm_engines, "sleep")
+
+    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
+        if global_step % args.logging_steps == 0:
+            # wandb
+            if self._wandb is not None:
+                # Add generated samples to wandb using Table
+                if "generated_samples" in logs_dict:
+                    # https://github.com/wandb/wandb/issues/2981#issuecomment-1997445737
+                    new_table = self._wandb.Table(
+                        columns=self.generated_samples_table.columns, data=self.generated_samples_table.data
+                    )
+                    new_table.add_data(global_step, *logs_dict.pop("generated_samples"))
+                    self.generated_samples_table = new_table
+                    self._wandb.log({"train/generated_samples": new_table})
+                logs = {
+                    "train/%s" % k: v
+                    for k, v in {
+                        **logs_dict,
+                        "global_step": global_step,
+                    }.items()
+                }
+                self._wandb.log(logs)
+            # TensorBoard
+            elif self._tensorboard is not None:
+                for k, v in logs_dict.items():
+                    if k == "generated_samples":
+                        # Record generated samples in TensorBoard using simple text format
+                        text, reward = v
+                        formatted_text = f"Sample:\n{text}\n\nReward: {reward:.4f}"
+                        self._tensorboard.add_text("train/generated_samples", formatted_text, global_step)
+                    else:
+                        self._tensorboard.add_scalar(f"train/{k}", v, global_step)
+
+        # TODO: Add evaluation mechanism for PPO
+        if global_step % args.eval_steps == 0 and self.eval_dataloader and len(self.eval_dataloader) > 0:
+            self.evaluate(self.eval_dataloader, global_step, args.eval_temperature, args.eval_n_samples_per_prompt)
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity/others on whole dev dataset as metric
-        client_states = client_states or {}
-        if global_step % self.args.save_steps == 0:
+        if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
-            refs = self.actor_model_group.async_run_method(
+            ref = self.actor_model_group.async_run_method(
                 method_name="save_checkpoint", tag=tag, client_states=client_states
             )
             if self.critic_model_group is not None:
-                refs.extend(self.critic_model_group.async_run_method(method_name="save_checkpoint", tag=tag))
-            ray.get(refs)
+                ref.extend(self.critic_model_group.async_run_method(method_name="save_checkpoint", tag=tag))
+            ray.get(ref)
 
-    def init_checkpoint_states(self) -> Dict:
-        ckpt_path = os.path.join(self.args.ckpt_path, "_actor")
-        if self.args.load_checkpoint and os.path.exists(ckpt_path):
-            checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
-                0
-            ]
-            logger.info(f"checkpoint_states: {checkpoint_states}")
-            return checkpoint_states
-        return {
-            "episode": 0,
-            "global_step": 0,
-            "total_consumed_prompts": 0,
-            "data_loader_state_dict": {},
-        }
+    def evaluate(self, eval_dataloader, global_step, temperature=0.6, n_samples_per_prompt=1):
+        """Evaluate model performance on eval dataset.
+
+        Args:
+            eval_dataloader: DataLoader containing evaluation prompts, labels and data sources
+            global_step: Current training step for logging
+            n_samples_per_prompt: Number of samples to generate per prompt for pass@k calculation
+        """
+        start_time = time.time()
+        logger.info(f"⏰ Evaluation start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # vLLM wakeup when vllm_enable_sleep
+        if self.strategy.args.vllm_enable_sleep:
+            from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
+
+            batch_vllm_engine_call(self.vllm_engines, "wake_up")
+
+        with torch.no_grad():
+            # First collect all prompts and labels
+            all_prompts = []
+            all_labels = []
+            prompt_to_datasource = {}  # Dictionary to store mapping between prompts and their data sources
+
+            for datasources, prompts, labels in eval_dataloader:
+                all_prompts.extend(prompts)
+                all_labels.extend(labels)
+                # Create mapping for each prompt to its corresponding data source
+                for prompt, datasource in zip(prompts, datasources):
+                    prompt_to_datasource[prompt] = datasource
+
+            # Generate samples and calculate rewards
+            generate_kwargs = self.generate_kwargs.copy()
+            generate_kwargs["temperature"] = temperature
+            generate_kwargs["n_samples_per_prompt"] = n_samples_per_prompt
+            samples_list = self.samples_generator.generate_samples(
+                all_prompts, all_labels, remote_reward_model=self.remote_reward_model, **generate_kwargs
+            )
+
+            # duplicate prompts and labels for each sample
+            all_prompts = sum([s.prompts for s in samples_list], [])
+            all_labels = sum([s.labels for s in samples_list], [])
+
+            # Get rewards from samples, such as agent rewards or remote reward models
+            rewards_list = []
+            for samples in samples_list:
+                rewards_list.append(samples.rewards)
+            # Reshape rewards to (num_prompts, n_samples_per_prompt)
+            rewards = torch.tensor(rewards_list).reshape(-1, n_samples_per_prompt)
+
+            # Collect local statistics for each data source
+            global_metrics = {}  # {datasource: {"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}}
+
+            # Process rewards in chunks of n_samples_per_prompt
+            num_prompts = len(all_prompts) // n_samples_per_prompt
+            for i in range(num_prompts):
+                # Get the original prompt (first one in the chunk)
+                original_prompt = all_prompts[i * n_samples_per_prompt]
+                datasource = prompt_to_datasource[original_prompt]  # Get corresponding data source using the mapping
+
+                if datasource not in global_metrics:
+                    global_metrics[datasource] = {f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}
+
+                # Get rewards for this chunk
+                chunk_rewards = rewards[i]
+
+                # Calculate pass@k and pass@1
+                if n_samples_per_prompt > 1:
+                    global_metrics[datasource][f"pass{n_samples_per_prompt}"] += chunk_rewards.max().float().item()
+                global_metrics[datasource]["pass1"] += chunk_rewards.mean().float().item()
+                global_metrics[datasource]["count"] += 1
+
+            # Calculate global averages
+            logs = {}
+            for datasource, metrics in global_metrics.items():
+                logs[f"eval_{datasource}_pass{n_samples_per_prompt}"] = (
+                    metrics[f"pass{n_samples_per_prompt}"] / metrics["count"]
+                )
+                logs[f"eval_{datasource}_pass1"] = metrics["pass1"] / metrics["count"]
+
+            # Log to wandb/tensorboard
+            if self._wandb is not None:
+                logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": global_step}.items()}
+                self._wandb.log(logs)
+            elif self._tensorboard is not None:
+                for k, v in logs.items():
+                    self._tensorboard.add_scalar(f"eval/{k}", v, global_step)
+
+        if self.strategy.args.vllm_enable_sleep:
+            batch_vllm_engine_call(self.vllm_engines, "sleep")
+
+        end_time = time.time()
+        duration = end_time - start_time
+        time_str = str(timedelta(seconds=duration)).split(".")[0]
+        logger.info(f"✨ Evaluation completed in {time_str}, global_step {global_step}, eval_metrics: {logs}")
+
+    def prepare_datasets(self):
+        args = self.args
+        strategy = self.strategy
+
+        # prepare datasets
+        train_data = blending_datasets(
+            args.prompt_data,
+            args.prompt_data_probs,
+            strategy,
+            args.seed,
+            max_count=args.max_samples,
+            dataset_split=self.prompt_split,
+        )
+
+        # Create train dataset
+        train_data = train_data.select(range(min(args.max_samples, len(train_data))))
+        prompts_dataset = PromptDataset(train_data, self.tokenizer, strategy, input_template=args.input_template)
+        prompts_dataloader = strategy.setup_dataloader(
+            prompts_dataset,
+            args.vllm_generate_batch_size,
+            True,
+            True,
+        )
+
+        # Create eval dataset if eval data exists
+        if getattr(args, "eval_dataset", None):
+            eval_data = blending_datasets(
+                args.eval_dataset,
+                None,  # No probability sampling for eval datasets
+                strategy,
+                dataset_split=self.eval_split,
+            )
+            eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
+            eval_dataset = PromptDataset(eval_data, self.tokenizer, strategy, input_template=args.input_template)
+            eval_dataloader = strategy.setup_dataloader(eval_dataset, 1, True, False)
+        else:
+            eval_dataloader = None
+
+        self.prompts_dataloader = prompts_dataloader
+        self.eval_dataloader = eval_dataloader
+        self.max_steps = (
+            len(prompts_dataset)
+            * args.n_samples_per_prompt
+            // args.train_batch_size
+            * args.num_episodes
+            * args.max_epochs
+        )
+
+    def get_max_steps(self):
+        return self.max_steps
 
 
 @ray.remote
@@ -247,169 +425,196 @@ class PPOTrainer(BasePPOTrainer):
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,
         reference_model_group: RayActorGroup,
-        vllm_engines,
+        vllm_engines=None,
+        prompt_max_len: int = 120,
+        dataloader_pin_memory: bool = True,
+        prompt_split: str = "train",
+        eval_split: str = "test",
         **generate_kwargs,
     ) -> None:
-        # get eval and save steps
-        if strategy.args.eval_steps == -1:
-            strategy.args.eval_steps = float("inf")  # do not evaluate
-        if strategy.args.save_steps == -1:
-            strategy.args.save_steps = float("inf")  # do not save ckpt
-
-        # Tokenizer is shared across the sample generator and trainer to avoid duplicated loads.
-        tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
-        self.prompts_dataloader, self.eval_dataloader, self.max_steps = prepare_datasets(strategy, tokenizer)
-        self.generate_kwargs = generate_kwargs
-
-        # sample generation
-        self.samples_generator = SamplesGenerator(
-            strategy=strategy,
-            prompts_dataloader=self.prompts_dataloader,
-            eval_dataloader=self.eval_dataloader,
-            tokenizer=tokenizer,
-            vllm_engines=vllm_engines,
-        )
-
-        # train
         super().__init__(
+            pretrain,
             strategy,
             actor_model_group,
             critic_model_group,
             reward_model_group,
             reference_model_group,
             vllm_engines,
-            tokenizer,
+            prompt_max_len,
+            dataloader_pin_memory,
+            prompt_split,
+            eval_split,
+            **generate_kwargs,
         )
 
-    def get_max_steps(self):
-        return self.max_steps
+        if self.kl_target:
+            self.kl_ctl = AdaptiveKLController(self.init_kl_coef, self.kl_target, self.kl_horizon)
+        else:
+            self.kl_ctl = FixedKLController(self.init_kl_coef)
 
-    def fit(self) -> None:
-        checkpoint_states = self.init_checkpoint_states()
+        if self.args.remote_rm_url and not self.args.remote_rm_url[0] == "agent":
+            from openrlhf.utils.remote_rm_utils import RemoteRewardModel
+
+            self.remote_reward_model = RemoteRewardModel.remote(self.args, self.remote_rm_url)
+
+        self.samples_generator = self.generator_cls(
+            self.vllm_engines,
+            self.strategy,
+            self.tokenizer,
+            self.prompt_max_len,
+        )
+
+        self.experience_maker = RemoteExperienceMaker(
+            self.actor_model_group,
+            self.critic_model_group,
+            self.reward_model_group,
+            self.reference_model_group,
+            self.kl_ctl,
+            self.strategy,
+            self.tokenizer,
+            remote_reward_model=self.remote_reward_model,
+        )
+
+        self.prepare_datasets()
+        self._init_wandb()
+
+        # get eval and save steps
+        if self.args.eval_steps == -1:
+            self.args.eval_steps = float("inf")  # do not evaluate
+        if self.args.save_steps == -1:
+            self.args.save_steps = float("inf")  # do not save ckpt
+
+    def fit(
+        self,
+    ) -> None:
+        args = self.args
+        is_fsdp2 = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2"
+
+        # broadcast init checkpoint to vllm
+        ckpt_path = os.path.join(args.ckpt_path, "_actor")
+        if args.load_checkpoint and os.path.exists(ckpt_path):
+            checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
+                0
+            ]
+            logger.info(f"checkpoint_states: {checkpoint_states}")
+            self._broadcast_to_vllm()
+        else:
+            checkpoint_states = {"global_step": 0, "episode": 0, "data_loader_state_dict": {}}
+
+        # For colocated vLLM + FSDP2 + sleep mode, offload actor params before the
+        # first rollout so vLLM can wake up KV cache without OOM
+        if is_fsdp2 and self.vllm_engines is not None and args.vllm_enable_sleep and args.deepspeed_enable_sleep:
+            ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
+
         # Restore step and start_epoch
-        start_episode = checkpoint_states["episode"]
-        global_step = checkpoint_states["global_step"]
-        total_consumed_prompts = checkpoint_states["total_consumed_prompts"]
-        # Keep vLLM weights and dataloader states in sync when resuming.
-        if global_step:
-            self.broadcast_to_vllm()
-            state_dict = checkpoint_states["data_loader_state_dict"]
-            if state_dict:
-                self.prompts_dataloader.load_state_dict(state_dict)
+        steps = checkpoint_states["global_step"] + 1
+        episode = checkpoint_states["episode"]
+        data_loader_state_dict = checkpoint_states["data_loader_state_dict"]
+        if data_loader_state_dict:
+            self.prompts_dataloader.load_state_dict(data_loader_state_dict)
 
-        for episode in range(start_episode, self.args.num_episodes):
-            dataset_length = len(self.prompts_dataloader)
+        for episode in range(episode, args.num_episodes):
             pbar = tqdm(
-                range(dataset_length),
-                desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
-                initial=total_consumed_prompts % max(dataset_length, 1),
+                range(self.prompts_dataloader.__len__()),
+                desc=f"Episode [{episode + 1}/{args.num_episodes}]",
+                disable=False,
+                initial=steps,
             )
-            while True:
-                # Draw one mini-batch of prompts; stop when loader is exhausted.
-                rollout_samples, filter_pass_rate, prompts_consumed, is_exhausted = (
-                    self.samples_generator.generate_samples(**self.generate_kwargs)
-                )
-                total_consumed_prompts += prompts_consumed
-                if is_exhausted:
-                    break
 
-                # Run PPO update on this batch and bump the global step counter.
-                status, global_step = self.train_step(rollout_samples, global_step)
+            filtered_samples = []
+            number_of_samples = 0
+            for _, rand_prompts, labels in self.prompts_dataloader:
+                remote_reward_model = self.remote_reward_model if self.args.dynamic_filtering else None
+                rollout_samples = self.samples_generator.generate_samples(
+                    rand_prompts, labels, remote_reward_model=remote_reward_model, **self.generate_kwargs
+                )
+                pbar.update()
+
+                # dynamic filtering
+                pass_rate = None
+                if self.args.dynamic_filtering:
+                    number_of_samples += len(rollout_samples)
+                    # Group individual samples into batches of n_samples size
+                    for i in range(0, len(rollout_samples), self.args.n_samples_per_prompt):
+                        batch_samples = rollout_samples[i : i + self.args.n_samples_per_prompt]
+                        if len(batch_samples) < self.args.n_samples_per_prompt:
+                            continue
+
+                        # Calculate average reward for this batch of samples
+                        avg_reward = sum(sample.scores[0].item() for sample in batch_samples) / len(batch_samples)
+
+                        # Check if average reward is within the specified range
+                        min_reward, max_reward = self.args.dynamic_filtering_reward_range
+                        if min_reward + 1e-6 < avg_reward < max_reward - 1e-6:
+                            filtered_samples.extend(batch_samples)
+
+                    # Continue sampling if filtered samples are insufficient
+                    if len(filtered_samples) / self.args.n_samples_per_prompt < self.args.rollout_batch_size:
+                        logger.info(
+                            f"filtered_samples {len(filtered_samples) / self.args.n_samples_per_prompt} < rollout_batch_size {self.args.rollout_batch_size}, continue sampling"
+                        )
+                        continue
+
+                    pass_rate = len(filtered_samples) / number_of_samples * 100
+                    logger.info(
+                        f"Dynamic filtering pass rate: {pass_rate:.2f}% ({len(filtered_samples)}/{number_of_samples})"
+                    )
+                    rollout_samples = filtered_samples[: self.args.rollout_batch_size * self.args.n_samples_per_prompt]
+                    filtered_samples = []
+                    number_of_samples = 0
+
+                # vLLM is slept at the end of generate_samples(); reload actor params
+                # for experience making (actor forward) if we offloaded it for vLLM.
+                # Important: do this AFTER dynamic filtering so we don't reload
+                # the actor to GPU and then immediately continue sampling (which
+                # can reduce available GPU memory for vLLM wake_up).
+                if (
+                    is_fsdp2
+                    and self.vllm_engines is not None
+                    and args.vllm_enable_sleep
+                    and args.deepspeed_enable_sleep
+                ):
+                    ray.get(self.actor_model_group.async_run_method(method_name="reload_model"))
+
+                experiences = self.experience_maker.make_experience_batch(rollout_samples)
+                sample0 = self.tokenizer.batch_decode(
+                    experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True
+                )
+                print(sample0)
+
+                # balance experiences across dp
+                if args.use_dynamic_batch:
+                    experiences = balance_experiences(experiences, args)
+
+                refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences)
+                if self.critic_model_group is not None:
+                    refs.extend(
+                        self.critic_model_group.async_run_method_batch(method_name="append", experience=experiences)
+                    )
+                ray.get(refs)
+
+                status = self.ppo_train(steps)
+
+                if "kl" in status:
+                    self.kl_ctl.update(status["kl"], args.rollout_batch_size * args.n_samples_per_prompt)
 
                 # Add generated samples to status dictionary
                 if self.args.dynamic_filtering:
-                    status["dynamic_filtering_pass_rate"] = filter_pass_rate
-                log_status = {k: v for k, v in status.items() if k not in ["generated_samples"]}
-                logger.info(f"✨ Global step {global_step}: {log_status}")
+                    status["dynamic_filtering_pass_rate"] = pass_rate
+                logger.info(f"✨ Global step {steps}: {status}")
+                status["generated_samples"] = [sample0[0], experiences[0].info["reward"][0]]
 
                 # logs/checkpoints
                 client_states = {
+                    "global_step": steps,
                     "episode": episode,
-                    "global_step": global_step,
-                    "total_consumed_prompts": total_consumed_prompts,
                     "data_loader_state_dict": self.prompts_dataloader.state_dict(),
                 }
-                self.save_logs_and_checkpoints(global_step, status, client_states)
+                self.save_logs_and_checkpoints(args, steps, pbar, status, client_states)
 
-                # TODO: Add evaluation mechanism for PPO
-                if global_step % self.args.eval_steps == 0 and self.eval_dataloader:
-                    eval_generate_kwargs = self.generate_kwargs.copy()
-                    eval_generate_kwargs["temperature"] = self.args.eval_temperature
-                    eval_generate_kwargs["n_samples_per_prompt"] = self.args.eval_n_samples_per_prompt
-                    self.evaluate(global_step, **eval_generate_kwargs)
+                steps = steps + 1
 
-                pbar.update(prompts_consumed)
-
-        # Close trackers
-        if self.wandb_logger:
-            self.wandb_logger.close()
-        if self.tensorboard_logger:
-            self.tensorboard_logger.close()
-
-    @torch.no_grad()
-    def evaluate(self, global_step, **generate_kwargs):
-        """Evaluate model performance on eval dataset."""
-        start_time = time.time()
-        logger.info(f"⏰ Evaluation start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-
-        # First collect all prompts and labels
-        prompt_to_datasource = {}  # Dictionary to store mapping between prompts and their data sources
-        for datasources, prompts, labels in self.eval_dataloader:
-            # Create mapping for each prompt to its corresponding data source
-            for prompt, datasource in zip(prompts, datasources):
-                prompt_to_datasource[prompt] = datasource
-
-        # Generate samples and calculate rewards
-        samples_list = self.samples_generator.generate_eval_samples(**generate_kwargs)
-
-        # duplicate prompts and labels for each sample
-        all_prompts = sum([s.prompts for s in samples_list], [])
-
-        n_samples_per_prompt = generate_kwargs["n_samples_per_prompt"]
-
-        # Get rewards from samples, such as agent rewards or remote reward models
-        rewards_list = []
-        for samples in samples_list:
-            rewards_list.append(samples.rewards)
-        # Reshape rewards to (num_prompts, n_samples_per_prompt)
-        rewards = torch.tensor(rewards_list).reshape(-1, n_samples_per_prompt)
-
-        # Collect local statistics for each data source
-        global_metrics = {}  # {datasource: {"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}}
-
-        # Process rewards in chunks of n_samples_per_prompt
-        num_prompts = len(all_prompts) // n_samples_per_prompt
-        for i in range(num_prompts):
-            # Get the original prompt (first one in the chunk)
-            original_prompt = all_prompts[i * n_samples_per_prompt]
-            datasource = prompt_to_datasource[original_prompt]  # Get corresponding data source using the mapping
-            if datasource not in global_metrics:
-                global_metrics[datasource] = {f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}
-
-            # Get rewards for this chunk
-            chunk_rewards = rewards[i]
-
-            # Calculate pass@k and pass@1
-            if n_samples_per_prompt > 1:
-                global_metrics[datasource][f"pass{n_samples_per_prompt}"] += chunk_rewards.max().float().item()
-            global_metrics[datasource]["pass1"] += chunk_rewards.mean().float().item()
-            global_metrics[datasource]["count"] += 1
-
-        # Calculate global averages
-        logs = {}
-        for datasource, metrics in global_metrics.items():
-            logs[f"eval_{datasource}_pass{n_samples_per_prompt}"] = (
-                metrics[f"pass{n_samples_per_prompt}"] / metrics["count"]
-            )
-            logs[f"eval_{datasource}_pass1"] = metrics["pass1"] / metrics["count"]
-
-        # Log to wandb/tensorboard
-        if self.wandb_logger:
-            self.wandb_logger.log_eval(global_step, logs)
-        if self.tensorboard_logger:
-            self.tensorboard_logger.log_eval(global_step, logs)
-
-        end_time = time.time()
-        duration = end_time - start_time
-        time_str = str(timedelta(seconds=duration)).split(".")[0]
-        logger.info(f"✨ Evaluation completed in {time_str}, global_step {global_step}, eval_metrics: {logs}")
+        if self._wandb is not None:
+            self._wandb.finish()
+        if self._tensorboard is not None:
+            self._tensorboard.close()

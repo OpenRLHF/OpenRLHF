@@ -77,7 +77,6 @@ class ActorPPOTrainer(ABC):
             vllm_is_truncated_threshold=(
                 self.args.vllm_is_truncated_threshold if self.args.enable_vllm_is_correction else None
             ),
-            use_icepop=self.args.use_icepop,
         )
 
         # Mixtral 8x7b
@@ -273,7 +272,7 @@ class ActorPPOTrainer(ABC):
         if self.args.use_dynamic_batch:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
 
-        self.strategy.backward(loss, self.actor, self.actor_optim)
+        self.strategy.backward(loss, self.actor, self.actor_optim, name="actor")
         if self.args.use_dynamic_batch:
             if self.replay_buffer.dynamic_optimizer_step[step]:
                 self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
@@ -300,7 +299,7 @@ class ActorPPOTrainer(ABC):
                 status[k] = v.float().mean().item()
         return status
 
-    def broadcast_to_vllm(self):
+    def _broadcast_to_vllm(self):
         use_prefix_cache = getattr(self.strategy.args, "enable_prefix_caching", False)
         cache_reset_refs = []
         if use_prefix_cache and torch.distributed.get_rank() == 0:
@@ -309,76 +308,245 @@ class ActorPPOTrainer(ABC):
                 cache_reset_refs.append(engine.reset_prefix_cache.remote())
 
         torch.cuda.empty_cache()
-        model = self.actor.model.module
+        is_fsdp2 = getattr(self.strategy.args, "dist_backend", "deepspeed") == "fsdp2"
+
+        if is_fsdp2:
+            model = self.actor.model
+        else:
+            model = self.actor.model.module
         count, num_params = 0, len(list(model.named_parameters()))
 
-        def _broadcast_param(param, count, num_params):
+        # --- FSDP2: Slime-style bucketed async weight sync ---
+        if is_fsdp2:
+            from torch.distributed.tensor import DTensor, Replicate
+
+            # Buffer size for bucketing (512 MB default, can be configured)
+            update_weight_buffer_size = getattr(self.strategy.args, "update_weight_buffer_size", 512 * 1024 * 1024)
             use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
-            # Fire all vllm engines for broadcast
-            if torch.distributed.get_rank() == 0:
-                shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
-                refs = [
-                    engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
-                    for engine in self.vllm_engines
-                ]
 
-                if use_ray:
-                    import ray.util.collective as collective
+            def _process_bucket_broadcast(bucket, is_last_bucket=False):
+                """Wait for async ops and broadcast a bucket of parameters using batch RPC."""
+                if not bucket:
+                    return
 
-                    collective.broadcast(param.data, 0, group_name=self._model_update_group)
+                # Wait for all async redistribute operations (all ranks participate in redistribute)
+                processed = []
+                for name, param_async in bucket:
+                    if hasattr(param_async, "wait"):
+                        param_data = param_async.wait()
+                    else:
+                        param_data = param_async
+                    processed.append((name, param_data))
+
+                # Only rank 0 does RPC and broadcast (only rank 0 has _model_update_group)
+                if torch.distributed.get_rank() == 0:
+                    # Prepare batch metadata
+                    names = [name for name, _ in processed]
+                    dtypes = [p.dtype for _, p in processed]
+                    shapes = [p.shape for _, p in processed]
+
+                    # Single RPC per bucket (instead of per-param)
+                    refs = [
+                        engine.batch_update_weights.remote(
+                            names=names,
+                            dtypes=dtypes,
+                            shapes=shapes,
+                            empty_cache=is_last_bucket,
+                        )
+                        for engine in self.vllm_engines
+                    ]
+
+                    # Async broadcast all params in this bucket
+                    handles = []
+                    # Keep any temporary contiguous tensors alive until their
+                    # async broadcasts complete; otherwise CUDA/NCCL may read
+                    # freed memory and cause undefined behavior.
+                    broadcast_tensors = []
+                    for _, param_data in processed:
+                        if use_ray:
+                            import ray.util.collective as collective
+
+                            collective.broadcast(param_data, 0, group_name=self._model_update_group)
+                        else:
+                            tensor = param_data if param_data.is_contiguous() else param_data.contiguous()
+                            broadcast_tensors.append(tensor)
+                            handle = self._model_update_group.broadcast(
+                                tensor, src=0, stream=torch.cuda.current_stream(), async_op=True
+                            )
+                            handles.append(handle)
+
+                    # Wait for all async broadcasts
+                    for handle in handles:
+                        handle.wait()
+                    del broadcast_tensors
+
+                    # Wait for vLLM to finish loading
+                    ray.get(refs)
+
+                # Single barrier per bucket (instead of per-param)
+                torch.distributed.barrier()
+
+                # Clean up bucket memory
+                del processed
+                torch.cuda.empty_cache()
+
+            def _process_bucket_cuda_ipc(bucket, is_last_bucket=False):
+                """Process bucket using CUDA IPC for collocated scenario."""
+                from torch.multiprocessing.reductions import reduce_tensor
+
+                if not bucket:
+                    return
+
+                # Wait for all async redistribute operations
+                processed = []
+                for name, param_async in bucket:
+                    if hasattr(param_async, "wait"):
+                        param_data = param_async.wait()
+                    else:
+                        param_data = param_async
+                    processed.append((name, param_data))
+
+                # Process each parameter with CUDA IPC
+                for idx, (name, param_data) in enumerate(processed):
+                    weight = param_data.data.clone()
+                    ipc_handle = reduce_tensor(weight)
+
+                    ipc_handle = {get_physical_gpu_id(): ipc_handle}
+                    ipc_handle_list = [None] * torch.distributed.get_world_size()
+                    torch.distributed.all_gather_object(ipc_handle_list, ipc_handle)
+
+                    if torch.distributed.get_rank() == 0:
+                        ipc_handles = {}
+                        for d in ipc_handle_list:
+                            ipc_handles.update(d)
+
+                        refs = [
+                            engine.update_weight_cuda_ipc.remote(
+                                name,
+                                dtype=param_data.dtype,
+                                shape=param_data.shape,
+                                ipc_handles=ipc_handles,
+                                empty_cache=(is_last_bucket and idx == len(processed) - 1),
+                            )
+                            for engine in self.vllm_engines
+                        ]
+                        ray.get(refs)
+                    torch_dist_barrier_and_cuda_sync()
+
+                # Clean up bucket memory
+                del processed
+                torch.cuda.empty_cache()
+
+            # Choose processing function based on CUDA IPC mode
+            _process_bucket = _process_bucket_cuda_ipc if self.use_cuda_ipc else _process_bucket_broadcast
+
+            # Collect parameters into buckets
+            bucket = []
+            bucket_size = 0
+            param_items = list(model.state_dict().items())
+            num_params = len(param_items)
+
+            for idx, (name, param) in enumerate(param_items):
+                param_size = param.numel() * param.element_size()
+
+                # Flush bucket if adding this param would exceed buffer size
+                if bucket and bucket_size + param_size >= update_weight_buffer_size:
+                    _process_bucket(bucket, is_last_bucket=False)
+                    bucket = []
+                    bucket_size = 0
+
+                # Move to CUDA if needed
+                if param.device.type == "cpu":
+                    param = param.to(torch.cuda.current_device())
+
+                # For DTensor: use async redistribute (Slime's key optimization)
+                if isinstance(param, DTensor):
+                    param_async = param.redistribute(
+                        placements=[Replicate()] * param.device_mesh.ndim,
+                        async_op=True,  # Async to allow overlap
+                    ).to_local()
+                    bucket.append((name, param_async))
                 else:
-                    self._model_update_group.broadcast(param.data, src=0, stream=torch.cuda.current_stream())
-                ray.get(refs)
+                    bucket.append((name, param))
 
-        def _handle_cuda_ipc(param, count, num_params):
-            from torch.multiprocessing.reductions import reduce_tensor
+                bucket_size += param_size
 
-            weight = param.data.clone()
-            ipc_handle = reduce_tensor(weight)
+            # Process remaining bucket
+            if bucket:
+                _process_bucket(bucket, is_last_bucket=True)
 
-            ipc_handle = {get_physical_gpu_id(): ipc_handle}
-            ipc_handle_list = [None] * torch.distributed.get_world_size()
-            torch.distributed.all_gather_object(ipc_handle_list, ipc_handle)
+        # --- DeepSpeed path (original code) ---
+        else:
 
-            if torch.distributed.get_rank() == 0:
-                ipc_handles = {}
-                for d in ipc_handle_list:
-                    ipc_handles.update(d)
+            def _broadcast_param(param, count, num_params):
+                use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
+                # Fire all vllm engines for broadcast
+                if torch.distributed.get_rank() == 0:
+                    shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
+                    refs = [
+                        engine.update_weight.remote(
+                            name, dtype=param.dtype, shape=shape, empty_cache=count == num_params
+                        )
+                        for engine in self.vllm_engines
+                    ]
 
-                shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
-                refs = [
-                    engine.update_weight_cuda_ipc.remote(
-                        name,
-                        dtype=param.dtype,
-                        shape=shape,
-                        ipc_handles=ipc_handles,
-                        empty_cache=count == num_params,
-                    )
-                    for engine in self.vllm_engines
-                ]
-                ray.get(refs)
-            torch_dist_barrier_and_cuda_sync()
+                    if use_ray:
+                        import ray.util.collective as collective
 
-        for name, param in model.named_parameters():
-            count += 1  # empty_cache at last param
+                        collective.broadcast(param.data, 0, group_name=self._model_update_group)
+                    else:
+                        self._model_update_group.broadcast(param.data, src=0, stream=torch.cuda.current_stream())
+                    ray.get(refs)
 
-            # broadcast
-            if not self.use_cuda_ipc:
-                # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
-                if self.strategy.args.ds_tensor_parallel_size > 1:
-                    with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
-                        _broadcast_param(param, count, num_params)
+            def _handle_cuda_ipc(param, count, num_params):
+                from torch.multiprocessing.reductions import reduce_tensor
+
+                weight = param.data.clone()
+                ipc_handle = reduce_tensor(weight)
+
+                ipc_handle = {get_physical_gpu_id(): ipc_handle}
+                ipc_handle_list = [None] * torch.distributed.get_world_size()
+                torch.distributed.all_gather_object(ipc_handle_list, ipc_handle)
+
+                if torch.distributed.get_rank() == 0:
+                    ipc_handles = {}
+                    for d in ipc_handle_list:
+                        ipc_handles.update(d)
+
+                    shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
+                    refs = [
+                        engine.update_weight_cuda_ipc.remote(
+                            name,
+                            dtype=param.dtype,
+                            shape=shape,
+                            ipc_handles=ipc_handles,
+                            empty_cache=count == num_params,
+                        )
+                        for engine in self.vllm_engines
+                    ]
+                    ray.get(refs)
+                torch_dist_barrier_and_cuda_sync()
+
+            for name, param in model.named_parameters():
+                count += 1  # empty_cache at last param
+
+                # broadcast
+                if not self.use_cuda_ipc:
+                    # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
+                    if self.strategy.args.ds_tensor_parallel_size > 1:
+                        with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
+                            _broadcast_param(param, count, num_params)
+                    else:
+                        with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
+                            _broadcast_param(param, count, num_params)
+                # CUDA IPC
                 else:
-                    with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                        _broadcast_param(param, count, num_params)
-            # CUDA IPC
-            else:
-                if self.strategy.args.ds_tensor_parallel_size > 1:
-                    with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
-                        _handle_cuda_ipc(param, count, num_params)
-                else:
-                    with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                        _handle_cuda_ipc(param, count, num_params)
+                    if self.strategy.args.ds_tensor_parallel_size > 1:
+                        with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
+                            _handle_cuda_ipc(param, count, num_params)
+                    else:
+                        with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
+                            _handle_cuda_ipc(param, count, num_params)
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)
@@ -406,7 +574,7 @@ class PolicyModelActor(BaseModelActor):
         actor = Actor(
             pretrain,
             attn_implementation=strategy.args.attn_implementation,
-            param_dtype=strategy.args.param_dtype,  # default: bf16
+            precision=strategy.args.data_type,
             load_in_4bit=strategy.args.load_in_4bit,
             lora_rank=strategy.args.lora_rank,
             lora_alpha=strategy.args.lora_alpha,
@@ -428,7 +596,7 @@ class PolicyModelActor(BaseModelActor):
             ema_model = Actor(
                 pretrain,
                 attn_implementation=strategy.args.attn_implementation,
-                param_dtype=strategy.args.param_dtype,  # default: bf16
+                precision=strategy.args.data_type,
                 load_in_4bit=strategy.args.load_in_4bit,
                 ds_config=strategy.get_ds_eval_config(offload=True),
                 packing_samples=strategy.args.packing_samples,
@@ -436,33 +604,46 @@ class PolicyModelActor(BaseModelActor):
         else:
             ema_model = None
 
-        # configure optimizer
-        actor_optim = strategy.create_optimizer(
-            actor, lr=args.actor_learning_rate, betas=strategy.args.adam_betas, weight_decay=args.l2
-        )
-
-        actor_scheduler = get_scheduler(
-            args.lr_scheduler,
-            actor_optim,
-            num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
-            num_training_steps=max_steps,
-            scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
-        )
-
         if args.gradient_checkpointing:
             actor.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
 
-        # prepare models/optimizers...
-        self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare(
-            (actor, actor_optim, actor_scheduler),
-            is_rlhf=True,
-        )
+        is_fsdp2 = getattr(args, "dist_backend", "deepspeed") == "fsdp2"
+        if is_fsdp2:
+            # FSDP2: wrap/shard model before building optimizer/scheduler (params become DTensor/sharded).
+            self.actor = strategy.prepare(actor)
+            self.actor_optim = strategy.create_optimizer(
+                self.actor, lr=args.actor_learning_rate, betas=strategy.args.adam_betas, weight_decay=args.l2
+            )
+            self.actor_scheduler = get_scheduler(
+                args.lr_scheduler,
+                self.actor_optim,
+                num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
+                num_training_steps=max_steps,
+                scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
+            )
+        else:
+            # DeepSpeed: build optimizer/scheduler first; engine handles gradient accumulation.
+            actor_optim = strategy.create_optimizer(
+                actor, lr=args.actor_learning_rate, betas=strategy.args.adam_betas, weight_decay=args.l2
+            )
+            actor_scheduler = get_scheduler(
+                args.lr_scheduler,
+                actor_optim,
+                num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
+                num_training_steps=max_steps,
+                scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
+            )
+
+            # prepare models/optimizers...
+            self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare(
+                (actor, actor_optim, actor_scheduler),
+            )
 
         if ema_model:
             ema_model._offload = True
-            self.ema_model = strategy.prepare(ema_model, is_rlhf=True)
+            self.ema_model = strategy.prepare(ema_model)
         else:
             self.ema_model = None
 
@@ -471,12 +652,22 @@ class PolicyModelActor(BaseModelActor):
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
-            self.checkpoint_states = states
+            _, states = strategy.load_ckpt(
+                self.actor.model,
+                ckpt_path,
+                optimizer=self.actor_optim,
+                scheduler=self.actor_scheduler,
+            )
+            self.checkpoint_states["global_step"] = states["global_step"]
+            self.checkpoint_states["episode"] = states["episode"]
+            self.checkpoint_states["data_loader_state_dict"] = states["data_loader_state_dict"]
 
         # initial offload
         if strategy.args.deepspeed_enable_sleep:
-            offload_deepspeed_states(self.actor.model)
+            self.offload_states()
+            # Note: For FSDP2, do NOT offload model to CPU here!
+            # FSDP2 sharded params are small (~1.75 GiB per GPU for 7B/8GPU).
+            # Keeping model on GPU avoids OOM during broadcast when vLLM is awake.
 
         # configure Trainer
         self.trainer = ActorPPOTrainer(
@@ -533,7 +724,7 @@ class PolicyModelActor(BaseModelActor):
         return action_log_probs.to("cpu")
 
     def broadcast_to_vllm(self):
-        self.trainer.broadcast_to_vllm()
+        self.trainer._broadcast_to_vllm()
 
     def get_checkpoint_states(self):
         return self.checkpoint_states
@@ -542,10 +733,34 @@ class PolicyModelActor(BaseModelActor):
         self.trainer.replay_buffer.append(experience)
 
     def reload_states(self):
-        reload_deepspeed_states(self.actor.model)
+        if hasattr(self.strategy, "reload_states"):
+            self.strategy.reload_states(self.actor, self.actor_optim)
+        else:
+            reload_deepspeed_states(self.actor.model)
+
+    def reload_model(self):
+        """Reload model parameters to GPU (FSDP2-only).
+
+        Used to bring the actor back to GPU for inference/experience making after
+        it was offloaded via offload_model(), without reloading optimizer states.
+        """
+        if hasattr(self.strategy, "reload_model"):
+            self.strategy.reload_model(self.actor)
 
     def offload_states(self):
-        offload_deepspeed_states(self.actor.model)
+        if hasattr(self.strategy, "offload_states"):
+            self.strategy.offload_states(self.actor, self.actor_optim)
+        else:
+            offload_deepspeed_states(self.actor.model)
+
+    def offload_model(self):
+        """Offload model parameters to CPU (FSDP2-only).
+
+        This is useful in colocated vLLM + training setups to free GPU memory
+        before waking up vLLM KV cache.
+        """
+        if hasattr(self.strategy, "offload_model"):
+            self.strategy.offload_model(self.actor)
 
     def save_checkpoint(self, tag, client_states):
         args = self.strategy.args
@@ -554,9 +769,11 @@ class PolicyModelActor(BaseModelActor):
                 self.actor.model,
                 os.path.join(args.ckpt_path, "_actor"),
                 tag,
-                args.max_ckpt_num,
-                args.max_ckpt_mem,
-                client_states,
+                max_num=args.max_ckpt_num,
+                max_mem=args.max_ckpt_mem,
+                client_state=client_states,
+                optimizer=self.actor_optim,
+                scheduler=self.actor_scheduler,
             )
         if self.save_hf_ckpt:
             save_path = os.path.join(args.ckpt_path, f"{tag}_hf")

@@ -1,21 +1,18 @@
-import heapq
 import time
+from abc import ABC
 from copy import deepcopy
 from dataclasses import dataclass, fields
 from datetime import timedelta
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Tuple, Union
 
 import ray
 import torch
-from tqdm import tqdm
-from vllm import SamplingParams
 
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
 from openrlhf.trainer.ray.launcher import RayActorGroup
-from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.seqlen_balancing import get_minimum_num_micro_batch_size, get_seqlen_balanced_partitions
-from openrlhf.utils.utils import zero_pad_sequences
+from openrlhf.utils.utils import remove_pad_token, zero_pad_sequences
 
 logger = init_logger(__name__)
 
@@ -208,263 +205,230 @@ class Experience:
         return Experience(**result)
 
 
-def _collect_prompt_batch(dataloader_iter, num_prompts: int):
-    """Draw up to `num_prompts` items from the prompt dataloader."""
-    prompts, labels = [], []
-    exhausted = False
+def update_samples_with_rewards(rewards_info, samples_list):
+    """Process rewards info and update samples with rewards, scores and extra logs.
 
-    while len(prompts) < num_prompts:
-        try:
-            _, batch_prompts, batch_labels = next(dataloader_iter)
-            remaining = num_prompts - len(prompts)
-            prompts.extend(batch_prompts[:remaining])
-            labels.extend(batch_labels[:remaining])
-        except StopIteration:
-            exhausted = True
-            break
+    Args:
+        rewards_info: List of reward information dictionaries
+        samples_list: List of Experience objects to update
+    """
+    # Process rewards and scores
+    samples_len = [len(sample.sequences) for sample in samples_list]
 
-    return prompts, labels, exhausted
+    rewards_list = torch.cat([torch.as_tensor(info["rewards"]) for info in rewards_info], dim=0).split(samples_len)
+    if "scores" in rewards_info[0]:
+        scores_list = torch.cat([torch.as_tensor(info["scores"]) for info in rewards_info], dim=0).split(samples_len)
+    else:
+        scores_list = rewards_list
+
+    # Process extra_logs if present
+    if "extra_logs" in rewards_info[0]:
+        # Merge all extra_logs tensors first
+        merged_logs = {
+            key: torch.cat(
+                [torch.as_tensor(logs[key]) for logs in [info["extra_logs"] for info in rewards_info]], dim=0
+            ).split(samples_len)
+            for key in rewards_info[0]["extra_logs"].keys()
+        }
+
+    # Update samples with rewards, scores and extra logs
+    for i, samples in enumerate(samples_list):
+        samples.rewards = rewards_list[i]
+        samples.scores = scores_list[i]
+        samples.info["score"] = scores_list[i]
+        samples.info["reward"] = rewards_list[i]
+        if "extra_logs" in rewards_info[0]:
+            for key, values in merged_logs.items():
+                samples.info[key] = values[i]
+
+    return samples_list
 
 
 class SamplesGenerator:
-    """Stateless sample generator: pulls prompts and dispatches to rollout workers."""
-
-    def __init__(
-        self,
-        strategy,
-        prompts_dataloader,
-        eval_dataloader,
-        tokenizer,
-        vllm_engines: List,
-    ):
+    def __init__(self, vllm_engines, strategy, tokenizer, prompt_max_len):
         self.strategy = strategy
         self.args = strategy.args
-
+        self.vllm_engines = vllm_engines
         self.tokenizer = tokenizer
-        self.vllm_engines = vllm_engines or []
-
-        self.prompts_dataloader = prompts_dataloader
-        self.eval_dataloader = eval_dataloader
+        self.prompt_max_len = prompt_max_len
 
     @torch.no_grad()
-    def generate_eval_samples(self, **generate_kwargs) -> Tuple[List[Experience], Optional[float], int, bool]:
-        if getattr(self, "_eval_dataloader_iter", None) is None:
-            self._eval_dataloader_iter = iter(self.eval_dataloader)
+    def generate_samples(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Experience]:
+        """
+        Generate samples and return in batches.
 
-        # Wake sleeping vLLM engines before dispatching.
-        if self.args.vllm_enable_sleep:
-            batch_vllm_engine_call(self.vllm_engines, "wake_up")
+        When not using vllm, we will fallback to the default implementation,
+        in which actor will be used to generate samples.
+        """
+        # vLLM wakeup when vllm_enable_sleep
+        if self.strategy.args.vllm_enable_sleep:
+            from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 
-        experiences, prompts_consumed, exhausted = self._generate_vllm(
-            dataloader_iter=self._eval_dataloader_iter,
-            num_prompts=len(self.eval_dataloader),
-            dynamic_filtering=False,
-            **generate_kwargs,
-        )
+            # For generation, we need both weights and KV cache.
+            # Note: vLLM sleep mode tracks sleeping tags separately. To avoid
+            # running requests while weights are still sleeping (which can
+            # crash or produce undefined behavior), explicitly wake weights
+            # and KV cache.
+            batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["weights"])
+            batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["kv_cache"])
 
-        # Put engines back to sleep when enabled.
-        if self.args.vllm_enable_sleep:
+        rollout_samples = self._generate_vllm(all_prompts, all_labels, **generate_kwargs)
+
+        # vLLM offload when vllm_enable_sleep
+        if self.strategy.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "sleep")
 
-        self._eval_dataloader_iter = None
+        return rollout_samples
 
-        return experiences
+        # tokenizer
 
-    @torch.no_grad()
-    def generate_samples(self, **generate_kwargs) -> Tuple[List[Experience], Optional[float], int, bool]:
-        """Produce one batch and indicate if the dataloader is exhausted."""
-        if getattr(self, "_dataloader_iter", None) is None:
-            self._dataloader_iter = iter(self.prompts_dataloader)
-
-        # Wake sleeping vLLM engines before dispatching.
-        if self.args.vllm_enable_sleep:
-            batch_vllm_engine_call(self.vllm_engines, "wake_up")
-
-        experiences, prompts_consumed, exhausted = self._generate_vllm(
-            dataloader_iter=self._dataloader_iter,
-            num_prompts=self.args.rollout_batch_size,
-            dynamic_filtering=self.args.dynamic_filtering,
-            **generate_kwargs,
-        )
-
-        # Put engines back to sleep when enabled.
-        if self.args.vllm_enable_sleep:
-            batch_vllm_engine_call(self.vllm_engines, "sleep")
-
-        filter_pass_rate = None
-        if self.args.dynamic_filtering and prompts_consumed:
-            filter_pass_rate = self.args.rollout_batch_size / prompts_consumed * 100
-
-        if exhausted:
-            self._dataloader_iter = None
-            logger.info("Prompt dataloader is exhausted.")
-
-        return experiences, filter_pass_rate, prompts_consumed, exhausted
-
-    def _generate_vllm(
-        self, dataloader_iter, num_prompts: int, dynamic_filtering, **generate_kwargs
-    ) -> Tuple[List[Experience], int, bool]:
-        """Generate a batch of Experiences with optional reward filtering."""
-        prompts_consumed = 0
-        prompts, labels, exhausted = _collect_prompt_batch(dataloader_iter, num_prompts)
-        # Stop early if the prompt source is fully consumed.
-        if exhausted:
-            return [], prompts_consumed, exhausted
-
-        pending_refs = self._dispatch_prompts_to_vllm(prompts, labels, **generate_kwargs)
-        prompts_consumed += len(prompts)
-
-        accepted_experiences: List[Experience] = []
-        pbar = tqdm(range(num_prompts), desc="Generate samples")
-
-        while pending_refs:
-            ready_refs, pending_refs = ray.wait(pending_refs, num_returns=1, timeout=10.0)
-            for ref in ready_refs:
-                # Build Experience objects for each vLLM response returned from this worker.
-                experiences = [
-                    self._process_response_into_experience(response, **generate_kwargs) for response in ray.get(ref)
-                ]
-
-                # Drop experiences if the average score falls outside the allowed range.
-                if dynamic_filtering and all(e.scores is not None for e in experiences):
-                    scores = [e.scores[0].item() for e in experiences]
-                    avg_reward = sum(scores) / len(scores)
-                    min_r, max_r = self.args.dynamic_filtering_reward_range
-                    if not (min_r < avg_reward < max_r):
-                        logger.info(
-                            f"Filtered out: avg_reward={avg_reward:.2f}, threshold=({min_r:.2f}, {max_r:.2f}), scores={[f'{s:.2f}' for s in scores]}"
-                        )
-                        experiences = []
-
-                # Accept experiences and stop once enough have been gathered.
-                if experiences:
-                    accepted_experiences.extend(experiences)
-                    pbar.set_postfix({"prompts_consumed": prompts_consumed})
-                    pbar.update()
-
-                # If rejected, request a new prompt to keep filling the batch.
-                else:
-                    # Pull another prompt when the current one fails filtering.
-                    new_prompts, new_labels, exhausted = _collect_prompt_batch(dataloader_iter, 1)
-                    prompts_consumed += len(new_prompts)
-                    # Cancel outstanding work if the dataloader is drained.
-                    if exhausted:
-                        for remaining_ref in pending_refs:
-                            ray.cancel(remaining_ref)
-                        return [], prompts_consumed, True
-                    # Otherwise dispatch the new prompt to keep filling the queue.
-                    else:
-                        new_refs = self._dispatch_prompts_to_vllm(new_prompts, new_labels, **generate_kwargs)
-                        pending_refs.extend(new_refs)
-
-        return accepted_experiences, prompts_consumed, exhausted
-
-    def _dispatch_prompts_to_vllm(self, prompts: List[str], labels: List[str], **generate_kwargs) -> List:
-        """Send prompts to rollout executors and return Ray object refs."""
-        sampling_params = SamplingParams(
-            temperature=generate_kwargs.get("temperature", 1.0),
-            top_p=generate_kwargs.get("top_p", 1.0),
-            top_k=generate_kwargs.get("top_k", -1),
-            max_tokens=generate_kwargs.get("max_new_tokens", 1024),
-            min_tokens=generate_kwargs.get("min_new_tokens", 1),
-            skip_special_tokens=generate_kwargs.get("skip_special_tokens", False),
-            logprobs=1 if self.args.enable_vllm_is_correction else None,
-        )
-        truncate_length = generate_kwargs.get("prompt_max_len", 1024) + generate_kwargs.get("max_new_tokens", 1024)
-
-        # Snapshot current pending rollout counts to balance upcoming work.
-        pending_counts = ray.get([engine.get_num_unfinished_requests.remote() for engine in self.vllm_engines])
-        engine_heap = [(count, idx) for idx, count in enumerate(pending_counts)]
-        heapq.heapify(engine_heap)
-
-        # Pre-compute engine assignment to keep loads even.
-        engine_indices = []
-        for _ in prompts:
-            current_load, engine_idx = heapq.heappop(engine_heap)
-            engine_indices.append(engine_idx)
-            heapq.heappush(engine_heap, (current_load + self.args.n_samples_per_prompt, engine_idx))
-
-        refs = []
-        for idx, (prompt, label) in enumerate(zip(prompts, labels)):
-            # Spread work across engines/workers in load-aware order.
-            llm_engine = self.vllm_engines[engine_indices[idx]]
-            ref = llm_engine.generate_responses.remote(
-                prompt=prompt,
-                label=label,
-                sampling_params=sampling_params,
-                max_length=truncate_length,
-                hf_tokenizer=self.tokenizer,
-                num_samples=self.args.n_samples_per_prompt,
+    def tokenize_fn(self, texts, max_length, padding=True, device=None):
+        if not padding:
+            # when padding is False, return tokenized texts as list
+            return self.tokenizer(
+                texts,
+                add_special_tokens=False,
+                max_length=max_length,
+                truncation=True,
             )
-            refs.append(ref)
-
-        return refs
-
-    def _process_response_into_experience(self, response, **generate_kwargs) -> Experience:
-        """Turn a single vLLM response into an Experience."""
-        truncate_length = generate_kwargs.get("prompt_max_len", 1024) + generate_kwargs.get("max_new_tokens", 1024)
-
-        # Base rollout fields from the output.
-        tokenized_observation = response["observation_tokens"].copy()
-        tokenized_ranges = response["action_ranges"]
-        reward_val = response.get("reward", None)
-        score_val = response.get("scores", None)
-
-        sequences = torch.tensor(tokenized_observation, dtype=torch.long)
-        attention_mask = torch.tensor([1] * len(tokenized_observation))
-        # Mark the action span within the concatenated tokens.
-        action_mask = torch.zeros_like(attention_mask)
-        for start, end in tokenized_ranges:
-            action_mask[start:end] = 1
-
-        # Truncate everything to the configured context window.
-        sequences = sequences[:truncate_length].to("cpu")
-        attention_mask = attention_mask[:truncate_length].to("cpu")
-        action_mask = action_mask[1:truncate_length].to("cpu")
-
-        # Align rollout logprobs with the truncated action span.
-        if response["rollout_log_probs"] is not None:
-            rollout_log_probs = torch.tensor(response["rollout_log_probs"][1:truncate_length]).to("cpu")
-        else:
-            rollout_log_probs = None
-
-        # Collect simple stats about lengths and clipping.
-        ones_indices = torch.where(action_mask)[0]
-        response_length = (ones_indices[-1] - ones_indices[0] + 1).item() if len(ones_indices) else 0
-        total_length = attention_mask.float().sum()
-        is_clipped = total_length >= truncate_length
-
-        info = {
-            "response_length": torch.tensor([response_length]),
-            "total_length": torch.tensor([total_length]),
-            "response_clip_ratio": torch.tensor([is_clipped]),
-        }
-        if reward_val is not None:
-            info["reward"] = torch.tensor([reward_val])
-        if score_val is not None:
-            info["score"] = torch.tensor([score_val])
-
-        # Convert extra logs to tensors for downstream consumers.
-        extra_logs = response.get("extra_logs", {})
-        for key, value in extra_logs.items():
-            if isinstance(value, torch.Tensor):
-                value = value.flatten()[0].item()
-            info[key] = torch.tensor([value])
-
-        return Experience(
-            sequences=sequences.unsqueeze(0),
-            attention_mask=attention_mask.unsqueeze(0),
-            action_mask=action_mask.unsqueeze(0),
-            rollout_log_probs=rollout_log_probs.unsqueeze(0) if rollout_log_probs is not None else None,
-            prompts=[response["prompt"]],
-            labels=[response["label"]],
-            rewards=torch.tensor([reward_val]) if reward_val is not None else None,
-            scores=torch.tensor([score_val]) if score_val is not None else None,
-            info=info,
+        batch = self.tokenizer(
+            texts,
+            return_tensors="pt",
+            add_special_tokens=False,
+            max_length=max_length,
+            padding=True,
+            truncation=True,
         )
+        return {k: v.to(device) for k, v in batch.items()}
+
+    def _generate_vllm(self, all_prompts: List[str], all_labels, **kwargs) -> List[Experience]:
+        """Generate samples using vLLM engine.
+
+        Args:
+            all_prompts: List of prompts to generate from
+            all_labels: List of labels corresponding to prompts
+            **kwargs: Additional arguments for generation
+
+        Returns:
+            List of Experience objects containing generated samples
+        """
+        from vllm import SamplingParams
+
+        llms = self.vllm_engines
+        args = self.strategy.args
+
+        # Set up sampling parameters
+        sampling_params = SamplingParams(
+            temperature=kwargs.get("temperature", 1.0),
+            top_p=kwargs.get("top_p", 1.0),
+            top_k=kwargs.get("top_k", -1),
+            max_tokens=kwargs.get("max_new_tokens", 1024),
+            min_tokens=kwargs.get("min_new_tokens", 1),
+            skip_special_tokens=kwargs.get("skip_special_tokens", False),
+            include_stop_str_in_output=True,
+            logprobs=1 if self.strategy.args.enable_vllm_is_correction else None,
+        )
+        max_response_length = kwargs.get("max_new_tokens", 1024)
+        truncate_length = self.prompt_max_len + max_response_length
+
+        # Expand prompt list based on the number of samples per prompt
+        n_samples_per_prompt = kwargs.pop("n_samples_per_prompt", args.n_samples_per_prompt)
+        all_prompts = sum([[prompt] * n_samples_per_prompt for prompt in all_prompts], [])
+        all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
+        all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
+
+        # Distribute requests to engines and collect responses
+        refs = []
+        batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
+        for i, llm in enumerate(llms):
+            prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
+            refs.append(llm.add_requests.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
+        ray.get(refs)
+
+        # Retrieve and combine results from all outputs
+        all_output_refs = []
+        for i, llm in enumerate(llms):
+            all_output_refs.append(llm.get_responses.remote())
+        all_outputs = sum(ray.get(all_output_refs), [])
+
+        # Process outputs into Experience objects
+        samples_list = []
+        for i in range(len(all_outputs)):
+            output = all_outputs[i]
+            prompt = all_prompts[i]
+            label = all_labels[i]
+
+            # Concatenate prompt and output tokens
+            input_ids = list(output.prompt_token_ids) + list(output.outputs[0].token_ids)
+            attention_mask = [1] * len(input_ids)
+
+            sequences = torch.tensor(input_ids, dtype=torch.long)
+            attention_mask = torch.tensor(attention_mask)
+
+            # Create action mask based on output token positions
+            action_mask = torch.zeros_like(attention_mask)
+            response_length = len(output.outputs[0].token_ids)
+            action_mask[len(output.prompt_token_ids) : len(output.prompt_token_ids) + response_length] = 1
+
+            # Calculate rollout log probs
+            rollout_log_probs = None
+            if self.strategy.args.enable_vllm_is_correction:
+                rollout_log_probs = []
+                response_ids = list(output.outputs[0].token_ids)
+                for i, logprob in enumerate(output.outputs[0].logprobs):
+                    rollout_log_probs.append(logprob[response_ids[i]].logprob)
+
+                rollout_log_probs = torch.tensor([0.0] * len(list(output.prompt_token_ids)) + rollout_log_probs)
+                rollout_log_probs = rollout_log_probs[1:truncate_length].to("cpu")
+
+            sequences = sequences[:truncate_length].to("cpu")
+            attention_mask = attention_mask[:truncate_length].to("cpu")
+            action_mask = action_mask[1:truncate_length].to("cpu")
+            total_length = attention_mask.float().sum()
+            is_clipped = response_length >= max_response_length
+
+            info = {
+                "response_length": torch.tensor([response_length]),
+                "total_length": torch.tensor([total_length]),
+                "response_clip_ratio": torch.tensor([is_clipped]),
+            }
+
+            rollout_samples = Experience(
+                sequences=sequences.unsqueeze(0),
+                attention_mask=attention_mask.unsqueeze(0),
+                action_mask=action_mask.unsqueeze(0),
+                rollout_log_probs=rollout_log_probs.unsqueeze(0) if rollout_log_probs is not None else None,
+                prompts=[prompt],
+                labels=[label],
+                info=info,
+            )
+            samples_list.append(rollout_samples)
+
+        # Get rewards from remote reward models if needed
+        # This is required by dynamic sampling
+        remote_reward_model = kwargs.get("remote_reward_model", None)
+        if remote_reward_model:
+            all_queries = sum(
+                [
+                    self.tokenizer.batch_decode(
+                        remove_pad_token(s.sequences, s.attention_mask), skip_special_tokens=False
+                    )
+                    for s in samples_list
+                ],
+                [],
+            )
+            all_prompts = sum([s.prompts for s in samples_list], [])
+            all_labels = sum([s.labels for s in samples_list], [])
+
+            # Get rewards info from remote model
+            rewards_info = ray.get(remote_reward_model.get_rewards.remote(all_queries, all_prompts, all_labels))
+            # Process rewards and scores
+            update_samples_with_rewards(rewards_info, samples_list)
+
+        return samples_list
 
 
-class RemoteExperienceMaker:
+class RemoteExperienceMaker(ABC):
     def __init__(
         self,
         actor_model_group: RayActorGroup,
@@ -472,22 +436,26 @@ class RemoteExperienceMaker:
         reward_model_group: RayActorGroup,
         initial_model_group: RayActorGroup,
         kl_controller,
-        strategy,
-        tokenizer,
+        strategy=None,
+        tokenizer=None,
+        remote_reward_model=None,
         **kwargs,
     ):
         super().__init__()
-
-        self.strategy = strategy
-        self.args = strategy.args
-        self.advantage_estimator = strategy.args.advantage_estimator
 
         self.actor_model_group = actor_model_group
         self.critic_model_group = critic_model_group
         self.reward_model_group = reward_model_group
         self.initial_model_group = initial_model_group
-        self.tokenizer = tokenizer
         self.kl_ctl = kl_controller
+        self.strategy = strategy
+        self.advantage_estimator = strategy.args.advantage_estimator
+        self.args = strategy.args
+
+        # remote_rm_url indicates that the remote reward model is agent environment, remote http server or custom reward func
+        self.remote_rm_url = self.args.remote_rm_url
+        self.remote_reward_model = remote_reward_model
+        self.tokenizer = tokenizer
 
     def split_rollout_samples(self, rollout_samples):
         for i, sample in enumerate(rollout_samples):
@@ -561,10 +529,21 @@ class RemoteExperienceMaker:
         action_mask_list = [s.action_mask for s in samples_list]
 
         # The rewards are already filled in the samples_list, such as the agent's environment rewards
-        use_reward_model = samples_list[0].rewards is None
-        if use_reward_model:
-            if self.reward_model_group is None:
-                raise ValueError("reward_model_group is required when rewards are not precomputed")
+        if samples_list[0].rewards is not None:
+            pass
+        elif self.remote_rm_url:
+            queries_list = sum(
+                [
+                    self.tokenizer.batch_decode(remove_pad_token(seq, attention_mask), skip_special_tokens=False)
+                    for seq, attention_mask in zip(sequences_list, attention_mask_list)
+                ],
+                [],
+            )
+            prompts_list = sum([s.prompts for s in samples_list], [])
+            labels_list = sum([s.labels for s in samples_list], [])
+            # Keep the remote call asynchronous
+            r_refs = self.remote_reward_model.get_rewards.remote(queries_list, prompts_list, labels_list)
+        else:
             # Batch call reward model
             r_refs = self.reward_model_group.async_run_method_batch(
                 method_name="forward",
@@ -572,11 +551,9 @@ class RemoteExperienceMaker:
                 attention_mask=attention_mask_list,
                 pad_sequence=[True] * len(samples_list),
             )
-        else:
-            r_refs = None
 
         # Sync to avoid GPU OOM when colocate models
-        if args.colocate_all_models and r_refs is not None:
+        if args.colocate_all_models and not self.remote_rm_url:
             ray.get(r_refs)
             ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
 
@@ -595,7 +572,7 @@ class RemoteExperienceMaker:
 
         # Batch call critic model
         if self.critic_model_group is not None:
-            if args.colocate_critic_reward and r_refs is not None:
+            if args.colocate_critic_reward and not self.remote_rm_url:
                 ray.get(r_refs)
                 ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
 
@@ -637,7 +614,14 @@ class RemoteExperienceMaker:
         value_list = sum(ray.get(value_ref)[::duplicate_factor], [])
 
         # Process rewards based on source
-        if use_reward_model:
+        if samples_list[0].rewards is not None:
+            pass
+        elif self.remote_rm_url:
+            # Get rewards info from remote model
+            rewards_info = ray.get(r_refs)
+            # Process rewards and scores
+            update_samples_with_rewards(rewards_info, samples_list)
+        else:
             # Reward Model
             rewards_list = sum(ray.get(r_refs)[::duplicate_factor], [])
             for i, samples in enumerate(samples_list):

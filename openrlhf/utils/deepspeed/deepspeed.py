@@ -54,11 +54,10 @@ class DeepspeedStrategy(ABC):
         self.stage = zero_stage
         self.train_batch_size = train_batch_size
         self.micro_train_batch_size = micro_train_batch_size
-        self.param_dtype = args.param_dtype  # default: bf16
         self.seed = seed
         self.full_determinism = full_determinism
         self.max_norm = max_norm
-
+        self.precision = getattr(args, "data_type", "bf16")
         self.adam_offload = getattr(args, "adam_offload", False)
         self.zpg = getattr(args, "zpg", 1)
         self.use_ds_universal_ckpt = getattr(args, "use_ds_universal_ckpt", False)
@@ -71,9 +70,8 @@ class DeepspeedStrategy(ABC):
 
         if self.ds_tensor_parallel_size > 1:
             assert deepspeed.version >= "0.16.4", "DeepSpeed version must be >= 0.16.4 for tensor parallel training"
-            assert self.param_dtype == "bf16", "BF16 is required for tensor parallel training"
+            assert self.precision == "bf16", "BF16 is required for tensor parallel training"
 
-        self.is_rlhf = False
         self.time_steps = defaultdict(int)
 
     def setup_distributed(self, timeout=timedelta(minutes=60)) -> None:
@@ -141,6 +139,29 @@ class DeepspeedStrategy(ABC):
         return optim
 
     def backward(self, loss: torch.Tensor, model: nn.Module, optimizer: optim.Optimizer, **kwargs) -> None:
+        """Backward pass.
+
+        Note on CP (Context Parallelism) + gradient scaling:
+        - Ring Attention rebuilds full-sequence tensors on every CP rank via
+          `flash_attn.utils.distributed.all_gather` before loss computation.
+        - `all_gather` autograd uses reduce_scatter(SUM) in backward, which introduces a `cp_size`
+          factor into the local gradients.
+        - DeepSpeed averages gradients across its data-parallel group (which includes CP when
+          enabled), dividing by (dp_size * cp_size); the `cp_size` factor from `all_gather` cancels
+          this, yielding an effective "dp average, cp sum" without explicitly scaling the loss.
+
+        MoE aux_loss handling:
+        - Trainers combine main_loss and aux_loss before calling backward:
+          loss = main_loss + aux_loss * aux_loss_coef
+        - aux_loss is computed locally on each CP rank based on the tokens it processes.
+        - DeepSpeed's AVG correctly averages aux_loss across all ranks.
+        - No special handling needed here - both losses flow through the same backward().
+
+        Args:
+            loss: Combined loss (main_loss + aux_loss * coef if MoE)
+            model: Model being trained
+            optimizer: Optimizer (unused, kept for API compatibility)
+        """
         if isinstance(model, Actor):
             model = model.model
         model.backward(loss)
@@ -203,10 +224,9 @@ class DeepspeedStrategy(ABC):
             return model
 
     def prepare(
-        self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False
+        self, *models_or_model_optim_pairs: ModelOrModelOptimPair
     ) -> Union[List[ModelOrModelOptimPair], ModelOrModelOptimPair]:
         ret = []
-        self.is_rlhf = is_rlhf
         for arg in models_or_model_optim_pairs:
             if isinstance(arg, tuple):
                 assert len(arg) == 3, f'Expect (model, optimizer, scheduler) pair, got a tuple with size "{len(arg)}"'
@@ -255,7 +275,7 @@ class DeepspeedStrategy(ABC):
             offload=False,
             adam_offload=self.adam_offload,
             stage=self.stage,
-            param_dtype=self.param_dtype,
+            precision=self.precision,
             max_norm=self.max_norm,
             zpg=self.zpg,
             grad_accum_dtype=self.grad_accum_dtype,
@@ -307,7 +327,7 @@ class DeepspeedStrategy(ABC):
         ds_config = get_eval_ds_config(
             offload=offload,
             stage=self.stage if self.stage == 3 else 0,
-            param_dtype=self.param_dtype,
+            precision=self.precision,
             deepcompile=self.deepcompile,
             tensor_parallel_size=self.ds_tensor_parallel_size,
         )
@@ -458,7 +478,17 @@ class DeepspeedStrategy(ABC):
             return 0
         return dist.get_rank()
 
-    def save_ckpt(self, model, save_dir, tag=None, max_num=3, max_mem=1000, client_state={}, save_latest=True):
+    def save_ckpt(
+        self,
+        model,
+        save_dir,
+        tag=None,
+        max_num=3,
+        max_mem=1000,
+        client_state={},
+        save_latest=True,
+        **kwargs,
+    ):
         assert isinstance(model, deepspeed.DeepSpeedEngine)
         if self.is_rank_0():
             os.makedirs(save_dir, exist_ok=True)
@@ -505,6 +535,7 @@ class DeepspeedStrategy(ABC):
         load_optimizer_states=True,
         load_lr_scheduler_states=True,
         load_module_only=False,
+        **kwargs,
     ):
         assert isinstance(model, deepspeed.DeepSpeedEngine)
         load_path, states = model.load_checkpoint(

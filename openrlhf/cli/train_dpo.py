@@ -17,12 +17,14 @@ def train(args):
     strategy = get_strategy(args)
     strategy.setup_distributed()
 
+    is_fsdp2 = getattr(args, "dist_backend", "deepspeed") == "fsdp2"
+
     # configure model
     # load huggingface model
     model = Actor(
         args.pretrain,
         attn_implementation=args.attn_implementation,
-        param_dtype=args.param_dtype,  # default: bf16
+        precision=args.data_type,
         load_in_4bit=args.load_in_4bit,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
@@ -41,7 +43,7 @@ def train(args):
     ref_model = Actor(
         args.ref_pretrain,
         attn_implementation=args.attn_implementation,
-        param_dtype=args.param_dtype,  # default: bf16
+        precision=args.data_type,
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
         packing_samples=args.packing_samples,
@@ -56,7 +58,11 @@ def train(args):
             gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
         )
 
-    # configure optimizer
+    # FSDP2: wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
+    if is_fsdp2:
+        model, ref_model = strategy.prepare(model, ref_model)
+
+    # configure optimizer (create AFTER FSDP2 wrapping)
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
 
     # prepare for data and dataset
@@ -125,13 +131,14 @@ def train(args):
         scheduler_specific_kwargs={"min_lr": args.learning_rate * args.min_lr_ratio},
     )
 
-    # strategy prepare
-    ((model, optim, scheduler), ref_model) = strategy.prepare((model, optim, scheduler), ref_model)
+    # strategy prepare (DeepSpeed path expects optimizer/scheduler passed in)
+    if not is_fsdp2:
+        ((model, optim, scheduler), ref_model) = strategy.prepare((model, optim, scheduler), ref_model)
 
     # load checkpoint
     consumed_samples = 0
     if args.load_checkpoint and os.path.exists(args.ckpt_path):
-        _, states = strategy.load_ckpt(model.model, args.ckpt_path)
+        _, states = strategy.load_ckpt(model.model, args.ckpt_path, optimizer=optim, scheduler=scheduler)
         consumed_samples = states["consumed_samples"]
         strategy.print(f"Loaded the checkpoint: {args.ckpt_path}, consumed_samples: {consumed_samples}")
 
@@ -193,10 +200,25 @@ if __name__ == "__main__":
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
     parser.add_argument(
-        "--param_dtype",
+        "--dist_backend", type=str, default="deepspeed", choices=["deepspeed", "fsdp2"], help="Distributed backend"
+    )
+    parser.add_argument(
+        "--fsdp2_cpu_offload",
+        action="store_true",
+        default=False,
+        help="Offload FSDP2 params/grads/optimizer to CPU",
+    )
+    parser.add_argument(
+        "--fsdp2_reshard_after_forward",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Control fully_shard reshard_after_forward flag",
+    )
+    parser.add_argument(
+        "--data_type",
         type=str,
         default="bf16",
-        choices=["bf16", "fp16"],
+        choices=["bf16", "fp16", "fp32"],
         help="Model data type",
     )
     parser.add_argument("--ref_offload", action="store_true", default=False)
@@ -215,7 +237,12 @@ if __name__ == "__main__":
     parser.add_argument("--grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
     parser.add_argument("--overlap_comm", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
-    parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed Tensor parallel size")
+    parser.add_argument(
+        "--ds_tensor_parallel_size",
+        type=int,
+        default=1,
+        help="Tensor parallel size (DeepSpeed AutoTP; FSDP2 uses torch-native TP)",
+    )
 
     # DPO
     parser.add_argument("--max_epochs", type=int, default=1)

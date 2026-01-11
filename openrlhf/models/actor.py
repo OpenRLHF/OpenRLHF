@@ -8,9 +8,10 @@ from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
+from openrlhf.utils.utils import convert_to_dtype
 
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
-from .utils import compute_entropy, log_probs_from_logits
+from .utils import _ensure_full_tensor, compute_entropy, log_probs_from_logits
 
 
 class Actor(nn.Module):
@@ -22,7 +23,7 @@ class Actor(nn.Module):
     Args:
         pretrain_or_model (nn.Module): A pretrained model or a new model instance to be used as the actor.
         attn_implementation (str, optional): Attention mechanism implementation to use. Defaults to "flash_attention_2".
-        param_dtype (str, optional): Model data type ("bf16", "fp16"). Defaults to "bf16".
+        precision (str, optional): One of 'bf16', 'fp16', 'fp32'. Defaults to 'bf16'.
         load_in_4bit (bool, optional): Load the model in 4-bit precision. Defaults to False.
         lora_rank (int, optional): Rank for LoRA adaptation. Defaults to 0.
         lora_alpha (int, optional): Alpha parameter for LoRA. Defaults to 16.
@@ -39,7 +40,7 @@ class Actor(nn.Module):
         self,
         pretrain_or_model,
         attn_implementation="flash_attention_2",
-        param_dtype="bf16",
+        precision="bf16",
         load_in_4bit=False,
         lora_rank=0,
         lora_alpha=16,
@@ -54,6 +55,7 @@ class Actor(nn.Module):
     ) -> None:
         super().__init__()
         self.temperature = temperature
+        torch_dtype = convert_to_dtype(precision)
 
         if isinstance(pretrain_or_model, str):
             # Support multiple attention mechanism implementations
@@ -66,13 +68,9 @@ class Actor(nn.Module):
             else:
                 dschf = None
 
-            # Determine torch dtype based on param_dtype parameter, default: bf16
-            from openrlhf.utils.utils import convert_to_torch_dtype
-
-            torch_dtype = convert_to_torch_dtype(param_dtype)
-
             if load_in_4bit:
-                assert param_dtype == "bf16", "we only support bnb_4bit_compute_dtype = bf16"
+                if torch_dtype != torch.bfloat16:
+                    raise ValueError("4-bit loading requires bf16 precision.")
                 nf4_config = BitsAndBytesConfig(
                     load_in_4bit=True,
                     bnb_4bit_quant_type="nf4",
@@ -94,7 +92,7 @@ class Actor(nn.Module):
                 trust_remote_code=True,
                 attn_implementation=attn_impl,
                 quantization_config=nf4_config,
-                torch_dtype=torch_dtype,  # default: bf16
+                torch_dtype=torch_dtype,
                 device_map=device_map,
             )
 
@@ -177,7 +175,8 @@ class Actor(nn.Module):
 
         if return_entropy:
             assert return_output
-            entropy = compute_entropy(output["logits"])
+            # Ensure logits is full tensor for entropy computation (TP compatibility)
+            entropy = compute_entropy(_ensure_full_tensor(output["logits"]))
             if self.packing_samples:
                 entropy = gather_and_pad_tensor(entropy, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
             setattr(output, "entropy", entropy[:, :-1])

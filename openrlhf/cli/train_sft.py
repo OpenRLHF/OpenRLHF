@@ -17,12 +17,14 @@ def train(args):
     strategy = get_strategy(args)
     strategy.setup_distributed()
 
+    is_fsdp2 = getattr(args, "dist_backend", "deepspeed") == "fsdp2"
+
     # configure model
     # load huggingface model
     model = Actor(
         args.pretrain,
         attn_implementation=args.attn_implementation,
-        param_dtype=args.param_dtype,  # default: bf16
+        precision=args.data_type,
         load_in_4bit=args.load_in_4bit,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
@@ -42,8 +44,9 @@ def train(args):
             gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
         )
 
-    # configure optimizer
-    optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
+    # FSDP2: wrap/shard model before building optimizer/scheduler (params become DTensor/sharded).
+    if is_fsdp2:
+        model = strategy.prepare(model)
 
     # prepare for data and dataset
     train_data = blending_datasets(
@@ -102,6 +105,9 @@ def train(args):
     num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
 
+    # configure optimizer (create AFTER FSDP2 wrapping)
+    optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
+
     scheduler = get_scheduler(
         args.lr_scheduler,
         optim,
@@ -110,13 +116,14 @@ def train(args):
         scheduler_specific_kwargs={"min_lr": args.learning_rate * 0.1},
     )
 
-    # prepare models
-    (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
+    # prepare models (DeepSpeed path expects optimizer/scheduler passed in)
+    if not is_fsdp2:
+        (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
 
     # load checkpoint
     consumed_samples = 0
     if args.load_checkpoint and os.path.exists(args.ckpt_path):
-        _, states = strategy.load_ckpt(model.model, args.ckpt_path)
+        _, states = strategy.load_ckpt(model.model, args.ckpt_path, optimizer=optim, scheduler=scheduler)
         consumed_samples = states["consumed_samples"]
         strategy.print(f"Loaded the checkpoint: {args.ckpt_path}, consumed_samples: {consumed_samples}")
 
@@ -176,10 +183,25 @@ if __name__ == "__main__":
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
     parser.add_argument(
-        "--param_dtype",
+        "--dist_backend", type=str, default="deepspeed", choices=["deepspeed", "fsdp2"], help="Distributed backend"
+    )
+    parser.add_argument(
+        "--fsdp2_cpu_offload",
+        action="store_true",
+        default=False,
+        help="Offload FSDP2 params/grads/optimizer to CPU",
+    )
+    parser.add_argument(
+        "--fsdp2_reshard_after_forward",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Control fully_shard reshard_after_forward flag",
+    )
+    parser.add_argument(
+        "--data_type",
         type=str,
         default="bf16",
-        choices=["bf16", "fp16"],
+        choices=["bf16", "fp16", "fp32"],
         help="Model data type",
     )
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
@@ -195,7 +217,12 @@ if __name__ == "__main__":
     parser.add_argument("--overlap_comm", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
-    parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed Tensor parallel size")
+    parser.add_argument(
+        "--ds_tensor_parallel_size",
+        type=int,
+        default=1,
+        help="Tensor parallel size (DeepSpeed AutoTP; FSDP2 uses torch-native TP)",
+    )
 
     # SFT
     parser.add_argument("--max_epochs", type=int, default=2)

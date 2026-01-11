@@ -105,10 +105,11 @@ class BaseModelActor(BaseDistributedActor):
 class ReferenceModelActor(BaseModelActor):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
         self._setup_distributed(strategy)
+
         model = Actor(
             pretrain,
             attn_implementation=strategy.args.attn_implementation,
-            param_dtype=strategy.args.param_dtype,  # default: bf16
+            precision=strategy.args.data_type,
             load_in_4bit=strategy.args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
             packing_samples=strategy.args.packing_samples,
@@ -120,7 +121,10 @@ class ReferenceModelActor(BaseModelActor):
         if strategy.args.ref_reward_offload:
             model._offload = True
 
-        self.model = self.strategy.prepare(model, is_rlhf=True)
+        if hasattr(self.strategy, "prepare_ref"):
+            self.model = self.strategy.prepare_ref(model)
+        else:
+            self.model = self.strategy.prepare(model)
         self.model.eval()
 
     def forward(
@@ -147,12 +151,13 @@ class ReferenceModelActor(BaseModelActor):
 class RewardModelActor(BaseModelActor):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
         self._setup_distributed(strategy)
+
         model = get_llm_for_sequence_regression(
             pretrain,
             "reward",
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
-            param_dtype=strategy.args.param_dtype,  # default: bf16
+            precision=strategy.args.data_type,
             load_in_4bit=strategy.args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
             value_head_prefix=strategy.args.value_head_prefix,
@@ -165,7 +170,7 @@ class RewardModelActor(BaseModelActor):
         if strategy.args.ref_reward_offload:
             model._offload = True
 
-        self.model = self.strategy.prepare(model, is_rlhf=True)
+        self.model = self.strategy.prepare(model)
         self.model.eval()
 
     def forward(
@@ -334,12 +339,10 @@ class RayActorGroup:
         # Calculate chunk size based on number of effective actors (considering ring groups)
         num_actors = len(self._actor_handlers)
         effective_actors = num_actors // self.duplicate_actors
-        if total_length == 0 or total_length < effective_actors:
-            raise ValueError(
-                f"Insufficient batch size for async_run_method_batch: total_length={total_length}, "
-                f"effective_actors={effective_actors}"
-            )
         chunk_size = total_length // effective_actors
+        assert (
+            total_length >= effective_actors
+        ), f"Total length {total_length} must be greater than or equal to effective actors {effective_actors}"
         if total_length % effective_actors != 0:
             chunk_size += 1
 
