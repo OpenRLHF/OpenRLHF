@@ -9,7 +9,6 @@ import ray
 import torch
 
 from torch.multiprocessing.reductions import reduce_tensor
-from torch.distributed._functional_collectives import AsyncCollectiveTensor
 from torch.distributed.tensor import DTensor, Replicate
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
@@ -415,7 +414,7 @@ class ActorPPOTrainer(ABC):
                     placements=(Replicate(),) * param.device_mesh.ndim,
                     async_op=True,
                 ).to_local()
-                return replicated.wait() if isinstance(replicated, AsyncCollectiveTensor) else replicated
+                return replicated.wait() if hasattr(replicated, "wait") else replicated
             return param.detach()
 
         num_params = sum(1 for _ in model.parameters())
