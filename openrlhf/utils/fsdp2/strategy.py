@@ -207,7 +207,7 @@ class FSDP2Strategy(ABC):
         print(f"[FSDP2 wrap_model] tp_size={self.tp_size}, mesh_dim_names={self.mesh.mesh_dim_names}, "
               f"fsdp_mesh_size={self.dp_size * self.ring_attn_size} (dp={self.dp_size} × cp={self.ring_attn_size})")
         if self.tp_size > 1:
-            from .tp.parallel import apply_tensor_parallel
+            from .tp.tp_parallel import apply_tensor_parallel
 
             self._log(f"Applying TP (size={self.tp_size})")
             print(f"[FSDP2 wrap_model] TP mesh: {self.mesh['tp']}")

@@ -410,11 +410,7 @@ class ActorPPOTrainer(ABC):
             """Convert DTensor to full tensor via redistribute; pass through regular tensors."""
             if isinstance(param, DTensor):
                 # redistribute handles all sharded dimensions (FSDP + TP)
-                replicated = param.redistribute(
-                    placements=(Replicate(),) * param.device_mesh.ndim,
-                    async_op=True,
-                ).to_local()
-                return replicated.wait() if hasattr(replicated, "wait") else replicated
+                return param.redistribute(placements=(Replicate(),) * param.device_mesh.ndim).to_local()
             return param.detach()
 
         num_params = sum(1 for _ in model.parameters())
