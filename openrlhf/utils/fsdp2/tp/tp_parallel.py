@@ -410,6 +410,39 @@ def maybe_add_score_layer_plan(model, plan: dict):
 # =============================================================================
 
 
+def maybe_enable_async_tp(tp_mesh: DeviceMesh, enabled: bool = False):
+    """Enable Async Tensor Parallel (Symmetric Memory) for NVLink environments.
+
+    See torchtitan for reference. This requires:
+    1. torch.compile support
+    2. NVLink / Symmetric Memory support
+    """
+    if not enabled:
+        return
+
+    try:
+        from torch.distributed._symmetric_memory import enable_symm_mem_for_group
+
+        import torch._inductor.config
+
+        torch._inductor.config._micro_pipeline_tp = True
+        enable_symm_mem_for_group(tp_mesh.get_group().group_name)
+        logger.info("Enabled Async TP (Symmetric Memory)")
+    except Exception as e:
+        logger.warning(f"Failed to enable Async TP: {e}")
+
+
+def _tie_weights(model: nn.Module):
+    """Ensure tied weights remain tied after TP sharding.
+
+    In many HF models, lm_head.weight is tied to embed_tokens.weight.
+    Parallelizing them separately may create independent DTensor objects.
+    """
+    if getattr(model.config, "tie_word_embeddings", False):
+        model.lm_head.weight = model.model.embed_tokens.weight
+        logger.info("Re-tied lm_head and embed_tokens weights after TP")
+
+
 def validate_tp_mesh(model, tp_mesh):
     """Validate attention heads divisible by TP size."""
     if tp_mesh.size() == 1:
@@ -427,12 +460,20 @@ def validate_tp_mesh(model, tp_mesh):
 
 
 def apply_tensor_parallel(
-    model, tp_mesh, tp_plan=None, sequence_parallel: bool = False, validate: bool = True, ring_attn_group=None
+    model,
+    tp_mesh,
+    tp_plan=None,
+    sequence_parallel: bool = False,
+    validate: bool = True,
+    ring_attn_group=None,
+    enable_async_tp: bool = False,
 ):
     """Apply Tensor Parallelism (DTensor parallel) to a model."""
 
     if tp_mesh.size() == 1:
         return model
+
+    maybe_enable_async_tp(tp_mesh, enabled=enable_async_tp)
 
     # If using PEFT, apply TP on the underlying HF model (keys like `model.layers.*`),
     # but keep returning the original wrapper.
@@ -456,6 +497,9 @@ def apply_tensor_parallel(
     tp_plan = {k: ensure_lora_style(v) for k, v in tp_plan.items()}
 
     parallelize_module(tp_root, tp_mesh, tp_plan)
+
+    # Re-tie weights if necessary (must happen after parallelize_module)
+    _tie_weights(tp_root)
 
     if ring_attn_group is not None:
         register_attention_hooks(tp_root, tp_mesh, sequence_parallel=sequence_parallel)
