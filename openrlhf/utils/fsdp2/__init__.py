@@ -10,7 +10,6 @@ Structure:
     utils.py      - EMA, optimizer state management
     tp/           - Tensor Parallelism
         tp_parallel.py - TP styles, plans, apply_tensor_parallel
-        tp_loss.py  - TP-aware loss (vocab-parallel log_probs, entropy, cross_entropy)
 """
 
 # Core
@@ -19,15 +18,8 @@ from .strategy import FSDP2Strategy
 # Tensor Parallelism
 from .tp import (
     apply_tensor_parallel,
-    cross_entropy_loss,
-    cross_entropy_loss_with_acc,
     get_tp_plan,
-    log_probs_from_logits,
     validate_tp_mesh,
-    vocab_parallel_cross_entropy,
-    vocab_parallel_entropy,
-    vocab_parallel_logprobs,
-    vocab_parallel_logprobs_entropy,
 )
 
 # Checkpointing
@@ -50,15 +42,8 @@ __all__ = [
     "FSDP2Strategy",
     # Tensor Parallelism
     "apply_tensor_parallel",
-    "cross_entropy_loss",
-    "cross_entropy_loss_with_acc",
     "get_tp_plan",
-    "log_probs_from_logits",
     "validate_tp_mesh",
-    "vocab_parallel_cross_entropy",
-    "vocab_parallel_entropy",
-    "vocab_parallel_logprobs",
-    "vocab_parallel_logprobs_entropy",
     # Checkpointing
     "load_distributed_checkpoint",
     "load_hf_model",

@@ -279,8 +279,8 @@ def _base_plan(sequence_parallel: bool = False, layernorm_cls=SequenceParallel):
 
     plan = {
         "model.embed_tokens": RowwiseParallelLora(input_layouts=Replicate()),
-        # Shard vocab dim, return DTensor for TP-aware loss utils.
-        "lm_head": ColwiseParallelLora(output_layouts=Shard(-1), use_local_output=False),
+        # Return full logits (all-gather vocab) as a local tensor for simple loss functions.
+        "lm_head": ColwiseParallelLora(output_layouts=Replicate(), use_local_output=True),
         **_attn_mlp_plan(),
     }
 
@@ -306,10 +306,10 @@ def _base_plan(sequence_parallel: bool = False, layernorm_cls=SequenceParallel):
                 # Reduce-scatter back to Shard(1) for residual connections
                 "model.layers.*.self_attn.o_proj": RowwiseParallelLora(output_layouts=Shard(1)),
                 "model.layers.*.mlp.down_proj": RowwiseParallelLora(output_layouts=Shard(1)),
-                # lm_head: input Shard(1), output Shard(-1) on vocab dim
+                # lm_head: input Shard(1), output Replicate() (full vocab logits)
                 "lm_head": ColwiseParallelLora(
                     input_layouts=Shard(1),
-                    output_layouts=Shard(-1),
+                    output_layouts=Replicate(),
                     use_local_output=True,
                 ),
             }
