@@ -304,6 +304,7 @@ class KTOTrainer(ABC):
             input_ids[hsize:],
             attention_mask=attention_mask[hsize:],
             return_output=True,
+            allgather_logits=True,
             ring_attn_group=self.strategy.ring_attn_group,
         )
         all_logits = output["logits"]
@@ -321,6 +322,7 @@ class KTOTrainer(ABC):
             input_ids,
             attention_mask=attention_mask,
             return_output=True,
+            allgather_logits=True,
             ring_attn_group=self.strategy.ring_attn_group,
         )
         all_logits = output["logits"]

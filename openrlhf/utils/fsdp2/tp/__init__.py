@@ -29,6 +29,7 @@ __all__ = [
     "SequenceParallelPreserveGrad",
     # TP Plan Functions
     "apply_tensor_parallel",
+    "get_tp_plan",
     "validate_tp_mesh",
     # Ring Attention Compat
     "AttentionDTensorHook",

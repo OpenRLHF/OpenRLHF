@@ -201,13 +201,14 @@ class FSDP2Strategy(ABC):
         is_actor = inner is not model
 
         # TP before FSDP
-        print(f"[FSDP2 wrap_model] tp_size={self.tp_size}, mesh_dim_names={self.mesh.mesh_dim_names}, "
-              f"fsdp_mesh_size={self.dp_size * self.ring_attn_size} (dp={self.dp_size} × cp={self.ring_attn_size})")
+        self._log(
+            f"Wrapping model with dp={self.dp_size} cp={self.ring_attn_size} tp={self.tp_size} "
+            f"(fsdp_mesh_size={self.dp_size * self.ring_attn_size})"
+        )
         if self.tp_size > 1:
             from .tp.tp_parallel import apply_tensor_parallel
 
             self._log(f"Applying TP (size={self.tp_size})")
-            print(f"[FSDP2 wrap_model] TP mesh: {self.mesh['tp']}")
             inner = apply_tensor_parallel(
                 inner,
                 self.mesh["tp"],
@@ -216,7 +217,7 @@ class FSDP2Strategy(ABC):
                 ring_attn_group=self.ring_attn_group if self.ring_attn_size > 1 else None,
             )
         else:
-            print(f"[FSDP2 wrap_model] Skipping TP: tp_size={self.tp_size}")
+            self._log("Skipping TP (tp_size=1)")
 
         # FSDP (force_cpu_offload overrides self.fsdp2_cpu_offload)
         inner = self._apply_fsdp(inner, force_cpu_offload=force_cpu_offload)

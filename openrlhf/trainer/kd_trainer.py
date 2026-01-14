@@ -135,6 +135,7 @@ class KDTrainer(ABC):
                     inputs,
                     attention_mask=attention_mask,
                     return_output=True,
+                    allgather_logits=True,
                     ring_attn_group=self.strategy.ring_attn_group,
                 )
                 prompts_id_len = (loss_masks != 0).int().argmax(dim=-1).squeeze(-1)
@@ -157,6 +158,7 @@ class KDTrainer(ABC):
                         inputs,
                         attention_mask=attention_mask,
                         return_output=True,
+                        allgather_logits=True,
                         ring_attn_group=self.strategy.ring_attn_group,
                     )["logits"]
                 distil_loss = self.kd_loss(output.logits, teacher_logits, labels)
@@ -248,6 +250,7 @@ class KDTrainer(ABC):
                     inputs,
                     attention_mask=attention_mask,
                     return_output=True,
+                    allgather_logits=True,
                     ring_attn_group=self.strategy.ring_attn_group,
                 )["logits"]
                 prompts_id_len = (loss_masks != 0).int().argmax(dim=-1).squeeze(-1)
