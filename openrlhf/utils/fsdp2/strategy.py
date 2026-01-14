@@ -161,10 +161,7 @@ class FSDP2Strategy(ABC):
             f"fsdp_mesh_size={self.dp_size * self.ring_attn_size}"
         )
 
-        # 当 TP > 1 时，用 vocab parallel 版本替换 models/utils 中的函数
-        if self.tp_size > 1:
-            from openrlhf.utils.fsdp2.tp import patch_for_tp
-            patch_for_tp()
+        # TP-aware loss is handled by DTensor-aware helpers (no monkey patch needed).
 
     @property
     def ring_attn_group(self):
