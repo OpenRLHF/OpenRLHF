@@ -4,6 +4,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+import warnings
 
 from .utils import masked_mean
 
@@ -19,38 +20,23 @@ class GPTLMLoss(nn.Module):
         self.loss = nn.CrossEntropyLoss(ignore_index=self.IGNORE_INDEX)
 
         self.ring_attn_group = ring_attn_group
-        if self.ring_attn_group:
-            self.ring_attn_rank = dist.get_rank(self.ring_attn_group)
-            self.ring_attn_world_size = dist.get_world_size(self.ring_attn_group)
+        if ring_attn_group is not None:
+            is_rank0 = (not dist.is_available()) or (not dist.is_initialized()) or dist.get_rank() == 0
+            if is_rank0:
+                warnings.warn(
+                    "GPTLMLoss(ring_attn_group=...) is deprecated and ignored. "
+                    "Compute loss on gathered logits/labels (e.g. Actor(..., allgather_logits=True)) "
+                    "or use gathered log_probs + SFTLoss.",
+                    stacklevel=2,
+                )
 
     def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        # RingAttention
-        if self.ring_attn_group is not None:
-            total_seq_len = labels.size(-1)
-            seq_len_per_process = total_seq_len // self.ring_attn_world_size
-            start_idx = self.ring_attn_rank * seq_len_per_process
-            end_idx = min(start_idx + seq_len_per_process, total_seq_len)
-            labels = labels[..., start_idx:end_idx]
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
 
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-
-            # if labels are all IGNORE_INDEX, then nn.CrossEntropyLoss will be nan
-            if torch.all(shift_labels == self.IGNORE_INDEX):
-                # Use mean of logits multiplied by 0 to maintain gradient flow
-                loss = shift_logits.mean() * 0
-            else:
-                loss = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-
-            dist.all_reduce(loss, op=dist.ReduceOp.SUM, group=self.ring_attn_group)
-            loss = loss / self.ring_attn_world_size
-        else:
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-
-            loss = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-
-        return loss
+        if torch.all(shift_labels == self.IGNORE_INDEX):
+            return shift_logits.mean() * 0
+        return self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
 
 
 class SFTLoss(nn.Module):

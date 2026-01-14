@@ -367,8 +367,17 @@ def _get_hf_plan(model):
 
     hf.setdefault("model.embed_tokens", "rowwise_rep")
     result = {k: _str_to_style(v) if isinstance(v, str) else v for k, v in hf.items()}
-    if "lm_head" in result and isinstance(result["lm_head"], ColwiseParallelLora):
-        result["lm_head"] = ColwiseParallelLora(output_layouts=Shard(-1), use_local_output=False)
+    # Always return full-vocab logits (Replicate) to keep loss functions simple.
+    if "lm_head" not in result:
+        result["lm_head"] = ColwiseParallelLora(output_layouts=Replicate(), use_local_output=True)
+    else:
+        style = result["lm_head"]
+        if isinstance(style, ColwiseParallel):
+            result["lm_head"] = ColwiseParallelLora(
+                input_layouts=style.input_layouts[0],
+                output_layouts=Replicate(),
+                use_local_output=True,
+            )
     return result
 
 
