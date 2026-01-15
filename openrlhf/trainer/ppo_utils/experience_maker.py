@@ -580,6 +580,11 @@ class RemoteExperienceMaker:
             ray.get(r_refs)
             ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
 
+        # Reload actor model to GPU if it was offloaded during rollout phase
+        # This is needed for hybrid engine mode where model is offloaded after weight sync
+        if getattr(args, "deepspeed_enable_sleep", False):
+            ray.get(self.actor_model_group.async_run_method(method_name="reload_model"))
+
         # Batch call actor model
         action_log_probs_ref = self.actor_model_group.async_run_method_batch(
             method_name="forward",

@@ -657,6 +657,16 @@ class PolicyModelActor(BaseModelActor):
     def offload_states(self):
         self.strategy.offload_states(self.actor, self.actor_optim)
 
+    def offload_model(self):
+        """Offload model to CPU for rollout phase (hybrid engine mode)."""
+        if isinstance(self.strategy, FSDP2Strategy):
+            self.strategy.offload_model(self.actor)
+
+    def reload_model(self):
+        """Reload model to GPU for forward pass (hybrid engine mode)."""
+        if isinstance(self.strategy, FSDP2Strategy):
+            self.strategy.reload_model(self.actor)
+
     def save_checkpoint(self, tag, client_states):
         args = self.strategy.args
         if not self.disable_ds_ckpt:
