@@ -275,7 +275,7 @@ class ActorPPOTrainer(ABC):
         if self.args.use_dynamic_batch:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
 
-        self.strategy.backward(loss, self.actor, self.actor_optim)
+        self.strategy.backward(loss, self.actor, self.actor_optim, name="actor")
         if self.args.use_dynamic_batch:
             if self.replay_buffer.dynamic_optimizer_step[step]:
                 self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
@@ -409,9 +409,17 @@ class ActorPPOTrainer(ABC):
         def _to_full_tensor(param: torch.Tensor) -> torch.Tensor:
             """Convert DTensor to full tensor via redistribute; pass through regular tensors."""
             if isinstance(param, DTensor):
-                # redistribute handles all sharded dimensions (FSDP + TP)
-                return param.redistribute(placements=(Replicate(),) * param.device_mesh.ndim).to_local()
-            return param.detach()
+                # FSDP2 CPU offload can leave local shards on CPU outside forward/backward.
+                # DTensor redistribute uses the mesh backend (typically NCCL), so ensure param
+                # is on CUDA before running collectives. (ref: slime's update_weights)
+                param = param.cuda()
+                # redistribute handles all sharded dimensions (FSDP + TP), async for overlap
+                param = param.redistribute(
+                    placements=(Replicate(),) * param.device_mesh.ndim,
+                    async_op=True,
+                ).to_local()
+                return param
+            return param.detach().cuda()
 
         num_params = sum(1 for _ in model.parameters())
         count = 0

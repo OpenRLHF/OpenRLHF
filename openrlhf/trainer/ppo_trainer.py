@@ -2,7 +2,7 @@ import os
 import time
 from abc import ABC
 from datetime import timedelta
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Union
 
 import ray
 import torch
