@@ -356,14 +356,15 @@ class FSDP2Strategy(ABC):
         """Clip gradients for FSDP2 + TP models.
 
         With FSDP mesh = dp_cp, parameters are DTensors distributed across multiple
-        dimensions. get_total_norm + full_tensor handles aggregation automatically:
-        - Shard placements: full_tensor() aggregates across the sharded dimension
-        - Replicate placements: full_tensor() returns as-is (already complete)
+        dimensions. We:
+        - Group parameters by (mesh, placements) since different sharding patterns
+          cannot be mixed in a single clip_grad call.
+        - Use `torch.nn.utils.get_total_norm`, which will invoke DTensor-aware ops
+          and run the needed collectives for sharded grads.
+        - Keep `total_norm` on CPU so `clip_grads_with_norm_` can safely apply the
+          scale to both CPU and CUDA grads (it moves the scalar internally).
 
-        This is much simpler than manual all_reduce because DTensor tracks the
-        correct aggregation logic based on placements.
-
-        Reference: Automodel's _clip_grad_norm_impl uses the same approach.
+        Reference: Automodel's `_clip_grad_norm_impl` uses the same grouping idea.
         """
         import math
 
@@ -388,18 +389,14 @@ class FSDP2Strategy(ABC):
         for group_params in sharding_groups.values():
             grads = [p.grad for p in group_params]
             norm = torch.nn.utils.get_total_norm(grads, norm_type, error_if_nonfinite=False)
-
-            # Convert DTensor norm to regular tensor via full_tensor()
-            # This automatically handles aggregation across all mesh dimensions
             if isinstance(norm, DTensor):
-                norm = norm.full_tensor()
-
-            norm = norm.float().cuda().clone().detach()
-            group_norms.append(norm)
+                norm = norm.to_local()
+            # Keep as a plain CPU scalar tensor for device-agnostic clipping below.
+            group_norms.append(norm.detach().float().cpu())
 
         # Combine norms across groups
         if len(group_norms) == 0:
-            total_norm = torch.tensor(0.0, device="cuda")
+            total_norm = torch.tensor(0.0)
         elif len(group_norms) == 1:
             total_norm = group_norms[0]
         else:
@@ -499,12 +496,11 @@ class FSDP2Strategy(ABC):
             return  # CPUOffloadPolicy already manages model
 
         inner = self._unwrap_model(model)
-        if next(inner.parameters()).device.type != "cpu":
-            inner.cpu()
-            torch.cuda.synchronize()
-            torch.cuda.empty_cache()
-            if self.is_rank_0():
-                print("[FSDP2] Model offloaded to CPU")
+        inner.cpu()
+        if self.is_rank_0():
+            print("[FSDP2] Model offloaded to CPU")
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
 
     @torch.no_grad()
     def reload_model(self, model):
