@@ -492,6 +492,8 @@ class FSDP2Strategy(ABC):
         """Offload model params to CPU.
 
         Call this AFTER weight sync with vLLM to free GPU memory.
+        This is used in the hybrid engine mode where training model is offloaded
+        during rollout phase to give vLLM more GPU memory.
         """
         if self.fsdp2_cpu_offload:
             return  # CPUOffloadPolicy already manages model
@@ -508,7 +510,9 @@ class FSDP2Strategy(ABC):
     def reload_model(self, model):
         """Reload model params to GPU.
 
-        Call this BEFORE training when model was offloaded.
+        Call this BEFORE forward pass when model was offloaded.
+        This is used in the hybrid engine mode to reload training model
+        before computing log probs.
         """
         if self.fsdp2_cpu_offload:
             return  # CPUOffloadPolicy already manages model
@@ -516,6 +520,7 @@ class FSDP2Strategy(ABC):
         inner = self._unwrap_model(model)
         if next(inner.parameters()).device.type == "cpu":
             inner.to(torch.device("cuda", torch.cuda.current_device()))
+            torch.cuda.synchronize()
             if self.is_rank_0():
                 print("[FSDP2] Model reloaded to GPU")
 
