@@ -12,6 +12,14 @@ Structure:
         tp_parallel.py - TP styles, plans, apply_tensor_parallel
 """
 
+# Checkpointing
+from .checkpoint import (
+    load_distributed_checkpoint,
+    load_hf_model,
+    save_distributed_checkpoint,
+    save_hf_model,
+)
+
 # Core
 from .strategy import FSDP2Strategy
 
@@ -20,14 +28,6 @@ from .tp import (
     apply_tensor_parallel,
     get_tp_plan,
     validate_tp_mesh,
-)
-
-# Checkpointing
-from .checkpoint import (
-    load_distributed_checkpoint,
-    load_hf_model,
-    save_distributed_checkpoint,
-    save_hf_model,
 )
 
 # Utilities

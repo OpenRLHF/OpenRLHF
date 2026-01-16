@@ -121,7 +121,6 @@ def train(args):
         scheduler_specific_kwargs={"min_lr": args.learning_rate * 0.1},
     )
 
-
     # prepare models (DeepSpeed path expects optimizer/scheduler passed in)
     if not is_fsdp2:
         (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
