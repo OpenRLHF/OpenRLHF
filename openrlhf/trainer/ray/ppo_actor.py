@@ -7,9 +7,8 @@ from typing import Dict, List, Optional, Union
 import deepspeed
 import ray
 import torch
-
-from torch.multiprocessing.reductions import reduce_tensor
 from torch.distributed.tensor import DTensor, Replicate
+from torch.multiprocessing.reductions import reduce_tensor
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -20,8 +19,8 @@ from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
-from openrlhf.utils.fsdp2 import FSDP2Strategy
 from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
+from openrlhf.utils.fsdp2 import FSDP2Strategy
 from openrlhf.utils.logging_utils import init_logger
 
 from ..ppo_utils import NaiveReplayBuffer
@@ -435,8 +434,11 @@ class ActorPPOTrainer(ABC):
                 if torch.distributed.get_rank() == 0:
                     refs = [
                         engine.update_weight_cuda_ipc.remote(
-                            name, dtype=local.dtype, shape=local.shape,
-                            ipc_handles=dict(handle_list), empty_cache=(count == num_params),
+                            name,
+                            dtype=local.dtype,
+                            shape=local.shape,
+                            ipc_handles=dict(handle_list),
+                            empty_cache=(count == num_params),
                         )
                         for engine in self.vllm_engines
                     ]
@@ -455,12 +457,16 @@ class ActorPPOTrainer(ABC):
                 if torch.distributed.get_rank() == 0:
                     refs = [
                         engine.update_weight.remote(
-                            name, dtype=local.dtype, shape=local.shape, empty_cache=(count == num_params),
+                            name,
+                            dtype=local.dtype,
+                            shape=local.shape,
+                            empty_cache=(count == num_params),
                         )
                         for engine in self.vllm_engines
                     ]
                     if use_ray:
                         import ray.util.collective as collective
+
                         collective.broadcast(local, 0, group_name=self._model_update_group)
                     else:
                         self._model_update_group.broadcast(local, src=0, stream=torch.cuda.current_stream())
@@ -475,7 +481,9 @@ class ActorPPOTrainer(ABC):
 
 @ray.remote(num_gpus=1)
 class PolicyModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: Union[DeepspeedStrategy, FSDP2Strategy], pretrain, max_steps=None, vllm_engines=None):
+    def init_model_from_pretrained(
+        self, strategy: Union[DeepspeedStrategy, FSDP2Strategy], pretrain, max_steps=None, vllm_engines=None
+    ):
         args = strategy.args
         self.save_hf_ckpt = args.save_hf_ckpt
         self.disable_ds_ckpt = args.disable_ds_ckpt

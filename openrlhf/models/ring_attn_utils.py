@@ -1,8 +1,8 @@
 import torch
 import torch.distributed as dist
-from torch.distributed.tensor import DTensor
 from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
 from flash_attn.utils.distributed import all_gather
+from torch.distributed.tensor import DTensor
 
 RING_ATTN_GROUP = None
 

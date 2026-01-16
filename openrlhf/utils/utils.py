@@ -1,4 +1,4 @@
-from typing import List, Union
+from typing import List
 
 import torch
 import torch.nn.functional as F
@@ -27,6 +27,7 @@ def get_strategy(args):
 
     if dist_backend == "fsdp2":
         from openrlhf.utils.fsdp2 import FSDP2Strategy
+
         strategy = FSDP2Strategy(
             seed=getattr(args, "seed", 42),
             full_determinism=getattr(args, "full_determinism", False),

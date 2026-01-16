@@ -199,7 +199,7 @@ class CriticModelActor(BaseModelActor):
             )
 
         is_fsdp2 = isinstance(strategy, FSDP2Strategy)
- 
+
         # FSDP2: wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
         if is_fsdp2:
             critic = strategy.prepare(critic)

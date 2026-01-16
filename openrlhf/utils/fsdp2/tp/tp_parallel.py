@@ -430,9 +430,8 @@ def maybe_enable_async_tp(tp_mesh: DeviceMesh, enabled: bool = False):
         return
 
     try:
-        from torch.distributed._symmetric_memory import enable_symm_mem_for_group
-
         import torch._inductor.config
+        from torch.distributed._symmetric_memory import enable_symm_mem_for_group
 
         torch._inductor.config._micro_pipeline_tp = True
         enable_symm_mem_for_group(tp_mesh.get_group().group_name)
