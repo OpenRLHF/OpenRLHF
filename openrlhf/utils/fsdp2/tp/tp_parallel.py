@@ -26,6 +26,7 @@ from torch.distributed.tensor.parallel import (
 )
 from torch.distributed.tensor.parallel.style import ParallelStyle, distribute_module
 from torch.distributed.tensor.placement_types import Placement
+from ..utils import ensure_tied_word_embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -440,15 +441,10 @@ def maybe_enable_async_tp(tp_mesh: DeviceMesh, enabled: bool = False):
         logger.warning(f"Failed to enable Async TP: {e}")
 
 
-def _tie_weights(model: nn.Module):
-    """Ensure tied weights remain tied after TP sharding.
-
-    In many HF models, lm_head.weight is tied to embed_tokens.weight.
-    Parallelizing them separately may create independent DTensor objects.
-    """
-    if getattr(model.config, "tie_word_embeddings", False):
-        model.lm_head.weight = model.model.embed_tokens.weight
-        logger.info("Re-tied lm_head and embed_tokens weights after TP")
+def _retie_embeddings(model: nn.Module):
+    """Re-tie embeddings after TP (TP may break weight sharing)."""
+    if ensure_tied_word_embeddings(model):
+        logger.info("Re-tied embeddings after TP")
 
 
 def validate_tp_mesh(model, tp_mesh):
@@ -507,7 +503,7 @@ def apply_tensor_parallel(
     parallelize_module(tp_root, tp_mesh, tp_plan)
 
     # Re-tie weights if necessary (must happen after parallelize_module)
-    _tie_weights(tp_root)
+    _retie_embeddings(tp_root)
 
     if ring_attn_group is not None:
         register_attention_hooks(tp_root, tp_mesh, sequence_parallel=sequence_parallel)

@@ -4,6 +4,7 @@ FSDP2 Utilities
 
 - moving_average_fsdp2: EMA update for FSDP2 models
 - move_optimizer_state: Move optimizer state between devices
+- ensure_tied_word_embeddings: Keep tied embeddings stable
 """
 
 from typing import Callable
@@ -138,3 +139,23 @@ def get_checkpoint_metadata(strategy) -> dict:
         "param_dtype": getattr(strategy, "param_dtype", getattr(strategy, "precision", "bf16")),
         "fsdp2_mesh_size": dp_size * cp_size,
     }
+
+
+# -----------------------------------------------------------------------------
+# Tied Embeddings
+# -----------------------------------------------------------------------------
+
+
+def ensure_tied_word_embeddings(model: nn.Module) -> bool:
+    """Re-tie lm_head.weight to embed_tokens.weight if config requires."""
+    base = model.get_base_model() if hasattr(model, "get_base_model") else model
+    if not getattr(getattr(base, "config", None), "tie_word_embeddings", False):
+        return False
+    if hasattr(base, "tie_weights"):
+        base.tie_weights()
+        return True
+    in_emb, out_emb = base.get_input_embeddings(), base.get_output_embeddings()
+    if in_emb and out_emb:
+        out_emb.weight = in_emb.weight
+        return True
+    return False
