@@ -215,7 +215,7 @@ class RowwiseParallelLora(RowwiseParallel):
                     _distribute_param(m, "bias", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
         if lora_b:
             for m in _iter_modules(lora_b):
-                _distribute_param(m, "weight", device_mesh, [Shard(1)], src_data_rank=self.src_data_rank)
+                _distribute_param(m, "weight", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
                 if getattr(m, "bias", None) is not None:
                     _distribute_param(m, "bias", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
 

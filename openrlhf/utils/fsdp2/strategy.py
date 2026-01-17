@@ -197,7 +197,7 @@ class FSDP2Strategy(ABC):
             model: Model to wrap
             force_cpu_offload: If True, force CPUOffloadPolicy (for Reference models)
         """
-        inner, is_actor = self._unwrap_model(model), model
+        inner = self._unwrap_model(model)
         is_actor = inner is not model
 
         # TP before FSDP
