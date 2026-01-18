@@ -159,19 +159,19 @@ class Actor(nn.Module):
     ) -> torch.Tensor:
         """Returns action log probs"""
         batch, seqlen = sequences.size()
-        foward_attention_mask = attention_mask
+        forward_attention_mask = attention_mask
         if self.packing_samples:
             sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices = unpad_and_slice_tensor(
                 sequences, attention_mask, ring_attn_group
             )
-            foward_attention_mask = None
+            forward_attention_mask = None
         else:
             # https://github.com/OpenRLHF/OpenRLHF/issues/217
             rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
 
-        output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids)
+        output = self.model(sequences, attention_mask=forward_attention_mask, position_ids=position_ids)
         # https://github.com/OpenRLHF/OpenRLHF/pull/634
         output["logits"] = output["logits"].to(torch.float32)
 
