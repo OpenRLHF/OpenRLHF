@@ -668,10 +668,10 @@ class PolicyModelActor(BaseModelActor):
         self.trainer.replay_buffer.append(experience)
 
     def reload_states(self):
-        self.strategy.reload_states(self.actor, self.actor_optim)
+        self.strategy.reload_states(self.actor.model, self.actor_optim)
 
     def offload_states(self):
-        self.strategy.offload_states(self.actor, self.actor_optim)
+        self.strategy.offload_states(self.actor.model, self.actor_optim)
 
     def offload_model(self):
         """Offload model to CPU for rollout phase (hybrid engine mode)."""

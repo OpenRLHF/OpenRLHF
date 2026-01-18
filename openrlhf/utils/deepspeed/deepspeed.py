@@ -554,17 +554,13 @@ class DeepspeedStrategy(ABC):
 
         DeepSpeed offloads via engine.optimizer.offload_states().
         """
-        if model is None:
-            return
-        inner = self._unwrap_model(model)
-        offload_deepspeed_states(inner)
+        if model is not None:
+            offload_deepspeed_states(model)
 
     def reload_states(self, model, optimizer):
         """Reload optimizer states to GPU.
 
         DeepSpeed reloads via engine.reload_states().
         """
-        if model is None:
-            return
-        inner = self._unwrap_model(model)
-        reload_deepspeed_states(inner)
+        if model is not None:
+            reload_deepspeed_states(model)
