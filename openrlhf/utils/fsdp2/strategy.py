@@ -30,6 +30,7 @@ from torch.distributed.tensor import DTensor
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import enable_full_determinism, set_seed
 
+from openrlhf.models import Actor
 from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
 from openrlhf.utils import convert_to_torch_dtype
 from openrlhf.utils.distributed_sampler import DistributedSampler
@@ -359,8 +360,9 @@ class FSDP2Strategy(ABC):
         dimensions. We:
         - Group parameters by (mesh, placements) since different sharding patterns
           cannot be mixed in a single clip_grad call.
-        - Use `torch.nn.utils.get_total_norm`, which will invoke DTensor-aware ops
-          and run the needed collectives for sharded grads.
+        - Use `torch.nn.utils.get_total_norm`, which may return a DTensor with partial
+          norm contributions; we materialize the global scalar via `full_tensor()`
+          (this triggers the needed collectives for sharded grads).
         - Keep `total_norm` on CPU so `clip_grads_with_norm_` can safely apply the
           scale to both CPU and CUDA grads (it moves the scalar internally).
 
@@ -390,7 +392,9 @@ class FSDP2Strategy(ABC):
             grads = [p.grad for p in group_params]
             norm = torch.nn.utils.get_total_norm(grads, norm_type, error_if_nonfinite=False)
             if isinstance(norm, DTensor):
-                norm = norm.to_local()
+                # get_total_norm may return a DTensor with partial norm placement; full_tensor()
+                # materializes a regular tensor containing the global scalar norm.
+                norm = norm.full_tensor()
             # Keep as a plain CPU scalar tensor for device-agnostic clipping below.
             group_norms.append(norm.detach().float().cpu())
 
@@ -617,10 +621,6 @@ class FSDP2Strategy(ABC):
     # Communication
     # -------------------------------------------------------------------------
 
-    def _dp_group(self):
-        """Return DP process group (for data-related operations, not FSDP)."""
-        return self.dp_group if hasattr(self, "dp_group") and self.dp_group else None
-
     def all_reduce(self, data, op="mean", with_context_parallel=True):
         """All-reduce across DP group (optionally including CP).
 
@@ -629,42 +629,70 @@ class FSDP2Strategy(ABC):
             op: Reduction operation ("mean", "max", "sum")
             with_context_parallel: If True, reduce across both DP and CP (for metrics).
                                    If False, reduce across DP only (for data partitioning).
-                                   Follows slime's convention.
         """
+        assert op in ("mean", "max", "sum")
+
         if isinstance(data, dict):
             return {k: self.all_reduce(v, op, with_context_parallel) for k, v in data.items()}
 
-        # Use dp_cp_group for metrics (like slime's with_context_parallel=True)
-        # Use dp_group only for data-related operations
-        if with_context_parallel and self.ring_attn_size > 1:
-            group = self.dp_cp_group
-            size = self.dp_size * self.ring_attn_size
-        else:
-            group = self._dp_group()
-            size = dist.get_world_size(self._dp_group()) if dist.is_initialized() else 1
-        is_tensor, on_cpu = isinstance(data, torch.Tensor), False
-        t = data if is_tensor else torch.tensor(data)
-        if t.device.type == "cpu":
-            on_cpu, t = True, t.cuda()
+        if not dist.is_initialized():
+            return data
 
-        dist.all_reduce(
-            t, op={"mean": dist.ReduceOp.SUM, "max": dist.ReduceOp.MAX, "sum": dist.ReduceOp.SUM}[op], group=group
-        )
+        # dp_cp_group for metrics, dp_group for data operations
+        process_group = self.dp_cp_group if with_context_parallel and self.ring_attn_size > 1 else self.dp_group
+        group_size = dist.get_world_size(group=process_group)
+
+        # Convert scalar to tensor
+        is_input_tensor = isinstance(data, torch.Tensor)
+        tensor = data if is_input_tensor else torch.tensor(data, device="cuda")
+
+        # Move to GPU if needed (NCCL requires CUDA tensors)
+        was_on_cpu = tensor.device.type == "cpu"
+        if was_on_cpu:
+            tensor = tensor.cuda()
+
+        # Perform all-reduce
+        reduce_op = {"mean": dist.ReduceOp.SUM, "max": dist.ReduceOp.MAX, "sum": dist.ReduceOp.SUM}[op]
+        dist.all_reduce(tensor, op=reduce_op, group=process_group)
         if op == "mean":
-            t = t / size
-        return (t.cpu() if on_cpu else t) if is_tensor else (t.cpu() if on_cpu else t).item()
+            tensor = tensor / group_size
+
+        if was_on_cpu:
+            tensor = tensor.cpu()
+
+        return tensor if is_input_tensor else tensor.item()
 
     def all_gather(self, data):
-        """All-gather across DP group."""
-        group, size = self._dp_group(), dist.get_world_size(self._dp_group()) if dist.is_initialized() else 1
-        is_tensor = isinstance(data, torch.Tensor)
-        t = data if is_tensor else torch.tensor(data)
-        on_cpu = t.device.type == "cpu"
+        """All-gather across DP group (not CP/TP, as they share same data)."""
+        if isinstance(data, dict):
+            return {k: self.all_gather(v) for k, v in data.items()}
 
-        out = [torch.zeros_like(t).cuda() for _ in range(size)]
-        dist.all_gather(out, t.cuda(), group=group)
-        result = torch.cat(out)
-        return (result.cpu() if on_cpu else result) if is_tensor else result.tolist()
+        if not dist.is_initialized():
+            return data
+
+        process_group = self.dp_group
+        group_size = dist.get_world_size(group=process_group)
+
+        # Convert scalar to tensor
+        is_input_tensor = isinstance(data, torch.Tensor)
+        tensor = data if is_input_tensor else torch.tensor(data, device="cuda")
+
+        # Handle 0-dim tensors
+        if tensor.dim() == 0:
+            tensor = tensor.view(1)
+
+        was_on_cpu = tensor.device.type == "cpu"
+        tensor_cuda = tensor.cuda() if was_on_cpu else tensor
+
+        # Gather
+        gathered = [torch.zeros_like(tensor_cuda) for _ in range(group_size)]
+        dist.all_gather(gathered, tensor_cuda, group=process_group)
+        result = torch.cat(gathered)
+
+        if was_on_cpu:
+            result = result.cpu()
+
+        return result if is_input_tensor else result.tolist()
 
     # -------------------------------------------------------------------------
     # Utilities
@@ -687,17 +715,12 @@ class FSDP2Strategy(ABC):
     def get_world_size(self):
         return dist.get_world_size() if dist.is_initialized() else 1
 
-    # DeepSpeed compatibility stubs
     def _unwrap_model(self, model):
         """Unwrap model (compatible with DeepspeedStrategy)."""
-        try:
-            from openrlhf.models import Actor
-
-            if isinstance(model, Actor):
-                return self._unwrap_model(model.model)
-        except ImportError:
-            pass
-        return model
+        if isinstance(model, Actor):
+            return self._unwrap_model(model.model)
+        else:
+            return model
 
     def get_ds_train_config(self, is_actor=False):
         return None
