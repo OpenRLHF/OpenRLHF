@@ -45,6 +45,7 @@ def save_hf_model(
     """Save model to HuggingFace format.
 
     Gathers full state dict to rank 0 and saves using model.save_pretrained().
+    For PEFT models, extracts adapter weights using get_peft_model_state_dict.
     Also saves tokenizer, config, and optional runtime metadata.
     """
     if is_rank_0:
@@ -54,9 +55,7 @@ def save_hf_model(
     is_peft = hasattr(fsdp_model, "peft_config")
 
     # Get full state dict (gathered to rank 0)
-    state = get_model_state_dict(
-        fsdp_model, options=StateDictOptions(full_state_dict=True, cpu_offload=True, ignore_frozen_params=is_peft)
-    )
+    state = get_model_state_dict(fsdp_model, options=StateDictOptions(full_state_dict=True, cpu_offload=True))
 
     if is_rank_0:
         # Clean up auto_map if corrupted
@@ -64,7 +63,24 @@ def save_hf_model(
         if cfg and hasattr(cfg, "auto_map") and isinstance(cfg.auto_map, dict):
             cfg.auto_map = {k: v for k, v in cfg.auto_map.items() if k is not None}
 
-        fsdp_model.save_pretrained(output_dir, state_dict=state, **kwargs)
+        if is_peft:
+            # PEFT model: extract adapter weights using get_peft_model_state_dict
+            # This mirrors the DeepSpeed implementation for consistency
+            from peft.utils.save_and_load import get_peft_model_state_dict
+
+            # Save adapter config and metadata first
+            fsdp_model.save_pretrained(output_dir, **kwargs)
+            # Extract adapter weights from the full state dict and save
+            adapter_state = get_peft_model_state_dict(fsdp_model, state_dict=state)
+            torch.save(adapter_state, os.path.join(output_dir, "adapter_model.bin"))
+            # Remove safetensors file if exists (avoid conflicts, same as DeepSpeed)
+            safetensors_path = os.path.join(output_dir, "adapter_model.safetensors")
+            if os.path.exists(safetensors_path):
+                os.remove(safetensors_path)
+        else:
+            # Regular model: save directly
+            fsdp_model.save_pretrained(output_dir, state_dict=state, **kwargs)
+
         _save_extras(fsdp_model, output_dir, tokenizer, metadata)
 
     dist.barrier()
