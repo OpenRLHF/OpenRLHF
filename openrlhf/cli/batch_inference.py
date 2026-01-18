@@ -137,7 +137,7 @@ def batch_generate(args):
 
     prompts_dataset = PromptDataset(prompts_data, tokenizer, strategy, input_template=args.input_template)
     prompts_dataloader = strategy.setup_dataloader(
-        prompts_dataset, args.micro_batch_size, True, False, drop_last=False
+        prompts_dataset, args.micro_batch_size, True, False, collate_fn=prompts_dataset.collate_fn, drop_last=False
     )
     pbar = tqdm(
         prompts_dataloader,

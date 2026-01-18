@@ -38,7 +38,7 @@ def prepare_datasets(strategy, tokenizer):
     # Create train dataset
     train_data = train_data.select(range(min(args.max_samples, len(train_data))))
     prompts_dataset = PromptDataset(train_data, tokenizer, strategy, input_template=args.input_template)
-    prompts_dataloader = strategy.setup_dataloader(prompts_dataset, 1, True, True)
+    prompts_dataloader = strategy.setup_dataloader(prompts_dataset, 1, True, True, prompts_dataset.collate_fn)
 
     # Create eval dataset if eval data exists
     if getattr(args, "eval_dataset", None):
@@ -50,7 +50,7 @@ def prepare_datasets(strategy, tokenizer):
         )
         eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
         eval_dataset = PromptDataset(eval_data, tokenizer, strategy, input_template=args.input_template)
-        eval_dataloader = strategy.setup_dataloader(eval_dataset, 1, True, False)
+        eval_dataloader = strategy.setup_dataloader(eval_dataset, 1, True, False, eval_dataset.collate_fn)
     else:
         eval_dataloader = None
 
