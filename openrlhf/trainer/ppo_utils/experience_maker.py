@@ -1,5 +1,6 @@
 import heapq
 import time
+from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass, fields
 from datetime import timedelta
@@ -245,6 +246,7 @@ class SamplesGenerator:
 
         self.prompts_dataloader = prompts_dataloader
         self.eval_dataloader = eval_dataloader
+        self._carry_prompts = deque()
 
     @torch.no_grad()
     def generate_eval_samples(self, **generate_kwargs) -> Tuple[List[Experience], Optional[float], int, bool]:
@@ -255,10 +257,11 @@ class SamplesGenerator:
         if self.args.vllm_enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
-        experiences, prompts_consumed, exhausted = self._generate_vllm(
+        experiences, _, _ = self._generate_vllm(
             dataloader_iter=self._eval_dataloader_iter,
             num_prompts=len(self.eval_dataloader),
             dynamic_filtering=False,
+            use_carry=False,
             **generate_kwargs,
         )
 
@@ -284,6 +287,7 @@ class SamplesGenerator:
             dataloader_iter=self._dataloader_iter,
             num_prompts=self.args.rollout_batch_size,
             dynamic_filtering=self.args.dynamic_filtering,
+            use_carry=True,
             **generate_kwargs,
         )
 
@@ -301,25 +305,71 @@ class SamplesGenerator:
 
         return experiences, filter_pass_rate, prompts_consumed, exhausted
 
+    def _collect_prompt_batch_with_carry(self, dataloader_iter, num_prompts: int, use_carry: bool = True):
+        prompts, labels = [], []
+        if use_carry:
+            while self._carry_prompts and len(prompts) < num_prompts:
+                prompt, label = self._carry_prompts.popleft()
+                prompts.append(prompt)
+                labels.append(label)
+
+        exhausted = False
+        consumed_from_loader = 0
+        if len(prompts) < num_prompts:
+            new_prompts, new_labels, exhausted = _collect_prompt_batch(dataloader_iter, num_prompts - len(prompts))
+            consumed_from_loader = len(new_prompts)
+            prompts.extend(new_prompts)
+            labels.extend(new_labels)
+
+        return prompts, labels, exhausted, consumed_from_loader
+
     def _generate_vllm(
-        self, dataloader_iter, num_prompts: int, dynamic_filtering, **generate_kwargs
+        self, dataloader_iter, num_prompts: int, dynamic_filtering, use_carry: bool = True, **generate_kwargs
     ) -> Tuple[List[Experience], int, bool]:
         """Generate a batch of Experiences with optional reward filtering."""
         prompts_consumed = 0
-        prompts, labels, exhausted = _collect_prompt_batch(dataloader_iter, num_prompts)
-        # Stop early if the prompt source is fully consumed.
-        if exhausted:
-            return [], prompts_consumed, exhausted
+        accepted_prompts = 0
+        exhausted = False
+        max_inflight = max(1, getattr(self.args, "vllm_generate_batch_size", num_prompts))
 
-        pending_refs = self._dispatch_prompts_to_vllm(prompts, labels, **generate_kwargs)
-        prompts_consumed += len(prompts)
+        pending_refs = []
+        ref_to_meta = {}
+
+        def _dispatch_more(num_to_dispatch: int):
+            nonlocal prompts_consumed, exhausted
+            if num_to_dispatch <= 0 or exhausted:
+                return
+            prompts, labels, new_exhausted, consumed_from_loader = self._collect_prompt_batch_with_carry(
+                dataloader_iter, num_to_dispatch, use_carry=use_carry
+            )
+            prompts_consumed += consumed_from_loader
+            if prompts:
+                refs = self._dispatch_prompts_to_vllm(prompts, labels, **generate_kwargs)
+                for ref, prompt, label in zip(refs, prompts, labels):
+                    pending_refs.append(ref)
+                    ref_to_meta[ref] = (prompt, label)
+            if new_exhausted:
+                exhausted = True
 
         accepted_experiences: List[Experience] = []
         pbar = tqdm(range(num_prompts), desc="Generate samples")
 
-        while pending_refs:
+        _dispatch_more(max_inflight)
+        if not pending_refs and exhausted:
+            return [], prompts_consumed, True
+
+        while pending_refs and accepted_prompts < num_prompts:
             ready_refs, pending_refs = ray.wait(pending_refs, num_returns=1, timeout=10.0)
+            if not ready_refs:
+                if not exhausted and len(pending_refs) < max_inflight:
+                    _dispatch_more(max_inflight - len(pending_refs))
+                continue
+
             for ref in ready_refs:
+                prompt_label = ref_to_meta.pop(ref, None)
+                if prompt_label is None:
+                    continue
+
                 # Build Experience objects for each vLLM response returned from this worker.
                 experiences = [
                     self._process_response_into_experience(response, **generate_kwargs) for response in ray.get(ref)
@@ -339,23 +389,33 @@ class SamplesGenerator:
                 # Accept experiences and stop once enough have been gathered.
                 if experiences:
                     accepted_experiences.extend(experiences)
+                    accepted_prompts += 1
                     pbar.set_postfix({"prompts_consumed": prompts_consumed})
                     pbar.update()
 
                 # If rejected, request a new prompt to keep filling the batch.
                 else:
                     # Pull another prompt when the current one fails filtering.
-                    new_prompts, new_labels, exhausted = _collect_prompt_batch(dataloader_iter, 1)
-                    prompts_consumed += len(new_prompts)
+                    _dispatch_more(1)
                     # Cancel outstanding work if the dataloader is drained.
-                    if exhausted:
-                        for remaining_ref in pending_refs:
-                            ray.cancel(remaining_ref)
+                    if exhausted and not pending_refs:
                         return [], prompts_consumed, True
-                    # Otherwise dispatch the new prompt to keep filling the queue.
-                    else:
-                        new_refs = self._dispatch_prompts_to_vllm(new_prompts, new_labels, **generate_kwargs)
-                        pending_refs.extend(new_refs)
+
+                if accepted_prompts >= num_prompts:
+                    break
+
+            if accepted_prompts >= num_prompts:
+                for pending_ref in pending_refs:
+                    prompt_label = ref_to_meta.get(pending_ref)
+                    if prompt_label is not None:
+                        self._carry_prompts.append(prompt_label)
+                    ray.cancel(pending_ref)
+                pending_refs = []
+                ref_to_meta = {}
+                break
+
+            if not exhausted and len(pending_refs) < max_inflight:
+                _dispatch_more(max_inflight - len(pending_refs))
 
         return accepted_experiences, prompts_consumed, exhausted
 
