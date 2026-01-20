@@ -499,10 +499,14 @@ class PolicyModelActor(BaseModelActor):
 
         self._setup_distributed(strategy)
 
+        is_fsdp2 = isinstance(strategy, FSDP2Strategy)
+        model_dtype = "fp32" if is_fsdp2 else args.param_dtype
+
         actor = Actor(
             pretrain,
             attn_implementation=strategy.args.attn_implementation,
             param_dtype=strategy.args.param_dtype,  # default: bf16
+            model_dtype=model_dtype,
             load_in_4bit=strategy.args.load_in_4bit,
             lora_rank=strategy.args.lora_rank,
             lora_alpha=strategy.args.lora_alpha,
@@ -525,6 +529,7 @@ class PolicyModelActor(BaseModelActor):
                 pretrain,
                 attn_implementation=strategy.args.attn_implementation,
                 param_dtype=strategy.args.param_dtype,  # default: bf16
+                model_dtype=model_dtype,
                 load_in_4bit=strategy.args.load_in_4bit,
                 ds_config=strategy.get_ds_eval_config(offload=True),
                 packing_samples=strategy.args.packing_samples,
@@ -536,8 +541,6 @@ class PolicyModelActor(BaseModelActor):
             actor.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
-
-        is_fsdp2 = isinstance(strategy, FSDP2Strategy)
 
         # FSDP2: wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
         if is_fsdp2:

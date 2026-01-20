@@ -40,6 +40,7 @@ class Actor(nn.Module):
         pretrain_or_model,
         attn_implementation="flash_attention_2",
         param_dtype="bf16",
+        model_dtype: Optional[str] = None,
         load_in_4bit=False,
         lora_rank=0,
         lora_alpha=16,
@@ -69,7 +70,11 @@ class Actor(nn.Module):
             # Determine torch dtype based on param_dtype parameter, default: bf16
             from openrlhf.utils.utils import convert_to_torch_dtype
 
-            torch_dtype = convert_to_torch_dtype(param_dtype)
+            # For FSDP2, keeping master weights in fp32 (model_dtype="fp32") aligns
+            # with Verl/NeMo RL: optimizer states follow param dtype (fp32), while
+            # FSDP2 MixedPrecisionPolicy controls compute dtype (e.g. bf16).
+            load_dtype = model_dtype or param_dtype
+            torch_dtype = convert_to_torch_dtype(load_dtype)
 
             if load_in_4bit:
                 assert param_dtype == "bf16", "we only support bnb_4bit_compute_dtype = bf16"

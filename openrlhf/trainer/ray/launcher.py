@@ -106,10 +106,14 @@ class BaseModelActor(BaseDistributedActor):
 class ReferenceModelActor(BaseModelActor):
     def init_model_from_pretrained(self, strategy: Union[DeepspeedStrategy, FSDP2Strategy], pretrain):
         self._setup_distributed(strategy)
+        is_fsdp2 = isinstance(strategy, FSDP2Strategy)
+        args = strategy.args
+        model_dtype = "fp32" if is_fsdp2 else args.param_dtype
         model = Actor(
             pretrain,
             attn_implementation=strategy.args.attn_implementation,
             param_dtype=strategy.args.param_dtype,  # default: bf16
+            model_dtype=model_dtype,
             load_in_4bit=strategy.args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
             packing_samples=strategy.args.packing_samples,
@@ -118,7 +122,6 @@ class ReferenceModelActor(BaseModelActor):
         )
         strategy.print(model)
 
-        is_fsdp2 = isinstance(strategy, FSDP2Strategy)
         if not is_fsdp2 and strategy.args.ref_reward_offload:
             model._offload = True
 
@@ -153,12 +156,16 @@ class ReferenceModelActor(BaseModelActor):
 class RewardModelActor(BaseModelActor):
     def init_model_from_pretrained(self, strategy: Union[DeepspeedStrategy, FSDP2Strategy], pretrain):
         self._setup_distributed(strategy)
+        is_fsdp2 = isinstance(strategy, FSDP2Strategy)
+        args = strategy.args
+        model_dtype = "fp32" if is_fsdp2 else args.param_dtype
         model = get_llm_for_sequence_regression(
             pretrain,
             "reward",
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
             param_dtype=strategy.args.param_dtype,  # default: bf16
+            model_dtype=model_dtype,
             load_in_4bit=strategy.args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
             value_head_prefix=strategy.args.value_head_prefix,
@@ -168,7 +175,6 @@ class RewardModelActor(BaseModelActor):
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
         strategy.print("mean: {}, std {}".format(model.mean, model.std))
 
-        is_fsdp2 = isinstance(strategy, FSDP2Strategy)
         if not is_fsdp2 and strategy.args.ref_reward_offload:
             model._offload = True
 

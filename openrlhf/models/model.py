@@ -22,6 +22,7 @@ def get_llm_for_sequence_regression(
     model_type: str,
     *,
     param_dtype="bf16",
+    model_dtype: Optional[str] = None,
     load_in_4bit=False,
     lora_rank=0,
     lora_alpha=16,
@@ -43,7 +44,9 @@ def get_llm_for_sequence_regression(
     Args:
         model_name_or_path (str): Path to the pretrained model.
         model_type (str): Type of the model, either "reward" or "critic".
-        param_dtype (str, optional): Model data type ("bf16", "fp16"). Defaults to "bf16".
+        param_dtype (str, optional): Compute dtype hint ("bf16", "fp16"). Defaults to "bf16".
+        model_dtype (str, optional): Weight dtype to load in ("fp32", "bf16", "fp16").
+            If not set, defaults to param_dtype (backward compatible).
         load_in_4bit (bool, optional): Load the model in 4-bit precision. Defaults to False.
         lora_rank (int, optional): Rank for LoRA adaptation. Defaults to 0.
         lora_alpha (int, optional): Alpha parameter for LoRA. Defaults to 16.
@@ -86,10 +89,14 @@ def get_llm_for_sequence_regression(
     else:
         dschf = None
 
-    # Determine torch dtype based on param_dtype parameter, default: bf16
+    # Determine torch dtype to load weights in.
     from openrlhf.utils.utils import convert_to_torch_dtype
 
-    torch_dtype = convert_to_torch_dtype(param_dtype)
+    # For FSDP2, keeping master weights in fp32 (model_dtype="fp32") aligns
+    # with Verl/NeMo RL: optimizer states follow param dtype (fp32), while
+    # FSDP2 MixedPrecisionPolicy controls compute dtype (e.g. bf16).
+    load_dtype = model_dtype or param_dtype
+    torch_dtype = convert_to_torch_dtype(load_dtype)
 
     if load_in_4bit:
         assert param_dtype == "bf16", "we only support bnb_4bit_compute_dtype = bf16"

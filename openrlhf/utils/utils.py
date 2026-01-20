@@ -6,20 +6,21 @@ from transformers import AutoTokenizer
 
 
 def convert_to_torch_dtype(param_dtype: str) -> torch.dtype:
-    """Convert param_dtype string to torch.dtype.
+    """Convert dtype string to torch.dtype.
 
     Args:
-        param_dtype: One of "bf16", "fp16"
+        param_dtype: One of "fp32", "bf16", "fp16"
 
     Returns:
-        Corresponding torch.dtype (bfloat16, float16)
+        Corresponding torch.dtype
     """
+    if param_dtype == "fp32":
+        return torch.float32
     if param_dtype == "bf16":
         return torch.bfloat16
-    elif param_dtype == "fp16":
+    if param_dtype == "fp16":
         return torch.float16
-    else:
-        raise ValueError(f"Invalid param_dtype: {param_dtype}")
+    raise ValueError(f"Invalid dtype: {param_dtype}")
 
 
 def get_strategy(args):
