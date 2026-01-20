@@ -210,6 +210,9 @@ if __name__ == "__main__":
     parser.add_argument("--value_head_prefix", type=str, default="score")
 
     # Context Parallel
+    parser.add_argument(
+        "--attn_topology", type=str, default="ring", choices=["ring", "star"], help="Context-parallel topology"
+    )
     parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")
     parser.add_argument(
         "--ring_head_stride",
@@ -291,7 +294,7 @@ if __name__ == "__main__":
         )
 
     if args.ring_attn_size > 1:
-        assert args.packing_samples, "packing_samples must be enabled when using ring attention"
+        assert args.packing_samples, "packing_samples must be enabled when using ring/star attention"
 
     if args.packing_samples and "flash_attention" not in args.attn_implementation:
         print(
