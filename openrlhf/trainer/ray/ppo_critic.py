@@ -167,12 +167,15 @@ class CriticModelActor(BaseModelActor):
         self.disable_ds_ckpt = args.disable_ds_ckpt
 
         self._setup_distributed(strategy)
+        is_fsdp2 = isinstance(strategy, FSDP2Strategy)
+        model_dtype = "fp32" if is_fsdp2 else args.param_dtype
         critic = get_llm_for_sequence_regression(
             pretrain,
             "critic",
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
             param_dtype=strategy.args.param_dtype,  # default: bf16
+            model_dtype=model_dtype,
             load_in_4bit=strategy.args.load_in_4bit,
             lora_rank=strategy.args.lora_rank,
             lora_alpha=strategy.args.lora_alpha,
@@ -197,8 +200,6 @@ class CriticModelActor(BaseModelActor):
             critic.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
-
-        is_fsdp2 = isinstance(strategy, FSDP2Strategy)
 
         # FSDP2: wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
         if is_fsdp2:
