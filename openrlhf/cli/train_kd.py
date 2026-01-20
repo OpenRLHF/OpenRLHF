@@ -18,6 +18,7 @@ def train(args):
     strategy.setup_distributed()
 
     is_fsdp2 = getattr(args, "dist_backend", "deepspeed") == "fsdp2"
+    model_dtype = "fp32" if is_fsdp2 else args.param_dtype
 
     # configure model
     # load huggingface model
@@ -25,6 +26,7 @@ def train(args):
         args.pretrain,
         attn_implementation=args.attn_implementation,
         param_dtype=args.param_dtype,  # default: bf16
+        model_dtype=model_dtype,
         load_in_4bit=args.load_in_4bit,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
@@ -39,6 +41,7 @@ def train(args):
         args.teacher_model,
         attn_implementation=args.attn_implementation,
         param_dtype=args.param_dtype,  # default: bf16
+        model_dtype=model_dtype,
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=args.teacher_offload),
     )
