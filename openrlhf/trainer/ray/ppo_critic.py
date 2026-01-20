@@ -14,7 +14,6 @@ from openrlhf.models import ValueLoss, get_llm_for_sequence_regression
 from openrlhf.models.utils import masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.utils import get_tokenizer
-from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
 
 from ..ppo_utils import NaiveReplayBuffer
@@ -67,12 +66,12 @@ class CriticPPOTrainer(ABC):
 
         # Determine tensor parallel size based on backend
         is_fsdp2 = getattr(self.args, "backend", "deepspeed") == "fsdp2"
-        tensor_parallel_size = getattr(self.args, "fsdp_tensor_parallel_size", 1) if is_fsdp2 else self.args.ds_tensor_parallel_size
+        tensor_parallel_size = (
+            getattr(self.args, "fsdp_tensor_parallel_size", 1) if is_fsdp2 else self.args.ds_tensor_parallel_size
+        )
 
         not_shuffle = (
-            self.strategy.ring_attn_group is not None
-            or tensor_parallel_size > 1
-            or self.args.use_dynamic_batch
+            self.strategy.ring_attn_group is not None or tensor_parallel_size > 1 or self.args.use_dynamic_batch
         )
         dataloader = DataLoader(
             self.replay_buffer,
@@ -238,7 +237,9 @@ class CriticModelActor(BaseModelActor):
         # initial offload for sleep mode
         is_fsdp2 = getattr(strategy.args, "backend", "deepspeed") == "fsdp2"
         if is_fsdp2:
-            enable_sleep = getattr(strategy.args, "fsdp2_enable_sleep", False) or getattr(strategy.args, "deepspeed_enable_sleep", False)
+            enable_sleep = getattr(strategy.args, "fsdp2_enable_sleep", False) or getattr(
+                strategy.args, "deepspeed_enable_sleep", False
+            )
             if enable_sleep:
                 self.offload_states()
         else:
@@ -312,6 +313,7 @@ class CriticModelActor(BaseModelActor):
         is_fsdp2 = getattr(self.strategy.args, "backend", "deepspeed") == "fsdp2"
         if is_fsdp2:
             from openrlhf.utils.fsdp2.fsdp2_utils import reload_fsdp2_states
+
             reload_fsdp2_states(self.critic, self.critic_optim)
         else:
             reload_deepspeed_states(self.critic)
@@ -321,6 +323,7 @@ class CriticModelActor(BaseModelActor):
         is_fsdp2 = getattr(self.strategy.args, "backend", "deepspeed") == "fsdp2"
         if is_fsdp2:
             from openrlhf.utils.fsdp2.fsdp2_utils import offload_fsdp2_states
+
             offload_fsdp2_states(self.critic, self.critic_optim)
         else:
             offload_deepspeed_states(self.critic)

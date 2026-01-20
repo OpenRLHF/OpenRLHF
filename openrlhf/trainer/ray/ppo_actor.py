@@ -16,7 +16,6 @@ from openrlhf.models import Actor, PolicyLoss
 from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.utils import get_tokenizer
-from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
 from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.logging_utils import init_logger
@@ -162,12 +161,12 @@ class ActorPPOTrainer(ABC):
 
         # Determine tensor parallel size based on backend
         is_fsdp2 = getattr(self.args, "backend", "deepspeed") == "fsdp2"
-        tensor_parallel_size = getattr(self.args, "fsdp_tensor_parallel_size", 1) if is_fsdp2 else self.args.ds_tensor_parallel_size
+        tensor_parallel_size = (
+            getattr(self.args, "fsdp_tensor_parallel_size", 1) if is_fsdp2 else self.args.ds_tensor_parallel_size
+        )
 
         not_shuffle = (
-            self.strategy.ring_attn_group is not None
-            or tensor_parallel_size > 1
-            or self.args.use_dynamic_batch
+            self.strategy.ring_attn_group is not None or tensor_parallel_size > 1 or self.args.use_dynamic_batch
         )
         dataloader = DataLoader(
             self.replay_buffer,
@@ -342,7 +341,7 @@ class ActorPPOTrainer(ABC):
         from openrlhf.utils.fsdp2.fsdp2_utils import to_local_if_dtensor
 
         # Get the inner model
-        model = self.actor.model if hasattr(self.actor, 'model') else self.actor
+        model = self.actor.model if hasattr(self.actor, "model") else self.actor
 
         # Get full state dict - this gathers from all FSDP shards
         with torch.no_grad():
@@ -361,12 +360,15 @@ class ActorPPOTrainer(ABC):
             """Broadcast parameter using process group."""
             if torch.distributed.get_rank() == 0:
                 refs = [
-                    engine.update_weight.remote(name, dtype=param_data.dtype, shape=param_data.shape, empty_cache=count == num_params)
+                    engine.update_weight.remote(
+                        name, dtype=param_data.dtype, shape=param_data.shape, empty_cache=count == num_params
+                    )
                     for engine in self.vllm_engines
                 ]
 
                 if use_ray:
                     import ray.util.collective as collective
+
                     collective.broadcast(param_data, 0, group_name=self._model_update_group)
                 else:
                     self._model_update_group.broadcast(param_data, src=0, stream=torch.cuda.current_stream())
@@ -414,6 +416,7 @@ class ActorPPOTrainer(ABC):
 
         del state_dict
         import gc
+
         gc.collect()
 
     def _broadcast_to_vllm_deepspeed(self):
@@ -590,9 +593,12 @@ class PolicyModelActor(BaseModelActor):
         is_fsdp2 = getattr(strategy.args, "backend", "deepspeed") == "fsdp2"
         if is_fsdp2:
             # For FSDP2, check for fsdp2_enable_sleep or deepspeed_enable_sleep (for compatibility)
-            enable_sleep = getattr(strategy.args, "fsdp2_enable_sleep", False) or getattr(strategy.args, "deepspeed_enable_sleep", False)
+            enable_sleep = getattr(strategy.args, "fsdp2_enable_sleep", False) or getattr(
+                strategy.args, "deepspeed_enable_sleep", False
+            )
             if enable_sleep:
                 from openrlhf.utils.fsdp2.fsdp2_utils import offload_fsdp2_states
+
                 offload_fsdp2_states(self.actor.model, self.actor_optim)
         else:
             if strategy.args.deepspeed_enable_sleep:
@@ -666,6 +672,7 @@ class PolicyModelActor(BaseModelActor):
         is_fsdp2 = getattr(self.strategy.args, "backend", "deepspeed") == "fsdp2"
         if is_fsdp2:
             from openrlhf.utils.fsdp2.fsdp2_utils import reload_fsdp2_states
+
             reload_fsdp2_states(self.actor.model, self.actor_optim)
         else:
             reload_deepspeed_states(self.actor.model)
@@ -675,6 +682,7 @@ class PolicyModelActor(BaseModelActor):
         is_fsdp2 = getattr(self.strategy.args, "backend", "deepspeed") == "fsdp2"
         if is_fsdp2:
             from openrlhf.utils.fsdp2.fsdp2_utils import offload_fsdp2_states
+
             offload_fsdp2_states(self.actor.model, self.actor_optim)
         else:
             offload_deepspeed_states(self.actor.model)

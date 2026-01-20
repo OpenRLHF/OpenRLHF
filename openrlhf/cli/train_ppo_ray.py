@@ -596,7 +596,11 @@ if __name__ == "__main__":
         ), "n_samples_per_prompt must be greater than 1 when using dynamic filtering"
 
     # Get tensor parallel size based on backend for validation
-    _tp_size = args.fsdp_tensor_parallel_size if getattr(args, "backend", "deepspeed") == "fsdp2" else args.ds_tensor_parallel_size
+    _tp_size = (
+        args.fsdp_tensor_parallel_size
+        if getattr(args, "backend", "deepspeed") == "fsdp2"
+        else args.ds_tensor_parallel_size
+    )
     assert (
         args.n_samples_per_prompt * args.rollout_batch_size // args.micro_rollout_batch_size
         >= args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size // _tp_size
