@@ -382,7 +382,7 @@ class SamplesGenerator:
                     min_r, max_r = self.args.dynamic_filtering_reward_range
                     if not (min_r < avg_reward < max_r):
                         logger.info(
-                            f"Filtered out: avg_reward={avg_reward:.2f}, threshold=({min_r:.2f}, {max_r:.2f}), scores={[f'{s:.2f}' for s in scores]}"
+                            f"Filtered out: avg_reward={avg_reward:.2f}, threshold=({min_r:.2f}, {max_r:.2f}), scores={[f'{s:.1f}' for s in scores]}"
                         )
                         experiences = []
 
