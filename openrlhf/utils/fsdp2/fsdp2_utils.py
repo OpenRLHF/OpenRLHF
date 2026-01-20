@@ -454,6 +454,114 @@ MODEL_TP_PLAN_FUNCTIONS = {
 }
 
 
+def offload_fsdp2_optimizer(optimizer, device: str = "cpu") -> None:
+    """Offload optimizer states to CPU memory.
+
+    Args:
+        optimizer: The optimizer whose states should be offloaded
+        device: Target device for offloading (default: "cpu")
+    """
+    if optimizer is None:
+        return
+
+    for state in optimizer.state.values():
+        for k, v in state.items():
+            if isinstance(v, (DTensor, torch.Tensor)):
+                state[k] = v.to(device)
+
+
+def reload_fsdp2_optimizer(optimizer, device: str = "cuda") -> None:
+    """Reload optimizer states to GPU memory.
+
+    Args:
+        optimizer: The optimizer whose states should be reloaded
+        device: Target device for reloading (default: "cuda")
+    """
+    if optimizer is None:
+        return
+
+    for state in optimizer.state.values():
+        for k, v in state.items():
+            if isinstance(v, (DTensor, torch.Tensor)):
+                state[k] = v.to(device)
+
+
+def offload_fsdp2_states(model: nn.Module, optimizer=None) -> None:
+    """Offload FSDP2 model and optimizer states to CPU for memory efficiency.
+
+    This is useful when you want to free up GPU memory during inference/generation
+    phases and reload the states before training.
+
+    Note: For FSDP2 with CPU offload enabled, the model parameters are already
+    managed by FSDP2's offload mechanism. This function primarily handles
+    optimizer state offloading.
+
+    Args:
+        model: The FSDP2-wrapped model
+        optimizer: Optional optimizer to offload states
+    """
+    import gc
+
+    # Offload optimizer states to CPU
+    if optimizer is not None:
+        offload_fsdp2_optimizer(optimizer, "cpu")
+
+    gc.collect()
+    torch.cuda.empty_cache()
+    if torch.distributed.is_initialized():
+        torch.distributed.barrier()
+    torch.cuda.synchronize()
+
+
+def reload_fsdp2_states(model: nn.Module, optimizer=None) -> None:
+    """Reload FSDP2 model and optimizer states to GPU for training.
+
+    This should be called before training after offload_fsdp2_states was used.
+
+    Args:
+        model: The FSDP2-wrapped model
+        optimizer: Optional optimizer to reload states
+    """
+    import gc
+
+    # Reload optimizer states to GPU
+    if optimizer is not None:
+        reload_fsdp2_optimizer(optimizer, "cuda")
+
+    gc.collect()
+    torch.cuda.empty_cache()
+    if torch.distributed.is_initialized():
+        torch.distributed.barrier()
+    torch.cuda.synchronize()
+
+
+def gather_fsdp2_params_for_broadcast(model: nn.Module) -> Dict[str, torch.Tensor]:
+    """Gather full model parameters from FSDP2 shards for weight synchronization.
+
+    This function collects the full (unsharded) model parameters that can be
+    broadcast to vLLM engines for weight synchronization.
+
+    Args:
+        model: The FSDP2-wrapped model
+
+    Returns:
+        Dictionary mapping parameter names to full (gathered) tensors
+    """
+    from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict
+
+    # Get full state dict - this gathers from all FSDP shards
+    with torch.no_grad():
+        state_dict = get_model_state_dict(
+            model,
+            options=StateDictOptions(
+                full_state_dict=True,
+                cpu_offload=False,  # Keep on GPU for broadcast
+            ),
+        )
+
+    return state_dict
+
+
 def get_optimized_tp_plan(model: nn.Module, sequence_parallel: bool = False) -> Optional[Dict[str, ParallelStyle]]:
     """Get optimized tensor parallel plan for specific model architectures.
 

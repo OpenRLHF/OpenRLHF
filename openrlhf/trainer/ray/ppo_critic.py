@@ -65,9 +65,13 @@ class CriticPPOTrainer(ABC):
         if self.args.use_dynamic_batch:
             self.replay_buffer.setup_dynamic_batch(self.strategy)
 
+        # Determine tensor parallel size based on backend
+        is_fsdp2 = getattr(self.args, "backend", "deepspeed") == "fsdp2"
+        tensor_parallel_size = getattr(self.args, "fsdp_tensor_parallel_size", 1) if is_fsdp2 else self.args.ds_tensor_parallel_size
+
         not_shuffle = (
             self.strategy.ring_attn_group is not None
-            or self.args.ds_tensor_parallel_size > 1
+            or tensor_parallel_size > 1
             or self.args.use_dynamic_batch
         )
         dataloader = DataLoader(
@@ -162,7 +166,14 @@ class CriticPPOTrainer(ABC):
 
 @ray.remote(num_gpus=1)
 class CriticModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps):
+    def init_model_from_pretrained(self, strategy, pretrain, max_steps):
+        """Initialize model from pretrained checkpoint.
+
+        Args:
+            strategy: Training strategy (DeepspeedStrategy or FSDP2Strategy)
+            pretrain: Path to pretrained model
+            max_steps: Maximum training steps
+        """
         args = strategy.args
         self.disable_ds_ckpt = args.disable_ds_ckpt
 
@@ -224,9 +235,15 @@ class CriticModelActor(BaseModelActor):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
             strategy.load_ckpt(self.critic, ckpt_path)
 
-        # initial offload
-        if strategy.args.deepspeed_enable_sleep:
-            self.offload_states()
+        # initial offload for sleep mode
+        is_fsdp2 = getattr(strategy.args, "backend", "deepspeed") == "fsdp2"
+        if is_fsdp2:
+            enable_sleep = getattr(strategy.args, "fsdp2_enable_sleep", False) or getattr(strategy.args, "deepspeed_enable_sleep", False)
+            if enable_sleep:
+                self.offload_states()
+        else:
+            if strategy.args.deepspeed_enable_sleep:
+                self.offload_states()
 
         # configure Trainer
         self.trainer = CriticPPOTrainer(
@@ -291,7 +308,19 @@ class CriticModelActor(BaseModelActor):
             )
 
     def reload_states(self):
-        reload_deepspeed_states(self.critic)
+        """Reload model and optimizer states to GPU."""
+        is_fsdp2 = getattr(self.strategy.args, "backend", "deepspeed") == "fsdp2"
+        if is_fsdp2:
+            from openrlhf.utils.fsdp2.fsdp2_utils import reload_fsdp2_states
+            reload_fsdp2_states(self.critic, self.critic_optim)
+        else:
+            reload_deepspeed_states(self.critic)
 
     def offload_states(self):
-        offload_deepspeed_states(self.critic)
+        """Offload model and optimizer states to CPU."""
+        is_fsdp2 = getattr(self.strategy.args, "backend", "deepspeed") == "fsdp2"
+        if is_fsdp2:
+            from openrlhf.utils.fsdp2.fsdp2_utils import offload_fsdp2_states
+            offload_fsdp2_states(self.critic, self.critic_optim)
+        else:
+            offload_deepspeed_states(self.critic)

@@ -9,6 +9,7 @@ It includes support for:
 from .fsdp2 import FSDP2Strategy
 from .fsdp2_utils import (
     clip_grad_by_total_norm_,
+    gather_fsdp2_params_for_broadcast,
     get_gemma_tp_plan,
     get_grad_norm,
     get_hf_tp_plan,
@@ -16,6 +17,10 @@ from .fsdp2_utils import (
     get_optimized_tp_plan,
     get_optimizer_grouped_parameters,
     get_qwen_tp_plan,
+    offload_fsdp2_optimizer,
+    offload_fsdp2_states,
+    reload_fsdp2_optimizer,
+    reload_fsdp2_states,
     to_local_if_dtensor,
     translate_parallel_style,
 )
@@ -37,4 +42,10 @@ __all__ = [
     "get_qwen_tp_plan",
     "get_gemma_tp_plan",
     "translate_parallel_style",
+    # Offload/reload utilities
+    "offload_fsdp2_optimizer",
+    "reload_fsdp2_optimizer",
+    "offload_fsdp2_states",
+    "reload_fsdp2_states",
+    "gather_fsdp2_params_for_broadcast",
 ]

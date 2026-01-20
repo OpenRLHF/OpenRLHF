@@ -11,7 +11,6 @@ from tqdm import tqdm
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
-from openrlhf.utils.deepspeed import DeepspeedStrategy
 
 
 class BaseDistributedActor:
@@ -52,8 +51,12 @@ class BaseDistributedActor:
 
 
 class BaseModelActor(BaseDistributedActor):
-    def _setup_distributed(self, strategy: DeepspeedStrategy):
-        # configure strategy
+    def _setup_distributed(self, strategy):
+        """Setup distributed training environment.
+
+        Args:
+            strategy: Training strategy (DeepspeedStrategy or FSDP2Strategy)
+        """
         self.strategy = strategy
         strategy.setup_distributed()
 
@@ -103,7 +106,13 @@ class BaseModelActor(BaseDistributedActor):
 
 @ray.remote(num_gpus=1)
 class ReferenceModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+    def init_model_from_pretrained(self, strategy, pretrain):
+        """Initialize model from pretrained checkpoint.
+
+        Args:
+            strategy: Training strategy (DeepspeedStrategy or FSDP2Strategy)
+            pretrain: Path to pretrained model
+        """
         self._setup_distributed(strategy)
         model = Actor(
             pretrain,
@@ -145,7 +154,13 @@ class ReferenceModelActor(BaseModelActor):
 
 @ray.remote(num_gpus=1)
 class RewardModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+    def init_model_from_pretrained(self, strategy, pretrain):
+        """Initialize model from pretrained checkpoint.
+
+        Args:
+            strategy: Training strategy (DeepspeedStrategy or FSDP2Strategy)
+            pretrain: Path to pretrained model
+        """
         self._setup_distributed(strategy)
         model = get_llm_for_sequence_regression(
             pretrain,
