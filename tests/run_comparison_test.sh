@@ -16,7 +16,7 @@ MAX_EPOCHS=1
 LR=5e-6
 SEED=42
 
-OUTPUT_DIR="./comparison_results"
+OUTPUT_DIR="/tmp/comparison_results"
 mkdir -p $OUTPUT_DIR
 
 echo "=============================================="
@@ -36,7 +36,7 @@ echo "=========================================="
 echo "Running DeepSpeed backend..."
 echo "=========================================="
 
-deepspeed --num_gpus=$NUM_GPUS -m openrlhf.cli.train_sft \
+deepspeed --num_gpus=$NUM_GPUS --module openrlhf.cli.train_sft \
     --backend deepspeed \
     --max_len $MAX_LEN \
     --dataset $DATASET \
@@ -114,8 +114,8 @@ def extract_losses(log_file, pattern=r"gpt_loss['\"]?\s*[:=]\s*([0-9]+\.[0-9]+)"
     return losses
 
 def main():
-    ds_losses = extract_losses('comparison_results/deepspeed.log')
-    fsdp_losses = extract_losses('comparison_results/fsdp2.log')
+    ds_losses = extract_losses('/tmp/comparison_results/deepspeed.log')
+    fsdp_losses = extract_losses('/tmp/comparison_results/fsdp2.log')
     
     print(f"DeepSpeed losses ({len(ds_losses)} values): {ds_losses[:10]}...")
     print(f"FSDP2 losses ({len(fsdp_losses)} values): {fsdp_losses[:10]}...")

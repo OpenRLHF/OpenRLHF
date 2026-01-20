@@ -2,6 +2,13 @@
 
 This module provides an FSDP2-based training strategy that mirrors the DeepSpeed interface.
 It uses PyTorch's FSDP2 (fully_shard) for distributed training.
+
+Key features:
+- Automatic model sharding across GPUs
+- Mixed precision training with configurable dtypes
+- Tensor parallelism support via HuggingFace's ._tp_plan (AutoTP)
+- Ring attention for sequence parallelism
+- Standalone implementation (no abstraction layer)
 """
 
 import os
@@ -9,7 +16,7 @@ import shutil
 from abc import ABC
 from collections import defaultdict
 from datetime import timedelta
-from typing import List, Tuple, Union, Optional
+from typing import List, Tuple, Union, Optional, Dict, Any
 
 import torch
 import torch.nn as nn
@@ -41,6 +48,8 @@ from .fsdp2_utils import (
     clip_grad_by_total_norm_,
     to_local_if_dtensor,
     get_llama_tp_plan,
+    get_hf_tp_plan,
+    get_optimized_tp_plan,
 )
 
 ModelOptimPair = Tuple[nn.Module, Optimizer]
@@ -53,6 +62,12 @@ class FSDP2Strategy(ABC):
     
     This strategy uses PyTorch FSDP2 (fully_shard) instead of DeepSpeed for distributed training.
     It provides the same interface as DeepspeedStrategy for compatibility.
+    
+    Features:
+    - Automatic model sharding via FSDP2
+    - Mixed precision training (bf16/fp16)
+    - Tensor parallelism via HF's ._tp_plan
+    - Ring attention for long sequences
     """
 
     def __init__(
@@ -66,15 +81,31 @@ class FSDP2Strategy(ABC):
         args=None,
     ) -> None:
         super().__init__()
-
+        
+        # Base attributes (same as DeepspeedStrategy)
         self.args = args
-        self.stage = zero_stage  # Kept for compatibility
+        self.stage = zero_stage
         self.train_batch_size = train_batch_size
         self.micro_train_batch_size = micro_train_batch_size
-        self.param_dtype = args.param_dtype  # default: bf16
         self.seed = seed
         self.full_determinism = full_determinism
         self.max_norm = max_norm
+        
+        # Will be set in setup_distributed
+        self.world_size = 1
+        self.dp_size = 1
+        self.accumulated_gradient = 1
+        
+        # Tracking for EMA updates
+        self.time_steps = defaultdict(int)
+        
+        # Ring attention tracking
+        self.ring_attn_rank = 0
+        
+        # RLHF mode flag
+        self.is_rlhf = False
+
+        self.param_dtype = args.param_dtype  # default: bf16
 
         # FSDP2-specific settings
         self.cpu_offload = getattr(args, "adam_offload", False)
@@ -82,13 +113,17 @@ class FSDP2Strategy(ABC):
         self.tensor_parallel_size = getattr(args, "fsdp_tensor_parallel_size", 1)
         self.ring_attn_size = getattr(args, "ring_attn_size", 1)
         self.use_dynamic_batch = getattr(args, "use_dynamic_batch", False)
-
-        self.is_rlhf = False
-        self.time_steps = defaultdict(int)
         
+        # AutoTP settings (HuggingFace's built-in tensor parallel plan)
+        self.use_hf_tp_plan = getattr(args, "use_hf_tp_plan", False)
+        self.sequence_parallel = getattr(args, "sequence_parallel", False)
+        
+        # Validate sequence parallel configuration
+        if self.sequence_parallel and self.tensor_parallel_size == 1:
+            print("[Warning] sequence_parallel=True but tensor_parallel_size=1, which has no effect. "
+                  "Enable tensor_parallel_size > 1 to use sequence parallelism.")
+
         # Will be set in setup_distributed
-        self.world_size = 1
-        self.dp_size = 1
         self.device_mesh = None
         self.dp_mesh = None
         self.tp_mesh = None
@@ -118,7 +153,30 @@ class FSDP2Strategy(ABC):
             dist.init_process_group(backend=backend, timeout=timeout)
 
         self.world_size = dist.get_world_size()
+        
+        # Validate parallelism configuration
+        parallel_product = self.ring_attn_size * self.tensor_parallel_size
+        if self.world_size % parallel_product != 0:
+            raise ValueError(
+                f"world_size ({self.world_size}) must be divisible by "
+                f"ring_attn_size ({self.ring_attn_size}) * tensor_parallel_size ({self.tensor_parallel_size}) = {parallel_product}"
+            )
+        
         self.dp_size = self.world_size // self.ring_attn_size // self.tensor_parallel_size
+        
+        if self.dp_size < 1:
+            raise ValueError(
+                f"Data parallel size must be >= 1, got {self.dp_size}. "
+                f"Reduce ring_attn_size ({self.ring_attn_size}) or tensor_parallel_size ({self.tensor_parallel_size})"
+            )
+        
+        # Print configuration on rank 0
+        if dist.get_rank() == 0:
+            print(f"[FSDP2] Distributed configuration:")
+            print(f"  - World size: {self.world_size}")
+            print(f"  - Data parallel size: {self.dp_size}")
+            print(f"  - Tensor parallel size: {self.tensor_parallel_size}")
+            print(f"  - Ring attention size: {self.ring_attn_size}")
 
         # Create device mesh
         self.device_mesh = init_device_mesh(
@@ -142,24 +200,51 @@ class FSDP2Strategy(ABC):
             // self.micro_train_batch_size
             // self.world_size
         )
+        
+        if self.accumulated_gradient < 1:
+            raise ValueError(
+                f"Gradient accumulation steps must be >= 1, got {self.accumulated_gradient}. "
+                f"Increase train_batch_size ({self.train_batch_size}) or decrease micro_train_batch_size ({self.micro_train_batch_size})"
+            )
+        
+        if dist.get_rank() == 0:
+            print(f"  - Gradient accumulation steps: {self.accumulated_gradient}")
 
     def setup_ring_attn(self, device_mesh):
-        """Setup ring attention if enabled."""
+        """Setup ring attention if enabled.
+        
+        This overrides the base class method to handle FSDP2-specific setup.
+        The ring attention group is used for distributing attention computation
+        across multiple GPUs in a ring topology.
+        
+        Args:
+            device_mesh: The device mesh containing the 'sp' (sequence parallel) dimension
+        """
         if self.ring_attn_size == 1:
             self.ring_attn_rank = 0
             return
 
+        # Get the ring attention group from the device mesh
         group = device_mesh["sp"].get_group()
         self.ring_attn_rank = dist.get_rank(group=group)
+        
+        # Set the global ring attention group
         set_ring_attn_group(group)
 
+        # Substitute HuggingFace flash attention with ring flash attention
         from ring_flash_attn import substitute_hf_flash_attn
 
         self.ring_head_stride = getattr(self.args, "ring_head_stride", 1)
-        substitute_hf_flash_attn(self.ring_attn_group, self.ring_head_stride)
+        # Use the group directly instead of self.ring_attn_group property
+        # to avoid the property lookup before the group is fully set
+        substitute_hf_flash_attn(group, self.ring_head_stride)
+        
+        if self.is_rank_0():
+            print(f"[FSDP2] Ring attention enabled with size {self.ring_attn_size}")
 
     @property
     def ring_attn_group(self):
+        """Get the ring attention process group."""
         return get_ring_attn_group()
 
     def create_optimizer(self, model, **kwargs) -> Optimizer:
@@ -173,7 +258,8 @@ class FSDP2Strategy(ABC):
         try:
             from apex.optimizers import FusedAdam
             optimizer = FusedAdam(optim_params, **kwargs)
-        except ImportError:
+        except (ImportError, RuntimeError):
+            # Fallback to AdamW if FusedAdam is not available or CUDA extensions not built
             optimizer = torch.optim.AdamW(optim_params, **kwargs)
             
         return optimizer
@@ -295,6 +381,189 @@ class FSDP2Strategy(ABC):
 
         return ret[0] if len(ret) == 1 else ret
 
+    def _recreate_scheduler(
+        self,
+        scheduler: Any,
+        new_optimizer: Optimizer
+    ) -> Any:
+        """Recreate a learning rate scheduler for the new optimizer.
+        
+        When FSDP2 wraps the model, the original optimizer is replaced. This method
+        recreates the scheduler to work with the new optimizer while preserving
+        the original scheduler's configuration and state.
+        
+        Args:
+            scheduler: The original scheduler to recreate
+            new_optimizer: The new optimizer to use with the scheduler
+            
+        Returns:
+            New scheduler instance configured like the original
+        """
+        scheduler_state = scheduler.state_dict()
+        scheduler_type = type(scheduler)
+        new_scheduler = None
+        
+        try:
+            # Check for LambdaLR scheduler (most common in transformers)
+            # This includes schedulers from transformers.get_scheduler()
+            if hasattr(scheduler, 'lr_lambdas') and scheduler.lr_lambdas is not None:
+                # LambdaLR or similar - preserve the lr_lambda functions
+                new_scheduler = torch.optim.lr_scheduler.LambdaLR(
+                    new_optimizer, lr_lambda=scheduler.lr_lambdas
+                )
+            # ChainedScheduler (used by transformers for warmup + decay)
+            elif hasattr(scheduler, '_schedulers'):
+                # Recursively recreate chained schedulers
+                new_schedulers = []
+                for s in scheduler._schedulers:
+                    new_schedulers.append(self._recreate_scheduler(s, new_optimizer))
+                new_scheduler = torch.optim.lr_scheduler.ChainedScheduler(new_schedulers)
+            # SequentialLR
+            elif hasattr(scheduler, '_schedulers') and hasattr(scheduler, '_milestones'):
+                new_schedulers = []
+                for s in scheduler._schedulers:
+                    new_schedulers.append(self._recreate_scheduler(s, new_optimizer))
+                new_scheduler = torch.optim.lr_scheduler.SequentialLR(
+                    new_optimizer,
+                    schedulers=new_schedulers,
+                    milestones=scheduler._milestones
+                )
+            # CosineAnnealingLR
+            elif hasattr(scheduler, 'T_max'):
+                new_scheduler = scheduler_type(
+                    new_optimizer,
+                    T_max=scheduler.T_max,
+                    eta_min=getattr(scheduler, 'eta_min', 0),
+                )
+            # CosineAnnealingWarmRestarts
+            elif hasattr(scheduler, 'T_0'):
+                new_scheduler = scheduler_type(
+                    new_optimizer,
+                    T_0=scheduler.T_0,
+                    T_mult=getattr(scheduler, 'T_mult', 1),
+                    eta_min=getattr(scheduler, 'eta_min', 0),
+                )
+            # LinearLR
+            elif hasattr(scheduler, 'total_iters') and hasattr(scheduler, 'start_factor'):
+                new_scheduler = scheduler_type(
+                    new_optimizer,
+                    start_factor=scheduler.start_factor,
+                    end_factor=getattr(scheduler, 'end_factor', 1.0),
+                    total_iters=scheduler.total_iters,
+                )
+            # ConstantLR
+            elif hasattr(scheduler, 'total_iters') and hasattr(scheduler, 'factor'):
+                new_scheduler = scheduler_type(
+                    new_optimizer,
+                    factor=scheduler.factor,
+                    total_iters=scheduler.total_iters,
+                )
+            # ExponentialLR
+            elif hasattr(scheduler, 'gamma') and not hasattr(scheduler, 'step_size') and not hasattr(scheduler, 'milestones'):
+                new_scheduler = scheduler_type(
+                    new_optimizer,
+                    gamma=scheduler.gamma,
+                )
+            # MultiStepLR
+            elif hasattr(scheduler, 'milestones') and hasattr(scheduler, 'gamma'):
+                new_scheduler = scheduler_type(
+                    new_optimizer,
+                    milestones=list(scheduler.milestones),
+                    gamma=scheduler.gamma,
+                )
+            # StepLR
+            elif hasattr(scheduler, 'step_size') and hasattr(scheduler, 'gamma'):
+                new_scheduler = scheduler_type(
+                    new_optimizer,
+                    step_size=scheduler.step_size,
+                    gamma=scheduler.gamma,
+                )
+            # ReduceLROnPlateau (special case - doesn't have load_state_dict compatibility)
+            elif scheduler_type.__name__ == 'ReduceLROnPlateau':
+                new_scheduler = scheduler_type(
+                    new_optimizer,
+                    mode=scheduler.mode,
+                    factor=scheduler.factor,
+                    patience=scheduler.patience,
+                    threshold=scheduler.threshold,
+                    threshold_mode=scheduler.threshold_mode,
+                    cooldown=scheduler.cooldown,
+                    min_lr=scheduler.min_lrs[0] if scheduler.min_lrs else 0,
+                    eps=scheduler.eps,
+                )
+                # ReduceLROnPlateau state is handled separately
+                return new_scheduler
+            # Fallback: try to recreate using generic approach
+            else:
+                self.print(f"[FSDP2] Warning: Unknown scheduler type {scheduler_type.__name__}, "
+                          "attempting generic recreation")
+                try:
+                    new_scheduler = scheduler_type(new_optimizer)
+                except TypeError:
+                    # If generic recreation fails, use constant LR as ultimate fallback
+                    self.print(f"[FSDP2] Warning: Could not recreate scheduler, using constant LR")
+                    new_scheduler = torch.optim.lr_scheduler.LambdaLR(
+                        new_optimizer, lr_lambda=lambda epoch: 1
+                    )
+                    return new_scheduler
+            
+            # Load the old scheduler state (adjusts last_epoch, etc.)
+            try:
+                new_scheduler.load_state_dict(scheduler_state)
+            except Exception as e:
+                self.print(f"[FSDP2] Warning: Could not load scheduler state: {e}")
+                
+        except Exception as e:
+            self.print(f"[FSDP2] Warning: Error recreating scheduler: {e}")
+            self.print(f"[FSDP2] Falling back to constant LR scheduler")
+            new_scheduler = torch.optim.lr_scheduler.LambdaLR(
+                new_optimizer, lr_lambda=lambda epoch: 1
+            )
+        
+        return new_scheduler
+    
+    def _get_tp_plan(self, model: nn.Module):
+        """Get tensor parallel plan with fallback priority.
+        
+        The fallback priority is:
+        1. HuggingFace's built-in TP plan (if use_hf_tp_plan=True and available)
+        2. Optimized TP plan for known model architectures
+        3. Default LLaMA-style TP plan
+        
+        Args:
+            model: The model to get the TP plan for
+            
+        Returns:
+            Dictionary mapping module paths to parallel styles
+        """
+        tp_plan = None
+        plan_source = "default"
+        
+        # Try HF tp_plan first if enabled
+        if self.use_hf_tp_plan:
+            try:
+                tp_plan = get_hf_tp_plan(model)
+                plan_source = "HuggingFace built-in"
+                self.print(f"[FSDP2] Using HuggingFace's built-in tensor parallel plan")
+            except AssertionError as e:
+                self.print(f"[FSDP2] HuggingFace tp_plan not available: {e}")
+                self.print("[FSDP2] Falling back to optimized/default plan")
+        
+        # Try optimized plan if HF plan not available
+        if tp_plan is None:
+            tp_plan = get_optimized_tp_plan(model, sequence_parallel=self.sequence_parallel)
+            if tp_plan is not None:
+                plan_source = "optimized"
+                self.print(f"[FSDP2] Using optimized tensor parallel plan for {type(model).__name__}")
+        
+        # Fall back to default LLaMA-style plan
+        if tp_plan is None:
+            tp_plan = get_llama_tp_plan(sequence_parallel=self.sequence_parallel)
+            plan_source = "default (LLaMA-style)"
+            self.print(f"[FSDP2] Using default LLaMA-style tensor parallel plan")
+        
+        return tp_plan
+    
     def _fsdp2_init_train_model(self, model, optim, scheduler):
         """Initialize model with FSDP2 for training.
         
@@ -315,7 +584,24 @@ class FSDP2Strategy(ABC):
 
         # Apply tensor parallelism if enabled
         if self.tensor_parallel_size > 1 and self.tp_mesh is not None:
-            tp_plan = get_llama_tp_plan(sequence_parallel=False)
+            # Validate that num_attention_heads and num_key_value_heads are divisible by TP size
+            config = inner_model.config if hasattr(inner_model, 'config') else None
+            if config is not None:
+                num_attention_heads = getattr(config, 'num_attention_heads', None)
+                num_key_value_heads = getattr(config, 'num_key_value_heads', num_attention_heads)
+                
+                if num_attention_heads is not None:
+                    assert num_attention_heads % self.tensor_parallel_size == 0, (
+                        f"num_attention_heads ({num_attention_heads}) must be divisible by "
+                        f"tensor_parallel_size ({self.tensor_parallel_size})"
+                    )
+                if num_key_value_heads is not None:
+                    assert num_key_value_heads % self.tensor_parallel_size == 0, (
+                        f"num_key_value_heads ({num_key_value_heads}) must be divisible by "
+                        f"tensor_parallel_size ({self.tensor_parallel_size})"
+                    )
+            
+            tp_plan = self._get_tp_plan(inner_model)
             parallelize_module(inner_model, self.tp_mesh, tp_plan)
 
         # Apply FSDP2
@@ -343,42 +629,13 @@ class FSDP2Strategy(ABC):
             try:
                 from apex.optimizers import FusedAdam
                 new_optim = FusedAdam(optim_params, lr=old_lr, betas=old_betas)
-            except ImportError:
+            except (ImportError, RuntimeError):
+                # Fallback to AdamW if FusedAdam is not available or CUDA extensions not built
                 new_optim = torch.optim.AdamW(optim_params, lr=old_lr, betas=old_betas)
             
             # Recreate scheduler if it exists
             if scheduler is not None:
-                # Try to get scheduler parameters
-                # Most schedulers have these attributes
-                scheduler_state = scheduler.state_dict()
-                scheduler_type = type(scheduler)
-                
-                try:
-                    # Try to recreate the same scheduler type
-                    if hasattr(scheduler, 'T_max'):  # CosineAnnealingLR
-                        new_scheduler = scheduler_type(
-                            new_optim,
-                            T_max=scheduler.T_max,
-                            eta_min=getattr(scheduler, 'eta_min', 0),
-                        )
-                    elif hasattr(scheduler, 'total_iters'):  # LinearLR, etc.
-                        new_scheduler = scheduler_type(
-                            new_optim,
-                            total_iters=scheduler.total_iters,
-                        )
-                    else:
-                        # Fallback: create a simple LambdaLR that maintains constant LR
-                        new_scheduler = torch.optim.lr_scheduler.LambdaLR(
-                            new_optim, lr_lambda=lambda epoch: 1
-                        )
-                    
-                    # Load the old scheduler state (adjusts last_epoch, etc.)
-                    new_scheduler.load_state_dict(scheduler_state)
-                except Exception as e:
-                    self.print(f"Warning: Could not recreate scheduler, using constant LR: {e}")
-                    new_scheduler = torch.optim.lr_scheduler.LambdaLR(
-                        new_optim, lr_lambda=lambda epoch: 1
-                    )
+                new_scheduler = self._recreate_scheduler(scheduler, new_optim)
 
         return model, new_optim if new_optim is not None else optim, new_scheduler if new_scheduler is not None else scheduler
 
@@ -400,7 +657,7 @@ class FSDP2Strategy(ABC):
 
         # Apply tensor parallelism if enabled
         if self.tensor_parallel_size > 1 and self.tp_mesh is not None:
-            tp_plan = get_llama_tp_plan(sequence_parallel=False)
+            tp_plan = self._get_tp_plan(inner_model)
             parallelize_module(inner_model, self.tp_mesh, tp_plan)
 
         # Apply FSDP2
@@ -425,10 +682,14 @@ class FSDP2Strategy(ABC):
             The FSDP2-wrapped model
         """
         # Mixed precision policy
+        # Note: When gradient checkpointing is enabled, we keep output_dtype same as param_dtype
+        # to avoid dtype mismatch during gradient checkpointing recomputation.
+        # The final logits are cast to float32 in Actor.forward() for loss computation.
+        output_dtype = dtype if self.activation_checkpointing else torch.float32
         mp_policy = MixedPrecisionPolicy(
             param_dtype=dtype,
             reduce_dtype=torch.float32,
-            output_dtype=torch.float32,
+            output_dtype=output_dtype,
         )
 
         # Offload policy
@@ -480,12 +741,23 @@ class FSDP2Strategy(ABC):
         }
 
     def moving_average(self, model, model_ema, beta=0.992, device="cpu"):
-        """Update EMA model weights."""
+        """Update EMA model weights with DTensor support.
+        
+        For FSDP2, parameters may be DTensors, so we need to convert them to
+        local tensors before performing the EMA update.
+        
+        Args:
+            model: Source model
+            model_ema: EMA model to update
+            beta: EMA coefficient (default: 0.992)
+            device: Device for computation (default: 'cpu')
+        """
         self.time_steps["ema"] += 1
         if self.time_steps["ema"] % self.accumulated_gradient == 0 or self.use_dynamic_batch:
             with torch.no_grad():
                 for param, param_ema in zip(model.parameters(), model_ema.parameters()):
                     if param.requires_grad:
+                        # Convert DTensor to local tensor if needed
                         data = to_local_if_dtensor(param.data).to(device)
                         param_ema_data = to_local_if_dtensor(param_ema.data)
                         param_ema_data.copy_((1 - beta) * data + beta * param_ema_data)

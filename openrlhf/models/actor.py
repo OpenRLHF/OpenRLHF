@@ -175,15 +175,10 @@ class Actor(nn.Module):
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
 
-        # For FSDP2 with mixed precision, we need to use autocast to ensure proper dtype handling
-        # DeepSpeed handles this internally, but FSDP2 requires explicit autocast
-        use_autocast = getattr(self, 'backend', 'deepspeed') == 'fsdp2'
-        
-        if use_autocast:
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids)
-        else:
-            output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids)
+        # Note: For FSDP2, the MixedPrecisionPolicy handles dtype casting automatically.
+        # For DeepSpeed, dtype casting is handled by the engine.
+        # Therefore, we don't need explicit autocast here - both backends handle it internally.
+        output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids)
         
         # https://github.com/OpenRLHF/OpenRLHF/pull/634
         output["logits"] = output["logits"].to(torch.float32)

@@ -208,6 +208,19 @@ if __name__ == "__main__":
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed Tensor parallel size")
     parser.add_argument("--fsdp_tensor_parallel_size", type=int, default=1, help="FSDP2 Tensor parallel size")
+    parser.add_argument(
+        "--use_hf_tp_plan",
+        action="store_true",
+        default=False,
+        help="Use HuggingFace's built-in tensor parallel plan (._tp_plan) for FSDP2 backend. "
+             "Requires transformers >= 4.51. Falls back to optimized plans if HF tp_plan is not available.",
+    )
+    parser.add_argument(
+        "--sequence_parallel",
+        action="store_true",
+        default=False,
+        help="Enable sequence parallelism for FSDP2 backend (requires tensor_parallel_size > 1)",
+    )
 
     # SFT
     parser.add_argument("--max_epochs", type=int, default=2)
