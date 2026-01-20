@@ -8,15 +8,15 @@ It includes support for:
 
 from .fsdp2 import FSDP2Strategy
 from .fsdp2_utils import (
-    get_optimizer_grouped_parameters,
-    get_grad_norm,
     clip_grad_by_total_norm_,
-    to_local_if_dtensor,
-    get_llama_tp_plan,
-    get_hf_tp_plan,
-    get_optimized_tp_plan,
-    get_qwen_tp_plan,
     get_gemma_tp_plan,
+    get_grad_norm,
+    get_hf_tp_plan,
+    get_llama_tp_plan,
+    get_optimized_tp_plan,
+    get_optimizer_grouped_parameters,
+    get_qwen_tp_plan,
+    to_local_if_dtensor,
     translate_parallel_style,
 )
 

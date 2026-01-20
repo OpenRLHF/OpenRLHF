@@ -66,6 +66,7 @@ class Actor(nn.Module):
             dschf = None
             if backend == "deepspeed" and ds_config is not None and ds_config["zero_optimization"]["stage"] == 3:
                 from transformers.integrations.deepspeed import HfDeepSpeedConfig
+
                 dschf = HfDeepSpeedConfig(ds_config)
 
             # Determine torch dtype based on param_dtype parameter, default: bf16
@@ -133,6 +134,7 @@ class Actor(nn.Module):
                 # set_z3_leaf_modules is required for MoE models (DeepSpeed only)
                 if backend == "deepspeed":
                     import deepspeed
+
                     for m in self.model.modules():
                         # https://github.com/microsoft/DeepSpeed/pull/4966
                         if "SparseMoeBlock" in m.__class__.__name__:
@@ -179,7 +181,7 @@ class Actor(nn.Module):
         # For DeepSpeed, dtype casting is handled by the engine.
         # Therefore, we don't need explicit autocast here - both backends handle it internally.
         output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids)
-        
+
         # https://github.com/OpenRLHF/OpenRLHF/pull/634
         output["logits"] = output["logits"].to(torch.float32)
 

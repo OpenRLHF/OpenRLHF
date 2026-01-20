@@ -2,22 +2,23 @@
 
 This module provides utility functions for FSDP2 training, including:
 - Optimizer grouped parameters
-- Gradient clipping utilities  
+- Gradient clipping utilities
 - DTensor utilities
 - Model parallelization plans
 - HuggingFace tp_plan support (AutoTP)
 """
 
 from functools import lru_cache
-from typing import Union, List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional, Union
+
 import torch
 import torch.nn as nn
 from torch.distributed.tensor import DTensor
 from torch.distributed.tensor.parallel import (
     ColwiseParallel,
+    ParallelStyle,
     RowwiseParallel,
     SequenceParallel,
-    ParallelStyle,
 )
 from torch.distributed.tensor.placement_types import Replicate, Shard
 
@@ -28,12 +29,12 @@ def get_optimizer_grouped_parameters(
     no_decay_name_list: List[str] = ["bias", "layer_norm.weight", "layernorm.weight", "norm.weight", "ln_f.weight"],
 ):
     """Get optimizer grouped parameters with weight decay handling.
-    
+
     Args:
         model: The model to get parameters from
         weight_decay: Weight decay value for parameters not in no_decay_name_list
         no_decay_name_list: List of parameter name patterns to exclude from weight decay
-    
+
     Returns:
         List of parameter groups with appropriate weight decay
     """
@@ -60,10 +61,10 @@ def get_optimizer_grouped_parameters(
 
 def to_local_if_dtensor(tensor: Union[torch.Tensor, DTensor]) -> torch.Tensor:
     """Returns the local shard of the given tensor if it is a DTensor.
-    
+
     Args:
         tensor: A torch.Tensor or DTensor
-        
+
     Returns:
         The local tensor (unwrapped if DTensor)
     """
@@ -79,14 +80,14 @@ def get_grad_norm(
     dtype: torch.dtype = torch.float32,
 ) -> float:
     """Calculate the norm of gradients.
-    
+
     Args:
         parameters: Parameters to compute gradient norm for
         dp_group: Process group for data parallel communication
         tp_group: Process group for tensor parallel communication (optional)
         norm_type: Type of the used p-norm
         dtype: Data type for norm computation
-        
+
     Returns:
         Total norm of the gradients
     """
@@ -94,9 +95,7 @@ def get_grad_norm(
         parameters = [parameters]
 
     # Get gradients
-    grads_for_norm = [
-        to_local_if_dtensor(p.grad.detach()) for p in parameters if p.grad is not None
-    ]
+    grads_for_norm = [to_local_if_dtensor(p.grad.detach()) for p in parameters if p.grad is not None]
 
     norm_type = float(norm_type)
     total_norm = 0.0
@@ -105,13 +104,9 @@ def get_grad_norm(
         total_norm = max(grad.abs().max().item() for grad in grads_for_norm) if grads_for_norm else 0.0
         total_norm_cuda = torch.tensor([float(total_norm)], dtype=dtype, device="cuda")
         # Reduce max across all data-parallel GPUs
-        torch.distributed.all_reduce(
-            total_norm_cuda, op=torch.distributed.ReduceOp.MAX, group=dp_group
-        )
+        torch.distributed.all_reduce(total_norm_cuda, op=torch.distributed.ReduceOp.MAX, group=dp_group)
         if tp_group is not None:
-            torch.distributed.all_reduce(
-                total_norm_cuda, op=torch.distributed.ReduceOp.MAX, group=tp_group
-            )
+            torch.distributed.all_reduce(total_norm_cuda, op=torch.distributed.ReduceOp.MAX, group=tp_group)
         total_norm = float(total_norm_cuda[0].item())
     else:
         total_norm_cuda = torch.tensor(0.0, dtype=dtype, device="cuda")
@@ -120,13 +115,9 @@ def get_grad_norm(
             total_norm_cuda += torch.pow(grad_norm, norm_type)
 
         # Sum across all data-parallel GPUs
-        torch.distributed.all_reduce(
-            total_norm_cuda, op=torch.distributed.ReduceOp.SUM, group=dp_group
-        )
+        torch.distributed.all_reduce(total_norm_cuda, op=torch.distributed.ReduceOp.SUM, group=dp_group)
         if tp_group is not None:
-            torch.distributed.all_reduce(
-                total_norm_cuda, op=torch.distributed.ReduceOp.SUM, group=tp_group
-            )
+            torch.distributed.all_reduce(total_norm_cuda, op=torch.distributed.ReduceOp.SUM, group=tp_group)
         total_norm = float(total_norm_cuda.item() ** (1.0 / norm_type))
 
     return total_norm
@@ -138,9 +129,9 @@ def clip_grad_by_total_norm_(
     total_norm: float,
 ):
     """Clips gradient of an iterable of parameters by total norm.
-    
+
     Note that the gradients are modified in place.
-    
+
     Args:
         parameters: Parameters to clip gradients for
         max_grad_norm: Maximum norm of the gradients
@@ -153,21 +144,17 @@ def clip_grad_by_total_norm_(
     clip_coeff = max_grad_norm / (total_norm + 1.0e-6)
 
     if clip_coeff < 1.0:
-        grads = [
-            to_local_if_dtensor(p.grad.detach())
-            for p in parameters
-            if p.grad is not None
-        ]
+        grads = [to_local_if_dtensor(p.grad.detach()) for p in parameters if p.grad is not None]
         for g in grads:
             g.mul_(clip_coeff)
 
 
 def get_llama_tp_plan(sequence_parallel: bool = False) -> dict:
     """Get tensor parallel plan for LLaMA-style models.
-    
+
     Args:
         sequence_parallel: Whether to enable sequence parallelism
-        
+
     Returns:
         Dictionary mapping module paths to parallel styles
     """
@@ -187,17 +174,13 @@ def get_llama_tp_plan(sequence_parallel: bool = False) -> dict:
 
     if sequence_parallel:
         base_model_sp_plan = {
-            "model.embed_tokens": RowwiseParallel(
-                input_layouts=Replicate(), output_layouts=Shard(1)
-            ),
+            "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
             "model.norm": SequenceParallel(),
             "model.layers.*.input_layernorm": SequenceParallel(),
             "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
             "model.layers.*.post_attention_layernorm": SequenceParallel(),
             "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
-            "lm_head": ColwiseParallel(
-                input_layouts=Shard(1), output_layouts=Replicate(), use_local_output=True
-            ),
+            "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Replicate(), use_local_output=True),
         }
         base_model_tp_plan.update(base_model_sp_plan)
 
@@ -207,21 +190,21 @@ def get_llama_tp_plan(sequence_parallel: bool = False) -> dict:
 @lru_cache
 def translate_parallel_style(style: str) -> ParallelStyle:
     """Translate parallel style string to ParallelStyle object.
-    
+
     This function translates HuggingFace's string-based parallel style
     specifications to PyTorch DTensor parallelization strategies.
-    
+
     Based on NeMo-RL implementation:
     https://github.com/NVIDIA/NeMo-RL/blob/main/nemo_rl/models/dtensor/parallelize.py
-    
+
     Args:
         style: String representation of parallel style.
-               Supported values: "colwise", "rowwise", "colwise_rep", 
+               Supported values: "colwise", "rowwise", "colwise_rep",
                "rowwise_rep", "sequence_parallel"
-    
+
     Returns:
         Corresponding ParallelStyle object
-        
+
     Raises:
         ValueError: If the style is not recognized
     """
@@ -243,26 +226,26 @@ def translate_parallel_style(style: str) -> ParallelStyle:
 
 def get_hf_tp_plan(model: nn.Module) -> Dict[str, ParallelStyle]:
     """Get tensor parallel plan from HuggingFace model's built-in `._tp_plan`.
-    
+
     This function retrieves tensor parallelism strategies from HuggingFace models
     that have built-in TP support (transformers >= 4.51). It handles:
     - TP strategies from model class (`model_cls._tp_plan`)
     - TP strategies from model instance (`model._tp_plan`)
     - TP strategies from inner model (`model.model._tp_plan`)
     - Special handling for embed_tokens and lm_head for speedup
-    
+
     Based on NeMo-RL implementation:
     https://github.com/NVIDIA/NeMo-RL/blob/main/nemo_rl/models/dtensor/parallelize.py
-    
+
     Args:
         model: A HuggingFace model instance (PreTrainedModel)
-    
+
     Returns:
         Dictionary mapping model component paths to their parallelization strategies
-        
+
     Raises:
         AssertionError: If no TP plan is found for the model
-        
+
     Example:
         >>> from transformers import AutoModelForCausalLM
         >>> model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-2-7b-hf")
@@ -270,44 +253,44 @@ def get_hf_tp_plan(model: nn.Module) -> Dict[str, ParallelStyle]:
         >>> print(tp_plan.keys())
     """
     model_cls = type(model)
-    
+
     # Determine model structure and prefix
     # Handle different model architectures
-    inner_model = model.model if hasattr(model, 'model') else model
+    inner_model = model.model if hasattr(model, "model") else model
     model_prefix = "model"
-    config = model.config if hasattr(model, 'config') else None
-    
+    config = model.config if hasattr(model, "config") else None
+
     # Handle Vision-Language models with different structures
     model_cls_name = model_cls.__name__
-    
+
     if "Qwen2VL" in model_cls_name or "Qwen2_5_VL" in model_cls_name:
-        if hasattr(model, 'model') and hasattr(model.model, 'language_model'):
+        if hasattr(model, "model") and hasattr(model.model, "language_model"):
             inner_model = model.model.language_model
             model_prefix = "model.language_model"
-            config = model.model.language_model.config if hasattr(model.model.language_model, 'config') else config
+            config = model.model.language_model.config if hasattr(model.model.language_model, "config") else config
     elif "Gemma3ForConditionalGeneration" in model_cls_name:
-        if hasattr(model, 'language_model'):
+        if hasattr(model, "language_model"):
             inner_model = model.language_model
             model_prefix = "language_model"
-            config = model.config.text_config if hasattr(model.config, 'text_config') else config
+            config = model.config.text_config if hasattr(model.config, "text_config") else config
     elif "Llama4ForConditionalGeneration" in model_cls_name:
-        if hasattr(model, 'language_model') and hasattr(model.language_model, 'model'):
+        if hasattr(model, "language_model") and hasattr(model.language_model, "model"):
             inner_model = model.language_model.model
             model_prefix = "language_model.model"
-            config = model.language_model.model.config if hasattr(model.language_model.model, 'config') else config
+            config = model.language_model.model.config if hasattr(model.language_model.model, "config") else config
     elif any(name in model_cls_name for name in ["Llava", "LlavaNext", "LlavaNextVideo", "LlavaOnevision"]):
-        if hasattr(model, 'model') and hasattr(model.model, 'language_model'):
+        if hasattr(model, "model") and hasattr(model.model, "language_model"):
             inner_model = model.model.language_model
             model_prefix = "model.language_model"
-            config = model.model.language_model.config if hasattr(model.model.language_model, 'config') else config
+            config = model.model.language_model.config if hasattr(model.model.language_model, "config") else config
     elif "Mistral3ForConditionalGeneration" in model_cls_name:
-        if hasattr(model, 'model') and hasattr(model.model, 'language_model'):
+        if hasattr(model, "model") and hasattr(model.model, "language_model"):
             inner_model = model.model.language_model
             model_prefix = "model.language_model"
-            config = model.model.language_model.config if hasattr(model.model.language_model, 'config') else config
-    
+            config = model.model.language_model.config if hasattr(model.model.language_model, "config") else config
+
     hf_tp_plan: Dict[str, Any] = {}
-    
+
     # Helper function to add prefix to keys that don't have it
     def add_prefix_if_needed(plan: Dict[str, Any], prefix: str) -> Dict[str, Any]:
         """Add prefix to keys that are relative paths (start with 'layers.')"""
@@ -322,35 +305,35 @@ def get_hf_tp_plan(model: nn.Module) -> Dict[str, ParallelStyle]:
                 # Keys like 'lm_head' or already prefixed keys
                 result[k] = v
         return result
-    
+
     # Collect TP plan from model class (model_cls._tp_plan will override after xxxForCausalLM.post_init())
     if hasattr(model_cls, "_tp_plan") and model_cls._tp_plan is not None:
         assert isinstance(model_cls._tp_plan, dict), f"model_cls._tp_plan is not a dict: {model_cls._tp_plan}"
         # Class-level tp_plan may have relative paths, add prefix
         prefixed_plan = add_prefix_if_needed(model_cls._tp_plan, model_prefix)
         hf_tp_plan.update(prefixed_plan)
-    
+
     # Collect TP plan from model instance
     if hasattr(model, "_tp_plan") and model._tp_plan is not None:
         # Instance-level tp_plan may also have relative paths
         prefixed_plan = add_prefix_if_needed(model._tp_plan, model_prefix)
         hf_tp_plan.update(prefixed_plan)
-    
+
     # Collect TP plan from inner model
     if hasattr(inner_model, "_tp_plan") and inner_model._tp_plan is not None:
         hf_tp_plan.update({f"{model_prefix}.{k}": v for k, v in inner_model._tp_plan.items()})
-    
+
     if len(hf_tp_plan) == 0:
         raise AssertionError(
             f"HuggingFace tp plan is not supported for {model_cls}. "
             f"Please set use_hf_tp_plan=False or provide a custom tensor parallel plan. "
             f"Alternatively, the model may not have built-in TP support (requires transformers >= 4.51)."
         )
-    
+
     # Add embed_tokens if not present (set to rowwise_rep for speedup)
     if f"{model_prefix}.embed_tokens" not in hf_tp_plan:
         hf_tp_plan[f"{model_prefix}.embed_tokens"] = "rowwise_rep"
-    
+
     # Convert string-based parallel styles to ParallelStyle objects
     converted_plan: Dict[str, ParallelStyle] = {}
     for k, v in hf_tp_plan.items():
@@ -364,19 +347,20 @@ def get_hf_tp_plan(model: nn.Module) -> Dict[str, ParallelStyle]:
             converted_plan[k] = v
         else:
             raise ValueError(f"Unknown parallel style type for key {k}: {type(v)}")
-    
+
     return converted_plan
 
 
 # Model-specific TP plan functions for models without HF built-in support
 # These provide optimized plans based on NeMo-RL's implementation
 
+
 def get_qwen_tp_plan(sequence_parallel: bool = False) -> Dict[str, ParallelStyle]:
     """Get tensor parallel plan for Qwen2/Qwen3 models.
-    
+
     Args:
         sequence_parallel: Whether to enable sequence parallelism
-        
+
     Returns:
         Dictionary mapping module paths to parallel styles
     """
@@ -404,9 +388,7 @@ def get_qwen_tp_plan(sequence_parallel: bool = False) -> Dict[str, ParallelStyle
         }
     else:
         base_model_tp_plan = {
-            "lm_head": ColwiseParallel(
-                output_layouts=Replicate(), use_local_output=True
-            ),
+            "lm_head": ColwiseParallel(output_layouts=Replicate(), use_local_output=True),
             "model.embed_tokens": RowwiseParallel(
                 input_layouts=Replicate(),
             ),
@@ -418,17 +400,17 @@ def get_qwen_tp_plan(sequence_parallel: bool = False) -> Dict[str, ParallelStyle
             "model.layers.*.mlp.gate_proj": ColwiseParallel(),
             "model.layers.*.mlp.down_proj": RowwiseParallel(),
         }
-    
+
     return base_model_tp_plan
 
 
 def get_gemma_tp_plan(model_prefix: str = "model", sequence_parallel: bool = False) -> Dict[str, ParallelStyle]:
     """Get tensor parallel plan for Gemma3 models.
-    
+
     Args:
         model_prefix: Prefix for model path (e.g., "model" or "model.language_model")
         sequence_parallel: Whether to enable sequence parallelism
-        
+
     Returns:
         Dictionary mapping module paths to parallel styles
     """
@@ -446,9 +428,7 @@ def get_gemma_tp_plan(model_prefix: str = "model", sequence_parallel: bool = Fal
 
     if sequence_parallel:
         base_model_sp_plan = {
-            f"{model_prefix}.embed_tokens": RowwiseParallel(
-                input_layouts=Replicate(), output_layouts=Shard(1)
-            ),
+            f"{model_prefix}.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
             f"{model_prefix}.layers.*.input_layernorm": SequenceParallel(),
             f"{model_prefix}.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
             f"{model_prefix}.layers.*.post_attention_layernorm": SequenceParallel(),
@@ -456,9 +436,7 @@ def get_gemma_tp_plan(model_prefix: str = "model", sequence_parallel: bool = Fal
             f"{model_prefix}.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
             f"{model_prefix}.layers.*.post_feedforward_layernorm": SequenceParallel(),
             f"{model_prefix}.norm": SequenceParallel(),
-            "lm_head": ColwiseParallel(
-                input_layouts=Shard(1), output_layouts=Replicate(), use_local_output=True
-            ),
+            "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Replicate(), use_local_output=True),
         }
         base_model_tp_plan.update(base_model_sp_plan)
 
@@ -478,22 +456,22 @@ MODEL_TP_PLAN_FUNCTIONS = {
 
 def get_optimized_tp_plan(model: nn.Module, sequence_parallel: bool = False) -> Optional[Dict[str, ParallelStyle]]:
     """Get optimized tensor parallel plan for specific model architectures.
-    
+
     This function returns a hand-tuned TP plan for models that have known
     optimal parallelization strategies. Falls back to None if no optimized
     plan is available for the model type.
-    
+
     Args:
         model: The model to get the TP plan for
         sequence_parallel: Whether to enable sequence parallelism
-        
+
     Returns:
         Dictionary mapping module paths to parallel styles, or None if no
         optimized plan is available
     """
     model_cls_name = type(model).__name__
-    
+
     if model_cls_name in MODEL_TP_PLAN_FUNCTIONS:
         return MODEL_TP_PLAN_FUNCTIONS[model_cls_name](sequence_parallel)
-    
+
     return None

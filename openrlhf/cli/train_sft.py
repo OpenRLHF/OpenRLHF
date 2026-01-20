@@ -170,7 +170,7 @@ if __name__ == "__main__":
         choices=["deepspeed", "fsdp2"],
         help="Training backend: deepspeed or fsdp2",
     )
-    
+
     # DeepSpeed / FSDP2 Common Settings
     parser.add_argument("--micro_train_batch_size", type=int, default=8, help="batch size per GPU")
     parser.add_argument("--train_batch_size", type=int, default=128, help="Global training batch size")
@@ -213,7 +213,7 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="Use HuggingFace's built-in tensor parallel plan (._tp_plan) for FSDP2 backend. "
-             "Requires transformers >= 4.51. Falls back to optimized plans if HF tp_plan is not available.",
+        "Requires transformers >= 4.51. Falls back to optimized plans if HF tp_plan is not available.",
     )
     parser.add_argument(
         "--sequence_parallel",
