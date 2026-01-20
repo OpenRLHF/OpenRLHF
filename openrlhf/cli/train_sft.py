@@ -19,6 +19,7 @@ def train(args):
 
     # configure model
     # load huggingface model
+    backend = getattr(args, "backend", "deepspeed")
     model = Actor(
         args.pretrain,
         attn_implementation=args.attn_implementation,
@@ -31,6 +32,7 @@ def train(args):
         ds_config=strategy.get_ds_train_config(is_actor=True),
         packing_samples=args.packing_samples,
         use_liger_kernel=args.use_liger_kernel,
+        backend=backend,
     )
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
@@ -160,7 +162,16 @@ if __name__ == "__main__":
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
     parser.add_argument("--use_ds_universal_ckpt", action="store_true", default=False)
 
-    # DeepSpeed
+    # Training Backend
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default="deepspeed",
+        choices=["deepspeed", "fsdp2"],
+        help="Training backend: deepspeed or fsdp2",
+    )
+    
+    # DeepSpeed / FSDP2 Common Settings
     parser.add_argument("--micro_train_batch_size", type=int, default=8, help="batch size per GPU")
     parser.add_argument("--train_batch_size", type=int, default=128, help="Global training batch size")
     parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
@@ -196,6 +207,7 @@ if __name__ == "__main__":
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed Tensor parallel size")
+    parser.add_argument("--fsdp_tensor_parallel_size", type=int, default=1, help="FSDP2 Tensor parallel size")
 
     # SFT
     parser.add_argument("--max_epochs", type=int, default=2)
