@@ -412,10 +412,11 @@ class ActorPPOTrainer(ABC):
                 # DTensor redistribute uses the mesh backend (typically NCCL), so ensure param
                 # is on CUDA before running collectives. (ref: slime's update_weights)
                 param = param.cuda()
-                # redistribute handles all sharded dimensions (FSDP + TP), async for overlap
+                # redistribute handles all sharded dimensions (FSDP + TP)
+                # async_op=False to ensure data is ready before broadcast (fix race condition)
                 param = param.redistribute(
                     placements=(Replicate(),) * param.device_mesh.ndim,
-                    async_op=True,
+                    async_op=False,
                 ).to_local()
                 return param
             return param.detach().cuda()

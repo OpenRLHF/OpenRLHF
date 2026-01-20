@@ -291,7 +291,7 @@ class FSDP2Strategy(ABC):
             kwargs["foreach"] = False
         weight_decay = float(kwargs.pop("weight_decay", 0.0))
         grouped = self._get_optimizer_grouped_parameters(self._unwrap_model(model), weight_decay)
-        return optim.AdamW(grouped, **kwargs)
+        return optim.AdamW(grouped, fused=True, **kwargs)
 
     @staticmethod
     def _get_optimizer_grouped_parameters(
