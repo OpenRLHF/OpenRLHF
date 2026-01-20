@@ -152,9 +152,18 @@ class FSDP2Strategy(ABC):
         # Only DP contributes to batch size - CP processes same sequence chunks, TP processes same batch
         # This matches DeepSpeed formula: train_batch_size / (micro_train_batch_size * dp_size)
         effective_batch = self.micro_train_batch_size * self.dp_size
-        self.accumulated_gradient = (
-            1 if getattr(self.args, "use_dynamic_batch", False) else max(1, self.train_batch_size // effective_batch)
-        )
+        if getattr(self.args, "use_dynamic_batch", False):
+            self.accumulated_gradient = 1
+        else:
+            grad_accum, remainder = divmod(self.train_batch_size, effective_batch)
+            if grad_accum < 1 or remainder != 0:
+                raise ValueError(
+                    "Invalid batch config for FSDP2: require "
+                    "`train_batch_size = micro_train_batch_size * dp_size * grad_accum_steps` "
+                    f"(got train_batch_size={self.train_batch_size}, "
+                    f"micro_train_batch_size={self.micro_train_batch_size}, dp_size={self.dp_size})."
+                )
+            self.accumulated_gradient = grad_accum
 
         self._log(
             f"world={self.world_size} dp={self.dp_size} cp={self.ring_attn_size} "
