@@ -570,7 +570,10 @@ def offload_fsdp2_states(model: nn.Module, optimizer=None) -> None:
     # Log GPU memory after offload
     if rank == 0:
         mem_after = torch.cuda.memory_allocated() / 1024**3
-        print(f"[FSDP2 Offload] GPU memory after: {mem_after:.2f} GB (freed: {mem_before - mem_after:.2f} GB)", flush=True)
+        print(
+            f"[FSDP2 Offload] GPU memory after: {mem_after:.2f} GB (freed: {mem_before - mem_after:.2f} GB)",
+            flush=True,
+        )
 
 
 def reload_fsdp2_states(model: nn.Module, optimizer=None) -> None:
@@ -613,7 +616,9 @@ def reload_fsdp2_states(model: nn.Module, optimizer=None) -> None:
     # Log GPU memory after reload
     if rank == 0:
         mem_after = torch.cuda.memory_allocated() / 1024**3
-        print(f"[FSDP2 Reload] GPU memory after: {mem_after:.2f} GB (used: {mem_after - mem_before:.2f} GB)", flush=True)
+        print(
+            f"[FSDP2 Reload] GPU memory after: {mem_after:.2f} GB (used: {mem_after - mem_before:.2f} GB)", flush=True
+        )
 
 
 def gather_fsdp2_params_for_broadcast(model: nn.Module) -> Dict[str, torch.Tensor]:
