@@ -600,6 +600,9 @@ class FSDP2Strategy(ABC):
         # Apply FSDP2
         inner_model = self._apply_fsdp2(inner_model, dtype, is_training=True)
 
+        # FSDP2 doesn't automatically move buffers to the correct device
+        self._move_buffers_to_device(inner_model)
+
         if is_actor:
             model.model = inner_model
         else:
@@ -661,12 +664,27 @@ class FSDP2Strategy(ABC):
         # Apply FSDP2
         inner_model = self._apply_fsdp2(inner_model, dtype, is_training=False)
 
+        # FSDP2 doesn't automatically move buffers to the correct device
+        # We need to do this explicitly for buffers like 'mean' and 'std' in reward models
+        self._move_buffers_to_device(inner_model)
+
         if is_actor:
             model.model = inner_model
         else:
             model = inner_model
 
         return model
+
+    def _move_buffers_to_device(self, model: nn.Module):
+        """Move model buffers to CUDA.
+
+        FSDP2 doesn't automatically move buffers to the correct device,
+        so we need to do this explicitly for models that have buffers like
+        'mean' and 'std' in reward models.
+        """
+        for buf in model.buffers():
+            if buf.device.type == "cpu":
+                torch.utils.swap_tensors(buf, buf.to("cuda"))
 
     def _apply_fsdp2(self, model: nn.Module, dtype: torch.dtype, is_training: bool = True):
         """Apply FSDP2 to the model.

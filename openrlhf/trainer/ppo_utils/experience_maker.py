@@ -560,11 +560,21 @@ class RemoteExperienceMaker:
         attention_mask_list = [s.attention_mask for s in samples_list]
         action_mask_list = [s.action_mask for s in samples_list]
 
+        # Check if we need FSDP2 sleep mode for ref/reward models
+        is_fsdp2_sleep = (
+            getattr(args, "backend", "deepspeed") == "fsdp2"
+            and getattr(args, "fsdp2_enable_sleep", False)
+            and getattr(args, "ref_reward_offload", False)
+        )
+
         # The rewards are already filled in the samples_list, such as the agent's environment rewards
         use_reward_model = samples_list[0].rewards is None
         if use_reward_model:
             if self.reward_model_group is None:
                 raise ValueError("reward_model_group is required when rewards are not precomputed")
+            # For FSDP2, reload reward model before forward
+            if is_fsdp2_sleep:
+                ray.get(self.reward_model_group.async_run_method(method_name="reload_states"))
             # Batch call reward model
             r_refs = self.reward_model_group.async_run_method_batch(
                 method_name="forward",
@@ -579,8 +589,14 @@ class RemoteExperienceMaker:
         if args.colocate_all_models and r_refs is not None:
             ray.get(r_refs)
             ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
+            # For FSDP2, offload reward model after forward
+            if is_fsdp2_sleep:
+                ray.get(self.reward_model_group.async_run_method(method_name="offload_states"))
 
         # Batch call actor model
+        # For FSDP2, reload actor model before forward (inference mode)
+        if is_fsdp2_sleep:
+            ray.get(self.actor_model_group.async_run_method(method_name="reload_states"))
         action_log_probs_ref = self.actor_model_group.async_run_method_batch(
             method_name="forward",
             sequences=sequences_list,
@@ -592,6 +608,9 @@ class RemoteExperienceMaker:
         if args.colocate_all_models or args.colocate_actor_ref:
             ray.get(action_log_probs_ref)
             ray.get(self.actor_model_group.async_run_method(method_name="empty_cache"))
+            # For FSDP2, offload actor model after forward
+            if is_fsdp2_sleep:
+                ray.get(self.actor_model_group.async_run_method(method_name="offload_states"))
 
         # Batch call critic model
         if self.critic_model_group is not None:
@@ -599,6 +618,9 @@ class RemoteExperienceMaker:
                 ray.get(r_refs)
                 ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
 
+            # For FSDP2, reload critic model before forward (inference mode)
+            if is_fsdp2_sleep:
+                ray.get(self.critic_model_group.async_run_method(method_name="reload_states"))
             value_ref = self.critic_model_group.async_run_method_batch(
                 method_name="forward",
                 sequences=sequences_list,
@@ -608,11 +630,17 @@ class RemoteExperienceMaker:
             if args.colocate_all_models or args.colocate_critic_reward:
                 ray.get(value_ref)
                 ray.get(self.critic_model_group.async_run_method(method_name="empty_cache"))
+                # For FSDP2, offload critic model after forward
+                if is_fsdp2_sleep:
+                    ray.get(self.critic_model_group.async_run_method(method_name="offload_states"))
         else:
             value_ref = ray.put([[None]] * (len(samples_list) * args.ring_attn_size * args.ds_tensor_parallel_size))
 
-        # Batch call initial model
+        # Batch call initial model (reference model)
         if self.initial_model_group is not None:
+            # For FSDP2, reload ref model before forward
+            if is_fsdp2_sleep:
+                ray.get(self.initial_model_group.async_run_method(method_name="reload_states"))
             base_action_log_probs_ref = self.initial_model_group.async_run_method_batch(
                 method_name="forward",
                 sequences=sequences_list,
@@ -623,6 +651,9 @@ class RemoteExperienceMaker:
             if args.colocate_all_models or args.colocate_actor_ref:
                 ray.get(base_action_log_probs_ref)
                 ray.get(self.initial_model_group.async_run_method(method_name="empty_cache"))
+                # For FSDP2, offload ref model after forward
+                if is_fsdp2_sleep:
+                    ray.get(self.initial_model_group.async_run_method(method_name="offload_states"))
         else:
             base_action_log_probs_ref = ray.put(
                 [[None]] * (len(samples_list) * args.ring_attn_size * args.ds_tensor_parallel_size)

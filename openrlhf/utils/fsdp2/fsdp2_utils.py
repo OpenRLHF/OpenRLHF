@@ -454,12 +454,12 @@ MODEL_TP_PLAN_FUNCTIONS = {
 }
 
 
-def offload_fsdp2_optimizer(optimizer, device: str = "cpu") -> None:
-    """Offload optimizer states to CPU memory.
+def _move_fsdp2_optimizer_to_device(optimizer, device: str) -> None:
+    """Move optimizer states to specified device.
 
     Args:
-        optimizer: The optimizer whose states should be offloaded
-        device: Target device for offloading (default: "cpu")
+        optimizer: The optimizer whose states should be moved
+        device: Target device ("cpu" or "cuda")
     """
     if optimizer is None:
         return
@@ -468,6 +468,55 @@ def offload_fsdp2_optimizer(optimizer, device: str = "cpu") -> None:
         for k, v in state.items():
             if isinstance(v, (DTensor, torch.Tensor)):
                 state[k] = v.to(device)
+
+
+def _move_fsdp2_buffers_to_device(model: nn.Module, device: str) -> None:
+    """Move FSDP2 model buffers to specified device.
+
+    FSDP2 modules may not move buffers automatically, so we need to do this explicitly.
+
+    Args:
+        model: The FSDP2-wrapped model
+        device: Target device ("cpu" or "cuda")
+    """
+    for buf in model.buffers():
+        if buf.device.type != device:
+            torch.utils.swap_tensors(buf, buf.to(device))
+
+
+def _move_fsdp2_model_to_device(model: nn.Module, device: str) -> nn.Module:
+    """Move FSDP2 model to specified device.
+
+    For FSDP2, we need to:
+    1. Move the model parameters and buffers to the target device
+    2. Handle buffers explicitly since FSDP2 may not move them automatically
+
+    Based on NeMo-RL's implementation:
+    https://github.com/NVIDIA/NeMo-RL/blob/main/nemo_rl/models/policy/workers/dtensor_policy_worker.py
+
+    Args:
+        model: The FSDP2-wrapped model
+        device: Target device ("cpu" or "cuda")
+
+    Returns:
+        The model with parameters on the target device
+    """
+    # Move buffers explicitly - FSDP2 modules may not move buffers automatically
+    _move_fsdp2_buffers_to_device(model, device)
+
+    # Move model parameters to target device
+    model = model.to(device)
+    return model
+
+
+def offload_fsdp2_optimizer(optimizer, device: str = "cpu") -> None:
+    """Offload optimizer states to CPU memory.
+
+    Args:
+        optimizer: The optimizer whose states should be offloaded
+        device: Target device for offloading (default: "cpu")
+    """
+    _move_fsdp2_optimizer_to_device(optimizer, device)
 
 
 def reload_fsdp2_optimizer(optimizer, device: str = "cuda") -> None:
@@ -477,24 +526,17 @@ def reload_fsdp2_optimizer(optimizer, device: str = "cuda") -> None:
         optimizer: The optimizer whose states should be reloaded
         device: Target device for reloading (default: "cuda")
     """
-    if optimizer is None:
-        return
-
-    for state in optimizer.state.values():
-        for k, v in state.items():
-            if isinstance(v, (DTensor, torch.Tensor)):
-                state[k] = v.to(device)
+    _move_fsdp2_optimizer_to_device(optimizer, device)
 
 
 def offload_fsdp2_states(model: nn.Module, optimizer=None) -> None:
     """Offload FSDP2 model and optimizer states to CPU for memory efficiency.
 
     This is useful when you want to free up GPU memory during inference/generation
-    phases and reload the states before training.
+    phases in colocate mode. Call reload_fsdp2_states() before training.
 
-    Note: For FSDP2 with CPU offload enabled, the model parameters are already
-    managed by FSDP2's offload mechanism. This function primarily handles
-    optimizer state offloading.
+    Based on NeMo-RL's offload_after_refit implementation:
+    https://github.com/NVIDIA/NeMo-RL/blob/main/nemo_rl/models/policy/workers/dtensor_policy_worker.py
 
     Args:
         model: The FSDP2-wrapped model
@@ -502,15 +544,33 @@ def offload_fsdp2_states(model: nn.Module, optimizer=None) -> None:
     """
     import gc
 
+    rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+
+    # Log GPU memory before offload
+    if rank == 0:
+        mem_before = torch.cuda.memory_allocated() / 1024**3
+        print(f"[FSDP2 Offload] GPU memory before: {mem_before:.2f} GB", flush=True)
+
+    # Move model to CPU
+    _move_fsdp2_model_to_device(model, "cpu")
+
+    # Set model to eval mode after offloading
+    model.eval()
+
     # Offload optimizer states to CPU
     if optimizer is not None:
-        offload_fsdp2_optimizer(optimizer, "cpu")
+        _move_fsdp2_optimizer_to_device(optimizer, "cpu")
 
     gc.collect()
     torch.cuda.empty_cache()
     if torch.distributed.is_initialized():
         torch.distributed.barrier()
     torch.cuda.synchronize()
+
+    # Log GPU memory after offload
+    if rank == 0:
+        mem_after = torch.cuda.memory_allocated() / 1024**3
+        print(f"[FSDP2 Offload] GPU memory after: {mem_after:.2f} GB (freed: {mem_before - mem_after:.2f} GB)", flush=True)
 
 
 def reload_fsdp2_states(model: nn.Module, optimizer=None) -> None:
@@ -518,21 +578,42 @@ def reload_fsdp2_states(model: nn.Module, optimizer=None) -> None:
 
     This should be called before training after offload_fsdp2_states was used.
 
+    Based on NeMo-RL's prepare_for_training implementation:
+    https://github.com/NVIDIA/NeMo-RL/blob/main/nemo_rl/models/policy/workers/dtensor_policy_worker.py
+
     Args:
         model: The FSDP2-wrapped model
         optimizer: Optional optimizer to reload states
     """
     import gc
 
+    rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+
+    # Log GPU memory before reload
+    if rank == 0:
+        mem_before = torch.cuda.memory_allocated() / 1024**3
+        print(f"[FSDP2 Reload] GPU memory before: {mem_before:.2f} GB", flush=True)
+
+    # Move model back to CUDA
+    _move_fsdp2_model_to_device(model, "cuda")
+
+    # Set model to train mode
+    model.train()
+
     # Reload optimizer states to GPU
     if optimizer is not None:
-        reload_fsdp2_optimizer(optimizer, "cuda")
+        _move_fsdp2_optimizer_to_device(optimizer, "cuda")
 
     gc.collect()
     torch.cuda.empty_cache()
     if torch.distributed.is_initialized():
         torch.distributed.barrier()
     torch.cuda.synchronize()
+
+    # Log GPU memory after reload
+    if rank == 0:
+        mem_after = torch.cuda.memory_allocated() / 1024**3
+        print(f"[FSDP2 Reload] GPU memory after: {mem_after:.2f} GB (used: {mem_after - mem_before:.2f} GB)", flush=True)
 
 
 def gather_fsdp2_params_for_broadcast(model: nn.Module) -> Dict[str, torch.Tensor]:

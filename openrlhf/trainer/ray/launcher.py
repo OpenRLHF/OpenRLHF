@@ -132,6 +132,30 @@ class ReferenceModelActor(BaseModelActor):
         self.model = self.strategy.prepare(model, is_rlhf=True)
         self.model.eval()
 
+        # For FSDP2, offload ref model after initialization to save GPU memory
+        # It will be reloaded before forward pass and offloaded after
+        self._is_fsdp2 = getattr(strategy.args, "backend", "deepspeed") == "fsdp2"
+        if self._is_fsdp2 and strategy.args.ref_reward_offload:
+            self.offload_states()
+
+    def offload_states(self):
+        """Offload model states to CPU (for FSDP2)."""
+        if not self._is_fsdp2:
+            return
+        from openrlhf.utils.fsdp2.fsdp2_utils import offload_fsdp2_states
+
+        inner_model = self.model.model if hasattr(self.model, "model") else self.model
+        offload_fsdp2_states(inner_model, None)
+
+    def reload_states(self):
+        """Reload model states to GPU (for FSDP2)."""
+        if not self._is_fsdp2:
+            return
+        from openrlhf.utils.fsdp2.fsdp2_utils import reload_fsdp2_states
+
+        inner_model = self.model.model if hasattr(self.model, "model") else self.model
+        reload_fsdp2_states(inner_model, None)
+
     def forward(
         self,
         sequences: torch.LongTensor,
@@ -182,6 +206,28 @@ class RewardModelActor(BaseModelActor):
 
         self.model = self.strategy.prepare(model, is_rlhf=True)
         self.model.eval()
+
+        # For FSDP2, offload reward model after initialization to save GPU memory
+        # It will be reloaded before forward pass and offloaded after
+        self._is_fsdp2 = getattr(strategy.args, "backend", "deepspeed") == "fsdp2"
+        if self._is_fsdp2 and strategy.args.ref_reward_offload:
+            self.offload_states()
+
+    def offload_states(self):
+        """Offload model states to CPU (for FSDP2)."""
+        if not self._is_fsdp2:
+            return
+        from openrlhf.utils.fsdp2.fsdp2_utils import offload_fsdp2_states
+
+        offload_fsdp2_states(self.model, None)
+
+    def reload_states(self):
+        """Reload model states to GPU (for FSDP2)."""
+        if not self._is_fsdp2:
+            return
+        from openrlhf.utils.fsdp2.fsdp2_utils import reload_fsdp2_states
+
+        reload_fsdp2_states(self.model, None)
 
     def forward(
         self,

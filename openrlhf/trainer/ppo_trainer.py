@@ -156,7 +156,9 @@ class BasePPOTrainer(ABC):
             status.update(ray.get(ref)[0])
             ray.get(group.async_run_method(method_name="offload_states"))
 
-        if self.args.deepspeed_enable_sleep:
+        # Check for sleep mode - either deepspeed or fsdp2
+        enable_sleep = self.args.deepspeed_enable_sleep or getattr(self.args, "fsdp2_enable_sleep", False)
+        if enable_sleep:
             # Colocated/sleeping: run critic first, then actor.
             if run_critic:
                 _run_sleep(self.critic_model_group)
