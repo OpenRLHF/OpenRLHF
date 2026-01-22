@@ -149,7 +149,7 @@ class ReferenceModelActor(BaseModelActor):
 
     def reload_states(self):
         """Reload model states to GPU (for FSDP2).
-        
+
         Note: Reference model should stay in eval mode for inference.
         """
         if not self._is_fsdp2:
@@ -232,7 +232,7 @@ class RewardModelActor(BaseModelActor):
 
     def reload_states(self):
         """Reload model states to GPU (for FSDP2).
-        
+
         Note: Reward model should stay in eval mode for proper reward normalization.
         """
         if not self._is_fsdp2:

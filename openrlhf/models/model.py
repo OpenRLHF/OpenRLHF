@@ -104,8 +104,9 @@ def get_llm_for_sequence_regression(
 
     # Enable detailed logging for model loading to debug value_head
     import logging
+
     logging.getLogger("transformers.modeling_utils").setLevel(logging.WARNING)
-    
+
     model = cls_class.from_pretrained(
         model_name_or_path,
         config=config,
