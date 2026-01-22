@@ -648,13 +648,19 @@ class PolicyModelActor(BaseModelActor):
         """Generates actor values."""
         device = torch.cuda.current_device()
         self.actor.eval()
+
+        # For FSDP2, use autocast to ensure proper dtype handling after offload/reload
+        is_fsdp2 = getattr(self.strategy.args, "backend", "deepspeed") == "fsdp2"
+        dtype = torch.bfloat16 if is_fsdp2 and self.strategy.args.param_dtype == "bf16" else None
+
         with torch.no_grad():
-            action_log_probs = self.actor(
-                sequences.to(device),
-                action_mask.to(device),
-                attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
-            )
+            with torch.autocast(device_type="cuda", dtype=dtype, enabled=(dtype is not None)):
+                action_log_probs = self.actor(
+                    sequences.to(device),
+                    action_mask.to(device),
+                    attention_mask.to(device),
+                    ring_attn_group=self.strategy.ring_attn_group,
+                )
         self.actor.train()  # reset model state
         return action_log_probs.to("cpu")
 

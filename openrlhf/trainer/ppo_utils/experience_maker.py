@@ -560,11 +560,10 @@ class RemoteExperienceMaker:
         attention_mask_list = [s.attention_mask for s in samples_list]
         action_mask_list = [s.action_mask for s in samples_list]
 
-        # Check if we need FSDP2 sleep mode for ref/reward models
-        is_fsdp2_sleep = (
-            getattr(args, "backend", "deepspeed") == "fsdp2"
-            and getattr(args, "fsdp2_enable_sleep", False)
-            and getattr(args, "ref_reward_offload", False)
+        # Check if we need FSDP2 sleep mode for models
+        # Note: fsdp2_enable_sleep controls sleep/wake cycle, ref_reward_offload is separate
+        is_fsdp2_sleep = getattr(args, "backend", "deepspeed") == "fsdp2" and (
+            getattr(args, "fsdp2_enable_sleep", False) or getattr(args, "deepspeed_enable_sleep", False)
         )
 
         # The rewards are already filled in the samples_list, such as the agent's environment rewards

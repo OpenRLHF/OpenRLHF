@@ -143,11 +143,12 @@ docs/.build
 *.pt
 
 core
-*/ckpt/*
+*ckpt/*
 .vscode
 .nfs*
 *jianh*
 *test_scripts*
 *checkpoint/*
 *ppo_results/*
+
 

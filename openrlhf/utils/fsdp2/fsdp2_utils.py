@@ -576,10 +576,10 @@ def offload_fsdp2_states(model: nn.Module, optimizer=None) -> None:
         )
 
 
-def reload_fsdp2_states(model: nn.Module, optimizer=None) -> None:
-    """Reload FSDP2 model and optimizer states to GPU for training.
+def reload_fsdp2_states(model: nn.Module, optimizer=None, training_mode: bool = True) -> None:
+    """Reload FSDP2 model and optimizer states to GPU.
 
-    This should be called before training after offload_fsdp2_states was used.
+    This should be called before training/inference after offload_fsdp2_states was used.
 
     Based on NeMo-RL's prepare_for_training implementation:
     https://github.com/NVIDIA/NeMo-RL/blob/main/nemo_rl/models/policy/workers/dtensor_policy_worker.py
@@ -587,6 +587,9 @@ def reload_fsdp2_states(model: nn.Module, optimizer=None) -> None:
     Args:
         model: The FSDP2-wrapped model
         optimizer: Optional optimizer to reload states
+        training_mode: Whether to set model to train mode (True) or eval mode (False).
+                      Default is True for backward compatibility. Set to False for
+                      models like reward models that should stay in eval mode.
     """
     import gc
 
@@ -600,8 +603,11 @@ def reload_fsdp2_states(model: nn.Module, optimizer=None) -> None:
     # Move model back to CUDA
     _move_fsdp2_model_to_device(model, "cuda")
 
-    # Set model to train mode
-    model.train()
+    # Set model to appropriate mode
+    if training_mode:
+        model.train()
+    else:
+        model.eval()
 
     # Reload optimizer states to GPU
     if optimizer is not None:

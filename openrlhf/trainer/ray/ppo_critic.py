@@ -222,11 +222,36 @@ class CriticModelActor(BaseModelActor):
                 gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
 
+        # Debug: Check value_head weights before strategy.prepare()
+        value_head_prefix = getattr(critic, "value_head_prefix", "score")
+        value_head_layer = getattr(critic, value_head_prefix, None)
+        if value_head_layer is not None and hasattr(value_head_layer, "weight"):
+            weight = value_head_layer.weight.data
+            strategy.print(
+                f"[DEBUG] Critic value_head (prefix={value_head_prefix}) BEFORE strategy.prepare(): "
+                f"mean={weight.mean().item():.6f}, std={weight.std().item():.6f}"
+            )
+
         # prepare models/optimizers...
         self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare(
             (critic, critic_optim, critic_scheduler),
             is_rlhf=True,
         )
+
+        # Debug: Check value_head weights after strategy.prepare()
+        critic_model = self.critic.model if hasattr(self.critic, "model") else self.critic
+        value_head_layer = getattr(critic_model, value_head_prefix, None)
+        if value_head_layer is not None and hasattr(value_head_layer, "weight"):
+            # For FSDP2, weights might be DTensors - convert to local tensor for checking
+            weight = value_head_layer.weight
+            if hasattr(weight, "full_tensor"):
+                weight = weight.full_tensor()
+            elif hasattr(weight, "to_local"):
+                weight = weight.to_local()
+            strategy.print(
+                f"[DEBUG] Critic value_head (prefix={value_head_prefix}) AFTER strategy.prepare(): "
+                f"mean={weight.data.mean().item():.6f}, std={weight.data.std().item():.6f}"
+            )
 
         # load checkpoint
         if args.load_checkpoint and os.path.exists(os.path.join(args.ckpt_path, "_actor")):
@@ -266,14 +291,20 @@ class CriticModelActor(BaseModelActor):
         """Generates critic values."""
         device = torch.cuda.current_device()
         self.critic.eval()
+
+        # For FSDP2, use autocast to ensure proper dtype handling after offload/reload
+        is_fsdp2 = getattr(self.strategy.args, "backend", "deepspeed") == "fsdp2"
+        dtype = torch.bfloat16 if is_fsdp2 and self.strategy.args.param_dtype == "bf16" else None
+
         with torch.no_grad():
-            value = self.critic(
-                sequences.to(device),
-                action_mask.to(device),
-                attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
-                values_allgather=True,
-            )
+            with torch.autocast(device_type="cuda", dtype=dtype, enabled=(dtype is not None)):
+                value = self.critic(
+                    sequences.to(device),
+                    action_mask.to(device),
+                    attention_mask.to(device),
+                    ring_attn_group=self.strategy.ring_attn_group,
+                    values_allgather=True,
+                )
         self.critic.train()  # reset model state
         return value.to("cpu")
 
