@@ -1,4 +1,8 @@
 class WorkerWrap:
+    # Initialize default values for model update tracking
+    _model_update_with_ray = False
+    _model_update_group = None
+
     def init_process_group(
         self, master_address, master_port, rank_offset, world_size, group_name, backend="nccl", use_ray=False
     ):

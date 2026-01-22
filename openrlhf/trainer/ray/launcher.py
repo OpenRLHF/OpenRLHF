@@ -11,7 +11,6 @@ from tqdm import tqdm
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
-from openrlhf.utils.deepspeed import DeepspeedStrategy
 
 
 class BaseDistributedActor:
@@ -52,8 +51,12 @@ class BaseDistributedActor:
 
 
 class BaseModelActor(BaseDistributedActor):
-    def _setup_distributed(self, strategy: DeepspeedStrategy):
-        # configure strategy
+    def _setup_distributed(self, strategy):
+        """Setup distributed training environment.
+
+        Args:
+            strategy: Training strategy (DeepspeedStrategy or FSDP2Strategy)
+        """
         self.strategy = strategy
         strategy.setup_distributed()
 
@@ -103,7 +106,13 @@ class BaseModelActor(BaseDistributedActor):
 
 @ray.remote(num_gpus=1)
 class ReferenceModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+    def init_model_from_pretrained(self, strategy, pretrain):
+        """Initialize model from pretrained checkpoint.
+
+        Args:
+            strategy: Training strategy (DeepspeedStrategy or FSDP2Strategy)
+            pretrain: Path to pretrained model
+        """
         self._setup_distributed(strategy)
         model = Actor(
             pretrain,
@@ -123,6 +132,34 @@ class ReferenceModelActor(BaseModelActor):
         self.model = self.strategy.prepare(model, is_rlhf=True)
         self.model.eval()
 
+        # For FSDP2, offload ref model after initialization to save GPU memory
+        # It will be reloaded before forward pass and offloaded after
+        self._is_fsdp2 = getattr(strategy.args, "backend", "deepspeed") == "fsdp2"
+        if self._is_fsdp2 and strategy.args.ref_reward_offload:
+            self.offload_states()
+
+    def offload_states(self):
+        """Offload model states to CPU (for FSDP2)."""
+        if not self._is_fsdp2:
+            return
+        from openrlhf.utils.fsdp2.fsdp2_utils import offload_fsdp2_states
+
+        inner_model = self.model.model if hasattr(self.model, "model") else self.model
+        offload_fsdp2_states(inner_model, None)
+
+    def reload_states(self):
+        """Reload model states to GPU (for FSDP2).
+
+        Note: Reference model should stay in eval mode for inference.
+        """
+        if not self._is_fsdp2:
+            return
+        from openrlhf.utils.fsdp2.fsdp2_utils import reload_fsdp2_states
+
+        inner_model = self.model.model if hasattr(self.model, "model") else self.model
+        # Use training_mode=False to keep reference model in eval mode
+        reload_fsdp2_states(inner_model, None, training_mode=False)
+
     def forward(
         self,
         sequences: torch.LongTensor,
@@ -132,20 +169,31 @@ class ReferenceModelActor(BaseModelActor):
         packed_seq_lens: Optional[list[int]] = None,
     ) -> torch.Tensor:
         device = torch.cuda.current_device()
+
+        # For FSDP2, use autocast to ensure proper dtype handling after offload/reload
+        dtype = torch.bfloat16 if self._is_fsdp2 and self.strategy.args.param_dtype == "bf16" else None
+
         with torch.no_grad():
-            log_probs = self.model(
-                sequences.to(device),
-                action_mask.to(device),
-                attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
-                packed_seq_lens=packed_seq_lens,
-            )
+            with torch.autocast(device_type="cuda", dtype=dtype, enabled=(dtype is not None)):
+                log_probs = self.model(
+                    sequences.to(device),
+                    action_mask.to(device),
+                    attention_mask.to(device),
+                    ring_attn_group=self.strategy.ring_attn_group,
+                    packed_seq_lens=packed_seq_lens,
+                )
         return log_probs.to("cpu")
 
 
 @ray.remote(num_gpus=1)
 class RewardModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+    def init_model_from_pretrained(self, strategy, pretrain):
+        """Initialize model from pretrained checkpoint.
+
+        Args:
+            strategy: Training strategy (DeepspeedStrategy or FSDP2Strategy)
+            pretrain: Path to pretrained model
+        """
         self._setup_distributed(strategy)
         model = get_llm_for_sequence_regression(
             pretrain,
@@ -168,6 +216,32 @@ class RewardModelActor(BaseModelActor):
         self.model = self.strategy.prepare(model, is_rlhf=True)
         self.model.eval()
 
+        # For FSDP2, offload reward model after initialization to save GPU memory
+        # It will be reloaded before forward pass and offloaded after
+        self._is_fsdp2 = getattr(strategy.args, "backend", "deepspeed") == "fsdp2"
+        if self._is_fsdp2 and strategy.args.ref_reward_offload:
+            self.offload_states()
+
+    def offload_states(self):
+        """Offload model states to CPU (for FSDP2)."""
+        if not self._is_fsdp2:
+            return
+        from openrlhf.utils.fsdp2.fsdp2_utils import offload_fsdp2_states
+
+        offload_fsdp2_states(self.model, None)
+
+    def reload_states(self):
+        """Reload model states to GPU (for FSDP2).
+
+        Note: Reward model should stay in eval mode for proper reward normalization.
+        """
+        if not self._is_fsdp2:
+            return
+        from openrlhf.utils.fsdp2.fsdp2_utils import reload_fsdp2_states
+
+        # Use training_mode=False to keep reward model in eval mode
+        reload_fsdp2_states(self.model, None, training_mode=False)
+
     def forward(
         self,
         sequences: torch.LongTensor,
@@ -176,14 +250,23 @@ class RewardModelActor(BaseModelActor):
         pad_sequence=False,
     ) -> torch.Tensor:
         device = torch.cuda.current_device()
+        # Ensure model is in eval mode for proper reward normalization
+        if self.model.training:
+            self.strategy.print(f"[WARNING] RewardModelActor: model was in training mode, switching to eval")
+            self.model.eval()
+
+        # For FSDP2, use autocast to ensure proper dtype handling after offload/reload
+        dtype = torch.bfloat16 if self._is_fsdp2 and self.strategy.args.param_dtype == "bf16" else None
+
         with torch.no_grad():
-            reward = self.model(
-                sequences.to(device),
-                attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
-                pad_sequence=True,
-                packed_seq_lens=packed_seq_lens,
-            )
+            with torch.autocast(device_type="cuda", dtype=dtype, enabled=(dtype is not None)):
+                reward = self.model(
+                    sequences.to(device),
+                    attention_mask.to(device),
+                    ring_attn_group=self.strategy.ring_attn_group,
+                    pad_sequence=True,
+                    packed_seq_lens=packed_seq_lens,
+                )
         return reward.to("cpu")
 
 
