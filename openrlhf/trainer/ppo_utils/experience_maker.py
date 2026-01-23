@@ -494,6 +494,7 @@ class SamplesGenerator:
         )
 
     def _finalize_pending(self, pending_refs, pending_prompts):
+        ray.get([engine.abort_all.remote() for engine in self.vllm_engines])
         # Requeue prompt labels for the next batch.
         for prompt_label in pending_prompts:
             self._pending_prompts.append(prompt_label)
