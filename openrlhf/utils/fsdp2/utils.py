@@ -43,7 +43,7 @@ def clip_grad_norm_dtensor(
     parameters = [p for p in model.parameters() if p.grad is not None]
     if not parameters:
         return 0.0
-    
+
     norm_type = float(norm_type)
 
     # Group parameters by their sharding pattern (mesh + placements)
@@ -94,7 +94,7 @@ def clip_grad_norm_dtensor(
 
 
 # -----------------------------------------------------------------------------
-# EMA (Exponential Moving Average) - Helper Functions
+# EMA (Exponential Moving Average)
 # -----------------------------------------------------------------------------
 
 
@@ -104,12 +104,6 @@ def _dtensor_to_local(t: torch.Tensor) -> torch.Tensor:
     Under no_grad, DTensor.to_local() directly returns _local_tensor (no async).
     """
     return t.to_local() if isinstance(t, DTensor) else t
-
-
-
-# -----------------------------------------------------------------------------
-# EMA (Exponential Moving Average) - Main Function
-# -----------------------------------------------------------------------------
 
 
 @torch.no_grad()
