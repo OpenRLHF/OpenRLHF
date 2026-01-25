@@ -20,14 +20,12 @@ from abc import ABC
 from collections import defaultdict
 from datetime import timedelta
 
-import math
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import CPUOffloadPolicy, FSDPModule, MixedPrecisionPolicy, fully_shard
-from torch.distributed.tensor import DTensor
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import enable_full_determinism, set_seed
 
@@ -36,9 +34,9 @@ from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_g
 from openrlhf.utils import convert_to_torch_dtype
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
-
 from .checkpoint import load_distributed_checkpoint, load_hf_model, save_distributed_checkpoint, save_hf_model
 from .utils import (
+    clip_grad_norm_dtensor,
     get_checkpoint_metadata,
     move_optimizer_state,
     moving_average_fsdp2,
@@ -362,72 +360,6 @@ class FSDP2Strategy(ABC):
 
         loss.backward()
 
-    @torch.no_grad()
-    def _clip_grad_norm(self, model, max_norm, norm_type=2.0):
-        """Clip gradients for FSDP2 + TP models.
-
-        With FSDP mesh = dp_cp, parameters are DTensors distributed across multiple
-        dimensions. We:
-        - Group parameters by (mesh, placements) since different sharding patterns
-          cannot be mixed in a single clip_grad call.
-        - Use `torch.nn.utils.get_total_norm`, which may return a DTensor with partial
-          norm contributions; we materialize the global scalar via `full_tensor()`
-          (this triggers the needed collectives for sharded grads).
-        - Keep `total_norm` on CPU so `clip_grads_with_norm_` can safely apply the
-          scale to both CPU and CUDA grads (it moves the scalar internally).
-
-        Reference: Automodel's `_clip_grad_norm_impl` uses the same grouping idea.
-        """
-        parameters = [p for p in self._unwrap_model(model).parameters() if p.grad is not None]
-        if not parameters:
-            return 0.0
-
-        # Group parameters by their sharding pattern (mesh + placements)
-        # Different sharding patterns must be handled separately for clip_grads_with_norm_
-        sharding_groups = {}
-        for p in parameters:
-            if isinstance(p, DTensor):
-                # DeviceMesh and Placement are hashable.
-                key = (p.device_mesh, p.placements)
-            else:
-                key = ("regular", "regular")
-            sharding_groups.setdefault(key, []).append(p)
-
-        # Compute norm for each sharding group
-        group_norms = []
-        for group_params in sharding_groups.values():
-            grads = [p.grad for p in group_params]
-            norm = torch.nn.utils.get_total_norm(grads, norm_type, error_if_nonfinite=False)
-            if isinstance(norm, DTensor):
-                # get_total_norm may return a DTensor with partial norm placement; full_tensor()
-                # materializes a regular tensor containing the global scalar norm.
-                norm = norm.full_tensor()
-            # Keep as a plain CPU scalar tensor for device-agnostic clipping below.
-            group_norms.append(norm.detach().float().cpu())
-
-        # Combine norms across groups
-        if len(group_norms) == 0:
-            total_norm = torch.tensor(0.0)
-        elif len(group_norms) == 1:
-            total_norm = group_norms[0]
-        else:
-            if math.isinf(norm_type):
-                total_norm = torch.stack(group_norms).max()
-            else:
-                # Combine p-norms: (sum of p-th powers)^(1/p)
-                total_norm = sum(gn**norm_type for gn in group_norms) ** (1.0 / norm_type)
-
-        # If no clipping is needed, skip the (potentially large) in-place scaling pass.
-        # total_norm is a CPU scalar tensor, so this check does not introduce GPU sync.
-        if torch.isfinite(total_norm).item() and (total_norm <= max_norm).item():
-            return total_norm.item()
-
-        # Clip gradients for each sharding group separately
-        for group_params in sharding_groups.values():
-            torch.nn.utils.clip_grads_with_norm_(group_params, max_norm, total_norm)
-
-        return total_norm.item()
-
     def optimizer_step(self, optimizer, model, scheduler, name="model", **kwargs):
         """Optimizer step with gradient accumulation."""
         key = f"step_{name}"
@@ -438,7 +370,7 @@ class FSDP2Strategy(ABC):
         if self.max_norm > 0:
             # Use DTensor-compatible gradient clipping for TP+FSDP
             # Standard clip_grad_norm_ fails when params have different meshes
-            self._clip_grad_norm(model, self.max_norm)
+            clip_grad_norm_dtensor(self._unwrap_model(model), max_norm=self.max_norm)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         if scheduler:
