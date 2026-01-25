@@ -20,6 +20,7 @@ from abc import ABC
 from collections import defaultdict
 from datetime import timedelta
 
+import math
 import torch
 import torch.distributed as dist
 import torch.nn as nn
@@ -298,7 +299,7 @@ class FSDP2Strategy(ABC):
         """Create AdamW optimizer."""
         if "foreach" not in kwargs and self.tp_size > 1 and self.dp_size <= 1:
             kwargs["foreach"] = False
-        weight_decay = float(kwargs.pop("weight_decay", 0.0))
+        weight_decay = kwargs.pop("weight_decay", 0.0)
         grouped = self._get_optimizer_grouped_parameters(self._unwrap_model(model), weight_decay)
         return optim.AdamW(grouped, fused=True, **kwargs)
 
@@ -377,20 +378,17 @@ class FSDP2Strategy(ABC):
 
         Reference: Automodel's `_clip_grad_norm_impl` uses the same grouping idea.
         """
-        import math
-
         parameters = [p for p in self._unwrap_model(model).parameters() if p.grad is not None]
         if not parameters:
             return 0.0
-
-        norm_type = float(norm_type)
 
         # Group parameters by their sharding pattern (mesh + placements)
         # Different sharding patterns must be handled separately for clip_grads_with_norm_
         sharding_groups = {}
         for p in parameters:
             if isinstance(p, DTensor):
-                key = (id(p.device_mesh), tuple(str(pl) for pl in p.placements))
+                # DeviceMesh and Placement are hashable.
+                key = (p.device_mesh, p.placements)
             else:
                 key = ("regular", "regular")
             sharding_groups.setdefault(key, []).append(p)
@@ -418,6 +416,11 @@ class FSDP2Strategy(ABC):
             else:
                 # Combine p-norms: (sum of p-th powers)^(1/p)
                 total_norm = sum(gn**norm_type for gn in group_norms) ** (1.0 / norm_type)
+
+        # If no clipping is needed, skip the (potentially large) in-place scaling pass.
+        # total_norm is a CPU scalar tensor, so this check does not introduce GPU sync.
+        if torch.isfinite(total_norm).item() and (total_norm <= max_norm).item():
+            return total_norm.item()
 
         # Clip gradients for each sharding group separately
         for group_params in sharding_groups.values():
@@ -472,7 +475,7 @@ class FSDP2Strategy(ABC):
         if sampler is None and dist.is_initialized():
             # Use dp_group for data sharding - CP ranks share the same data
             # This ensures all CP ranks in the same DP group see identical samples
-            dp_group = self.dp_group if hasattr(self, "dp_group") and self.dp_group else None
+            dp_group = self.dp_group if self.dp_group else None
             sampler = DistributedSampler(
                 dataset,
                 num_replicas=dist.get_world_size(dp_group) if dp_group else dist.get_world_size(),
