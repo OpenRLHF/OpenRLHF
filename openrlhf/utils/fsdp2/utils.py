@@ -4,14 +4,94 @@ FSDP2 Utilities
 
 - moving_average_fsdp2: EMA update for FSDP2 models
 - move_optimizer_state: Move optimizer state between devices
+- clip_grad_norm_dtensor: Sharding-aware grad norm clipping for DTensor
 - ensure_tied_word_embeddings: Keep tied embeddings stable
 """
 
+import math
 from typing import Callable
 
 import torch
 import torch.nn as nn
 from torch.distributed.tensor import DTensor
+
+# -----------------------------------------------------------------------------
+# Gradient Norm Clipping (DTensor/FSDP2)
+# -----------------------------------------------------------------------------
+
+
+@torch.no_grad()
+def clip_grad_norm_dtensor(
+    model: nn.Module,
+    max_norm: float,
+    norm_type: float = 2.0,
+) -> float:
+    """Clip gradients for FSDP2 + TP models.
+
+    With FSDP mesh = dp_cp, parameters are DTensors distributed across multiple
+    dimensions. We:
+    - Group parameters by (mesh, placements) since different sharding patterns
+      cannot be mixed in a single clip_grad call.
+    - Use `torch.nn.utils.get_total_norm`, which may return a DTensor with partial
+      norm contributions; we materialize the global scalar via `full_tensor()`
+      (this triggers the needed collectives for sharded grads).
+    - Keep `total_norm` on CPU so `clip_grads_with_norm_` can safely apply the
+      scale to both CPU and CUDA grads (it moves the scalar internally).
+
+    Reference: Automodel's `_clip_grad_norm_impl` uses the same grouping idea.
+    """
+    parameters = [p for p in model.parameters() if p.grad is not None]
+    if not parameters:
+        return 0.0
+    
+    norm_type = float(norm_type)
+
+    # Group parameters by their sharding pattern (mesh + placements)
+    # Different sharding patterns must be handled separately for clip_grads_with_norm_
+    sharding_groups = {}
+    for p in parameters:
+        if isinstance(p, DTensor):
+            # DeviceMesh and Placement are hashable.
+            key = (p.device_mesh, p.placements)
+        else:
+            key = ("regular", "regular")
+        sharding_groups.setdefault(key, []).append(p)
+
+    # Compute norm for each sharding group
+    group_norms = []
+    for group_params in sharding_groups.values():
+        grads = [p.grad for p in group_params]
+        norm = torch.nn.utils.get_total_norm(grads, norm_type, error_if_nonfinite=False)
+        if isinstance(norm, DTensor):
+            # get_total_norm may return a DTensor with partial norm placement; full_tensor()
+            # materializes a regular tensor containing the global scalar norm.
+            norm = norm.full_tensor()
+        # Keep as a plain CPU scalar tensor for device-agnostic clipping below.
+        group_norms.append(norm.detach().float().cpu())
+
+    # Combine norms across groups
+    if len(group_norms) == 0:
+        total_norm = torch.tensor(0.0)
+    elif len(group_norms) == 1:
+        total_norm = group_norms[0]
+    else:
+        if math.isinf(norm_type):
+            total_norm = torch.stack(group_norms).max()
+        else:
+            # Combine p-norms: (sum of p-th powers)^(1/p)
+            total_norm = sum(gn**norm_type for gn in group_norms) ** (1.0 / norm_type)
+
+    # If no clipping is needed, skip the (potentially large) in-place scaling pass.
+    # total_norm is a CPU scalar tensor, so this check does not introduce GPU sync.
+    if torch.isfinite(total_norm).item() and (total_norm <= max_norm).item():
+        return total_norm.item()
+
+    # Clip gradients for each sharding group separately
+    for group_params in sharding_groups.values():
+        torch.nn.utils.clip_grads_with_norm_(group_params, max_norm, total_norm)
+
+    return total_norm.item()
+
 
 # -----------------------------------------------------------------------------
 # EMA (Exponential Moving Average) - Helper Functions
@@ -24,6 +104,7 @@ def _dtensor_to_local(t: torch.Tensor) -> torch.Tensor:
     Under no_grad, DTensor.to_local() directly returns _local_tensor (no async).
     """
     return t.to_local() if isinstance(t, DTensor) else t
+
 
 
 # -----------------------------------------------------------------------------
