@@ -12,17 +12,23 @@ Two checkpoint formats:
    - Supports resuming training with optimizer/scheduler state
 """
 
+import json
 import os
 import shutil
 import warnings
-import json
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
 import torch.distributed as dist
-import torch.nn as nn
 import torch.distributed.checkpoint as dcp
-from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict, get_state_dict, set_model_state_dict, set_state_dict
+import torch.nn as nn
+from torch.distributed.checkpoint.state_dict import (
+    StateDictOptions,
+    get_model_state_dict,
+    get_state_dict,
+    set_model_state_dict,
+    set_state_dict,
+)
 from torch.distributed.checkpoint.stateful import Stateful
 from torch.distributed.fsdp import FSDPModule
 from torch.optim import Optimizer
@@ -70,9 +76,9 @@ def save_hf_model(
             # This mirrors the DeepSpeed implementation for consistency
             from peft.utils.save_and_load import get_peft_model_state_dict
 
-            # Save adapter config and metadata first
+            # Save adapter config and weights (PEFT internally extracts adapter weights from state)
             fsdp_model.save_pretrained(output_dir, state_dict=state, **kwargs)
-            # Extract adapter weights from the full state dict and save
+            # Extract adapter weights and save as .bin format for compatibility
             adapter_state = get_peft_model_state_dict(fsdp_model, state_dict=state)
             torch.save(adapter_state, os.path.join(output_dir, "adapter_model.bin"))
             # Remove safetensors file if exists (avoid conflicts, same as DeepSpeed)
@@ -130,6 +136,8 @@ def load_hf_model(
             broadcast_from_rank0=dist.is_initialized(),
         ),
     )
+
+
 # =============================================================================
 # Distributed Checkpoints (PyTorch DCP)
 # =============================================================================
