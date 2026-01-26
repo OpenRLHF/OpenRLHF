@@ -12,16 +12,18 @@ Two checkpoint formats:
    - Supports resuming training with optimizer/scheduler state
 """
 
-import gc
 import os
 import shutil
 import warnings
+import json
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict, set_model_state_dict
+import torch.distributed.checkpoint as dcp
+from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict, get_state_dict, set_model_state_dict, set_state_dict
+from torch.distributed.checkpoint.stateful import Stateful
 from torch.distributed.fsdp import FSDPModule
 from torch.optim import Optimizer
 
@@ -69,7 +71,7 @@ def save_hf_model(
             from peft.utils.save_and_load import get_peft_model_state_dict
 
             # Save adapter config and metadata first
-            fsdp_model.save_pretrained(output_dir, **kwargs)
+            fsdp_model.save_pretrained(output_dir, state_dict=state, **kwargs)
             # Extract adapter weights from the full state dict and save
             adapter_state = get_peft_model_state_dict(fsdp_model, state_dict=state)
             torch.save(adapter_state, os.path.join(output_dir, "adapter_model.bin"))
@@ -81,11 +83,14 @@ def save_hf_model(
             # Regular model: save directly
             fsdp_model.save_pretrained(output_dir, state_dict=state, **kwargs)
 
-        _save_extras(fsdp_model, output_dir, tokenizer, metadata)
+        if tokenizer:
+            tokenizer.save_pretrained(output_dir)
+        if metadata:
+            with open(os.path.join(output_dir, "fsdp2_runtime.json"), "w") as f:
+                json.dump(metadata, f, indent=2, sort_keys=True)
 
     dist.barrier()
     del state
-    gc.collect()
 
 
 def load_hf_model(
@@ -125,56 +130,6 @@ def load_hf_model(
             broadcast_from_rank0=dist.is_initialized(),
         ),
     )
-
-
-def _save_extras(model, output_dir: str, tokenizer, metadata: Optional[Dict]):
-    """Save config, tokenizer, and metadata on rank 0."""
-    import json
-
-    # Config
-    cfg = getattr(model, "config", None)
-    if cfg:
-        try:
-            cfg.save_pretrained(output_dir)
-        except Exception:
-            try:
-                cfg.to_json_file(os.path.join(output_dir, "config.json"))
-            except Exception:
-                pass
-
-        # Custom modules (auto_map)
-        if getattr(cfg, "auto_map", None):
-            try:
-                from transformers.dynamic_module_utils import custom_object_save
-
-                custom_object_save(model, output_dir, config=cfg)
-            except Exception:
-                pass
-
-    # Generation config
-    gen_cfg = getattr(model, "generation_config", None)
-    if gen_cfg:
-        try:
-            gen_cfg.save_pretrained(output_dir)
-        except Exception:
-            pass
-
-    # Tokenizer
-    if tokenizer:
-        try:
-            tokenizer.save_pretrained(output_dir)
-        except Exception:
-            pass
-
-    # Runtime metadata
-    if metadata:
-        try:
-            with open(os.path.join(output_dir, "fsdp2_runtime.json"), "w") as f:
-                json.dump(metadata, f, indent=2, sort_keys=True)
-        except Exception:
-            pass
-
-
 # =============================================================================
 # Distributed Checkpoints (PyTorch DCP)
 # =============================================================================
@@ -207,10 +162,6 @@ def save_distributed_checkpoint(
         max_num: Maximum number of checkpoints to keep
         max_mem: Maximum total checkpoint size in GB
     """
-    import torch.distributed.checkpoint as dcp
-    from torch.distributed.checkpoint.state_dict import get_state_dict
-    from torch.distributed.checkpoint.stateful import Stateful
-
     if not tag:
         raise ValueError("Checkpoint tag required")
 
@@ -279,10 +230,6 @@ def load_distributed_checkpoint(
     Returns:
         (tag, client_state) tuple
     """
-    import torch.distributed.checkpoint as dcp
-    from torch.distributed.checkpoint.state_dict import StateDictOptions, set_state_dict
-    from torch.distributed.checkpoint.stateful import Stateful
-
     if not os.path.exists(load_dir):
         raise FileNotFoundError(f"Checkpoint dir not found: {load_dir}")
 
@@ -342,11 +289,6 @@ def load_distributed_checkpoint(
         dcp.load({"app": app}, checkpoint_id=ckpt_path, process_group=process_group)
 
     return resolved, app.client_state
-
-
-# =============================================================================
-# Helpers
-# =============================================================================
 
 
 def _cleanup_old_checkpoints(save_dir: str, max_num: int, max_mem: int):
