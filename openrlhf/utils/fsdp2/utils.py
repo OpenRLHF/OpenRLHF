@@ -140,7 +140,7 @@ def moving_average_fsdp2(model: nn.Module, model_ema: nn.Module, unwrap_fn: Call
                 f"EMA tensor shape mismatch for '{name}': ema={tuple(dst.shape)} src={tuple(src_local.shape)}"
             )
         if src_local.device != dst.device or src_local.dtype != dst.dtype:
-            src_local = src_local.to(device=dst.device, dtype=dst.dtype, non_blocking=True)
+            src_local = src_local.to(device=dst.device, dtype=dst.dtype, non_blocking=False)
 
         if do_ema:
             dst.lerp_(src_local, lerp_weight)
