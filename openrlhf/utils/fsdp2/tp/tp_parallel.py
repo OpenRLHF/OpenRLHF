@@ -319,6 +319,17 @@ def _base_plan(sequence_parallel: bool = False, layernorm_cls=SequenceParallel):
     return plan
 
 
+def _set_sharded_lm_head(plan: dict, sequence_parallel: bool) -> dict:
+    """Force lm_head to output vocab-sharded DTensor logits (Shard(-1))."""
+    plan = dict(plan)
+    plan["lm_head"] = ColwiseParallelLora(
+        input_layouts=Shard(1) if sequence_parallel else Replicate(),
+        output_layouts=Shard(-1),
+        use_local_output=False,
+    )
+    return plan
+
+
 def _llama_plan(model, sequence_parallel: bool):
     return _base_plan(sequence_parallel, SequenceParallelPreserveGrad)
 
@@ -382,23 +393,26 @@ def _get_hf_plan(model):
     return result
 
 
-def get_tp_plan(model, sequence_parallel: bool = False, custom_plan=None):
+def get_tp_plan(model, sequence_parallel: bool = False, custom_plan=None, shard_logits: bool = False):
     """Get TP plan: custom > model-specific > HuggingFace > base."""
     if custom_plan:
-        return {k: _str_to_style(v) if isinstance(v, str) else v for k, v in custom_plan.items()}
+        plan = {k: _str_to_style(v) if isinstance(v, str) else v for k, v in custom_plan.items()}
+        return _set_sharded_lm_head(plan, sequence_parallel) if shard_logits else plan
 
     cls_name = type(model).__name__
     if cls_name in _MODEL_PLANS:
         try:
-            return _MODEL_PLANS[cls_name](model, sequence_parallel)
+            plan = _MODEL_PLANS[cls_name](model, sequence_parallel)
+            return _set_sharded_lm_head(plan, sequence_parallel) if shard_logits else plan
         except Exception as e:
             logger.warning(f"Plan failed for {cls_name}: {e}")
 
     hf_plan = _get_hf_plan(model)
     if hf_plan:
-        return hf_plan
+        return _set_sharded_lm_head(hf_plan, sequence_parallel) if shard_logits else hf_plan
 
-    return _base_plan(sequence_parallel)
+    plan = _base_plan(sequence_parallel)
+    return _set_sharded_lm_head(plan, sequence_parallel) if shard_logits else plan
 
 
 def maybe_add_score_layer_plan(model, plan: dict):
@@ -471,6 +485,7 @@ def apply_tensor_parallel(
     validate: bool = True,
     ring_attn_group=None,
     enable_async_tp: bool = False,
+    shard_logits: bool = False,
 ):
     """Apply Tensor Parallelism (DTensor parallel) to a model."""
 
@@ -493,7 +508,7 @@ def apply_tensor_parallel(
     if validate:
         validate_tp_mesh(tp_root, tp_mesh)
     if tp_plan is None:
-        tp_plan = get_tp_plan(tp_root, sequence_parallel)
+        tp_plan = get_tp_plan(tp_root, sequence_parallel, shard_logits=shard_logits)
 
     tp_plan = maybe_add_score_layer_plan(model, tp_plan)
 
