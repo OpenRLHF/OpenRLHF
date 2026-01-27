@@ -113,6 +113,12 @@ def _logsumexp_sharded(logits_local: torch.Tensor, group, dim: int = -1) -> torc
     return global_max + torch.log(global_exp_sum)
 
 
+def _local_slice_by_vocab(logits: torch.Tensor, vocab_start: int, vocab_end: int) -> torch.Tensor:
+    if isinstance(logits, DTensor):
+        return logits.to_local()
+    return logits[..., vocab_start:vocab_end]
+
+
 def log_probs_from_sharded_logits(
     logits: DTensor,
     labels: torch.Tensor,
@@ -168,6 +174,68 @@ def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor, temperatur
             log_probs_labels.append(row_log_probs_labels)
         log_probs_labels = torch.stack(log_probs_labels)
     return log_probs_labels
+
+
+def select_token_logits(logits: torch.Tensor, token_ids: torch.Tensor) -> torch.Tensor:
+    """Select logits for specific token ids, supports DTensor-sharded vocab."""
+    if not isinstance(logits, DTensor):
+        token_ids = token_ids.to(device=logits.device)
+        return logits.index_select(dim=-1, index=token_ids)
+
+    group, local_logits, _, _, vocab_start, vocab_end = _get_dtensor_shard_info(logits)
+    token_ids = token_ids.to(local_logits.device)
+    local_indices = token_ids - vocab_start
+    in_shard = (token_ids >= vocab_start) & (token_ids < vocab_end)
+    safe_local = local_indices.clamp(0, max=local_logits.size(-1) - 1)
+    gathered = local_logits.index_select(dim=-1, index=safe_local)
+    local_values = torch.where(in_shard, gathered, torch.full_like(gathered, float("-inf")))
+
+    global_values = local_values.clone()
+    dist.all_reduce(global_values, op=dist.ReduceOp.MAX, group=group)
+    return global_values
+
+
+def kd_loss_from_logits(
+    logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    label: torch.Tensor,
+    ignore_index: int = -100,
+) -> torch.Tensor:
+    """KD loss that supports DTensor-sharded vocab logits."""
+    if not isinstance(logits, DTensor) and not isinstance(teacher_logits, DTensor):
+        teacher_probs = F.softmax(teacher_logits, dim=-1, dtype=torch.float32)
+        inf_mask = torch.isinf(logits)
+        logprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
+        prod_probs = torch.masked_fill(teacher_probs * logprobs, inf_mask, 0)
+        x = torch.sum(prod_probs, dim=-1).view(-1)
+        mask = (label != ignore_index).int()
+        return -torch.sum(x * mask.view(-1), dim=0) / torch.sum(mask.view(-1), dim=0)
+
+    ref = logits if isinstance(logits, DTensor) else teacher_logits
+    group, _, _, _, vocab_start, vocab_end = _get_dtensor_shard_info(ref)
+
+    student_local = _local_slice_by_vocab(logits, vocab_start, vocab_end).float()
+    teacher_local = _local_slice_by_vocab(teacher_logits, vocab_start, vocab_end).float()
+
+    if isinstance(teacher_logits, DTensor):
+        teacher_logsumexp = _logsumexp_sharded(teacher_local, group, dim=-1)
+    else:
+        teacher_logsumexp = torch.logsumexp(teacher_logits.float(), dim=-1)
+
+    if isinstance(logits, DTensor):
+        student_logsumexp = _logsumexp_sharded(student_local, group, dim=-1)
+    else:
+        student_logsumexp = torch.logsumexp(logits.float(), dim=-1)
+
+    teacher_probs_local = torch.exp(teacher_local - teacher_logsumexp.unsqueeze(-1))
+    student_logprobs_local = student_local - student_logsumexp.unsqueeze(-1)
+    local_sum = (teacher_probs_local * student_logprobs_local).sum(dim=-1)
+
+    total_sum = local_sum.clone()
+    dist.all_reduce(total_sum, op=dist.ReduceOp.SUM, group=group)
+
+    mask = (label != ignore_index).float()
+    return -(total_sum.view(-1) * mask.view(-1)).sum() / mask.sum()
 
 
 def masked_mean(tensor: torch.Tensor, mask: Optional[torch.Tensor], dim: int = None) -> torch.Tensor:
