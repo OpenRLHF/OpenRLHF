@@ -5,10 +5,15 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
-
-from .utils import masked_mean
-from .utils import log_probs_from_logits
 from torch.distributed.tensor import DTensor
+
+from .utils import (
+    _get_dtensor_shard_info,
+    kd_loss_from_logits,
+    log_probs_from_logits,
+    masked_mean,
+    select_token_logits,
+)
 
 
 class GPTLMLoss(nn.Module):
@@ -362,20 +367,7 @@ class KDLoss(nn.Module):
         self.IGNORE_INDEX = -100
 
     def forward(self, logits: torch.Tensor, teacher_logits: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
-        if isinstance(logits, DTensor) or isinstance(teacher_logits, DTensor):
-            raise RuntimeError(
-                "KDLoss does not support sharded (DTensor) logits. "
-                "Disable --tp_shard_logits for KD runs."
-            )
-        teacher_probs = F.softmax(teacher_logits, dim=-1, dtype=torch.float32)
-        inf_mask = torch.isinf(logits)
-        logprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
-        prod_probs = torch.masked_fill(teacher_probs * logprobs, inf_mask, 0)
-        x = torch.sum(prod_probs, dim=-1).view(-1)
-        mask = (label != self.IGNORE_INDEX).int()
-        distil_loss = -torch.sum(x * mask.view(-1), dim=0) / torch.sum(mask.view(-1), dim=0)
-
-        return distil_loss
+        return kd_loss_from_logits(logits, teacher_logits, label, self.IGNORE_INDEX)
 
 
 class PRMLoss(nn.Module):
@@ -391,29 +383,61 @@ class PRMLoss(nn.Module):
         self.reward_token_ids = reward_token_ids
 
     def forward(self, inputs: torch.Tensor, logits: torch.Tensor, labels: torch.Tensor, *, return_acc: bool = False):
-        if isinstance(logits, DTensor):
-            raise RuntimeError(
-                "PRMLoss does not support sharded (DTensor) logits. "
-                "Disable --tp_shard_logits for PRM runs."
-            )
         placeholder_mask = inputs == self.placeholder_token_id
-        logits = logits[placeholder_mask].squeeze(1)
-        labels = labels[placeholder_mask]
-
         if labels.dtype == torch.float:
             # soft label
             assert len(self.reward_token_ids) == 2, "reward_token_ids should have 2 tokens for soft labels"
-            logits = logits[..., self.reward_token_ids]
+            token_ids = torch.tensor(self.reward_token_ids, dtype=torch.long)
+            logits = select_token_logits(logits, token_ids)
+            logits = logits[placeholder_mask].squeeze(1)
+            labels = labels[placeholder_mask]
             positive_labels = labels.to(logits.dtype)
             negative_labels = 1 - positive_labels
             negative_labels[positive_labels != -100] = 1 - positive_labels[positive_labels != -100]
             labels = torch.stack([positive_labels, negative_labels], dim=-1)
         elif self.reward_token_ids is not None:
             # hard label with reward_token_ids set. (otherwise the whole vocab will be trained together.)
-            logits = logits[..., self.reward_token_ids]
+            token_ids = torch.tensor(self.reward_token_ids, dtype=torch.long)
+            logits = select_token_logits(logits, token_ids)
+            logits = logits[placeholder_mask].squeeze(1)
+            labels = labels[placeholder_mask]
             # this is slow....
             for i, token in enumerate(self.reward_token_ids):
                 labels = torch.where(labels == token, i, labels)
+        else:
+            labels_ph = labels[placeholder_mask]
+            if isinstance(logits, DTensor):
+                # Avoid DTensor advanced indexing; compute token log-probs first (returns local tensor).
+                log_probs = log_probs_from_logits(logits, labels)
+                log_probs_ph = log_probs[placeholder_mask]
+
+                mask = labels_ph != self.IGNORE_INDEX
+                loss = -(log_probs_ph.view(-1) * mask.view(-1)).sum() / mask.sum()
+
+                if not return_acc:
+                    return loss
+
+                group, local_logits, _, _, vocab_start, _ = _get_dtensor_shard_info(logits)
+                local_ph = local_logits[placeholder_mask].float()
+                local_max, local_argmax = local_ph.max(dim=-1)
+
+                global_max = local_max.clone()
+                dist.all_reduce(global_max, op=dist.ReduceOp.MAX, group=group)
+
+                candidate_idx = torch.where(
+                    local_max == global_max,
+                    local_argmax + vocab_start,
+                    torch.full_like(local_argmax, -1),
+                )
+                global_argmax = candidate_idx.clone()
+                dist.all_reduce(global_argmax, op=dist.ReduceOp.MAX, group=group)
+
+                acc = (global_argmax == labels_ph).float()
+                acc = (acc * mask).sum() / mask.sum()
+                return loss, acc
+
+            logits = logits[placeholder_mask].squeeze(1)
+            labels = labels_ph
 
         loss = self.loss(logits, labels)
         if not return_acc:
