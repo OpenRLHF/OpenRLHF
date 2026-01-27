@@ -64,6 +64,7 @@ class FSDP2Strategy(ABC):
         self.fsdp2_cpu_offload = getattr(args, "fsdp2_cpu_offload", False)
         self.fsdp2_reshard_after_forward = getattr(args, "fsdp2_reshard_after_forward", True)
         self.sequence_parallel = getattr(args, "sequence_parallel", False)
+        self.tp_shard_logits = getattr(args, "tp_shard_logits", False)
 
         # CPUOffloadPolicy and manual offload are mutually exclusive (ref: slime)
         # When fsdp2_cpu_offload is enabled, FSDP2 manages CPU offload automatically,
@@ -224,6 +225,7 @@ class FSDP2Strategy(ABC):
                 sequence_parallel=self.sequence_parallel,
                 validate=True,
                 ring_attn_group=self.ring_attn_group if self.ring_attn_size > 1 else None,
+                shard_logits=self.tp_shard_logits,
             )
         else:
             self._log("Skipping TP (tp_size=1)")

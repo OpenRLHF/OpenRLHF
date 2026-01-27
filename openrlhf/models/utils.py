@@ -1,7 +1,9 @@
 from typing import Optional, Tuple, Union
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
+from torch.distributed.tensor import DTensor
 
 
 def compute_approx_kl(
@@ -82,7 +84,66 @@ def _logsumexp_by_chunk(logits: torch.Tensor, chunk_size: int = 1024) -> torch.T
     return logsumexp_values
 
 
+def _get_dtensor_shard_info(tensor: DTensor):
+    mesh = tensor.device_mesh
+    group = mesh.get_group()
+    rank = dist.get_rank(group)
+    world = dist.get_world_size(group)
+    local = tensor.to_local()
+    local_vocab = local.size(-1)
+
+    size_tensor = torch.tensor(local_vocab, device=local.device, dtype=torch.int64)
+    size_list = [torch.zeros_like(size_tensor) for _ in range(world)]
+    dist.all_gather(size_list, size_tensor, group=group)
+    sizes = [int(s.item()) for s in size_list]
+    vocab_start = sum(sizes[:rank])
+    vocab_end = vocab_start + sizes[rank]
+    global_vocab = sum(sizes)
+    return group, local, local_vocab, global_vocab, vocab_start, vocab_end
+
+
+def _logsumexp_sharded(logits_local: torch.Tensor, group, dim: int = -1) -> torch.Tensor:
+    local_max = logits_local.max(dim=dim).values
+    global_max = local_max.clone()
+    dist.all_reduce(global_max, op=dist.ReduceOp.MAX, group=group)
+    local_exp = torch.exp(logits_local - global_max.unsqueeze(dim))
+    local_exp_sum = local_exp.sum(dim=dim)
+    global_exp_sum = local_exp_sum.clone()
+    dist.all_reduce(global_exp_sum, op=dist.ReduceOp.SUM, group=group)
+    return global_max + torch.log(global_exp_sum)
+
+
+def log_probs_from_sharded_logits(
+    logits: DTensor,
+    labels: torch.Tensor,
+    temperature: float = 1.0,
+    ignore_index: int = -100,
+) -> torch.Tensor:
+    group, local_logits, local_vocab, _, vocab_start, vocab_end = _get_dtensor_shard_info(logits)
+    logits_local = local_logits.float()
+    if temperature != 1.0:
+        logits_local = logits_local / temperature
+
+    logsumexp_global = _logsumexp_sharded(logits_local, group, dim=-1)
+
+    labels = labels.to(logits_local.device)
+    local_labels = labels - vocab_start
+    in_shard = (labels >= vocab_start) & (labels < vocab_end) & (labels != ignore_index)
+    safe_local = local_labels.clamp(0, max(local_vocab - 1, 0))
+    gathered = logits_local.gather(dim=-1, index=safe_local.unsqueeze(-1)).squeeze(-1)
+    local_label_logits = torch.where(in_shard, gathered, torch.full_like(gathered, float("-inf")))
+
+    global_label_logits = local_label_logits.clone()
+    dist.all_reduce(global_label_logits, op=dist.ReduceOp.MAX, group=group)
+
+    log_probs = global_label_logits - logsumexp_global
+    log_probs = torch.where(labels == ignore_index, torch.zeros_like(log_probs), log_probs)
+    return log_probs
+
+
 def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:
+    if isinstance(logits, DTensor):
+        return log_probs_from_sharded_logits(logits, labels, temperature)
     if temperature != 1.0:
         logits.div_(temperature)
     # https://github.com/OpenRLHF/OpenRLHF/pull/718#issuecomment-2641081881
@@ -123,8 +184,25 @@ def masked_normalize(tensor: torch.Tensor, mask: torch.Tensor, dim: int = 1, eps
     return mean_centered * var.clamp(min=eps).rsqrt()
 
 
+def _compute_entropy_sharded(logits: DTensor) -> torch.Tensor:
+    group, local_logits, _, _, _, _ = _get_dtensor_shard_info(logits)
+    logits_local = local_logits.float()
+    logsumexp_global = _logsumexp_sharded(logits_local, group, dim=-1)
+    probs_local = torch.exp(logits_local - logsumexp_global.unsqueeze(-1))
+    local_p_logit = (probs_local * logits_local).sum(dim=-1)
+    global_p_logit = local_p_logit.clone()
+    dist.all_reduce(global_p_logit, op=dist.ReduceOp.SUM, group=group)
+    return logsumexp_global - global_p_logit
+
+
 @torch.compile
-def compute_entropy(logits: torch.Tensor):
+def _compute_entropy_dense(logits: torch.Tensor):
     pd = torch.nn.functional.softmax(logits, dim=-1)
     entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)
     return entropy
+
+
+def compute_entropy(logits: torch.Tensor):
+    if isinstance(logits, DTensor):
+        return _compute_entropy_sharded(logits)
+    return _compute_entropy_dense(logits)

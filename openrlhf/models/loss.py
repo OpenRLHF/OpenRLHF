@@ -7,6 +7,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .utils import masked_mean
+from .utils import log_probs_from_logits
+from torch.distributed.tensor import DTensor
 
 
 class GPTLMLoss(nn.Module):
@@ -36,6 +38,10 @@ class GPTLMLoss(nn.Module):
 
         if torch.all(shift_labels == self.IGNORE_INDEX):
             return shift_logits.mean() * 0
+        if isinstance(shift_logits, DTensor):
+            log_probs = log_probs_from_logits(shift_logits, shift_labels)
+            mask = shift_labels != self.IGNORE_INDEX
+            return -(log_probs * mask).sum() / mask.sum()
         return self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
 
 
@@ -356,6 +362,11 @@ class KDLoss(nn.Module):
         self.IGNORE_INDEX = -100
 
     def forward(self, logits: torch.Tensor, teacher_logits: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
+        if isinstance(logits, DTensor) or isinstance(teacher_logits, DTensor):
+            raise RuntimeError(
+                "KDLoss does not support sharded (DTensor) logits. "
+                "Disable --tp_shard_logits for KD runs."
+            )
         teacher_probs = F.softmax(teacher_logits, dim=-1, dtype=torch.float32)
         inf_mask = torch.isinf(logits)
         logprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
@@ -380,6 +391,11 @@ class PRMLoss(nn.Module):
         self.reward_token_ids = reward_token_ids
 
     def forward(self, inputs: torch.Tensor, logits: torch.Tensor, labels: torch.Tensor, *, return_acc: bool = False):
+        if isinstance(logits, DTensor):
+            raise RuntimeError(
+                "PRMLoss does not support sharded (DTensor) logits. "
+                "Disable --tp_shard_logits for PRM runs."
+            )
         placeholder_mask = inputs == self.placeholder_token_id
         logits = logits[placeholder_mask].squeeze(1)
         labels = labels[placeholder_mask]
