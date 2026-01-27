@@ -327,6 +327,12 @@ if __name__ == "__main__":
     )
     parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed tensor parallel size")
     parser.add_argument(
+        "--sequence_parallel",
+        action="store_true",
+        default=False,
+        help="Enable sequence parallelism for FSDP2+TP (requires --ds_tensor_parallel_size > 1).",
+    )
+    parser.add_argument(
         "--tp_shard_logits",
         action="store_true",
         default=False,

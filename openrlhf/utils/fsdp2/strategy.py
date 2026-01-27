@@ -107,6 +107,12 @@ class FSDP2Strategy(ABC):
         ), f"world_size({self.world_size}) not divisible by ring_attn*tp({parallel_factor})"
         self.dp_size = self.world_size // parallel_factor
 
+        # Sequence Parallel (SP) is only meaningful with TP>1.
+        if self.sequence_parallel:
+            if self.tp_size <= 1:
+                raise ValueError(
+                    "Invalid config: --sequence_parallel requires --ds_tensor_parallel_size > 1 (tp_size > 1)."
+                )
         # Create 3D mesh: (dp, cp, tp) - always include all dimensions even if size=1
         # This ensures all parameters use the same mesh structure, avoiding mesh mismatch issues
         # in operations like clip_grad_norm that aggregate across all parameters
@@ -301,7 +307,9 @@ class FSDP2Strategy(ABC):
             kwargs["foreach"] = False
         weight_decay = kwargs.pop("weight_decay", 0.0)
         grouped = self._get_optimizer_grouped_parameters(self._unwrap_model(model), weight_decay)
-        return optim.AdamW(grouped, fused=True, **kwargs)
+        # fused=True only works on CUDA and is incompatible with CPU offload.
+        fused = torch.cuda.is_available() and not self.fsdp2_cpu_offload
+        return optim.AdamW(grouped, fused=fused, **kwargs)
 
     @staticmethod
     def _get_optimizer_grouped_parameters(
