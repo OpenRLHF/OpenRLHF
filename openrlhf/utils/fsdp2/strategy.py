@@ -30,7 +30,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import enable_full_determinism, set_seed
 
 from openrlhf.models import Actor
-from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
+from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group, set_ring_attn_pad_multiple
 from openrlhf.utils import convert_to_torch_dtype
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
@@ -113,6 +113,12 @@ class FSDP2Strategy(ABC):
                 raise ValueError(
                     "Invalid config: --sequence_parallel requires --ds_tensor_parallel_size > 1 (tp_size > 1)."
                 )
+            if not getattr(self.args, "packing_samples", False):
+                raise ValueError(
+                    "--sequence_parallel requires --packing_samples to be enabled, "
+                    "because HF's causal mask creation uses inputs_embeds.shape[1] "
+                    "which would be seq/tp_size after SP sharding, causing mask length mismatch."
+                )
         # Create 3D mesh: (dp, cp, tp) - always include all dimensions even if size=1
         # This ensures all parameters use the same mesh structure, avoiding mesh mismatch issues
         # in operations like clip_grad_norm that aggregate across all parameters
@@ -142,6 +148,14 @@ class FSDP2Strategy(ABC):
 
         # Setup ring attention using CP group
         set_ring_attn_group(None)
+        set_ring_attn_pad_multiple(1)
+
+        if self.sequence_parallel and self.tp_size > 1:
+            # Ensure packed sequence length is divisible by TP degree when SP is enabled.
+            # - If CP is enabled, this pads total length to `cp_size * tp_size`.
+            # - If CP is disabled, this pads total length to `tp_size`.
+            set_ring_attn_pad_multiple(self.tp_size)
+
         if self.ring_attn_size > 1:
             set_ring_attn_group(self.cp_group)
             try:
@@ -230,7 +244,6 @@ class FSDP2Strategy(ABC):
                 self.mesh["tp"],
                 sequence_parallel=self.sequence_parallel,
                 validate=True,
-                ring_attn_group=self.ring_attn_group if self.ring_attn_size > 1 else None,
                 shard_logits=self.tp_shard_logits,
             )
         else:
