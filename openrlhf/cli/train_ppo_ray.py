@@ -278,6 +278,21 @@ if __name__ == "__main__":
     # DeepSpeed
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
+    parser.add_argument(
+        "--dist_backend", type=str, default="deepspeed", choices=["deepspeed", "fsdp2"], help="Distributed backend"
+    )
+    parser.add_argument(
+        "--fsdp2_cpu_offload",
+        action="store_true",
+        default=False,
+        help="Offload FSDP2 params/grads/optimizer to CPU",
+    )
+    parser.add_argument(
+        "--fsdp2_reshard_after_forward",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Control fully_shard reshard_after_forward flag",
+    )
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--deepcompile", action="store_true", default=False)
     parser.add_argument(
@@ -311,6 +326,18 @@ if __name__ == "__main__":
         help="Enable sleep mode for deepspeed when using --colocate_all_models",
     )
     parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed tensor parallel size")
+    parser.add_argument(
+        "--sequence_parallel",
+        action="store_true",
+        default=False,
+        help="Enable sequence parallelism for FSDP2+TP (requires --ds_tensor_parallel_size > 1).",
+    )
+    parser.add_argument(
+        "--tp_shard_logits",
+        action="store_true",
+        default=False,
+        help="Shard lm_head logits on vocab dim (FSDP2+TP).",
+    )
 
     # packing samples using Flash Attention2
     parser.add_argument("--packing_samples", action="store_true", default=False)

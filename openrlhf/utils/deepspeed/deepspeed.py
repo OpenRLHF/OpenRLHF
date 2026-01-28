@@ -27,6 +27,8 @@ from .deepspeed_utils import (
     get_eval_ds_config,
     get_optimizer_grouped_parameters,
     get_train_ds_config,
+    offload_deepspeed_states,
+    reload_deepspeed_states,
 )
 
 ModelOptimPair = Tuple[nn.Module, Optimizer]
@@ -72,8 +74,6 @@ class DeepspeedStrategy(ABC):
         if self.ds_tensor_parallel_size > 1:
             assert deepspeed.version >= "0.16.4", "DeepSpeed version must be >= 0.16.4 for tensor parallel training"
             assert self.param_dtype == "bf16", "BF16 is required for tensor parallel training"
-
-        self.is_rlhf = False
         self.time_steps = defaultdict(int)
 
     def setup_distributed(self, timeout=timedelta(minutes=60)) -> None:
@@ -203,10 +203,9 @@ class DeepspeedStrategy(ABC):
             return model
 
     def prepare(
-        self, *models_or_model_optim_pairs: ModelOrModelOptimPair, is_rlhf=False
+        self, *models_or_model_optim_pairs: ModelOrModelOptimPair
     ) -> Union[List[ModelOrModelOptimPair], ModelOrModelOptimPair]:
         ret = []
-        self.is_rlhf = is_rlhf
         for arg in models_or_model_optim_pairs:
             if isinstance(arg, tuple):
                 assert len(arg) == 3, f'Expect (model, optimizer, scheduler) pair, got a tuple with size "{len(arg)}"'
@@ -458,7 +457,18 @@ class DeepspeedStrategy(ABC):
             return 0
         return dist.get_rank()
 
-    def save_ckpt(self, model, save_dir, tag=None, max_num=3, max_mem=1000, client_state={}, save_latest=True):
+    def save_ckpt(
+        self,
+        model,
+        save_dir,
+        tag=None,
+        max_num=3,
+        max_mem=1000,
+        client_state={},
+        save_latest=True,
+        optimizer=None,
+        scheduler=None,
+    ):
         assert isinstance(model, deepspeed.DeepSpeedEngine)
         if self.is_rank_0():
             os.makedirs(save_dir, exist_ok=True)
@@ -505,6 +515,8 @@ class DeepspeedStrategy(ABC):
         load_optimizer_states=True,
         load_lr_scheduler_states=True,
         load_module_only=False,
+        optimizer=None,
+        scheduler=None,
     ):
         assert isinstance(model, deepspeed.DeepSpeedEngine)
         load_path, states = model.load_checkpoint(
@@ -518,3 +530,37 @@ class DeepspeedStrategy(ABC):
         if load_path is None:
             raise Exception(f"[deepspeed] failed to resume from checkpoint {load_dir}")
         return load_path, states
+
+    # -------------------------------------------------------------------------
+    # State Management (Unified interface with FSDP2Strategy)
+    # -------------------------------------------------------------------------
+
+    def offload_model(self, model):
+        """Offload model params to CPU.
+
+        Note: DeepSpeed ZeRO-3 auto-manages model sharding, so this is a no-op.
+        """
+        pass  # ZeRO-3 automatically manages model sharding
+
+    def reload_model(self, model):
+        """Reload model params to GPU.
+
+        Note: DeepSpeed ZeRO-3 auto-manages model sharding, so this is a no-op.
+        """
+        pass  # ZeRO-3 automatically manages model sharding
+
+    def offload_states(self, model, optimizer):
+        """Offload optimizer states to CPU (model stays on GPU).
+
+        DeepSpeed offloads via engine.optimizer.offload_states().
+        """
+        if model is not None:
+            offload_deepspeed_states(model)
+
+    def reload_states(self, model, optimizer):
+        """Reload optimizer states to GPU.
+
+        DeepSpeed reloads via engine.reload_states().
+        """
+        if model is not None:
+            reload_deepspeed_states(model)

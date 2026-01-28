@@ -580,6 +580,13 @@ class RemoteExperienceMaker:
             ray.get(r_refs)
             ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
 
+        # Hybrid engine (colocated vLLM + DeepSpeed): reload actor/critic to GPU before computing
+        # logprobs/values. Note: reference and reward models use prepare_ref with auto CPU offload.
+        if self.args.deepspeed_enable_sleep:
+            ray.get(self.actor_model_group.async_run_method(method_name="reload_model"))
+            if self.critic_model_group is not None:
+                ray.get(self.critic_model_group.async_run_method(method_name="reload_model"))
+
         # Batch call actor model
         action_log_probs_ref = self.actor_model_group.async_run_method_batch(
             method_name="forward",

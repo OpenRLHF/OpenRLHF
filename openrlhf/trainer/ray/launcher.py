@@ -1,7 +1,7 @@
 import logging
 import os
 import socket
-from typing import Dict, Optional, Type
+from typing import Dict, Optional, Type, Union
 
 import ray
 import torch
@@ -12,6 +12,7 @@ from tqdm import tqdm
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
 from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils.fsdp2 import FSDP2Strategy
 
 
 class BaseDistributedActor:
@@ -52,7 +53,7 @@ class BaseDistributedActor:
 
 
 class BaseModelActor(BaseDistributedActor):
-    def _setup_distributed(self, strategy: DeepspeedStrategy):
+    def _setup_distributed(self, strategy: Union[DeepspeedStrategy, FSDP2Strategy]):
         # configure strategy
         self.strategy = strategy
         strategy.setup_distributed()
@@ -103,12 +104,16 @@ class BaseModelActor(BaseDistributedActor):
 
 @ray.remote(num_gpus=1)
 class ReferenceModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+    def init_model_from_pretrained(self, strategy: Union[DeepspeedStrategy, FSDP2Strategy], pretrain):
         self._setup_distributed(strategy)
+        is_fsdp2 = isinstance(strategy, FSDP2Strategy)
+        args = strategy.args
+        model_dtype = "fp32" if is_fsdp2 else args.param_dtype
         model = Actor(
             pretrain,
             attn_implementation=strategy.args.attn_implementation,
             param_dtype=strategy.args.param_dtype,  # default: bf16
+            model_dtype=model_dtype,
             load_in_4bit=strategy.args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
             packing_samples=strategy.args.packing_samples,
@@ -117,10 +122,14 @@ class ReferenceModelActor(BaseModelActor):
         )
         strategy.print(model)
 
-        if strategy.args.ref_reward_offload:
+        if not is_fsdp2 and strategy.args.ref_reward_offload:
             model._offload = True
 
-        self.model = self.strategy.prepare(model, is_rlhf=True)
+        # FSDP2: use prepare_ref for reference models (enables CPU offload)
+        if is_fsdp2 and strategy.args.ref_reward_offload:
+            self.model = self.strategy.prepare_ref(model)
+        else:
+            self.model = self.strategy.prepare(model)
         self.model.eval()
 
     def forward(
@@ -145,14 +154,18 @@ class ReferenceModelActor(BaseModelActor):
 
 @ray.remote(num_gpus=1)
 class RewardModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+    def init_model_from_pretrained(self, strategy: Union[DeepspeedStrategy, FSDP2Strategy], pretrain):
         self._setup_distributed(strategy)
+        is_fsdp2 = isinstance(strategy, FSDP2Strategy)
+        args = strategy.args
+        model_dtype = "fp32" if is_fsdp2 else args.param_dtype
         model = get_llm_for_sequence_regression(
             pretrain,
             "reward",
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
             param_dtype=strategy.args.param_dtype,  # default: bf16
+            model_dtype=model_dtype,
             load_in_4bit=strategy.args.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
             value_head_prefix=strategy.args.value_head_prefix,
@@ -162,10 +175,14 @@ class RewardModelActor(BaseModelActor):
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
         strategy.print("mean: {}, std {}".format(model.mean, model.std))
 
-        if strategy.args.ref_reward_offload:
+        if not is_fsdp2 and strategy.args.ref_reward_offload:
             model._offload = True
 
-        self.model = self.strategy.prepare(model, is_rlhf=True)
+        # FSDP2: use prepare_ref for reward models (enables CPU offload)
+        if is_fsdp2 and strategy.args.ref_reward_offload:
+            self.model = self.strategy.prepare_ref(model)
+        else:
+            self.model = self.strategy.prepare(model)
         self.model.eval()
 
     def forward(
