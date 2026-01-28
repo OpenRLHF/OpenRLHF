@@ -291,7 +291,9 @@ def _base_plan(sequence_parallel: bool = False, layernorm_cls=SequenceParallel):
                 # Embedding: output Shard(1) for SP
                 "model.embed_tokens": RowwiseParallelLora(input_layouts=Replicate(), output_layouts=Shard(1)),
                 # Final norm: SP (preserve requires_grad)
-                "model.norm": SequenceParallelPreserveGrad(),
+                # NOTE: return local tensor to avoid DTensor view/alias ops in HF heads
+                # (e.g. `hidden_states[:, slice_indices, :]` in LlamaForCausalLM).
+                "model.norm": SequenceParallelPreserveGrad(use_local_output=True),
                 # LayerNorms: SP (input Shard(1), output Shard(1) as local tensor)
                 "model.layers.*.input_layernorm": layernorm_cls(use_local_output=True),
                 "model.layers.*.post_attention_layernorm": layernorm_cls(use_local_output=True),
