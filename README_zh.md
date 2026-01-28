@@ -30,7 +30,7 @@
 
 OpenRLHF 是**首个**结合 **Ray + vLLM 分布式架构**与**统一 Agent 设计范式**的高性能、生产就绪的开源 RLHF 框架，用于可扩展和可扩展的人类反馈强化学习。
 
-📚 **了解更多**：[文档](https://openrlhf.readthedocs.io/) | [PPT](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [技术报告](https://www.researchgate.net/publication/393414548_OpenRLHF_An_Easy-to-use_Scalable_and_High-performance_RLHF_Framework)
+📚 **了解更多**：[文档](https://openrlhf.readthedocs.io/) | [PPT](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [技术报告](https://www.researchgate.net/publication/393414548_OpenRLHF_An_Easy-to-use_Scalable_and_High-performance_RLHF_Framework) | [视频](https://www.bilibili.com/video/BV1dv2jBxEQG/)
 
 ## 📖 目录
 
