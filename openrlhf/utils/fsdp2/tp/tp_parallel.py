@@ -12,6 +12,7 @@ This module provides tensor parallelism support including:
 from __future__ import annotations
 
 import logging
+import re
 from functools import partial
 
 import torch.nn as nn
@@ -260,6 +261,39 @@ def ensure_lora_style(style: ParallelStyle) -> ParallelStyle:
 # =============================================================================
 
 
+def _prune_plan(plan: dict, model: nn.Module) -> dict:
+    """Drop TP plan entries that don't match any module in the model.
+
+    This avoids extremely noisy warnings from `parallelize_module` when a plan
+    includes optional/fused module names (e.g. `qkv_proj`, `gate_up_proj`) that
+    are not present for a given checkpoint.
+    """
+
+    module_names = {name for name, _ in model.named_modules()}
+    kept: dict = {}
+    dropped: list[str] = []
+
+    for key, style in plan.items():
+        if "*" not in key:
+            if key in module_names:
+                kept[key] = style
+            else:
+                dropped.append(key)
+            continue
+
+        pattern = "^" + re.escape(key).replace("\\*", "[^.]+") + "$"
+        if any(re.match(pattern, name) for name in module_names):
+            kept[key] = style
+        else:
+            dropped.append(key)
+
+    if dropped:
+        preview = ", ".join(dropped[:8]) + (" ..." if len(dropped) > 8 else "")
+        logger.info(f"Pruned {len(dropped)} unmatched TP plan entries: {preview}")
+
+    return kept
+
+
 def _attn_mlp_plan():
     """Attention + MLP layers (shared by LLaMA-style models)."""
     return {
@@ -402,22 +436,26 @@ def get_tp_plan(model, sequence_parallel: bool = False, custom_plan=None, shard_
     """Get TP plan: custom > model-specific > HuggingFace > base."""
     if custom_plan:
         plan = {k: _str_to_style(v) if isinstance(v, str) else v for k, v in custom_plan.items()}
-        return _set_sharded_lm_head(plan, sequence_parallel) if shard_logits else plan
+        plan = _set_sharded_lm_head(plan, sequence_parallel) if shard_logits else plan
+        return _prune_plan(plan, model)
 
     cls_name = type(model).__name__
     if cls_name in _MODEL_PLANS:
         try:
             plan = _MODEL_PLANS[cls_name](model, sequence_parallel)
-            return _set_sharded_lm_head(plan, sequence_parallel) if shard_logits else plan
+            plan = _set_sharded_lm_head(plan, sequence_parallel) if shard_logits else plan
+            return _prune_plan(plan, model)
         except Exception as e:
             logger.warning(f"Plan failed for {cls_name}: {e}")
 
     hf_plan = _get_hf_plan(model)
     if hf_plan:
-        return _set_sharded_lm_head(hf_plan, sequence_parallel) if shard_logits else hf_plan
+        hf_plan = _set_sharded_lm_head(hf_plan, sequence_parallel) if shard_logits else hf_plan
+        return _prune_plan(hf_plan, model)
 
     plan = _base_plan(sequence_parallel)
-    return _set_sharded_lm_head(plan, sequence_parallel) if shard_logits else plan
+    plan = _set_sharded_lm_head(plan, sequence_parallel) if shard_logits else plan
+    return _prune_plan(plan, model)
 
 
 def maybe_add_score_layer_plan(model, plan: dict):
