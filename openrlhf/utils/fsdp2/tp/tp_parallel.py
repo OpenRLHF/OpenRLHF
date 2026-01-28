@@ -299,10 +299,13 @@ def _base_plan(sequence_parallel: bool = False, layernorm_cls=SequenceParallel):
                 "model.layers.*.self_attn": PrepareModuleInput(
                     input_kwarg_layouts={"hidden_states": Shard(1)},
                     desired_input_kwarg_layouts={"hidden_states": Replicate()},
+                    # Always feed local tensors into attention kernels (flash-attn / ring-flash-attn).
+                    use_local_output=True,
                 ),
                 "model.layers.*.mlp": PrepareModuleInput(
                     input_layouts=Shard(1),
                     desired_input_layouts=Replicate(),
+                    use_local_output=True,
                 ),
                 # Reduce-scatter back to Shard(1) for residual connections
                 "model.layers.*.self_attn.o_proj": RowwiseParallelLora(output_layouts=Shard(1)),
@@ -483,7 +486,6 @@ def apply_tensor_parallel(
     tp_plan=None,
     sequence_parallel: bool = False,
     validate: bool = True,
-    ring_attn_group=None,
     enable_async_tp: bool = False,
     shard_logits: bool = False,
 ):
@@ -520,71 +522,4 @@ def apply_tensor_parallel(
     # Re-tie weights if necessary (must happen after parallelize_module)
     _retie_embeddings(tp_root)
 
-    if ring_attn_group is not None:
-        register_attention_hooks(tp_root, tp_mesh, sequence_parallel=sequence_parallel)
-
     return model
-
-
-# =============================================================================
-# Ring Attention Compatibility
-# =============================================================================
-
-
-class AttentionDTensorHook:
-    """Convert DTensor activations to local tensors for Ring Attention compatibility.
-
-    Ring Attention kernels expect regular local tensors; with TP(+SP) wrappers, attention
-    may receive DTensor inputs. We convert inputs to local tensors and ensure outputs
-    are local as well (do not reconstruct DTensor outputs here).
-    """
-
-    def __init__(self, tp_mesh: DeviceMesh, sequence_parallel: bool = False):
-        self.tp_mesh = tp_mesh
-        self.sequence_parallel = sequence_parallel
-
-    def pre_forward(self, module, args, kwargs):
-        if args:
-            hidden_states = args[0]
-            if isinstance(hidden_states, DTensor):
-                return (hidden_states.to_local(), *args[1:]), kwargs
-            return args, kwargs
-
-        hidden_states = kwargs.get("hidden_states")
-        if isinstance(hidden_states, DTensor):
-            new_kwargs = dict(kwargs)
-            new_kwargs["hidden_states"] = hidden_states.to_local()
-            return args, new_kwargs
-        return args, kwargs
-
-    def post_forward(self, module, args, output):
-        if isinstance(output, DTensor):
-            return output.to_local()
-        if isinstance(output, tuple) and output and isinstance(output[0], DTensor):
-            return (output[0].to_local(), *output[1:])
-        return output
-
-
-def register_attention_hooks(model: nn.Module, tp_mesh: DeviceMesh, sequence_parallel: bool = False) -> None:
-    """Register DTensor conversion hooks on attention modules for Ring Attention compatibility."""
-
-    hook_count = 0
-    for name, module in model.named_modules():
-        if "self_attn" in name and not any(
-            x in name for x in [".q_proj", ".k_proj", ".v_proj", ".o_proj", ".q_norm", ".k_norm", "_proj", "_norm"]
-        ):
-            if hasattr(module, "q_proj") or hasattr(module, "qkv_proj"):
-                if getattr(module, "_openrlhf_tp_cp_hook_registered", False):
-                    continue
-                hook = AttentionDTensorHook(tp_mesh, sequence_parallel=sequence_parallel)
-                module.register_forward_pre_hook(hook.pre_forward, with_kwargs=True)
-                module.register_forward_hook(hook.post_forward)
-                setattr(module, "_openrlhf_tp_cp_hook_registered", True)
-                hook_count += 1
-                logger.debug(f"Registered DTensor hook on: {name}")
-
-    if hook_count == 0:
-        logger.warning("No attention modules found for DTensor hook registration")
-    else:
-        sp_status = "with SP" if sequence_parallel else "without SP"
-        logger.info(f"Registered {hook_count} DTensor conversion hooks for attention modules ({sp_status})")

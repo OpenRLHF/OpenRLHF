@@ -3,18 +3,16 @@ Tensor Parallelism Module for FSDP2
 ===================================
 
 Files:
-- tp_parallel.py : TP styles, plans, apply_tensor_parallel, Ring Attention compat
+- tp_parallel.py : TP styles, plans, apply_tensor_parallel
 """
 
-from .tp_parallel import (  # Parallel Styles; TP Plan Functions; Ring Attention Compat
-    AttentionDTensorHook,
+from .tp_parallel import (  # Parallel Styles; TP Plan Functions
     ColwiseParallelLora,
     ReplicateParallel,
     RowwiseParallelLora,
     SequenceParallelPreserveGrad,
     apply_tensor_parallel,
     get_tp_plan,
-    register_attention_hooks,
     validate_tp_mesh,
 )
 
@@ -28,7 +26,4 @@ __all__ = [
     "apply_tensor_parallel",
     "get_tp_plan",
     "validate_tp_mesh",
-    # Ring Attention Compat
-    "AttentionDTensorHook",
-    "register_attention_hooks",
 ]
