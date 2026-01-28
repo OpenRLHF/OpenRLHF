@@ -5,6 +5,7 @@ from flash_attn.utils.distributed import all_gather
 from torch.distributed.tensor import DTensor
 
 RING_ATTN_GROUP = None
+RING_ATTN_PAD_MULTIPLE = 1
 
 
 def set_ring_attn_group(group):
@@ -14,6 +15,26 @@ def set_ring_attn_group(group):
 
 def get_ring_attn_group():
     return RING_ATTN_GROUP
+
+
+def set_ring_attn_pad_multiple(multiple: int) -> None:
+    """Set packed-stream padding multiple for TP/SP compatibility.
+
+    This controls extra padding applied in packing mode to make the packed token
+    stream length divisible by:
+      - `tp_size` when ring attention (CP) is disabled
+      - `cp_size * tp_size` when ring attention (CP) is enabled
+
+    We implement this by padding the *global* packed stream to a multiple of
+    `cp_size * RING_ATTN_PAD_MULTIPLE` before slicing per CP rank.
+    """
+    global RING_ATTN_PAD_MULTIPLE
+    if multiple is None:
+        multiple = 1
+    multiple = int(multiple)
+    if multiple < 1:
+        raise ValueError(f"multiple must be >= 1, got {multiple}")
+    RING_ATTN_PAD_MULTIPLE = multiple
 
 
 def reset_ring_attn_position_ids(start, end, packed_seq_lens):
@@ -69,15 +90,25 @@ def get_tensor_in_current_ring_attn_rank(tensors: list[torch.Tensor] | torch.Ten
         tensors = [tensors]
     ring_attn_rank = dist.get_rank(group=ring_attn_group)
     ring_attn_size = dist.get_world_size(group=ring_attn_group)
+    if tensors[0].dim() != 2 or tensors[0].shape[0] != 1:
+        raise ValueError(
+            "Packing mode expects tensors shaped (1, total_tokens) before CP slicing; "
+            f"got shape={tuple(tensors[0].shape)}"
+        )
     seqlen = tensors[0].shape[-1]
     total_seq_len = tensors[0].numel()
-    ring_attn_pad_len = (ring_attn_size - seqlen % ring_attn_size) % ring_attn_size
+    pad_multiple = ring_attn_size * max(1, int(RING_ATTN_PAD_MULTIPLE))
+    ring_attn_pad_len = (pad_multiple - seqlen % pad_multiple) % pad_multiple
     output_tensors = []
     for tensor in tensors:
         if tensor.numel() != total_seq_len:
             raise ValueError(f"tensor.numel() {tensor.numel()} != total_seq_len {total_seq_len}")
         tensor = torch.nn.functional.pad(tensor, (0, ring_attn_pad_len), value=pad_id)
-        local_seq_len = tensor.numel() // ring_attn_size
+        local_seq_len = tensor.shape[-1] // ring_attn_size
+        if RING_ATTN_PAD_MULTIPLE > 1 and local_seq_len % RING_ATTN_PAD_MULTIPLE != 0:
+            raise AssertionError(
+                f"local_seq_len ({local_seq_len}) must be divisible by RING_ATTN_PAD_MULTIPLE ({RING_ATTN_PAD_MULTIPLE})"
+            )
         start, end = ring_attn_rank * local_seq_len, (ring_attn_rank + 1) * local_seq_len
         tensor = tensor[:, start:end]
         output_tensors.append(tensor)
@@ -92,7 +123,9 @@ def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
 
     This function performs several operations:
     1. Removes padding, unpads sequences from (batch, seqlen) to (1, total_seqs)
-    2. Adapts to ring_attn_group, pads sequences to be divisible by ring_attn_group
+    2. Pads the packed stream for parallelism:
+       - With ring_attn_group: pad to be divisible by (cp_size * tp_pad_multiple) then slice per CP rank
+       - Without ring_attn_group: optionally pad to be divisible by tp_pad_multiple (for Sequence Parallel)
     3. Slices the sequences for the current ring_attn_rank
 
     Example:
@@ -131,6 +164,21 @@ def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
         )
         cu_seqlens[-1] += ring_attn_pad_len
         update_ring_attn_params(cu_seqlens)
+    elif RING_ATTN_PAD_MULTIPLE > 1:
+        # TP+SP requires seq length divisible by TP size. When ring-attn is disabled
+        # (cp_group is None), we still pad the packed stream so Sequence Parallel can
+        # evenly shard the sequence dimension across TP ranks.
+        pad_multiple = RING_ATTN_PAD_MULTIPLE
+        seqlen = sequences.shape[-1]
+        ring_attn_pad_len = (pad_multiple - seqlen % pad_multiple) % pad_multiple
+        if ring_attn_pad_len:
+            sequences = torch.nn.functional.pad(sequences, (0, ring_attn_pad_len), value=0)
+            rolled_sequences = torch.nn.functional.pad(rolled_sequences, (0, ring_attn_pad_len), value=0)
+            position_ids = torch.nn.functional.pad(position_ids, (0, ring_attn_pad_len), value=0)
+        if sequences.shape[-1] % pad_multiple != 0:
+            raise AssertionError(
+                f"packed_seq_len ({sequences.shape[-1]}) must be divisible by RING_ATTN_PAD_MULTIPLE ({pad_multiple})"
+            )
     return sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices
 
 
@@ -168,8 +216,8 @@ def gather_and_pad_tensor(tensor, ring_attn_group, ring_attn_pad_len, indices, b
 
     if ring_attn_group is not None:
         tensor = all_gather(tensor.transpose(0, 1), ring_attn_group).transpose(0, 1)  # (1, total_seqs)
-        if ring_attn_pad_len > 0:
-            tensor = tensor[:, :-ring_attn_pad_len]
+    if ring_attn_pad_len > 0:
+        tensor = tensor[:, :-ring_attn_pad_len]
     tensor = pad_input(tensor.transpose(0, 1), indices, batch, seqlen).squeeze(-1)  # (batch, seqlen)
     if is_dtensor:
         # Preserve TP sharding metadata (typically Shard(-1) on vocab dim).
