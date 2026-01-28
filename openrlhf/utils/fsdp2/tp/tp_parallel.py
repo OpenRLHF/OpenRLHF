@@ -377,9 +377,21 @@ def _qwen_plan(model, sequence_parallel: bool):
     plan = _base_plan(sequence_parallel, SequenceParallelPreserveGrad)
     plan.update(
         {
-            # Q/K norms receive head-sharded input; keep them replicated.
-            "model.layers.*.self_attn.q_norm": ReplicateParallel(),
-            "model.layers.*.self_attn.k_norm": ReplicateParallel(),
+            # Q/K norms run on head-sharded activations: (batch, seq, heads, head_dim).
+            # Mark the input/output as Shard(2) (heads dim) so DTensor can correctly
+            # all-reduce replicated parameter grads across TP ranks.
+            "model.layers.*.self_attn.q_norm": ReplicateParallel(
+                input_layout=Shard(2),
+                desired_input_layout=Shard(2),
+                output_layout=Shard(2),
+                use_local_output=True,
+            ),
+            "model.layers.*.self_attn.k_norm": ReplicateParallel(
+                input_layout=Shard(2),
+                desired_input_layout=Shard(2),
+                output_layout=Shard(2),
+                use_local_output=True,
+            ),
         }
     )
     return plan
