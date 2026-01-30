@@ -12,6 +12,7 @@ This module provides tensor parallelism support including:
 from __future__ import annotations
 
 import logging
+from fnmatch import fnmatch
 from functools import partial
 
 import torch.nn as nn
@@ -260,6 +261,23 @@ def ensure_lora_style(style: ParallelStyle) -> ParallelStyle:
 # =============================================================================
 
 
+def _prune_plan(plan: dict, model: nn.Module) -> dict:
+    """Drop TP plan entries that don't match any module in the model.
+
+    Avoids noisy warnings from `parallelize_module` when a plan includes
+    optional/fused module names (e.g. `qkv_proj`, `gate_up_proj`).
+    """
+    module_names = {name for name, _ in model.named_modules()}
+
+    def matches(pattern: str) -> bool:
+        return any(fnmatch(name, pattern) for name in module_names)
+
+    kept = {k: v for k, v in plan.items() if matches(k)}
+    if (n := len(plan) - len(kept)) > 0:
+        logger.debug(f"Pruned {n} unmatched TP plan entries")
+    return kept
+
+
 def _attn_mlp_plan():
     """Attention + MLP layers (shared by LLaMA-style models)."""
     return {
@@ -343,9 +361,21 @@ def _qwen_plan(model, sequence_parallel: bool):
     plan = _base_plan(sequence_parallel, SequenceParallelPreserveGrad)
     plan.update(
         {
-            # Q/K norms receive head-sharded input; keep them replicated.
-            "model.layers.*.self_attn.q_norm": ReplicateParallel(),
-            "model.layers.*.self_attn.k_norm": ReplicateParallel(),
+            # Q/K norms run on head-sharded activations: (batch, seq, heads, head_dim).
+            # Mark the input/output as Shard(2) (heads dim) so DTensor can correctly
+            # all-reduce replicated parameter grads across TP ranks.
+            "model.layers.*.self_attn.q_norm": ReplicateParallel(
+                input_layout=Shard(2),
+                desired_input_layout=Shard(2),
+                output_layout=Shard(2),
+                use_local_output=True,
+            ),
+            "model.layers.*.self_attn.k_norm": ReplicateParallel(
+                input_layout=Shard(2),
+                desired_input_layout=Shard(2),
+                output_layout=Shard(2),
+                use_local_output=True,
+            ),
         }
     )
     return plan
@@ -400,24 +430,24 @@ def _get_hf_plan(model):
 
 def get_tp_plan(model, sequence_parallel: bool = False, custom_plan=None, shard_logits: bool = False):
     """Get TP plan: custom > model-specific > HuggingFace > base."""
+    plan = None
+
     if custom_plan:
         plan = {k: _str_to_style(v) if isinstance(v, str) else v for k, v in custom_plan.items()}
-        return _set_sharded_lm_head(plan, sequence_parallel) if shard_logits else plan
+    else:
+        cls_name = type(model).__name__
+        if cls_name in _MODEL_PLANS:
+            try:
+                plan = _MODEL_PLANS[cls_name](model, sequence_parallel)
+            except Exception as e:
+                logger.warning(f"Plan failed for {cls_name}: {e}")
 
-    cls_name = type(model).__name__
-    if cls_name in _MODEL_PLANS:
-        try:
-            plan = _MODEL_PLANS[cls_name](model, sequence_parallel)
-            return _set_sharded_lm_head(plan, sequence_parallel) if shard_logits else plan
-        except Exception as e:
-            logger.warning(f"Plan failed for {cls_name}: {e}")
+        if plan is None:
+            plan = _get_hf_plan(model) or _base_plan(sequence_parallel)
 
-    hf_plan = _get_hf_plan(model)
-    if hf_plan:
-        return _set_sharded_lm_head(hf_plan, sequence_parallel) if shard_logits else hf_plan
-
-    plan = _base_plan(sequence_parallel)
-    return _set_sharded_lm_head(plan, sequence_parallel) if shard_logits else plan
+    if shard_logits:
+        plan = _set_sharded_lm_head(plan, sequence_parallel)
+    return _prune_plan(plan, model)
 
 
 def maybe_add_score_layer_plan(model, plan: dict):
