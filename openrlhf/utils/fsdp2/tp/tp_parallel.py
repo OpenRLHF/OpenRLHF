@@ -261,21 +261,17 @@ def ensure_lora_style(style: ParallelStyle) -> ParallelStyle:
 # =============================================================================
 
 
-def _prune_plan(plan: dict, model: nn.Module) -> dict:
-    """Drop TP plan entries that don't match any module in the model.
-
-    Avoids noisy warnings from `parallelize_module` when a plan includes
-    optional/fused module names (e.g. `qkv_proj`, `gate_up_proj`).
-    """
-    module_names = {name for name, _ in model.named_modules()}
-
-    def matches(pattern: str) -> bool:
-        return any(fnmatch(name, pattern) for name in module_names)
-
-    kept = {k: v for k, v in plan.items() if matches(k)}
-    if (n := len(plan) - len(kept)) > 0:
-        logger.debug(f"Pruned {n} unmatched TP plan entries")
-    return kept
+def _str_to_style(s: str):
+    """Convert string shorthand to ParallelStyle instance."""
+    styles = {
+        "colwise": ColwiseParallelLora(),
+        "rowwise": RowwiseParallelLora(),
+        "colwise_rep": ColwiseParallelLora(output_layouts=Replicate()),
+        "rowwise_rep": RowwiseParallelLora(input_layouts=Replicate()),
+        "sequence_parallel": SequenceParallelPreserveGrad(),
+        "replicate": ReplicateParallel(),
+    }
+    return styles[s]
 
 
 def _attn_mlp_plan():
@@ -295,7 +291,6 @@ def _attn_mlp_plan():
 
 def _base_plan(sequence_parallel: bool = False, layernorm_cls=SequenceParallel):
     """Base TP plan for LLaMA-style models."""
-
     plan = {
         "model.embed_tokens": RowwiseParallelLora(input_layouts=Replicate()),
         # Return full logits (all-gather vocab) as a local tensor for simple loss functions.
@@ -353,6 +348,11 @@ def _set_sharded_lm_head(plan: dict, sequence_parallel: bool) -> dict:
     return plan
 
 
+# -----------------------------------------------------------------------------
+# Model-specific plans
+# -----------------------------------------------------------------------------
+
+
 def _llama_plan(model, sequence_parallel: bool):
     return _base_plan(sequence_parallel, SequenceParallelPreserveGrad)
 
@@ -390,16 +390,9 @@ _MODEL_PLANS = {
 }
 
 
-def _str_to_style(s: str):
-    styles = {
-        "colwise": ColwiseParallelLora(),
-        "rowwise": RowwiseParallelLora(),
-        "colwise_rep": ColwiseParallelLora(output_layouts=Replicate()),
-        "rowwise_rep": RowwiseParallelLora(input_layouts=Replicate()),
-        "sequence_parallel": SequenceParallelPreserveGrad(),
-        "replicate": ReplicateParallel(),
-    }
-    return styles[s]
+# -----------------------------------------------------------------------------
+# Plan retrieval and post-processing
+# -----------------------------------------------------------------------------
 
 
 def _get_hf_plan(model):
@@ -426,6 +419,23 @@ def _get_hf_plan(model):
                 use_local_output=True,
             )
     return result
+
+
+def _prune_plan(plan: dict, model: nn.Module) -> dict:
+    """Drop TP plan entries that don't match any module in the model.
+
+    Avoids noisy warnings from `parallelize_module` when a plan includes
+    optional/fused module names (e.g. `qkv_proj`, `gate_up_proj`).
+    """
+    module_names = {name for name, _ in model.named_modules()}
+
+    def matches(pattern: str) -> bool:
+        return any(fnmatch(name, pattern) for name in module_names)
+
+    kept = {k: v for k, v in plan.items() if matches(k)}
+    if (n := len(plan) - len(kept)) > 0:
+        logger.debug(f"Pruned {n} unmatched TP plan entries")
+    return kept
 
 
 def get_tp_plan(model, sequence_parallel: bool = False, custom_plan=None, shard_logits: bool = False):
