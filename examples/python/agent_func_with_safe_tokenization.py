@@ -28,9 +28,7 @@ def safe_agentic_training_example():
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
     except Exception as e:
-        logging.warning(
-            "Local path failed: %s. Falling back to GPT-2 for logic test.", e
-        )
+        logging.warning("Local path failed: %s. Falling back to GPT-2 for logic test.", e)
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
     token_handler = DefaultAgentTokenHandler(
@@ -45,7 +43,9 @@ def safe_agentic_training_example():
         observation_text,
         add_special_tokens=True,
         return_tensors="pt",
-    )["input_ids"][0].tolist()
+    )[
+        "input_ids"
+    ][0].tolist()
 
     # Simulated vLLM output: action tokens without EOS (issue #1128)
     action_tokens_from_vllm = [512, 513, 514]

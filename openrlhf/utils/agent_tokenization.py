@@ -8,11 +8,12 @@ while maintaining turn-boundary integrity.
 Reference: https://github.com/OpenRLHF/OpenRLHF/issues/1128
 """
 
-from abc import ABC, abstractmethod
-from typing import List, Dict, Tuple, Optional
-from dataclasses import dataclass
-from transformers import PreTrainedTokenizer
 import logging
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+from transformers import PreTrainedTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TokenSequence:
     """Represents a token sequence with metadata."""
+
     tokens: List[int]
     source: str  # 'observation', 'action', 'feedback', etc.
     original_text: Optional[str] = None
@@ -34,6 +36,7 @@ class TokenSequence:
 @dataclass
 class ConcatenationReport:
     """Report on token concatenation validation."""
+
     total_tokens: int
     turn_boundary_indices: Dict[str, Tuple[int, int]]  # {source: (start, end)}
     token_offset_warnings: List[str]
@@ -95,7 +98,6 @@ class AgentTokenHandler(ABC):
         Raises:
             ValueError: If tokens and text are misaligned
         """
-        pass
 
     @abstractmethod
     def handle_feedback_tokens(
@@ -111,7 +113,6 @@ class AgentTokenHandler(ABC):
         Returns:
             TokenSequence with proper newline/special token formatting
         """
-        pass
 
     @abstractmethod
     def concatenate_sequences(
@@ -130,7 +131,6 @@ class AgentTokenHandler(ABC):
         Raises:
             ValueError: If concatenation violates turn-boundary integrity
         """
-        pass
 
 
 class DefaultAgentTokenHandler(AgentTokenHandler):
@@ -171,8 +171,7 @@ class DefaultAgentTokenHandler(AgentTokenHandler):
             action_tokens_copy.append(self.tokenizer.eos_token_id)
             if self.verbose:
                 logger.info(
-                    "[AgentTokenHandler] Appended EOS token (ID: %s) "
-                    "to action sequence. New length: %s",
+                    "[AgentTokenHandler] Appended EOS token (ID: %s) " "to action sequence. New length: %s",
                     self.tokenizer.eos_token_id,
                     len(action_tokens_copy),
                 )
@@ -199,7 +198,9 @@ class DefaultAgentTokenHandler(AgentTokenHandler):
             formatted_text,
             add_special_tokens=False,
             return_tensors="pt",
-        )["input_ids"][0].tolist()
+        )[
+            "input_ids"
+        ][0].tolist()
 
         return TokenSequence(feedback_tokens, "feedback", formatted_text)
 
@@ -230,18 +231,11 @@ class DefaultAgentTokenHandler(AgentTokenHandler):
 
         # Zero-inference filtering: drop None and empty-token sequences
         filtered_sequences: List[TokenSequence] = [
-            s
-            for s in sequences
-            if s is not None
-            and isinstance(s, TokenSequence)
-            and len(s.tokens) > 0
+            s for s in sequences if s is not None and isinstance(s, TokenSequence) and len(s.tokens) > 0
         ]
         dropped_count: int = len(sequences) - len(filtered_sequences)
         if dropped_count > 0:
-            warnings.append(
-                "Filtered out %s sequence(s) with None or empty tokens."
-                % dropped_count
-            )
+            warnings.append("Filtered out %s sequence(s) with None or empty tokens." % dropped_count)
             if self.verbose:
                 logger.warning(
                     "[AgentTokenHandler] Dropped %s sequence(s) (None or empty).",
@@ -259,8 +253,7 @@ class DefaultAgentTokenHandler(AgentTokenHandler):
             # State collision guard: detect duplicate source key
             if seq.source in turn_boundaries:
                 collision_msg = (
-                    "Duplicate source key '%s' in turn boundaries; "
-                    "later occurrence overwrites previous."
+                    "Duplicate source key '%s' in turn boundaries; " "later occurrence overwrites previous."
                 ) % seq.source
                 warnings.append(collision_msg)
                 if self.verbose:
@@ -270,8 +263,7 @@ class DefaultAgentTokenHandler(AgentTokenHandler):
 
             if self.verbose:
                 logger.debug(
-                    "[AgentTokenHandler] Concatenated %s "
-                    "(indices %s:%s, len=%s)",
+                    "[AgentTokenHandler] Concatenated %s " "(indices %s:%s, len=%s)",
                     seq.source,
                     start_idx,
                     end_idx,
@@ -283,8 +275,7 @@ class DefaultAgentTokenHandler(AgentTokenHandler):
         if len(concatenated) != total_expected:
             warnings.append(
                 "Token count mismatch: expected %s, got %s. "
-                "This may indicate tokenizer re-encoding during concatenation."
-                % (total_expected, len(concatenated))
+                "This may indicate tokenizer re-encoding during concatenation." % (total_expected, len(concatenated))
             )
 
         report: ConcatenationReport = ConcatenationReport(
@@ -305,9 +296,7 @@ class CustomAgentTokenHandlerExample(DefaultAgentTokenHandler):
     and override methods for model-specific behavior.
     """
 
-    def handle_action_tokens(
-        self, action_tokens: List[int], action_text: str
-    ) -> TokenSequence:
+    def handle_action_tokens(self, action_tokens: List[int], action_text: str) -> TokenSequence:
         # Your custom logic here
         return super().handle_action_tokens(action_tokens, action_text)
 
@@ -315,8 +304,6 @@ class CustomAgentTokenHandlerExample(DefaultAgentTokenHandler):
         # Your custom logic here
         return super().handle_feedback_tokens(feedback_text)
 
-    def concatenate_sequences(
-        self, sequences: List[TokenSequence]
-    ) -> Tuple[List[int], ConcatenationReport]:
+    def concatenate_sequences(self, sequences: List[TokenSequence]) -> Tuple[List[int], ConcatenationReport]:
         # Your custom logic here
         return super().concatenate_sequences(sequences)
