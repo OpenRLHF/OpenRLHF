@@ -65,6 +65,12 @@ def clip_grad_norm_dtensor(
         if isinstance(norm, DTensor):
             # get_total_norm may return a DTensor with partial norm placement; full_tensor()
             # materializes a regular tensor containing the global scalar norm.
+            # Under CPUOffloadPolicy, DTensor grads (and thus norm) can live on CPU.
+            # DTensor full_tensor() triggers collectives on the local tensor device; NCCL
+            # collectives don't support CPU tensors. Move the scalar DTensor to CUDA
+            # before materializing the full scalar.
+            if norm.to_local().device.type == "cpu" and torch.cuda.is_available():
+                norm = norm.to(device=torch.device("cuda", torch.cuda.current_device()))
             norm = norm.full_tensor()
         # Keep as a plain CPU scalar tensor for device-agnostic clipping below.
         group_norms.append(norm.detach().float().cpu())

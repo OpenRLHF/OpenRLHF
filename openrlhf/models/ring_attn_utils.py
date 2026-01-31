@@ -214,12 +214,30 @@ def gather_and_pad_tensor(tensor, ring_attn_group, ring_attn_pad_len, indices, b
         placements = tensor.placements
         tensor = tensor.to_local()
 
+    if tensor.dim() < 2 or tensor.shape[0] != 1:
+        raise ValueError(
+            "Packing mode expects tensors shaped (1, total_tokens, ...) before CP gather; "
+            f"got shape={tuple(tensor.shape)}"
+        )
+
+    # Convert from packed-stream format (1, total_tokens, ...) to flash-attn format (total_tokens, ...).
+    # For scalar-per-token tensors (1, total_tokens), pad_input expects at least 2 dims, so we
+    # represent it as (total_tokens, 1) and squeeze at the end.
+    is_scalar_per_token = tensor.dim() == 2
+    packed = tensor.squeeze(0)  # (total_tokens, ...) or (total_tokens,)
+    if packed.dim() == 1:
+        packed = packed.unsqueeze(-1)  # (total_tokens, 1)
+
     if ring_attn_group is not None:
-        tensor = all_gather(tensor.transpose(0, 1), ring_attn_group).transpose(0, 1)  # (1, total_seqs)
+        packed = all_gather(packed, ring_attn_group)
     if ring_attn_pad_len > 0:
-        tensor = tensor[:, :-ring_attn_pad_len]
-    tensor = pad_input(tensor.transpose(0, 1), indices, batch, seqlen).squeeze(-1)  # (batch, seqlen)
+        packed = packed[:-ring_attn_pad_len]
+
+    out = pad_input(packed, indices, batch, seqlen)
+    if is_scalar_per_token:
+        out = out.squeeze(-1)
+
     if is_dtensor:
         # Preserve TP sharding metadata (typically Shard(-1) on vocab dim).
-        return DTensor.from_local(tensor, mesh, placements, run_check=False)
-    return tensor
+        return DTensor.from_local(out, mesh, placements, run_check=False)
+    return out

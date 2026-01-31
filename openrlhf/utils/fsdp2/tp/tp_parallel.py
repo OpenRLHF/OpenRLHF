@@ -357,27 +357,22 @@ def _llama_plan(model, sequence_parallel: bool):
     return _base_plan(sequence_parallel, SequenceParallelPreserveGrad)
 
 
+def _head_shard_norm_style() -> ReplicateParallel:
+    """ReplicateParallel for norms on head-sharded activations (batch, seq, heads, head_dim)."""
+    return ReplicateParallel(
+        input_layout=Shard(2),
+        desired_input_layout=Shard(2),
+        output_layout=Shard(2),
+        use_local_output=True,
+    )
+
+
 def _qwen_plan(model, sequence_parallel: bool):
     plan = _base_plan(sequence_parallel, SequenceParallelPreserveGrad)
-    plan.update(
-        {
-            # Q/K norms run on head-sharded activations: (batch, seq, heads, head_dim).
-            # Mark the input/output as Shard(2) (heads dim) so DTensor can correctly
-            # all-reduce replicated parameter grads across TP ranks.
-            "model.layers.*.self_attn.q_norm": ReplicateParallel(
-                input_layout=Shard(2),
-                desired_input_layout=Shard(2),
-                output_layout=Shard(2),
-                use_local_output=True,
-            ),
-            "model.layers.*.self_attn.k_norm": ReplicateParallel(
-                input_layout=Shard(2),
-                desired_input_layout=Shard(2),
-                output_layout=Shard(2),
-                use_local_output=True,
-            ),
-        }
-    )
+    # Q/K norms run on head-sharded activations after reshape.
+    # Shard(2) marks the heads dimension so DTensor correctly all-reduces grads.
+    plan["model.layers.*.self_attn.q_norm"] = _head_shard_norm_style()
+    plan["model.layers.*.self_attn.k_norm"] = _head_shard_norm_style()
     return plan
 
 

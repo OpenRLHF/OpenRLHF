@@ -185,10 +185,11 @@ def save_distributed_checkpoint(
     class AppState(Stateful):
         def state_dict(self):
             model_state, optim_state = get_state_dict(fsdp_model, [optimizer] if optimizer else [])
-            state = {"model": model_state, "optimizers": optim_state, "client_state": dict(client_state or {})}
-            if scheduler:
-                state["scheduler"] = scheduler.state_dict()
-            return state
+            # NOTE: torch.distributed.checkpoint only persists tensor-like leaves
+            # (Tensor/ShardedTensor/DTensor). Python objects (dict/int/float) in
+            # the state dict are silently dropped in load. Persist those extras
+            # (client_state, scheduler state) separately as a small rank0 file.
+            return {"model": model_state, "optimizers": optim_state}
 
         def load_state_dict(self, _):
             raise RuntimeError("Use load_distributed_checkpoint instead")
@@ -208,6 +209,15 @@ def save_distributed_checkpoint(
 
     # Update 'latest' marker
     if save_latest and is_rank_0:
+        # Save non-tensor extras (client_state, scheduler) on rank0.
+        extra_path = os.path.join(ckpt_path, "extra_state.pt")
+        torch.save(
+            {
+                "client_state": dict(client_state or {}),
+                "scheduler": (scheduler.state_dict() if scheduler is not None else None),
+            },
+            extra_path,
+        )
         # Mark checkpoint as complete to avoid picking up partial directories
         # when resolving checkpoints by mtime (prime-rl style).
         with open(os.path.join(ckpt_path, "STABLE"), "w") as f:
@@ -273,10 +283,17 @@ def load_distributed_checkpoint(
     # Stateful wrapper for loading
     class AppState(Stateful):
         def __init__(self):
-            self.client_state = {}
+            # DCP requires a template state_dict() describing what to load into.
+            # In newer torch versions, dcp.load() will call state_dict() on the
+            # provided Stateful object to build the load plan.
+            model_state, optim_state = get_state_dict(fsdp_model, [optimizer] if load_opt else [])
+            self._template = {
+                "model": model_state,
+                "optimizers": optim_state,
+            }
 
         def state_dict(self):
-            raise RuntimeError("Use save_distributed_checkpoint instead")
+            return self._template
 
         def load_state_dict(self, state):
             set_state_dict(
@@ -286,9 +303,6 @@ def load_distributed_checkpoint(
                 optim_state_dict=state.get("optimizers") if load_opt else {},
                 options=StateDictOptions(strict=load_module_strict),
             )
-            if load_sched and "scheduler" in state:
-                scheduler.load_state_dict(state["scheduler"])
-            self.client_state = state.get("client_state", {})
 
     app = AppState()
     with warnings.catch_warnings():
@@ -296,7 +310,23 @@ def load_distributed_checkpoint(
         warnings.filterwarnings("ignore", category=UserWarning)
         dcp.load({"app": app}, checkpoint_id=ckpt_path, process_group=process_group)
 
-    return resolved, app.client_state
+    # Load non-tensor extras saved by rank0 (client_state + scheduler state).
+    extra_state = {}
+    extra_path = os.path.join(ckpt_path, "extra_state.pt")
+    if dist.is_initialized() and dist.get_rank() == 0 and os.path.isfile(extra_path):
+        extra_state = torch.load(extra_path, map_location="cpu")
+    if dist.is_initialized():
+        obj_list = [extra_state]
+        dist.broadcast_object_list(obj_list, src=0, group=process_group)
+        extra_state = obj_list[0] or {}
+
+    client_state = extra_state.get("client_state", {}) if isinstance(extra_state, dict) else {}
+    if load_sched and scheduler is not None:
+        sched_state = extra_state.get("scheduler", None) if isinstance(extra_state, dict) else None
+        if sched_state is not None:
+            scheduler.load_state_dict(sched_state)
+
+    return resolved, client_state
 
 
 def _cleanup_old_checkpoints(save_dir: str, max_num: int, max_mem: int):
