@@ -417,23 +417,26 @@ class PRMLoss(nn.Module):
                 if not return_acc:
                     return loss
 
-                group, local_logits, _, _, vocab_start, _ = _get_dtensor_shard_info(logits)
-                local_ph = local_logits[placeholder_mask].float()
-                local_max, local_argmax = local_ph.max(dim=-1)
+                # Accuracy is a metric only; avoid tracking collectives in autograd
+                # (dist.all_reduce has no autograd kernel).
+                with torch.no_grad():
+                    group, local_logits, _, _, vocab_start, _ = _get_dtensor_shard_info(logits)
+                    local_ph = local_logits.detach()[placeholder_mask].float()
+                    local_max, local_argmax = local_ph.max(dim=-1)
 
-                global_max = local_max.clone()
-                dist.all_reduce(global_max, op=dist.ReduceOp.MAX, group=group)
+                    global_max = local_max.clone()
+                    dist.all_reduce(global_max, op=dist.ReduceOp.MAX, group=group)
 
-                candidate_idx = torch.where(
-                    local_max == global_max,
-                    local_argmax + vocab_start,
-                    torch.full_like(local_argmax, -1),
-                )
-                global_argmax = candidate_idx.clone()
-                dist.all_reduce(global_argmax, op=dist.ReduceOp.MAX, group=group)
+                    candidate_idx = torch.where(
+                        local_max == global_max,
+                        local_argmax + vocab_start,
+                        torch.full_like(local_argmax, -1),
+                    )
+                    global_argmax = candidate_idx.clone()
+                    dist.all_reduce(global_argmax, op=dist.ReduceOp.MAX, group=group)
 
-                acc = (global_argmax == labels_ph).float()
-                acc = (acc * mask).sum() / mask.sum()
+                    acc = (global_argmax == labels_ph).float()
+                    acc = (acc * mask).sum() / mask.sum()
                 return loss, acc
 
             logits = logits[placeholder_mask].squeeze(1)
