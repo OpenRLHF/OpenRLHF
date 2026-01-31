@@ -92,7 +92,11 @@ class FSDP2Strategy(ABC):
         if local_rank >= 0:
             torch.cuda.set_device(local_rank)
 
-        dist.init_process_group(timeout=timeout)
+        # Explicit backend + device_id reduces NCCL barrier warnings and avoids
+        # hangs when global-rank-to-GPU mapping is heterogeneous.
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+        device_id = local_rank if (backend == "nccl" and local_rank >= 0) else None
+        dist.init_process_group(backend=backend, timeout=timeout, device_id=device_id)
         self.world_size = dist.get_world_size()
 
         # Initialize Gloo group for CPU-safe barriers (ref: slime)
