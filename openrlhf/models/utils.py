@@ -2,6 +2,7 @@ from typing import Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
+import torch.distributed.nn.functional as dist_nn
 import torch.nn.functional as F
 from torch.distributed.tensor import DTensor
 
@@ -84,7 +85,14 @@ def _logsumexp_by_chunk(logits: torch.Tensor, chunk_size: int = 1024) -> torch.T
     return logsumexp_values
 
 
-def _get_dtensor_shard_info(tensor: DTensor):
+def _get_dtensor_shard_info(
+    tensor: DTensor,
+) -> Tuple[dist.ProcessGroup, torch.Tensor, int, int, int, int]:
+    """Extract sharding info from a vocab-sharded DTensor.
+
+    Returns:
+        (group, local_tensor, local_vocab, global_vocab, vocab_start, vocab_end)
+    """
     mesh = tensor.device_mesh
     group = mesh.get_group()
     rank = dist.get_rank(group)
@@ -104,12 +112,13 @@ def _get_dtensor_shard_info(tensor: DTensor):
 
 def _logsumexp_sharded(logits_local: torch.Tensor, group, dim: int = -1) -> torch.Tensor:
     local_max = logits_local.max(dim=dim).values
-    global_max = local_max.clone()
+    # `global_max` is used only for numerical stability: logsumexp(x) is shift-invariant,
+    # so we can safely stop gradients through this MAX reduction.
+    global_max = local_max.detach().clone()
     dist.all_reduce(global_max, op=dist.ReduceOp.MAX, group=group)
     local_exp = torch.exp(logits_local - global_max.unsqueeze(dim))
     local_exp_sum = local_exp.sum(dim=dim)
-    global_exp_sum = local_exp_sum.clone()
-    dist.all_reduce(global_exp_sum, op=dist.ReduceOp.SUM, group=group)
+    global_exp_sum = dist_nn.all_reduce(local_exp_sum, op=dist.ReduceOp.SUM, group=group)
     return global_max + torch.log(global_exp_sum)
 
 
@@ -137,10 +146,10 @@ def log_probs_from_sharded_logits(
     in_shard = (labels >= vocab_start) & (labels < vocab_end) & (labels != ignore_index)
     safe_local = local_labels.clamp(0, max(local_vocab - 1, 0))
     gathered = logits_local.gather(dim=-1, index=safe_local.unsqueeze(-1)).squeeze(-1)
-    local_label_logits = torch.where(in_shard, gathered, torch.full_like(gathered, float("-inf")))
+    # Use SUM reduction with masking so gradients route only to the owning vocab shard.
+    local_label_logits = torch.where(in_shard, gathered, torch.zeros_like(gathered))
 
-    global_label_logits = local_label_logits.clone()
-    dist.all_reduce(global_label_logits, op=dist.ReduceOp.MAX, group=group)
+    global_label_logits = dist_nn.all_reduce(local_label_logits, op=dist.ReduceOp.SUM, group=group)
 
     log_probs = global_label_logits - logsumexp_global
     log_probs = torch.where(labels == ignore_index, torch.zeros_like(log_probs), log_probs)
@@ -151,7 +160,7 @@ def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor, temperatur
     if isinstance(logits, DTensor):
         return log_probs_from_sharded_logits(logits, labels, temperature)
     if temperature != 1.0:
-        logits.div_(temperature)
+        logits = logits / temperature  # Avoid in-place op to prevent modifying caller's tensor
     # https://github.com/OpenRLHF/OpenRLHF/pull/718#issuecomment-2641081881
     if logits.dtype in [torch.float32, torch.float64]:
         batch_dim = logits.shape[:-1]
@@ -188,11 +197,10 @@ def select_token_logits(logits: torch.Tensor, token_ids: torch.Tensor) -> torch.
     in_shard = (token_ids >= vocab_start) & (token_ids < vocab_end)
     safe_local = local_indices.clamp(0, max=local_logits.size(-1) - 1)
     gathered = local_logits.index_select(dim=-1, index=safe_local)
-    local_values = torch.where(in_shard, gathered, torch.full_like(gathered, float("-inf")))
+    # Use SUM reduction so gradients propagate only to ranks that own the selected tokens.
+    local_values = torch.where(in_shard, gathered, torch.zeros_like(gathered))
 
-    global_values = local_values.clone()
-    dist.all_reduce(global_values, op=dist.ReduceOp.MAX, group=group)
-    return global_values
+    return dist_nn.all_reduce(local_values, op=dist.ReduceOp.SUM, group=group)
 
 
 def kd_loss_from_logits(
@@ -231,8 +239,7 @@ def kd_loss_from_logits(
     student_logprobs_local = student_local - student_logsumexp.unsqueeze(-1)
     local_sum = (teacher_probs_local * student_logprobs_local).sum(dim=-1)
 
-    total_sum = local_sum.clone()
-    dist.all_reduce(total_sum, op=dist.ReduceOp.SUM, group=group)
+    total_sum = dist_nn.all_reduce(local_sum, op=dist.ReduceOp.SUM, group=group)
 
     mask = (label != ignore_index).float()
     return -(total_sum.view(-1) * mask.view(-1)).sum() / mask.sum()
@@ -258,8 +265,7 @@ def _compute_entropy_sharded(logits: DTensor) -> torch.Tensor:
     logsumexp_global = _logsumexp_sharded(logits_local, group, dim=-1)
     probs_local = torch.exp(logits_local - logsumexp_global.unsqueeze(-1))
     local_p_logit = (probs_local * logits_local).sum(dim=-1)
-    global_p_logit = local_p_logit.clone()
-    dist.all_reduce(global_p_logit, op=dist.ReduceOp.SUM, group=group)
+    global_p_logit = dist_nn.all_reduce(local_p_logit, op=dist.ReduceOp.SUM, group=group)
     return logsumexp_global - global_p_logit
 
 
