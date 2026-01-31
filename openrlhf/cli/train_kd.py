@@ -45,7 +45,7 @@ def train(args):
         load_in_4bit=args.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=args.teacher_offload),
     )
-    if args.teacher_offload:
+    if (not is_fsdp2) and args.teacher_offload:
         teacher_model._offload = True
 
     # configure tokenizer
@@ -62,7 +62,9 @@ def train(args):
     # FSDP2: wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
     if is_fsdp2:
         model = strategy.prepare(model)
-        teacher_model = strategy.prepare(teacher_model)
+        # Teacher is inference-only; when offload is requested, prefer prepare_ref() to
+        # enable CPUOffloadPolicy under FSDP2 (mirrors ray launcher behavior).
+        teacher_model = strategy.prepare_ref(teacher_model) if args.teacher_offload else strategy.prepare(teacher_model)
 
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
