@@ -1,0 +1,56 @@
+"""
+FSDP2 Module for OpenRLHF
+=========================
+
+Provides FSDP2 training strategy with Tensor Parallelism (TP) support.
+
+Structure:
+    strategy.py   - FSDP2Strategy (main entry point)
+    checkpoint.py - Distributed checkpoint save/load
+    utils.py      - EMA, optimizer state management
+    tp/           - Tensor Parallelism
+        tp_parallel.py - TP styles, plans, apply_tensor_parallel
+"""
+
+# Checkpointing
+from .checkpoint import (
+    load_distributed_checkpoint,
+    load_hf_model,
+    save_distributed_checkpoint,
+    save_hf_model,
+)
+
+# Core
+from .strategy import FSDP2Strategy
+
+# Tensor Parallelism
+from .tp import (
+    apply_tensor_parallel,
+    get_tp_plan,
+    validate_tp_mesh,
+)
+
+# Utilities
+from .utils import (
+    get_checkpoint_metadata,
+    move_optimizer_state,
+    moving_average_fsdp2,
+)
+
+__all__ = [
+    # Core
+    "FSDP2Strategy",
+    # Tensor Parallelism
+    "apply_tensor_parallel",
+    "get_tp_plan",
+    "validate_tp_mesh",
+    # Checkpointing
+    "load_distributed_checkpoint",
+    "load_hf_model",
+    "save_distributed_checkpoint",
+    "save_hf_model",
+    # Utilities
+    "get_checkpoint_metadata",
+    "move_optimizer_state",
+    "moving_average_fsdp2",
+]

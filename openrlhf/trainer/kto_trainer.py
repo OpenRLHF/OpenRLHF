@@ -218,7 +218,14 @@ class KTOTrainer(ABC):
             tag = f"global_step{global_step}"
             if not self.disable_ds_ckpt:
                 self.strategy.save_ckpt(
-                    self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+                    self.model.model,
+                    args.ckpt_path,
+                    tag,
+                    args.max_ckpt_num,
+                    args.max_ckpt_mem,
+                    client_states,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
                 )
             if self.save_hf_ckpt:
                 save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
@@ -293,7 +300,13 @@ class KTOTrainer(ABC):
         )
 
         # latter half
-        output = model(input_ids[hsize:], attention_mask=attention_mask[hsize:], return_output=True)
+        output = model(
+            input_ids[hsize:],
+            attention_mask=attention_mask[hsize:],
+            return_output=True,
+            allgather_logits=True,
+            ring_attn_group=self.strategy.ring_attn_group,
+        )
         all_logits = output["logits"]
         KL_logps = self._get_batch_logps(
             all_logits,
@@ -305,7 +318,13 @@ class KTOTrainer(ABC):
         return chosen_logps, reject_logps, KL_logps, aux_loss
 
     def compute_model_logps(self, model, input_ids, attention_mask, labels, prompt_id_lens):
-        output = model(input_ids, attention_mask=attention_mask, return_output=True)
+        output = model(
+            input_ids,
+            attention_mask=attention_mask,
+            return_output=True,
+            allgather_logits=True,
+            ring_attn_group=self.strategy.ring_attn_group,
+        )
         all_logits = output["logits"]
         all_logps = self._get_batch_logps(
             all_logits, input_ids, attention_mask=attention_mask, average_log_prob=False, prompt_id_lens=prompt_id_lens
