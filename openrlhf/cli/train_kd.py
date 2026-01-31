@@ -64,7 +64,9 @@ def train(args):
         model = strategy.prepare(model)
         # Teacher is inference-only; when offload is requested, prefer prepare_ref() to
         # enable CPUOffloadPolicy under FSDP2 (mirrors ray launcher behavior).
-        teacher_model = strategy.prepare_ref(teacher_model) if args.teacher_offload else strategy.prepare(teacher_model)
+        teacher_model = (
+            strategy.prepare_ref(teacher_model) if args.teacher_offload else strategy.prepare(teacher_model)
+        )
 
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
