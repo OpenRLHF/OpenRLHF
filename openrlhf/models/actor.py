@@ -149,6 +149,12 @@ class Actor(nn.Module):
             self.packing_samples = packing_samples
         else:
             self.model = pretrain_or_model
+            # Keep behavior consistent with the from_pretrained() branch.
+            # - packing_samples is required for Ring Attention (CP) token slicing.
+            # - use_cache should be disabled for training (HF recommends generate(use_cache=True) instead).
+            self.packing_samples = packing_samples
+            if hasattr(self.model, "config") and hasattr(self.model.config, "use_cache"):
+                self.model.config.use_cache = False
 
     def forward(
         self,
