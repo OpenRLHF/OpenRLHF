@@ -26,7 +26,7 @@ class SFTTrainer(ABC):
         max_epochs (int, defaults to 2): The maximum number of training epochs.
         tokenizer (Tokenizer, optional): The tokenizer for processing input data.
         save_hf_ckpt (bool): Whether to save huggingface-format model weight.
-        disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight. (Deepspeed model weight is used for training recovery)
+        disable_fsdp2_ckpt (bool): Whether to disable FSDP2 distributed checkpoints (used for training recovery).
     """
 
     def __init__(
@@ -43,7 +43,7 @@ class SFTTrainer(ABC):
         max_epochs: int = 2,
         tokenizer=None,
         save_hf_ckpt: bool = False,
-        disable_ds_ckpt: bool = False,
+        disable_fsdp2_ckpt: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -59,7 +59,7 @@ class SFTTrainer(ABC):
         self.optimizer = optim
         self.args = strategy.args
         self.save_hf_ckpt = save_hf_ckpt
-        self.disable_ds_ckpt = disable_ds_ckpt
+        self.disable_fsdp2_ckpt = disable_fsdp2_ckpt
 
         self.loss_fn = SFTLoss()
 
@@ -205,9 +205,16 @@ class SFTTrainer(ABC):
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
-            if not self.disable_ds_ckpt:
+            if not self.disable_fsdp2_ckpt:
                 self.strategy.save_ckpt(
-                    self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+                    self.model.model,
+                    args.ckpt_path,
+                    tag,
+                    args.max_ckpt_num,
+                    args.max_ckpt_mem,
+                    client_states,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
                 )
             if self.save_hf_ckpt:
                 save_path = os.path.join(args.ckpt_path, f"{tag}_hf")

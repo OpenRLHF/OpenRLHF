@@ -1,11 +1,19 @@
+import warnings
 from typing import Optional, Tuple
 
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.distributed.tensor import DTensor
 
-from .utils import masked_mean
+from .utils import (
+    _get_dtensor_shard_info,
+    kd_loss_from_logits,
+    log_probs_from_logits,
+    masked_mean,
+    select_token_logits,
+)
 
 
 class GPTLMLoss(nn.Module):
@@ -19,38 +27,27 @@ class GPTLMLoss(nn.Module):
         self.loss = nn.CrossEntropyLoss(ignore_index=self.IGNORE_INDEX)
 
         self.ring_attn_group = ring_attn_group
-        if self.ring_attn_group:
-            self.ring_attn_rank = dist.get_rank(self.ring_attn_group)
-            self.ring_attn_world_size = dist.get_world_size(self.ring_attn_group)
+        if ring_attn_group is not None:
+            is_rank0 = (not dist.is_available()) or (not dist.is_initialized()) or dist.get_rank() == 0
+            if is_rank0:
+                warnings.warn(
+                    "GPTLMLoss(ring_attn_group=...) is deprecated and ignored. "
+                    "Compute loss on gathered logits/labels (e.g. Actor(..., allgather_logits=True)) "
+                    "or use gathered log_probs + SFTLoss.",
+                    stacklevel=2,
+                )
 
     def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        # RingAttention
-        if self.ring_attn_group is not None:
-            total_seq_len = labels.size(-1)
-            seq_len_per_process = total_seq_len // self.ring_attn_world_size
-            start_idx = self.ring_attn_rank * seq_len_per_process
-            end_idx = min(start_idx + seq_len_per_process, total_seq_len)
-            labels = labels[..., start_idx:end_idx]
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
 
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-
-            # if labels are all IGNORE_INDEX, then nn.CrossEntropyLoss will be nan
-            if torch.all(shift_labels == self.IGNORE_INDEX):
-                # Use mean of logits multiplied by 0 to maintain gradient flow
-                loss = shift_logits.mean() * 0
-            else:
-                loss = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-
-            dist.all_reduce(loss, op=dist.ReduceOp.SUM, group=self.ring_attn_group)
-            loss = loss / self.ring_attn_world_size
-        else:
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-
-            loss = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-
-        return loss
+        if torch.all(shift_labels == self.IGNORE_INDEX):
+            return shift_logits.mean() * 0
+        if isinstance(shift_logits, DTensor):
+            log_probs = log_probs_from_logits(shift_logits, shift_labels)
+            mask = shift_labels != self.IGNORE_INDEX
+            return -(log_probs * mask).sum() / mask.sum()
+        return self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
 
 
 class SFTLoss(nn.Module):
@@ -370,15 +367,7 @@ class KDLoss(nn.Module):
         self.IGNORE_INDEX = -100
 
     def forward(self, logits: torch.Tensor, teacher_logits: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
-        teacher_probs = F.softmax(teacher_logits, dim=-1, dtype=torch.float32)
-        inf_mask = torch.isinf(logits)
-        logprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
-        prod_probs = torch.masked_fill(teacher_probs * logprobs, inf_mask, 0)
-        x = torch.sum(prod_probs, dim=-1).view(-1)
-        mask = (label != self.IGNORE_INDEX).int()
-        distil_loss = -torch.sum(x * mask.view(-1), dim=0) / torch.sum(mask.view(-1), dim=0)
-
-        return distil_loss
+        return kd_loss_from_logits(logits, teacher_logits, label, self.IGNORE_INDEX)
 
 
 class PRMLoss(nn.Module):
@@ -395,23 +384,63 @@ class PRMLoss(nn.Module):
 
     def forward(self, inputs: torch.Tensor, logits: torch.Tensor, labels: torch.Tensor, *, return_acc: bool = False):
         placeholder_mask = inputs == self.placeholder_token_id
-        logits = logits[placeholder_mask].squeeze(1)
-        labels = labels[placeholder_mask]
-
         if labels.dtype == torch.float:
             # soft label
             assert len(self.reward_token_ids) == 2, "reward_token_ids should have 2 tokens for soft labels"
-            logits = logits[..., self.reward_token_ids]
+            token_ids = torch.tensor(self.reward_token_ids, dtype=torch.long)
+            logits = select_token_logits(logits, token_ids)
+            logits = logits[placeholder_mask].squeeze(1)
+            labels = labels[placeholder_mask]
             positive_labels = labels.to(logits.dtype)
             negative_labels = 1 - positive_labels
             negative_labels[positive_labels != -100] = 1 - positive_labels[positive_labels != -100]
             labels = torch.stack([positive_labels, negative_labels], dim=-1)
         elif self.reward_token_ids is not None:
             # hard label with reward_token_ids set. (otherwise the whole vocab will be trained together.)
-            logits = logits[..., self.reward_token_ids]
+            token_ids = torch.tensor(self.reward_token_ids, dtype=torch.long)
+            logits = select_token_logits(logits, token_ids)
+            logits = logits[placeholder_mask].squeeze(1)
+            labels = labels[placeholder_mask]
             # this is slow....
             for i, token in enumerate(self.reward_token_ids):
                 labels = torch.where(labels == token, i, labels)
+        else:
+            labels_ph = labels[placeholder_mask]
+            if isinstance(logits, DTensor):
+                # Avoid DTensor advanced indexing; compute token log-probs first (returns local tensor).
+                log_probs = log_probs_from_logits(logits, labels)
+                log_probs_ph = log_probs[placeholder_mask]
+
+                mask = labels_ph != self.IGNORE_INDEX
+                loss = -(log_probs_ph.view(-1) * mask.view(-1)).sum() / mask.sum()
+
+                if not return_acc:
+                    return loss
+
+                # Accuracy is a metric only; avoid tracking collectives in autograd
+                # (dist.all_reduce has no autograd kernel).
+                with torch.no_grad():
+                    group, local_logits, _, _, vocab_start, _ = _get_dtensor_shard_info(logits)
+                    local_ph = local_logits.detach()[placeholder_mask].float()
+                    local_max, local_argmax = local_ph.max(dim=-1)
+
+                    global_max = local_max.clone()
+                    dist.all_reduce(global_max, op=dist.ReduceOp.MAX, group=group)
+
+                    candidate_idx = torch.where(
+                        local_max == global_max,
+                        local_argmax + vocab_start,
+                        torch.full_like(local_argmax, -1),
+                    )
+                    global_argmax = candidate_idx.clone()
+                    dist.all_reduce(global_argmax, op=dist.ReduceOp.MAX, group=group)
+
+                    acc = (global_argmax == labels_ph).float()
+                    acc = (acc * mask).sum() / mask.sum()
+                return loss, acc
+
+            logits = logits[placeholder_mask].squeeze(1)
+            labels = labels_ph
 
         loss = self.loss(logits, labels)
         if not return_acc:

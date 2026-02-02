@@ -38,7 +38,7 @@ class RewardModelTrainer(ABC):
         max_norm=0.5,
         max_epochs: int = 2,
         loss="sigmoid",
-        disable_ds_ckpt=False,
+        disable_fsdp2_ckpt=False,
         save_hf_ckpt=False,
     ) -> None:
         super().__init__()
@@ -52,7 +52,7 @@ class RewardModelTrainer(ABC):
         self.optimizer = optim
         self.tokenizer = tokenizer
         self.args = strategy.args
-        self.disable_ds_ckpt = disable_ds_ckpt
+        self.disable_fsdp2_ckpt = disable_fsdp2_ckpt
         self.save_hf_ckpt = save_hf_ckpt
 
         if loss == "sigmoid":
@@ -223,9 +223,16 @@ class RewardModelTrainer(ABC):
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
-            if not self.disable_ds_ckpt:
+            if not self.disable_fsdp2_ckpt:
                 self.strategy.save_ckpt(
-                    self.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+                    self.model,
+                    args.ckpt_path,
+                    tag,
+                    args.max_ckpt_num,
+                    args.max_ckpt_mem,
+                    client_states,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
                 )
             if self.save_hf_ckpt:
                 save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
@@ -307,7 +314,12 @@ class RewardModelTrainer(ABC):
         We do this to avoid doing two forward passes, because it's faster for FSDP.
         """
         input_ids, att_masks = self.concatenated_inputs(chosen_ids, c_mask, reject_ids, r_mask)
-        all_values, output = model(input_ids, attention_mask=att_masks, return_output=True)
+        all_values, output = model(
+            input_ids,
+            attention_mask=att_masks,
+            return_output=True,
+            ring_attn_group=self.strategy.ring_attn_group,
+        )
         chosen_rewards = all_values[: chosen_ids.shape[0]]
         rejected_rewards = all_values[chosen_ids.shape[0] :]
         aux_loss = output.aux_loss if "aux_loss" in output else []

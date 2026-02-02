@@ -27,7 +27,7 @@ class KTOTrainer(ABC):
         beta (float, defaults to 0.01): Coefficient for regularizing the preference loss.
         max_epochs (int, defaults to 2): Maximum number of training epochs.
         save_hf_ckpt (bool): Whether to save huggingface-format model weight.
-        disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight.
+        disable_fsdp2_ckpt (bool): Whether to disable FSDP2 distributed checkpoints (used for training recovery).
     """
 
     def __init__(
@@ -44,7 +44,7 @@ class KTOTrainer(ABC):
         beta=0.01,
         max_epochs: int = 2,
         save_hf_ckpt: bool = False,
-        disable_ds_ckpt: bool = False,
+        disable_fsdp2_ckpt: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -59,7 +59,7 @@ class KTOTrainer(ABC):
         self.tokenizer = tokenizer
         self.args = strategy.args
         self.save_hf_ckpt = save_hf_ckpt
-        self.disable_ds_ckpt = disable_ds_ckpt
+        self.disable_fsdp2_ckpt = disable_fsdp2_ckpt
 
         self.beta = beta
         self.loss_fn = KTOLoss(
@@ -216,9 +216,16 @@ class KTOTrainer(ABC):
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
-            if not self.disable_ds_ckpt:
+            if not self.disable_fsdp2_ckpt:
                 self.strategy.save_ckpt(
-                    self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+                    self.model.model,
+                    args.ckpt_path,
+                    tag,
+                    args.max_ckpt_num,
+                    args.max_ckpt_mem,
+                    client_states,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
                 )
             if self.save_hf_ckpt:
                 save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
@@ -293,7 +300,13 @@ class KTOTrainer(ABC):
         )
 
         # latter half
-        output = model(input_ids[hsize:], attention_mask=attention_mask[hsize:], return_output=True)
+        output = model(
+            input_ids[hsize:],
+            attention_mask=attention_mask[hsize:],
+            return_output=True,
+            allgather_logits=True,
+            ring_attn_group=self.strategy.ring_attn_group,
+        )
         all_logits = output["logits"]
         KL_logps = self._get_batch_logps(
             all_logits,
@@ -305,7 +318,13 @@ class KTOTrainer(ABC):
         return chosen_logps, reject_logps, KL_logps, aux_loss
 
     def compute_model_logps(self, model, input_ids, attention_mask, labels, prompt_id_lens):
-        output = model(input_ids, attention_mask=attention_mask, return_output=True)
+        output = model(
+            input_ids,
+            attention_mask=attention_mask,
+            return_output=True,
+            allgather_logits=True,
+            ring_attn_group=self.strategy.ring_attn_group,
+        )
         all_logits = output["logits"]
         all_logps = self._get_batch_logps(
             all_logits, input_ids, attention_mask=attention_mask, average_log_prob=False, prompt_id_lens=prompt_id_lens

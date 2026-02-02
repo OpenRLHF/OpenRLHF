@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
-from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils.fsdp2 import FSDP2Strategy
 
 
 class BaseDistributedActor:
@@ -52,7 +52,7 @@ class BaseDistributedActor:
 
 
 class BaseModelActor(BaseDistributedActor):
-    def _setup_distributed(self, strategy: DeepspeedStrategy):
+    def _setup_distributed(self, strategy: FSDP2Strategy):
         # configure strategy
         self.strategy = strategy
         strategy.setup_distributed()
@@ -103,24 +103,22 @@ class BaseModelActor(BaseDistributedActor):
 
 @ray.remote(num_gpus=1)
 class ReferenceModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+    def init_model_from_pretrained(self, strategy: FSDP2Strategy, pretrain):
         self._setup_distributed(strategy)
         model = Actor(
             pretrain,
             attn_implementation=strategy.args.attn_implementation,
             param_dtype=strategy.args.param_dtype,  # default: bf16
+            model_dtype="fp32",
             load_in_4bit=strategy.args.load_in_4bit,
-            ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
             packing_samples=strategy.args.packing_samples,
             temperature=strategy.args.temperature,
             use_liger_kernel=strategy.args.use_liger_kernel,
         )
         strategy.print(model)
 
-        if strategy.args.ref_reward_offload:
-            model._offload = True
-
-        self.model = self.strategy.prepare(model, is_rlhf=True)
+        # Reference model is inference-only; cpu_offload controls FSDP2 CPUOffloadPolicy.
+        self.model = self.strategy.prepare(model, cpu_offload=strategy.args.ref_reward_offload)
         self.model.eval()
 
     def forward(
@@ -145,7 +143,7 @@ class ReferenceModelActor(BaseModelActor):
 
 @ray.remote(num_gpus=1)
 class RewardModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+    def init_model_from_pretrained(self, strategy: FSDP2Strategy, pretrain):
         self._setup_distributed(strategy)
         model = get_llm_for_sequence_regression(
             pretrain,
@@ -153,8 +151,8 @@ class RewardModelActor(BaseModelActor):
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
             param_dtype=strategy.args.param_dtype,  # default: bf16
+            model_dtype="fp32",
             load_in_4bit=strategy.args.load_in_4bit,
-            ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
             value_head_prefix=strategy.args.value_head_prefix,
             packing_samples=strategy.args.packing_samples,
         )
@@ -162,10 +160,8 @@ class RewardModelActor(BaseModelActor):
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
         strategy.print("mean: {}, std {}".format(model.mean, model.std))
 
-        if strategy.args.ref_reward_offload:
-            model._offload = True
-
-        self.model = self.strategy.prepare(model, is_rlhf=True)
+        # Reward model is inference-only; cpu_offload controls FSDP2 CPUOffloadPolicy.
+        self.model = self.strategy.prepare(model, cpu_offload=strategy.args.ref_reward_offload)
         self.model.eval()
 
     def forward(
@@ -216,7 +212,7 @@ class RayActorGroup:
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
         self.ray_actor_type = ray_actor_type
-        # duplicate actors is ring_attn_size * tensor_parallel_size
+        # duplicate actors is cp_size * tp_size
         self.duplicate_actors = duplicate_actors
 
         # custom resources, see https://docs.ray.io/en/latest/ray-core/scheduling/resources.html

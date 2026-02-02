@@ -1,13 +1,11 @@
 from typing import Optional
 
-import deepspeed
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
-from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
 from .utils import compute_entropy, log_probs_from_logits
@@ -28,7 +26,6 @@ class Actor(nn.Module):
         lora_alpha (int, optional): Alpha parameter for LoRA. Defaults to 16.
         lora_dropout (float, optional): Dropout rate for LoRA layers. Defaults to 0.
         target_modules (list, optional): List of target modules for applying LoRA. Defaults to None.
-        ds_config (dict, optional): Configuration for DeepSpeed, enabling model partitioning across multiple GPUs. Defaults to None.
         device_map (dict, optional): Device mapping for loading the model onto specific devices. Defaults to None.
         packing_samples (bool, optional): Whether to pack samples during training. Defaults to False.
         temperature (float, optional): Temperature for action selection. Defaults to 1.0.
@@ -40,12 +37,12 @@ class Actor(nn.Module):
         pretrain_or_model,
         attn_implementation="flash_attention_2",
         param_dtype="bf16",
+        model_dtype: Optional[str] = None,
         load_in_4bit=False,
         lora_rank=0,
         lora_alpha=16,
         lora_dropout=0,
         target_modules=None,
-        ds_config=None,
         device_map=None,
         packing_samples=False,
         temperature=1.0,
@@ -59,17 +56,14 @@ class Actor(nn.Module):
             # Support multiple attention mechanism implementations
             attn_impl = attn_implementation
 
-            # Note: dschf is defined in function scope to avoid global effects
-            # https://huggingface.co/docs/transformers/deepspeed#non-trainer-deepspeed-integration
-            if ds_config is not None and ds_config["zero_optimization"]["stage"] == 3:
-                dschf = HfDeepSpeedConfig(ds_config)
-            else:
-                dschf = None
-
             # Determine torch dtype based on param_dtype parameter, default: bf16
             from openrlhf.utils.utils import convert_to_torch_dtype
 
-            torch_dtype = convert_to_torch_dtype(param_dtype)
+            # For FSDP2, keeping master weights in fp32 (model_dtype="fp32") aligns
+            # with Verl/NeMo RL: optimizer states follow param dtype (fp32), while
+            # FSDP2 MixedPrecisionPolicy controls compute dtype (e.g. bf16).
+            load_dtype = model_dtype or param_dtype
+            torch_dtype = convert_to_torch_dtype(load_dtype)
 
             if load_in_4bit:
                 assert param_dtype == "bf16", "we only support bnb_4bit_compute_dtype = bf16"
@@ -128,14 +122,6 @@ class Actor(nn.Module):
                 print("[MoE] set output_router_logits as True")
                 self.model.config.output_router_logits = True
 
-                # set_z3_leaf_modules is required for MoE models
-                for m in self.model.modules():
-                    # https://github.com/microsoft/DeepSpeed/pull/4966
-                    if "SparseMoeBlock" in m.__class__.__name__:
-                        deepspeed.utils.set_z3_leaf_modules(self.model, [m.__class__])
-                        print(f"Setting zero3 leaf for model on class with name: {m.__class__.__name__}")
-                        break
-
             # https://github.com/huggingface/transformers/issues/26877
             # Use `model.generate(use_cache=True)` instead.`
             self.model.config.use_cache = False
@@ -144,6 +130,12 @@ class Actor(nn.Module):
             self.packing_samples = packing_samples
         else:
             self.model = pretrain_or_model
+            # Keep behavior consistent with the from_pretrained() branch.
+            # - packing_samples is required for Ring Attention (CP) token slicing.
+            # - use_cache should be disabled for training (HF recommends generate(use_cache=True) instead).
+            self.packing_samples = packing_samples
+            if hasattr(self.model, "config") and hasattr(self.model.config, "use_cache"):
+                self.model.config.use_cache = False
 
     def forward(
         self,

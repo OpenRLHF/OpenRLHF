@@ -12,7 +12,6 @@ openrlhf.cli.train_prm \
    --param_dtype bf16 \
    --max_epochs 1 \
    --max_len 8192 \
-   --zero_stage 3 \
    --learning_rate 1e-6 \
    --dataset zhuzilin/Math-Shepherd \
    --input_key input \
@@ -30,5 +29,5 @@ EOF
 
 
 if [[ ${1} != "slurm" ]]; then
-    deepspeed --module $training_commands
+    torchrun --standalone --nproc-per-node ${NPROC_PER_NODE:-8} -m $training_commands
 fi

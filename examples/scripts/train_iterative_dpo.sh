@@ -62,13 +62,12 @@ openrlhf.cli.batch_inference
    --max_len 4096 \
    --dataset $GENERATE_OUTPUT  \
    --dataset_probs 1.0 \
-   --zero_stage 0 \
    --post_processor iter_dpo \
    --micro_batch_size 4 \
    --output_path $RM_OUTPUT
 EOF
    echo $get_rewards_commands
-   deepspeed --module $get_rewards_commands
+   torchrun --standalone --nproc-per-node ${NPROC_PER_NODE:-8} -m $get_rewards_commands
    checkSuccess "RM"
 
    read -r -d '' dpo_commands <<EOF
@@ -82,14 +81,13 @@ openrlhf.cli.train_dpo \
    --pretrain $POLICY_MODEL_PATH \
    --ref_pretrain $REF_MODEL_PATH \
    --save_path $MODEL_OUTPUT_PATH \
-   --zero_stage 3 \
    --max_epochs 1 \
    --param_dtype bf16 \
    --learning_rate 5e-7 \
    --gradient_checkpointing
 EOF
    echo $dpo_commands
-   deepspeed --module $dpo_commands
+   torchrun --standalone --nproc-per-node ${NPROC_PER_NODE:-8} -m $dpo_commands
    checkSuccess "DPO"
 
    iter=$((iter + 1))

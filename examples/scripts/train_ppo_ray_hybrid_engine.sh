@@ -25,7 +25,6 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --prompt_max_len 1024 \
    --max_samples 100000 \
    --generate_max_len 1024 \
-   --zero_stage 3 \
    --param_dtype bf16 \
    --actor_learning_rate 5e-7 \
    --critic_learning_rate 9e-6 \
@@ -39,14 +38,14 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --vllm_sync_backend nccl \
    --enforce_eager \
    --vllm_enable_sleep \
-   --deepspeed_enable_sleep \
+   --fsdp2_enable_sleep \
    --use_dynamic_batch \
    --train_max_tokens_per_gpu 16384 \
    --enable_vllm_is_correction
 
-# Enable tensor parallelism for DeepSpeed
-#    --ds_tensor_parallel_size 2 \
+# Enable tensor parallelism for FSDP2
+#    --fsdp2_tp_size 2 \
 
 # Enable Ring-Attention
-#    --ring_attn_size 4 \
+#    --fsdp2_cp_size 4 \
 #    --ring_head_stride 2 \

@@ -14,7 +14,6 @@ openrlhf.cli.train_sft \
    --save_steps -1 \
    --logging_steps 1 \
    --eval_steps -1 \
-   --zero_stage 2 \
    --max_epochs 1 \
    --param_dtype bf16 \
    --attn_implementation flash_attention_2 \
@@ -27,5 +26,5 @@ EOF
     # --packing_samples
 
 if [[ ${1} != "slurm" ]]; then
-    deepspeed --module $training_commands
+    torchrun --standalone --nproc-per-node ${NPROC_PER_NODE:-8} -m $training_commands
 fi

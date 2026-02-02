@@ -20,7 +20,6 @@ openrlhf.cli.batch_inference \
     --input_key chosen \
     --apply_chat_template \
     --max_samples 128000 \
-    --zero_stage 0 \
     --post_processor csft \
     --normalize_reward
     --micro_batch_size 4 \
@@ -36,7 +35,6 @@ openrlhf.cli.train_sft \
     --micro_train_batch_size 2 \
     --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
     --save_path ./checkpoint/llama-3-8b-csft \
-    --zero_stage 2 \
     --max_epochs 1 \
     --param_dtype bf16 \
     --learning_rate 5e-6 \
@@ -44,7 +42,7 @@ openrlhf.cli.train_sft \
 EOF
 
 if [ ! -e $RM_OUTPUT ]; then
-    deepspeed --module $get_rewards_commands
+    torchrun --standalone --nproc-per-node ${NPROC_PER_NODE:-8} -m $get_rewards_commands
     checkSuccess "RM"
 fi
-deepspeed --module $sft_commands
+torchrun --standalone --nproc-per-node ${NPROC_PER_NODE:-8} -m $sft_commands

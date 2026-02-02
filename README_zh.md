@@ -35,7 +35,7 @@ OpenRLHF 是**首个**结合 **Ray + vLLM 分布式架构**与**统一 Agent 设
 ## 📖 目录
 
 - [🗞️ 新闻](#新闻)
-- [🏗️ 架构基础](#架构基础ray--vllm-分布式) - Ray + vLLM + DeepSpeed 分布式基础设施
+- [🏗️ 架构基础](#架构基础ray--vllm-分布式) - Ray + vLLM + FSDP2 分布式基础设施
 - [🎯 设计范式](#设计范式基于-agent-的执行) - 统一的 Agent 执行流程
 - [🚀 RL 算法](#最先进的-rl-算法) - PPO、REINFORCE++、GRPO、RLOO
 - [📋 特性概览](#全面特性) - 完整的 RLHF 流程能力
@@ -93,8 +93,8 @@ OpenRLHF 利用 [Ray](https://github.com/ray-project/ray) 实现高效的分布�
 **vLLM - 高性能推理引擎**  
 RLHF 训练中 **80% 的时间**花在样本生成上。通过 [vLLM](https://github.com/vllm-project/vllm) 与自动张量并行（AutoTP）和流水线并行（PP），OpenRLHF 提供高吞吐量、内存高效的生成。
 
-**DeepSpeed - 内存高效训练**  
-基于 [DeepSpeed](https://github.com/deepspeedai/DeepSpeed) ZeRO-3、[deepcompile](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/deepcompile/README.md)、[AutoTP](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/huggingface-tp/README.md) 和 RingAttention。支持大模型训练而无需重量级框架，直接与 HuggingFace 模型配合使用。
+**FSDP2 - 内存高效训练**  
+基于 PyTorch FSDP2（可组合的 `fully_shard`）、DTensor 张量并行，以及 RingAttention（上下文并行）。支持混合精度、（可选）CPU offload、分布式 checkpoint，并可直接与 HuggingFace 模型配合使用。
 
 **Transformers - 模型接口**  
 与 HuggingFace Transformers 原生集成，可无缝加载模型、状态管理和微调预训练模型。
@@ -255,8 +255,8 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
     - 示例：`./examples/scripts/train_dapo_ray_hybrid_engine.sh`
 
 **可扩展性**
-- 张量并行的 DeepSpeed AutoTP（参见训练脚本中的 `--ds_tensor_parallel_size`）
-- 长上下文的 [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh)（`--ring_attn_size`）
+- FSDP2 张量并行（参见训练脚本中的 `--fsdp2_tp_size`）
+- 长上下文的 [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh)（`--fsdp2_cp_size`）
 - 使用 [SLURM](./examples/scripts/train_ppo_ray_slurm.sh) 的多节点训练
 
 **模型支持**
@@ -345,7 +345,7 @@ OpenRLHF 的模型检查点与 HuggingFace 模型完全兼容。您可以使用 
 <summary>SFT 命令</summary>
 
 ```bash
-deepspeed --module openrlhf.cli.train_sft \
+torchrun --standalone --nproc-per-node 8 -m openrlhf.cli.train_sft \
    --max_len 4096 \
    --dataset Open-Orca/OpenOrca \
    --input_key question \
@@ -359,7 +359,6 @@ deepspeed --module openrlhf.cli.train_sft \
    --save_steps -1 \
    --logging_steps 1 \
    --eval_steps -1 \
-   --zero_stage 2 \
    --max_epochs 1 \
    --packing_samples \
    --param_dtype bf16 \
@@ -369,7 +368,7 @@ deepspeed --module openrlhf.cli.train_sft \
 
 # 附加选项：
 # --apply_chat_template                # 使用 HF tokenizer 聊天模板
-# --ring_attn_size 2                   # 启用 RingAttention（先安装 ring_flash_attn）
+# --fsdp2_cp_size 2                    # 启用 RingAttention（先安装 ring_flash_attn）
 # --multiturn                          # 多轮微调损失
 # --pretrain_mode                      # 继续预训练模式
 ```
@@ -382,7 +381,7 @@ deepspeed --module openrlhf.cli.train_sft \
 <summary>奖励模型训练命令</summary>
 
 ```bash
-deepspeed --module openrlhf.cli.train_rm \
+torchrun --standalone --nproc-per-node 8 -m openrlhf.cli.train_rm \
    --save_path ./checkpoint/llama3-8b-rm \
    --save_steps -1 \
    --logging_steps 1 \
@@ -393,7 +392,6 @@ deepspeed --module openrlhf.cli.train_rm \
    --param_dtype bf16 \
    --max_epochs 1 \
    --max_len 8192 \
-   --zero_stage 3 \
    --learning_rate 9e-6 \
    --dataset OpenRLHF/preference_dataset_mixture2_and_safe_pku \
    --apply_chat_template \
@@ -460,7 +458,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --prompt_max_len 1024 \
    --max_samples 100000 \
    --generate_max_len 1024 \
-   --zero_stage 3 \
    --param_dtype bf16 \
    --actor_learning_rate 5e-7 \
    --critic_learning_rate 9e-6 \
@@ -474,7 +471,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_sync_backend nccl \
    --enforce_eager \
    --vllm_enable_sleep \
-   --deepspeed_enable_sleep \
+   --fsdp2_enable_sleep \
    --use_wandb {wandb_token}
 
 # 算法变体（所有算法都使用单轮 Agent 执行）：
@@ -500,7 +497,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 > **Ray 环境设置**：让 Ray 使用 `--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'` 自动部署
 
 > [!NOTE]
-> **GPU 索引错误故障排除**：如果遇到 DeepSpeed GPU 设备设置问题，请设置 `export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1`。
+> **GPU 索引错误故障排除**：如果遇到 Ray GPU 设备设置问题，请设置 `export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1`。
 
 📚 **更多示例**：参见 [example/scripts](./examples/scripts/) 和[文档](https://openrlhf.readthedocs.io/en/latest/usage.html)
 
@@ -709,25 +706,23 @@ python -m openrlhf.cli.lora_combiner \
 
 | 优化 | 标志 | 何时使用 |
 |------|------|---------|
-| **混合引擎** | `--colocate_all_models`<br>`--vllm_enable_sleep`<br>`--deepspeed_enable_sleep` | GPU 内存充足 |
+| **混合引擎** | `--colocate_all_models`<br>`--vllm_enable_sleep`<br>`--fsdp2_enable_sleep` | GPU 内存充足 |
 | **异步训练** | `--async_train` | 收敛已验证，需要吞吐量 |
 | **样本打包** | `--packing_samples` | 始终（尤其是训练） |
-| **DeepCompile** | `--deepcompile` | PyTorch 2.0+ |
-| **重叠通信** | `--overlap_comm` | GPU 内存充足 |
 | **动态批次** | `--use_dynamic_batch` | 可变序列长度 |
 | **前缀缓存** | vLLM 配置 | `n_samples_per_prompt` > 1 |
 
 #### 💾 内存管理
 
 **当您有足够内存时**：
-- ✅ 禁用 `--adam_offload`
-- ✅ 启用 `--overlap_comm`
+- ✅ 禁用 `--fsdp2_cpu_offload`
 - ✅ 使用 `--colocate_critic_reward` 和 `--colocate_actor_ref`
 
 **遇到 OOM 时**：
 - ❌ 禁用所有 `--colocate_*` 选项
 - ✅ 减少批次大小
 - ✅ 启用梯度检查点
+- ✅ 必要时启用 `--fsdp2_cpu_offload`
 
 #### 🎮 批次大小调优
 
@@ -798,6 +793,7 @@ python -m openrlhf.cli.lora_combiner \
 - [OpenAI GPT ↗](https://github.com/openai/gpt-3)
 - [LLaMA ↗](https://llama.meta.com/)
 - [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
+- [PyTorch ↗](https://github.com/pytorch/pytorch)
 - [Ray ↗](https://github.com/ray-project/ray)
 
 我们的项目还要感谢 [ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/ColossalChat) 和 [DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat)。在项目早期，我们参考了他们的代码设计。我们的项目要感谢 [Netmind.AI](https://www.netmind.ai/) 为开发 ring attention 提供的 GPU 支持。

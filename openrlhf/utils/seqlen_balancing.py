@@ -231,10 +231,10 @@ def get_reverse_idx(idx_map):
     return reverse_idx_map
 
 
-def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu, ring_attn_size, ds_tensor_parallel_size):
+def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu, fsdp2_cp_size, fsdp2_tp_size):
     # use first fit to get the number of micro batches
     # eg: [5, 3, 7, 2, 6] 10 -> [10, 7, 6]
-    max_tokens_per_gpu *= ring_attn_size * ds_tensor_parallel_size
+    max_tokens_per_gpu *= fsdp2_cp_size * fsdp2_tp_size
     batches = []
     for l in total_lengths:
         for i in range(len(batches)):

@@ -35,7 +35,7 @@ OpenRLHF is **the first** high-performance, production-ready open-source RLHF fr
 ## 📖 Table of Contents
 
 - [🗞️ News](#news)
-- [🏗️ Architecture Foundation](#architecture-foundation-ray--vllm-distribution) - Ray + vLLM + DeepSpeed distributed infrastructure
+- [🏗️ Architecture Foundation](#architecture-foundation-ray--vllm-distribution) - Ray + vLLM + FSDP2 distributed infrastructure
 - [🎯 Design Paradigm](#design-paradigm-agent-based-execution) - Unified agent-based execution pipeline
 - [🚀 RL Algorithms](#state-of-the-art-rl-algorithms) - PPO, REINFORCE++, GRPO, RLOO
 - [📋 Features Overview](#comprehensive-features) - Complete RLHF pipeline capabilities
@@ -93,8 +93,8 @@ OpenRLHF leverages [Ray](https://github.com/ray-project/ray) for efficient distr
 **vLLM - High-Performance Inference Engine**  
 RLHF training spends **80% of the time on sample generation**. Powered by [vLLM](https://github.com/vllm-project/vllm) with Auto Tensor Parallelism (AutoTP) and Pipeline Parallelism (PP), OpenRLHF delivers high-throughput, memory-efficient generation.
 
-**DeepSpeed - Memory-Efficient Training**  
-Built on [DeepSpeed](https://github.com/deepspeedai/DeepSpeed) ZeRO-3, [deepcompile](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/deepcompile/README.md), [AutoTP](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/huggingface-tp/README.md), and RingAttention. Enables large model training without heavyweight frameworks while working directly with HuggingFace models.
+**FSDP2 - Memory-Efficient Training**  
+Built on PyTorch FSDP2 (composable `fully_shard`), DTensor-based tensor parallelism, and RingAttention (context parallel). Supports mixed precision, (optional) CPU offload, and distributed checkpoints while working directly with HuggingFace models.
 
 **Transformers - Model Interface**  
 Native integration with HuggingFace Transformers for seamless model loading, state management, and fine-tuning of pretrained models.
@@ -254,8 +254,8 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
     - Example: `./examples/scripts/train_dapo_ray_hybrid_engine.sh`
 
 **Scalability**
-- DeepSpeed AutoTP for tensor parallelism (see `--ds_tensor_parallel_size` in training scripts)
-- [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh) for long context (`--ring_attn_size`)
+- FSDP2 tensor parallelism (see `--fsdp2_tp_size` in training scripts)
+- [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh) for long context (`--fsdp2_cp_size`)
 - Multi-node training with [SLURM](./examples/scripts/train_ppo_ray_slurm.sh)
 
 **Model Support**
@@ -344,7 +344,7 @@ Then you can use the startup scripts we provide in the [examples/scripts](./exam
 <summary>SFT command</summary>
 
 ```bash
-deepspeed --module openrlhf.cli.train_sft \
+torchrun --standalone --nproc-per-node 8 -m openrlhf.cli.train_sft \
    --max_len 4096 \
    --dataset Open-Orca/OpenOrca \
    --input_key question \
@@ -358,7 +358,6 @@ deepspeed --module openrlhf.cli.train_sft \
    --save_steps -1 \
    --logging_steps 1 \
    --eval_steps -1 \
-   --zero_stage 2 \
    --max_epochs 1 \
    --packing_samples \
    --param_dtype bf16 \
@@ -368,7 +367,7 @@ deepspeed --module openrlhf.cli.train_sft \
 
 # Additional options:
 # --apply_chat_template                # Use HF tokenizer chat template
-# --ring_attn_size 2                   # Enable RingAttention (install ring_flash_attn first)
+# --fsdp2_cp_size 2                    # Enable RingAttention (install ring_flash_attn first)
 # --multiturn                          # Multi-turn fine-tuning loss
 # --pretrain_mode                      # Continued pre-training mode
 ```
@@ -382,7 +381,7 @@ deepspeed --module openrlhf.cli.train_sft \
 <summary>Reward model training command</summary>
 
 ```bash
-deepspeed --module openrlhf.cli.train_rm \
+torchrun --standalone --nproc-per-node 8 -m openrlhf.cli.train_rm \
    --save_path ./checkpoint/llama3-8b-rm \
    --save_steps -1 \
    --logging_steps 1 \
@@ -393,7 +392,6 @@ deepspeed --module openrlhf.cli.train_rm \
    --param_dtype bf16 \
    --max_epochs 1 \
    --max_len 8192 \
-   --zero_stage 3 \
    --learning_rate 9e-6 \
    --dataset OpenRLHF/preference_dataset_mixture2_and_safe_pku \
    --apply_chat_template \
@@ -461,7 +459,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --prompt_max_len 1024 \
    --max_samples 100000 \
    --generate_max_len 1024 \
-   --zero_stage 3 \
    --param_dtype bf16 \
    --actor_learning_rate 5e-7 \
    --critic_learning_rate 9e-6 \
@@ -475,7 +472,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_sync_backend nccl \
    --enforce_eager \
    --vllm_enable_sleep \
-   --deepspeed_enable_sleep \
+   --fsdp2_enable_sleep \
    --use_wandb {wandb_token}
 
 # Algorithm Variants (all use single-turn agent execution):
@@ -501,7 +498,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 > **Ray Environment Setup**: Let Ray auto-deploy with `--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`
 
 > [!NOTE]
-> **Troubleshooting GPU index errors**: Set `export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1` if you encounter DeepSpeed GPU device setup issues.
+> **Troubleshooting GPU index errors**: Set `export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1` if you encounter Ray GPU device setup issues.
 
 📚 **More Examples**: See [examples/scripts](./examples/scripts/) and [Documentation](https://openrlhf.readthedocs.io/en/latest/usage.html)
 
@@ -710,25 +707,23 @@ Optimize OpenRLHF for your hardware and workload with these recommendations:
 
 | Optimization | Flag | When to Use |
 |--------------|------|-------------|
-| **Hybrid Engine** | `--colocate_all_models`<br>`--vllm_enable_sleep`<br>`--deepspeed_enable_sleep` | Sufficient GPU memory |
+| **Hybrid Engine** | `--colocate_all_models`<br>`--vllm_enable_sleep`<br>`--fsdp2_enable_sleep` | Sufficient GPU memory |
 | **Async Training** | `--async_train` | Convergence validated, need throughput |
 | **Sample Packing** | `--packing_samples` | Always (especially training) |
-| **DeepCompile** | `--deepcompile` | PyTorch 2.0+ |
-| **Overlap Comm** | `--overlap_comm` | Sufficient GPU memory |
 | **Dynamic Batch** | `--use_dynamic_batch` | Variable sequence lengths |
 | **Prefix Caching** | vLLM config | `n_samples_per_prompt` > 1 |
 
 #### 💾 Memory Management
 
 **When you have enough memory**:
-- ✅ Disable `--adam_offload`
-- ✅ Enable `--overlap_comm`
+- ✅ Disable `--fsdp2_cpu_offload`
 - ✅ Use `--colocate_critic_reward` and `--colocate_actor_ref`
 
 **When hitting OOM**:
 - ❌ Disable all `--colocate_*` options
 - ✅ Reduce batch sizes
 - ✅ Enable gradient checkpointing
+- ✅ Enable `--fsdp2_cpu_offload` (if needed)
 
 #### 🎮 Batch Size Tuning
 
@@ -800,6 +795,7 @@ We would like to express our gratitude to the following projects and organizatio
 - [OpenAI GPT ↗](https://github.com/openai/gpt-3)
 - [LLaMA ↗](https://llama.meta.com/)
 - [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
+- [PyTorch ↗](https://github.com/pytorch/pytorch)
 - [Ray ↗](https://github.com/ray-project/ray)
 
 Our project would also like to thank [ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/ColossalChat) and [DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat). In the early stages of the project, we referred to their code design. 
