@@ -117,11 +117,8 @@ class ReferenceModelActor(BaseModelActor):
         )
         strategy.print(model)
 
-        # FSDP2: use prepare_ref for reference models (enables CPU offload)
-        if strategy.args.ref_reward_offload:
-            self.model = self.strategy.prepare_ref(model)
-        else:
-            self.model = self.strategy.prepare(model)
+        # Reference model is inference-only; cpu_offload controls FSDP2 CPUOffloadPolicy.
+        self.model = self.strategy.prepare(model, cpu_offload=strategy.args.ref_reward_offload)
         self.model.eval()
 
     def forward(
@@ -163,11 +160,8 @@ class RewardModelActor(BaseModelActor):
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
         strategy.print("mean: {}, std {}".format(model.mean, model.std))
 
-        # FSDP2: use prepare_ref for reward models (enables CPU offload)
-        if strategy.args.ref_reward_offload:
-            self.model = self.strategy.prepare_ref(model)
-        else:
-            self.model = self.strategy.prepare(model)
+        # Reward model is inference-only; cpu_offload controls FSDP2 CPUOffloadPolicy.
+        self.model = self.strategy.prepare(model, cpu_offload=strategy.args.ref_reward_offload)
         self.model.eval()
 
     def forward(

@@ -54,9 +54,8 @@ def train(args):
 
     # Wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
     model = strategy.prepare(model)
-    # Teacher is inference-only; when offload is requested, prefer prepare_ref() to
-    # enable CPUOffloadPolicy under FSDP2 (mirrors ray launcher behavior).
-    teacher_model = strategy.prepare_ref(teacher_model) if args.teacher_offload else strategy.prepare(teacher_model)
+    # Teacher is inference-only; cpu_offload controls FSDP2 CPUOffloadPolicy.
+    teacher_model = strategy.prepare(teacher_model, cpu_offload=args.teacher_offload)
 
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
