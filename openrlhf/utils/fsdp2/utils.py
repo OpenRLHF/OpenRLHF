@@ -215,7 +215,7 @@ def get_checkpoint_metadata(strategy) -> dict:
         "fsdp2_dp_size": strategy.fsdp2_dp_size,
         "fsdp2_cp_size": strategy.fsdp2_cp_size,
         "fsdp2_tp_size": strategy.fsdp2_tp_size,
-        "param_dtype": strategy.param_dtype
+        "param_dtype": strategy.param_dtype,
     }
 
 
