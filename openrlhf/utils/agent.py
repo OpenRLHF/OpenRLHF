@@ -175,7 +175,11 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
 
         # Generate one continuation from the engine.
         request_output = await llm_engine.generate(prompt_token_ids, deepcopy(sampling_params))
-        action_token_ids = request_output.outputs[0].token_ids
+        generation_output = request_output.outputs[0]
+        action_token_ids = generation_output.token_ids
+
+        # Check if response was truncated (hit max_tokens length limit)
+        is_truncated = generation_output.finish_reason == "length"
 
         # Stitch prompt + action together for downstream consumers.
         observation_token_ids = prompt_token_ids + action_token_ids
@@ -183,9 +187,9 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
 
         # Calculate rollout log probs.
         rollout_log_probs = None
-        if sampling_params.logprobs is not None and request_output.outputs[0].logprobs is not None:
+        if sampling_params.logprobs is not None and generation_output.logprobs is not None:
             rollout_log_probs = [0.0] * len(prompt_token_ids)
-            for token_id, logprob_dict in zip(action_token_ids, request_output.outputs[0].logprobs):
+            for token_id, logprob_dict in zip(action_token_ids, generation_output.logprobs):
                 token_logprob = logprob_dict.get(token_id)
                 rollout_log_probs.append(token_logprob.logprob if token_logprob is not None else 0.0)
 
@@ -198,6 +202,8 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
             "observation_tokens": observation_token_ids,
             "action_ranges": action_ranges,
             "rollout_log_probs": rollout_log_probs,
+            # Truncation flag (finish_reason == "length")
+            "truncated": is_truncated,
             # Reward-related fields (filled by reward/agent variants).
             "reward": None,
             "scores": None,

@@ -412,6 +412,13 @@ if __name__ == "__main__":
         "--overlong_buffer_len", type=float, default=None, help="reward with optional overlong penalty"
     )
     parser.add_argument("--overlong_penalty_factor", type=float, default=1, help="overlong penalty factor")
+    parser.add_argument(
+        "--stop_properly_penalty_coef",
+        type=float,
+        default=None,
+        help="Penalty coefficient [0,1] for truncated samples (finish_reason='length'). "
+        "Truncated sample rewards are scaled by this coefficient to encourage proper stopping.",
+    )
 
     # Context Parallel
     parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")

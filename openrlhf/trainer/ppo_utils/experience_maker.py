@@ -11,6 +11,7 @@ from tqdm import tqdm
 from vllm import SamplingParams
 
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
+from openrlhf.trainer.ppo_utils.length_penalty import apply_length_penalties
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils.logging_utils import init_logger
@@ -434,10 +435,14 @@ class SamplesGenerator:
         total_length = attention_mask.float().sum()
         is_clipped = total_length >= truncate_length
 
+        # Check if response was truncated (hit max_tokens limit, finish_reason == "length")
+        is_truncated = response.get("truncated", False)
+
         info = {
             "response_length": torch.tensor([response_length]),
             "total_length": torch.tensor([total_length]),
             "response_clip_ratio": torch.tensor([is_clipped]),
+            "truncated": torch.tensor([is_truncated]),
         }
         if reward_val is not None:
             info["reward"] = torch.tensor([reward_val])
@@ -698,27 +703,8 @@ class RemoteExperienceMaker:
         """
         args = self.strategy.args
 
-        # DAPO reward shaping with optional overlong penalty - Apply BEFORE dynamic indices processing
-        if args.overlong_buffer_len is not None:
-            assert (
-                args.generate_max_len >= args.overlong_buffer_len
-            ), "generate_max_len must be larger than overlong_buffer_len"
-            overlong_buffer_len = args.overlong_buffer_len
-            expected_len = args.generate_max_len - overlong_buffer_len
-            overlong_penalty_factor = args.overlong_penalty_factor
-
-            # Apply penalty to each experience's rewards based on response length
-            for experience in experiences:
-                response_lengths = experience.info["response_length"]
-                batch_size = len(response_lengths)
-                for j in range(batch_size):
-                    valid_response_length = response_lengths[j].item()
-                    # Cap the exceed_len to overlong_buffer_len to prevent excessive penalty
-                    exceed_len = min(valid_response_length - expected_len, overlong_buffer_len)
-                    if exceed_len > 0:
-                        overlong_penalty = -exceed_len / overlong_buffer_len * overlong_penalty_factor
-                        # Apply penalty to the j-th reward in this experience
-                        experience.rewards[j] += overlong_penalty
+        # Apply length penalties (DAPO overlong / ProRL stop properly) - BEFORE dynamic indices processing
+        apply_length_penalties(experiences, args)
 
         # get rewards from experiences
         exp_len = [len(experience.index) for experience in experiences]
