@@ -53,9 +53,8 @@ OpenRLHFは、**Ray + vLLM分散アーキテクチャ**と**統一エージェ�
 <details>
 <summary>ニュースを表示</summary>
 
-- [2025/11] [NeMo Gym](https://github.com/NVIDIA-NeMo/Gym) OpenRLHFがNeMo-Gymとの統合をサポートし、外部評価環境を用いた高度なエージェントベースRLHF学習が可能になりました。
+- [2026/2] [ProRL V2](https://developer.nvidia.com/blog/scaling-llm-reinforcement-learning-with-prolonged-training-using-prorl-v2/) がREINFORCE++-baselineを使用して長期RL学習で最先端の1.5B推論モデルを学習。学習スクリプト：[train_prorlv2_math_hybrid_engine.sh](./examples/scripts/train_prorlv2_math_hybrid_engine.sh)
 - [2025/10] [ScaleRL](https://arxiv.org/abs/2510.13786) が大規模学習シナリオにおけるREINFORCE++-baselineの有効性を検証。[REINFORCE++スライド](https://docs.google.com/presentation/d/1stieP_3PM1z4Hq1YWR3GywFkxcHEAlstXMaS23KlGN4)をリリース
-- [2025/8] [ProRL V2](https://hijkzzz.notion.site/prorl-v2) がREINFORCE++-baselineを使用して最先端の1.5B推論モデルを学習し、ブログ記事 [REINFORCE++-baseline is all you need in RLVR](https://medium.com/@janhu9527/reinforce-baseline-is-all-you-need-in-rlvr-f5406930aa85) をリリース。
 - [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) がREINFORCE++-baselineと非常に類似した手法を用いて推論モデルを学習。
 - [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) がOpenRLHFのフォークとしてリリース。集中型マルチエージェント相互作用と分散ポリシー学習を統合することで、LLMベースのマルチエージェントシステムをRLで学習することを目的としています。
 - [2025/5] OpenRLHF 0.8.0は `--async_train` による非同期RLHF学習と、`--agent_func_path` による非同期エージェントRLHFをサポートし、クラスベースのエージェントAPIを再設計。実行可能な例は [train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh) を参照してください。

@@ -9,6 +9,7 @@ grpcio>=1.74.0
 isort
 jsonlines
 loralib
+math-verify[antlr4_13_2]
 optimum
 optree>=0.13.0
 packaging
