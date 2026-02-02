@@ -289,8 +289,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--eval_task", type=str, default=None, help="Set to generate_vllm, generate (HF generate) or rm"
     )
-    parser.add_argument("--zero_stage", type=int, default=0, help="DeepSpeed ZeRO Stage")
-    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed cli")
+    parser.add_argument("--local_rank", type=int, default=-1, help="Local rank (for torchrun)")
+    parser.add_argument("--fsdp2_tp_size", type=int, default=1, help="FSDP2 tensor parallel size")
+    parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")
     parser.add_argument(
         "--param_dtype",
         type=str,

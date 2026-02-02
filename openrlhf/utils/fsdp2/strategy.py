@@ -55,9 +55,8 @@ class FSDP2Strategy(ABC):
         self.micro_train_batch_size = micro_train_batch_size
 
         # Parallelism config
-        self.ring_attn_size = max(1, int(getattr(args, "ring_attn_size", 1) or 1))
-        self.tp_size = max(1, int(getattr(args, "ds_tensor_parallel_size", 1) or 1))
-        self.ds_tensor_parallel_size = self.tp_size  # backward compat
+        self.ring_attn_size = int(args.ring_attn_size)
+        self.fsdp2_tp_size = int(args.fsdp2_tp_size)
 
         # FSDP config
         self.param_dtype = getattr(args, "param_dtype", "bf16")
@@ -68,10 +67,10 @@ class FSDP2Strategy(ABC):
 
         # CPUOffloadPolicy and manual offload are mutually exclusive (ref: slime)
         # When fsdp2_cpu_offload is enabled, FSDP2 manages CPU offload automatically,
-        # so deepspeed_enable_sleep (manual offload) should be disabled.
-        if self.fsdp2_cpu_offload and getattr(args, "deepspeed_enable_sleep", False):
-            args.deepspeed_enable_sleep = False
-            print("[FSDP2] Warning: deepspeed_enable_sleep disabled because fsdp2_cpu_offload is enabled")
+        # so fsdp2_enable_sleep (manual offload) should be disabled.
+        if self.fsdp2_cpu_offload and getattr(args, "fsdp2_enable_sleep", False):
+            args.fsdp2_enable_sleep = False
+            print("[FSDP2] Warning: fsdp2_enable_sleep disabled because fsdp2_cpu_offload is enabled")
 
         # State
         self.time_steps = defaultdict(int)
@@ -105,7 +104,7 @@ class FSDP2Strategy(ABC):
         self._gloo_group = dist.new_group(backend="gloo")
 
         # Validate and compute parallelism sizes
-        parallel_factor = self.ring_attn_size * self.tp_size
+        parallel_factor = self.ring_attn_size * self.fsdp2_tp_size
         assert (
             self.world_size % parallel_factor == 0
         ), f"world_size({self.world_size}) not divisible by ring_attn*tp({parallel_factor})"
@@ -113,10 +112,8 @@ class FSDP2Strategy(ABC):
 
         # Sequence Parallel (SP) is only meaningful with TP>1.
         if self.sequence_parallel:
-            if self.tp_size <= 1:
-                raise ValueError(
-                    "Invalid config: --sequence_parallel requires --ds_tensor_parallel_size > 1 (tp_size > 1)."
-                )
+            if self.fsdp2_tp_size <= 1:
+                raise ValueError("Invalid config: --sequence_parallel requires --fsdp2_tp_size > 1.")
             if not getattr(self.args, "packing_samples", False):
                 raise ValueError(
                     "--sequence_parallel requires --packing_samples to be enabled, "
@@ -128,7 +125,7 @@ class FSDP2Strategy(ABC):
         # in operations like clip_grad_norm that aggregate across all parameters
         self.mesh = init_device_mesh(
             "cuda",
-            (self.dp_size, self.ring_attn_size, self.tp_size),
+            (self.dp_size, self.ring_attn_size, self.fsdp2_tp_size),
             mesh_dim_names=("dp", "cp", "tp"),
         )
 
@@ -154,11 +151,11 @@ class FSDP2Strategy(ABC):
         set_ring_attn_group(None)
         set_ring_attn_pad_multiple(1)
 
-        if self.sequence_parallel and self.tp_size > 1:
+        if self.sequence_parallel and self.fsdp2_tp_size > 1:
             # Ensure packed sequence length is divisible by TP degree when SP is enabled.
             # - If CP is enabled, this pads total length to `cp_size * tp_size`.
             # - If CP is disabled, this pads total length to `tp_size`.
-            set_ring_attn_pad_multiple(self.tp_size)
+            set_ring_attn_pad_multiple(self.fsdp2_tp_size)
 
         if self.ring_attn_size > 1:
             set_ring_attn_group(self.cp_group)
@@ -174,7 +171,7 @@ class FSDP2Strategy(ABC):
 
         # Gradient accumulation
         # Only DP contributes to batch size - CP processes same sequence chunks, TP processes same batch
-        # This matches DeepSpeed formula: train_batch_size / (micro_train_batch_size * dp_size)
+        # This matches the standard formula: train_batch_size / (micro_train_batch_size * dp_size)
         effective_batch = self.micro_train_batch_size * self.dp_size
         if getattr(self.args, "use_dynamic_batch", False):
             self.accumulated_gradient = 1
@@ -191,7 +188,7 @@ class FSDP2Strategy(ABC):
 
         self._log(
             f"world={self.world_size} dp={self.dp_size} cp={self.ring_attn_size} "
-            f"tp={self.tp_size} grad_accum={self.accumulated_gradient} "
+            f"tp={self.fsdp2_tp_size} grad_accum={self.accumulated_gradient} "
             f"fsdp_mesh_size={self.dp_size * self.ring_attn_size}"
         )
 
@@ -236,13 +233,13 @@ class FSDP2Strategy(ABC):
 
         # TP before FSDP
         self._log(
-            f"Wrapping model with dp={self.dp_size} cp={self.ring_attn_size} tp={self.tp_size} "
+            f"Wrapping model with dp={self.dp_size} cp={self.ring_attn_size} tp={self.fsdp2_tp_size} "
             f"(fsdp_mesh_size={self.dp_size * self.ring_attn_size})"
         )
-        if self.tp_size > 1:
+        if self.fsdp2_tp_size > 1:
             from .tp.tp_parallel import apply_tensor_parallel
 
-            self._log(f"Applying TP (size={self.tp_size})")
+            self._log(f"Applying TP (size={self.fsdp2_tp_size})")
             inner = apply_tensor_parallel(
                 inner,
                 self.mesh["tp"],
@@ -251,7 +248,7 @@ class FSDP2Strategy(ABC):
                 shard_logits=self.tp_shard_logits,
             )
         else:
-            self._log("Skipping TP (tp_size=1)")
+            self._log("Skipping TP (fsdp2_tp_size=1)")
 
         # FSDP (force_cpu_offload overrides self.fsdp2_cpu_offload)
         inner = self._apply_fsdp(inner, force_cpu_offload=force_cpu_offload)
@@ -320,7 +317,7 @@ class FSDP2Strategy(ABC):
 
     def create_optimizer(self, model, **kwargs):
         """Create AdamW optimizer."""
-        if "foreach" not in kwargs and self.tp_size > 1 and self.dp_size <= 1:
+        if "foreach" not in kwargs and self.fsdp2_tp_size > 1 and self.dp_size <= 1:
             kwargs["foreach"] = False
         weight_decay = kwargs.pop("weight_decay", 0.0)
         grouped = self._get_optimizer_grouped_parameters(self._unwrap_model(model), weight_decay)
@@ -334,7 +331,7 @@ class FSDP2Strategy(ABC):
         weight_decay: float,
         no_decay_name_list=("bias", "layer_norm.weight", "layernorm.weight", "norm.weight", "ln_f.weight"),
     ):
-        """Match OpenRLHF's DeepSpeed optimizer grouping rules."""
+        """Match OpenRLHF's optimizer parameter grouping rules."""
         decay = []
         no_decay = []
         for name, param in model.named_parameters():
@@ -546,7 +543,7 @@ class FSDP2Strategy(ABC):
         optimizer=None,
         scheduler=None,
     ):
-        """Save FSDP2 distributed checkpoint (DeepSpeed-compatible signature)."""
+        """Save FSDP2 distributed checkpoint."""
         save_distributed_checkpoint(
             model,
             save_dir,
@@ -687,14 +684,8 @@ class FSDP2Strategy(ABC):
         return dist.get_world_size() if dist.is_initialized() else 1
 
     def _unwrap_model(self, model):
-        """Unwrap model (compatible with DeepspeedStrategy)."""
+        """Unwrap Actor wrapper to get the underlying module."""
         if isinstance(model, Actor):
             return self._unwrap_model(model.model)
         else:
             return model
-
-    def get_ds_train_config(self, is_actor=False):
-        return None
-
-    def get_ds_eval_config(self, offload=False):
-        return None

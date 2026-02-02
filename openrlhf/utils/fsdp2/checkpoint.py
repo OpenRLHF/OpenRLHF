@@ -73,7 +73,7 @@ def save_hf_model(
 
         if is_peft:
             # PEFT model: extract adapter weights using get_peft_model_state_dict
-            # This mirrors the DeepSpeed implementation for consistency
+            # Keep adapter artifacts consistent with other checkpoint writers
             from peft.utils.save_and_load import get_peft_model_state_dict
 
             # Save adapter config and weights (PEFT internally extracts adapter weights from state)
@@ -81,7 +81,7 @@ def save_hf_model(
             # Extract adapter weights and save as .bin format for compatibility
             adapter_state = get_peft_model_state_dict(fsdp_model, state_dict=state)
             torch.save(adapter_state, os.path.join(output_dir, "adapter_model.bin"))
-            # Remove safetensors file if exists (avoid conflicts, same as DeepSpeed)
+            # Remove safetensors file if exists (avoid conflicts)
             safetensors_path = os.path.join(output_dir, "adapter_model.safetensors")
             if os.path.exists(safetensors_path):
                 os.remove(safetensors_path)

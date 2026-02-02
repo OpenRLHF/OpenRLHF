@@ -15,7 +15,6 @@ openrlhf.cli.train_kd \
    --save_steps -1 \
    --logging_steps 1 \
    --eval_steps -1 \
-   --zero_stage 3 \
    --max_epochs 1 \
    --param_dtype bf16 \
    --attn_implementation flash_attention_2 \
@@ -28,5 +27,5 @@ EOF
 
 
 if [[ ${1} != "slurm" ]]; then
-    deepspeed --module $training_commands
+    torchrun --standalone --nproc-per-node ${NPROC_PER_NODE:-8} -m $training_commands
 fi

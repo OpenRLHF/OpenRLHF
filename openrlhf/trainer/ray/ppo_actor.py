@@ -4,7 +4,6 @@ import socket
 from abc import ABC
 from typing import Dict, List, Optional, Union
 
-import deepspeed
 import ray
 import torch
 from torch.distributed.tensor import DTensor, Replicate
@@ -18,7 +17,6 @@ from openrlhf.models import Actor, PolicyLoss
 from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.utils import get_tokenizer
-from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.fsdp2 import FSDP2Strategy
 from openrlhf.utils.logging_utils import init_logger
@@ -98,19 +96,13 @@ class ActorPPOTrainer(ABC):
         if backend == "nccl" and self.args.colocate_all_models and not self.args.async_train:
             self.use_cuda_ipc = True
 
-        # Create torch group with deepspeed rank 0 and all vllm ranks
+        # Create torch group with rank 0 and all vLLM ranks
         # to update vllm engine's weights after each training stage.
         #
         # Say we have 3 vllm engines and each of them has 4 GPUs,
         # then the torch group is:
         # [    0,      1, 2, 3, 4,  5, 6, 7, 8,  9, 10, 11, 12]
-        # |ds rank 0 |  engine-0  |  engine-1  |   engine-2   |
-        #
-        # For ZeRO-1/2:
-        #   1. Broadcast parameters from rank 0 to all vllm engines
-        # For ZeRO-3:
-        #   1. AllGather paramters to rank 0
-        #   2. Broadcast parameters from rank 0 to all vllm engines
+        # |fsdp2 rank0 |  engine-0  |  engine-1  |   engine-2   |
         if self.vllm_engines is not None and not self.use_cuda_ipc and torch.distributed.get_rank() == 0:
             master_address = ray._private.services.get_node_ip_address()
             with socket.socket() as sock:
@@ -157,9 +149,7 @@ class ActorPPOTrainer(ABC):
             self.replay_buffer.setup_dynamic_batch(self.strategy)
 
         not_shuffle = (
-            self.strategy.ring_attn_group is not None
-            or self.args.ds_tensor_parallel_size > 1
-            or self.args.use_dynamic_batch
+            self.strategy.ring_attn_group is not None or self.args.fsdp2_tp_size > 1 or self.args.use_dynamic_batch
         )
         dataloader = DataLoader(
             self.replay_buffer,
@@ -316,84 +306,7 @@ class ActorPPOTrainer(ABC):
         if hasattr(model, "module"):
             model = model.module
 
-        dist_backend = getattr(self.strategy.args, "dist_backend", "deepspeed")
-
-        if dist_backend == "fsdp2":
-            return self._broadcast_to_vllm_fsdp2(model, cache_reset_refs)
-
-        count, num_params = 0, len(list(model.named_parameters()))
-
-        def _broadcast_param(param, count, num_params):
-            use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
-            # Fire all vllm engines for broadcast
-            if torch.distributed.get_rank() == 0:
-                shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
-                refs = [
-                    engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
-                    for engine in self.vllm_engines
-                ]
-
-                param_data = param.data.contiguous()
-                if use_ray:
-                    import ray.util.collective as collective
-
-                    collective.broadcast(param_data, 0, group_name=self._model_update_group)
-                else:
-                    self._model_update_group.broadcast(param_data, src=0, stream=torch.cuda.current_stream())
-                ray.get(refs)
-
-        def _handle_cuda_ipc(param, count, num_params):
-            weight = param.data.clone(memory_format=torch.contiguous_format)
-            ipc_handle = reduce_tensor(weight)
-
-            ipc_handle = {get_physical_gpu_id(): ipc_handle}
-            ipc_handle_list = [None] * torch.distributed.get_world_size()
-            torch.distributed.all_gather_object(ipc_handle_list, ipc_handle)
-
-            if torch.distributed.get_rank() == 0:
-                ipc_handles = {}
-                for d in ipc_handle_list:
-                    ipc_handles.update(d)
-
-                shape = param.shape if self.strategy.args.zero_stage != 3 else param.ds_shape
-                refs = [
-                    engine.update_weight_cuda_ipc.remote(
-                        name,
-                        dtype=param.dtype,
-                        shape=shape,
-                        ipc_handles=ipc_handles,
-                        empty_cache=count == num_params,
-                    )
-                    for engine in self.vllm_engines
-                ]
-                ray.get(refs)
-            torch_dist_barrier_and_cuda_sync()
-
-        for name, param in model.named_parameters():
-            count += 1  # empty_cache at last param
-
-            # broadcast
-            if not self.use_cuda_ipc:
-                # For ZeRO-3, allgather sharded parameter and broadcast to all vllm engines by rank 0
-                if self.strategy.args.ds_tensor_parallel_size > 1:
-                    with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
-                        _broadcast_param(param, count, num_params)
-                else:
-                    with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                        _broadcast_param(param, count, num_params)
-            # CUDA IPC
-            else:
-                if self.strategy.args.ds_tensor_parallel_size > 1:
-                    with deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True):
-                        _handle_cuda_ipc(param, count, num_params)
-                else:
-                    with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
-                        _handle_cuda_ipc(param, count, num_params)
-
-        if cache_reset_refs:
-            ray.get(cache_reset_refs)
-        torch.cuda.empty_cache()
-        torch_dist_barrier_and_cuda_sync()
+        return self._broadcast_to_vllm_fsdp2(model, cache_reset_refs)
 
     @torch.no_grad()
     def _broadcast_to_vllm_fsdp2(self, model, cache_reset_refs):
@@ -482,37 +395,31 @@ class ActorPPOTrainer(ABC):
 
 @ray.remote(num_gpus=1)
 class PolicyModelActor(BaseModelActor):
-    def init_model_from_pretrained(
-        self, strategy: Union[DeepspeedStrategy, FSDP2Strategy], pretrain, max_steps=None, vllm_engines=None
-    ):
+    def init_model_from_pretrained(self, strategy: FSDP2Strategy, pretrain, max_steps=None, vllm_engines=None):
         args = strategy.args
         self.save_hf_ckpt = args.save_hf_ckpt
-        self.disable_ds_ckpt = args.disable_ds_ckpt
+        self.disable_fsdp2_ckpt = args.disable_fsdp2_ckpt
         self.vllm_engines = vllm_engines
         self.max_steps = max_steps
 
         if getattr(args, "vllm_num_engines", 0) > 0:
-            # To prevent hanging during NCCL synchronization of weights between DeepSpeed and vLLM.
+            # To prevent hanging during NCCL synchronization of weights between training and vLLM.
             # see https://github.com/vllm-project/vllm/blob/c6b0a7d3ba03ca414be1174e9bd86a97191b7090/vllm/worker/worker_base.py#L445
             if getattr(args, "vllm_sync_backend", "nccl") == "nccl":
                 os.environ["NCCL_CUMEM_ENABLE"] = "0"
 
         self._setup_distributed(strategy)
 
-        is_fsdp2 = isinstance(strategy, FSDP2Strategy)
-        model_dtype = "fp32" if is_fsdp2 else args.param_dtype
-
         actor = Actor(
             pretrain,
             attn_implementation=strategy.args.attn_implementation,
             param_dtype=strategy.args.param_dtype,  # default: bf16
-            model_dtype=model_dtype,
+            model_dtype="fp32",
             load_in_4bit=strategy.args.load_in_4bit,
             lora_rank=strategy.args.lora_rank,
             lora_alpha=strategy.args.lora_alpha,
             target_modules=strategy.args.target_modules,
             lora_dropout=strategy.args.lora_dropout,
-            ds_config=strategy.get_ds_train_config(is_actor=True),
             packing_samples=strategy.args.packing_samples,
             temperature=strategy.args.temperature,
             use_liger_kernel=strategy.args.use_liger_kernel,
@@ -529,9 +436,8 @@ class PolicyModelActor(BaseModelActor):
                 pretrain,
                 attn_implementation=strategy.args.attn_implementation,
                 param_dtype=strategy.args.param_dtype,  # default: bf16
-                model_dtype=model_dtype,
+                model_dtype="fp32",
                 load_in_4bit=strategy.args.load_in_4bit,
-                ds_config=strategy.get_ds_eval_config(offload=True),
                 packing_samples=strategy.args.packing_samples,
             )
         else:
@@ -542,12 +448,10 @@ class PolicyModelActor(BaseModelActor):
                 gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
 
-        # FSDP2: wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
-        if is_fsdp2:
-            actor = strategy.prepare(actor)
-            if ema_model:
-                # FSDP2 uses prepare_ref() for CPU offload, no need for _offload attribute
-                ema_model = strategy.prepare_ref(ema_model)
+        # Wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
+        actor = strategy.prepare(actor)
+        if ema_model:
+            ema_model = strategy.prepare_ref(ema_model)
 
         # configure optimizer (after model wrapping for FSDP2)
         actor_optim = strategy.create_optimizer(
@@ -562,21 +466,10 @@ class PolicyModelActor(BaseModelActor):
             scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
         )
 
-        # prepare models/optimizers (DeepSpeed path expects optimizer/scheduler passed in)
-        if not is_fsdp2:
-            self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare(
-                (actor, actor_optim, actor_scheduler),
-            )
-            if ema_model:
-                ema_model._offload = True
-                self.ema_model = strategy.prepare(ema_model)
-            else:
-                self.ema_model = None
-        else:
-            self.actor = actor
-            self.actor_optim = actor_optim
-            self.actor_scheduler = actor_scheduler
-            self.ema_model = ema_model
+        self.actor = actor
+        self.actor_optim = actor_optim
+        self.actor_scheduler = actor_scheduler
+        self.ema_model = ema_model
 
         # load checkpoint
         self.checkpoint_states = {}
@@ -605,7 +498,7 @@ class PolicyModelActor(BaseModelActor):
                         strategy.print(f"[EMA] Failed to load EMA checkpoint from {ema_ckpt_path}: {e}")
 
         # initial offload
-        if strategy.args.deepspeed_enable_sleep:
+        if strategy.args.fsdp2_enable_sleep:
             self.offload_states()
 
         # configure Trainer
@@ -689,7 +582,7 @@ class PolicyModelActor(BaseModelActor):
 
     def save_checkpoint(self, tag, client_states):
         args = self.strategy.args
-        if not self.disable_ds_ckpt:
+        if not self.disable_fsdp2_ckpt:
             self.strategy.save_ckpt(
                 self.actor.model,
                 os.path.join(args.ckpt_path, "_actor"),

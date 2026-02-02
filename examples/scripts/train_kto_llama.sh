@@ -12,7 +12,6 @@ openrlhf.cli.train_kto \
    --param_dtype bf16 \
    --max_epochs 1 \
    --max_len 8192 \
-   --zero_stage 3 \
    --learning_rate 5e-7 \
    --dataset Dylan2048/ultrafeedback-unpaired-preferences \
    --input_key instruction \
@@ -27,5 +26,5 @@ EOF
 
 
 if [[ ${1} != "slurm" ]]; then
-    deepspeed --module $training_commands
+    torchrun --standalone --nproc-per-node ${NPROC_PER_NODE:-8} -m $training_commands
 fi

@@ -2,7 +2,7 @@ import os
 import time
 from abc import ABC
 from datetime import timedelta
-from typing import Dict, Tuple, Union
+from typing import Dict, Tuple
 
 import ray
 import torch
@@ -15,7 +15,6 @@ from openrlhf.trainer.ppo_utils.kl_controller import AdaptiveKLController, Fixed
 from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
-from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.fsdp2 import FSDP2Strategy
 from openrlhf.utils.logging_utils import TensorboardLogger, WandbLogger, init_logger
 from openrlhf.utils.utils import get_tokenizer
@@ -66,7 +65,7 @@ class BasePPOTrainer(ABC):
 
     def __init__(
         self,
-        strategy: Union[DeepspeedStrategy, FSDP2Strategy],
+        strategy: FSDP2Strategy,
         actor_model_group: RayActorGroup,
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,
@@ -157,7 +156,7 @@ class BasePPOTrainer(ABC):
             status.update(ray.get(ref)[0])
             ray.get(group.async_run_method(method_name="offload_states"))
 
-        if self.args.deepspeed_enable_sleep:
+        if self.args.fsdp2_enable_sleep:
             # Colocated/sleeping: run critic first, then actor.
             if run_critic:
                 _run_sleep(self.critic_model_group)
@@ -198,7 +197,7 @@ class BasePPOTrainer(ABC):
         # Offload actor model to CPU to free GPU memory for vLLM during rollout
         # This is critical for avoiding OOM when vLLM wakes up with full KV cache
         # Note: reference and reward models use prepare_ref with forced CPU offload in FSDP2
-        if self.args.deepspeed_enable_sleep:
+        if self.args.fsdp2_enable_sleep:
             ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
             if self.critic_model_group is not None:
                 ray.get(self.critic_model_group.async_run_method(method_name="offload_model"))
@@ -249,7 +248,7 @@ class PPOTrainer(BasePPOTrainer):
     def __init__(
         self,
         pretrain: str,
-        strategy: DeepspeedStrategy,
+        strategy: FSDP2Strategy,
         actor_model_group: RayActorGroup,
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,

@@ -35,7 +35,7 @@ OpenRLHFは、**Ray + vLLM分散アーキテクチャ**と**統一エージェ�
 ## 📖 目次
 
 - [🗞️ ニュース](#ニュース)
-- [🏗️ アーキテクチャ基盤](#アーキテクチャ基盤ray--vllm分散) - Ray + vLLM + DeepSpeed分散インフラ
+- [🏗️ アーキテクチャ基盤](#アーキテクチャ基盤ray--vllm分散) - Ray + vLLM + FSDP2分散インフラ
 - [🎯 設計パラダイム](#設計パラダイムエージェントベースの実行) - 統一エージェント実行パイプライン
 - [🚀 RLアルゴリズム](#最先端のrlアルゴリズム) - PPO、REINFORCE++、GRPO、RLOO
 - [📋 機能概要](#包括的な機能) - 完全なRLHFパイプライン機能
@@ -93,8 +93,8 @@ OpenRLHFは[Ray](https://github.com/ray-project/ray)を活用して効率的な�
 **vLLM - 高性能推論エンジン**  
 RLHF学習では**時間の80%**がサンプル生成に費やされます。自動テンソル並列化（AutoTP）とパイプライン並列化（PP）を備えた[vLLM](https://github.com/vllm-project/vllm)により、OpenRLHFは高スループットでメモリ効率的な生成を提供します。
 
-**DeepSpeed - メモリ効率的な学習**  
-[DeepSpeed](https://github.com/deepspeedai/DeepSpeed) ZeRO-3、[deepcompile](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/deepcompile/README.md)、[AutoTP](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/huggingface-tp/README.md)、RingAttentionをベースに構築されています。重量級フレームワークなしで大規模モデルの学習を可能にし、HuggingFaceモデルと直接連携します。
+**FSDP2 - メモリ効率的な学習**  
+PyTorch FSDP2（合成可能な `fully_shard`）、DTensorベースのテンソル並列、RingAttention（コンテキスト並列）をベースに構築されています。混合精度、（オプションの）CPU offload、分散チェックポイントをサポートし、HuggingFaceモデルと直接連携します。
 
 **Transformers - モデルインターフェース**  
 HuggingFace Transformersとのネイティブ統合により、シームレスなモデル読み込み、状態管理、事前学習済みモデルのファインチューニングを実現します。
@@ -260,7 +260,7 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
     - 例：`./examples/scripts/train_dapo_ray_hybrid_engine.sh`
 
 **スケーラビリティ**
-- DeepSpeed AutoTP（テンソル並列化）は、学習スクリプト内の `--ds_tensor_parallel_size` を参照
+- FSDP2 テンソル並列は、学習スクリプト内の `--fsdp2_tp_size` を参照
 - 長文脈のための[RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh)（`--ring_attn_size`）
 - [SLURM](./examples/scripts/train_ppo_ray_slurm.sh)を使用したマルチノード学習
 
@@ -414,6 +414,7 @@ AIとNLP分野への貢献に対して、以下のプロジェクトと組織に
 - [OpenAI GPT ↗](https://github.com/openai/gpt-3)
 - [LLaMA ↗](https://llama.meta.com/)
 - [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
+- [PyTorch ↗](https://github.com/pytorch/pytorch)
 - [Ray ↗](https://github.com/ray-project/ray)
 
 私たちのプロジェクトは[ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/ColossalChat)と[DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat)にも感謝します。プロジェクトの初期段階で、彼らのコード設計を参考にしました。ring attentionの開発のためのGPUサポートを提供してくれた[Netmind.AI](https://www.netmind.ai/)に感謝します。
