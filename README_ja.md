@@ -30,7 +30,7 @@
 
 OpenRLHFは、**Ray + vLLM分散アーキテクチャ**と**統一エージェントベース設計パラダイム**を組み合わせた**最初の**高性能で本番環境対応のオープンソースRLHFフレームワークです。
 
-📚 **詳細はこちら**：[ドキュメント](https://openrlhf.readthedocs.io/) | [スライド](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [技術レポート](https://www.researchgate.net/publication/393414548_OpenRLHF_An_Easy-to-use_Scalable_and_High-performance_RLHF_Framework)
+📚 **詳細はこちら**：[ドキュメント](https://openrlhf.readthedocs.io/) | [スライド](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [技術レポート](https://www.researchgate.net/publication/393414548_OpenRLHF_An_Easy-to-use_Scalable_and_High-performance_RLHF_Framework) | [動画](https://www.bilibili.com/video/BV1dv2jBxEQG/)
 
 ## 📖 目次
 
