@@ -261,7 +261,7 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 
 **スケーラビリティ**
 - FSDP2 テンソル並列は、学習スクリプト内の `--fsdp2_tp_size` を参照
-- 長文脈のための[RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh)（`--ring_attn_size`）
+- 長文脈のための[RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh)（`--fsdp2_cp_size`）
 - [SLURM](./examples/scripts/train_ppo_ray_slurm.sh)を使用したマルチノード学習
 
 **モデルサポート**

@@ -73,7 +73,7 @@ ENGINE_ARGS=(
    --vllm_sync_backend nccl
    --enforce_eager
    --gradient_checkpointing
-   --ring_attn_size 2
+	--fsdp2_cp_size 2
    --ring_head_stride 2
    --param_dtype bf16
 )

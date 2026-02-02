@@ -47,5 +47,5 @@ python3 -m openrlhf.cli.train_ppo_ray \
 #    --fsdp2_tp_size 2 \
 
 # Enable Ring-Attention
-#    --ring_attn_size 4 \
+#    --fsdp2_cp_size 4 \
 #    --ring_head_stride 2 \

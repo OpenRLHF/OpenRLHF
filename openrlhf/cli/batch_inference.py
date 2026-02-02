@@ -291,7 +291,31 @@ if __name__ == "__main__":
     )
     parser.add_argument("--local_rank", type=int, default=-1, help="Local rank (for torchrun)")
     parser.add_argument("--fsdp2_tp_size", type=int, default=1, help="FSDP2 tensor parallel size")
-    parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")
+    parser.add_argument("--fsdp2_cp_size", type=int, default=1, help="FSDP2 context parallel size")
+    parser.add_argument(
+        "--fsdp2_cpu_offload",
+        action="store_true",
+        default=False,
+        help="Offload FSDP2 params/grads/optimizer to CPU",
+    )
+    parser.add_argument(
+        "--fsdp2_reshard_after_forward",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Control fully_shard reshard_after_forward flag",
+    )
+    parser.add_argument(
+        "--sequence_parallel",
+        action="store_true",
+        default=False,
+        help="Enable sequence parallelism for FSDP2+TP (requires --fsdp2_tp_size > 1).",
+    )
+    parser.add_argument(
+        "--tp_shard_logits",
+        action="store_true",
+        default=False,
+        help="Shard lm_head logits on vocab dim (FSDP2+TP).",
+    )
     parser.add_argument(
         "--param_dtype",
         type=str,

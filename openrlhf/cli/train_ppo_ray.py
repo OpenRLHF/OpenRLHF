@@ -75,7 +75,7 @@ def train(args):
         PolicyModelActor,
         pg=pg,
         num_gpus_per_actor=0.2 if pg else 1,
-        duplicate_actors=args.ring_attn_size * args.fsdp2_tp_size,
+        duplicate_actors=args.fsdp2_cp_size * args.fsdp2_tp_size,
     )
 
     if args.init_kl_coef > 0:
@@ -85,7 +85,7 @@ def train(args):
             ReferenceModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.ring_attn_size * args.fsdp2_tp_size,
+            duplicate_actors=args.fsdp2_cp_size * args.fsdp2_tp_size,
         )
     else:
         ref_model = None
@@ -111,7 +111,7 @@ def train(args):
             CriticModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.ring_attn_size * args.fsdp2_tp_size,
+            duplicate_actors=args.fsdp2_cp_size * args.fsdp2_tp_size,
         )
     else:
         critic_model = None
@@ -124,7 +124,7 @@ def train(args):
             RewardModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.ring_attn_size * args.fsdp2_tp_size,
+            duplicate_actors=args.fsdp2_cp_size * args.fsdp2_tp_size,
         )
     else:
         reward_model = None
@@ -429,7 +429,7 @@ if __name__ == "__main__":
     parser.add_argument("--overlong_penalty_factor", type=float, default=1, help="overlong penalty factor")
 
     # Context Parallel
-    parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")
+    parser.add_argument("--fsdp2_cp_size", type=int, default=1, help="FSDP2 context parallel size")
     parser.add_argument(
         "--ring_head_stride",
         type=int,
@@ -530,15 +530,12 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
-    if args.ring_attn_size > 1:
-        if not args.packing_samples:
-            print("[Warning] --ring_attn_size > 1 requires --packing_samples.")
-            args.packing_samples = True
+    if args.fsdp2_cp_size > 1:
+        assert args.packing_samples, "packing_samples must be enabled when using ring attention"
 
     if args.use_dynamic_batch:
         if not args.packing_samples:
-            print("[Warning] Please --packing_samples to accelerate when --use_dynamic_batch is enabled.")
-            args.packing_samples = True
+            print("[Warning] Please use --packing_samples to accelerate when --use_dynamic_batch is enabled.")
         if args.rollout_max_tokens_per_gpu is None:
             print("[Warning] Set --rollout_max_tokens_per_gpu to --train_max_tokens_per_gpu.")
             args.rollout_max_tokens_per_gpu = args.train_max_tokens_per_gpu
@@ -585,7 +582,7 @@ if __name__ == "__main__":
 
     assert (
         args.n_samples_per_prompt * args.rollout_batch_size // args.micro_rollout_batch_size
-        >= args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size // args.fsdp2_tp_size
+        >= args.actor_num_nodes * args.actor_num_gpus_per_node // args.fsdp2_cp_size // args.fsdp2_tp_size
     ), "The number of sample batches must be greater than or equal to the effective number of actor processes."
 
     if args.use_ms:

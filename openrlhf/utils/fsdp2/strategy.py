@@ -55,15 +55,15 @@ class FSDP2Strategy(ABC):
         self.micro_train_batch_size = micro_train_batch_size
 
         # Parallelism config
-        self.ring_attn_size = int(args.ring_attn_size)
-        self.fsdp2_tp_size = int(args.fsdp2_tp_size)
+        self.fsdp2_cp_size = args.fsdp2_cp_size
+        self.fsdp2_tp_size = args.fsdp2_tp_size
 
         # FSDP config
-        self.param_dtype = getattr(args, "param_dtype", "bf16")
-        self.fsdp2_cpu_offload = getattr(args, "fsdp2_cpu_offload", False)
-        self.fsdp2_reshard_after_forward = getattr(args, "fsdp2_reshard_after_forward", True)
-        self.sequence_parallel = getattr(args, "sequence_parallel", False)
-        self.tp_shard_logits = getattr(args, "tp_shard_logits", False)
+        self.param_dtype = args.param_dtype
+        self.fsdp2_cpu_offload = args.fsdp2_cpu_offload
+        self.fsdp2_reshard_after_forward = args.fsdp2_reshard_after_forward
+        self.sequence_parallel = args.sequence_parallel
+        self.tp_shard_logits = args.tp_shard_logits
 
         # CPUOffloadPolicy and manual offload are mutually exclusive (ref: slime)
         # When fsdp2_cpu_offload is enabled, FSDP2 manages CPU offload automatically,
@@ -104,11 +104,11 @@ class FSDP2Strategy(ABC):
         self._gloo_group = dist.new_group(backend="gloo")
 
         # Validate and compute parallelism sizes
-        parallel_factor = self.ring_attn_size * self.fsdp2_tp_size
+        parallel_factor = self.fsdp2_cp_size * self.fsdp2_tp_size
         assert (
             self.world_size % parallel_factor == 0
-        ), f"world_size({self.world_size}) not divisible by ring_attn*tp({parallel_factor})"
-        self.dp_size = self.world_size // parallel_factor
+        ), f"world_size({self.world_size}) not divisible by cp*tp({parallel_factor})"
+        self.fsdp2_dp_size = self.world_size // parallel_factor
 
         # Sequence Parallel (SP) is only meaningful with TP>1.
         if self.sequence_parallel:
@@ -125,7 +125,7 @@ class FSDP2Strategy(ABC):
         # in operations like clip_grad_norm that aggregate across all parameters
         self.mesh = init_device_mesh(
             "cuda",
-            (self.dp_size, self.ring_attn_size, self.fsdp2_tp_size),
+            (self.fsdp2_dp_size, self.fsdp2_cp_size, self.fsdp2_tp_size),
             mesh_dim_names=("dp", "cp", "tp"),
         )
 
@@ -157,14 +157,14 @@ class FSDP2Strategy(ABC):
             # - If CP is disabled, this pads total length to `tp_size`.
             set_ring_attn_pad_multiple(self.fsdp2_tp_size)
 
-        if self.ring_attn_size > 1:
+        if self.fsdp2_cp_size > 1:
             set_ring_attn_group(self.cp_group)
             try:
                 from ring_flash_attn import substitute_hf_flash_attn
             except ModuleNotFoundError as e:  # pragma: no cover
                 raise RuntimeError(
-                    "ring_flash_attn is required when --ring_attn_size > 1. "
-                    "Install ring_flash_attn or set --ring_attn_size 1."
+                    "ring_flash_attn is required when --fsdp2_cp_size > 1. "
+                    "Install ring_flash_attn or set --fsdp2_cp_size 1."
                 ) from e
 
             substitute_hf_flash_attn(self.cp_group, getattr(self.args, "ring_head_stride", 1))
@@ -172,7 +172,7 @@ class FSDP2Strategy(ABC):
         # Gradient accumulation
         # Only DP contributes to batch size - CP processes same sequence chunks, TP processes same batch
         # This matches the standard formula: train_batch_size / (micro_train_batch_size * dp_size)
-        effective_batch = self.micro_train_batch_size * self.dp_size
+        effective_batch = self.micro_train_batch_size * self.fsdp2_dp_size
         if getattr(self.args, "use_dynamic_batch", False):
             self.accumulated_gradient = 1
         else:
@@ -182,14 +182,14 @@ class FSDP2Strategy(ABC):
                     "Invalid batch config for FSDP2: require "
                     "`train_batch_size = micro_train_batch_size * dp_size * grad_accum_steps` "
                     f"(got train_batch_size={self.train_batch_size}, "
-                    f"micro_train_batch_size={self.micro_train_batch_size}, dp_size={self.dp_size})."
+                    f"micro_train_batch_size={self.micro_train_batch_size}, fsdp2_dp_size={self.fsdp2_dp_size})."
                 )
             self.accumulated_gradient = grad_accum
 
         self._log(
-            f"world={self.world_size} dp={self.dp_size} cp={self.ring_attn_size} "
+            f"world={self.world_size} dp={self.fsdp2_dp_size} cp={self.fsdp2_cp_size} "
             f"tp={self.fsdp2_tp_size} grad_accum={self.accumulated_gradient} "
-            f"fsdp_mesh_size={self.dp_size * self.ring_attn_size}"
+            f"fsdp_mesh_size={self.fsdp2_dp_size * self.fsdp2_cp_size}"
         )
 
         # TP-aware loss is handled by DTensor-aware helpers (no monkey patch needed).
@@ -218,8 +218,8 @@ class FSDP2Strategy(ABC):
 
         # TP before FSDP
         self._log(
-            f"Wrapping model with dp={self.dp_size} cp={self.ring_attn_size} tp={self.fsdp2_tp_size} "
-            f"(fsdp_mesh_size={self.dp_size * self.ring_attn_size})"
+            f"Wrapping model with dp={self.fsdp2_dp_size} cp={self.fsdp2_cp_size} tp={self.fsdp2_tp_size} "
+            f"(fsdp_mesh_size={self.fsdp2_dp_size * self.fsdp2_cp_size})"
         )
         if self.fsdp2_tp_size > 1:
             from .tp.tp_parallel import apply_tensor_parallel
@@ -302,7 +302,7 @@ class FSDP2Strategy(ABC):
 
     def create_optimizer(self, model, **kwargs):
         """Create AdamW optimizer."""
-        if "foreach" not in kwargs and self.fsdp2_tp_size > 1 and self.dp_size <= 1:
+        if "foreach" not in kwargs and self.fsdp2_tp_size > 1 and self.fsdp2_dp_size <= 1:
             kwargs["foreach"] = False
         weight_decay = kwargs.pop("weight_decay", 0.0)
         grouped = self._get_optimizer_grouped_parameters(self._unwrap_model(model), weight_decay)
@@ -592,7 +592,7 @@ class FSDP2Strategy(ABC):
             return data
 
         # dp_cp_group for metrics, dp_group for data operations
-        process_group = self.dp_cp_group if with_context_parallel and self.ring_attn_size > 1 else self.dp_group
+        process_group = self.dp_cp_group if with_context_parallel and self.fsdp2_cp_size > 1 else self.dp_group
         group_size = dist.get_world_size(group=process_group)
 
         # Convert scalar to tensor

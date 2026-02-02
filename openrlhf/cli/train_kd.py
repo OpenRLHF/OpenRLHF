@@ -222,7 +222,7 @@ if __name__ == "__main__":
     )
 
     # Context Parallel
-    parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")
+    parser.add_argument("--fsdp2_cp_size", type=int, default=1, help="FSDP2 context parallel size")
     parser.add_argument(
         "--ring_head_stride",
         type=int,

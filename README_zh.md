@@ -256,7 +256,7 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 
 **可扩展性**
 - FSDP2 张量并行（参见训练脚本中的 `--fsdp2_tp_size`）
-- 长上下文的 [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh)（`--ring_attn_size`）
+- 长上下文的 [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh)（`--fsdp2_cp_size`）
 - 使用 [SLURM](./examples/scripts/train_ppo_ray_slurm.sh) 的多节点训练
 
 **模型支持**
@@ -368,7 +368,7 @@ torchrun --standalone --nproc-per-node 8 -m openrlhf.cli.train_sft \
 
 # 附加选项：
 # --apply_chat_template                # 使用 HF tokenizer 聊天模板
-# --ring_attn_size 2                   # 启用 RingAttention（先安装 ring_flash_attn）
+# --fsdp2_cp_size 2                    # 启用 RingAttention（先安装 ring_flash_attn）
 # --multiturn                          # 多轮微调损失
 # --pretrain_mode                      # 继续预训练模式
 ```
