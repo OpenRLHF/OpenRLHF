@@ -196,7 +196,7 @@ class BasePPOTrainer(ABC):
 
         # Offload actor model to CPU to free GPU memory for vLLM during rollout
         # This is critical for avoiding OOM when vLLM wakes up with full KV cache
-        # Note: reference and reward models use prepare_ref with forced CPU offload in FSDP2
+        # Note: reference/reward models are prepared via prepare(..., cpu_offload=...).
         if self.args.fsdp2_enable_sleep:
             ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
             if self.critic_model_group is not None:

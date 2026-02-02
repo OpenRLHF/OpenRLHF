@@ -451,7 +451,7 @@ class PolicyModelActor(BaseModelActor):
         # Wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
         actor = strategy.prepare(actor)
         if ema_model:
-            ema_model = strategy.prepare_ref(ema_model)
+            ema_model = strategy.prepare(ema_model, cpu_offload=True)
 
         # configure optimizer (after model wrapping for FSDP2)
         actor_optim = strategy.create_optimizer(
