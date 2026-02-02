@@ -209,16 +209,14 @@ def move_optimizer_state(optimizer: torch.optim.Optimizer, device: str | torch.d
 
 def get_checkpoint_metadata(strategy) -> dict:
     """Build metadata for FSDP2 checkpoint (saved as fsdp2_runtime.json)."""
-    dp_size = getattr(strategy, "dp_size", 1)
-    cp_size = getattr(strategy, "ring_attn_size", 1)
     return {
         "backend": "fsdp2",
-        "world_size": getattr(strategy, "world_size", 1),
-        "dp_size": dp_size,
-        "ring_attn_size": cp_size,
-        "tp_size": getattr(strategy, "tp_size", 1),
-        "param_dtype": getattr(strategy, "param_dtype", getattr(strategy, "precision", "bf16")),
-        "fsdp2_mesh_size": dp_size * cp_size,
+        "world_size": strategy.world_size,
+        "fsdp2_dp_size": strategy.fsdp2_dp_size,
+        "fsdp2_cp_size": strategy.fsdp2_cp_size,
+        "fsdp2_tp_size": strategy.fsdp2_tp_size,
+        "param_dtype": strategy.param_dtype,
+        "fsdp2_mesh_size": strategy.fsdp2_dp_size * strategy.fsdp2_cp_size,
     }
 
 

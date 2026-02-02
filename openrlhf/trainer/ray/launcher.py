@@ -212,7 +212,7 @@ class RayActorGroup:
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
         self.ray_actor_type = ray_actor_type
-        # duplicate actors is ring_attn_size * fsdp2_tp_size
+        # duplicate actors is cp_size * tp_size
         self.duplicate_actors = duplicate_actors
 
         # custom resources, see https://docs.ray.io/en/latest/ray-core/scheduling/resources.html

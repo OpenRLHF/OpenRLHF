@@ -255,7 +255,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 
 **Scalability**
 - FSDP2 tensor parallelism (see `--fsdp2_tp_size` in training scripts)
-- [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh) for long context (`--ring_attn_size`)
+- [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh) for long context (`--fsdp2_cp_size`)
 - Multi-node training with [SLURM](./examples/scripts/train_ppo_ray_slurm.sh)
 
 **Model Support**
@@ -367,7 +367,7 @@ torchrun --standalone --nproc-per-node 8 -m openrlhf.cli.train_sft \
 
 # Additional options:
 # --apply_chat_template                # Use HF tokenizer chat template
-# --ring_attn_size 2                   # Enable RingAttention (install ring_flash_attn first)
+# --fsdp2_cp_size 2                    # Enable RingAttention (install ring_flash_attn first)
 # --multiturn                          # Multi-turn fine-tuning loss
 # --pretrain_mode                      # Continued pre-training mode
 ```

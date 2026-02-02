@@ -29,6 +29,7 @@ def train(args):
         lora_alpha=args.lora_alpha,
         target_modules=args.target_modules,
         lora_dropout=args.lora_dropout,
+        packing_samples=args.packing_samples,
         use_liger_kernel=args.use_liger_kernel,
     )
 
@@ -43,6 +44,7 @@ def train(args):
         param_dtype=args.param_dtype,  # default: bf16
         model_dtype="fp32",
         load_in_4bit=args.load_in_4bit,
+        packing_samples=args.packing_samples,
     )
     get_tokenizer(args.pretrain, ref_model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
 
@@ -197,6 +199,7 @@ if __name__ == "__main__":
         help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
     )
     parser.add_argument("--use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
+    parser.add_argument("--packing_samples", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--fsdp2_tp_size", type=int, default=1, help="FSDP2 tensor parallel size")
     parser.add_argument(
@@ -213,7 +216,7 @@ if __name__ == "__main__":
     )
 
     # Context Parallel
-    parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")
+    parser.add_argument("--fsdp2_cp_size", type=int, default=1, help="FSDP2 context parallel size")
     parser.add_argument(
         "--ring_head_stride",
         type=int,
@@ -291,6 +294,9 @@ if __name__ == "__main__":
             "[Warning] input_template contains \\n characters instead of newline. "
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
+
+    if args.fsdp2_cp_size > 1:
+        assert args.packing_samples, "packing_samples must be enabled when using ring attention"
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub

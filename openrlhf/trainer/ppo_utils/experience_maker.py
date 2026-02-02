@@ -499,13 +499,13 @@ class RemoteExperienceMaker:
             effective_actor_num = (
                 self.args.actor_num_nodes
                 * self.args.actor_num_gpus_per_node
-                // self.args.ring_attn_size
+                // self.args.fsdp2_cp_size
                 // self.args.fsdp2_tp_size
             )
             minimum_batch_num = get_minimum_num_micro_batch_size(
                 total_lengths,
                 self.args.rollout_max_tokens_per_gpu,
-                self.args.ring_attn_size,
+                self.args.fsdp2_cp_size,
                 self.args.fsdp2_tp_size,
             )
             minimum_batch_num = minimum_batch_num // effective_actor_num * effective_actor_num
@@ -616,7 +616,7 @@ class RemoteExperienceMaker:
                 ray.get(value_ref)
                 ray.get(self.critic_model_group.async_run_method(method_name="empty_cache"))
         else:
-            value_ref = ray.put([[None]] * (len(samples_list) * args.ring_attn_size * args.fsdp2_tp_size))
+            value_ref = ray.put([[None]] * (len(samples_list) * args.fsdp2_cp_size * args.fsdp2_tp_size))
 
         # Batch call initial model
         if self.initial_model_group is not None:
@@ -632,13 +632,13 @@ class RemoteExperienceMaker:
                 ray.get(self.initial_model_group.async_run_method(method_name="empty_cache"))
         else:
             base_action_log_probs_ref = ray.put(
-                [[None]] * (len(samples_list) * args.ring_attn_size * args.fsdp2_tp_size)
+                [[None]] * (len(samples_list) * args.fsdp2_cp_size * args.fsdp2_tp_size)
             )
 
         # Wait for all remote calls to complete and flatten the results
-        # Note: the results duplicated ring_attn_size * fsdp2_tp_size times
+        # Note: the results duplicated cp_size * tp_size times
         # This is because the actors in ring group and tp group will return the same output
-        duplicate_factor = args.ring_attn_size * args.fsdp2_tp_size
+        duplicate_factor = args.fsdp2_cp_size * args.fsdp2_tp_size
         action_log_probs_list = sum(ray.get(action_log_probs_ref)[::duplicate_factor], [])
         base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref)[::duplicate_factor], [])
         value_list = sum(ray.get(value_ref)[::duplicate_factor], [])
