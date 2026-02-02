@@ -67,13 +67,10 @@ ENGINE_ARGS=(
    --vllm_tensor_parallel_size 2
    --vllm_gpu_memory_utilization 0.7
    --colocate_all_models
-   --deepspeed_enable_sleep
+   --fsdp2_enable_sleep
    --vllm_sync_backend nccl
    --enforce_eager
-
-   --zero_stage 3
    --gradient_checkpointing
-   # --adam_offload
    --ring_attn_size 2
    --ring_head_stride 2
    --param_dtype bf16

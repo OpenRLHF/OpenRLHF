@@ -1,12 +1,10 @@
 from typing import Optional
 
-import deepspeed
 import torch
 import torch.nn as nn
 from peft import LoraConfig, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
-from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from openrlhf.utils.logging_utils import init_logger
 
@@ -30,7 +28,6 @@ def get_llm_for_sequence_regression(
     lora_dropout=0,
     normalize_reward=False,
     attn_implementation="flash_attention_2",
-    ds_config: dict = None,
     init_value_head=False,
     value_head_prefix="score",
     device_map=None,
@@ -54,7 +51,6 @@ def get_llm_for_sequence_regression(
         lora_dropout (float, optional): Dropout rate for LoRA layers. Defaults to 0.
         normalize_reward (bool, optional): Normalize reward values. Defaults to False.
         use_flash_attention_2 (bool, optional): Use Flash Attention 2.0. Defaults to False.
-        ds_config (dict, optional): Deepspeed configuration for model partitioning across multiple GPUs when ZeRO-3 is enabled. Defaults to None.
         init_value_head (bool, optional): Initialize the value head. Defaults to False.
         value_head_prefix (str, optional): Prefix for the value head. Defaults to "score".
         device_map (dict, optional): Map of devices for model loading. Defaults to None.
@@ -81,13 +77,6 @@ def get_llm_for_sequence_regression(
         cls_class = _get_reward_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
     else:
         cls_class = _get_critic_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
-
-    # Note: dschf is defined in function scope to avoid global effects
-    # https://huggingface.co/docs/transformers/main_classes/deepspeed#nontrainer-deepspeed-integration
-    if ds_config is not None and ds_config["zero_optimization"]["stage"] == 3:
-        dschf = HfDeepSpeedConfig(ds_config)
-    else:
-        dschf = None
 
     # Determine torch dtype to load weights in.
     from openrlhf.utils.utils import convert_to_torch_dtype
@@ -147,27 +136,16 @@ def get_llm_for_sequence_regression(
         print("[MoE] set output_router_logits as True")
         model.config.output_router_logits = True
 
-        # set_z3_leaf_modules is required for MoE models
-        for m in model.modules():
-            # https://github.com/microsoft/DeepSpeed/pull/4966
-            if "SparseMoeBlock" in m.__class__.__name__:
-                deepspeed.utils.set_z3_leaf_modules(model, [m.__class__])
-                print(f"Setting zero3 leaf for model on class with name: {m.__class__.__name__}")
-                break
-
     # https://github.com/huggingface/transformers/issues/26877
     model.config.use_cache = False
 
-    # NOTE: For reward model training only, intialize value_head manually
-    # because deepspeed.zero.Init() will not intialize them.
-    # TODO: Find a better way to clarify reward model training.
+    # NOTE: For reward model training only, initialize value_head manually.
     if init_value_head:
         value_head = getattr(model, value_head_prefix)
-        if dschf is not None:
-            logger.info("initialize value_head for ZeRO-3 reward model training.")
-            with deepspeed.zero.GatheredParameters([value_head.weight], modifier_rank=0):
-                if torch.distributed.get_rank() == 0:
-                    value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
+        if torch.distributed.is_initialized():
+            if torch.distributed.get_rank() == 0:
+                value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
+            torch.distributed.broadcast(value_head.weight.data, src=0)
         else:
             value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
 

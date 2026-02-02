@@ -32,7 +32,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --max_epochs 1 \
    --prompt_max_len 1024 \
    --generate_max_len 1024 \
-   --zero_stage 3 \
    --param_dtype bf16 \
    --actor_learning_rate 5e-7 \
    --critic_learning_rate 9e-6 \
@@ -42,8 +41,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --apply_chat_template \
    --normalize_reward \
    --packing_samples \
-   --adam_offload \
    --attn_implementation flash_attention_2 \
    --gradient_checkpointing \
    --use_wandb {wandb_token}
-

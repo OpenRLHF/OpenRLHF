@@ -42,7 +42,7 @@ class KDTrainer(ABC):
         max_epochs: int = 2,
         tokenizer=None,
         save_hf_ckpt: bool = False,
-        disable_ds_ckpt: bool = False,
+        disable_fsdp2_ckpt: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -58,7 +58,7 @@ class KDTrainer(ABC):
         self.tokenizer = tokenizer
         self.optimizer = optim
         self.args = strategy.args
-        self.disable_ds_ckpt = disable_ds_ckpt
+        self.disable_fsdp2_ckpt = disable_fsdp2_ckpt
         self.save_hf_ckpt = save_hf_ckpt
 
         self.loss_fn = GPTLMLoss()
@@ -217,7 +217,7 @@ class KDTrainer(ABC):
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
-            if not self.disable_ds_ckpt:
+            if not self.disable_fsdp2_ckpt:
                 self.strategy.save_ckpt(
                     self.model.model,
                     args.ckpt_path,
