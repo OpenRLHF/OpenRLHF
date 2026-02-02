@@ -307,7 +307,9 @@ class RewardModelTrainer(ABC):
         We do this to avoid doing two forward passes, because it's faster for FSDP.
         """
         input_ids, att_masks = self.concatenated_inputs(chosen_ids, c_mask, reject_ids, r_mask)
-        all_values, output = model(input_ids, attention_mask=att_masks, return_output=True)
+        all_values, output = model(
+            input_ids, attention_mask=att_masks, return_output=True, ring_attn_group=self.strategy.ring_attn_group
+        )
         chosen_rewards = all_values[: chosen_ids.shape[0]]
         rejected_rewards = all_values[chosen_ids.shape[0] :]
         aux_loss = output.aux_loss if "aux_loss" in output else []
