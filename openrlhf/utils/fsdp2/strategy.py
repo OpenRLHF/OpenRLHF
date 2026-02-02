@@ -202,31 +202,16 @@ class FSDP2Strategy(ABC):
     # Model Preparation
     # -------------------------------------------------------------------------
 
-    def prepare(self, model):
-        """Apply FSDP with forced CPUOffloadPolicy for Actor model.
-
-        Actor models are used for training.
-
-        Args:
-            model: Model to wrap
-        """
-        return self._wrap(model, force_cpu_offload=False)
-
-    def prepare_ref(self, model):
-        """Apply FSDP with forced CPUOffloadPolicy for Reference model.
-
-        Reference models are only used for inference during training, so we always
-        enable CPUOffloadPolicy to save GPU memory. This is more efficient than
-        manually calling model.cpu()/model.cuda().
-        """
-        return self._wrap(model, force_cpu_offload=True)
+    def prepare(self, model, cpu_offload: bool = False):
+        """Prepare a model with optional FSDP2 CPU offload."""
+        return self._wrap(model, force_cpu_offload=cpu_offload)
 
     def _wrap(self, model, force_cpu_offload=False):
         """Wrap model with TP + FSDP, preserving Actor wrapper.
 
         Args:
             model: Model to wrap
-            force_cpu_offload: If True, force CPUOffloadPolicy (for Reference models)
+            force_cpu_offload: If True, force CPUOffloadPolicy
         """
         inner = self._unwrap_model(model)
         is_actor = inner is not model
