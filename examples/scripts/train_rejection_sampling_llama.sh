@@ -42,7 +42,6 @@ openrlhf.cli.batch_inference
    --input_key context_messages \
    --apply_chat_template \
    --temperature 0.9
-   --zero_stage 0 \
    --best_of_n 4 \
    --enable_prefix_caching \
    --tp_size 4 \
@@ -63,13 +62,12 @@ openrlhf.cli.batch_inference
    --max_len 4096 \
    --dataset $GENERATE_OUTPUT  \
    --dataset_probs 1.0 \
-   --zero_stage 0 \
    --post_processor rs \
    --micro_batch_size 4 \
    --output_path $RM_OUTPUT
 EOF
    echo $get_rewards_commands
-   deepspeed --module $get_rewards_commands
+   torchrun --standalone --nproc-per-node ${NPROC_PER_NODE:-8} -m $get_rewards_commands
    checkSuccess "RM"
 
    read -r -d '' sft_commands <<EOF
@@ -82,14 +80,13 @@ openrlhf.cli.train_sft \
    --pretrain $POLICY_MODEL_PATH \
    --save_path ./checkpoint/llama-3-8b-rejection \
    --input_template "" \
-   --zero_stage 2 \
    --max_epochs 1 \
    --param_dtype bf16 \
    --learning_rate 2e-6 \
    --gradient_checkpointing
 EOF
    echo $sft_commands
-   deepspeed --module $sft_commands
+   torchrun --standalone --nproc-per-node ${NPROC_PER_NODE:-8} -m $sft_commands
    checkSuccess "SFT"
 
    iter=$((iter + 1))

@@ -12,7 +12,6 @@ openrlhf.cli.train_rm \
    --param_dtype bf16 \
    --max_epochs 1 \
    --max_len 8192 \
-   --zero_stage 3 \
    --learning_rate 9e-6 \
    --dataset OpenRLHF/preference_dataset_mixture2_and_safe_pku \
    --apply_chat_template \
@@ -28,5 +27,5 @@ EOF
 
 
 if [[ ${1} != "slurm" ]]; then
-    deepspeed --module $training_commands
+    torchrun --standalone --nproc-per-node ${NPROC_PER_NODE:-8} -m $training_commands
 fi

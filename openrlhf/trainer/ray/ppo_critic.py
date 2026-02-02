@@ -14,7 +14,6 @@ from openrlhf.models import ValueLoss, get_llm_for_sequence_regression
 from openrlhf.models.utils import masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.utils import get_tokenizer
-from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.fsdp2 import FSDP2Strategy
 
 from ..ppo_utils import NaiveReplayBuffer
@@ -66,9 +65,7 @@ class CriticPPOTrainer(ABC):
             self.replay_buffer.setup_dynamic_batch(self.strategy)
 
         not_shuffle = (
-            self.strategy.ring_attn_group is not None
-            or self.args.ds_tensor_parallel_size > 1
-            or self.args.use_dynamic_batch
+            self.strategy.ring_attn_group is not None or self.args.fsdp2_tp_size > 1 or self.args.use_dynamic_batch
         )
         dataloader = DataLoader(
             self.replay_buffer,
@@ -162,26 +159,23 @@ class CriticPPOTrainer(ABC):
 
 @ray.remote(num_gpus=1)
 class CriticModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: Union[DeepspeedStrategy, FSDP2Strategy], pretrain, max_steps):
+    def init_model_from_pretrained(self, strategy: FSDP2Strategy, pretrain, max_steps):
         args = strategy.args
-        self.disable_ds_ckpt = args.disable_ds_ckpt
+        self.disable_fsdp2_ckpt = args.disable_fsdp2_ckpt
 
         self._setup_distributed(strategy)
-        is_fsdp2 = isinstance(strategy, FSDP2Strategy)
-        model_dtype = "fp32" if is_fsdp2 else args.param_dtype
         critic = get_llm_for_sequence_regression(
             pretrain,
             "critic",
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
             param_dtype=strategy.args.param_dtype,  # default: bf16
-            model_dtype=model_dtype,
+            model_dtype="fp32",
             load_in_4bit=strategy.args.load_in_4bit,
             lora_rank=strategy.args.lora_rank,
             lora_alpha=strategy.args.lora_alpha,
             target_modules=strategy.args.target_modules,
             lora_dropout=strategy.args.lora_dropout,
-            ds_config=strategy.get_ds_train_config(is_actor=False),
             value_head_prefix=strategy.args.value_head_prefix,
             init_value_head=strategy.args.pretrain == strategy.args.critic_pretrain,
             packing_samples=strategy.args.packing_samples,
@@ -201,9 +195,8 @@ class CriticModelActor(BaseModelActor):
                 gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
 
-        # FSDP2: wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
-        if is_fsdp2:
-            critic = strategy.prepare(critic)
+        # Wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
+        critic = strategy.prepare(critic)
 
         # configure optimizer (after model wrapping for FSDP2)
         critic_optim = strategy.create_optimizer(
@@ -219,15 +212,9 @@ class CriticModelActor(BaseModelActor):
             scheduler_specific_kwargs={"min_lr": args.critic_learning_rate * 0.1},
         )
 
-        # prepare models/optimizers (DeepSpeed path expects optimizer/scheduler passed in)
-        if not is_fsdp2:
-            self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare(
-                (critic, critic_optim, critic_scheduler)
-            )
-        else:
-            self.critic = critic
-            self.critic_optim = critic_optim
-            self.critic_scheduler = critic_scheduler
+        self.critic = critic
+        self.critic_optim = critic_optim
+        self.critic_scheduler = critic_scheduler
 
         # load checkpoint
         if args.load_checkpoint and os.path.exists(os.path.join(args.ckpt_path, "_actor")):
@@ -236,7 +223,7 @@ class CriticModelActor(BaseModelActor):
             strategy.load_ckpt(self.critic, ckpt_path, optimizer=self.critic_optim, scheduler=self.critic_scheduler)
 
         # initial offload
-        if strategy.args.deepspeed_enable_sleep:
+        if strategy.args.fsdp2_enable_sleep:
             self.offload_states()
 
         # configure Trainer
@@ -296,7 +283,7 @@ class CriticModelActor(BaseModelActor):
 
     def save_checkpoint(self, tag):
         args = self.strategy.args
-        if not self.disable_ds_ckpt:
+        if not self.disable_fsdp2_ckpt:
             self.strategy.save_ckpt(
                 self.critic,
                 os.path.join(args.ckpt_path, "_critic"),

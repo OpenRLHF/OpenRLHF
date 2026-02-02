@@ -32,7 +32,6 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --prompt_max_len 1024 \
    --max_samples 20000 \
    --generate_max_len 1024 \
-   --zero_stage 3 \
    --param_dtype bf16 \
    --actor_learning_rate 5e-7 \
    --prompt_data OpenRLHF/prompt-collection-v0.1 \
@@ -43,7 +42,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --vllm_sync_backend nccl \
    --enforce_eager \
    --vllm_enable_sleep \
-   --deepspeed_enable_sleep \
+   --fsdp2_enable_sleep \
    --vllm_enable_is_correction
 
 # You could also try

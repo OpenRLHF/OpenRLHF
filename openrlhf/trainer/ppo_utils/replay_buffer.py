@@ -145,9 +145,7 @@ def balance_experiences(experiences, args):
     items_all.sort(key=lambda x: x.info["total_length"], reverse=True)
 
     # split experience into chunks
-    effective_num = (
-        args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size // args.ds_tensor_parallel_size
-    )
+    effective_num = args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size // args.fsdp2_tp_size
     split_items = [items_all[i : i + effective_num] for i in range(0, len(items_all), effective_num)]
     half = len(split_items) // 2
     first_half = split_items[:half]
@@ -242,7 +240,7 @@ class NaiveReplayBuffer(ABC):
         sample_lengths = [sample.info["total_length"].item() for sample in self.items]
 
         world_size = dist.get_world_size()
-        dp_size = world_size // args.ring_attn_size // args.ds_tensor_parallel_size
+        dp_size = world_size // args.ring_attn_size // args.fsdp2_tp_size
         local_train_batch_size = args.train_batch_size // dp_size
         num_steps = args.rollout_batch_size * args.n_samples_per_prompt // args.train_batch_size
 
@@ -255,7 +253,7 @@ class NaiveReplayBuffer(ABC):
                     sample_lengths[start:end],
                     args.train_max_tokens_per_gpu,
                     args.ring_attn_size,
-                    args.ds_tensor_parallel_size,
+                    args.fsdp2_tp_size,
                 )
             )
 

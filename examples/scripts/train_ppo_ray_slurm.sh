@@ -79,7 +79,6 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --max_epochs 1 \
     --prompt_max_len 1024 \
     --generate_max_len 1024 \
-    --zero_stage 3 \
     --param_dtype bf16 \
     --actor_learning_rate 5e-7 \
     --critic_learning_rate 9e-6 \
@@ -88,7 +87,6 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --input_key context_messages \
     --apply_chat_template \
     --normalize_reward \
-    --adam_offload \
     --packing_samples \
     --vllm_sync_backend nccl \
     --gradient_checkpointing \

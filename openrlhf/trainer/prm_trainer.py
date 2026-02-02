@@ -25,7 +25,7 @@ class ProcessRewardModelTrainer(ABC):
         max_norm (float, defaults to 0.5): Maximum gradient norm for gradient clipping.
         max_epochs (int, defaults to 2): Maximum number of training epochs.
         save_hf_ckpt (bool): Whether to save huggingface-format model weight.
-        disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight.
+        disable_fsdp2_ckpt (bool): Whether to disable FSDP2 distributed checkpoints (used for training recovery).
     """
 
     def __init__(
@@ -41,7 +41,7 @@ class ProcessRewardModelTrainer(ABC):
         max_epochs: int = 2,
         tokenizer=None,
         save_hf_ckpt: bool = False,
-        disable_ds_ckpt: bool = False,
+        disable_fsdp2_ckpt: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -56,7 +56,7 @@ class ProcessRewardModelTrainer(ABC):
         self.optimizer = optim
         self.args = strategy.args
         self.save_hf_ckpt = save_hf_ckpt
-        self.disable_ds_ckpt = disable_ds_ckpt
+        self.disable_fsdp2_ckpt = disable_fsdp2_ckpt
 
         # set placeholder token
         self.placeholder_token_id = convert_token_to_id(strategy.args.placeholder_token, self.tokenizer)
@@ -209,7 +209,7 @@ class ProcessRewardModelTrainer(ABC):
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
-            if not self.disable_ds_ckpt:
+            if not self.disable_fsdp2_ckpt:
                 self.strategy.save_ckpt(
                     self.model.model,
                     args.ckpt_path,
