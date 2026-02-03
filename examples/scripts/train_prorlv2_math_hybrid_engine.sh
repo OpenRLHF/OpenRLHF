@@ -62,6 +62,10 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --prompt_data ${DATASET_PATH} \
    --input_key prompt \
    --label_key label \
+   --eval_dataset OpenRLHF/aime-2024 \
+   --eval_steps 5 \
+   --eval_temperature 1.0 \
+   --eval_n_samples_per_prompt 4 \
    --apply_chat_template \
    --gradient_checkpointing \
    --packing_samples \
