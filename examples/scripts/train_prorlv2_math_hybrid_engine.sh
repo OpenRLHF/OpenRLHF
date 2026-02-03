@@ -20,7 +20,7 @@ WORK_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
 
 # Model and Dataset Configuration
 MODEL_PATH="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
-DATASET_PATH="zhuzilin/dapo-math-17k"
+DATASET_PATH="OpenRLHF/dapo-math-17k"
 SAVE_PATH="${WORK_DIR}/exp/DeepSeek-R1-Qwen-1.5B-PRORLV2"
 
 # Math reward function for answer verification
