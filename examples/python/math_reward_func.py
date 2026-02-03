@@ -1,10 +1,30 @@
 import re
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
+import ray
 import torch
 
 # math-verify is required: pip install 'math-verify[antlr4_13_2]'
 from math_verify import parse, verify
+
+_VERIFY_TIMEOUT = 180  # seconds per verification
+
+
+@ray.remote
+def _verify_with_ray(pred_answer: str, gold_answer: str) -> Tuple[bool, Optional[str]]:
+    """
+    Ray remote function for math verification.
+    Runs in a separate Ray worker process, allowing proper timeout handling.
+
+    Returns:
+        Tuple of (is_correct, error_message)
+    """
+    try:
+        parsed_gold = parse(gold_answer)
+        parsed_pred = parse(pred_answer)
+        return verify(parsed_gold, parsed_pred), None
+    except Exception as e:
+        return False, str(e)
 
 
 def extract_boxed_answer(text: str) -> Optional[str]:
@@ -39,6 +59,7 @@ def extract_boxed_answer(text: str) -> Optional[str]:
 def verify_math_answer(pred_answer: str, gold_answer: str) -> bool:
     """
     Verify if the predicted answer matches the gold answer using math-verify library.
+    Runs verification in a Ray worker process with timeout support.
 
     Args:
         pred_answer: The predicted answer string
@@ -51,17 +72,17 @@ def verify_math_answer(pred_answer: str, gold_answer: str) -> bool:
         return False
 
     try:
-        # Parse both answers using math-verify
-        # Note: parsing_timeout=None is required for multithreaded environments (e.g., Ray)
-        # because signal.alarm() doesn't work in threads
-        parsed_gold = parse(gold_answer, parsing_timeout=None)
-        parsed_pred = parse(pred_answer, parsing_timeout=None)
+        ref = _verify_with_ray.remote(pred_answer, gold_answer)
+        is_correct, error = ray.get(ref, timeout=_VERIFY_TIMEOUT)
 
-        # Verify if they match
-        return verify(parsed_gold, parsed_pred)
+        if error:
+            print(f"[Math Verify] Parse error: {error}, pred={pred_answer}, gold={gold_answer}")
+        return is_correct
+    except ray.exceptions.GetTimeoutError:
+        print(f"[Math Verify] Timeout, pred={pred_answer}, gold={gold_answer}")
+        return False
     except Exception as e:
-        # If parsing fails, log and return False
-        print(f"[Math Verify] Parse error: {e}, pred={pred_answer}, gold={gold_answer}")
+        print(f"[Math Verify] Error: {e}, pred={pred_answer}, gold={gold_answer}")
         return False
 
 
@@ -85,7 +106,6 @@ def reward_func(queries: List[str], prompts: List[str], labels: List[str], **kwa
             - extra_logs: Additional logging information
     """
     rewards = []
-    correct_count = 0
 
     for query, prompt, label in zip(queries, prompts, labels):
         # Extract the response part (after the prompt)
@@ -96,28 +116,21 @@ def reward_func(queries: List[str], prompts: List[str], labels: List[str], **kwa
 
         # Extract answer from response
         pred_answer = extract_boxed_answer(response)
-        gold_answer = label  # Use raw label if no \boxed{} found
+        gold_answer = label
 
         # Verify if answers match using math-verify
         is_correct = verify_math_answer(pred_answer, gold_answer)
 
-        if is_correct:
-            rewards.append(1.0)
-            correct_count += 1
-        else:
-            rewards.append(0.0)
-
-        # Debug logging
+        rewards.append(1.0 if is_correct else 0.0)
         print(f"[Math Reward] Pred: {pred_answer}, Gold: {gold_answer}, Match: {is_correct}")
 
     rewards_tensor = torch.tensor(rewards, dtype=torch.float)
-    # Use mean of rewards as accuracy (will be averaged across batches correctly)
     accuracy = rewards_tensor.mean()
 
     return {
-        "rewards": rewards_tensor,  # Rewards for advantage calculation
-        "scores": rewards_tensor,  # Scores for dynamic filtering (0-1 reward)
+        "rewards": rewards_tensor,
+        "scores": rewards_tensor,
         "extra_logs": {
-            "math_accuracy": accuracy,  # Ratio value, safe to average across batches
+            "math_accuracy": accuracy,
         },
     }
