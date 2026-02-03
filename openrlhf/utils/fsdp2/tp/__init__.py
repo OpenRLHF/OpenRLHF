@@ -1,15 +1,11 @@
-"""
-Tensor Parallelism Module for FSDP2
-===================================
+"""Tensor Parallelism Module for FSDP2.
 
 Files:
 - tp_parallel.py : TP styles, plans, apply_tensor_parallel
 """
 
-from .tp_parallel import (  # Parallel Styles; TP Plan Functions
-    ColwiseParallelLora,
+from .tp_parallel import (
     ReplicateParallel,
-    RowwiseParallelLora,
     SequenceParallelPreserveGrad,
     apply_tensor_parallel,
     get_tp_plan,
@@ -18,8 +14,6 @@ from .tp_parallel import (  # Parallel Styles; TP Plan Functions
 
 __all__ = [
     # Parallel Styles
-    "ColwiseParallelLora",
-    "RowwiseParallelLora",
     "ReplicateParallel",
     "SequenceParallelPreserveGrad",
     # TP Plan Functions
