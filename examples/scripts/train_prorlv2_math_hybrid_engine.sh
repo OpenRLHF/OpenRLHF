@@ -34,7 +34,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --vllm_num_engines 8 \
    --vllm_tensor_parallel_size 1 \
    --colocate_all_models \
-   --vllm_gpu_memory_utilization 0.6 \
+   --vllm_gpu_memory_utilization 0.75 \
    --init_kl_coef 1e-4 \
    --gamma 1.0 \
    --use_kl_loss \
@@ -76,7 +76,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --enable_vllm_is_correction \
    --vllm_is_truncated_threshold 0.5 5.0 \
    --use_icepop \
-   --train_max_tokens_per_gpu 16192 \
+   --train_max_tokens_per_gpu 32768 \
    --stop_properly_penalty_coef 0.0
 
 # ProRL v2 Key Parameters:
