@@ -2,8 +2,8 @@
 Tensor Parallelism for FSDP2
 ============================
 
-This module provides tensor parallelism support including:
-- Custom ParallelStyle variants (LoRA-aware, SequenceParallel)
+This module provides DTensor tensor parallelism support including:
+- Custom ParallelStyle variants (ReplicateParallel, SequenceParallelPreserveGrad)
 - TP plans for common HF model families (LLaMA, Qwen, Mistral)
 - Model parallelization utilities
 - Ring Attention compatibility hooks
@@ -17,7 +17,7 @@ from functools import partial
 
 import torch.nn as nn
 from torch.distributed.device_mesh import DeviceMesh
-from torch.distributed.tensor import DTensor, Replicate, Shard, distribute_tensor
+from torch.distributed.tensor import DTensor, Replicate, Shard
 from torch.distributed.tensor.parallel import (
     ColwiseParallel,
     PrepareModuleInput,
@@ -27,6 +27,7 @@ from torch.distributed.tensor.parallel import (
 )
 from torch.distributed.tensor.parallel.style import ParallelStyle, distribute_module
 from torch.distributed.tensor.placement_types import Placement
+
 from ..utils import ensure_tied_word_embeddings
 
 logger = logging.getLogger(__name__)
@@ -40,8 +41,9 @@ logger = logging.getLogger(__name__)
 class ReplicateParallel(ParallelStyle):
     """Replicate computation style for modules that should not be sharded.
 
-    `distribute_module(..., partition_fn=None)` will replicate parameters/buffers to DTensor,
-    which keeps mesh metadata consistent across parameters (useful for global grad norm).
+    `distribute_module(..., partition_fn=None)` will replicate parameters/buffers
+    to DTensor, which keeps mesh metadata consistent across parameters
+    (useful for global grad norm).
     """
 
     def __init__(
@@ -84,146 +86,6 @@ class ReplicateParallel(ParallelStyle):
         )
 
 
-def _iter_modules(x):
-    if x is None:
-        return []
-    if isinstance(x, nn.ModuleDict):
-        return list(x.values())
-    return [x]
-
-
-def _get_base_linear(module: nn.Module) -> nn.Linear | None:
-    base = getattr(module, "get_base_layer", None)
-    if callable(base):
-        try:
-            base_layer = module.get_base_layer()
-        except Exception:
-            base_layer = None
-        if isinstance(base_layer, nn.Linear):
-            return base_layer
-    return module if isinstance(module, nn.Linear) else None
-
-
-def _distribute_param(module, name, mesh, placements, *, src_data_rank: int = 0):
-    param = getattr(module, name, None)
-    if param is None or isinstance(param, DTensor):
-        return
-    setattr(
-        module,
-        name,
-        nn.Parameter(
-            distribute_tensor(param, mesh, placements, src_data_rank=src_data_rank),
-            requires_grad=param.requires_grad,
-        ),
-    )
-
-
-class ColwiseParallelLora(ColwiseParallel):
-    """ColwiseParallel that also shards PEFT LoRA linear wrappers."""
-
-    src_data_rank: int = 0
-
-    def _apply(self, module: nn.Module, device_mesh):
-        if isinstance(module, nn.Embedding):
-            partition_fn = self._partition_embedding_fn
-        elif _get_base_linear(module) is not None:
-            partition_fn = self._partition_linear_fn
-        else:
-            raise NotImplementedError(
-                f"{type(self).__name__} only supports nn.Linear/nn.Embedding (and PEFT LoRA Linear wrappers), got {type(module)}"
-            )
-
-        return distribute_module(
-            module,
-            device_mesh,
-            partition_fn,
-            partial(self._prepare_input_fn, self.input_layouts, self.desired_input_layouts),
-            partial(self._prepare_output_fn, self.output_layouts, self.use_local_output),
-        )
-
-    def _partition_linear_fn(self, name, module, device_mesh):
-        base_layer = _get_base_linear(module)
-        if base_layer is None:
-            return
-
-        _distribute_param(base_layer, "weight", device_mesh, [Shard(0)], src_data_rank=self.src_data_rank)
-        if getattr(base_layer, "bias", None) is not None:
-            _distribute_param(base_layer, "bias", device_mesh, [Shard(0)], src_data_rank=self.src_data_rank)
-
-        lora_b = getattr(module, "lora_B", None) or getattr(module, "lora_b", None)
-        lora_a = getattr(module, "lora_A", None) or getattr(module, "lora_a", None)
-        if lora_b:
-            for m in _iter_modules(lora_b):
-                _distribute_param(m, "weight", device_mesh, [Shard(0)], src_data_rank=self.src_data_rank)
-                if getattr(m, "bias", None) is not None:
-                    _distribute_param(m, "bias", device_mesh, [Shard(0)], src_data_rank=self.src_data_rank)
-        if lora_a:
-            for m in _iter_modules(lora_a):
-                _distribute_param(m, "weight", device_mesh, [Shard(0)], src_data_rank=self.src_data_rank)
-                if getattr(m, "bias", None) is not None:
-                    _distribute_param(m, "bias", device_mesh, [Shard(0)], src_data_rank=self.src_data_rank)
-                # All-gather LoRA-A output so LoRA-B (also sharded) gets replicated input.
-                m.register_forward_hook(
-                    lambda mod, inp, out, mesh=device_mesh: (
-                        out.redistribute(mesh, [Replicate()]) if isinstance(out, DTensor) else out
-                    )
-                )
-
-    def _partition_embedding_fn(self, name, module, device_mesh):
-        _distribute_param(module, "weight", device_mesh, [Shard(1)], src_data_rank=self.src_data_rank)
-
-
-class RowwiseParallelLora(RowwiseParallel):
-    """RowwiseParallel that also shards PEFT LoRA linear wrappers."""
-
-    src_data_rank: int = 0
-
-    def _apply(self, module: nn.Module, device_mesh):
-        if isinstance(module, nn.Embedding):
-            partition_fn = self._partition_embedding_fn
-            self.desired_input_layouts = (Replicate(),)
-        elif _get_base_linear(module) is not None:
-            partition_fn = self._partition_linear_fn
-            self.desired_input_layouts = (Shard(-1),)
-        else:
-            raise NotImplementedError(
-                f"{type(self).__name__} only supports nn.Linear/nn.Embedding (and PEFT LoRA Linear wrappers), got {type(module)}"
-            )
-
-        return distribute_module(
-            module,
-            device_mesh,
-            partition_fn,
-            partial(self._prepare_input_fn, self.input_layouts, self.desired_input_layouts),
-            partial(self._prepare_output_fn, self.output_layouts, self.use_local_output),
-        )
-
-    def _partition_linear_fn(self, name, module, device_mesh):
-        base_layer = _get_base_linear(module)
-        if base_layer is None:
-            return
-
-        _distribute_param(base_layer, "weight", device_mesh, [Shard(1)], src_data_rank=self.src_data_rank)
-        if getattr(base_layer, "bias", None) is not None:
-            _distribute_param(base_layer, "bias", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
-
-        lora_a = getattr(module, "lora_A", None) or getattr(module, "lora_a", None)
-        lora_b = getattr(module, "lora_B", None) or getattr(module, "lora_b", None)
-        if lora_a:
-            for m in _iter_modules(lora_a):
-                _distribute_param(m, "weight", device_mesh, [Shard(1)], src_data_rank=self.src_data_rank)
-                if getattr(m, "bias", None) is not None:
-                    _distribute_param(m, "bias", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
-        if lora_b:
-            for m in _iter_modules(lora_b):
-                _distribute_param(m, "weight", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
-                if getattr(m, "bias", None) is not None:
-                    _distribute_param(m, "bias", device_mesh, [Replicate()], src_data_rank=self.src_data_rank)
-
-    def _partition_embedding_fn(self, name, module, device_mesh):
-        _distribute_param(module, "weight", device_mesh, [Shard(0)], src_data_rank=self.src_data_rank)
-
-
 class SequenceParallelPreserveGrad(SequenceParallel):
     """SequenceParallel that preserves requires_grad when re-wrapping parameters."""
 
@@ -238,24 +100,6 @@ class SequenceParallelPreserveGrad(SequenceParallel):
             )
 
 
-def ensure_lora_style(style: ParallelStyle) -> ParallelStyle:
-    """Upgrade base torch TP styles to LoRA-aware variants (without mutating in-place)."""
-
-    if isinstance(style, ColwiseParallel) and not isinstance(style, ColwiseParallelLora):
-        return ColwiseParallelLora(
-            input_layouts=style.input_layouts[0],
-            output_layouts=style.output_layouts[0],
-            use_local_output=style.use_local_output,
-        )
-    if isinstance(style, RowwiseParallel) and not isinstance(style, RowwiseParallelLora):
-        return RowwiseParallelLora(
-            input_layouts=style.input_layouts[0],
-            output_layouts=style.output_layouts[0],
-            use_local_output=style.use_local_output,
-        )
-    return style
-
-
 # =============================================================================
 # TP Plans for HF Models
 # =============================================================================
@@ -264,10 +108,10 @@ def ensure_lora_style(style: ParallelStyle) -> ParallelStyle:
 def _str_to_style(s: str):
     """Convert string shorthand to ParallelStyle instance."""
     styles = {
-        "colwise": ColwiseParallelLora(),
-        "rowwise": RowwiseParallelLora(),
-        "colwise_rep": ColwiseParallelLora(output_layouts=Replicate()),
-        "rowwise_rep": RowwiseParallelLora(input_layouts=Replicate()),
+        "colwise": ColwiseParallel(),
+        "rowwise": RowwiseParallel(),
+        "colwise_rep": ColwiseParallel(output_layouts=Replicate()),
+        "rowwise_rep": RowwiseParallel(input_layouts=Replicate()),
         "sequence_parallel": SequenceParallelPreserveGrad(),
         "replicate": ReplicateParallel(),
     }
@@ -277,24 +121,24 @@ def _str_to_style(s: str):
 def _attn_mlp_plan():
     """Attention + MLP layers (shared by LLaMA-style models)."""
     return {
-        "model.layers.*.self_attn.q_proj": ColwiseParallelLora(),
-        "model.layers.*.self_attn.k_proj": ColwiseParallelLora(),
-        "model.layers.*.self_attn.v_proj": ColwiseParallelLora(),
-        "model.layers.*.self_attn.qkv_proj": ColwiseParallelLora(),
-        "model.layers.*.self_attn.o_proj": RowwiseParallelLora(),
-        "model.layers.*.mlp.gate_proj": ColwiseParallelLora(),
-        "model.layers.*.mlp.up_proj": ColwiseParallelLora(),
-        "model.layers.*.mlp.gate_up_proj": ColwiseParallelLora(),
-        "model.layers.*.mlp.down_proj": RowwiseParallelLora(),
+        "model.layers.*.self_attn.q_proj": ColwiseParallel(),
+        "model.layers.*.self_attn.k_proj": ColwiseParallel(),
+        "model.layers.*.self_attn.v_proj": ColwiseParallel(),
+        "model.layers.*.self_attn.qkv_proj": ColwiseParallel(),
+        "model.layers.*.self_attn.o_proj": RowwiseParallel(),
+        "model.layers.*.mlp.gate_proj": ColwiseParallel(),
+        "model.layers.*.mlp.up_proj": ColwiseParallel(),
+        "model.layers.*.mlp.gate_up_proj": ColwiseParallel(),
+        "model.layers.*.mlp.down_proj": RowwiseParallel(),
     }
 
 
 def _base_plan(sequence_parallel: bool = False, layernorm_cls=SequenceParallel):
     """Base TP plan for LLaMA-style models."""
-    plan = {
-        "model.embed_tokens": RowwiseParallelLora(input_layouts=Replicate()),
+    plan: dict[str, ParallelStyle] = {
+        "model.embed_tokens": RowwiseParallel(input_layouts=Replicate()),
         # Return full logits (all-gather vocab) as a local tensor for simple loss functions.
-        "lm_head": ColwiseParallelLora(output_layouts=Replicate(), use_local_output=True),
+        "lm_head": ColwiseParallel(output_layouts=Replicate(), use_local_output=True),
         **_attn_mlp_plan(),
     }
 
@@ -302,7 +146,7 @@ def _base_plan(sequence_parallel: bool = False, layernorm_cls=SequenceParallel):
         plan.update(
             {
                 # Embedding: output Shard(1) for SP
-                "model.embed_tokens": RowwiseParallelLora(input_layouts=Replicate(), output_layouts=Shard(1)),
+                "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
                 # Final norm: SP (preserve requires_grad)
                 # NOTE: return local tensor to avoid DTensor view/alias ops in HF heads
                 # (e.g. `hidden_states[:, slice_indices, :]` in LlamaForCausalLM).
@@ -323,10 +167,10 @@ def _base_plan(sequence_parallel: bool = False, layernorm_cls=SequenceParallel):
                     use_local_output=True,
                 ),
                 # Reduce-scatter back to Shard(1) for residual connections
-                "model.layers.*.self_attn.o_proj": RowwiseParallelLora(output_layouts=Shard(1)),
-                "model.layers.*.mlp.down_proj": RowwiseParallelLora(output_layouts=Shard(1)),
+                "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
+                "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
                 # lm_head: input Shard(1), output Replicate() (full vocab logits)
-                "lm_head": ColwiseParallelLora(
+                "lm_head": ColwiseParallel(
                     input_layouts=Shard(1),
                     output_layouts=Replicate(),
                     use_local_output=True,
@@ -340,7 +184,7 @@ def _base_plan(sequence_parallel: bool = False, layernorm_cls=SequenceParallel):
 def _set_sharded_lm_head(plan: dict, sequence_parallel: bool) -> dict:
     """Force lm_head to output vocab-sharded DTensor logits (Shard(-1))."""
     plan = dict(plan)
-    plan["lm_head"] = ColwiseParallelLora(
+    plan["lm_head"] = ColwiseParallel(
         input_layouts=Shard(1) if sequence_parallel else Replicate(),
         output_layouts=Shard(-1),
         use_local_output=False,
@@ -392,7 +236,7 @@ _MODEL_PLANS = {
 
 def _get_hf_plan(model):
     """Extract TP plan from HuggingFace model's _tp_plan attribute."""
-    hf = {}
+    hf: dict[str, ParallelStyle | str] = {}
     for src in [type(model), model, getattr(model, "model", None)]:
         if src and hasattr(src, "_tp_plan"):
             prefix = "model." if src == getattr(model, "model", None) else ""
@@ -401,18 +245,22 @@ def _get_hf_plan(model):
         return None
 
     hf.setdefault("model.embed_tokens", "rowwise_rep")
-    result = {k: _str_to_style(v) if isinstance(v, str) else v for k, v in hf.items()}
+    result: dict[str, ParallelStyle] = {
+        k: _str_to_style(v) if isinstance(v, str) else v for k, v in hf.items()
+    }
+
     # Always return full-vocab logits (Replicate) to keep loss functions simple.
     if "lm_head" not in result:
-        result["lm_head"] = ColwiseParallelLora(output_layouts=Replicate(), use_local_output=True)
+        result["lm_head"] = ColwiseParallel(output_layouts=Replicate(), use_local_output=True)
     else:
         style = result["lm_head"]
         if isinstance(style, ColwiseParallel):
-            result["lm_head"] = ColwiseParallelLora(
+            result["lm_head"] = ColwiseParallel(
                 input_layouts=style.input_layouts[0],
                 output_layouts=Replicate(),
                 use_local_output=True,
             )
+
     return result
 
 
@@ -429,7 +277,7 @@ def _prune_plan(plan: dict, model: nn.Module) -> dict:
 
     kept = {k: v for k, v in plan.items() if matches(k)}
     if (n := len(plan) - len(kept)) > 0:
-        logger.debug(f"Pruned {n} unmatched TP plan entries")
+        logger.debug("Pruned %s unmatched TP plan entries", n)
     return kept
 
 
@@ -445,14 +293,20 @@ def get_tp_plan(model, sequence_parallel: bool = False, custom_plan=None, shard_
             try:
                 plan = _MODEL_PLANS[cls_name](model, sequence_parallel)
             except Exception as e:
-                logger.warning(f"Plan failed for {cls_name}: {e}")
+                logger.warning("Plan failed for %s: %s", cls_name, e)
 
         if plan is None:
             plan = _get_hf_plan(model) or _base_plan(sequence_parallel)
 
     if shard_logits:
         plan = _set_sharded_lm_head(plan, sequence_parallel)
-    return _prune_plan(plan, model)
+    plan = _prune_plan(plan, model)
+    if not plan:
+        raise ValueError(
+            "No TP plan entries matched any modules for this model. "
+            f"model_cls={type(model).__name__}. Provide a custom TP plan or disable TP (fsdp2_tp_size=1)."
+        )
+    return plan
 
 
 def maybe_add_score_layer_plan(model, plan: dict):
@@ -492,7 +346,7 @@ def maybe_enable_async_tp(tp_mesh: DeviceMesh, enabled: bool = False):
         enable_symm_mem_for_group(tp_mesh.get_group().group_name)
         logger.info("Enabled Async TP (Symmetric Memory)")
     except Exception as e:
-        logger.warning(f"Failed to enable Async TP: {e}")
+        logger.warning("Failed to enable Async TP: %s", e)
 
 
 def _retie_embeddings(model: nn.Module):
@@ -533,30 +387,16 @@ def apply_tensor_parallel(
 
     maybe_enable_async_tp(tp_mesh, enabled=enable_async_tp)
 
-    # If using PEFT, apply TP on the underlying HF model (keys like `model.layers.*`),
-    # but keep returning the original wrapper.
-    tp_root = model
-    try:
-        from peft import PeftModel
-
-        if isinstance(model, PeftModel):
-            tp_root = model.get_base_model()
-    except Exception:
-        tp_root = model
-
     if validate:
-        validate_tp_mesh(tp_root, tp_mesh)
+        validate_tp_mesh(model, tp_mesh)
     if tp_plan is None:
-        tp_plan = get_tp_plan(tp_root, sequence_parallel, shard_logits=shard_logits)
+        tp_plan = get_tp_plan(model, sequence_parallel, shard_logits=shard_logits)
 
     tp_plan = maybe_add_score_layer_plan(model, tp_plan)
 
-    # Ensure plan is LoRA-aware even if user/HF provides base styles.
-    tp_plan = {k: ensure_lora_style(v) for k, v in tp_plan.items()}
-
-    parallelize_module(tp_root, tp_mesh, tp_plan)
+    parallelize_module(model, tp_mesh, tp_plan)
 
     # Re-tie weights if necessary (must happen after parallelize_module)
-    _retie_embeddings(tp_root)
+    _retie_embeddings(model)
 
     return model
