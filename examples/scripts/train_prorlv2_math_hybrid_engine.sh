@@ -8,7 +8,7 @@
 # - Dynamic Sampling (--dynamic_filtering) to reduce noise
 # - KL-regularized trust regions (--use_kl_loss --kl_estimator k2)
 # - ICEPOP (--use_icepop) for importance sampling correction
-# - Scheduled cosine length penalty (--overlong_buffer_len) for concise outputs
+# - Stop Properly Penalty (--stop_properly_penalty_coef) for truncated samples
 #
 # ProRL v2 achieves state-of-the-art performance among 1.5B reasoning models
 # with sustained improvements across math, code, and reasoning tasks.
