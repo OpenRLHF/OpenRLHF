@@ -9,13 +9,14 @@ grpcio>=1.74.0
 isort
 jsonlines
 loralib
-math-verify[antlr4_13_2]
 optimum
 optree>=0.13.0
 packaging
 peft
+pylatexenc
 pynvml>=12.0.0
 ray[default]==2.48.0
+sympy
 tensorboard
 torch
 torchdata
