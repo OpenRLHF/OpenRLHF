@@ -52,8 +52,10 @@ def verify_math_answer(pred_answer: str, gold_answer: str) -> bool:
 
     try:
         # Parse both answers using math-verify
-        parsed_gold = parse(gold_answer)
-        parsed_pred = parse(pred_answer)
+        # Note: parsing_timeout=None is required for multithreaded environments (e.g., Ray)
+        # because signal.alarm() doesn't work in threads
+        parsed_gold = parse(gold_answer, parsing_timeout=None)
+        parsed_pred = parse(pred_answer, parsing_timeout=None)
 
         # Verify if they match
         return verify(parsed_gold, parsed_pred)
