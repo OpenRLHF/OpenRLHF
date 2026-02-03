@@ -120,6 +120,18 @@ class FSDP2Strategy(ABC):
                     "because HF's causal mask creation uses inputs_embeds.shape[1] "
                     "which would be seq/tp_size after SP sharding, causing mask length mismatch."
                 )
+
+        # DTensor TP does not support PEFT/LoRA wrappers or 4-bit quantized modules.
+        if getattr(self.args, "lora_rank", 0) and self.fsdp2_tp_size > 1:
+            raise ValueError(
+                "Invalid config: --lora_rank > 0 is not supported with --fsdp2_tp_size > 1 (DTensor TP). "
+                "Set --lora_rank 0 or run with --fsdp2_tp_size 1."
+            )
+        if getattr(self.args, "load_in_4bit", False) and self.fsdp2_tp_size > 1:
+            raise ValueError(
+                "Invalid config: --load_in_4bit is not supported with --fsdp2_tp_size > 1 (DTensor TP). "
+                "Set --load_in_4bit False or run with --fsdp2_tp_size 1."
+            )
         # Create 3D mesh: (dp, cp, tp) - always include all dimensions even if size=1
         # This ensures all parameters use the same mesh structure, avoiding mesh mismatch issues
         # in operations like clip_grad_norm that aggregate across all parameters
