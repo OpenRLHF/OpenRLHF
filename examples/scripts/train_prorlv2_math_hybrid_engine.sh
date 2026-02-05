@@ -47,9 +47,9 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --remote_rm_url ${REWARD_FUNC_PATH} \
    --save_path ${SAVE_PATH} \
    --ckpt_path "${SAVE_PATH}/ckpt" \
-   --save_steps 10 \
+   --save_steps 5 \
    --save_hf_ckpt \
-   --train_batch_size 8192 \
+   --train_batch_size 1024 \
    --rollout_batch_size 512 \
    --n_samples_per_prompt 16 \
    --use_dynamic_batch \
@@ -58,7 +58,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --generate_max_len 8192 \
    --zero_stage 3 \
    --param_dtype bf16 \
-   --actor_learning_rate 2e-6 \
+   --actor_learning_rate 1e-6 \
    --prompt_data ${DATASET_PATH} \
    --input_key prompt \
    --label_key label \
