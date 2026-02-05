@@ -283,14 +283,11 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 ```bash
 # 1. 启动 Docker 容器
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
-  -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:25.02-py3 bash
+  -v $PWD:/openrlhf vllm/vllm-openai:v0.15.1-cu130 bash
 
-# 2. 清理冲突包
-sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
-
-# 3. 安装 OpenRLHF（选择一个）
+# 2. 安装 OpenRLHF（选择一个）
 pip install openrlhf                    # 基础
-pip install openrlhf[vllm]              # + vLLM 0.13.0（推荐）
+pip install openrlhf[vllm]              # + vLLM 0.15.0（推荐）
 pip install openrlhf[vllm_latest]       # + 最新 vLLM
 pip install openrlhf[vllm,ring,liger]   # + 所有优化
 ```
@@ -304,7 +301,7 @@ pip install -e .
 ```
 
 > [!TIP]
-> 我们推荐 **vLLM 0.13.0+** 以获得最佳性能。参见 [Dockerfiles](./dockerfile/) 和 [Nvidia-Docker 安装脚本](./examples/scripts/nvidia_docker_install.sh)。
+> 我们推荐 **vLLM 0.15.0+** 以获得最佳性能。参见 [Dockerfiles](./dockerfile/) 和 [Nvidia-Docker 安装脚本](./examples/scripts/nvidia_docker_install.sh)。
 
 ### 准备数据集
 

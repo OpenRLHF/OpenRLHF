@@ -2,7 +2,7 @@ accelerate
 aiohttp
 bitsandbytes
 datasets
-deepspeed==0.18.3
+deepspeed==0.18.5
 einops
 flash-attn==2.8.3
 grpcio>=1.74.0
@@ -10,7 +10,7 @@ isort
 jsonlines
 loralib
 optimum
-optree>=0.13.0
+optree>=0.15.0
 packaging
 peft
 pylatexenc
@@ -22,7 +22,7 @@ torch
 torchdata
 torchmetrics
 tqdm
-transformers==4.57.3
+transformers==4.57.6
 transformers_stream_generator
 wandb
 wheel

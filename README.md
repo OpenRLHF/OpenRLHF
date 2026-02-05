@@ -282,14 +282,11 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 ```bash
 # 1. Launch Docker container
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
-  -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:25.02-py3 bash
+  -v $PWD:/openrlhf vllm/vllm-openai:v0.15.1-cu130 bash
 
-# 2. Clean conflicting packages
-sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
-
-# 3. Install OpenRLHF (choose one)
+# 2. Install OpenRLHF (choose one)
 pip install openrlhf                    # Basic
-pip install openrlhf[vllm]              # + vLLM 0.13.0 (recommended)
+pip install openrlhf[vllm]              # + vLLM 0.15.0 (recommended)
 pip install openrlhf[vllm_latest]       # + Latest vLLM
 pip install openrlhf[vllm,ring,liger]   # + All optimizations
 ```
@@ -303,7 +300,7 @@ pip install -e .
 ```
 
 > [!TIP]
-> We recommend **vLLM 0.13.0+** for best performance. See [Dockerfiles](./dockerfile/) and [Nvidia-Docker Install Script](./examples/scripts/nvidia_docker_install.sh).
+> We recommend **vLLM 0.15.0+** for best performance. See [Dockerfiles](./dockerfile/) and [Nvidia-Docker Install Script](./examples/scripts/nvidia_docker_install.sh).
 
 ### Prepare Datasets
 
