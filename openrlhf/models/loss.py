@@ -86,7 +86,7 @@ class PolicyLoss(nn.Module):
         policy_loss_type: str = "ppo",
         enable_vllm_is_correction: bool = False,
         vllm_is_truncated_threshold: list = None,
-        use_icepop: bool = False,
+        vllm_is_correction_type: str = "tis",
     ) -> None:
         super().__init__()
         self.clip_eps_low = clip_eps_low
@@ -96,7 +96,7 @@ class PolicyLoss(nn.Module):
         self.policy_loss_type = policy_loss_type
         self.enable_vllm_is_correction = enable_vllm_is_correction
         self.vllm_is_truncated_threshold = vllm_is_truncated_threshold
-        self.use_icepop = use_icepop
+        self.vllm_is_correction_type = vllm_is_correction_type
 
         # GSPO requires sequence-level loss
         if policy_loss_type == "gspo":
@@ -105,6 +105,11 @@ class PolicyLoss(nn.Module):
         # Dual-clip PPO: https://arxiv.org/pdf/1912.09729
         if dual_clip is not None:
             assert dual_clip > 1.0, f"dual_clip must be > 1.0, got {dual_clip}"
+
+        if self.vllm_is_correction_type not in {"tis", "icepop", "mis"}:
+            raise ValueError(
+                f"Invalid vllm_is_correction_type: {self.vllm_is_correction_type}, must be one of tis/icepop/mis"
+            )
 
     def forward(
         self,
@@ -146,17 +151,25 @@ class PolicyLoss(nn.Module):
         vllm_kl = None
         if self.enable_vllm_is_correction and self.policy_loss_type == "ppo":
             low_threshold, high_threshold = self.vllm_is_truncated_threshold
-            if self.use_icepop:
-                # ICEPOP: set coefficients outside the interval to 0
-                vllm_is = torch.exp(old_log_probs - rollout_log_probs).detach()
+            log_ratio = old_log_probs - rollout_log_probs
+            if self.vllm_is_correction_type == "icepop":
+                # ICEPOP: token-level filtering (set coefficients outside the interval to 0)
+                vllm_is = torch.exp(log_ratio).detach()
                 mask = (vllm_is >= low_threshold) & (vllm_is <= high_threshold)
                 vllm_is = vllm_is * mask
+                loss = vllm_is * loss
+            elif self.vllm_is_correction_type == "mis":
+                # MIS: use sequence-level geometric mean only for filtering,
+                # correction coefficients still use TIS (token-level clamp)
+                seq_log_ratio = masked_mean(log_ratio, action_mask, dim=-1)
+                seq_is = torch.exp(seq_log_ratio)
+                seq_mask = (seq_is >= low_threshold) & (seq_is <= high_threshold)
+                vllm_is = torch.exp(log_ratio).detach()
+                loss = seq_mask.unsqueeze(-1) * vllm_is * loss
             else:
-                # Standard clamp with low and high thresholds
-                vllm_is = (
-                    torch.exp(old_log_probs - rollout_log_probs).clamp(min=low_threshold, max=high_threshold).detach()
-                )
-            loss = vllm_is * loss
+                # TIS: token-level clamp with low and high thresholds
+                vllm_is = torch.exp(log_ratio).clamp(min=low_threshold, max=high_threshold).detach()
+                loss = vllm_is * loss
             vllm_kl = masked_mean(rollout_log_probs - old_log_probs, action_mask, dim=None)
 
         loss = (

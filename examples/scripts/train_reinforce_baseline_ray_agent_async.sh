@@ -90,7 +90,7 @@ OPTIMIZER_ARGS=(
    --use_kl_loss
    --kl_estimator k2
    --enable_vllm_is_correction
-   --use_icepop
+   --vllm_is_correction_type icepop
 )
 
 LOG_ARGS=(

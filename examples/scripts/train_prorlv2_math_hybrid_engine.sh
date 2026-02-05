@@ -7,7 +7,7 @@
 # - Clip-Higher (--eps_clip_low_high 0.2 0.27) for exploration
 # - Dynamic Sampling (--dynamic_filtering) to reduce noise
 # - KL-regularized trust regions (--use_kl_loss --kl_estimator k2)
-# - ICEPOP (--use_icepop) for importance sampling correction
+# - TIS/ICEPOP/MIS (--vllm_is_correction_type) for importance sampling correction
 # - Stop Properly Penalty (--stop_properly_penalty_coef) for truncated samples
 #
 # ProRL v2 achieves state-of-the-art performance among 1.5B reasoning models
@@ -75,7 +75,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --deepspeed_enable_sleep \
    --enable_vllm_is_correction \
    --vllm_is_truncated_threshold 0.5 5.0 \
-   --use_icepop \
+   --vllm_is_correction_type icepop \
    --train_max_tokens_per_gpu 32768 \
    --stop_properly_penalty_coef 0.0
 
@@ -84,10 +84,10 @@ python3 -m openrlhf.cli.train_ppo_ray \
 # REINFORCE++-baseline with batch advantage normalization:
 #   --advantage_estimator reinforce_baseline
 #
-# ICEPOP (Importance Sampling Correction):
+# TIS/ICEPOP/MIS (Importance Sampling Correction):
 #   --enable_vllm_is_correction: Enable vLLM importance sampling correction for off-policy rollouts
 #   --vllm_is_truncated_threshold 0.5 5.0: IS truncation interval [low, high]
-#   --use_icepop: Set IS coefficients outside [low, high] to 0 (instead of clamp)
+#   --vllm_is_correction_type icepop: Set IS coefficients outside [low, high] to 0 (instead of clamp)
 #
 # Length Penalty (Two options, can be used together):
 #
