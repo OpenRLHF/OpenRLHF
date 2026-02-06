@@ -253,8 +253,8 @@ if __name__ == "__main__":
         "--vllm_is_correction_type",
         type=str,
         default="tis",
-        choices=["tis", "icepop", "mis"],
-        help="vLLM IS correction type: tis (token-level clamp), icepop (token-level filter), mis (sequence-level geom mean)",
+        choices=["tis", "icepop", "seq-mask-tis"],
+        help="vLLM IS correction type: tis (token-level clamp), icepop (token-level filter), seq-mask-tis (sequence-level geom mean)",
     )
 
     # Async training using ray

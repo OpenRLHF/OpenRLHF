@@ -106,9 +106,9 @@ class PolicyLoss(nn.Module):
         if dual_clip is not None:
             assert dual_clip > 1.0, f"dual_clip must be > 1.0, got {dual_clip}"
 
-        if self.vllm_is_correction_type not in {"tis", "icepop", "mis"}:
+        if self.vllm_is_correction_type not in {"tis", "icepop", "seq-mask-tis"}:
             raise ValueError(
-                f"Invalid vllm_is_correction_type: {self.vllm_is_correction_type}, must be one of tis/icepop/mis"
+                f"Invalid vllm_is_correction_type: {self.vllm_is_correction_type}, must be one of tis/icepop/seq-mask-tis"
             )
 
     def forward(
@@ -158,8 +158,8 @@ class PolicyLoss(nn.Module):
                 mask = (vllm_is >= low_threshold) & (vllm_is <= high_threshold)
                 vllm_is = vllm_is * mask
                 loss = vllm_is * loss
-            elif self.vllm_is_correction_type == "mis":
-                # MIS: use sequence-level geometric mean only for filtering,
+            elif self.vllm_is_correction_type == "seq-mask-tis":
+                # seq-mask-tis: use sequence-level geometric mean only for filtering,
                 # correction coefficients still use TIS (token-level clamp)
                 seq_log_ratio = masked_mean(log_ratio, action_mask, dim=-1)
                 seq_is = torch.exp(seq_log_ratio)
