@@ -109,7 +109,7 @@ class ReferenceModelActor(BaseModelActor):
             pretrain,
             attn_implementation=strategy.args.attn_implementation,
             param_dtype=strategy.args.param_dtype,  # default: bf16
-            model_dtype="fp32",
+            model_dtype=strategy.args.param_dtype,
             load_in_4bit=strategy.args.load_in_4bit,
             packing_samples=strategy.args.packing_samples,
             temperature=strategy.args.temperature,
@@ -151,7 +151,7 @@ class RewardModelActor(BaseModelActor):
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
             param_dtype=strategy.args.param_dtype,  # default: bf16
-            model_dtype="fp32",
+            model_dtype=strategy.args.param_dtype,
             load_in_4bit=strategy.args.load_in_4bit,
             value_head_prefix=strategy.args.value_head_prefix,
             packing_samples=strategy.args.packing_samples,
