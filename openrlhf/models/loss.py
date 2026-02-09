@@ -143,7 +143,7 @@ class PolicyLoss(nn.Module):
             # CFPO: https://arxiv.org/abs/2601.22801
             # Loss = -(advantage * ratio - |advantage| * (ratio - 1)^2 / (2 * clip_eps))
             loss = -(advantages * ratio - torch.abs(advantages) * torch.pow(ratio - 1, 2) / (2 * self.clip_eps_low))
-            
+
         else:
             # Standard PPO clipping
             clip1 = torch.min(surr1, surr2)
