@@ -136,7 +136,7 @@ class PolicyLoss(nn.Module):
         surr1 = ratio * advantages
         surr2 = ratio.clamp(1 - self.clip_eps_low, 1 + self.clip_eps_high) * advantages
 
-        if self.dual_clip is None:
+        if self.dual_clip is None and self.policy_loss_type != "cfpo":
             # Standard PPO
             loss = -torch.min(surr1, surr2)
         elif self.policy_loss_type == "cfpo":
