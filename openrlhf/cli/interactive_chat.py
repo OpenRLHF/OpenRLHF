@@ -77,12 +77,12 @@ def generate(args):
 
         if args.apply_chat_template:
             generated_ids = outputs[0][:, input_ids.shape[1] :]
-            response = tokenizer.batch_decode(
+            response = tokenizer.decode(
                 generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
             )[0]
             conversations.append({"role": "assistant", "content": response})
         else:
-            user_prompt = tokenizer.batch_decode(outputs[0], skip_special_tokens=True)[0]
+            user_prompt = tokenizer.decode(outputs[0], skip_special_tokens=True)[0]
             response = user_prompt[user_prompt_len:]
 
         print(response)

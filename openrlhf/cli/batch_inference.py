@@ -170,7 +170,7 @@ def batch_generate(args):
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
             )
-            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            outputs = tokenizer.decode(outputs, skip_special_tokens=True)
             for prompt, output in zip(prompts, outputs):
                 output = output[len(prompt) :]
                 output_dataset.append({"input": prompt, "output": output})
