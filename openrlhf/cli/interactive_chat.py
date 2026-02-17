@@ -1,7 +1,10 @@
 import argparse
 import torch
+import transformers
 from openrlhf.models import Actor
 from openrlhf.utils import get_tokenizer
+
+_TRANSFORMERS_V5 = int(transformers.__version__.split(".")[0]) >= 5
 
 
 def generate(args):
@@ -77,10 +80,20 @@ def generate(args):
 
         if args.apply_chat_template:
             generated_ids = outputs[0][:, input_ids.shape[1] :]
-            response = tokenizer.decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True)[0]
+            if _TRANSFORMERS_V5:
+                response = tokenizer.decode(
+                    generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
+                )[0]
+            else:
+                response = tokenizer.batch_decode(
+                    generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
+                )[0]
             conversations.append({"role": "assistant", "content": response})
         else:
-            user_prompt = tokenizer.decode(outputs[0], skip_special_tokens=True)[0]
+            if _TRANSFORMERS_V5:
+                user_prompt = tokenizer.decode(outputs[0], skip_special_tokens=True)[0]
+            else:
+                user_prompt = tokenizer.batch_decode(outputs[0], skip_special_tokens=True)[0]
             response = user_prompt[user_prompt_len:]
 
         print(response)
