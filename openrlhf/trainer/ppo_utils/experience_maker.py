@@ -1,5 +1,6 @@
 import heapq
 import time
+from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, fields
 from datetime import timedelta
@@ -305,22 +306,64 @@ class SamplesGenerator:
     def _generate_vllm(
         self, dataloader_iter, num_prompts: int, dynamic_filtering, **generate_kwargs
     ) -> Tuple[List[Experience], int, bool]:
-        """Generate a batch of Experiences with optional reward filtering."""
+        """Generate a batch of Experiences with optional reward filtering.
+
+        Uses 3-stage deferred dispatch (50/25/25): stage 1 is sent immediately,
+        stages 2 and 3 are held back and dispatched when any engine's pending
+        count drops to <=1, so the heap-based balancer sees real load imbalance.
+        """
         prompts_consumed = 0
         prompts, labels, exhausted = _collect_prompt_batch(dataloader_iter, num_prompts)
         # Stop early if the prompt source is fully consumed.
         if exhausted:
             return [], prompts_consumed, exhausted
 
-        pending_refs = self._dispatch_prompts_to_vllm(prompts, labels, **generate_kwargs)
+        # Staged dispatch (50/25/25): send the first half immediately, hold the
+        # rest in a queue.  Each subsequent stage dispatches when an engine is
+        # nearly idle, so the heap-based balancer sees real load imbalance.
+        mid = max(1, len(prompts) // 2)
+        q3 = mid + max(1, (len(prompts) - mid) // 2)
+        staged_batches = [
+            (prompts[mid:q3], labels[mid:q3]),
+            (prompts[q3:], labels[q3:]),
+        ]
+        # Drop empty trailing stages (e.g. when batch is very small).
+        staged_batches = [(p, l) for p, l in staged_batches if p]
+
+        dispatches = self._dispatch_prompts_to_vllm(prompts[:mid], labels[:mid], **generate_kwargs)
+        pending_refs = [ref for ref, _ in dispatches]
+        ref_to_engine = {ref: engine_idx for ref, engine_idx in dispatches}
         prompts_consumed += len(prompts)
+
+        # Track how many outstanding requests each engine has.
+        engine_pending = defaultdict(int)
+        for _, engine_idx in dispatches:
+            engine_pending[engine_idx] += 1
 
         accepted_experiences: List[Experience] = []
         pbar = tqdm(range(num_prompts), desc="Generate samples")
+        filtered_count = 0
 
         while pending_refs:
             ready_refs, pending_refs = ray.wait(pending_refs, num_returns=1, timeout=10.0)
             for ref in ready_refs:
+                engine_idx = ref_to_engine.pop(ref)
+                engine_pending[engine_idx] -= 1
+
+                # Dispatch next staged batch when any engine is nearly idle,
+                # so new work is queued before the engine fully drains.
+                if staged_batches and engine_pending[engine_idx] <= 1:
+                    next_prompts, next_labels = staged_batches.pop(0)
+                    logger.info(
+                        f"Stage-{3 - len(staged_batches)} dispatch triggered: "
+                        f"engine {engine_idx} nearly idle, pending={dict(engine_pending)}"
+                    )
+                    next_dispatches = self._dispatch_prompts_to_vllm(next_prompts, next_labels, **generate_kwargs)
+                    for new_ref, new_engine_idx in next_dispatches:
+                        pending_refs.append(new_ref)
+                        ref_to_engine[new_ref] = new_engine_idx
+                        engine_pending[new_engine_idx] += 1
+
                 # Build Experience objects for each vLLM response returned from this worker.
                 experiences = [
                     self._process_response_into_experience(response, **generate_kwargs) for response in ray.get(ref)
@@ -332,9 +375,15 @@ class SamplesGenerator:
                     avg_reward = sum(scores) / len(scores)
                     min_r, max_r = self.args.dynamic_filtering_reward_range
                     if not (min_r < avg_reward < max_r):
-                        logger.info(
-                            f"Filtered out: avg_reward={avg_reward:.2f}, threshold=({min_r:.2f}, {max_r:.2f}), scores={[f'{s:.2f}' for s in scores]}"
-                        )
+                        filtered_count += 1
+                        if filtered_count <= 3 or filtered_count % 25 == 0:
+                            logger.info(
+                                "Dynamic filtering rejected group "
+                                f"(rejected={filtered_count}, accepted={len(accepted_experiences)}/{num_prompts}, "
+                                f"prompts_consumed={prompts_consumed}, "
+                                f"avg_reward={avg_reward:.2f}, threshold=({min_r:.2f}, {max_r:.2f}), "
+                                f"scores={[f'{s:.2f}' for s in scores]})"
+                            )
                         experiences = []
 
                 # Accept experiences and stop once enough have been gathered.
@@ -355,13 +404,16 @@ class SamplesGenerator:
                         return [], prompts_consumed, True
                     # Otherwise dispatch the new prompt to keep filling the queue.
                     else:
-                        new_refs = self._dispatch_prompts_to_vllm(new_prompts, new_labels, **generate_kwargs)
-                        pending_refs.extend(new_refs)
+                        new_dispatches = self._dispatch_prompts_to_vllm(new_prompts, new_labels, **generate_kwargs)
+                        for new_ref, new_engine_idx in new_dispatches:
+                            pending_refs.append(new_ref)
+                            ref_to_engine[new_ref] = new_engine_idx
+                            engine_pending[new_engine_idx] += 1
 
         return accepted_experiences, prompts_consumed, exhausted
 
-    def _dispatch_prompts_to_vllm(self, prompts: List[str], labels: List[str], **generate_kwargs) -> List:
-        """Send prompts to rollout executors and return Ray object refs."""
+    def _dispatch_prompts_to_vllm(self, prompts: List[str], labels: List[str], **generate_kwargs) -> List[Tuple]:
+        """Send prompts to rollout executors and return (ref, engine_idx) tuples."""
         sampling_params = SamplingParams(
             temperature=generate_kwargs.get("temperature", 1.0),
             top_p=generate_kwargs.get("top_p", 1.0),
@@ -372,6 +424,7 @@ class SamplesGenerator:
             logprobs=1 if self.args.enable_vllm_is_correction else None,
         )
         truncate_length = generate_kwargs.get("prompt_max_len", 1024) + generate_kwargs.get("max_new_tokens", 1024)
+        n_samples_per_prompt = generate_kwargs.get("n_samples_per_prompt", self.args.n_samples_per_prompt)
 
         # Snapshot current pending rollout counts to balance upcoming work.
         pending_counts = ray.get([engine.get_num_unfinished_requests.remote() for engine in self.vllm_engines])
@@ -383,21 +436,22 @@ class SamplesGenerator:
         for _ in prompts:
             current_load, engine_idx = heapq.heappop(engine_heap)
             engine_indices.append(engine_idx)
-            heapq.heappush(engine_heap, (current_load + self.args.n_samples_per_prompt, engine_idx))
+            heapq.heappush(engine_heap, (current_load + n_samples_per_prompt, engine_idx))
 
         refs = []
         for idx, (prompt, label) in enumerate(zip(prompts, labels)):
             # Spread work across engines/workers in load-aware order.
-            llm_engine = self.vllm_engines[engine_indices[idx]]
+            engine_idx = engine_indices[idx]
+            llm_engine = self.vllm_engines[engine_idx]
             ref = llm_engine.generate_responses.remote(
                 prompt=prompt,
                 label=label,
                 sampling_params=sampling_params,
                 max_length=truncate_length,
                 hf_tokenizer=self.tokenizer,
-                num_samples=self.args.n_samples_per_prompt,
+                num_samples=n_samples_per_prompt,
             )
-            refs.append(ref)
+            refs.append((ref, engine_idx))
 
         return refs
 
