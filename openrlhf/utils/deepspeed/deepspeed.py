@@ -237,13 +237,9 @@ class DeepspeedStrategy(ABC):
             # Without this, the old optimizer still pins the full (unsharded) tensors in GPU
             # memory, causing OOM when deepspeed.initialize() allocates gradient partitions.
             old_defaults = optim.defaults.copy()
-            del optim
             if scheduler is not None:
                 scheduler.optimizer = None
-            sharded_model = model.model if is_actor else model
-            AdamOptimizer = DeepSpeedCPUAdam if self.adam_offload else FusedAdam
-            optim_params = get_optimizer_grouped_parameters(sharded_model, old_defaults.get("weight_decay", 0.0))
-            optim = AdamOptimizer(optim_params, **old_defaults)
+            optim = self.create_optimizer(model, **old_defaults)
             if scheduler is not None:
                 scheduler.optimizer = optim
             gc.collect()
