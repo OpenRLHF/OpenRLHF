@@ -78,7 +78,7 @@ openrlhf.cli.train_sft \
    --train_batch_size 128 \
    --micro_train_batch_size 2 \
    --pretrain $POLICY_MODEL_PATH \
-   --save_path ./checkpoint/llama-3-8b-rejection \
+   --ckpt_save_path ./checkpoint/llama-3-8b-rejection \
    --input_template "" \
    --max_epochs 1 \
    --param_dtype bf16 \

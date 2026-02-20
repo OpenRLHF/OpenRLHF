@@ -47,19 +47,22 @@ class UnpairedPreferenceDataset(Dataset):
     ) -> None:
         super().__init__()
         self.tokenizer = tokenizer
-        self.strategy = strategy
         self.max_length = max_length
 
         # chat_template
         self.input_template = input_template
-        self.input_key = getattr(self.strategy.args, "input_key", None)
-        self.output_key = getattr(self.strategy.args, "output_key", None)
-        self.label_key = getattr(self.strategy.args, "label_key", None)
-        self.apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
+        args = strategy.args
+        # NOTE: Avoid storing `strategy` on the dataset instance.
+        # `datasets.Dataset.map(..., num_proc>1)` pickles bound methods and
+        # `strategy` contains non-pickleable distributed objects.
+        self.input_key = getattr(args, "input_key", None)
+        self.output_key = getattr(args, "output_key", None)
+        self.label_key = getattr(args, "label_key", None)
+        self.apply_chat_template = getattr(args, "apply_chat_template", False)
 
         if self.apply_chat_template:
             self.apply_chat_template = self.tokenizer.apply_chat_template
-            tokenizer_chat_template = getattr(self.strategy.args, "tokenizer_chat_template", None)
+            tokenizer_chat_template = getattr(args, "tokenizer_chat_template", None)
             if tokenizer_chat_template:
                 self.tokenizer.chat_template = tokenizer_chat_template
 

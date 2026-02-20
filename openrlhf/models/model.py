@@ -1,10 +1,9 @@
-from typing import Optional
+from typing import Literal, Optional
 
 import torch
 import torch.nn as nn
-from peft import LoraConfig, get_peft_model
-from peft.tuners.lora import LoraLayer
-from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
+from peft import LoraConfig, TaskType, get_peft_model
+from transformers import AutoConfig, AutoModel
 
 from openrlhf.utils.logging_utils import init_logger
 
@@ -19,9 +18,8 @@ def get_llm_for_sequence_regression(
     model_name_or_path: str,
     model_type: str,
     *,
-    param_dtype="bf16",
-    model_dtype: Optional[str] = None,
-    load_in_4bit=False,
+    torch_dtype: torch.dtype = torch.float32,
+    init_device: Literal["meta_structure"] = "meta_structure",
     lora_rank=0,
     lora_alpha=16,
     target_modules=None,
@@ -30,38 +28,24 @@ def get_llm_for_sequence_regression(
     attn_implementation="flash_attention_2",
     init_value_head=False,
     value_head_prefix="score",
-    device_map=None,
     packing_samples=False,
     **kwargs,
 ) -> nn.Module:
-    """Retrieve a transformer model with a sequence regression head on top.
+    """Build a sequence-regression model structure (meta-init only).
 
-    This function loads a pretrained transformer model and attaches a linear layer for sequence regression.
-
-    Args:
-        model_name_or_path (str): Path to the pretrained model.
-        model_type (str): Type of the model, either "reward" or "critic".
-        param_dtype (str, optional): Compute dtype hint ("bf16", "fp16"). Defaults to "bf16".
-        model_dtype (str, optional): Weight dtype to load in ("fp32", "bf16", "fp16").
-            If not set, defaults to param_dtype (backward compatible).
-        load_in_4bit (bool, optional): Load the model in 4-bit precision. Defaults to False.
-        lora_rank (int, optional): Rank for LoRA adaptation. Defaults to 0.
-        lora_alpha (int, optional): Alpha parameter for LoRA. Defaults to 16.
-        target_modules (list, optional): List of target modules for LoRA. Defaults to None.
-        lora_dropout (float, optional): Dropout rate for LoRA layers. Defaults to 0.
-        normalize_reward (bool, optional): Normalize reward values. Defaults to False.
-        use_flash_attention_2 (bool, optional): Use Flash Attention 2.0. Defaults to False.
-        init_value_head (bool, optional): Initialize the value head. Defaults to False.
-        value_head_prefix (str, optional): Prefix for the value head. Defaults to "score".
-        device_map (dict, optional): Map of devices for model loading. Defaults to None.
-        packing_samples (bool, optional): Whether to pack samples during training. Defaults to False.
-
-    Returns:
-        nn.Module: A pretrained transformer model with a sequence regression head.
+    Weight loading is intentionally separated from structure building and should
+    be handled by the checkpoint module (`openrlhf.utils.fsdp2.checkpoint`).
     """
-    assert (
-        model_type == "critic" or model_type == "reward"
-    ), f"invalid model_type: {model_type}, should be critic or reward."
+    if kwargs:
+        logger.debug(f"Ignored extra kwargs in get_llm_for_sequence_regression: {sorted(kwargs.keys())}")
+
+    if init_device != "meta_structure":
+        raise ValueError(
+            "get_llm_for_sequence_regression now only supports init_device='meta_structure'. "
+            "Use checkpoint.load_hf_weights or checkpoint.load_pretrained_weights_for_inference for weight loading."
+        )
+
+    assert model_type in ("critic", "reward"), f"invalid model_type: {model_type}, should be critic or reward."
 
     config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
     config.normalize_reward = normalize_reward
@@ -78,59 +62,11 @@ def get_llm_for_sequence_regression(
     else:
         cls_class = _get_critic_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
 
-    # Determine torch dtype to load weights in.
-    from openrlhf.utils.utils import convert_to_torch_dtype
+    config.torch_dtype = torch_dtype
 
-    # For FSDP2, keeping master weights in fp32 (model_dtype="fp32") aligns
-    # with Verl/NeMo RL: optimizer states follow param dtype (fp32), while
-    # FSDP2 MixedPrecisionPolicy controls compute dtype (e.g. bf16).
-    load_dtype = model_dtype or param_dtype
-    torch_dtype = convert_to_torch_dtype(load_dtype)
+    with torch.device("meta"):
+        model = cls_class(config)
 
-    if load_in_4bit:
-        assert param_dtype == "bf16", "we only support bnb_4bit_compute_dtype = bf16"
-        nf4_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-        )
-    else:
-        nf4_config = None
-
-    model = cls_class.from_pretrained(
-        model_name_or_path,
-        config=config,
-        trust_remote_code=True,
-        torch_dtype=torch_dtype,  # default: bf16
-        quantization_config=nf4_config,
-        device_map=device_map,
-        **kwargs,
-    )
-
-    # LoRA
-    if lora_rank > 0:
-        model.enable_input_require_grads()
-        lora_config = LoraConfig(
-            r=lora_rank,
-            lora_alpha=lora_alpha,
-            target_modules=target_modules,
-            lora_dropout=lora_dropout,
-            bias="none",
-        )
-        model = get_peft_model(model, lora_config)
-
-        if load_in_4bit:
-            for name, module in model.named_modules():
-                if isinstance(module, LoraLayer):
-                    module = module.to(torch.bfloat16)
-                if "norm" in name:
-                    module = module.to(torch.float32)
-                if value_head_prefix in name or "embed_tokens" in name:
-                    if hasattr(module, "weight"):
-                        module = module.to(torch.bfloat16)
-
-    # MoE - balancing loss
     model_config = model.config.to_dict()
     if "output_router_logits" in model_config:
         print("[MoE] set output_router_logits as True")
@@ -139,15 +75,22 @@ def get_llm_for_sequence_regression(
     # https://github.com/huggingface/transformers/issues/26877
     model.config.use_cache = False
 
-    # NOTE: For reward model training only, initialize value_head manually.
+    # For meta-init workflows, value_head must be initialized after materialization.
     if init_value_head:
-        value_head = getattr(model, value_head_prefix)
-        if torch.distributed.is_initialized():
-            if torch.distributed.get_rank() == 0:
-                value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
-            torch.distributed.broadcast(value_head.weight.data, src=0)
-        else:
-            value_head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
+        logger.debug("init_value_head is deferred to post-materialization stage")
+
+    if lora_rank > 0:
+        model.enable_input_require_grads()
+        lora_config = LoraConfig(
+            task_type=TaskType.SEQ_CLS,
+            r=lora_rank,
+            lora_alpha=lora_alpha,
+            target_modules=target_modules,
+            lora_dropout=lora_dropout,
+            bias="none",
+            modules_to_save=[value_head_prefix],
+        )
+        model = get_peft_model(model, lora_config)
 
     return model
 
@@ -172,8 +115,10 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
 
             # load mean/std from config.json
             if hasattr(config, "mean"):
-                self.mean[0] = config.mean
-                self.std[0] = config.std
+                if not getattr(self.mean, "is_meta", False):
+                    self.mean[0] = config.mean
+                if not getattr(self.std, "is_meta", False):
+                    self.std[0] = config.std
 
         def forward(
             self,
@@ -236,8 +181,10 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
 
             # load mean/std from config.json
             if hasattr(config, "mean"):
-                self.mean[0] = config.mean
-                self.std[0] = config.std
+                if not getattr(self.mean, "is_meta", False):
+                    self.mean[0] = config.mean
+                if not getattr(self.std, "is_meta", False):
+                    self.std[0] = config.std
 
         def forward(
             self,
@@ -284,7 +231,6 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
 
             if return_output:
                 return (action_values, outputs)
-            else:
-                return action_values
+            return action_values
 
     return CriticModel

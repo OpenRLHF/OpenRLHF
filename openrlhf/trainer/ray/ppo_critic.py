@@ -13,7 +13,7 @@ from transformers.trainer import get_scheduler
 from openrlhf.models import ValueLoss, get_llm_for_sequence_regression
 from openrlhf.models.utils import masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
-from openrlhf.utils import get_tokenizer
+from openrlhf.utils import convert_to_torch_dtype
 from openrlhf.utils.fsdp2 import FSDP2Strategy
 
 from ..ppo_utils import NaiveReplayBuffer
@@ -164,31 +164,21 @@ class CriticModelActor(BaseModelActor):
         self.disable_fsdp2_ckpt = args.disable_fsdp2_ckpt
 
         self._setup_distributed(strategy)
+        init_value_head = strategy.args.pretrain == strategy.args.critic_pretrain
         critic = get_llm_for_sequence_regression(
             pretrain,
             "critic",
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
-            param_dtype=strategy.args.param_dtype,  # default: bf16
-            model_dtype="fp32",
-            load_in_4bit=strategy.args.load_in_4bit,
-            lora_rank=strategy.args.lora_rank,
-            lora_alpha=strategy.args.lora_alpha,
-            target_modules=strategy.args.target_modules,
-            lora_dropout=strategy.args.lora_dropout,
+            torch_dtype=convert_to_torch_dtype("fp32"),
+            init_device="meta_structure",
             value_head_prefix=strategy.args.value_head_prefix,
-            init_value_head=strategy.args.pretrain == strategy.args.critic_pretrain,
+            init_value_head=init_value_head,
             packing_samples=strategy.args.packing_samples,
         )
         strategy.print(critic)
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
         strategy.print("mean: {}, std {}".format(critic.mean, critic.std))
-
-        # configure tokenizer
-        if strategy.args.save_value_network:
-            self.tokenizer = get_tokenizer(
-                pretrain, critic, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer
-            )
 
         if args.gradient_checkpointing:
             critic.gradient_checkpointing_enable(
@@ -197,6 +187,12 @@ class CriticModelActor(BaseModelActor):
 
         # Wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
         critic = strategy.prepare(critic)
+        strategy.load_pretrained(
+            critic,
+            pretrain,
+            init_value_head=init_value_head,
+            value_head_prefix=strategy.args.value_head_prefix,
+        )
 
         # configure optimizer (after model wrapping for FSDP2)
         critic_optim = strategy.create_optimizer(
@@ -217,10 +213,10 @@ class CriticModelActor(BaseModelActor):
         self.critic_scheduler = critic_scheduler
 
         # load checkpoint
-        if args.load_checkpoint and os.path.exists(os.path.join(args.ckpt_path, "_actor")):
-            ckpt_path = os.path.join(args.ckpt_path, "_critic")
+        if args.load_checkpoint and os.path.exists(os.path.join(args.dcp_ckpt_path, "_actor")):
+            ckpt_path = os.path.join(args.dcp_ckpt_path, "_critic")
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            strategy.load_ckpt(self.critic, ckpt_path, optimizer=self.critic_optim, scheduler=self.critic_scheduler)
+            strategy.load_dcp_model(self.critic, ckpt_path, optimizer=self.critic_optim, scheduler=self.critic_scheduler)
 
         # initial offload
         if strategy.args.fsdp2_enable_sleep:
@@ -271,22 +267,12 @@ class CriticModelActor(BaseModelActor):
         torch.cuda.synchronize()
         return status
 
-    def save_model(self):
-        args = self.strategy.args
-
-        # save model checkpoint after fitting on only rank0
-        self.strategy.save_model(
-            self.critic,
-            self.tokenizer,
-            args.save_path + "_critic",
-        )
-
     def save_checkpoint(self, tag):
         args = self.strategy.args
         if not self.disable_fsdp2_ckpt:
-            self.strategy.save_ckpt(
+            self.strategy.save_dcp_model(
                 self.critic,
-                os.path.join(args.ckpt_path, "_critic"),
+                os.path.join(args.dcp_ckpt_path, "_critic"),
                 tag,
                 args.max_ckpt_num,
                 args.max_ckpt_mem,

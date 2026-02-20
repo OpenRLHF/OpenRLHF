@@ -4,8 +4,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_model
-from peft.tuners.lora import LoraLayer
-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoConfig, AutoModelForCausalLM
 
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
 from .utils import compute_entropy, log_probs_from_logits
@@ -13,37 +12,50 @@ from .utils import compute_entropy, log_probs_from_logits
 
 class Actor(nn.Module):
     """
-    Base class for Actor models in reinforcement learning.
+    Actor model for reinforcement learning.
 
-    This class serves as a foundation for implementing various actor models, which are responsible for selecting actions based on the policy learned from the environment.
+    Builds an HF causal-LM on the ``meta`` device (no weight allocation) and
+    optionally applies LoRA adapters.  Weights are loaded later via
+    ``strategy.load_pretrained`` or ``load_hf_weights``.
+
+    When ``use_meta_init=False``, the model is loaded with real weights via
+    ``from_pretrained`` instead.  Combined with ``lora_path``, this allows
+    loading a trained LoRA adapter and merging it into the base model for
+    inference without a separate merge step.
 
     Args:
-        pretrain_or_model (nn.Module): A pretrained model or a new model instance to be used as the actor.
-        attn_implementation (str, optional): Attention mechanism implementation to use. Defaults to "flash_attention_2".
-        param_dtype (str, optional): Model data type ("bf16", "fp16"). Defaults to "bf16".
-        load_in_4bit (bool, optional): Load the model in 4-bit precision. Defaults to False.
-        lora_rank (int, optional): Rank for LoRA adaptation. Defaults to 0.
-        lora_alpha (int, optional): Alpha parameter for LoRA. Defaults to 16.
-        lora_dropout (float, optional): Dropout rate for LoRA layers. Defaults to 0.
-        target_modules (list, optional): List of target modules for applying LoRA. Defaults to None.
-        device_map (dict, optional): Device mapping for loading the model onto specific devices. Defaults to None.
-        packing_samples (bool, optional): Whether to pack samples during training. Defaults to False.
-        temperature (float, optional): Temperature for action selection. Defaults to 1.0.
-        use_liger_kernel (bool, optional): Whether to use Liger Kernel for the model. Defaults to False.
+        pretrain (str): HuggingFace model name or local path.
+        attn_implementation (str): Attention implementation. Defaults to ``"flash_attention_2"``.
+        torch_dtype (torch.dtype): Model dtype for meta-init.
+            Training models typically pass ``torch.float32`` (FSDP mixed-precision handles cast);
+            ref/inference models pass ``torch.bfloat16`` or ``torch.float16``.
+        use_meta_init (bool): If ``True`` (default), build model on meta device
+            (weights loaded later by strategy). If ``False``, load real weights
+            via ``from_pretrained``.
+        use_liger_kernel (bool): Use Liger Kernel optimised causal LM. Defaults to ``False``.
+        lora_rank (int): LoRA rank. 0 disables LoRA. Defaults to 0.
+        lora_alpha (int): LoRA alpha. Defaults to 16.
+        lora_dropout (float): LoRA dropout. Defaults to 0.
+        target_modules (list | None): LoRA target modules. Defaults to ``None``.
+        lora_path (str | None): Path to a trained LoRA adapter directory.
+            When set (requires ``use_meta_init=False``), the adapter is loaded
+            via ``PeftModel.from_pretrained`` and merged into the base model.
+        packing_samples (bool): Pack samples during training. Defaults to ``False``.
+        temperature (float): Temperature for log-prob computation. Defaults to 1.0.
     """
 
     def __init__(
         self,
-        pretrain_or_model,
+        pretrain: str,
+        *,
         attn_implementation="flash_attention_2",
-        param_dtype="bf16",
-        model_dtype: Optional[str] = None,
-        load_in_4bit=False,
+        torch_dtype: torch.dtype = torch.float32,
+        use_meta_init: bool = True,
         lora_rank=0,
         lora_alpha=16,
         lora_dropout=0,
         target_modules=None,
-        device_map=None,
+        lora_path=None,
         packing_samples=False,
         temperature=1.0,
         use_liger_kernel=False,
@@ -51,50 +63,35 @@ class Actor(nn.Module):
     ) -> None:
         super().__init__()
         self.temperature = temperature
+        self.packing_samples = packing_samples
 
-        if isinstance(pretrain_or_model, str):
-            # Support multiple attention mechanism implementations
-            attn_impl = attn_implementation
+        if use_meta_init:
+            # -- Build causal-LM structure on meta device (no weight allocation) --
+            cfg = AutoConfig.from_pretrained(pretrain, trust_remote_code=True)
+            cfg.use_cache = False
+            try:
+                cfg._attn_implementation = attn_implementation
+            except Exception:
+                setattr(cfg, "_attn_implementation", attn_implementation)
 
-            # Determine torch dtype based on param_dtype parameter, default: bf16
-            from openrlhf.utils.utils import convert_to_torch_dtype
+            with torch.device("meta"):
+                if use_liger_kernel:
+                    from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
-            # For FSDP2, keeping master weights in fp32 (model_dtype="fp32") aligns
-            # with Verl/NeMo RL: optimizer states follow param dtype (fp32), while
-            # FSDP2 MixedPrecisionPolicy controls compute dtype (e.g. bf16).
-            load_dtype = model_dtype or param_dtype
-            torch_dtype = convert_to_torch_dtype(load_dtype)
+                    model = AutoLigerKernelForCausalLM.from_config(
+                        cfg, dtype=torch_dtype, trust_remote_code=True
+                    )
+                else:
+                    model = AutoModelForCausalLM.from_config(
+                        cfg, dtype=torch_dtype, trust_remote_code=True
+                    )
 
-            if load_in_4bit:
-                assert param_dtype == "bf16", "we only support bnb_4bit_compute_dtype = bf16"
-                nf4_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_quant_type="nf4",
-                    bnb_4bit_use_double_quant=True,
-                    bnb_4bit_compute_dtype=torch.bfloat16,
-                )
-            else:
-                nf4_config = None
+            self.model = model
+            if hasattr(self.model, "config") and hasattr(self.model.config, "use_cache"):
+                self.model.config.use_cache = False
 
-            if use_liger_kernel:
-                from liger_kernel.transformers import AutoLigerKernelForCausalLM
-
-                model_class = AutoLigerKernelForCausalLM
-            else:
-                model_class = AutoModelForCausalLM
-
-            self.model = model_class.from_pretrained(
-                pretrain_or_model,
-                trust_remote_code=True,
-                attn_implementation=attn_impl,
-                quantization_config=nf4_config,
-                torch_dtype=torch_dtype,  # default: bf16
-                device_map=device_map,
-            )
-
-            # LoRA
+            # LoRA (meta-init compatible): apply adapters before TP/FSDP wrapping.
             if lora_rank > 0:
-                # https://github.com/huggingface/peft/issues/137
                 self.model.enable_input_require_grads()
                 lora_config = LoraConfig(
                     task_type=TaskType.CAUSAL_LM,
@@ -105,37 +102,27 @@ class Actor(nn.Module):
                     bias="none",
                 )
                 self.model = get_peft_model(self.model, lora_config)
-
-                if load_in_4bit:
-                    for name, module in self.model.named_modules():
-                        if isinstance(module, LoraLayer):
-                            module = module.to(torch.bfloat16)
-                        if "norm" in name:
-                            module = module.to(torch.float32)
-                        if "lm_head" in name or "embed_tokens" in name:
-                            if hasattr(module, "weight"):
-                                module = module.to(torch.bfloat16)
-
-            # MoE - balancing loss
-            model_config = self.model.config.to_dict()
-            if "output_router_logits" in model_config:
-                print("[MoE] set output_router_logits as True")
-                self.model.config.output_router_logits = True
-
-            # https://github.com/huggingface/transformers/issues/26877
-            # Use `model.generate(use_cache=True)` instead.`
-            self.model.config.use_cache = False
-
-            # packing samples using Flash Attention 2
-            self.packing_samples = packing_samples
         else:
-            self.model = pretrain_or_model
-            # Keep behavior consistent with the from_pretrained() branch.
-            # - packing_samples is required for Ring Attention (CP) token slicing.
-            # - use_cache should be disabled for training (HF recommends generate(use_cache=True) instead).
-            self.packing_samples = packing_samples
-            if hasattr(self.model, "config") and hasattr(self.model.config, "use_cache"):
-                self.model.config.use_cache = False
+            # -- Non meta-init: load real weights via from_pretrained --
+            from peft import PeftModel
+
+            model = AutoModelForCausalLM.from_pretrained(
+                pretrain,
+                dtype=torch_dtype,
+                attn_implementation=attn_implementation,
+                trust_remote_code=True,
+            )
+            if lora_path:
+                model = PeftModel.from_pretrained(model, lora_path, dtype=torch_dtype)
+                model = model.merge_and_unload()
+
+            self.model = model
+
+        # MoE - balancing loss
+        model_config = self.model.config.to_dict()
+        if "output_router_logits" in model_config:
+            print("[MoE] set output_router_logits as True")
+            self.model.config.output_router_logits = True
 
     def forward(
         self,
@@ -195,6 +182,9 @@ class Actor(nn.Module):
         action_log_probs = log_probs[:, -action_mask.shape[1] :] * action_mask.float()
 
         return (action_log_probs, output) if return_output else action_log_probs
+
+    def generate(self, *args, **kwargs):
+        return self.model.generate(*args, **kwargs)
 
     def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs={"use_reentrant": False}):
         self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)
