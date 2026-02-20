@@ -1,4 +1,5 @@
 import argparse
+import os
 from datetime import datetime
 
 import ray
@@ -177,9 +178,6 @@ def train(args):
     # save model
     ray.get(actor_model.async_save_model())
 
-    if args.critic_pretrain and args.save_value_network and critic_model is not None:
-        ray.get(critic_model.async_save_model())
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -265,7 +263,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_steps", type=int, default=-1)
     parser.add_argument("--save_steps", type=int, default=-1)
     parser.add_argument("--logging_steps", type=int, default=1)
-    parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_ppo_ray")
+    parser.add_argument("--ckpt_save_path", type=str, default="./ckpt")
     parser.add_argument("--save_hf_ckpt", action="store_true", default=False)
     parser.add_argument("--disable_fsdp2_ckpt", action="store_true", default=False)
     parser.add_argument("--max_ckpt_num", type=int, default=3)
@@ -327,6 +325,14 @@ if __name__ == "__main__":
         help="Shard lm_head logits on vocab dim (FSDP2+TP).",
     )
 
+    # HF safetensors sharded export (DCP writer)
+    parser.add_argument(
+        "--hf_max_shard_size_gb",
+        type=float,
+        default=5,
+        help="Max shard size (GB) when saving HF safetensors via DCP.",
+    )
+
     # packing samples using Flash Attention2
     parser.add_argument("--packing_samples", action="store_true", default=False)
 
@@ -336,14 +342,12 @@ if __name__ == "__main__":
     parser.add_argument("--train_max_tokens_per_gpu", type=int, default=16192)
 
     # LoRA
-    parser.add_argument("--load_in_4bit", action="store_true", default=False)
     parser.add_argument("--lora_rank", type=int, default=0)
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")
     parser.add_argument("--lora_dropout", type=float, default=0)
 
     # PPO
-    parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--num_episodes", type=int, default=1)
     parser.add_argument("--rollout_batch_size", type=int, default=1024, help="Batch size for make experience")
     parser.add_argument(

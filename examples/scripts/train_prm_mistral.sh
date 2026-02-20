@@ -2,7 +2,7 @@ set -x
 
 read -r -d '' training_commands <<EOF
 openrlhf.cli.train_prm \
-   --save_path ./checkpoint/mistal-7b-prm \
+   --ckpt_save_path ./checkpoint/mistal-7b-prm \
    --save_steps 500 \
    --logging_steps 1 \
    --eval_steps 100 \

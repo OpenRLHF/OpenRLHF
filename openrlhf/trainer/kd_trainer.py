@@ -138,7 +138,8 @@ class KDTrainer(ABC):
                     allgather_logits=True,
                     ring_attn_group=self.strategy.ring_attn_group,
                 )
-                prompts_id_len = (loss_masks != 0).int().argmax(dim=-1).squeeze(-1)
+                # Keep batch dimension even when batch_size == 1.
+                prompts_id_len = (loss_masks != 0).int().argmax(dim=-1).view(-1)
 
                 # loss function
                 labels = torch.where(
@@ -218,9 +219,9 @@ class KDTrainer(ABC):
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
             if not self.disable_fsdp2_ckpt:
-                self.strategy.save_ckpt(
+                self.strategy.save_dcp_model(
                     self.model.model,
-                    args.ckpt_path,
+                    args.dcp_ckpt_path,
                     tag,
                     args.max_ckpt_num,
                     args.max_ckpt_mem,
@@ -229,8 +230,9 @@ class KDTrainer(ABC):
                     scheduler=self.scheduler,
                 )
             if self.save_hf_ckpt:
-                save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
-                self.strategy.save_model(self.model, self.tokenizer, save_path)
+                self.strategy.save_hf_ckpt_with_rotation(
+                    self.model, self.tokenizer, args.hf_ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem
+                )
 
     def evaluate(self, eval_dataloader, steps=0):
         times = 0
@@ -253,7 +255,8 @@ class KDTrainer(ABC):
                     allgather_logits=True,
                     ring_attn_group=self.strategy.ring_attn_group,
                 )["logits"]
-                prompts_id_len = (loss_masks != 0).int().argmax(dim=-1).squeeze(-1)
+                # Keep batch dimension even when batch_size == 1.
+                prompts_id_len = (loss_masks != 0).int().argmax(dim=-1).view(-1)
 
                 labels = torch.where(
                     attention_mask.bool(),

@@ -5,13 +5,14 @@ from datetime import timedelta
 import jsonlines
 import torch
 from torch import distributed as dist
+from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.datasets.utils import blending_datasets
 from openrlhf.models import Actor, get_llm_for_sequence_regression
-from openrlhf.utils import get_processor, get_strategy, get_tokenizer
+from openrlhf.utils import convert_to_torch_dtype, get_processor, get_strategy, get_tokenizer
 
 
 def batch_generate_vllm(args):
@@ -94,19 +95,18 @@ def batch_generate(args):
     strategy = get_strategy(args)
     strategy.setup_distributed(timeout=timedelta(minutes=720))
 
-    # configure model
+    # configure model (non meta-init: real weights loaded by from_pretrained)
     model = Actor(
         args.pretrain,
+        use_meta_init=False,
+        lora_path=getattr(args, "lora_path", None),
         attn_implementation=args.attn_implementation,
-        param_dtype=args.param_dtype,  # default: bf16
+        torch_dtype=convert_to_torch_dtype(args.param_dtype),
     )
+    model.model.eval()
 
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
-
-    # prepare models
-    model = strategy.prepare(model)
-    model.eval()
 
     # tokenizer
     def tokenize_fn(texts):
@@ -136,8 +136,18 @@ def batch_generate(args):
         prompts_data = prompts_data.select(range(start_idx, min(end_idx, len(prompts_data))))
 
     prompts_dataset = PromptDataset(prompts_data, tokenizer, strategy, input_template=args.input_template)
+    sampler = None
+    if dist.is_initialized():
+        sampler = DistributedSampler(
+            prompts_dataset,
+            num_replicas=dist.get_world_size(),
+            rank=dist.get_rank(),
+            shuffle=True,
+            seed=strategy.seed,
+            drop_last=False,
+        )
     prompts_dataloader = strategy.setup_dataloader(
-        prompts_dataset, args.micro_batch_size, True, False, drop_last=False
+        prompts_dataset, args.micro_batch_size, True, False, drop_last=False, sampler=sampler
     )
     pbar = tqdm(
         prompts_dataloader,
@@ -210,7 +220,7 @@ def batch_rm_inference(args):
         "reward",
         normalize_reward=True,
         attn_implementation=args.attn_implementation,
-        param_dtype=args.param_dtype,  # default: bf16
+        torch_dtype=convert_to_torch_dtype(args.param_dtype),
         value_head_prefix=args.value_head_prefix,
     )
 
@@ -219,6 +229,12 @@ def batch_rm_inference(args):
 
     # prepare models
     model = strategy.prepare(model)
+    strategy.load_pretrained(
+        model,
+        args.pretrain,
+        init_value_head=False,
+        value_head_prefix=args.value_head_prefix,
+    )
     model.eval()
 
     dataset = blending_datasets(
@@ -232,8 +248,35 @@ def batch_rm_inference(args):
     dataset = SFTDataset(
         dataset, tokenizer, args.max_len, strategy, pretrain_mode=False, input_template=args.input_template
     )
+
+    # Wrap SFTDataset to carry original indices through DataLoader so that
+    # shuffled batches can be mapped back to (prompt, response) text pairs.
+    class _IndexedDataset(torch.utils.data.Dataset):
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __len__(self):
+            return len(self._inner)
+
+        def __getitem__(self, idx):
+            input_ids, attention_mask, loss_mask = self._inner[idx]
+            return idx, input_ids, attention_mask, loss_mask
+
+    indexed_dataset = _IndexedDataset(dataset)
+
+    def collate_fn(item_list):
+        indices = torch.tensor([item[0] for item in item_list], dtype=torch.long)
+        base_items = [(item[1], item[2], item[3]) for item in item_list]
+        input_ids, attention_masks, loss_masks = dataset.collate_fn(base_items)
+        return indices, input_ids, attention_masks, loss_masks
+
     dataloader = strategy.setup_dataloader(
-        dataset, args.micro_batch_size, True, False, dataset.collate_fn, drop_last=False
+        indexed_dataset,
+        args.micro_batch_size,
+        True,
+        False,
+        collate_fn,
+        drop_last=False,
     )
     pbar = tqdm(
         dataloader,
@@ -245,12 +288,18 @@ def batch_rm_inference(args):
 
     output_dataset = []
     with torch.no_grad():
-        for _, input_ids, attention_masks, info in pbar:
+        for indices, input_ids, attention_masks, _loss_masks in pbar:
             input_ids = input_ids.squeeze(1).to(torch.cuda.current_device())
             attention_masks = attention_masks.squeeze(1).to(torch.cuda.current_device())
             rewards = model(input_ids, attention_masks)
-            for prompt, output, reward in zip(info["input"], info["output"], rewards):
-                output_dataset.append({"input": prompt, "output": output, "reward": reward.item()})
+            for idx, reward in zip(indices.tolist(), rewards):
+                output_dataset.append(
+                    {
+                        "input": dataset.prompts[idx],
+                        "output": dataset.responses[idx],
+                        "reward": reward.item(),
+                    }
+                )
 
             dist.barrier()
 
@@ -316,6 +365,7 @@ if __name__ == "__main__":
         default=False,
         help="Shard lm_head logits on vocab dim (FSDP2+TP).",
     )
+
     parser.add_argument(
         "--param_dtype",
         type=str,
@@ -344,6 +394,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--value_head_prefix", type=str, default="value_head", help="value_head prefix for Reward Model"
     )
+
+    # LoRA
+    parser.add_argument("--lora_path", type=str, default=None, help="Path to a trained LoRA adapter to load and merge")
 
     # Custom dataset
     parser.add_argument("--dataset", type=str, default=None)

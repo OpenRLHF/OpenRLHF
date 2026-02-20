@@ -224,9 +224,9 @@ class RewardModelTrainer(ABC):
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
             if not self.disable_fsdp2_ckpt:
-                self.strategy.save_ckpt(
+                self.strategy.save_dcp_model(
                     self.model,
-                    args.ckpt_path,
+                    args.dcp_ckpt_path,
                     tag,
                     args.max_ckpt_num,
                     args.max_ckpt_mem,
@@ -235,8 +235,9 @@ class RewardModelTrainer(ABC):
                     scheduler=self.scheduler,
                 )
             if self.save_hf_ckpt:
-                save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
-                self.strategy.save_model(self.model, self.tokenizer, save_path)
+                self.strategy.save_hf_ckpt_with_rotation(
+                    self.model, self.tokenizer, args.hf_ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem
+                )
 
     def evaluate(self, eval_dataloader, steps=0):
         step_bar = tqdm(

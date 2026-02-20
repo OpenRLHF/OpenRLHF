@@ -2,7 +2,7 @@ set -x
 
 read -r -d '' training_commands <<EOF
 openrlhf.cli.train_kto \
-   --save_path ./checkpoint/llama3-8b-kto \
+   --ckpt_save_path ./checkpoint/llama3-8b-kto \
    --save_steps -1 \
    --logging_steps 1 \
    --eval_steps -1 \

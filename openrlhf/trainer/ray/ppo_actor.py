@@ -16,9 +16,10 @@ from transformers.trainer import get_scheduler
 from openrlhf.models import Actor, PolicyLoss
 from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
-from openrlhf.utils import get_tokenizer
+from openrlhf.utils import convert_to_torch_dtype, get_tokenizer
 from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.fsdp2 import FSDP2Strategy
+from openrlhf.utils.fsdp2.utils import moving_average_fsdp2
 from openrlhf.utils.logging_utils import init_logger
 
 from ..ppo_utils import NaiveReplayBuffer
@@ -413,16 +414,14 @@ class PolicyModelActor(BaseModelActor):
         actor = Actor(
             pretrain,
             attn_implementation=strategy.args.attn_implementation,
-            param_dtype=strategy.args.param_dtype,  # default: bf16
-            model_dtype="fp32",
-            load_in_4bit=strategy.args.load_in_4bit,
+            torch_dtype=convert_to_torch_dtype("fp32"),
+            use_liger_kernel=strategy.args.use_liger_kernel,
             lora_rank=strategy.args.lora_rank,
             lora_alpha=strategy.args.lora_alpha,
             target_modules=strategy.args.target_modules,
             lora_dropout=strategy.args.lora_dropout,
             packing_samples=strategy.args.packing_samples,
             temperature=strategy.args.temperature,
-            use_liger_kernel=strategy.args.use_liger_kernel,
         )
         strategy.print(actor)
 
@@ -435,9 +434,8 @@ class PolicyModelActor(BaseModelActor):
             ema_model = Actor(
                 pretrain,
                 attn_implementation=strategy.args.attn_implementation,
-                param_dtype=strategy.args.param_dtype,  # default: bf16
-                model_dtype="fp32",
-                load_in_4bit=strategy.args.load_in_4bit,
+                torch_dtype=convert_to_torch_dtype("fp32"),
+                use_liger_kernel=strategy.args.use_liger_kernel,
                 packing_samples=strategy.args.packing_samples,
             )
         else:
@@ -452,6 +450,13 @@ class PolicyModelActor(BaseModelActor):
         actor = strategy.prepare(actor)
         if ema_model:
             ema_model = strategy.prepare(ema_model, cpu_offload=True)
+
+        strategy.load_pretrained(actor, pretrain)
+
+        # Materialize EMA storage and initialize from actor weights (avoid double IO).
+        if ema_model is not None:
+            strategy._unwrap_model(ema_model).to_empty(device="cpu")
+            moving_average_fsdp2(actor, ema_model, strategy._unwrap_model, beta=0.0)
 
         # configure optimizer (after model wrapping for FSDP2)
         actor_optim = strategy.create_optimizer(
@@ -473,20 +478,20 @@ class PolicyModelActor(BaseModelActor):
 
         # load checkpoint
         self.checkpoint_states = {}
-        ckpt_path = os.path.join(args.ckpt_path, "_actor")
+        ckpt_path = os.path.join(args.dcp_ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            ckpt_id, states = strategy.load_ckpt(
+            ckpt_id, states = strategy.load_dcp_model(
                 self.actor.model, ckpt_path, optimizer=self.actor_optim, scheduler=self.actor_scheduler
             )
             self.checkpoint_states = states
             if args.enable_ema and self.ema_model is not None:
-                ema_ckpt_path = os.path.join(args.ckpt_path, "_ema")
+                ema_ckpt_path = os.path.join(args.dcp_ckpt_path, "_ema")
                 if os.path.exists(ema_ckpt_path):
                     try:
                         ema_tag = os.path.basename(str(ckpt_id))
                         strategy.print(f"Loading EMA checkpoint: {ema_ckpt_path} (tag={ema_tag})")
-                        strategy.load_ckpt(
+                        strategy.load_dcp_model(
                             self.ema_model.model,
                             ema_ckpt_path,
                             tag=ema_tag,
@@ -529,10 +534,10 @@ class PolicyModelActor(BaseModelActor):
         args = self.strategy.args
 
         # save model checkpoint after fitting on only rank0
-        self.strategy.save_model(
+        self.strategy.save_hf_model(
             self.ema_model if args.enable_ema else self.actor,
             self.tokenizer,
-            args.save_path,
+            args.last_hf_ckpt_path,
         )
 
     def forward(
@@ -583,9 +588,9 @@ class PolicyModelActor(BaseModelActor):
     def save_checkpoint(self, tag, client_states):
         args = self.strategy.args
         if not self.disable_fsdp2_ckpt:
-            self.strategy.save_ckpt(
+            self.strategy.save_dcp_model(
                 self.actor.model,
-                os.path.join(args.ckpt_path, "_actor"),
+                os.path.join(args.dcp_ckpt_path, "_actor"),
                 tag,
                 args.max_ckpt_num,
                 args.max_ckpt_mem,
@@ -594,9 +599,9 @@ class PolicyModelActor(BaseModelActor):
                 scheduler=self.actor_scheduler,
             )
             if args.enable_ema and self.ema_model is not None:
-                self.strategy.save_ckpt(
+                self.strategy.save_dcp_model(
                     self.ema_model.model,
-                    os.path.join(args.ckpt_path, "_ema"),
+                    os.path.join(args.dcp_ckpt_path, "_ema"),
                     tag,
                     args.max_ckpt_num,
                     args.max_ckpt_mem,
@@ -604,11 +609,13 @@ class PolicyModelActor(BaseModelActor):
                     save_latest=True,
                 )
         if self.save_hf_ckpt:
-            save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
-            self.strategy.save_model(
+            self.strategy.save_hf_ckpt_with_rotation(
                 self.ema_model if args.enable_ema else self.actor,
                 self.tokenizer,
-                save_path,
+                args.hf_ckpt_path,
+                tag,
+                args.max_ckpt_num,
+                args.max_ckpt_mem,
             )
         # wait
         torch_dist_barrier_and_cuda_sync()

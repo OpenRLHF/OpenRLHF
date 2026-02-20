@@ -47,7 +47,7 @@ class GPTLMLoss(nn.Module):
             log_probs = log_probs_from_logits(shift_logits, shift_labels)
             mask = shift_labels != self.IGNORE_INDEX
             return -(log_probs * mask).sum() / mask.sum()
-        return self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+        return self.loss(shift_logits.float().view(-1, shift_logits.size(-1)), shift_labels.view(-1))
 
 
 class SFTLoss(nn.Module):
@@ -442,7 +442,7 @@ class PRMLoss(nn.Module):
             logits = logits[placeholder_mask].squeeze(1)
             labels = labels_ph
 
-        loss = self.loss(logits, labels)
+        loss = self.loss(logits.float(), labels)
         if not return_acc:
             return loss
 

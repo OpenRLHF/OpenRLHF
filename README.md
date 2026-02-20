@@ -259,7 +259,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 - Multi-node training with [SLURM](./examples/scripts/train_ppo_ray_slurm.sh)
 
 **Model Support**
-- [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh) (`--lora_rank`, `--load_in_4bit`)
+- [LoRA](./examples/scripts/train_sft_mixtral_lora.sh) (`--lora_rank`)
 - [Mixture of Experts (MoE)](./examples/test_scripts/train_sft_moe.sh) (`--aux_loss_coef`)
 - FlashAttention (`--attn_implementation`)
 - HuggingFace chat templates (`--apply_chat_template`)
@@ -686,6 +686,24 @@ python -m openrlhf.cli.lora_combiner \
     --output_path ./checkpoint/llama-3-8b-rm-combined \
     --is_rm \
     --param_dtype bf16
+```
+
+Alternatively, you can load a LoRA adapter directly for inference without a separate merge step by passing `--lora_path` to the inference scripts:
+
+```bash
+# Batch inference with LoRA
+python -m openrlhf.cli.batch_inference \
+    --eval_task generate \
+    --pretrain meta-llama/Meta-Llama-3-8B \
+    --lora_path ./checkpoint/llama3-8b-sft-lora \
+    --output_path ./output.jsonl \
+    --dataset your_dataset \
+    --max_new_tokens 2048
+
+# Interactive chat with LoRA
+python -m openrlhf.cli.interactive_chat \
+    --pretrain meta-llama/Meta-Llama-3-8B \
+    --lora_path ./checkpoint/llama3-8b-sft-lora
 ```
 
 ### Performance Tuning Guide

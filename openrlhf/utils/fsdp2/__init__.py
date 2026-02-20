@@ -14,10 +14,10 @@ Structure:
 
 # Checkpointing
 from .checkpoint import (
-    load_distributed_checkpoint,
-    load_hf_model,
-    save_distributed_checkpoint,
-    save_hf_model,
+    load_hf_weights,
+    save_hf_checkpoint,
+    load_dcp_checkpoint,
+    save_dcp_checkpoint,
 )
 
 # Core
@@ -45,10 +45,10 @@ __all__ = [
     "get_tp_plan",
     "validate_tp_mesh",
     # Checkpointing
-    "load_distributed_checkpoint",
-    "load_hf_model",
-    "save_distributed_checkpoint",
-    "save_hf_model",
+    "load_hf_weights",
+    "save_hf_checkpoint",
+    "load_dcp_checkpoint",
+    "save_dcp_checkpoint",
     # Utilities
     "get_checkpoint_metadata",
     "move_optimizer_state",

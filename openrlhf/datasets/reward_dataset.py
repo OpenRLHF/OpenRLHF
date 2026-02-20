@@ -68,19 +68,23 @@ class RewardDataset(Dataset):
         super().__init__()
         self.is_dpo = is_dpo
         self.tokenizer = tokenizer
-        self.strategy = strategy
         self.max_length = max_length
 
         # chat_template
         self.input_template = input_template
-        self.prompt_key = getattr(self.strategy.args, "prompt_key", None)
-        self.chosen_key = getattr(self.strategy.args, "chosen_key", None)
-        self.rejected_key = getattr(self.strategy.args, "rejected_key", None)
-        self.apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
+        args = strategy.args
+        # NOTE: Do not store `strategy` on the dataset instance.
+        # `datasets.Dataset.map(..., num_proc>1)` pickles the bound method
+        # `self.process_data`, and `strategy` contains non-pickleable objects
+        # (e.g., ProcessGroup), causing multi-proc map failures.
+        self.prompt_key = getattr(args, "prompt_key", None)
+        self.chosen_key = getattr(args, "chosen_key", None)
+        self.rejected_key = getattr(args, "rejected_key", None)
+        self.apply_chat_template = getattr(args, "apply_chat_template", False)
 
         if self.apply_chat_template:
             self.apply_chat_template = self.tokenizer.apply_chat_template
-            tokenizer_chat_template = getattr(self.strategy.args, "tokenizer_chat_template", None)
+            tokenizer_chat_template = getattr(args, "tokenizer_chat_template", None)
             if tokenizer_chat_template:
                 self.tokenizer.chat_template = tokenizer_chat_template
 

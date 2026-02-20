@@ -15,8 +15,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --vllm_gpu_memory_utilization 0.5 \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
    --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \
-   --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
-   --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
+   --ckpt_save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
    --save_hf_ckpt \
    --train_batch_size 128 \
    --rollout_batch_size 1024 \

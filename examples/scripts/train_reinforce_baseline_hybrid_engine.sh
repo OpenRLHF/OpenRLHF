@@ -22,8 +22,7 @@ CKPT_ARGS=(
    # --reward_pretrain ${REWARD_MODEL}
    --load_checkpoint
 
-   --save_path ${SAVE_PATH}
-   --ckpt_path "${SAVE_PATH}/ckpt"
+   --ckpt_save_path ${SAVE_PATH}
    --save_hf_ckpt
    --max_ckpt_num 3
    --save_steps 10

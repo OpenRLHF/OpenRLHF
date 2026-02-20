@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
+from openrlhf.utils import convert_to_torch_dtype
 from openrlhf.utils.fsdp2 import FSDP2Strategy
 
 
@@ -108,17 +109,23 @@ class ReferenceModelActor(BaseModelActor):
         model = Actor(
             pretrain,
             attn_implementation=strategy.args.attn_implementation,
-            param_dtype=strategy.args.param_dtype,  # default: bf16
-            model_dtype=strategy.args.param_dtype,
-            load_in_4bit=strategy.args.load_in_4bit,
+            torch_dtype=convert_to_torch_dtype(strategy.args.param_dtype),
+            use_liger_kernel=strategy.args.use_liger_kernel,
             packing_samples=strategy.args.packing_samples,
             temperature=strategy.args.temperature,
-            use_liger_kernel=strategy.args.use_liger_kernel,
         )
         strategy.print(model)
 
         # Reference model is inference-only; cpu_offload controls FSDP2 CPUOffloadPolicy.
-        self.model = self.strategy.prepare(model, cpu_offload=strategy.args.ref_reward_offload)
+        self.model = self.strategy.prepare(
+            model,
+            cpu_offload=strategy.args.ref_reward_offload,
+        )
+        self.strategy.load_pretrained(
+            self.model,
+            pretrain,
+            force_cpu_offload=strategy.args.ref_reward_offload,
+        )
         self.model.eval()
 
     def forward(
@@ -150,18 +157,27 @@ class RewardModelActor(BaseModelActor):
             "reward",
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
-            param_dtype=strategy.args.param_dtype,  # default: bf16
-            model_dtype=strategy.args.param_dtype,
-            load_in_4bit=strategy.args.load_in_4bit,
+            torch_dtype=convert_to_torch_dtype(strategy.args.param_dtype),
+            init_device="meta_structure",
             value_head_prefix=strategy.args.value_head_prefix,
             packing_samples=strategy.args.packing_samples,
         )
         strategy.print(model)
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
-        strategy.print("mean: {}, std {}".format(model.mean, model.std))
 
         # Reward model is inference-only; cpu_offload controls FSDP2 CPUOffloadPolicy.
-        self.model = self.strategy.prepare(model, cpu_offload=strategy.args.ref_reward_offload)
+        self.model = self.strategy.prepare(
+            model,
+            cpu_offload=strategy.args.ref_reward_offload,
+        )
+        self.strategy.load_pretrained(
+            self.model,
+            pretrain,
+            force_cpu_offload=strategy.args.ref_reward_offload,
+            init_value_head=False,
+            value_head_prefix=strategy.args.value_head_prefix,
+        )
+        strategy.print("mean: {}, std {}".format(getattr(self.model, "mean", None), getattr(self.model, "std", None)))
         self.model.eval()
 
     def forward(

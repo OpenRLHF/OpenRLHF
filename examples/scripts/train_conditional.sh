@@ -34,7 +34,7 @@ openrlhf.cli.train_sft \
     --train_batch_size 128 \
     --micro_train_batch_size 2 \
     --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-    --save_path ./checkpoint/llama-3-8b-csft \
+    --ckpt_save_path ./checkpoint/llama-3-8b-csft \
     --max_epochs 1 \
     --param_dtype bf16 \
     --learning_rate 5e-6 \

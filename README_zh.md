@@ -260,7 +260,7 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 - 使用 [SLURM](./examples/scripts/train_ppo_ray_slurm.sh) 的多节点训练
 
 **模型支持**
-- [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--lora_rank`、`--load_in_4bit`）
+- [LoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--lora_rank`）
 - [专家混合（MoE）](./examples/test_scripts/train_sft_moe.sh)（`--aux_loss_coef`）
 - FlashAttention（`--attn_implementation`）
 - HuggingFace 聊天模板（`--apply_chat_template`）
@@ -685,6 +685,24 @@ python -m openrlhf.cli.lora_combiner \
     --output_path ./checkpoint/llama-3-8b-rm-combined \
     --is_rm \
     --param_dtype bf16
+```
+
+或者，您可以通过 `--lora_path` 直接在推理时加载 LoRA 适配器，无需单独的合并步骤：
+
+```bash
+# 批量推理
+python -m openrlhf.cli.batch_inference \
+    --eval_task generate \
+    --pretrain meta-llama/Meta-Llama-3-8B \
+    --lora_path ./checkpoint/llama3-8b-sft-lora \
+    --output_path ./output.jsonl \
+    --dataset your_dataset \
+    --max_new_tokens 2048
+
+# 交互式对话
+python -m openrlhf.cli.interactive_chat \
+    --pretrain meta-llama/Meta-Llama-3-8B \
+    --lora_path ./checkpoint/llama3-8b-sft-lora
 ```
 
 ### 性能调优指南

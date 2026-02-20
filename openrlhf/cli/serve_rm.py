@@ -6,7 +6,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from openrlhf.models import get_llm_for_sequence_regression
-from openrlhf.utils import get_tokenizer
+from openrlhf.utils import convert_to_torch_dtype, get_tokenizer
+from openrlhf.utils.fsdp2.checkpoint import load_hf_weights
 from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
@@ -19,12 +20,17 @@ class RewardModelProxy:
             "reward",
             normalize_reward=args.normalize_reward,
             attn_implementation=args.attn_implementation,
-            param_dtype=args.param_dtype,  # default: bf16
-            load_in_4bit=args.load_in_4bit,
+            torch_dtype=convert_to_torch_dtype(args.param_dtype),
+            init_device="meta_structure",
             value_head_prefix=args.value_head_prefix,
-            device_map="auto",
             packing_samples=args.packing_samples,
         )
+        loaded = load_hf_weights(
+            self.reward_model,
+            args.reward_pretrain,
+            device_map=args.device_map,
+        )
+        self.reward_model = loaded
         self.reward_model.eval()
 
         self.tokenizer = get_tokenizer(
@@ -32,6 +38,11 @@ class RewardModelProxy:
         )
         self.max_length = args.max_len
         self.batch_size = args.batch_size
+
+    def _model_device(self) -> torch.device:
+        for param in self.reward_model.parameters():
+            return param.device
+        return torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
 
     def get_reward(self, queries, prompts):
         if self.batch_size is None:
@@ -42,11 +53,11 @@ class RewardModelProxy:
         logger.info(f"queries[0]: {queries[0]}")
 
         scores = []
-        # batch
         with torch.no_grad():
             for i in range(0, len(queries), batch_size):
                 inputs = self.tokenize_fn(
-                    queries[i : min(len(queries), i + batch_size)], device=self.reward_model.device
+                    queries[i : min(len(queries), i + batch_size)],
+                    device=self._model_device(),
                 )
                 r = self.reward_model(inputs["input_ids"], inputs["attention_mask"])
                 r = r.tolist()
@@ -67,22 +78,19 @@ class RewardModelProxy:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    # Reward Model
     parser.add_argument("--reward_pretrain", type=str, default=None, help="HF model name or path")
     parser.add_argument("--normalize_reward", action="store_true", default=False, help="Enable Reward Normalization")
     parser.add_argument("--value_head_prefix", type=str, default="score")
-    parser.add_argument("--max_len", type=int, default="2048")
+    parser.add_argument("--max_len", type=int, default=2048)
 
     parser.add_argument("--port", type=int, default=5000, help="Port number for the server")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="IP for the server")
 
-    # Performance
-    parser.add_argument("--load_in_4bit", action="store_true", default=False)
     parser.add_argument(
         "--param_dtype",
         type=str,
         default="bf16",
-        choices=["bf16", "fp16"],
+        choices=["fp32", "bf16", "fp16"],
         help="Model data type",
     )
     parser.add_argument(
@@ -95,7 +103,13 @@ if __name__ == "__main__":
     parser.add_argument("--packing_samples", action="store_true", default=False)
     parser.add_argument("--batch_size", type=int, default=None)
 
-    # ModelScope parameters
+    parser.add_argument(
+        "--device_map",
+        type=str,
+        default="auto",
+        help="Inference backend selector: auto -> HF device_map backend; otherwise DCP HF safetensors backend.",
+    )
+
     parser.add_argument("--use_ms", action="store_true", default=False)
 
     args = parser.parse_args()
@@ -103,10 +117,8 @@ if __name__ == "__main__":
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub
 
-        # Patch hub to download models from modelscope to speed up.
         patch_hub()
 
-    # server
     reward_model = RewardModelProxy(args)
     app = FastAPI()
 

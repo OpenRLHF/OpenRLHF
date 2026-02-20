@@ -3,13 +3,14 @@ import math
 import os
 from datetime import datetime
 
+import torch
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import SFTDataset
 from openrlhf.datasets.utils import blending_datasets
 from openrlhf.models import Actor
 from openrlhf.trainer.kd_trainer import KDTrainer
-from openrlhf.utils import get_strategy, get_tokenizer
+from openrlhf.utils import convert_to_torch_dtype, get_strategy, get_tokenizer
 
 
 def train(args):
@@ -18,28 +19,23 @@ def train(args):
     strategy.setup_distributed()
 
     # configure model
-    # load huggingface model
     model = Actor(
         args.pretrain,
         attn_implementation=args.attn_implementation,
-        param_dtype=args.param_dtype,  # default: bf16
-        model_dtype="fp32",
-        load_in_4bit=args.load_in_4bit,
+        torch_dtype=convert_to_torch_dtype("fp32"),
+        use_liger_kernel=args.use_liger_kernel,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
         target_modules=args.target_modules,
         lora_dropout=args.lora_dropout,
         packing_samples=args.packing_samples,
-        use_liger_kernel=args.use_liger_kernel,
     )
 
     # load teacher model for inference
     teacher_model = Actor(
         args.teacher_model,
         attn_implementation=args.attn_implementation,
-        param_dtype=args.param_dtype,  # default: bf16
-        model_dtype="fp32",
-        load_in_4bit=args.load_in_4bit,
+        torch_dtype=convert_to_torch_dtype(args.param_dtype),
         packing_samples=args.packing_samples,
     )
 
@@ -58,6 +54,13 @@ def train(args):
     model = strategy.prepare(model)
     # Teacher is inference-only; cpu_offload controls FSDP2 CPUOffloadPolicy.
     teacher_model = strategy.prepare(teacher_model, cpu_offload=args.teacher_offload)
+    strategy.load_pretrained(model, args.pretrain)
+
+    strategy.load_pretrained(
+        teacher_model,
+        args.teacher_model,
+        force_cpu_offload=args.teacher_offload,
+    )
 
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
@@ -105,7 +108,11 @@ def train(args):
             input_template=args.input_template,
         )
         eval_dataloader = strategy.setup_dataloader(
-            eval_dataset, args.micro_train_batch_size, True, False, eval_dataset.collate_fn
+            eval_dataset,
+            args.micro_train_batch_size,
+            True,
+            False,
+            eval_dataset.collate_fn,
         )
 
     # scheduler
@@ -122,12 +129,12 @@ def train(args):
 
     # load checkpoint
     consumed_samples = 0
-    if args.load_checkpoint and os.path.exists(args.ckpt_path):
-        _, states = strategy.load_ckpt(model.model, args.ckpt_path, optimizer=optim, scheduler=scheduler)
+    if args.load_checkpoint and os.path.exists(args.dcp_ckpt_path):
+        _, states = strategy.load_dcp_model(model.model, args.dcp_ckpt_path, optimizer=optim, scheduler=scheduler)
         consumed_samples = states["consumed_samples"]
-        strategy.print(f"Loaded the checkpoint: {args.ckpt_path}, consumed_samples: {consumed_samples}")
+        strategy.print(f"Loaded the checkpoint: {args.dcp_ckpt_path}, consumed_samples: {consumed_samples}")
 
-    os.makedirs(args.save_path, exist_ok=True)
+    os.makedirs(args.ckpt_save_path, exist_ok=True)
 
     # configure Trainer
     trainer = KDTrainer(
@@ -150,19 +157,18 @@ def train(args):
     trainer.fit(args, consumed_samples, num_update_steps_per_epoch)
 
     # save model checkpoint after fitting on only rank0
-    strategy.save_model(model, tokenizer, args.save_path)
+    strategy.save_hf_model(model, tokenizer, args.last_hf_ckpt_path)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # Checkpoints
-    parser.add_argument("--save_path", type=str, default="./ckpt")
+    parser.add_argument("--ckpt_save_path", type=str, default="./ckpt")
     parser.add_argument("--save_steps", type=int, default=-1)
     parser.add_argument("--save_hf_ckpt", action="store_true", default=False)
     parser.add_argument("--disable_fsdp2_ckpt", action="store_true", default=False)
     parser.add_argument("--logging_steps", type=int, default=1)
     parser.add_argument("--eval_steps", type=int, default=-1)
-    parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_kd")
     parser.add_argument("--max_ckpt_num", type=int, default=3)
     parser.add_argument("--max_ckpt_mem", type=int, default=1e8)
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
@@ -224,6 +230,14 @@ if __name__ == "__main__":
         help="Shard lm_head logits on vocab dim (FSDP2+TP).",
     )
 
+    # HF safetensors sharded export (DCP writer)
+    parser.add_argument(
+        "--hf_max_shard_size_gb",
+        type=float,
+        default=5,
+        help="Max shard size (GB) when saving HF safetensors via DCP.",
+    )
+
     # Context Parallel
     parser.add_argument("--fsdp2_cp_size", type=int, default=1, help="FSDP2 context parallel size")
     parser.add_argument(
@@ -236,7 +250,6 @@ if __name__ == "__main__":
     )
 
     # LoRA
-    parser.add_argument("--load_in_4bit", action="store_true", default=False)
     parser.add_argument("--lora_rank", type=int, default=0)
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")

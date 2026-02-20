@@ -25,7 +25,6 @@ def convert_to_torch_dtype(param_dtype: str) -> torch.dtype:
 
 def get_strategy(args):
     from openrlhf.utils.fsdp2 import FSDP2Strategy
-
     strategy = FSDP2Strategy(
         seed=getattr(args, "seed", 42),
         full_determinism=getattr(args, "full_determinism", False),

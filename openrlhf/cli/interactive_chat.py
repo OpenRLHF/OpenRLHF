@@ -1,7 +1,9 @@
 import argparse
+
 import torch
+
 from openrlhf.models import Actor
-from openrlhf.utils import get_tokenizer
+from openrlhf.utils import convert_to_torch_dtype, get_tokenizer
 
 
 def generate(args):
@@ -14,16 +16,16 @@ def generate(args):
     dummy_strategy.is_rank_0 = lambda: True
     dummy_strategy.args = args
 
-    # configure model
+    # Build model (non meta-init: real weights loaded by from_pretrained)
     model = Actor(
         args.pretrain,
+        use_meta_init=False,
+        lora_path=getattr(args, "lora_path", None),
         attn_implementation=args.attn_implementation,
-        param_dtype=args.param_dtype,  # default: bf16
-        load_in_4bit=args.load_in_4bit,
-        device_map="auto",
+        torch_dtype=convert_to_torch_dtype(args.param_dtype),
     )
+    model.model.eval()
 
-    # configure tokenizer
     tokenizer = get_tokenizer(
         args.pretrain, model.model, "left", dummy_strategy, use_fast=not args.disable_fast_tokenizer
     )
@@ -59,10 +61,16 @@ def generate(args):
         if args.enable_csft:
             user_prompt += args.csft_prompt.strip() + " "
 
-        user_prompt_len = len(user_prompt)
-        input_ids = tokenizer.encode(user_prompt, return_tensors="pt").to(torch.cuda.current_device())
+        encoded = tokenizer(
+            user_prompt,
+            return_tensors="pt",
+            add_special_tokens=False,
+        )
+        device = next(model.model.parameters()).device
+        encoded = {k: v.to(device) for k, v in encoded.items()}
+        input_ids = encoded["input_ids"]
         outputs = model.generate(
-            input_ids=input_ids,
+            **encoded,
             use_cache=True,
             max_length=args.max_len,
             do_sample=not args.greedy_sampling,
@@ -75,15 +83,18 @@ def generate(args):
             eos_token_id=tokenizer.eos_token_id,
         )
 
+        seqs = outputs[0] if isinstance(outputs, (tuple, list)) else outputs
         if args.apply_chat_template:
-            generated_ids = outputs[0][:, input_ids.shape[1] :]
+            generated_ids = seqs[:, input_ids.shape[1] :]
             response = tokenizer.batch_decode(
                 generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
             )[0]
             conversations.append({"role": "assistant", "content": response})
         else:
-            user_prompt = tokenizer.batch_decode(outputs[0], skip_special_tokens=True)[0]
-            response = user_prompt[user_prompt_len:]
+            generated_ids = seqs[:, input_ids.shape[1] :]
+            response = tokenizer.batch_decode(
+                generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
+            )[0]
 
         print(response)
 
@@ -94,7 +105,7 @@ if __name__ == "__main__":
         "--param_dtype",
         type=str,
         default="bf16",
-        choices=["bf16", "fp16"],
+        choices=["fp32", "bf16", "fp16"],
         help="Model data type",
     )
     parser.add_argument(
@@ -105,11 +116,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
 
-    # QLora
-    parser.add_argument("--load_in_4bit", action="store_true", default=False, help="Use QLoRA")
-
-    # Sampling
     parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")
+
     parser.add_argument("--max_len", type=int, default=4096)
     parser.add_argument("--greedy_sampling", action="store_true", default=False, help="Use Greedy sampling")
     parser.add_argument("--top_p", type=float, default=0.9, help="top_p for Sampling")
@@ -124,7 +132,9 @@ if __name__ == "__main__":
     parser.add_argument("--enable_csft", action="store_true", default=False)
     parser.add_argument("--csft_prompt", type=str, default="<rm_score>: 5.00", help="conditional SFT prompt")
 
-    # ModelScope parameters
+    # LoRA
+    parser.add_argument("--lora_path", type=str, default=None, help="Path to a trained LoRA adapter to load and merge")
+
     parser.add_argument("--use_ms", action="store_true", default=False)
 
     args = parser.parse_args()
@@ -142,7 +152,6 @@ if __name__ == "__main__":
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub
 
-        # Patch hub to download models from modelscope to speed up.
         patch_hub()
 
     print(args)
