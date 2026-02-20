@@ -328,7 +328,7 @@ class SamplesGenerator:
             (prompts[q3:], labels[q3:]),
         ]
         # Drop empty trailing stages (e.g. when batch is very small).
-        staged_batches = [(p, l) for p, l in staged_batches if p]
+        staged_batches = [(stage_prompts, stage_labels) for stage_prompts, stage_labels in staged_batches if stage_prompts]
 
         dispatches = self._dispatch_prompts_to_vllm(prompts[:mid], labels[:mid], **generate_kwargs)
         pending_refs = [ref for ref, _ in dispatches]
@@ -342,7 +342,6 @@ class SamplesGenerator:
 
         accepted_experiences: List[Experience] = []
         pbar = tqdm(range(num_prompts), desc="Generate samples")
-        filtered_count = 0
 
         while pending_refs:
             ready_refs, pending_refs = ray.wait(pending_refs, num_returns=1, timeout=10.0)
@@ -375,15 +374,7 @@ class SamplesGenerator:
                     avg_reward = sum(scores) / len(scores)
                     min_r, max_r = self.args.dynamic_filtering_reward_range
                     if not (min_r < avg_reward < max_r):
-                        filtered_count += 1
-                        if filtered_count <= 3 or filtered_count % 25 == 0:
-                            logger.info(
-                                "Dynamic filtering rejected group "
-                                f"(rejected={filtered_count}, accepted={len(accepted_experiences)}/{num_prompts}, "
-                                f"prompts_consumed={prompts_consumed}, "
-                                f"avg_reward={avg_reward:.2f}, threshold=({min_r:.2f}, {max_r:.2f}), "
-                                f"scores={[f'{s:.2f}' for s in scores]})"
-                            )
+                        logger.info(f"Filtered out: avg_reward={avg_reward:.2f}, threshold=({min_r:.2f}, {max_r:.2f}), scores={[f'{s:.2f}' for s in scores]}")
                         experiences = []
 
                 # Accept experiences and stop once enough have been gathered.
