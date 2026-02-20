@@ -328,7 +328,9 @@ class SamplesGenerator:
             (prompts[q3:], labels[q3:]),
         ]
         # Drop empty trailing stages (e.g. when batch is very small).
-        staged_batches = [(stage_prompts, stage_labels) for stage_prompts, stage_labels in staged_batches if stage_prompts]
+        staged_batches = [
+            (stage_prompts, stage_labels) for stage_prompts, stage_labels in staged_batches if stage_prompts
+        ]
 
         dispatches = self._dispatch_prompts_to_vllm(prompts[:mid], labels[:mid], **generate_kwargs)
         pending_refs = [ref for ref, _ in dispatches]
@@ -374,7 +376,9 @@ class SamplesGenerator:
                     avg_reward = sum(scores) / len(scores)
                     min_r, max_r = self.args.dynamic_filtering_reward_range
                     if not (min_r < avg_reward < max_r):
-                        logger.info(f"Filtered out: avg_reward={avg_reward:.2f}, threshold=({min_r:.2f}, {max_r:.2f}), scores={[f'{s:.2f}' for s in scores]}")
+                        logger.info(
+                            f"Filtered out: avg_reward={avg_reward:.2f}, threshold=({min_r:.2f}, {max_r:.2f}), scores={[f'{s:.2f}' for s in scores]}"
+                        )
                         experiences = []
 
                 # Accept experiences and stop once enough have been gathered.
