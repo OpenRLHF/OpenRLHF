@@ -10,7 +10,7 @@ openrlhf.cli.train_sft \
     --micro_train_batch_size 4 \
     --max_samples 500000 \
     --pretrain mistralai/Mixtral-8x7B-v0.1 \
-    --save_path ./checkpoint/mixtral-sft-lora\
+    --ckpt_save_path ./checkpoint/mixtral-sft-lora\
     --save_steps -1 \
     --logging_steps 1 \
     --eval_steps -1 \

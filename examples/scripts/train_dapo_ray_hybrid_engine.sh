@@ -19,8 +19,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --eps_clip_low_high 0.2 0.27 \
    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
    --remote_rm_url /openrlhf/examples/python/reward_func.py \
-   --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
-   --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
+   --ckpt_save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
    --save_steps 20 \
    --save_hf_ckpt \
    --micro_train_batch_size 8 \
@@ -43,7 +42,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --enforce_eager \
    --vllm_enable_sleep \
    --fsdp2_enable_sleep \
-   --vllm_enable_is_correction
+   --enable_vllm_is_correction
 
 # You could also try
 #   --kl_estimator k2 \

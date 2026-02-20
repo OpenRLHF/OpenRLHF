@@ -11,7 +11,7 @@ openrlhf.cli.train_kd \
    --max_samples 500000 \
    --pretrain meta-llama/Meta-Llama-3-8B-Instruct \
    --teacher_model meta-llama/Meta-Llama-3-70B-Instruct \
-   --save_path ./checkpoint/llama3-8b-kd \
+   --ckpt_save_path ./checkpoint/llama3-8b-kd \
    --save_steps -1 \
    --logging_steps 1 \
    --eval_steps -1 \

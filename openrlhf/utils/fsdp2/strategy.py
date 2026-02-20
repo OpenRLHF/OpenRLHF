@@ -24,6 +24,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
+from torch.distributed.checkpoint.state_dict import StateDictOptions, set_model_state_dict
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import CPUOffloadPolicy, FSDPModule, MixedPrecisionPolicy, fully_shard
 from torchdata.stateful_dataloader import StatefulDataLoader
@@ -34,7 +35,14 @@ from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_g
 from openrlhf.utils import convert_to_torch_dtype
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
-from .checkpoint import load_distributed_checkpoint, load_hf_model, save_distributed_checkpoint, save_hf_model
+from .checkpoint import (
+    load_hf_weights,
+    save_hf_checkpoint,
+    load_dcp_checkpoint,
+    save_dcp_checkpoint,
+    _cleanup_old_checkpoints,
+)
+from .tp.tp_parallel import apply_tensor_parallel
 from .utils import (
     clip_grad_norm_dtensor,
     get_checkpoint_metadata,
@@ -77,6 +85,13 @@ class FSDP2Strategy(ABC):
         self.mesh = None
         self._gloo_group = None  # Gloo group for CPU-safe barriers
 
+        # Derive checkpoint sub-paths from ckpt_save_path (training scripts only)
+        ckpt_save_path = getattr(args, "ckpt_save_path", None)
+        if ckpt_save_path is not None:
+            args.last_hf_ckpt_path = os.path.join(ckpt_save_path, "last_hf_ckpt")
+            args.hf_ckpt_path = os.path.join(ckpt_save_path, "hf_ckpt")
+            args.dcp_ckpt_path = os.path.join(ckpt_save_path, "dcp_ckpt")
+
     # -------------------------------------------------------------------------
     # Distributed Setup
     # -------------------------------------------------------------------------
@@ -104,11 +119,11 @@ class FSDP2Strategy(ABC):
         self._gloo_group = dist.new_group(backend="gloo")
 
         # Validate and compute parallelism sizes
-        parallel_factor = self.fsdp2_cp_size * self.fsdp2_tp_size
+        cp_tp_factor = self.fsdp2_cp_size * self.fsdp2_tp_size
         assert (
-            self.world_size % parallel_factor == 0
-        ), f"world_size({self.world_size}) not divisible by cp*tp({parallel_factor})"
-        self.fsdp2_dp_size = self.world_size // parallel_factor
+            self.world_size % cp_tp_factor == 0
+        ), f"world_size({self.world_size}) not divisible by cp*tp({cp_tp_factor})"
+        self.fsdp2_dp_size = self.world_size // cp_tp_factor
 
         # Sequence Parallel (SP) is only meaningful with TP>1.
         if self.sequence_parallel:
@@ -121,16 +136,11 @@ class FSDP2Strategy(ABC):
                     "which would be seq/tp_size after SP sharding, causing mask length mismatch."
                 )
 
-        # DTensor TP does not support PEFT/LoRA wrappers or 4-bit quantized modules.
+        # DTensor TP does not support PEFT/LoRA wrappers.
         if getattr(self.args, "lora_rank", 0) and self.fsdp2_tp_size > 1:
             raise ValueError(
                 "Invalid config: --lora_rank > 0 is not supported with --fsdp2_tp_size > 1 (DTensor TP). "
                 "Set --lora_rank 0 or run with --fsdp2_tp_size 1."
-            )
-        if getattr(self.args, "load_in_4bit", False) and self.fsdp2_tp_size > 1:
-            raise ValueError(
-                "Invalid config: --load_in_4bit is not supported with --fsdp2_tp_size > 1 (DTensor TP). "
-                "Set --load_in_4bit False or run with --fsdp2_tp_size 1."
             )
         # Create 3D mesh: (dp, cp, tp) - always include all dimensions even if size=1
         # This ensures all parameters use the same mesh structure, avoiding mesh mismatch issues
@@ -184,19 +194,19 @@ class FSDP2Strategy(ABC):
         # Gradient accumulation
         # Only DP contributes to batch size - CP processes same sequence chunks, TP processes same batch
         # This matches the standard formula: train_batch_size / (micro_train_batch_size * fsdp2_dp_size)
-        effective_batch = self.micro_train_batch_size * self.fsdp2_dp_size
+        batch_per_step = self.micro_train_batch_size * self.fsdp2_dp_size
         if getattr(self.args, "use_dynamic_batch", False):
             self.accumulated_gradient = 1
         else:
-            grad_accum, remainder = divmod(self.train_batch_size, effective_batch)
-            if grad_accum < 1 or remainder != 0:
+            accum_steps, remainder = divmod(self.train_batch_size, batch_per_step)
+            if accum_steps < 1 or remainder != 0:
                 raise ValueError(
                     "Invalid batch config for FSDP2: require "
                     "`train_batch_size = micro_train_batch_size * fsdp2_dp_size * grad_accum_steps` "
                     f"(got train_batch_size={self.train_batch_size}, "
                     f"micro_train_batch_size={self.micro_train_batch_size}, fsdp2_dp_size={self.fsdp2_dp_size})."
                 )
-            self.accumulated_gradient = grad_accum
+            self.accumulated_gradient = accum_steps
 
         self._log(
             f"world={self.world_size} dp={self.fsdp2_dp_size} cp={self.fsdp2_cp_size} "
@@ -211,11 +221,16 @@ class FSDP2Strategy(ABC):
         return get_ring_attn_group()
 
     # -------------------------------------------------------------------------
-    # Model Preparation
+    # Model Wrapping
     # -------------------------------------------------------------------------
 
     def prepare(self, model, cpu_offload: bool = False):
-        """Prepare a model with optional FSDP2 CPU offload."""
+        """Prepare a model with optional FSDP2 CPU offload.
+
+        Args:
+            model: Model to wrap/shard.
+            cpu_offload: If True, enable CPU offload policy for this model.
+        """
         return self._wrap(model, force_cpu_offload=cpu_offload)
 
     def _wrap(self, model, force_cpu_offload=False):
@@ -225,8 +240,8 @@ class FSDP2Strategy(ABC):
             model: Model to wrap
             force_cpu_offload: If True, force CPUOffloadPolicy
         """
-        inner = self._unwrap_model(model)
-        is_actor = inner is not model
+        unwrapped = self._unwrap_model(model)
+        is_actor = unwrapped is not model
 
         # TP before FSDP
         self._log(
@@ -234,11 +249,9 @@ class FSDP2Strategy(ABC):
             f"(fsdp_mesh_size={self.fsdp2_dp_size * self.fsdp2_cp_size})"
         )
         if self.fsdp2_tp_size > 1:
-            from .tp.tp_parallel import apply_tensor_parallel
-
             self._log(f"Applying TP (size={self.fsdp2_tp_size})")
-            inner = apply_tensor_parallel(
-                inner,
+            unwrapped = apply_tensor_parallel(
+                unwrapped,
                 self.mesh["tp"],
                 sequence_parallel=self.sequence_parallel,
                 validate=True,
@@ -248,12 +261,12 @@ class FSDP2Strategy(ABC):
             self._log("Skipping TP (fsdp2_tp_size=1)")
 
         # FSDP (force_cpu_offload overrides self.fsdp2_cpu_offload)
-        inner = self._apply_fsdp(inner, force_cpu_offload=force_cpu_offload)
+        unwrapped = self._apply_fsdp(unwrapped, force_cpu_offload=force_cpu_offload)
 
         if is_actor:
-            model.model = inner
+            model.model = unwrapped
             return model
-        return inner
+        return unwrapped
 
     def _apply_fsdp(self, model, force_cpu_offload=False):
         """Apply FSDP2 sharding with merged DP+CP mesh.
@@ -269,7 +282,7 @@ class FSDP2Strategy(ABC):
         """
         # Use merged DP+CP mesh for FSDP - critical for Ring Attention correctness
         mesh = self.fsdp_mesh
-        mp = (
+        mixed_precision = (
             None
             if self.param_dtype == "fp32"
             else MixedPrecisionPolicy(
@@ -279,34 +292,147 @@ class FSDP2Strategy(ABC):
             )
         )
         use_cpu_offload = force_cpu_offload or self.fsdp2_cpu_offload
-        offload = CPUOffloadPolicy(pin_memory=True) if use_cpu_offload else None
+        offload_policy = CPUOffloadPolicy(pin_memory=True) if use_cpu_offload else None
 
         # Shard transformer layers
-        layer_cls = getattr(model, "_no_split_modules", None) or []
-        layers = [
+        no_split_modules = getattr(model, "_no_split_modules", [])
+        fsdp_units = [
             m
             for m in model.modules()
-            if m.__class__.__name__ in layer_cls
+            if m.__class__.__name__ in no_split_modules
             or (
                 isinstance(m, nn.Embedding)
                 and not getattr(getattr(model, "config", None), "tie_word_embeddings", True)
             )
         ]
 
-        for i, layer in enumerate(layers):
+        for i, layer in enumerate(fsdp_units):
             if not isinstance(layer, FSDPModule):
                 fully_shard(
                     layer,
                     mesh=mesh,
-                    mp_policy=mp,
-                    offload_policy=offload,
-                    reshard_after_forward=self.fsdp2_reshard_after_forward and i < len(layers) - 1,
+                    mp_policy=mixed_precision,
+                    offload_policy=offload_policy,
+                    reshard_after_forward=self.fsdp2_reshard_after_forward and i < len(fsdp_units) - 1,
                 )
 
         # Shard root
         if not isinstance(model, FSDPModule):
-            fully_shard(model, mesh=mesh, mp_policy=mp, offload_policy=offload, reshard_after_forward=False)
+            fully_shard(model, mesh=mesh, mp_policy=mixed_precision, offload_policy=offload_policy, reshard_after_forward=False)
         return model
+
+    # -------------------------------------------------------------------------
+    # Model Loading & Post-load Fixup
+    # -------------------------------------------------------------------------
+
+    def load_pretrained(
+        self,
+        model: nn.Module,
+        pretrain: str,
+        *,
+        force_cpu_offload: bool = False,
+        init_value_head: bool = False,
+        value_head_prefix: str = "score",
+    ) -> bool:
+        """Materialize (to_empty) and load pretrained weights into an already wrapped model.
+
+        Returns:
+          True on success.
+        """
+        unwrapped = self._unwrap_model(model)
+
+        on_cpu = self.fsdp2_cpu_offload or force_cpu_offload
+        device = "cpu" if on_cpu else torch.device("cuda", torch.cuda.current_device())
+
+        load_hf_weights(
+            unwrapped,
+            pretrain,
+            device=device,
+            process_group=self._gloo_group,
+        )
+
+        if on_cpu:
+            self._move_buffers_to_cuda(unwrapped)
+        if init_value_head:
+            self._init_value_head_after_load(unwrapped, value_head_prefix=value_head_prefix)
+        self._init_lora_after_load(unwrapped)
+        return True
+
+    @torch.no_grad()
+    def _move_buffers_to_cuda(self, model: nn.Module) -> None:
+        """Keep buffers on CUDA for CPU-offloaded FSDP2 models (slime-style)."""
+        device = torch.device("cuda", torch.cuda.current_device())
+        for _name, buf in model.named_buffers():
+            if getattr(buf, "is_meta", False) or buf.device == device:
+                continue
+            buf.data = buf.data.to(device)
+
+    @torch.no_grad()
+    def _init_value_head_after_load(self, model: nn.Module, value_head_prefix: str) -> None:
+        """Initialize value head weights after meta-init materialization."""
+        value_head = getattr(model, value_head_prefix, None)
+        if value_head is None or not hasattr(value_head, "weight"):
+            return
+
+        weight = value_head.weight
+        weight_key = f"{value_head_prefix}.weight"
+        if dist.is_initialized() and dist.get_rank() != 0:
+            state = {}
+        else:
+            shape = tuple(weight.shape)
+            dtype = weight.dtype
+            # Match existing init: std = 1 / (hidden_size + 1)
+            hidden_size = shape[1] if len(shape) >= 2 else max(1, shape[0])
+            std = 1.0 / float(hidden_size + 1)
+            init_weight = torch.empty(shape, device="cpu", dtype=dtype)
+            init_weight.normal_(mean=0.0, std=std)
+            state = {weight_key: init_weight}
+
+        set_model_state_dict(
+            model,
+            state,
+            options=StateDictOptions(
+                full_state_dict=True,
+                cpu_offload=True,
+                strict=False,
+                broadcast_from_rank0=dist.is_initialized(),
+            ),
+        )
+
+    @torch.no_grad()
+    def _init_lora_after_load(self, model: nn.Module) -> None:
+        """Initialize PEFT LoRA adapter weights after meta-init materialization."""
+        if not bool(getattr(self.args, "lora_rank", 0)):
+            return
+
+        # Build a small rank0 state_dict for LoRA params and broadcast+distribute it.
+        if dist.is_initialized() and dist.get_rank() != 0:
+            state = {}
+        else:
+            state = {}
+            for name, param in model.named_parameters():
+                if not name.endswith("weight"):
+                    continue
+                if "lora_A" in name:
+                    init_weight = torch.empty(tuple(param.shape), device="cpu", dtype=param.dtype)
+                    init_weight.normal_(mean=0.0, std=0.02)
+                    state[name] = init_weight
+                elif "lora_B" in name:
+                    state[name] = torch.zeros(tuple(param.shape), device="cpu", dtype=param.dtype)
+
+        if not state and not dist.is_initialized():
+            return
+
+        set_model_state_dict(
+            model,
+            state,
+            options=StateDictOptions(
+                full_state_dict=True,
+                cpu_offload=True,
+                strict=False,
+                broadcast_from_rank0=dist.is_initialized(),
+            ),
+        )
 
     # -------------------------------------------------------------------------
     # Training
@@ -373,11 +499,11 @@ class FSDP2Strategy(ABC):
         if self.accumulated_gradient > 1:
             loss = loss / self.accumulated_gradient
 
-        inner = self._unwrap_model(model)
-        if isinstance(inner, FSDPModule) and self.accumulated_gradient > 1:
+        unwrapped = self._unwrap_model(model)
+        if isinstance(unwrapped, FSDPModule) and self.accumulated_gradient > 1:
             key = f"step_{name}"
             is_final = (self.time_steps.get(key, 0) + 1) % self.accumulated_gradient == 0
-            inner.set_requires_gradient_sync(is_final)
+            unwrapped.set_requires_gradient_sync(is_final)
 
         loss.backward()
 
@@ -464,8 +590,8 @@ class FSDP2Strategy(ABC):
         if self.fsdp2_cpu_offload:
             return  # CPUOffloadPolicy already manages model
 
-        inner = self._unwrap_model(model)
-        inner.cpu()
+        unwrapped = self._unwrap_model(model)
+        unwrapped.cpu()
         if self.is_rank_0():
             print("[FSDP2] Model offloaded to CPU")
         torch.cuda.synchronize()
@@ -482,9 +608,9 @@ class FSDP2Strategy(ABC):
         if self.fsdp2_cpu_offload:
             return  # CPUOffloadPolicy already manages model
 
-        inner = self._unwrap_model(model)
-        if next(inner.parameters()).device.type == "cpu":
-            inner.to(torch.device("cuda", torch.cuda.current_device()))
+        unwrapped = self._unwrap_model(model)
+        if next(unwrapped.parameters()).device.type == "cpu":
+            unwrapped.to(torch.device("cuda", torch.cuda.current_device()))
             torch.cuda.synchronize()
             if self.is_rank_0():
                 print("[FSDP2] Model reloaded to GPU")
@@ -520,15 +646,25 @@ class FSDP2Strategy(ABC):
     # Checkpointing
     # -------------------------------------------------------------------------
 
-    def save_model(self, model, tokenizer, output_dir, **kwargs):
-        save_hf_model(
-            model, tokenizer, output_dir, self.is_rank_0(), self._unwrap_model, get_checkpoint_metadata(self), **kwargs
+    def save_hf_model(self, model, tokenizer, output_dir, **kwargs):
+        # Convert fp32 master weights to the training compute dtype (e.g. bf16) for deployment.
+        save_dtype = convert_to_torch_dtype(self.param_dtype)
+        max_gb = getattr(self.args, "hf_max_shard_size_gb", 5)
+        max_bytes = int(float(max_gb) * 1024**3) if max_gb else None
+
+        save_hf_checkpoint(
+            self._unwrap_model(model),
+            tokenizer,
+            output_dir,
+            self.is_rank_0(),
+            args=self.args,
+            save_dtype=save_dtype,
+            process_group=self._gloo_group,
+            max_shard_size_bytes=max_bytes,
+            metadata=get_checkpoint_metadata(self),
         )
 
-    def load_model(self, model, path, **kwargs):
-        load_hf_model(model, path, self._unwrap_model, **kwargs)
-
-    def save_ckpt(
+    def save_dcp_model(
         self,
         model,
         save_dir,
@@ -541,7 +677,7 @@ class FSDP2Strategy(ABC):
         scheduler=None,
     ):
         """Save FSDP2 distributed checkpoint."""
-        save_distributed_checkpoint(
+        save_dcp_checkpoint(
             model,
             save_dir,
             tag,
@@ -556,7 +692,15 @@ class FSDP2Strategy(ABC):
             process_group=self._gloo_group,
         )
 
-    def load_ckpt(
+    def save_hf_ckpt_with_rotation(self, model, tokenizer, save_dir, tag, max_num, max_mem):
+        """Save HF checkpoint with rotation cleanup (like _actor DCP checkpoints)."""
+        save_path = os.path.join(save_dir, tag)
+        self.save_hf_model(model, tokenizer, save_path)
+        if self.is_rank_0():
+            os.makedirs(save_dir, exist_ok=True)
+            _cleanup_old_checkpoints(save_dir, max_num, max_mem)
+
+    def load_dcp_model(
         self,
         model,
         load_dir,
@@ -568,7 +712,7 @@ class FSDP2Strategy(ABC):
         optimizer=None,
         scheduler=None,
     ):
-        return load_distributed_checkpoint(
+        return load_dcp_checkpoint(
             model,
             load_dir,
             self._unwrap_model,
@@ -608,12 +752,12 @@ class FSDP2Strategy(ABC):
         group_size = dist.get_world_size(group=process_group)
 
         # Convert scalar to tensor
-        is_input_tensor = isinstance(data, torch.Tensor)
-        tensor = data if is_input_tensor else torch.tensor(data, device="cuda")
+        was_tensor = isinstance(data, torch.Tensor)
+        tensor = data if was_tensor else torch.tensor(data, device="cuda")
 
         # Move to GPU if needed (NCCL requires CUDA tensors)
-        was_on_cpu = tensor.device.type == "cpu"
-        if was_on_cpu:
+        from_cpu = tensor.device.type == "cpu"
+        if from_cpu:
             tensor = tensor.cuda()
 
         # Perform all-reduce
@@ -622,10 +766,10 @@ class FSDP2Strategy(ABC):
         if op == "mean":
             tensor = tensor / group_size
 
-        if was_on_cpu:
+        if from_cpu:
             tensor = tensor.cpu()
 
-        return tensor if is_input_tensor else tensor.item()
+        return tensor if was_tensor else tensor.item()
 
     def all_gather(self, data):
         """All-gather across DP group (not CP/TP, as they share same data)."""
@@ -639,25 +783,25 @@ class FSDP2Strategy(ABC):
         group_size = dist.get_world_size(group=process_group)
 
         # Convert scalar to tensor
-        is_input_tensor = isinstance(data, torch.Tensor)
-        tensor = data if is_input_tensor else torch.tensor(data, device="cuda")
+        was_tensor = isinstance(data, torch.Tensor)
+        tensor = data if was_tensor else torch.tensor(data, device="cuda")
 
         # Handle 0-dim tensors
         if tensor.dim() == 0:
             tensor = tensor.view(1)
 
-        was_on_cpu = tensor.device.type == "cpu"
-        tensor_cuda = tensor.cuda() if was_on_cpu else tensor
+        from_cpu = tensor.device.type == "cpu"
+        gpu_tensor = tensor.cuda() if from_cpu else tensor
 
         # Gather
-        gathered = [torch.zeros_like(tensor_cuda) for _ in range(group_size)]
-        dist.all_gather(gathered, tensor_cuda, group=process_group)
-        result = torch.cat(gathered)
+        shards = [torch.zeros_like(gpu_tensor) for _ in range(group_size)]
+        dist.all_gather(shards, gpu_tensor, group=process_group)
+        result = torch.cat(shards)
 
-        if was_on_cpu:
+        if from_cpu:
             result = result.cpu()
 
-        return result if is_input_tensor else result.tolist()
+        return result if was_tensor else result.tolist()
 
     # -------------------------------------------------------------------------
     # Utilities

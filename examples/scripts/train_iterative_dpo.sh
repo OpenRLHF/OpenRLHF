@@ -80,7 +80,7 @@ openrlhf.cli.train_dpo \
    --micro_train_batch_size 2 \
    --pretrain $POLICY_MODEL_PATH \
    --ref_pretrain $REF_MODEL_PATH \
-   --save_path $MODEL_OUTPUT_PATH \
+   --ckpt_save_path $MODEL_OUTPUT_PATH \
    --max_epochs 1 \
    --param_dtype bf16 \
    --learning_rate 5e-7 \
