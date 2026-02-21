@@ -1,3 +1,4 @@
+import gc
 import os
 import shutil
 from abc import ABC
@@ -231,6 +232,18 @@ class DeepspeedStrategy(ABC):
                 model.model = tp_model
             else:
                 model = tp_model
+
+            # Recreate optimizer over sharded params to free pre-sharded weight references.
+            # Without this, the old optimizer still pins the full (unsharded) tensors in GPU
+            # memory, causing OOM when deepspeed.initialize() allocates gradient partitions.
+            old_defaults = optim.defaults.copy()
+            if scheduler is not None:
+                scheduler.optimizer = None
+            optim = self.create_optimizer(model, **old_defaults)
+            if scheduler is not None:
+                scheduler.optimizer = optim
+            gc.collect()
+            torch.cuda.empty_cache()
 
         engine, optim, _, scheduler = deepspeed.initialize(
             model=model.model if is_actor else model,
