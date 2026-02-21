@@ -373,7 +373,7 @@ if __name__ == "__main__":
     parser.add_argument("--kl_target", type=float, default=None)
     parser.add_argument("--kl_horizon", type=int, default=10000)
     parser.add_argument("--init_kl_coef", type=float, default=0.01, help="KL penalty in PPO")
-    parser.add_argument("--policy_loss_type", type=str, default="ppo", choices=["ppo", "gspo"])
+    parser.add_argument("--policy_loss_type", type=str, default="ppo", choices=["ppo", "gspo", "cfpo"])
     parser.add_argument(
         "--kl_estimator",
         type=str,
