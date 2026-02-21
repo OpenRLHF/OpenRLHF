@@ -23,17 +23,41 @@ def convert_to_torch_dtype(param_dtype: str) -> torch.dtype:
 
 
 def get_strategy(args):
-    from openrlhf.utils.deepspeed import DeepspeedStrategy
+    """Get training strategy based on backend configuration.
 
-    strategy = DeepspeedStrategy(
-        seed=getattr(args, "seed", 42),
-        full_determinism=getattr(args, "full_determinism", False),
-        max_norm=getattr(args, "max_norm", 1.0),
-        micro_train_batch_size=getattr(args, "micro_train_batch_size", 1),
-        train_batch_size=getattr(args, "train_batch_size", 128),
-        zero_stage=args.zero_stage,
-        args=args,
-    )
+    Args:
+        args: Arguments containing strategy configuration.
+              Use args.backend="fsdp2" to use FSDP2 instead of DeepSpeed.
+
+    Returns:
+        Training strategy (DeepspeedStrategy or FSDP2Strategy)
+    """
+    backend = getattr(args, "backend", "deepspeed")
+
+    if backend == "fsdp2":
+        from openrlhf.utils.fsdp2 import FSDP2Strategy
+
+        strategy = FSDP2Strategy(
+            seed=getattr(args, "seed", 42),
+            full_determinism=getattr(args, "full_determinism", False),
+            max_norm=getattr(args, "max_norm", 1.0),
+            micro_train_batch_size=getattr(args, "micro_train_batch_size", 1),
+            train_batch_size=getattr(args, "train_batch_size", 128),
+            zero_stage=getattr(args, "zero_stage", 2),
+            args=args,
+        )
+    else:
+        from openrlhf.utils.deepspeed import DeepspeedStrategy
+
+        strategy = DeepspeedStrategy(
+            seed=getattr(args, "seed", 42),
+            full_determinism=getattr(args, "full_determinism", False),
+            max_norm=getattr(args, "max_norm", 1.0),
+            micro_train_batch_size=getattr(args, "micro_train_batch_size", 1),
+            train_batch_size=getattr(args, "train_batch_size", 128),
+            zero_stage=args.zero_stage,
+            args=args,
+        )
     return strategy
 
 

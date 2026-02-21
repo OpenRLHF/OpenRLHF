@@ -4,7 +4,6 @@ import socket
 from abc import ABC
 from typing import Dict, List, Optional, Union
 
-import deepspeed
 import ray
 import torch
 import torch.distributed
@@ -17,12 +16,17 @@ from openrlhf.models import Actor, PolicyLoss
 from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.utils import get_tokenizer
-from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
 from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.logging_utils import init_logger
 
 from ..ppo_utils import NaiveReplayBuffer
+
+# Import deepspeed lazily to avoid import errors when not using deepspeed backend
+try:
+    import deepspeed
+except ImportError:
+    deepspeed = None
 
 logger = init_logger(__name__)
 
@@ -155,10 +159,14 @@ class ActorPPOTrainer(ABC):
         if self.args.use_dynamic_batch:
             self.replay_buffer.setup_dynamic_batch(self.strategy)
 
+        # Determine tensor parallel size based on backend
+        is_fsdp2 = getattr(self.args, "backend", "deepspeed") == "fsdp2"
+        tensor_parallel_size = (
+            getattr(self.args, "fsdp_tensor_parallel_size", 1) if is_fsdp2 else self.args.ds_tensor_parallel_size
+        )
+
         not_shuffle = (
-            self.strategy.ring_attn_group is not None
-            or self.args.ds_tensor_parallel_size > 1
-            or self.args.use_dynamic_batch
+            self.strategy.ring_attn_group is not None or tensor_parallel_size > 1 or self.args.use_dynamic_batch
         )
         dataloader = DataLoader(
             self.replay_buffer,
@@ -309,6 +317,10 @@ class ActorPPOTrainer(ABC):
         return status
 
     def broadcast_to_vllm(self):
+        """Broadcast model weights to vLLM engines.
+
+        This method handles both DeepSpeed and FSDP2 backends.
+        """
         use_prefix_cache = getattr(self.strategy.args, "enable_prefix_caching", False)
         cache_reset_refs = []
         if use_prefix_cache and torch.distributed.get_rank() == 0:
@@ -317,6 +329,106 @@ class ActorPPOTrainer(ABC):
                 cache_reset_refs.append(engine.reset_prefix_cache.remote())
 
         torch.cuda.empty_cache()
+
+        # Check if using FSDP2 backend
+        is_fsdp2 = getattr(self.strategy.args, "backend", "deepspeed") == "fsdp2"
+
+        if is_fsdp2:
+            self._broadcast_to_vllm_fsdp2()
+        else:
+            self._broadcast_to_vllm_deepspeed()
+
+        if cache_reset_refs:
+            ray.get(cache_reset_refs)
+        torch.cuda.empty_cache()
+        torch_dist_barrier_and_cuda_sync()
+
+    def _broadcast_to_vllm_fsdp2(self):
+        """Broadcast model weights to vLLM using FSDP2 backend."""
+        from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict
+        from openrlhf.utils.fsdp2.fsdp2_utils import to_local_if_dtensor
+
+        # Get the inner model
+        model = self.actor.model if hasattr(self.actor, "model") else self.actor
+
+        # Get full state dict - this gathers from all FSDP shards
+        with torch.no_grad():
+            state_dict = get_model_state_dict(
+                model,
+                options=StateDictOptions(
+                    full_state_dict=True,
+                    cpu_offload=False,  # Keep on GPU for broadcast
+                ),
+            )
+
+        use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
+        count, num_params = 0, len(state_dict)
+
+        def _broadcast_param(name, param_data, count, num_params):
+            """Broadcast parameter using process group."""
+            if torch.distributed.get_rank() == 0:
+                refs = [
+                    engine.update_weight.remote(
+                        name, dtype=param_data.dtype, shape=param_data.shape, empty_cache=count == num_params
+                    )
+                    for engine in self.vllm_engines
+                ]
+
+                if use_ray:
+                    import ray.util.collective as collective
+
+                    collective.broadcast(param_data, 0, group_name=self._model_update_group)
+                else:
+                    self._model_update_group.broadcast(param_data, src=0, stream=torch.cuda.current_stream())
+                ray.get(refs)
+
+        def _handle_cuda_ipc(name, param_data, count, num_params):
+            """Broadcast parameter using CUDA IPC (for colocated models)."""
+            from torch.multiprocessing.reductions import reduce_tensor
+
+            weight = param_data.clone()
+            ipc_handle = reduce_tensor(weight)
+
+            ipc_handle = {get_physical_gpu_id(): ipc_handle}
+            ipc_handle_list = [None] * torch.distributed.get_world_size()
+            torch.distributed.all_gather_object(ipc_handle_list, ipc_handle)
+
+            if torch.distributed.get_rank() == 0:
+                ipc_handles = {}
+                for d in ipc_handle_list:
+                    ipc_handles.update(d)
+
+                refs = [
+                    engine.update_weight_cuda_ipc.remote(
+                        name,
+                        dtype=param_data.dtype,
+                        shape=param_data.shape,
+                        ipc_handles=ipc_handles,
+                        empty_cache=count == num_params,
+                    )
+                    for engine in self.vllm_engines
+                ]
+                ray.get(refs)
+            torch_dist_barrier_and_cuda_sync()
+
+        for name, param in state_dict.items():
+            count += 1
+            # Convert DTensor to local tensor if needed
+            param_data = to_local_if_dtensor(param)
+
+            # Choose broadcast method based on use_cuda_ipc
+            if not self.use_cuda_ipc:
+                _broadcast_param(name, param_data, count, num_params)
+            else:
+                _handle_cuda_ipc(name, param_data, count, num_params)
+
+        del state_dict
+        import gc
+
+        gc.collect()
+
+    def _broadcast_to_vllm_deepspeed(self):
+        """Broadcast model weights to vLLM using DeepSpeed backend."""
         model = self.actor.model.module
         count, num_params = 0, len(list(model.named_parameters()))
 
@@ -388,15 +500,18 @@ class ActorPPOTrainer(ABC):
                     with deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.zero_stage == 3):
                         _handle_cuda_ipc(param, count, num_params)
 
-        if cache_reset_refs:
-            ray.get(cache_reset_refs)
-        torch.cuda.empty_cache()
-        torch_dist_barrier_and_cuda_sync()
-
 
 @ray.remote(num_gpus=1)
 class PolicyModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps=None, vllm_engines=None):
+    def init_model_from_pretrained(self, strategy, pretrain, max_steps=None, vllm_engines=None):
+        """Initialize model from pretrained checkpoint.
+
+        Args:
+            strategy: Training strategy (DeepspeedStrategy or FSDP2Strategy)
+            pretrain: Path to pretrained model
+            max_steps: Maximum training steps
+            vllm_engines: vLLM engines for text generation
+        """
         args = strategy.args
         self.save_hf_ckpt = args.save_hf_ckpt
         self.disable_ds_ckpt = args.disable_ds_ckpt
@@ -482,9 +597,20 @@ class PolicyModelActor(BaseModelActor):
             _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
             self.checkpoint_states = states
 
-        # initial offload
-        if strategy.args.deepspeed_enable_sleep:
-            offload_deepspeed_states(self.actor.model)
+        # initial offload for sleep mode
+        is_fsdp2 = getattr(strategy.args, "backend", "deepspeed") == "fsdp2"
+        if is_fsdp2:
+            # For FSDP2, check for fsdp2_enable_sleep or deepspeed_enable_sleep (for compatibility)
+            enable_sleep = getattr(strategy.args, "fsdp2_enable_sleep", False) or getattr(
+                strategy.args, "deepspeed_enable_sleep", False
+            )
+            if enable_sleep:
+                from openrlhf.utils.fsdp2.fsdp2_utils import offload_fsdp2_states
+
+                offload_fsdp2_states(self.actor.model, self.actor_optim)
+        else:
+            if strategy.args.deepspeed_enable_sleep:
+                offload_deepspeed_states(self.actor.model)
 
         # configure Trainer
         self.trainer = ActorPPOTrainer(
@@ -530,13 +656,19 @@ class PolicyModelActor(BaseModelActor):
         """Generates actor values."""
         device = torch.cuda.current_device()
         self.actor.eval()
+
+        # For FSDP2, use autocast to ensure proper dtype handling after offload/reload
+        is_fsdp2 = getattr(self.strategy.args, "backend", "deepspeed") == "fsdp2"
+        dtype = torch.bfloat16 if is_fsdp2 and self.strategy.args.param_dtype == "bf16" else None
+
         with torch.no_grad():
-            action_log_probs = self.actor(
-                sequences.to(device),
-                action_mask.to(device),
-                attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
-            )
+            with torch.autocast(device_type="cuda", dtype=dtype, enabled=(dtype is not None)):
+                action_log_probs = self.actor(
+                    sequences.to(device),
+                    action_mask.to(device),
+                    attention_mask.to(device),
+                    ring_attn_group=self.strategy.ring_attn_group,
+                )
         self.actor.train()  # reset model state
         return action_log_probs.to("cpu")
 
@@ -550,10 +682,24 @@ class PolicyModelActor(BaseModelActor):
         self.trainer.replay_buffer.append(experience)
 
     def reload_states(self):
-        reload_deepspeed_states(self.actor.model)
+        """Reload model and optimizer states to GPU."""
+        is_fsdp2 = getattr(self.strategy.args, "backend", "deepspeed") == "fsdp2"
+        if is_fsdp2:
+            from openrlhf.utils.fsdp2.fsdp2_utils import reload_fsdp2_states
+
+            reload_fsdp2_states(self.actor.model, self.actor_optim)
+        else:
+            reload_deepspeed_states(self.actor.model)
 
     def offload_states(self):
-        offload_deepspeed_states(self.actor.model)
+        """Offload model and optimizer states to CPU."""
+        is_fsdp2 = getattr(self.strategy.args, "backend", "deepspeed") == "fsdp2"
+        if is_fsdp2:
+            from openrlhf.utils.fsdp2.fsdp2_utils import offload_fsdp2_states
+
+            offload_fsdp2_states(self.actor.model, self.actor_optim)
+        else:
+            offload_deepspeed_states(self.actor.model)
 
     def save_checkpoint(self, tag, client_states):
         args = self.strategy.args

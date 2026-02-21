@@ -24,6 +24,12 @@ def train(args):
     strategy = get_strategy(args)
     strategy.print(args)
 
+    # Get tensor parallel size based on backend
+    if getattr(args, "backend", "deepspeed") == "fsdp2":
+        tensor_parallel_size = getattr(args, "fsdp_tensor_parallel_size", 1)
+    else:
+        tensor_parallel_size = args.ds_tensor_parallel_size
+
     # init vllm / actor /critic /ref /reward model
     # if colocated, create placement group for actor and ref model explicitly.
     pg = None
@@ -75,7 +81,7 @@ def train(args):
         PolicyModelActor,
         pg=pg,
         num_gpus_per_actor=0.2 if pg else 1,
-        duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
+        duplicate_actors=args.ring_attn_size * tensor_parallel_size,
     )
 
     if args.init_kl_coef > 0:
@@ -85,7 +91,7 @@ def train(args):
             ReferenceModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
+            duplicate_actors=args.ring_attn_size * tensor_parallel_size,
         )
     else:
         ref_model = None
@@ -111,7 +117,7 @@ def train(args):
             CriticModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
+            duplicate_actors=args.ring_attn_size * tensor_parallel_size,
         )
     else:
         critic_model = None
@@ -124,7 +130,7 @@ def train(args):
             RewardModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
+            duplicate_actors=args.ring_attn_size * tensor_parallel_size,
         )
     else:
         reward_model = None
@@ -275,6 +281,15 @@ if __name__ == "__main__":
         "--use_ds_universal_ckpt", action="store_true", help="Use deepspeed universal checkpoint", default=False
     )
 
+    # Distributed Training Backend
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default="deepspeed",
+        choices=["deepspeed", "fsdp2"],
+        help="Distributed training backend: deepspeed (default) or fsdp2",
+    )
+
     # DeepSpeed
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
@@ -310,7 +325,16 @@ if __name__ == "__main__":
         default=False,
         help="Enable sleep mode for deepspeed when using --colocate_all_models",
     )
+    parser.add_argument(
+        "--fsdp2_enable_sleep",
+        action="store_true",
+        default=False,
+        help="Enable sleep mode for FSDP2 when using --colocate_all_models (used when backend=fsdp2)",
+    )
     parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed tensor parallel size")
+    parser.add_argument(
+        "--fsdp_tensor_parallel_size", type=int, default=1, help="FSDP2 tensor parallel size (used when backend=fsdp2)"
+    )
 
     # packing samples using Flash Attention2
     parser.add_argument("--packing_samples", action="store_true", default=False)
@@ -578,9 +602,15 @@ if __name__ == "__main__":
             args.n_samples_per_prompt > 1
         ), "n_samples_per_prompt must be greater than 1 when using dynamic filtering"
 
+    # Get tensor parallel size based on backend for validation
+    _tp_size = (
+        args.fsdp_tensor_parallel_size
+        if getattr(args, "backend", "deepspeed") == "fsdp2"
+        else args.ds_tensor_parallel_size
+    )
     assert (
         args.n_samples_per_prompt * args.rollout_batch_size // args.micro_rollout_batch_size
-        >= args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size // args.ds_tensor_parallel_size
+        >= args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size // _tp_size
     ), "The number of sample batches must be greater than or equal to the effective number of actor processes."
 
     if args.use_ms:

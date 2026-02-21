@@ -14,7 +14,6 @@ from openrlhf.models import ValueLoss, get_llm_for_sequence_regression
 from openrlhf.models.utils import masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.utils import get_tokenizer
-from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
 
 from ..ppo_utils import NaiveReplayBuffer
@@ -65,10 +64,14 @@ class CriticPPOTrainer(ABC):
         if self.args.use_dynamic_batch:
             self.replay_buffer.setup_dynamic_batch(self.strategy)
 
+        # Determine tensor parallel size based on backend
+        is_fsdp2 = getattr(self.args, "backend", "deepspeed") == "fsdp2"
+        tensor_parallel_size = (
+            getattr(self.args, "fsdp_tensor_parallel_size", 1) if is_fsdp2 else self.args.ds_tensor_parallel_size
+        )
+
         not_shuffle = (
-            self.strategy.ring_attn_group is not None
-            or self.args.ds_tensor_parallel_size > 1
-            or self.args.use_dynamic_batch
+            self.strategy.ring_attn_group is not None or tensor_parallel_size > 1 or self.args.use_dynamic_batch
         )
         dataloader = DataLoader(
             self.replay_buffer,
@@ -162,7 +165,14 @@ class CriticPPOTrainer(ABC):
 
 @ray.remote(num_gpus=1)
 class CriticModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps):
+    def init_model_from_pretrained(self, strategy, pretrain, max_steps):
+        """Initialize model from pretrained checkpoint.
+
+        Args:
+            strategy: Training strategy (DeepspeedStrategy or FSDP2Strategy)
+            pretrain: Path to pretrained model
+            max_steps: Maximum training steps
+        """
         args = strategy.args
         self.disable_ds_ckpt = args.disable_ds_ckpt
 
@@ -212,11 +222,36 @@ class CriticModelActor(BaseModelActor):
                 gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
 
+        # Debug: Check value_head weights before strategy.prepare()
+        value_head_prefix = getattr(critic, "value_head_prefix", "score")
+        value_head_layer = getattr(critic, value_head_prefix, None)
+        if value_head_layer is not None and hasattr(value_head_layer, "weight"):
+            weight = value_head_layer.weight.data
+            strategy.print(
+                f"[DEBUG] Critic value_head (prefix={value_head_prefix}) BEFORE strategy.prepare(): "
+                f"mean={weight.mean().item():.6f}, std={weight.std().item():.6f}"
+            )
+
         # prepare models/optimizers...
         self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare(
             (critic, critic_optim, critic_scheduler),
             is_rlhf=True,
         )
+
+        # Debug: Check value_head weights after strategy.prepare()
+        critic_model = self.critic.model if hasattr(self.critic, "model") else self.critic
+        value_head_layer = getattr(critic_model, value_head_prefix, None)
+        if value_head_layer is not None and hasattr(value_head_layer, "weight"):
+            # For FSDP2, weights might be DTensors - convert to local tensor for checking
+            weight = value_head_layer.weight
+            if hasattr(weight, "full_tensor"):
+                weight = weight.full_tensor()
+            elif hasattr(weight, "to_local"):
+                weight = weight.to_local()
+            strategy.print(
+                f"[DEBUG] Critic value_head (prefix={value_head_prefix}) AFTER strategy.prepare(): "
+                f"mean={weight.data.mean().item():.6f}, std={weight.data.std().item():.6f}"
+            )
 
         # load checkpoint
         if args.load_checkpoint and os.path.exists(os.path.join(args.ckpt_path, "_actor")):
@@ -224,9 +259,17 @@ class CriticModelActor(BaseModelActor):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
             strategy.load_ckpt(self.critic, ckpt_path)
 
-        # initial offload
-        if strategy.args.deepspeed_enable_sleep:
-            self.offload_states()
+        # initial offload for sleep mode
+        is_fsdp2 = getattr(strategy.args, "backend", "deepspeed") == "fsdp2"
+        if is_fsdp2:
+            enable_sleep = getattr(strategy.args, "fsdp2_enable_sleep", False) or getattr(
+                strategy.args, "deepspeed_enable_sleep", False
+            )
+            if enable_sleep:
+                self.offload_states()
+        else:
+            if strategy.args.deepspeed_enable_sleep:
+                self.offload_states()
 
         # configure Trainer
         self.trainer = CriticPPOTrainer(
@@ -248,14 +291,20 @@ class CriticModelActor(BaseModelActor):
         """Generates critic values."""
         device = torch.cuda.current_device()
         self.critic.eval()
+
+        # For FSDP2, use autocast to ensure proper dtype handling after offload/reload
+        is_fsdp2 = getattr(self.strategy.args, "backend", "deepspeed") == "fsdp2"
+        dtype = torch.bfloat16 if is_fsdp2 and self.strategy.args.param_dtype == "bf16" else None
+
         with torch.no_grad():
-            value = self.critic(
-                sequences.to(device),
-                action_mask.to(device),
-                attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
-                values_allgather=True,
-            )
+            with torch.autocast(device_type="cuda", dtype=dtype, enabled=(dtype is not None)):
+                value = self.critic(
+                    sequences.to(device),
+                    action_mask.to(device),
+                    attention_mask.to(device),
+                    ring_attn_group=self.strategy.ring_attn_group,
+                    values_allgather=True,
+                )
         self.critic.train()  # reset model state
         return value.to("cpu")
 
@@ -291,7 +340,21 @@ class CriticModelActor(BaseModelActor):
             )
 
     def reload_states(self):
-        reload_deepspeed_states(self.critic)
+        """Reload model and optimizer states to GPU."""
+        is_fsdp2 = getattr(self.strategy.args, "backend", "deepspeed") == "fsdp2"
+        if is_fsdp2:
+            from openrlhf.utils.fsdp2.fsdp2_utils import reload_fsdp2_states
+
+            reload_fsdp2_states(self.critic, self.critic_optim)
+        else:
+            reload_deepspeed_states(self.critic)
 
     def offload_states(self):
-        offload_deepspeed_states(self.critic)
+        """Offload model and optimizer states to CPU."""
+        is_fsdp2 = getattr(self.strategy.args, "backend", "deepspeed") == "fsdp2"
+        if is_fsdp2:
+            from openrlhf.utils.fsdp2.fsdp2_utils import offload_fsdp2_states
+
+            offload_fsdp2_states(self.critic, self.critic_optim)
+        else:
+            offload_deepspeed_states(self.critic)
