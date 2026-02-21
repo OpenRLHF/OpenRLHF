@@ -59,6 +59,9 @@ class LLMRayActor:
 
         self.kwargs = kwargs
 
+        self.request_ids = set()
+        self.request_ids_lock = asyncio.Lock()
+
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
         await self.llm.is_sleeping()
@@ -141,17 +144,29 @@ class LLMRayActor:
 
     async def generate(self, prompt_token_ids, sampling_params):
         """Token-level generation for rollout executors."""
-        generator = self.llm.generate(
-            TokensPrompt(prompt_token_ids=prompt_token_ids),
-            deepcopy(sampling_params),
-            request_id=random_uuid(),
-        )
+        request_id = random_uuid()
 
-        final_output = None
-        async for request_output in generator:
-            final_output = request_output
+        async with self.request_ids_lock:
+            self.request_ids.add(request_id)
 
-        return final_output
+        try:
+            generator = self.llm.generate(
+                TokensPrompt(prompt_token_ids=prompt_token_ids),
+                deepcopy(sampling_params),
+                request_id=request_id,
+            )
+            final_output = None
+            async for request_output in generator:
+                final_output = request_output
+            return final_output
+        finally:
+            async with self.request_ids_lock:
+                self.request_ids.discard(request_id)
+
+    async def abort_all(self):
+        async with self.request_ids_lock:
+            await self.llm.abort(list(self.request_ids))
+            self.request_ids.clear()
 
     def get_num_unfinished_requests(self) -> int:
         """Number of unfinished requests in vLLM engine."""

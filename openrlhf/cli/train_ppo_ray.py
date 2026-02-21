@@ -566,6 +566,7 @@ if __name__ == "__main__":
     # Set vLLM generate_batch_size to rollout_batch_size if not specified
     if not args.vllm_generate_batch_size:
         args.vllm_generate_batch_size = args.rollout_batch_size
+    assert args.vllm_generate_batch_size > 0
 
     if args.dynamic_filtering:
         assert (
