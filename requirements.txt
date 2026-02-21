@@ -6,6 +6,7 @@ deepspeed==0.18.5
 einops
 flash-attn==2.8.3
 grpcio>=1.74.0
+huggingface_hub>=1.0.0
 isort
 jsonlines
 loralib
@@ -22,7 +23,7 @@ torch
 torchdata
 torchmetrics
 tqdm
-transformers==4.57.6
+transformers>=4.57.6
 transformers_stream_generator
 wandb
 wheel

@@ -4,9 +4,12 @@ from datetime import timedelta
 
 import jsonlines
 import torch
+import transformers
 from torch import distributed as dist
 from tqdm import tqdm
 from transformers import AutoTokenizer
+
+_TRANSFORMERS_V5 = int(transformers.__version__.split(".")[0]) >= 5
 
 from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.datasets.utils import blending_datasets
@@ -170,7 +173,11 @@ def batch_generate(args):
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
             )
-            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            outputs = (
+                tokenizer.decode(outputs, skip_special_tokens=True)
+                if _TRANSFORMERS_V5
+                else tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            )
             for prompt, output in zip(prompts, outputs):
                 output = output[len(prompt) :]
                 output_dataset.append({"input": prompt, "output": output})

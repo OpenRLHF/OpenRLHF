@@ -6,7 +6,10 @@ from typing import Dict, Tuple
 
 import ray
 import torch
+import transformers
 from tqdm import tqdm
+
+_TRANSFORMERS_V5 = int(transformers.__version__.split(".")[0]) >= 5
 
 from openrlhf.datasets import PromptDataset
 from openrlhf.datasets.utils import blending_datasets
@@ -110,8 +113,9 @@ class BasePPOTrainer(ABC):
         experiences = self.experience_maker.make_experience_batch(rollout_samples)
 
         # Peek at the first decoded sample for quick sanity check.
+        _decode = self.tokenizer.decode if _TRANSFORMERS_V5 else self.tokenizer.batch_decode
         sample0 = [
-            self.tokenizer.batch_decode(experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True)[0],
+            _decode(experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True)[0],
             experiences[0].info["reward"][0].item(),
         ]
         print(sample0)
