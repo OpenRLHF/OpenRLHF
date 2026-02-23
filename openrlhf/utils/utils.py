@@ -52,6 +52,7 @@ def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=
 
 
 def convert_token_to_id(token, tokenizer):
+    tokenizer.add_tokens([token], special_tokens=True)
     if isinstance(token, str):
         token = tokenizer.encode(token, add_special_tokens=False)
         assert len(token) == 1
