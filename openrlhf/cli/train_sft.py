@@ -208,6 +208,10 @@ if __name__ == "__main__":
     parser.add_argument("--l2", type=float, default=0, help="weight decay loss")
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
 
+    # context-parallel topology
+    parser.add_argument(
+        "--attn_topology", type=str, default="ring", choices=["ring", "star"], help="Context-parallel topology"
+    )
     # ring-attention
     parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")
     parser.add_argument(
@@ -281,7 +285,7 @@ if __name__ == "__main__":
         )
 
     if args.ring_attn_size > 1:
-        assert args.packing_samples, "packing_samples must be enabled when using ring attention"
+        assert args.packing_samples, "packing_samples must be enabled when using ring/star attention"
 
     if args.packing_samples and "flash_attention" not in args.attn_implementation:
         print(

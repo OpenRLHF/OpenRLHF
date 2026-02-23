@@ -9,7 +9,10 @@ from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
-from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
+from .ring_attn_utils import gather_and_pad_tensor as ring_gather_and_pad_tensor
+from .ring_attn_utils import unpad_and_slice_tensor as ring_unpad_and_slice_tensor
+from .star_attn_utils import gather_and_pad_tensor as star_gather_and_pad_tensor
+from .star_attn_utils import unpad_and_slice_tensor as star_unpad_and_slice_tensor
 from .utils import compute_entropy, log_probs_from_logits
 
 
@@ -161,9 +164,22 @@ class Actor(nn.Module):
         batch, seqlen = sequences.size()
         foward_attention_mask = attention_mask
         if self.packing_samples:
-            sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices = unpad_and_slice_tensor(
-                sequences, attention_mask, ring_attn_group
-            )
+            if ring_attn_group is not None:
+                sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices = ring_unpad_and_slice_tensor(
+                    sequences, attention_mask, ring_attn_group
+                )
+                attn_kind = "ring"
+            else:
+                # Assume star if provided via strategy
+                from openrlhf.utils.deepspeed.deepspeed import DeepspeedStrategy  # local import to avoid cycle
+
+                attn_kind = "star"
+                from .star_attn_utils import get_star_attn_group
+
+                star_group = get_star_attn_group()
+                sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices = star_unpad_and_slice_tensor(
+                    sequences, attention_mask, star_group
+                )
             foward_attention_mask = None
         else:
             # https://github.com/OpenRLHF/OpenRLHF/issues/217
@@ -186,15 +202,33 @@ class Actor(nn.Module):
         if not return_action_log_probs and not return_logprobs:
             assert return_output
             if allgather_logits and self.packing_samples:
-                output["logits"] = gather_and_pad_tensor(
-                    output["logits"], ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
-                )
+                if "attn_kind" in locals() and attn_kind == "star":
+                    from .star_attn_utils import get_star_attn_group
+
+                    star_group = get_star_attn_group()
+                    output["logits"] = star_gather_and_pad_tensor(
+                        output["logits"], star_group, ring_attn_pad_len, indices, batch, seqlen
+                    )
+                else:
+                    output["logits"] = ring_gather_and_pad_tensor(
+                        output["logits"], ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
+                    )
             return output
 
         log_probs = log_probs_from_logits(output["logits"], rolled_sequences, temperature=self.temperature)
 
         if self.packing_samples:
-            log_probs = gather_and_pad_tensor(log_probs, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
+            if "attn_kind" in locals() and attn_kind == "star":
+                from .star_attn_utils import get_star_attn_group
+
+                star_group = get_star_attn_group()
+                log_probs = star_gather_and_pad_tensor(
+                    log_probs, star_group, ring_attn_pad_len, indices, batch, seqlen
+                )
+            else:
+                log_probs = ring_gather_and_pad_tensor(
+                    log_probs, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
+                )
 
         log_probs = log_probs[:, :-1]
         if not return_action_log_probs and return_logprobs:

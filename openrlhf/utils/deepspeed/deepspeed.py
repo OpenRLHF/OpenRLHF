@@ -21,6 +21,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 
 from openrlhf.models import Actor
 from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
+from openrlhf.models.star_attn_utils import get_star_attn_group, set_star_attn_group
 from openrlhf.utils.distributed_sampler import DistributedSampler
 from openrlhf.utils.distributed_util import torch_dist_barrier_and_cuda_sync
 from .deepspeed_utils import (
@@ -68,6 +69,9 @@ class DeepspeedStrategy(ABC):
         self.deepcompile = getattr(args, "deepcompile", False)
         self.ds_tensor_parallel_size = getattr(args, "ds_tensor_parallel_size", 1)
         self.ring_attn_size = getattr(self.args, "ring_attn_size", 1)
+
+        self.attn_topology = getattr(self.args, "attn_topology", "ring")  # ring | star
+
         self.use_dynamic_batch = getattr(self.args, "use_dynamic_batch", False)
 
         if self.ds_tensor_parallel_size > 1:
@@ -103,7 +107,12 @@ class DeepspeedStrategy(ABC):
         self.ds_device_mesh = init_device_mesh(
             "cuda", (dp_size, self.ring_attn_size, self.ds_tensor_parallel_size), mesh_dim_names=("dp", "sp", "tp")
         )
-        self.setup_ring_attn(self.ds_device_mesh)
+        if self.attn_topology == "ring":
+            self.setup_ring_attn(self.ds_device_mesh)
+        elif self.attn_topology == "star":
+            self.setup_star_attn(self.ds_device_mesh)
+        else:
+            raise ValueError(f"Unknown attn_topology: {self.attn_topology}")
 
         self.accumulated_gradient = (
             self.train_batch_size
@@ -131,6 +140,18 @@ class DeepspeedStrategy(ABC):
     @property
     def ring_attn_group(self):
         return get_ring_attn_group()
+
+    def setup_star_attn(self, ds_device_mesh):
+        if self.ring_attn_size == 1:
+            self.ring_attn_rank = 0
+            return
+        group = ds_device_mesh["sp"].get_group()
+        self.ring_attn_rank = dist.get_rank(group=group)
+        set_star_attn_group(group)
+
+    @property
+    def star_attn_group(self):
+        return get_star_attn_group()
 
     def create_optimizer(self, model, **kwargs) -> Optimizer:
         if isinstance(model, Actor):

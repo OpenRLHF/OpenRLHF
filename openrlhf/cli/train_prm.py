@@ -181,6 +181,11 @@ if __name__ == "__main__":
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed Tensor parallel size")
 
+    # Context Parallel
+    parser.add_argument(
+        "--attn_topology", type=str, default="ring", choices=["ring", "star"], help="Context-parallel topology"
+    )
+
     # LoRA
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
     parser.add_argument("--lora_rank", type=int, default=0)
