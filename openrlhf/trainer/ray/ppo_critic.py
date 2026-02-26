@@ -14,7 +14,7 @@ from openrlhf.models import ValueLoss, get_llm_for_sequence_regression
 from openrlhf.models.utils import masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.utils import convert_to_torch_dtype
-from openrlhf.utils.fsdp2 import FSDP2Strategy
+from openrlhf.utils.fsdp2.strategy import FSDP2Strategy
 
 from ..ppo_utils import NaiveReplayBuffer
 from .launcher import BaseModelActor

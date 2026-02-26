@@ -7,7 +7,7 @@ from peft import LoraConfig, TaskType, get_peft_model
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
-from .utils import compute_entropy, log_probs_from_logits
+from .utils import compute_entropy, compute_token_log_probs
 
 
 class Actor(nn.Module):
@@ -170,7 +170,7 @@ class Actor(nn.Module):
                 )
             return output
 
-        log_probs = log_probs_from_logits(output["logits"], rolled_sequences, temperature=self.temperature)
+        log_probs = compute_token_log_probs(output["logits"], rolled_sequences, temperature=self.temperature)
 
         if self.packing_samples:
             log_probs = gather_and_pad_tensor(log_probs, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)

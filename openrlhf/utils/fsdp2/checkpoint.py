@@ -36,11 +36,6 @@ logger = logging.getLogger(__name__)
 UnwrapFn = Callable[[nn.Module], nn.Module]
 
 
-# =============================================================================
-# Internal utilities
-# =============================================================================
-
-
 def _is_lora_model(model: nn.Module, args=None) -> bool:
     """Check if the model is a PEFT LoRA model.
 
@@ -279,11 +274,6 @@ def _cleanup_old_checkpoints(save_dir: str, max_num: int, max_mem: int):
         shutil.rmtree(path, ignore_errors=True)
 
 
-# =============================================================================
-# HF safetensors — Load
-# =============================================================================
-
-
 @torch.no_grad()
 def load_hf_weights(
     model: nn.Module,
@@ -378,11 +368,6 @@ def load_hf_weights(
         dist.barrier(group=process_group)
 
     return model
-
-
-# =============================================================================
-# HF safetensors — Save
-# =============================================================================
 
 
 def _save_hf_weights(
@@ -609,11 +594,6 @@ def save_hf_checkpoint(
             metadata=metadata,
             save_dtype=save_dtype,
         )
-
-
-# =============================================================================
-# Distributed Checkpoints (PyTorch DCP)
-# =============================================================================
 
 
 def save_dcp_checkpoint(

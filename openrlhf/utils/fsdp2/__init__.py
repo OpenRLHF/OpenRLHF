@@ -10,6 +10,10 @@ Structure:
     utils.py      - EMA, optimizer state management
     tp/           - Tensor Parallelism
         tp_parallel.py - TP styles, plans, apply_tensor_parallel
+
+Note:
+    Import FSDP2Strategy from `openrlhf.utils.fsdp2.strategy` to avoid
+    circular imports during package initialization.
 """
 
 # Checkpointing
@@ -19,9 +23,6 @@ from .checkpoint import (
     load_dcp_checkpoint,
     save_dcp_checkpoint,
 )
-
-# Core
-from .strategy import FSDP2Strategy
 
 # Tensor Parallelism
 from .tp import (
@@ -38,8 +39,6 @@ from .utils import (
 )
 
 __all__ = [
-    # Core
-    "FSDP2Strategy",
     # Tensor Parallelism
     "apply_tensor_parallel",
     "get_tp_plan",

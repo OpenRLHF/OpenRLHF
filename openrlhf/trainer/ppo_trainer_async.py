@@ -7,7 +7,7 @@ from tqdm import tqdm
 from openrlhf.trainer.ppo_trainer import BasePPOTrainer, prepare_datasets
 from openrlhf.trainer.ppo_utils.experience_maker import SamplesGenerator
 from openrlhf.trainer.ray.launcher import RayActorGroup
-from openrlhf.utils.fsdp2 import FSDP2Strategy
+from openrlhf.utils.fsdp2.strategy import FSDP2Strategy
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.utils import get_tokenizer
 
