@@ -6,7 +6,7 @@ from torch.optim import Optimizer
 from tqdm import tqdm
 
 from openrlhf.models import KTOLoss
-from openrlhf.models.utils import log_probs_from_logits
+from openrlhf.models.utils import compute_token_log_probs
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 
@@ -366,7 +366,7 @@ class KTOTrainer(ABC):
 
         # dummy token; we'll ignore the losses on these tokens later
         labels[~loss_masks] = 0
-        per_token_logps = log_probs_from_logits(logits, labels)
+        per_token_logps = compute_token_log_probs(logits, labels)
 
         if average_log_prob:
             return (per_token_logps * loss_masks).sum(-1) / loss_masks.sum(-1)

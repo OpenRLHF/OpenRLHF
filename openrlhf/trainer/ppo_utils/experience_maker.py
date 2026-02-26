@@ -10,7 +10,7 @@ import torch
 from tqdm import tqdm
 from vllm import SamplingParams
 
-from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
+from openrlhf.models.utils import compute_approx_kl, reward_with_kl_penalty, masked_mean
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils.logging_utils import init_logger
@@ -756,7 +756,7 @@ class RemoteExperienceMaker:
 
         # calculate return and advantages
         for experience, reward in zip(experiences, rewards):
-            reward = compute_reward(
+            reward = reward_with_kl_penalty(
                 reward,
                 self.kl_ctl.value,
                 experience.kl,

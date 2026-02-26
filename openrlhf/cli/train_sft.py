@@ -207,10 +207,10 @@ if __name__ == "__main__":
         help="Enable sequence parallelism for FSDP2+TP (requires --fsdp2_tp_size > 1).",
     )
     parser.add_argument(
-        "--tp_shard_logits",
+        "--tp_loss_parallel",
         action="store_true",
         default=False,
-        help="Shard lm_head logits on vocab dim (FSDP2+TP).",
+        help="Enable vocab-sharded lm_head logits and TP loss-parallel path (requires --fsdp2_tp_size > 1).",
     )
 
     # HF safetensors sharded export (DCP writer)

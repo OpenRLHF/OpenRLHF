@@ -83,7 +83,12 @@ if __name__ == "__main__":
     parser.add_argument("--fsdp2_cpu_offload", action="store_true", default=False, help="Enable CPU offload")
     parser.add_argument("--fsdp2_reshard_after_forward", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--sequence_parallel", action="store_true", default=False)
-    parser.add_argument("--tp_shard_logits", action="store_true", default=False)
+    parser.add_argument(
+        "--tp_loss_parallel",
+        action="store_true",
+        default=False,
+        help="Enable vocab-sharded lm_head logits and TP loss-parallel path (requires --fsdp2_tp_size > 1).",
+    )
     parser.add_argument("--seed", type=int, default=42)
 
     # HF export options

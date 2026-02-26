@@ -18,7 +18,7 @@ from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.utils import convert_to_torch_dtype, get_tokenizer
 from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
-from openrlhf.utils.fsdp2 import FSDP2Strategy
+from openrlhf.utils.fsdp2.strategy import FSDP2Strategy
 from openrlhf.utils.fsdp2.utils import moving_average_fsdp2
 from openrlhf.utils.logging_utils import init_logger
 

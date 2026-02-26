@@ -12,7 +12,7 @@ from tqdm import tqdm
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
 from openrlhf.utils import convert_to_torch_dtype
-from openrlhf.utils.fsdp2 import FSDP2Strategy
+from openrlhf.utils.fsdp2.strategy import FSDP2Strategy
 
 
 class BaseDistributedActor:

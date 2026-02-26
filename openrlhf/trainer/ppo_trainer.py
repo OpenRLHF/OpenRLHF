@@ -15,7 +15,7 @@ from openrlhf.trainer.ppo_utils.kl_controller import AdaptiveKLController, Fixed
 from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
-from openrlhf.utils.fsdp2 import FSDP2Strategy
+from openrlhf.utils.fsdp2.strategy import FSDP2Strategy
 from openrlhf.utils.logging_utils import TensorboardLogger, WandbLogger, init_logger
 from openrlhf.utils.utils import get_tokenizer
 

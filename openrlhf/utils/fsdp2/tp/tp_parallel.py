@@ -33,11 +33,6 @@ from ..utils import ensure_tied_word_embeddings
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# Custom Parallel Styles
-# =============================================================================
-
-
 class ReplicateParallel(ParallelStyle):
     """Replicate computation style for modules that should not be sharded.
 
@@ -98,11 +93,6 @@ class SequenceParallelPreserveGrad(SequenceParallel):
                     requires_grad=param.requires_grad,
                 ),
             )
-
-
-# =============================================================================
-# TP Plans for HF Models
-# =============================================================================
 
 
 def _str_to_style(s: str):
@@ -192,11 +182,6 @@ def _set_sharded_lm_head(plan: dict, sequence_parallel: bool) -> dict:
     return plan
 
 
-# -----------------------------------------------------------------------------
-# Model-specific plans
-# -----------------------------------------------------------------------------
-
-
 def _llama_plan(model, sequence_parallel: bool):
     return _base_plan(sequence_parallel, SequenceParallelPreserveGrad)
 
@@ -227,11 +212,6 @@ _MODEL_PLANS = {
     "Qwen2ForCausalLM": _qwen_plan,
     "Qwen3ForCausalLM": _qwen_plan,
 }
-
-
-# -----------------------------------------------------------------------------
-# Plan retrieval and post-processing
-# -----------------------------------------------------------------------------
 
 
 def _get_hf_plan(model):
@@ -321,11 +301,6 @@ def maybe_add_score_layer_plan(model, plan: dict):
         )
         logger.info("Added ReplicateParallel for score layer (Critic model)")
     return plan
-
-
-# =============================================================================
-# Apply TP to Model
-# =============================================================================
 
 
 def maybe_enable_async_tp(tp_mesh: DeviceMesh, enabled: bool = False):

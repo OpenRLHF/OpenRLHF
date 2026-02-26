@@ -15,11 +15,6 @@ import torch
 import torch.nn as nn
 from torch.distributed.tensor import DTensor
 
-# -----------------------------------------------------------------------------
-# Gradient Norm Clipping (DTensor/FSDP2)
-# -----------------------------------------------------------------------------
-
-
 @torch.no_grad()
 def clip_grad_norm_dtensor(
     model: nn.Module,
@@ -99,11 +94,6 @@ def clip_grad_norm_dtensor(
     return total_norm.item()
 
 
-# -----------------------------------------------------------------------------
-# EMA (Exponential Moving Average)
-# -----------------------------------------------------------------------------
-
-
 def _dtensor_to_local(t: torch.Tensor) -> torch.Tensor:
     """Extract local shard from DTensor, or return tensor as-is.
 
@@ -170,11 +160,6 @@ def moving_average_fsdp2(model: nn.Module, model_ema: nn.Module, unwrap_fn: Call
         _update_tensor(name, ema_b, src_b, do_ema=False)
 
 
-# -----------------------------------------------------------------------------
-# Optimizer State Management
-# -----------------------------------------------------------------------------
-
-
 @torch.no_grad()
 def move_optimizer_state(optimizer: torch.optim.Optimizer, device: str | torch.device) -> None:
     """Move optimizer state tensors to specified device.
@@ -202,11 +187,6 @@ def move_optimizer_state(optimizer: torch.optim.Optimizer, device: str | torch.d
         torch.cuda.synchronize()
 
 
-# -----------------------------------------------------------------------------
-# Checkpoint Metadata
-# -----------------------------------------------------------------------------
-
-
 def get_checkpoint_metadata(strategy) -> dict:
     """Build metadata for FSDP2 checkpoint (saved as fsdp2_runtime.json)."""
     return {
@@ -218,11 +198,6 @@ def get_checkpoint_metadata(strategy) -> dict:
         "param_dtype": strategy.param_dtype,
         "fsdp2_mesh_size": strategy.fsdp2_dp_size * strategy.fsdp2_cp_size,
     }
-
-
-# -----------------------------------------------------------------------------
-# Tied Embeddings
-# -----------------------------------------------------------------------------
 
 
 def ensure_tied_word_embeddings(model: nn.Module) -> bool:

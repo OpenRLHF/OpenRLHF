@@ -7,13 +7,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributed.tensor import DTensor
 
-from .utils import (
-    _get_dtensor_shard_info,
-    kd_loss_from_logits,
-    log_probs_from_logits,
-    masked_mean,
-    select_token_logits,
+from openrlhf.utils.fsdp2.tp.loss_parallel import (
+    compute_kd_loss_sharded,
+    gather_token_logits_sharded,
+    compute_argmax_sharded,
 )
+from .utils import compute_token_log_probs, masked_mean
 
 
 class GPTLMLoss(nn.Module):
@@ -44,7 +43,7 @@ class GPTLMLoss(nn.Module):
         if torch.all(shift_labels == self.IGNORE_INDEX):
             return shift_logits.mean() * 0
         if isinstance(shift_logits, DTensor):
-            log_probs = log_probs_from_logits(shift_logits, shift_labels)
+            log_probs = compute_token_log_probs(shift_logits, shift_labels)
             mask = shift_labels != self.IGNORE_INDEX
             return -(log_probs * mask).sum() / mask.sum()
         return self.loss(shift_logits.float().view(-1, shift_logits.size(-1)), shift_labels.view(-1))
@@ -367,7 +366,16 @@ class KDLoss(nn.Module):
         self.IGNORE_INDEX = -100
 
     def forward(self, logits: torch.Tensor, teacher_logits: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
-        return kd_loss_from_logits(logits, teacher_logits, label, self.IGNORE_INDEX)
+        if isinstance(logits, DTensor) or isinstance(teacher_logits, DTensor):
+            return compute_kd_loss_sharded(logits, teacher_logits, label, self.IGNORE_INDEX)
+
+        teacher_probs = F.softmax(teacher_logits, dim=-1, dtype=torch.float32)
+        inf_mask = torch.isinf(logits)
+        logprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
+        prod_probs = torch.masked_fill(teacher_probs * logprobs, inf_mask, 0)
+        x = torch.sum(prod_probs, dim=-1).view(-1)
+        mask = (label != self.IGNORE_INDEX).int()
+        return -torch.sum(x * mask.view(-1), dim=0) / torch.sum(mask.view(-1), dim=0)
 
 
 class PRMLoss(nn.Module):
@@ -388,7 +396,10 @@ class PRMLoss(nn.Module):
             # soft label
             assert len(self.reward_token_ids) == 2, "reward_token_ids should have 2 tokens for soft labels"
             token_ids = torch.tensor(self.reward_token_ids, dtype=torch.long)
-            logits = select_token_logits(logits, token_ids)
+            if isinstance(logits, DTensor):
+                logits = gather_token_logits_sharded(logits, token_ids)
+            else:
+                logits = logits.index_select(dim=-1, index=token_ids.to(device=logits.device))
             logits = logits[placeholder_mask].squeeze(1)
             labels = labels[placeholder_mask]
             positive_labels = labels.to(logits.dtype)
@@ -398,7 +409,10 @@ class PRMLoss(nn.Module):
         elif self.reward_token_ids is not None:
             # hard label with reward_token_ids set. (otherwise the whole vocab will be trained together.)
             token_ids = torch.tensor(self.reward_token_ids, dtype=torch.long)
-            logits = select_token_logits(logits, token_ids)
+            if isinstance(logits, DTensor):
+                logits = gather_token_logits_sharded(logits, token_ids)
+            else:
+                logits = logits.index_select(dim=-1, index=token_ids.to(device=logits.device))
             logits = logits[placeholder_mask].squeeze(1)
             labels = labels[placeholder_mask]
             # this is slow....
@@ -408,7 +422,7 @@ class PRMLoss(nn.Module):
             labels_ph = labels[placeholder_mask]
             if isinstance(logits, DTensor):
                 # Avoid DTensor advanced indexing; compute token log-probs first (returns local tensor).
-                log_probs = log_probs_from_logits(logits, labels)
+                log_probs = compute_token_log_probs(logits, labels)
                 log_probs_ph = log_probs[placeholder_mask]
 
                 mask = labels_ph != self.IGNORE_INDEX
@@ -417,24 +431,8 @@ class PRMLoss(nn.Module):
                 if not return_acc:
                     return loss
 
-                # Accuracy is a metric only; avoid tracking collectives in autograd
-                # (dist.all_reduce has no autograd kernel).
                 with torch.no_grad():
-                    group, local_logits, _, _, vocab_start, _ = _get_dtensor_shard_info(logits)
-                    local_ph = local_logits.detach()[placeholder_mask].float()
-                    local_max, local_argmax = local_ph.max(dim=-1)
-
-                    global_max = local_max.clone()
-                    dist.all_reduce(global_max, op=dist.ReduceOp.MAX, group=group)
-
-                    candidate_idx = torch.where(
-                        local_max == global_max,
-                        local_argmax + vocab_start,
-                        torch.full_like(local_argmax, -1),
-                    )
-                    global_argmax = candidate_idx.clone()
-                    dist.all_reduce(global_argmax, op=dist.ReduceOp.MAX, group=group)
-
+                    global_argmax = compute_argmax_sharded(logits, placeholder_mask)
                     acc = (global_argmax == labels_ph).float()
                     acc = (acc * mask).sum() / mask.sum()
                 return loss, acc
