@@ -65,13 +65,18 @@ class FSDP2Strategy(ABC):
         # Parallelism config
         self.fsdp2_cp_size = args.fsdp2_cp_size
         self.fsdp2_tp_size = args.fsdp2_tp_size
+        self.tp_loss_parallel = args.tp_loss_parallel
+
+        # tp_loss_parallel means lm_head outputs vocab-sharded DTensor logits and
+        # requires TP world size > 1 to be meaningful.
+        if self.tp_loss_parallel and self.fsdp2_tp_size <= 1:
+            raise ValueError("--tp_loss_parallel requires --fsdp2_tp_size > 1.")
 
         # FSDP config
         self.param_dtype = args.param_dtype
         self.fsdp2_cpu_offload = args.fsdp2_cpu_offload
         self.fsdp2_reshard_after_forward = args.fsdp2_reshard_after_forward
         self.sequence_parallel = args.sequence_parallel
-        self.tp_shard_logits = args.tp_shard_logits
 
         # CPUOffloadPolicy and manual offload are mutually exclusive (ref: slime)
         # When fsdp2_cpu_offload is enabled, FSDP2 manages CPU offload automatically,
@@ -255,7 +260,7 @@ class FSDP2Strategy(ABC):
                 self.mesh["tp"],
                 sequence_parallel=self.sequence_parallel,
                 validate=True,
-                shard_logits=self.tp_shard_logits,
+                shard_logits=self.tp_loss_parallel,
             )
         else:
             self._log("Skipping TP (fsdp2_tp_size=1)")
