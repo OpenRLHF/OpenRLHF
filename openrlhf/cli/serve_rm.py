@@ -7,7 +7,6 @@ from fastapi.responses import JSONResponse
 
 from openrlhf.models import get_llm_for_sequence_regression
 from openrlhf.utils import convert_to_torch_dtype, get_tokenizer
-from openrlhf.utils.fsdp2.checkpoint import load_hf_weights
 from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
@@ -21,16 +20,10 @@ class RewardModelProxy:
             normalize_reward=args.normalize_reward,
             attn_implementation=args.attn_implementation,
             torch_dtype=convert_to_torch_dtype(args.param_dtype),
-            init_device="meta_structure",
             value_head_prefix=args.value_head_prefix,
             packing_samples=args.packing_samples,
+            device_map="auto",
         )
-        loaded = load_hf_weights(
-            self.reward_model,
-            args.reward_pretrain,
-            device_map=args.device_map,
-        )
-        self.reward_model = loaded
         self.reward_model.eval()
 
         self.tokenizer = get_tokenizer(
@@ -102,13 +95,6 @@ if __name__ == "__main__":
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument("--packing_samples", action="store_true", default=False)
     parser.add_argument("--batch_size", type=int, default=None)
-
-    parser.add_argument(
-        "--device_map",
-        type=str,
-        default="auto",
-        help="Inference backend selector: auto -> HF device_map backend; otherwise DCP HF safetensors backend.",
-    )
 
     parser.add_argument("--use_ms", action="store_true", default=False)
 

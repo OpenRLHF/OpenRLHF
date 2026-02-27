@@ -36,10 +36,10 @@ from openrlhf.utils import convert_to_torch_dtype
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 from .checkpoint import (
-    load_hf_weights,
-    save_hf_checkpoint,
-    load_dcp_checkpoint,
-    save_dcp_checkpoint,
+    _load_hf_checkpoint,
+    _save_hf_checkpoint,
+    _load_dcp_checkpoint,
+    _save_dcp_checkpoint,
     _cleanup_old_checkpoints,
 )
 from .tp.tp_parallel import apply_tensor_parallel
@@ -141,12 +141,6 @@ class FSDP2Strategy(ABC):
                     "which would be seq/tp_size after SP sharding, causing mask length mismatch."
                 )
 
-        # DTensor TP does not support PEFT/LoRA wrappers.
-        if getattr(self.args, "lora_rank", 0) and self.fsdp2_tp_size > 1:
-            raise ValueError(
-                "Invalid config: --lora_rank > 0 is not supported with --fsdp2_tp_size > 1 (DTensor TP). "
-                "Set --lora_rank 0 or run with --fsdp2_tp_size 1."
-            )
         # Create 3D mesh: (dp, cp, tp) - always include all dimensions even if size=1
         # This ensures all parameters use the same mesh structure, avoiding mesh mismatch issues
         # in operations like clip_grad_norm that aggregate across all parameters
@@ -229,21 +223,12 @@ class FSDP2Strategy(ABC):
     # Model Wrapping
     # -------------------------------------------------------------------------
 
-    def prepare(self, model, cpu_offload: bool = False):
-        """Prepare a model with optional FSDP2 CPU offload.
+    def apply_parallelism(self, model, force_cpu_offload: bool = False):
+        """Apply TP + FSDP sharding to a model, preserving Actor wrapper.
 
         Args:
-            model: Model to wrap/shard.
-            cpu_offload: If True, enable CPU offload policy for this model.
-        """
-        return self._wrap(model, force_cpu_offload=cpu_offload)
-
-    def _wrap(self, model, force_cpu_offload=False):
-        """Wrap model with TP + FSDP, preserving Actor wrapper.
-
-        Args:
-            model: Model to wrap
-            force_cpu_offload: If True, force CPUOffloadPolicy
+            model: Model to shard.
+            force_cpu_offload: If True, enable CPU offload policy for this model.
         """
         unwrapped = self._unwrap_model(model)
         is_actor = unwrapped is not model
@@ -330,7 +315,7 @@ class FSDP2Strategy(ABC):
     # Model Loading & Post-load Fixup
     # -------------------------------------------------------------------------
 
-    def load_pretrained(
+    def load_hf_checkpoint(
         self,
         model: nn.Module,
         pretrain: str,
@@ -349,7 +334,7 @@ class FSDP2Strategy(ABC):
         on_cpu = self.fsdp2_cpu_offload or force_cpu_offload
         device = "cpu" if on_cpu else torch.device("cuda", torch.cuda.current_device())
 
-        load_hf_weights(
+        _load_hf_checkpoint(
             unwrapped,
             pretrain,
             device=device,
@@ -360,7 +345,6 @@ class FSDP2Strategy(ABC):
             self._move_buffers_to_cuda(unwrapped)
         if init_value_head:
             self._init_value_head_after_load(unwrapped, value_head_prefix=value_head_prefix)
-        self._init_lora_after_load(unwrapped)
         return True
 
     @torch.no_grad()
@@ -392,41 +376,6 @@ class FSDP2Strategy(ABC):
             init_weight = torch.empty(shape, device="cpu", dtype=dtype)
             init_weight.normal_(mean=0.0, std=std)
             state = {weight_key: init_weight}
-
-        set_model_state_dict(
-            model,
-            state,
-            options=StateDictOptions(
-                full_state_dict=True,
-                cpu_offload=True,
-                strict=False,
-                broadcast_from_rank0=dist.is_initialized(),
-            ),
-        )
-
-    @torch.no_grad()
-    def _init_lora_after_load(self, model: nn.Module) -> None:
-        """Initialize PEFT LoRA adapter weights after meta-init materialization."""
-        if not bool(getattr(self.args, "lora_rank", 0)):
-            return
-
-        # Build a small rank0 state_dict for LoRA params and broadcast+distribute it.
-        if dist.is_initialized() and dist.get_rank() != 0:
-            state = {}
-        else:
-            state = {}
-            for name, param in model.named_parameters():
-                if not name.endswith("weight"):
-                    continue
-                if "lora_A" in name:
-                    init_weight = torch.empty(tuple(param.shape), device="cpu", dtype=param.dtype)
-                    init_weight.normal_(mean=0.0, std=0.02)
-                    state[name] = init_weight
-                elif "lora_B" in name:
-                    state[name] = torch.zeros(tuple(param.shape), device="cpu", dtype=param.dtype)
-
-        if not state and not dist.is_initialized():
-            return
 
         set_model_state_dict(
             model,
@@ -651,25 +600,40 @@ class FSDP2Strategy(ABC):
     # Checkpointing
     # -------------------------------------------------------------------------
 
-    def save_hf_model(self, model, tokenizer, output_dir, **kwargs):
+    def save_hf_checkpoint(self, model, tokenizer, output_dir, tag=None, max_num=None, max_mem=None, **kwargs):
+        """Save HF checkpoint, optionally under a sub-tag with rotation cleanup.
+
+        Args:
+            model: Model to save.
+            tokenizer: Tokenizer to save alongside the model.
+            output_dir: Root directory for saving.
+            tag: If provided, save under ``output_dir/tag`` and apply rotation cleanup.
+            max_num: Max number of checkpoints to keep (used with tag).
+            max_mem: Max total checkpoint size in GB (used with tag).
+        """
+        save_dir = os.path.join(output_dir, tag) if tag else output_dir
+
         # Convert fp32 master weights to the training compute dtype (e.g. bf16) for deployment.
         save_dtype = convert_to_torch_dtype(self.param_dtype)
         max_gb = getattr(self.args, "hf_max_shard_size_gb", 5)
         max_bytes = int(float(max_gb) * 1024**3) if max_gb else None
 
-        save_hf_checkpoint(
+        _save_hf_checkpoint(
             self._unwrap_model(model),
             tokenizer,
-            output_dir,
+            save_dir,
             self.is_rank_0(),
-            args=self.args,
             save_dtype=save_dtype,
             process_group=self._gloo_group,
             max_shard_size_bytes=max_bytes,
             metadata=get_checkpoint_metadata(self),
         )
 
-    def save_dcp_model(
+        if tag and self.is_rank_0():
+            os.makedirs(output_dir, exist_ok=True)
+            _cleanup_old_checkpoints(output_dir, max_num, max_mem)
+
+    def save_dcp_checkpoint(
         self,
         model,
         save_dir,
@@ -682,7 +646,7 @@ class FSDP2Strategy(ABC):
         scheduler=None,
     ):
         """Save FSDP2 distributed checkpoint."""
-        save_dcp_checkpoint(
+        _save_dcp_checkpoint(
             model,
             save_dir,
             tag,
@@ -697,15 +661,7 @@ class FSDP2Strategy(ABC):
             process_group=self._gloo_group,
         )
 
-    def save_hf_ckpt_with_rotation(self, model, tokenizer, save_dir, tag, max_num, max_mem):
-        """Save HF checkpoint with rotation cleanup (like _actor DCP checkpoints)."""
-        save_path = os.path.join(save_dir, tag)
-        self.save_hf_model(model, tokenizer, save_path)
-        if self.is_rank_0():
-            os.makedirs(save_dir, exist_ok=True)
-            _cleanup_old_checkpoints(save_dir, max_num, max_mem)
-
-    def load_dcp_model(
+    def load_dcp_checkpoint(
         self,
         model,
         load_dir,
@@ -717,7 +673,7 @@ class FSDP2Strategy(ABC):
         optimizer=None,
         scheduler=None,
     ):
-        return load_dcp_checkpoint(
+        return _load_dcp_checkpoint(
             model,
             load_dir,
             self._unwrap_model,

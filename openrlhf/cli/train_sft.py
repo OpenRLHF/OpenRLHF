@@ -23,12 +23,8 @@ def train(args):
     model = Actor(
         args.pretrain,
         attn_implementation=args.attn_implementation,
-        torch_dtype=convert_to_torch_dtype("fp32"),
+        torch_dtype=torch.float32,
         use_liger_kernel=args.use_liger_kernel,
-        lora_rank=args.lora_rank,
-        lora_alpha=args.lora_alpha,
-        target_modules=args.target_modules,
-        lora_dropout=args.lora_dropout,
         packing_samples=args.packing_samples,
     )
     # configure tokenizer
@@ -42,8 +38,8 @@ def train(args):
         )
 
     # Wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
-    model = strategy.prepare(model)
-    strategy.load_pretrained(model, args.pretrain)
+    model = strategy.apply_parallelism(model)
+    strategy.load_hf_checkpoint(model, args.pretrain)
 
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
@@ -116,7 +112,7 @@ def train(args):
     # load checkpoint
     consumed_samples = 0
     if args.load_checkpoint and os.path.exists(args.dcp_ckpt_path):
-        _, states = strategy.load_dcp_model(model.model, args.dcp_ckpt_path, optimizer=optim, scheduler=scheduler)
+        _, states = strategy.load_dcp_checkpoint(model.model, args.dcp_ckpt_path, optimizer=optim, scheduler=scheduler)
         consumed_samples = states["consumed_samples"]
         strategy.print(f"Loaded the checkpoint: {args.dcp_ckpt_path}, consumed_samples: {consumed_samples}")
 
@@ -142,7 +138,7 @@ def train(args):
     trainer.fit(args, consumed_samples, num_update_steps_per_epoch)
 
     # save model checkpoint after fitting on only rank0
-    strategy.save_hf_model(model, tokenizer, args.last_hf_ckpt_path)
+    strategy.save_hf_checkpoint(model, tokenizer, args.last_hf_ckpt_path)
 
 
 if __name__ == "__main__":
@@ -242,12 +238,6 @@ if __name__ == "__main__":
         "It should be a divisor of the number of heads. "
         "A larger value may results in faster training but will consume more memory.",
     )
-
-    # LoRA
-    parser.add_argument("--lora_rank", type=int, default=0)
-    parser.add_argument("--lora_alpha", type=int, default=16)
-    parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")
-    parser.add_argument("--lora_dropout", type=float, default=0)
 
     # packing SFT samples without CrossAttention
     parser.add_argument("--packing_samples", action="store_true", default=False)

@@ -1,8 +1,7 @@
-from typing import Literal, Optional
+from typing import Optional
 
 import torch
 import torch.nn as nn
-from peft import LoraConfig, TaskType, get_peft_model
 from transformers import AutoConfig, AutoModel
 
 from openrlhf.utils.logging_utils import init_logger
@@ -19,31 +18,19 @@ def get_llm_for_sequence_regression(
     model_type: str,
     *,
     torch_dtype: torch.dtype = torch.float32,
-    init_device: Literal["meta_structure"] = "meta_structure",
-    lora_rank=0,
-    lora_alpha=16,
-    target_modules=None,
-    lora_dropout=0,
+    device_map: Optional[str] = "meta",
     normalize_reward=False,
     attn_implementation="flash_attention_2",
-    init_value_head=False,
     value_head_prefix="score",
     packing_samples=False,
-    **kwargs,
 ) -> nn.Module:
-    """Build a sequence-regression model structure (meta-init only).
+    """Build a sequence-regression model.
 
-    Weight loading is intentionally separated from structure building and should
-    be handled by the checkpoint module (`openrlhf.utils.fsdp2.checkpoint`).
+    - ``device_map="meta"`` (default): build model structure on meta device only.
+      Weights should be loaded later via ``strategy.load_pretrained``.
+    - ``device_map!="meta"``: load real weights via HuggingFace
+      ``from_pretrained`` and forward ``device_map`` to it (e.g. ``"cuda:0"``).
     """
-    if kwargs:
-        logger.debug(f"Ignored extra kwargs in get_llm_for_sequence_regression: {sorted(kwargs.keys())}")
-
-    if init_device != "meta_structure":
-        raise ValueError(
-            "get_llm_for_sequence_regression now only supports init_device='meta_structure'. "
-            "Use checkpoint.load_hf_weights or checkpoint.load_pretrained_weights_for_inference for weight loading."
-        )
 
     assert model_type in ("critic", "reward"), f"invalid model_type: {model_type}, should be critic or reward."
 
@@ -62,10 +49,21 @@ def get_llm_for_sequence_regression(
     else:
         cls_class = _get_critic_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
 
-    config.torch_dtype = torch_dtype
-
-    with torch.device("meta"):
-        model = cls_class(config)
+    if device_map == "meta":
+        with torch.device("meta"):
+            model = cls_class(config)
+    else:
+        load_kwargs = {
+            "config": config,
+            "trust_remote_code": True,
+            "dtype": torch_dtype,
+        }
+        if device_map is not None:
+            load_kwargs["device_map"] = device_map
+        model = cls_class.from_pretrained(
+            model_name_or_path,
+            **load_kwargs,
+        )
 
     model_config = model.config.to_dict()
     if "output_router_logits" in model_config:
@@ -74,23 +72,6 @@ def get_llm_for_sequence_regression(
 
     # https://github.com/huggingface/transformers/issues/26877
     model.config.use_cache = False
-
-    # For meta-init workflows, value_head must be initialized after materialization.
-    if init_value_head:
-        logger.debug("init_value_head is deferred to post-materialization stage")
-
-    if lora_rank > 0:
-        model.enable_input_require_grads()
-        lora_config = LoraConfig(
-            task_type=TaskType.SEQ_CLS,
-            r=lora_rank,
-            lora_alpha=lora_alpha,
-            target_modules=target_modules,
-            lora_dropout=lora_dropout,
-            bias="none",
-            modules_to_save=[value_head_prefix],
-        )
-        model = get_peft_model(model, lora_config)
 
     return model
 

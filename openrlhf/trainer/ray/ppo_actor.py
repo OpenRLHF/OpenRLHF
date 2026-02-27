@@ -16,7 +16,7 @@ from transformers.trainer import get_scheduler
 from openrlhf.models import Actor, PolicyLoss
 from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
-from openrlhf.utils import convert_to_torch_dtype, get_tokenizer
+from openrlhf.utils import get_tokenizer
 from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.fsdp2.strategy import FSDP2Strategy
 from openrlhf.utils.fsdp2.utils import moving_average_fsdp2
@@ -295,7 +295,7 @@ class ActorPPOTrainer(ABC):
         # merge logs from info field
         for k, v in experience.info.items():
             if isinstance(v, list):
-                status[k] = torch.tensor(v, dtype=torch.float).mean().item()
+                status[k] = torch.tensor(v, dtype=torch.float32).mean().item()
             elif isinstance(v, torch.Tensor):
                 status[k] = v.float().mean().item()
         return status
@@ -425,12 +425,8 @@ class PolicyModelActor(BaseModelActor):
         actor = Actor(
             pretrain,
             attn_implementation=strategy.args.attn_implementation,
-            torch_dtype=convert_to_torch_dtype("fp32"),
+            torch_dtype=torch.float32,
             use_liger_kernel=strategy.args.use_liger_kernel,
-            lora_rank=strategy.args.lora_rank,
-            lora_alpha=strategy.args.lora_alpha,
-            target_modules=strategy.args.target_modules,
-            lora_dropout=strategy.args.lora_dropout,
             packing_samples=strategy.args.packing_samples,
             temperature=strategy.args.temperature,
         )
@@ -445,7 +441,7 @@ class PolicyModelActor(BaseModelActor):
             ema_model = Actor(
                 pretrain,
                 attn_implementation=strategy.args.attn_implementation,
-                torch_dtype=convert_to_torch_dtype("fp32"),
+                torch_dtype=torch.float32,
                 use_liger_kernel=strategy.args.use_liger_kernel,
                 packing_samples=strategy.args.packing_samples,
             )
@@ -458,11 +454,11 @@ class PolicyModelActor(BaseModelActor):
             )
 
         # Wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
-        actor = strategy.prepare(actor)
+        actor = strategy.apply_parallelism(actor)
         if ema_model:
-            ema_model = strategy.prepare(ema_model, cpu_offload=True)
+            ema_model = strategy.apply_parallelism(ema_model, force_cpu_offload=True)
 
-        strategy.load_pretrained(actor, pretrain)
+        strategy.load_hf_checkpoint(actor, pretrain)
 
         # Materialize EMA storage and initialize from actor weights (avoid double IO).
         if ema_model is not None:
@@ -492,7 +488,7 @@ class PolicyModelActor(BaseModelActor):
         ckpt_path = os.path.join(args.dcp_ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            ckpt_id, states = strategy.load_dcp_model(
+            ckpt_id, states = strategy.load_dcp_checkpoint(
                 self.actor.model, ckpt_path, optimizer=self.actor_optim, scheduler=self.actor_scheduler
             )
             self.checkpoint_states = states
@@ -502,7 +498,7 @@ class PolicyModelActor(BaseModelActor):
                     try:
                         ema_tag = os.path.basename(str(ckpt_id))
                         strategy.print(f"Loading EMA checkpoint: {ema_ckpt_path} (tag={ema_tag})")
-                        strategy.load_dcp_model(
+                        strategy.load_dcp_checkpoint(
                             self.ema_model.model,
                             ema_ckpt_path,
                             tag=ema_tag,
@@ -545,7 +541,7 @@ class PolicyModelActor(BaseModelActor):
         args = self.strategy.args
 
         # save model checkpoint after fitting on only rank0
-        self.strategy.save_hf_model(
+        self.strategy.save_hf_checkpoint(
             self.ema_model if args.enable_ema else self.actor,
             self.tokenizer,
             args.last_hf_ckpt_path,
@@ -599,7 +595,7 @@ class PolicyModelActor(BaseModelActor):
     def save_checkpoint(self, tag, client_states):
         args = self.strategy.args
         if not self.disable_fsdp2_ckpt:
-            self.strategy.save_dcp_model(
+            self.strategy.save_dcp_checkpoint(
                 self.actor.model,
                 os.path.join(args.dcp_ckpt_path, "_actor"),
                 tag,
@@ -610,7 +606,7 @@ class PolicyModelActor(BaseModelActor):
                 scheduler=self.actor_scheduler,
             )
             if args.enable_ema and self.ema_model is not None:
-                self.strategy.save_dcp_model(
+                self.strategy.save_dcp_checkpoint(
                     self.ema_model.model,
                     os.path.join(args.dcp_ckpt_path, "_ema"),
                     tag,
@@ -620,7 +616,7 @@ class PolicyModelActor(BaseModelActor):
                     save_latest=True,
                 )
         if self.save_hf_ckpt:
-            self.strategy.save_hf_ckpt_with_rotation(
+            self.strategy.save_hf_checkpoint(
                 self.ema_model if args.enable_ema else self.actor,
                 self.tokenizer,
                 args.hf_ckpt_path,
