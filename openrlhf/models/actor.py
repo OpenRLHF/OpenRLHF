@@ -3,7 +3,6 @@ from typing import Optional
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from peft import LoraConfig, TaskType, get_peft_model
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
@@ -14,32 +13,25 @@ class Actor(nn.Module):
     """
     Actor model for reinforcement learning.
 
-    Builds an HF causal-LM on the ``meta`` device (no weight allocation) and
-    optionally applies LoRA adapters.  Weights are loaded later via
-    ``strategy.load_pretrained`` or ``load_hf_weights``.
-
-    When ``use_meta_init=False``, the model is loaded with real weights via
-    ``from_pretrained`` instead.  Combined with ``lora_path``, this allows
-    loading a trained LoRA adapter and merging it into the base model for
-    inference without a separate merge step.
+    - ``device_map="meta"`` (default): build an HF causal-LM on the ``meta``
+      device (no weight allocation). Weights are loaded later via
+      ``strategy.load_pretrained``.
+    - ``device_map!="meta"``: load real weights via HuggingFace
+      ``from_pretrained`` and forward ``device_map`` to it (e.g. ``"auto"``,
+      ``"cuda:0"``, or ``"cpu"``). If ``device_map is None``, HF defaults are
+      used (typically CPU).
 
     Args:
         pretrain (str): HuggingFace model name or local path.
         attn_implementation (str): Attention implementation. Defaults to ``"flash_attention_2"``.
-        torch_dtype (torch.dtype): Model dtype for meta-init.
+        dtype (torch.dtype): Model dtype for meta-init and ``from_pretrained``.
             Training models typically pass ``torch.float32`` (FSDP mixed-precision handles cast);
             ref/inference models pass ``torch.bfloat16`` or ``torch.float16``.
-        use_meta_init (bool): If ``True`` (default), build model on meta device
-            (weights loaded later by strategy). If ``False``, load real weights
-            via ``from_pretrained``.
+        device_map (str | None): Device placement for model weights. Use ``"meta"``
+            to create structure-only meta tensors; use ``"auto"`` for automatic
+            placement with Accelerate; use ``"cuda:{rank}"`` to place the whole
+            model on a specific GPU.
         use_liger_kernel (bool): Use Liger Kernel optimised causal LM. Defaults to ``False``.
-        lora_rank (int): LoRA rank. 0 disables LoRA. Defaults to 0.
-        lora_alpha (int): LoRA alpha. Defaults to 16.
-        lora_dropout (float): LoRA dropout. Defaults to 0.
-        target_modules (list | None): LoRA target modules. Defaults to ``None``.
-        lora_path (str | None): Path to a trained LoRA adapter directory.
-            When set (requires ``use_meta_init=False``), the adapter is loaded
-            via ``PeftModel.from_pretrained`` and merged into the base model.
         packing_samples (bool): Pack samples during training. Defaults to ``False``.
         temperature (float): Temperature for log-prob computation. Defaults to 1.0.
     """
@@ -50,12 +42,7 @@ class Actor(nn.Module):
         *,
         attn_implementation="flash_attention_2",
         torch_dtype: torch.dtype = torch.float32,
-        use_meta_init: bool = True,
-        lora_rank=0,
-        lora_alpha=16,
-        lora_dropout=0,
-        target_modules=None,
-        lora_path=None,
+        device_map: Optional[str] = "meta",
         packing_samples=False,
         temperature=1.0,
         use_liger_kernel=False,
@@ -65,14 +52,11 @@ class Actor(nn.Module):
         self.temperature = temperature
         self.packing_samples = packing_samples
 
-        if use_meta_init:
+        if device_map == "meta":
             # -- Build causal-LM structure on meta device (no weight allocation) --
             cfg = AutoConfig.from_pretrained(pretrain, trust_remote_code=True)
             cfg.use_cache = False
-            try:
-                cfg._attn_implementation = attn_implementation
-            except Exception:
-                setattr(cfg, "_attn_implementation", attn_implementation)
+            cfg._attn_implementation = attn_implementation
 
             with torch.device("meta"):
                 if use_liger_kernel:
@@ -89,34 +73,27 @@ class Actor(nn.Module):
             self.model = model
             if hasattr(self.model, "config") and hasattr(self.model.config, "use_cache"):
                 self.model.config.use_cache = False
-
-            # LoRA (meta-init compatible): apply adapters before TP/FSDP wrapping.
-            if lora_rank > 0:
-                self.model.enable_input_require_grads()
-                lora_config = LoraConfig(
-                    task_type=TaskType.CAUSAL_LM,
-                    r=lora_rank,
-                    lora_alpha=lora_alpha,
-                    target_modules=target_modules,
-                    lora_dropout=lora_dropout,
-                    bias="none",
-                )
-                self.model = get_peft_model(self.model, lora_config)
         else:
-            # -- Non meta-init: load real weights via from_pretrained --
-            from peft import PeftModel
+            # -- Load real weights via from_pretrained --
+            model_cls = AutoModelForCausalLM
+            if use_liger_kernel:
+                from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
-            model = AutoModelForCausalLM.from_pretrained(
-                pretrain,
-                dtype=torch_dtype,
-                attn_implementation=attn_implementation,
-                trust_remote_code=True,
-            )
-            if lora_path:
-                model = PeftModel.from_pretrained(model, lora_path, dtype=torch_dtype)
-                model = model.merge_and_unload()
+                model_cls = AutoLigerKernelForCausalLM
+
+            load_kwargs = {
+                "dtype": torch_dtype,
+                "attn_implementation": attn_implementation,
+                "trust_remote_code": True,
+            }
+            if device_map is not None:
+                load_kwargs["device_map"] = device_map
+
+            model = model_cls.from_pretrained(pretrain, **load_kwargs)
 
             self.model = model
+            if hasattr(self.model, "config") and hasattr(self.model.config, "use_cache"):
+                self.model.config.use_cache = False
 
         # MoE - balancing loss
         model_config = self.model.config.to_dict()

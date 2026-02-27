@@ -117,11 +117,11 @@ class ReferenceModelActor(BaseModelActor):
         strategy.print(model)
 
         # Reference model is inference-only; cpu_offload controls FSDP2 CPUOffloadPolicy.
-        self.model = self.strategy.prepare(
+        self.model = self.strategy.apply_parallelism(
             model,
-            cpu_offload=strategy.args.ref_reward_offload,
+            force_cpu_offload=strategy.args.ref_reward_offload,
         )
-        self.strategy.load_pretrained(
+        self.strategy.load_hf_checkpoint(
             self.model,
             pretrain,
             force_cpu_offload=strategy.args.ref_reward_offload,
@@ -158,7 +158,6 @@ class RewardModelActor(BaseModelActor):
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
             torch_dtype=convert_to_torch_dtype(strategy.args.param_dtype),
-            init_device="meta_structure",
             value_head_prefix=strategy.args.value_head_prefix,
             packing_samples=strategy.args.packing_samples,
         )
@@ -166,11 +165,11 @@ class RewardModelActor(BaseModelActor):
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
 
         # Reward model is inference-only; cpu_offload controls FSDP2 CPUOffloadPolicy.
-        self.model = self.strategy.prepare(
+        self.model = self.strategy.apply_parallelism(
             model,
-            cpu_offload=strategy.args.ref_reward_offload,
+            force_cpu_offload=strategy.args.ref_reward_offload,
         )
-        self.strategy.load_pretrained(
+        self.strategy.load_hf_checkpoint(
             self.model,
             pretrain,
             force_cpu_offload=strategy.args.ref_reward_offload,

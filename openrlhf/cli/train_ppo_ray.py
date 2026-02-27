@@ -341,12 +341,6 @@ if __name__ == "__main__":
     parser.add_argument("--rollout_max_tokens_per_gpu", type=int, default=None)
     parser.add_argument("--train_max_tokens_per_gpu", type=int, default=16192)
 
-    # LoRA
-    parser.add_argument("--lora_rank", type=int, default=0)
-    parser.add_argument("--lora_alpha", type=int, default=16)
-    parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")
-    parser.add_argument("--lora_dropout", type=float, default=0)
-
     # PPO
     parser.add_argument("--num_episodes", type=int, default=1)
     parser.add_argument("--rollout_batch_size", type=int, default=1024, help="Batch size for make experience")

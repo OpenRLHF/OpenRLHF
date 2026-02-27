@@ -16,14 +16,6 @@ Note:
     circular imports during package initialization.
 """
 
-# Checkpointing
-from .checkpoint import (
-    load_hf_weights,
-    save_hf_checkpoint,
-    load_dcp_checkpoint,
-    save_dcp_checkpoint,
-)
-
 # Tensor Parallelism
 from .tp import (
     apply_tensor_parallel,
@@ -43,11 +35,6 @@ __all__ = [
     "apply_tensor_parallel",
     "get_tp_plan",
     "validate_tp_mesh",
-    # Checkpointing
-    "load_hf_weights",
-    "save_hf_checkpoint",
-    "load_dcp_checkpoint",
-    "save_dcp_checkpoint",
     # Utilities
     "get_checkpoint_metadata",
     "move_optimizer_state",

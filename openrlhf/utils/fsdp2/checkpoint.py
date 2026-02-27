@@ -36,142 +36,6 @@ logger = logging.getLogger(__name__)
 UnwrapFn = Callable[[nn.Module], nn.Module]
 
 
-def _is_lora_model(model: nn.Module, args=None) -> bool:
-    """Check if the model is a PEFT LoRA model.
-
-    Checks the model's ``peft_config`` attribute first; falls back to the
-    ``lora_rank`` flag in *args* (the strategy / training arguments).
-    """
-    if hasattr(model, "peft_config"):
-        return True
-    return bool(getattr(args, "lora_rank", 0))
-
-
-def _get_model_dtype(model: nn.Module) -> Optional[torch.dtype]:
-    for param in model.parameters():
-        return param.dtype
-    return None
-
-
-def _tensor_nbytes(t: torch.Tensor) -> int:
-    return t.numel() * t.element_size()
-
-
-def _has_safetensors(hf_dir: str) -> bool:
-    return any(f.endswith(".safetensors") for f in os.listdir(hf_dir))
-
-
-def _read_hf_keys(hf_dir: str) -> set[str]:
-    """Return the set of tensor keys present in a HF safetensors checkpoint directory."""
-    index_path = os.path.join(hf_dir, "model.safetensors.index.json")
-    if os.path.isfile(index_path):
-        with open(index_path, "r", encoding="utf-8") as f:
-            index_data = json.load(f)
-        return set(index_data.get("weight_map", {}).keys())
-
-    # Fallback: scan all .safetensors files (header-only).
-    try:
-        from safetensors import safe_open  # type: ignore[import]
-    except ModuleNotFoundError as e:
-        raise RuntimeError(
-            "safetensors is required to read HF safetensors checkpoints. "
-            "Install it before using dcp_hf_safetensors backend."
-        ) from e
-
-    all_keys: set[str] = set()
-    for filename in os.listdir(hf_dir):
-        if not filename.endswith(".safetensors"):
-            continue
-        with safe_open(os.path.join(hf_dir, filename), framework="pt") as f:
-            all_keys.update(f.keys())
-    return all_keys
-
-
-def _looks_like_peft_lora_keys(keys) -> bool:
-    """Heuristic to detect PEFT/LoRA checkpoints by key names."""
-    for key in keys:
-        if "lora_A" in key or "lora_B" in key:
-            return True
-        if key.startswith("base_model.model."):
-            return True
-    return False
-
-
-def _build_peft_to_base_load_dict(state_dict: Dict[str, Any], checkpoint_keys: set[str]) -> Dict[str, Any]:
-    """Build a load dict to map base checkpoints into PEFT/LoRA model tensors.
-
-    PEFT wraps target Linear modules under `*.base_layer.*` and prefixes all keys
-    with `base_model.model.`. Base HF checkpoints (e.g. Qwen2.5-Math-7B) do not
-    contain these wrappers, so we remap checkpoint keys to the corresponding
-    PEFT tensors.
-    """
-    load_dict: Dict[str, Any] = {}
-    for model_key, tensor in state_dict.items():
-        if not torch.is_tensor(tensor):
-            continue
-        # Adapter weights are absent in base checkpoints; init later.
-        if "lora_A" in model_key or "lora_B" in model_key:
-            continue
-
-        ckpt_key = model_key
-        if ckpt_key.startswith("base_model.model."):
-            ckpt_key = ckpt_key[len("base_model.model.") :]
-        ckpt_key = ckpt_key.replace(".base_layer.", ".")
-
-        if ckpt_key in checkpoint_keys:
-            load_dict[ckpt_key] = tensor
-
-    if not load_dict:
-        logger.warning(
-            "Detected PEFT/LoRA model but produced empty key mapping. "
-            "Checkpoint keys may be incompatible with this model structure."
-        )
-    return load_dict
-
-
-@torch.no_grad()
-def _init_lora_weights(model: nn.Module) -> None:
-    """Initialize LoRA adapter weights (lora_A ~ N(0,0.02), lora_B = 0).
-
-    After loading base-model weights into a PEFT-wrapped model the LoRA
-    parameters are left uninitialised (``to_empty`` fills them with garbage).
-    This mirrors the initialisation done by ``FSDP2Strategy._init_lora_after_load``
-    but works on a single-process, non-FSDP model used for inference.
-    """
-    for name, param in model.named_parameters():
-        if not name.endswith("weight"):
-            continue
-        if "lora_A" in name:
-            param.data.normal_(mean=0.0, std=0.02)
-        elif "lora_B" in name:
-            param.data.zero_()
-
-
-def resolve_hf_dir(
-    pretrain: str,
-) -> str:
-    """Resolve a HF repo id or local path into a local directory."""
-    if not pretrain:
-        raise ValueError("pretrain is required")
-
-    pretrain = os.path.expanduser(pretrain)
-    if os.path.isdir(pretrain):
-        return pretrain
-
-    try:
-        from huggingface_hub import snapshot_download
-    except ModuleNotFoundError as e:
-        raise RuntimeError(
-            "huggingface_hub is required to resolve HF repo ids. "
-            "Install it or pass a local pretrain directory."
-        ) from e
-
-    return snapshot_download(
-        repo_id=pretrain,
-        repo_type="model",
-    )
-
-
 @torch.no_grad()
 def _fixup_after_load(model: nn.Module) -> None:
     """Fixes after to_empty() + sharded load.
@@ -234,7 +98,7 @@ def _compute_shard_mapping(
     for key, tensor in state_dict.items():
         if not torch.is_tensor(tensor):
             continue
-        tensor_bytes = _tensor_nbytes(tensor)
+        tensor_bytes = tensor.numel() * tensor.element_size()
         if shard_bytes > 0 and shard_bytes + tensor_bytes > max_shard_size_bytes:
             shard_index += 1
             shard_bytes = 0
@@ -275,81 +139,38 @@ def _cleanup_old_checkpoints(save_dir: str, max_num: int, max_mem: int):
 
 
 @torch.no_grad()
-def load_hf_weights(
+def _load_hf_checkpoint(
     model: nn.Module,
     pretrain: str,
     *,
     device: torch.device | str = "cuda",
-    device_map: Optional[str] = None,
-    trust_remote_code: bool = True,
     process_group: Optional[dist.ProcessGroup] = None,
 ) -> nn.Module:
-    """Load HF pretrained weights into a model.
+    """Load HF safetensors weights into an existing model via DCP.
 
-    Unified loader that handles both distributed training and single-GPU inference:
+    - ``process_group`` provided: distributed DCP load across FSDP2/TP ranks.
+    - ``process_group`` omitted: single-process DCP load.
 
-    - ``device_map="auto"`` — uses HF ``from_pretrained(device_map="auto")``,
-      returns a **new** model object (original ``model`` is discarded).
-    - ``process_group`` provided — distributed DCP load across FSDP2/TP ranks,
-      modifies ``model`` in-place and returns it.
-    - Neither — single-process DCP load (e.g. inference without FSDP),
-      modifies ``model`` in-place and returns it.
-
-    Extra keys in ``model`` (e.g. ``score.weight`` for Critic) are left
-    uninitialized — caller is responsible for initializing them.
+    The function materializes and updates ``model`` in-place, then returns the
+    same object.
     """
-    hf_dir = resolve_hf_dir(pretrain)
+    # Resolve HF repo id or local path into a local directory.
+    hf_dir = os.path.expanduser(pretrain)
+    if not os.path.isdir(hf_dir):
+        from huggingface_hub import snapshot_download
+        hf_dir = snapshot_download(repo_id=pretrain, repo_type="model")
 
-    # ── Branch 1: HF device_map="auto" (returns new object) ──────────
-    if device_map == "auto":
-        try:
-            from transformers import PreTrainedModel
-        except Exception:  # pragma: no cover
-            PreTrainedModel = None
-
-        model_class = type(model)
-        if PreTrainedModel is not None and issubclass(model_class, PreTrainedModel):
-            dtype = _get_model_dtype(model)
-            load_kwargs: Dict[str, Any] = {
-                "trust_remote_code": trust_remote_code,
-                "device_map": "auto",
-            }
-            config = getattr(model, "config", None)
-            if config is not None:
-                load_kwargs["config"] = config
-            if dtype is not None:
-                load_kwargs["torch_dtype"] = dtype
-
-            loaded = model_class.from_pretrained(hf_dir, **load_kwargs)
-            if hasattr(loaded, "config") and hasattr(loaded.config, "use_cache"):
-                loaded.config.use_cache = False
-            _fixup_after_load(loaded)
-            return loaded
-
-    # ── Branch 2 & 3: DCP-based load (distributed or single-process) ─
+    # DCP-based load (distributed or single-process).
     if process_group is None and not (dist.is_initialized() and dist.get_world_size() > 1):
         # Single-process: pick a real device
         device = torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else "cpu"
 
     model.to_empty(device=device)
 
-    if not _has_safetensors(hf_dir):
+    if not any(f.endswith(".safetensors") for f in os.listdir(hf_dir)):
         raise FileNotFoundError(f"No .safetensors files found under: {hf_dir}")
 
-    checkpoint_keys = _read_hf_keys(hf_dir)
     state_dict = model.state_dict()
-
-    # PEFT/LoRA compatibility: map base checkpoints into PEFT key space.
-    is_peft_on_base = _looks_like_peft_lora_keys(state_dict.keys()) and not _looks_like_peft_lora_keys(checkpoint_keys)
-    if is_peft_on_base:
-        state_dict = _build_peft_to_base_load_dict(state_dict, checkpoint_keys)
-    else:
-        uninitialized_keys = set(state_dict.keys()) - checkpoint_keys
-        if uninitialized_keys:
-            logger.info(
-                "Keys in model but not in checkpoint (will be left uninitialized): %s",
-                sorted(uninitialized_keys),
-            )
 
     dcp.load(
         state_dict,
@@ -357,10 +178,6 @@ def load_hf_weights(
         planner=DefaultLoadPlanner(allow_partial_load=True),
         process_group=process_group,
     )
-
-    # Single-process PEFT: initialize LoRA adapter weights.
-    if is_peft_on_base and process_group is None:
-        _init_lora_weights(model)
 
     _fixup_after_load(model)
 
@@ -370,8 +187,8 @@ def load_hf_weights(
     return model
 
 
-def _save_hf_weights(
-    model_parts: list[nn.Module],
+def _save_hf_checkpoint(
+    model: nn.Module,
     tokenizer,
     output_dir: str,
     is_rank_0: bool,
@@ -395,7 +212,7 @@ def _save_hf_weights(
 
     # Sharded (distributed) state dict.
     model_state = get_model_state_dict(
-        model_parts[0], options=StateDictOptions(full_state_dict=False, cpu_offload=True)
+        model, options=StateDictOptions(full_state_dict=False, cpu_offload=True)
     )
 
     # Cast to the desired save dtype (e.g. fp32 master weights → bf16 for deployment).
@@ -471,8 +288,8 @@ def _save_hf_weights(
                         sort_keys=True,
                     )
 
-        # Try to save HF config from the first model part.
-        config = getattr(model_parts[0], "config", None) if model_parts else None
+        # Try to save HF config from the model.
+        config = getattr(model, "config", None)
         if config and hasattr(config, "auto_map") and isinstance(config.auto_map, dict):
             config.auto_map = {k: v for k, v in config.auto_map.items() if k is not None}
         if config and hasattr(config, "save_pretrained"):
@@ -484,119 +301,7 @@ def _save_hf_weights(
                 json.dump(metadata, f, indent=2, sort_keys=True)
 
 
-@torch.no_grad()
-def _save_lora_adapter(
-    model: nn.Module,
-    output_dir: str,
-    is_rank_0: bool,
-    *,
-    process_group=None,
-    save_dtype: Optional[torch.dtype] = None,
-) -> None:
-    """Save LoRA adapter weights in standard PEFT format.
-
-    Produces ``adapter_model.safetensors`` + ``adapter_config.json`` that can be
-    loaded by ``PeftModel.from_pretrained(base_model, output_dir)`` and merged
-    with ``lora_combiner.py``.
-
-    Only rank-0 writes files; all ranks participate in the full state_dict
-    collection.
-    """
-    from safetensors.torch import save_file as safetensors_save
-
-    # 1. Collect full state dict (all ranks participate, result on CPU).
-    full_state = get_model_state_dict(
-        model, options=StateDictOptions(full_state_dict=True, cpu_offload=True)
-    )
-
-    # 2. Filter to LoRA adapter weights and modules_to_save.
-    #    PEFT's own save_pretrained emits keys like:
-    #      base_model.model.<path>.lora_A.default.weight
-    #      base_model.model.<path>.modules_to_save.default.weight
-    #    We keep the same key format so PeftModel.from_pretrained works.
-    lora_state: Dict[str, torch.Tensor] = {}
-    for key, tensor in full_state.items():
-        if "lora_A" in key or "lora_B" in key or "modules_to_save" in key:
-            if save_dtype is not None:
-                tensor = tensor.to(save_dtype)
-            lora_state[key] = tensor.contiguous()
-
-    if is_rank_0:
-        os.makedirs(output_dir, exist_ok=True)
-
-        # 3. Save adapter weights.
-        safetensors_save(lora_state, os.path.join(output_dir, "adapter_model.safetensors"))
-
-        # 4. Save adapter config from the model's peft_config.
-        peft_config = None
-        if hasattr(model, "peft_config"):
-            # peft_config is a dict: {"default": LoraConfig(...)}
-            peft_config = model.peft_config.get("default", None)
-        if peft_config is not None and hasattr(peft_config, "to_dict"):
-            config_dict = peft_config.to_dict()
-        else:
-            # Fallback: build minimal config from lora_state keys.
-            logger.warning(
-                "Could not find peft_config on model; writing minimal adapter_config.json"
-            )
-            config_dict = {"peft_type": "LORA"}
-
-        with open(os.path.join(output_dir, "adapter_config.json"), "w", encoding="utf-8") as f:
-            json.dump(config_dict, f, indent=2, sort_keys=True)
-
-        logger.info(
-            "Saved LoRA adapter: %d parameters, %d keys → %s",
-            sum(t.numel() for t in lora_state.values()),
-            len(lora_state),
-            output_dir,
-        )
-
-    if dist.is_initialized() and process_group is not None:
-        dist.barrier(group=process_group)
-
-
-def save_hf_checkpoint(
-    model: nn.Module,
-    tokenizer,
-    output_dir: str,
-    is_rank_0: bool,
-    *,
-    args=None,
-    save_dtype: Optional[torch.dtype] = None,
-    process_group=None,
-    max_shard_size_bytes: Optional[int] = None,
-    metadata: Optional[Dict] = None,
-) -> None:
-    """Unified save for both LoRA and full models.
-
-    Automatically detects whether *model* is a PEFT/LoRA model and dispatches
-    to :func:`_save_lora_adapter` or :func:`_save_hf_weights` accordingly.
-    Tokenizer is always saved alongside the checkpoint on rank-0.
-    """
-    if _is_lora_model(model, args):
-        _save_lora_adapter(
-            model,
-            output_dir,
-            is_rank_0,
-            process_group=process_group,
-            save_dtype=save_dtype,
-        )
-        if is_rank_0 and tokenizer is not None:
-            tokenizer.save_pretrained(output_dir)
-    else:
-        _save_hf_weights(
-            [model],
-            tokenizer,
-            output_dir,
-            is_rank_0,
-            process_group=process_group,
-            max_shard_size_bytes=max_shard_size_bytes,
-            metadata=metadata,
-            save_dtype=save_dtype,
-        )
-
-
-def save_dcp_checkpoint(
+def _save_dcp_checkpoint(
     model: nn.Module,
     save_dir: str,
     tag: str,
@@ -682,7 +387,7 @@ def save_dcp_checkpoint(
         _cleanup_old_checkpoints(save_dir, max_num, max_mem)
 
 
-def load_dcp_checkpoint(
+def _load_dcp_checkpoint(
     model: nn.Module,
     load_dir: str,
     unwrap_fn: UnwrapFn,
