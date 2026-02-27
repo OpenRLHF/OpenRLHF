@@ -13,7 +13,6 @@ from transformers.trainer import get_scheduler
 from openrlhf.models import ValueLoss, get_llm_for_sequence_regression
 from openrlhf.models.utils import masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
-from openrlhf.utils import convert_to_torch_dtype
 from openrlhf.utils.fsdp2.strategy import FSDP2Strategy
 
 from ..ppo_utils import NaiveReplayBuffer
@@ -170,10 +169,8 @@ class CriticModelActor(BaseModelActor):
             "critic",
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
-            torch_dtype=convert_to_torch_dtype("fp32"),
-            init_device="meta_structure",
+            torch_dtype=torch.float32,
             value_head_prefix=strategy.args.value_head_prefix,
-            init_value_head=init_value_head,
             packing_samples=strategy.args.packing_samples,
         )
         strategy.print(critic)
@@ -186,8 +183,8 @@ class CriticModelActor(BaseModelActor):
             )
 
         # Wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
-        critic = strategy.prepare(critic)
-        strategy.load_pretrained(
+        critic = strategy.apply_parallelism(critic)
+        strategy.load_hf_checkpoint(
             critic,
             pretrain,
             init_value_head=init_value_head,
@@ -216,7 +213,7 @@ class CriticModelActor(BaseModelActor):
         if args.load_checkpoint and os.path.exists(os.path.join(args.dcp_ckpt_path, "_actor")):
             ckpt_path = os.path.join(args.dcp_ckpt_path, "_critic")
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            strategy.load_dcp_model(self.critic, ckpt_path, optimizer=self.critic_optim, scheduler=self.critic_scheduler)
+            strategy.load_dcp_checkpoint(self.critic, ckpt_path, optimizer=self.critic_optim, scheduler=self.critic_scheduler)
 
         # initial offload
         if strategy.args.fsdp2_enable_sleep:
@@ -270,7 +267,7 @@ class CriticModelActor(BaseModelActor):
     def save_checkpoint(self, tag):
         args = self.strategy.args
         if not self.disable_fsdp2_ckpt:
-            self.strategy.save_dcp_model(
+            self.strategy.save_dcp_checkpoint(
                 self.critic,
                 os.path.join(args.dcp_ckpt_path, "_critic"),
                 tag,

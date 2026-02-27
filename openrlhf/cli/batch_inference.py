@@ -98,8 +98,7 @@ def batch_generate(args):
     # configure model (non meta-init: real weights loaded by from_pretrained)
     model = Actor(
         args.pretrain,
-        use_meta_init=False,
-        lora_path=getattr(args, "lora_path", None),
+        device_map=f"cuda:{torch.cuda.current_device()}",
         attn_implementation=args.attn_implementation,
         torch_dtype=convert_to_torch_dtype(args.param_dtype),
     )
@@ -118,7 +117,8 @@ def batch_generate(args):
             padding=True,
             truncation=True,
         )
-        return {k: v.to(torch.cuda.current_device()) for k, v in batch.items()}
+        device = next(model.model.parameters()).device
+        return {k: v.to(device) for k, v in batch.items()}
 
     prompts_data = blending_datasets(
         args.dataset,
@@ -228,8 +228,8 @@ def batch_rm_inference(args):
     tokenizer = get_tokenizer(args.pretrain, model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
 
     # prepare models
-    model = strategy.prepare(model)
-    strategy.load_pretrained(
+    model = strategy.apply_parallelism(model)
+    strategy.load_hf_checkpoint(
         model,
         args.pretrain,
         init_value_head=False,
@@ -394,9 +394,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--value_head_prefix", type=str, default="value_head", help="value_head prefix for Reward Model"
     )
-
-    # LoRA
-    parser.add_argument("--lora_path", type=str, default=None, help="Path to a trained LoRA adapter to load and merge")
 
     # Custom dataset
     parser.add_argument("--dataset", type=str, default=None)

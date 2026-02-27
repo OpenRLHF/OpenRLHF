@@ -23,9 +23,7 @@ def train(args):
         args.pretrain,
         "reward",
         attn_implementation=args.attn_implementation,
-        torch_dtype=convert_to_torch_dtype("fp32"),
-        init_device="meta_structure",
-        init_value_head=True,
+        torch_dtype=torch.float32,
         value_head_prefix=args.value_head_prefix,
         packing_samples=args.packing_samples,
     )
@@ -42,8 +40,8 @@ def train(args):
         )
 
     # Wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
-    model = strategy.prepare(model)
-    strategy.load_pretrained(
+    model = strategy.apply_parallelism(model)
+    strategy.load_hf_checkpoint(
         model,
         args.pretrain,
         init_value_head=True,
@@ -122,7 +120,7 @@ def train(args):
     # load checkpoint
     consumed_samples = 0
     if args.load_checkpoint and os.path.exists(args.dcp_ckpt_path):
-        _, states = strategy.load_dcp_model(model, args.dcp_ckpt_path, optimizer=optim, scheduler=scheduler)
+        _, states = strategy.load_dcp_checkpoint(model, args.dcp_ckpt_path, optimizer=optim, scheduler=scheduler)
         consumed_samples = states["consumed_samples"]
         strategy.print(f"Loaded the checkpoint: {args.dcp_ckpt_path}, consumed_samples: {consumed_samples}")
 
@@ -153,7 +151,7 @@ def train(args):
     unwrap_model.config.value_head_prefix = args.value_head_prefix
 
     # save model checkpoint after fitting on only rank0
-    strategy.save_hf_model(model, tokenizer, args.last_hf_ckpt_path)
+    strategy.save_hf_checkpoint(model, tokenizer, args.last_hf_ckpt_path)
 
 
 if __name__ == "__main__":

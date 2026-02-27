@@ -7,11 +7,9 @@ flash-attn==2.8.3
 grpcio>=1.74.0
 isort
 jsonlines
-loralib
 optimum
 optree>=0.13.0
 packaging
-peft
 pynvml>=12.0.0
 ray[default]==2.48.0
 tensorboard

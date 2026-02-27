@@ -43,7 +43,7 @@ OpenRLHFは、**Ray + vLLM分散アーキテクチャ**と**統一エージェ�
 - [🎓 学習ガイド](#教師あり微調整) - SFT、報酬モデル、RL学習
 - [🎯 シングルターンエージェント](#シングルターンエージェントカスタム報酬による強化微調整) - カスタム報酬関数
 - [🤖 マルチターンエージェント](#マルチターンエージェント複雑な環境相互作用) - 複雑な環境
-- [🔧 高度なトピック](#高度なトピック) - LoRA、パフォーマンスチューニング
+- [🔧 高度なトピック](#高度なトピック) - パフォーマンスチューニング
 
 ---
 
@@ -265,7 +265,6 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 - [SLURM](./examples/scripts/train_ppo_ray_slurm.sh)を使用したマルチノード学習
 
 **モデルサポート**
-- [LoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--lora_rank`）
 - [専門家混合（MoE）](./examples/test_scripts/train_sft_moe.sh)（`--aux_loss_coef`）
 - FlashAttention（`--attn_implementation`）
 - HuggingFaceチャットテンプレート（`--apply_chat_template`）
@@ -336,37 +335,6 @@ pip install -e .
 
 <a id="高度なトピック"></a>
 ## 🔧 高度なトピック
-
-### LoRA：アダプターのマージ
-
-LoRA/QLoRAを使用する場合、OpenRLHFはアダプターの重みのみを保存します。デプロイまたは学習を続けるには、アダプターをベースモデルとマージします：
-
-```bash
-python -m openrlhf.cli.lora_combiner \
-    --model_path meta-llama/Meta-Llama-3-8B \
-    --lora_path ./checkpoint/llama3-8b-rm \
-    --output_path ./checkpoint/llama-3-8b-rm-combined \
-    --is_rm \
-    --param_dtype bf16
-```
-
-または、`--lora_path` を使用して推論時に LoRA アダプターを直接ロードすることもできます（別途マージ手順は不要）：
-
-```bash
-# バッチ推論
-python -m openrlhf.cli.batch_inference \
-    --eval_task generate \
-    --pretrain meta-llama/Meta-Llama-3-8B \
-    --lora_path ./checkpoint/llama3-8b-sft-lora \
-    --output_path ./output.jsonl \
-    --dataset your_dataset \
-    --max_new_tokens 2048
-
-# インタラクティブチャット
-python -m openrlhf.cli.interactive_chat \
-    --pretrain meta-llama/Meta-Llama-3-8B \
-    --lora_path ./checkpoint/llama3-8b-sft-lora
-```
 
 ### パフォーマンスチューニングガイド
 

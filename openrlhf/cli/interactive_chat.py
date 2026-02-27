@@ -19,8 +19,7 @@ def generate(args):
     # Build model (non meta-init: real weights loaded by from_pretrained)
     model = Actor(
         args.pretrain,
-        use_meta_init=False,
-        lora_path=getattr(args, "lora_path", None),
+        device_map="auto" if torch.cuda.is_available() else None,
         attn_implementation=args.attn_implementation,
         torch_dtype=convert_to_torch_dtype(args.param_dtype),
     )
@@ -131,9 +130,6 @@ if __name__ == "__main__":
     parser.add_argument("--ta_prompt", type=str, default=None)
     parser.add_argument("--enable_csft", action="store_true", default=False)
     parser.add_argument("--csft_prompt", type=str, default="<rm_score>: 5.00", help="conditional SFT prompt")
-
-    # LoRA
-    parser.add_argument("--lora_path", type=str, default=None, help="Path to a trained LoRA adapter to load and merge")
 
     parser.add_argument("--use_ms", action="store_true", default=False)
 

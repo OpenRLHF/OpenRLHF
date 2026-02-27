@@ -25,14 +25,13 @@ def convert(args):
         normalize_reward=args.normalize_reward,
         attn_implementation=args.attn_implementation,
         torch_dtype=convert_to_torch_dtype("fp32"),
-        init_device="meta_structure",
         value_head_prefix=args.value_head_prefix,
         packing_samples=args.packing_samples,
     )
 
     # 2. FSDP2 prepare (TP + FSDP sharding) + load base pretrained weights
-    model = strategy.prepare(model)
-    strategy.load_pretrained(
+    model = strategy.apply_parallelism(model)
+    strategy.load_hf_checkpoint(
         model,
         args.pretrain,
         init_value_head=True,
@@ -40,7 +39,7 @@ def convert(args):
     )
 
     # 3. Load DCP checkpoint (model weights only, skip optimizer/scheduler)
-    tag, client_state = strategy.load_dcp_model(
+    tag, client_state = strategy.load_dcp_checkpoint(
         model,
         args.ckpt_path,
         tag=args.tag,
@@ -54,7 +53,7 @@ def convert(args):
 
     # 5. Save as HF safetensors
     tokenizer = get_tokenizer(args.pretrain, unwrapped, "left", strategy)
-    strategy.save_hf_model(model, tokenizer, args.output_dir)
+    strategy.save_hf_checkpoint(model, tokenizer, args.output_dir)
     strategy.print(f"Saved HF checkpoint to {args.output_dir}")
 
 
@@ -101,7 +100,6 @@ if __name__ == "__main__":
     args.max_norm = 1.0
     args.micro_train_batch_size = 1
     args.train_batch_size = 1
-    args.lora_rank = 0
     args.use_dynamic_batch = False
 
     convert(args)

@@ -43,7 +43,7 @@ OpenRLHF is **the first** high-performance, production-ready open-source RLHF fr
 - [🎓 Training Guide](#supervised-fine-tuning) - SFT, Reward Model, RL Training
 - [🎯 Single-Turn Agent](#single-turn-agent-reinforced-fine-tuning-with-custom-rewards) - Custom reward functions
 - [🤖 Multi-Turn Agent](#multi-turn-agent-complex-environment-interactions) - Complex environments
-- [🔧 Advanced Topics](#advanced-topics) - LoRA, performance tuning
+- [🔧 Advanced Topics](#advanced-topics) - Performance tuning
 
 ---
 
@@ -259,7 +259,6 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 - Multi-node training with [SLURM](./examples/scripts/train_ppo_ray_slurm.sh)
 
 **Model Support**
-- [LoRA](./examples/scripts/train_sft_mixtral_lora.sh) (`--lora_rank`)
 - [Mixture of Experts (MoE)](./examples/test_scripts/train_sft_moe.sh) (`--aux_loss_coef`)
 - FlashAttention (`--attn_implementation`)
 - HuggingFace chat templates (`--apply_chat_template`)
@@ -411,7 +410,7 @@ It is recommended to set the `--value_prefix_head` option of the Reward Model to
 reward_model = AutoModelForSequenceClassification.from_pretrained(
               reward_model_path,
               num_labels=1,
-              torch_dtype=torch.bfloat16,
+              dtype=torch.bfloat16,
               attn_implementation="flash_attention_2",
               use_cache=False,
           )
@@ -674,37 +673,6 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 <a id="advanced-topics"></a>
 ## 🔧 Advanced Topics
-
-### LoRA: Merging Adapters
-
-When using LoRA/QLoRA, OpenRLHF saves only the adapter weights. To deploy or continue training, merge the adapter with the base model:
-
-```bash
-python -m openrlhf.cli.lora_combiner \
-    --model_path meta-llama/Meta-Llama-3-8B \
-    --lora_path ./checkpoint/llama3-8b-rm \
-    --output_path ./checkpoint/llama-3-8b-rm-combined \
-    --is_rm \
-    --param_dtype bf16
-```
-
-Alternatively, you can load a LoRA adapter directly for inference without a separate merge step by passing `--lora_path` to the inference scripts:
-
-```bash
-# Batch inference with LoRA
-python -m openrlhf.cli.batch_inference \
-    --eval_task generate \
-    --pretrain meta-llama/Meta-Llama-3-8B \
-    --lora_path ./checkpoint/llama3-8b-sft-lora \
-    --output_path ./output.jsonl \
-    --dataset your_dataset \
-    --max_new_tokens 2048
-
-# Interactive chat with LoRA
-python -m openrlhf.cli.interactive_chat \
-    --pretrain meta-llama/Meta-Llama-3-8B \
-    --lora_path ./checkpoint/llama3-8b-sft-lora
-```
 
 ### Performance Tuning Guide
 

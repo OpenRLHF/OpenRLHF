@@ -217,7 +217,7 @@ class KTOTrainer(ABC):
         if global_step % args.save_steps == 0:
             tag = f"global_step{global_step}"
             if not self.disable_fsdp2_ckpt:
-                self.strategy.save_dcp_model(
+                self.strategy.save_dcp_checkpoint(
                     self.model.model,
                     args.dcp_ckpt_path,
                     tag,
@@ -228,7 +228,7 @@ class KTOTrainer(ABC):
                     scheduler=self.scheduler,
                 )
             if self.save_hf_ckpt:
-                self.strategy.save_hf_ckpt_with_rotation(
+                self.strategy.save_hf_checkpoint(
                     self.model, self.tokenizer, args.hf_ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem
                 )
 

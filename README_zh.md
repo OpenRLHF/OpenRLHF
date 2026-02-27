@@ -43,7 +43,7 @@ OpenRLHF 是**首个**结合 **Ray + vLLM 分布式架构**与**统一 Agent 设
 - [🎓 训练指南](#监督微调) - SFT、奖励模型、RL 训练
 - [🎯 单轮 Agent](#单轮-agent强化微调与自定义奖励) - 自定义奖励函数
 - [🤖 多轮 Agent](#多轮-agent复杂环境交互) - 复杂环境
-- [🔧 高级主题](#高级主题) - LoRA、性能调优
+- [🔧 高级主题](#高级主题) - 性能调优
 
 ---
 
@@ -260,7 +260,6 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 - 使用 [SLURM](./examples/scripts/train_ppo_ray_slurm.sh) 的多节点训练
 
 **模型支持**
-- [LoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--lora_rank`）
 - [专家混合（MoE）](./examples/test_scripts/train_sft_moe.sh)（`--aux_loss_coef`）
 - FlashAttention（`--attn_implementation`）
 - HuggingFace 聊天模板（`--apply_chat_template`）
@@ -410,7 +409,7 @@ torchrun --standalone --nproc-per-node 8 -m openrlhf.cli.train_rm \
 reward_model = AutoModelForSequenceClassification.from_pretrained(
               reward_model_path,
               num_labels=1,
-              torch_dtype=torch.bfloat16,
+              dtype=torch.bfloat16,
               attn_implementation="flash_attention_2",
               use_cache=False,
           )
@@ -673,37 +672,6 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 <a id="高级主题"></a>
 ## 🔧 高级主题
-
-### LoRA：合并适配器
-
-使用 LoRA/QLoRA 时，OpenRLHF 仅保存适配器权重。要部署或继续训练，请将适配器与基础模型合并：
-
-```bash
-python -m openrlhf.cli.lora_combiner \
-    --model_path meta-llama/Meta-Llama-3-8B \
-    --lora_path ./checkpoint/llama3-8b-rm \
-    --output_path ./checkpoint/llama-3-8b-rm-combined \
-    --is_rm \
-    --param_dtype bf16
-```
-
-或者，您可以通过 `--lora_path` 直接在推理时加载 LoRA 适配器，无需单独的合并步骤：
-
-```bash
-# 批量推理
-python -m openrlhf.cli.batch_inference \
-    --eval_task generate \
-    --pretrain meta-llama/Meta-Llama-3-8B \
-    --lora_path ./checkpoint/llama3-8b-sft-lora \
-    --output_path ./output.jsonl \
-    --dataset your_dataset \
-    --max_new_tokens 2048
-
-# 交互式对话
-python -m openrlhf.cli.interactive_chat \
-    --pretrain meta-llama/Meta-Llama-3-8B \
-    --lora_path ./checkpoint/llama3-8b-sft-lora
-```
 
 ### 性能调优指南
 
