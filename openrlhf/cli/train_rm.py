@@ -119,10 +119,10 @@ def train(args):
 
     # load checkpoint
     consumed_samples = 0
-    if args.load_checkpoint and os.path.exists(args.dcp_ckpt_path):
-        _, states = strategy.load_dcp_checkpoint(model, args.dcp_ckpt_path, optimizer=optim, scheduler=scheduler)
+    if args.load_checkpoint and os.path.exists(strategy.dcp_ckpt_path):
+        _, states = strategy.load_dcp_checkpoint(model, strategy.dcp_ckpt_path, optimizer=optim, scheduler=scheduler)
         consumed_samples = states["consumed_samples"]
-        strategy.print(f"Loaded the checkpoint: {args.dcp_ckpt_path}, consumed_samples: {consumed_samples}")
+        strategy.print(f"Loaded the checkpoint: {strategy.dcp_ckpt_path}, consumed_samples: {consumed_samples}")
 
     os.makedirs(args.ckpt_save_path, exist_ok=True)
 
@@ -151,7 +151,7 @@ def train(args):
     unwrap_model.config.value_head_prefix = args.value_head_prefix
 
     # save model checkpoint after fitting on only rank0
-    strategy.save_hf_checkpoint(model, tokenizer, args.last_hf_ckpt_path)
+    strategy.save_hf_checkpoint(model, tokenizer, strategy.last_hf_ckpt_path)
 
 
 if __name__ == "__main__":

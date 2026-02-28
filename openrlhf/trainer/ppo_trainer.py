@@ -223,7 +223,7 @@ class BasePPOTrainer(ABC):
             ray.get(refs)
 
     def init_checkpoint_states(self) -> Dict:
-        ckpt_path = os.path.join(self.args.dcp_ckpt_path, "_actor")
+        ckpt_path = os.path.join(self.self.strategy.dcp_ckpt_path, "_actor")
         if self.args.load_checkpoint and os.path.exists(ckpt_path):
             checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
                 0

@@ -12,6 +12,15 @@ FSDP sharding uses merged dp_cp mesh:
 - Ring Attention only aggregates dK/dV (activation gradients), NOT parameter gradients
 - Without merging DP+CP, different CP ranks would have divergent parameters!
 
+CP loss scaling note:
+- Ring Attention's all_gather autograd uses reduce_scatter(SUM) in backward,
+  introducing a cp_size factor into local gradients.
+- FSDP2 averages gradients across the flattened dp_cp mesh, dividing by
+  (dp_size * cp_size); the cp_size factor cancels out, yielding an effective
+  "dp average, cp sum" without explicitly scaling the loss.
+- MoE aux_loss needs no special handling: FSDP2's AVG across dp_cp correctly
+  averages the per-rank load balance metric.
+
 Reference: Automodel, torchtitan both merge DP+CP for FSDP mesh.
 """
 
@@ -67,8 +76,7 @@ class FSDP2Strategy(ABC):
         self.fsdp2_tp_size = args.fsdp2_tp_size
         self.tp_loss_parallel = args.tp_loss_parallel
 
-        # tp_loss_parallel means lm_head outputs vocab-sharded DTensor logits and
-        # requires TP world size > 1 to be meaningful.
+        # tp_loss_parallel requires TP > 1 (lm_head outputs vocab-sharded DTensor logits)
         if self.tp_loss_parallel and self.fsdp2_tp_size <= 1:
             raise ValueError("--tp_loss_parallel requires --fsdp2_tp_size > 1.")
 
@@ -78,9 +86,8 @@ class FSDP2Strategy(ABC):
         self.fsdp2_reshard_after_forward = args.fsdp2_reshard_after_forward
         self.sequence_parallel = args.sequence_parallel
 
-        # CPUOffloadPolicy and manual offload are mutually exclusive (ref: slime)
-        # When fsdp2_cpu_offload is enabled, FSDP2 manages CPU offload automatically,
-        # so fsdp2_enable_sleep (manual offload) should be disabled.
+        # CPUOffloadPolicy and manual offload (fsdp2_enable_sleep) are mutually exclusive:
+        # FSDP2 manages CPU offload automatically when fsdp2_cpu_offload is enabled.
         if self.fsdp2_cpu_offload and getattr(args, "fsdp2_enable_sleep", False):
             args.fsdp2_enable_sleep = False
             print("[FSDP2] Warning: fsdp2_enable_sleep disabled because fsdp2_cpu_offload is enabled")
@@ -88,14 +95,14 @@ class FSDP2Strategy(ABC):
         # State
         self.time_steps = defaultdict(int)
         self.mesh = None
-        self._gloo_group = None  # Gloo group for CPU-safe barriers
+        self._gloo_group = None
 
-        # Derive checkpoint sub-paths from ckpt_save_path (training scripts only)
+        # Derive checkpoint sub-paths from ckpt_save_path
         ckpt_save_path = getattr(args, "ckpt_save_path", None)
         if ckpt_save_path is not None:
-            args.last_hf_ckpt_path = os.path.join(ckpt_save_path, "last_hf_ckpt")
-            args.hf_ckpt_path = os.path.join(ckpt_save_path, "hf_ckpt")
-            args.dcp_ckpt_path = os.path.join(ckpt_save_path, "dcp_ckpt")
+            self.last_hf_ckpt_path = os.path.join(ckpt_save_path, "last_hf_ckpt")
+            self.hf_ckpt_path = os.path.join(ckpt_save_path, "hf_ckpt")
+            self.dcp_ckpt_path = os.path.join(ckpt_save_path, "dcp_ckpt")
 
     # -------------------------------------------------------------------------
     # Distributed Setup
@@ -118,9 +125,8 @@ class FSDP2Strategy(ABC):
         dist.init_process_group(backend=backend, timeout=timeout, device_id=device_id)
         self.world_size = dist.get_world_size()
 
-        # Initialize Gloo group for CPU-safe barriers (ref: slime)
-        # NCCL barriers require GPU tensors, which fail when model is offloaded to CPU.
-        # Gloo works with CPU tensors and is safe to use after model offload.
+        # Gloo group for CPU-safe barriers: NCCL requires GPU tensors, which
+        # fail when model is offloaded to CPU.
         self._gloo_group = dist.new_group(backend="gloo")
 
         # Validate and compute parallelism sizes
@@ -141,41 +147,31 @@ class FSDP2Strategy(ABC):
                     "which would be seq/tp_size after SP sharding, causing mask length mismatch."
                 )
 
-        # Create 3D mesh: (dp, cp, tp) - always include all dimensions even if size=1
-        # This ensures all parameters use the same mesh structure, avoiding mesh mismatch issues
-        # in operations like clip_grad_norm that aggregate across all parameters
+        # Always create 3D mesh even if some dims are size=1, so all parameters
+        # share the same mesh structure (avoids mismatch in clip_grad_norm etc.)
         self.mesh = init_device_mesh(
             "cuda",
             (self.fsdp2_dp_size, self.fsdp2_cp_size, self.fsdp2_tp_size),
             mesh_dim_names=("dp", "cp", "tp"),
         )
 
-        # Create FSDP mesh by merging DP and CP dimensions
-        # This is CRITICAL for Ring Attention correctness:
-        # - Ring Attention backward only aggregates dK, dV (activation gradients)
-        # - Parameter gradients (dW_q, dW_k, dW_v, etc.) are NOT aggregated by Ring Attention
-        # - FSDP's reduce-scatter must cover all DP+CP ranks to aggregate parameter gradients
-        # - Without this, different CP ranks would have divergent parameters!
-        # Reference: Automodel and torchtitan both use this approach
+        # Merge DP+CP for FSDP reduce-scatter (see module docstring for rationale)
         self.fsdp_mesh = self.mesh["dp", "cp"]._flatten(mesh_dim_name="dp_cp")
 
-        # Process groups for different purposes:
-        # - dp_cp_group: for metrics reduction across all FSDP ranks (DP + CP)
-        # - dp_group: for data sampling (only DP, CP ranks share same data)
-        # - cp_group: for Ring Attention KV communication
-        # Note: tp_group is no longer needed for grad norm (DTensor handles it)
+        # Process groups:
+        #   dp_cp_group — metrics reduction across all FSDP ranks
+        #   dp_group    — data sampling (CP ranks share same data)
+        #   cp_group    — Ring Attention KV communication
         self.dp_cp_group = self.fsdp_mesh.get_group()
         self.dp_group = self.mesh["dp"].get_group()
         self.cp_group = self.mesh["cp"].get_group()
 
-        # Setup ring attention using CP group
+        # Initialize ring attention defaults
         set_ring_attn_group(None)
         set_ring_attn_pad_multiple(1)
 
         if self.sequence_parallel and self.fsdp2_tp_size > 1:
-            # Ensure packed sequence length is divisible by TP degree when SP is enabled.
-            # - If CP is enabled, this pads total length to `fsdp2_cp_size * fsdp2_tp_size`.
-            # - If CP is disabled, this pads total length to `fsdp2_tp_size`.
+            # Pad packed sequence length to be divisible by TP degree for SP
             set_ring_attn_pad_multiple(self.fsdp2_tp_size)
 
         if self.fsdp2_cp_size > 1:
@@ -190,9 +186,7 @@ class FSDP2Strategy(ABC):
 
             substitute_hf_flash_attn(self.cp_group, getattr(self.args, "ring_head_stride", 1))
 
-        # Gradient accumulation
-        # Only DP contributes to batch size - CP processes same sequence chunks, TP processes same batch
-        # This matches the standard formula: train_batch_size / (micro_train_batch_size * fsdp2_dp_size)
+        # Gradient accumulation: only DP contributes to effective batch size
         batch_per_step = self.micro_train_batch_size * self.fsdp2_dp_size
         if getattr(self.args, "use_dynamic_batch", False):
             self.accumulated_gradient = 1
@@ -207,8 +201,8 @@ class FSDP2Strategy(ABC):
                 )
             self.accumulated_gradient = accum_steps
 
-        self._log(
-            f"world={self.world_size} dp={self.fsdp2_dp_size} cp={self.fsdp2_cp_size} "
+        self.print(
+            f"[FSDP2] world={self.world_size} dp={self.fsdp2_dp_size} cp={self.fsdp2_cp_size} "
             f"tp={self.fsdp2_tp_size} grad_accum={self.accumulated_gradient} "
             f"fsdp_mesh_size={self.fsdp2_dp_size * self.fsdp2_cp_size}"
         )
@@ -220,11 +214,11 @@ class FSDP2Strategy(ABC):
         return get_ring_attn_group()
 
     # -------------------------------------------------------------------------
-    # Model Wrapping
+    # Model Sharding
     # -------------------------------------------------------------------------
 
     def apply_parallelism(self, model, force_cpu_offload: bool = False):
-        """Apply TP + FSDP sharding to a model, preserving Actor wrapper.
+        """Apply TP then FSDP sharding to a model, preserving Actor wrapper.
 
         Args:
             model: Model to shard.
@@ -233,13 +227,12 @@ class FSDP2Strategy(ABC):
         unwrapped = self._unwrap_model(model)
         is_actor = unwrapped is not model
 
-        # TP before FSDP
-        self._log(
-            f"Wrapping model with dp={self.fsdp2_dp_size} cp={self.fsdp2_cp_size} tp={self.fsdp2_tp_size} "
+        self.print(
+            f"[FSDP2] Sharding model: dp={self.fsdp2_dp_size} cp={self.fsdp2_cp_size} tp={self.fsdp2_tp_size} "
             f"(fsdp_mesh_size={self.fsdp2_dp_size * self.fsdp2_cp_size})"
         )
         if self.fsdp2_tp_size > 1:
-            self._log(f"Applying TP (size={self.fsdp2_tp_size})")
+            self.print(f"[FSDP2] Applying TP (size={self.fsdp2_tp_size})")
             unwrapped = apply_tensor_parallel(
                 unwrapped,
                 self.mesh["tp"],
@@ -248,9 +241,8 @@ class FSDP2Strategy(ABC):
                 shard_logits=self.tp_loss_parallel,
             )
         else:
-            self._log("Skipping TP (fsdp2_tp_size=1)")
+            self.print("[FSDP2] Skipping TP (fsdp2_tp_size=1)")
 
-        # FSDP (force_cpu_offload overrides self.fsdp2_cpu_offload)
         unwrapped = self._apply_fsdp(unwrapped, force_cpu_offload=force_cpu_offload)
 
         if is_actor:
@@ -259,18 +251,12 @@ class FSDP2Strategy(ABC):
         return unwrapped
 
     def _apply_fsdp(self, model, force_cpu_offload=False):
-        """Apply FSDP2 sharding with merged DP+CP mesh.
+        """Apply FSDP2 sharding using merged DP+CP mesh (see module docstring).
 
         Args:
-            model: Model to shard
-            force_cpu_offload: If True, force CPUOffloadPolicy regardless of self.fsdp2_cpu_offload
-
-        Note:
-            Uses fsdp_mesh (dp_cp flattened) instead of mesh["dp"] to ensure
-            FSDP reduce-scatter covers all DP+CP ranks. This is essential for
-            Ring Attention because it only aggregates dK/dV, not parameter gradients.
+            model: Model to shard.
+            force_cpu_offload: If True, force CPUOffloadPolicy regardless of self.fsdp2_cpu_offload.
         """
-        # Use merged DP+CP mesh for FSDP - critical for Ring Attention correctness
         mesh = self.fsdp_mesh
         mixed_precision = (
             None
@@ -284,9 +270,9 @@ class FSDP2Strategy(ABC):
         use_cpu_offload = force_cpu_offload or self.fsdp2_cpu_offload
         offload_policy = CPUOffloadPolicy(pin_memory=True) if use_cpu_offload else None
 
-        # Shard transformer layers
+        # Collect modules that should be individually sharded (transformer layers + untied embeddings)
         no_split_modules = getattr(model, "_no_split_modules", [])
-        fsdp_units = [
+        shard_units = [
             m
             for m in model.modules()
             if m.__class__.__name__ in no_split_modules
@@ -296,17 +282,16 @@ class FSDP2Strategy(ABC):
             )
         ]
 
-        for i, layer in enumerate(fsdp_units):
+        for i, layer in enumerate(shard_units):
             if not isinstance(layer, FSDPModule):
                 fully_shard(
                     layer,
                     mesh=mesh,
                     mp_policy=mixed_precision,
                     offload_policy=offload_policy,
-                    reshard_after_forward=self.fsdp2_reshard_after_forward and i < len(fsdp_units) - 1,
+                    reshard_after_forward=self.fsdp2_reshard_after_forward and i < len(shard_units) - 1,
                 )
 
-        # Shard root
         if not isinstance(model, FSDPModule):
             fully_shard(model, mesh=mesh, mp_policy=mixed_precision, offload_policy=offload_policy, reshard_after_forward=False)
         return model
@@ -331,8 +316,8 @@ class FSDP2Strategy(ABC):
         """
         unwrapped = self._unwrap_model(model)
 
-        on_cpu = self.fsdp2_cpu_offload or force_cpu_offload
-        device = "cpu" if on_cpu else torch.device("cuda", torch.cuda.current_device())
+        load_to_cpu = self.fsdp2_cpu_offload or force_cpu_offload
+        device = "cpu" if load_to_cpu else torch.device("cuda", torch.cuda.current_device())
 
         _load_hf_checkpoint(
             unwrapped,
@@ -341,7 +326,7 @@ class FSDP2Strategy(ABC):
             process_group=self._gloo_group,
         )
 
-        if on_cpu:
+        if load_to_cpu:
             self._move_buffers_to_cuda(unwrapped)
         if init_value_head:
             self._init_value_head_after_load(unwrapped, value_head_prefix=value_head_prefix)
@@ -349,7 +334,7 @@ class FSDP2Strategy(ABC):
 
     @torch.no_grad()
     def _move_buffers_to_cuda(self, model: nn.Module) -> None:
-        """Keep buffers on CUDA for CPU-offloaded FSDP2 models (slime-style)."""
+        """Keep buffers on CUDA for CPU-offloaded FSDP2 models."""
         device = torch.device("cuda", torch.cuda.current_device())
         for _name, buf in model.named_buffers():
             if getattr(buf, "is_meta", False) or buf.device == device:
@@ -370,8 +355,8 @@ class FSDP2Strategy(ABC):
         else:
             shape = tuple(weight.shape)
             dtype = weight.dtype
-            # Match existing init: std = 1 / (hidden_size + 1)
             hidden_size = shape[1] if len(shape) >= 2 else max(1, shape[0])
+            # Match existing init convention: std = 1 / (hidden_size + 1)
             std = 1.0 / float(hidden_size + 1)
             init_weight = torch.empty(shape, device="cpu", dtype=dtype)
             init_weight.normal_(mean=0.0, std=std)
@@ -397,10 +382,10 @@ class FSDP2Strategy(ABC):
         if "foreach" not in kwargs and self.fsdp2_tp_size > 1 and self.fsdp2_dp_size <= 1:
             kwargs["foreach"] = False
         weight_decay = kwargs.pop("weight_decay", 0.0)
-        grouped = self._get_optimizer_grouped_parameters(self._unwrap_model(model), weight_decay)
-        # fused=True only works on CUDA and is incompatible with CPU offload.
+        param_groups = self._get_optimizer_grouped_parameters(self._unwrap_model(model), weight_decay)
+        # fused=True only works on CUDA and is incompatible with CPU offload
         fused = torch.cuda.is_available() and not self.fsdp2_cpu_offload
-        return optim.AdamW(grouped, fused=fused, **kwargs)
+        return optim.AdamW(param_groups, fused=fused, **kwargs)
 
     @staticmethod
     def _get_optimizer_grouped_parameters(
@@ -408,7 +393,7 @@ class FSDP2Strategy(ABC):
         weight_decay: float,
         no_decay_name_list=("bias", "layer_norm.weight", "layernorm.weight", "norm.weight", "ln_f.weight"),
     ):
-        """Match OpenRLHF's optimizer parameter grouping rules."""
+        """Separate parameters into weight-decay and no-weight-decay groups."""
         decay = []
         no_decay = []
         for name, param in model.named_parameters():
@@ -424,31 +409,10 @@ class FSDP2Strategy(ABC):
         ]
 
     def backward(self, loss, model, optimizer, name="model", **kwargs):
-        """Backward with gradient accumulation and deferred sync.
+        """Backward with gradient accumulation.
 
-        Note on loss scaling with CP (Context Parallelism):
-        - Ring Attention slices the sequence across CP ranks for the forward pass,
-          then uses `flash_attn.utils.distributed.all_gather` to rebuild full-sequence tensors
-          (log_probs / values / etc.) on EVERY CP rank before loss computation.
-        - `all_gather` autograd uses reduce_scatter(SUM) in backward, which introduces a `fsdp2_cp_size`
-          factor into the local gradients.
-        - FSDP2 then averages gradients across the flattened `dp_cp` mesh, dividing by
-          (fsdp2_dp_size * fsdp2_cp_size); the `fsdp2_cp_size` factor from `all_gather` cancels this, yielding an
-          effective "dp average, cp sum" without explicitly scaling the loss here.
-
-        MoE aux_loss handling:
-        - Trainers combine main_loss and aux_loss before calling backward:
-          loss = main_loss + aux_loss * aux_loss_coef
-        - aux_loss is computed locally on each CP rank based on the tokens it processes.
-        - FSDP2's AVG across (fsdp2_dp_size * fsdp2_cp_size) correctly averages aux_loss across all ranks,
-          giving us the global load balance metric we want.
-        - No special handling needed here - both losses flow through the same backward().
-
-        Args:
-            loss: Combined loss (main_loss + aux_loss * coef if MoE)
-            model: Model being trained
-            optimizer: Optimizer
-            name: Name for gradient sync tracking
+        No explicit CP loss scaling is needed here — see module docstring for
+        why the all_gather reduce_scatter factor cancels FSDP's dp_cp averaging.
         """
         if self.accumulated_gradient > 1:
             loss = loss / self.accumulated_gradient
@@ -469,8 +433,7 @@ class FSDP2Strategy(ABC):
             return
 
         if self.max_norm > 0:
-            # Use DTensor-compatible gradient clipping for TP+FSDP
-            # Standard clip_grad_norm_ fails when params have different meshes
+            # DTensor-compatible clipping (standard clip_grad_norm_ fails with mixed meshes)
             clip_grad_norm_dtensor(self._unwrap_model(model), max_norm=self.max_norm)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
@@ -500,14 +463,10 @@ class FSDP2Strategy(ABC):
     ):
         """Create distributed dataloader.
 
-        Note:
-            Data is sharded only across DP dimension, not CP.
-            CP ranks within the same DP group see the same data but process different
-            sequence chunks. This is essential for Ring Attention to work correctly.
+        Data is sharded only across DP, not CP. CP ranks within the same DP
+        group see identical samples but process different sequence chunks.
         """
         if sampler is None and dist.is_initialized():
-            # Use dp_group for data sharding - CP ranks share the same data
-            # This ensures all CP ranks in the same DP group see identical samples
             dp_group = self.dp_group if self.dp_group else None
             sampler = DistributedSampler(
                 dataset,
@@ -535,49 +494,33 @@ class FSDP2Strategy(ABC):
 
     @torch.no_grad()
     def offload_model(self, model):
-        """Offload model params to CPU.
-
-        Call this AFTER weight sync with vLLM to free GPU memory.
-        This is used in the hybrid engine mode where training model is offloaded
-        during rollout phase to give vLLM more GPU memory.
-        """
+        """Offload model params to CPU (hybrid engine: free GPU for vLLM rollout)."""
         if self.fsdp2_cpu_offload:
-            return  # CPUOffloadPolicy already manages model
+            return  # CPUOffloadPolicy already manages offload
 
         unwrapped = self._unwrap_model(model)
         unwrapped.cpu()
-        if self.is_rank_0():
-            print("[FSDP2] Model offloaded to CPU")
+        self.print("[FSDP2] Model offloaded to CPU")
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
     @torch.no_grad()
     def reload_model(self, model):
-        """Reload model params to GPU.
-
-        Call this BEFORE forward pass when model was offloaded.
-        This is used in the hybrid engine mode to reload training model
-        before computing log probs.
-        """
+        """Reload model params to GPU (hybrid engine: before forward pass)."""
         if self.fsdp2_cpu_offload:
-            return  # CPUOffloadPolicy already manages model
+            return  # CPUOffloadPolicy already manages offload
 
         unwrapped = self._unwrap_model(model)
         if next(unwrapped.parameters()).device.type == "cpu":
             unwrapped.to(torch.device("cuda", torch.cuda.current_device()))
             torch.cuda.synchronize()
-            if self.is_rank_0():
-                print("[FSDP2] Model reloaded to GPU")
+            self.print("[FSDP2] Model reloaded to GPU")
 
     @torch.no_grad()
-    def offload_states(self, model, optimizer):
-        """Offload optimizer states to CPU (model stays on GPU).
-
-        Use this for vLLM weight sync: optimizer offloaded, model stays for sync.
-        """
+    def offload_optimizer_states(self, optimizer):
+        """Offload optimizer states to CPU (model stays on GPU for vLLM weight sync)."""
         move_optimizer_state(optimizer, torch.device("cpu"))
-        if self.is_rank_0():
-            print("[FSDP2] Optimizer states offloaded to CPU")
+        self.print("[FSDP2] Optimizer states offloaded to CPU")
 
         torch.cuda.empty_cache()
         if self._gloo_group is not None:
@@ -585,12 +528,11 @@ class FSDP2Strategy(ABC):
         torch.cuda.synchronize()
 
     @torch.no_grad()
-    def reload_states(self, model, optimizer):
-        """Reload optimizer states to GPU (model not included)."""
+    def reload_optimizer_states(self, optimizer):
+        """Reload optimizer states to GPU."""
         device = torch.device("cuda", torch.cuda.current_device())
         move_optimizer_state(optimizer, device)
-        if self.is_rank_0():
-            print("[FSDP2] Optimizer states reloaded to GPU")
+        self.print("[FSDP2] Optimizer states reloaded to GPU")
 
         torch.cuda.synchronize()
         if self._gloo_group is not None:
@@ -613,7 +555,7 @@ class FSDP2Strategy(ABC):
         """
         save_dir = os.path.join(output_dir, tag) if tag else output_dir
 
-        # Convert fp32 master weights to the training compute dtype (e.g. bf16) for deployment.
+        # Convert fp32 master weights to the training compute dtype (e.g. bf16) for deployment
         save_dtype = convert_to_torch_dtype(self.param_dtype)
         max_gb = getattr(self.args, "hf_max_shard_size_gb", 5)
         max_bytes = int(float(max_gb) * 1024**3) if max_gb else None
@@ -695,10 +637,10 @@ class FSDP2Strategy(ABC):
         """All-reduce across DP group (optionally including CP).
 
         Args:
-            data: Data to reduce (tensor, scalar, or dict)
-            op: Reduction operation ("mean", "max", "sum")
-            with_context_parallel: If True, reduce across both DP and CP (for metrics).
-                                   If False, reduce across DP only (for data partitioning).
+            data: Data to reduce (tensor, scalar, or dict).
+            op: Reduction operation ("mean", "max", "sum").
+            with_context_parallel: If True, reduce across DP+CP (for metrics).
+                                   If False, reduce across DP only.
         """
         assert op in ("mean", "max", "sum")
 
@@ -708,20 +650,16 @@ class FSDP2Strategy(ABC):
         if not dist.is_initialized():
             return data
 
-        # dp_cp_group for metrics, dp_group for data operations
         process_group = self.dp_cp_group if with_context_parallel and self.fsdp2_cp_size > 1 else self.dp_group
         group_size = dist.get_world_size(group=process_group)
 
-        # Convert scalar to tensor
         was_tensor = isinstance(data, torch.Tensor)
         tensor = data if was_tensor else torch.tensor(data, device="cuda")
 
-        # Move to GPU if needed (NCCL requires CUDA tensors)
         from_cpu = tensor.device.type == "cpu"
         if from_cpu:
             tensor = tensor.cuda()
 
-        # Perform all-reduce
         reduce_op = {"mean": dist.ReduceOp.SUM, "max": dist.ReduceOp.MAX, "sum": dist.ReduceOp.SUM}[op]
         dist.all_reduce(tensor, op=reduce_op, group=process_group)
         if op == "mean":
@@ -743,18 +681,15 @@ class FSDP2Strategy(ABC):
         process_group = self.dp_group
         group_size = dist.get_world_size(group=process_group)
 
-        # Convert scalar to tensor
         was_tensor = isinstance(data, torch.Tensor)
         tensor = data if was_tensor else torch.tensor(data, device="cuda")
 
-        # Handle 0-dim tensors
         if tensor.dim() == 0:
             tensor = tensor.view(1)
 
         from_cpu = tensor.device.type == "cpu"
         gpu_tensor = tensor.cuda() if from_cpu else tensor
 
-        # Gather
         shards = [torch.zeros_like(gpu_tensor) for _ in range(group_size)]
         dist.all_gather(shards, gpu_tensor, group=process_group)
         result = torch.cat(shards)
@@ -768,11 +703,8 @@ class FSDP2Strategy(ABC):
     # Utilities
     # -------------------------------------------------------------------------
 
-    def _log(self, msg):
-        if self.is_rank_0():
-            print(f"[FSDP2] {msg}")
-
     def print(self, *msg):
+        """Rank-0 logging without prefix (public API, 30+ external callers)."""
         if self.is_rank_0():
             print(*msg)
 
@@ -789,5 +721,4 @@ class FSDP2Strategy(ABC):
         """Unwrap Actor wrapper to get the underlying module."""
         if isinstance(model, Actor):
             return self._unwrap_model(model.model)
-        else:
-            return model
+        return model

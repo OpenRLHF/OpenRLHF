@@ -474,7 +474,7 @@ class PolicyModelActor(BaseModelActor):
 
         # load checkpoint
         self.checkpoint_states = {}
-        ckpt_path = os.path.join(args.dcp_ckpt_path, "_actor")
+        ckpt_path = os.path.join(self.strategy.dcp_ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
             ckpt_id, states = strategy.load_dcp_checkpoint(
@@ -482,7 +482,7 @@ class PolicyModelActor(BaseModelActor):
             )
             self.checkpoint_states = states
             if args.enable_ema and self.ema_model is not None:
-                ema_ckpt_path = os.path.join(args.dcp_ckpt_path, "_ema")
+                ema_ckpt_path = os.path.join(self.strategy.dcp_ckpt_path, "_ema")
                 if os.path.exists(ema_ckpt_path):
                     try:
                         ema_tag = os.path.basename(str(ckpt_id))
@@ -533,7 +533,7 @@ class PolicyModelActor(BaseModelActor):
         self.strategy.save_hf_checkpoint(
             self.ema_model if args.enable_ema else self.actor,
             self.tokenizer,
-            args.last_hf_ckpt_path,
+            self.strategy.last_hf_ckpt_path,
         )
 
     def forward(
@@ -566,10 +566,10 @@ class PolicyModelActor(BaseModelActor):
         self.trainer.replay_buffer.append(experience)
 
     def reload_states(self):
-        self.strategy.reload_states(self.actor.model, self.actor_optim)
+        self.strategy.reload_optimizer_states(self.actor_optim)
 
     def offload_states(self):
-        self.strategy.offload_states(self.actor.model, self.actor_optim)
+        self.strategy.offload_optimizer_states(self.actor_optim)
 
     def offload_model(self):
         """Offload model to CPU for rollout phase (hybrid engine mode)."""
@@ -586,7 +586,7 @@ class PolicyModelActor(BaseModelActor):
         if not self.disable_fsdp2_ckpt:
             self.strategy.save_dcp_checkpoint(
                 self.actor.model,
-                os.path.join(args.dcp_ckpt_path, "_actor"),
+                os.path.join(self.strategy.dcp_ckpt_path, "_actor"),
                 tag,
                 args.max_ckpt_num,
                 args.max_ckpt_mem,
@@ -597,7 +597,7 @@ class PolicyModelActor(BaseModelActor):
             if args.enable_ema and self.ema_model is not None:
                 self.strategy.save_dcp_checkpoint(
                     self.ema_model.model,
-                    os.path.join(args.dcp_ckpt_path, "_ema"),
+                    os.path.join(self.strategy.dcp_ckpt_path, "_ema"),
                     tag,
                     args.max_ckpt_num,
                     args.max_ckpt_mem,
@@ -608,7 +608,7 @@ class PolicyModelActor(BaseModelActor):
             self.strategy.save_hf_checkpoint(
                 self.ema_model if args.enable_ema else self.actor,
                 self.tokenizer,
-                args.hf_ckpt_path,
+                self.strategy.hf_ckpt_path,
                 tag,
                 args.max_ckpt_num,
                 args.max_ckpt_mem,
