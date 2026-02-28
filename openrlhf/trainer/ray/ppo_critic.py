@@ -210,8 +210,8 @@ class CriticModelActor(BaseModelActor):
         self.critic_scheduler = critic_scheduler
 
         # load checkpoint
-        if args.load_checkpoint and os.path.exists(os.path.join(args.dcp_ckpt_path, "_actor")):
-            ckpt_path = os.path.join(args.dcp_ckpt_path, "_critic")
+        if args.load_checkpoint and os.path.exists(os.path.join(self.strategy.dcp_ckpt_path, "_actor")):
+            ckpt_path = os.path.join(self.strategy.dcp_ckpt_path, "_critic")
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
             strategy.load_dcp_checkpoint(self.critic, ckpt_path, optimizer=self.critic_optim, scheduler=self.critic_scheduler)
 
@@ -269,7 +269,7 @@ class CriticModelActor(BaseModelActor):
         if not self.disable_fsdp2_ckpt:
             self.strategy.save_dcp_checkpoint(
                 self.critic,
-                os.path.join(args.dcp_ckpt_path, "_critic"),
+                os.path.join(self.strategy.dcp_ckpt_path, "_critic"),
                 tag,
                 args.max_ckpt_num,
                 args.max_ckpt_mem,
@@ -278,10 +278,10 @@ class CriticModelActor(BaseModelActor):
             )
 
     def reload_states(self):
-        self.strategy.reload_states(self.critic, self.critic_optim)
+        self.strategy.reload_optimizer_states(self.critic_optim)
 
     def offload_states(self):
-        self.strategy.offload_states(self.critic, self.critic_optim)
+        self.strategy.offload_optimizer_states(self.critic_optim)
 
     def offload_model(self):
         """Offload model to CPU for rollout phase (hybrid engine mode)."""
