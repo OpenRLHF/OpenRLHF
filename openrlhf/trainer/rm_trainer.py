@@ -226,7 +226,7 @@ class RewardModelTrainer(ABC):
             if not self.disable_fsdp2_ckpt:
                 self.strategy.save_dcp_checkpoint(
                     self.model,
-                    args.dcp_ckpt_path,
+                    self.strategy.dcp_ckpt_path,
                     tag,
                     args.max_ckpt_num,
                     args.max_ckpt_mem,
@@ -236,7 +236,7 @@ class RewardModelTrainer(ABC):
                 )
             if self.save_hf_ckpt:
                 self.strategy.save_hf_checkpoint(
-                    self.model, self.tokenizer, args.hf_ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem
+                    self.model, self.tokenizer, self.strategy.hf_ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem
                 )
 
     def evaluate(self, eval_dataloader, steps=0):
