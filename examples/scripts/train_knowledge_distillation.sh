@@ -9,7 +9,7 @@ openrlhf.cli.train_kd \
    --train_batch_size 256 \
    --micro_train_batch_size 2 \
    --max_samples 500000 \
-   --pretrain meta-llama/Meta-Llama-3-8B-Instruct \
+   --model_name_or_path meta-llama/Meta-Llama-3-8B-Instruct \
    --teacher_model meta-llama/Meta-Llama-3-70B-Instruct \
    --ckpt_save_path ./checkpoint/llama3-8b-kd \
    --save_steps -1 \
@@ -24,6 +24,8 @@ openrlhf.cli.train_kd \
    --gradient_checkpointing
 EOF
     # --use_wandb [WANDB_TOKENS] or True (use wandb login command)
+    # Resume example (explicit step dir, not /dcp_checkpoint):
+    # --resume_from_path /path/to/ckpt/dcp_ckpt/global_step_<N>
 
 
 if [[ ${1} != "slurm" ]]; then

@@ -9,9 +9,10 @@ Training-state resume uses distributed DCP checkpoints.
 import json
 import logging
 import os
+import re
 import shutil
 import warnings
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional
 
 import torch
 import torch.distributed as dist
@@ -49,7 +50,7 @@ def _fixup_after_load(model: nn.Module) -> None:
     # Re-tie embeddings if required by config.
     ensure_tied_word_embeddings(backbone)
 
-    # Rotary embedding inv_freq fix (prime-rl style).
+    # Rotary embedding inv_freq fix
     rotary_emb = None
     if hasattr(backbone, "model") and hasattr(backbone.model, "rotary_emb"):
         rotary_emb = backbone.model.rotary_emb
@@ -108,40 +109,48 @@ def _compute_shard_mapping(
     return mapping if mapping else None
 
 
-def _cleanup_old_checkpoints(save_dir: str, max_num: int, max_mem: int):
-    """Remove old checkpoints to stay within count and size limits."""
-    size_limit_bytes = max_mem * 1024**3
+def _cleanup_old_checkpoints(save_dir: str, max_num: int, *, tag: Optional[str] = None, is_rank_0: bool = True):
+    """Write ``latest`` marker and remove old checkpoints under *save_dir*.
 
-    # Get checkpoint entries sorted by modification time
+    Only rank-0 should perform filesystem mutations.  When *is_rank_0* is
+    ``False`` the function is a no-op.  If *tag* is provided, a ``latest``
+    file containing the tag name is written after cleanup.
+    Set *max_num* to ``-1`` to disable deletion.
+    """
+    if not is_rank_0:
+        return
+    if max_num != -1 and max_num <= 0:
+        raise ValueError(f"max_num must be -1 or a positive integer, got {max_num}")
+
+    os.makedirs(save_dir, exist_ok=True)
+    # Keep only canonical step directories to avoid deleting unrelated folders.
+    step_dir_pattern = re.compile(r"^global_step_(\d+)$")
     checkpoints = []
     for name in os.listdir(save_dir):
         path = os.path.join(save_dir, name)
-        if os.path.isdir(path) and name != "latest":
-            try:
-                checkpoints.append((name, path, os.path.getmtime(path)))
-            except OSError:
-                pass
-    checkpoints.sort(key=lambda x: x[2])
-
-    def get_size(path):
-        return sum(os.path.getsize(os.path.join(r, f)) for r, _, files in os.walk(path) for f in files)
+        if not os.path.isdir(path):
+            continue
+        match = step_dir_pattern.fullmatch(name)
+        if match is None:
+            continue
+        checkpoints.append((int(match.group(1)), path))
+    checkpoints.sort(key=lambda item: item[0])
 
     # Remove by count
-    while len(checkpoints) > max_num:
-        shutil.rmtree(checkpoints.pop(0)[1], ignore_errors=True)
+    if max_num != -1:
+        while len(checkpoints) > max_num:
+            _, path = checkpoints.pop(0)
+            shutil.rmtree(path)
 
-    # Remove by size
-    total = sum(get_size(ckpt[1]) for ckpt in checkpoints)
-    while total > size_limit_bytes and len(checkpoints) > 1:
-        path = checkpoints.pop(0)[1]
-        total -= get_size(path)
-        shutil.rmtree(path, ignore_errors=True)
+    if tag is not None:
+        with open(os.path.join(save_dir, "latest"), "w") as f:
+            f.write(tag)
 
 
 @torch.no_grad()
 def _load_hf_checkpoint(
     model: nn.Module,
-    pretrain: str,
+    model_name_or_path: str,
     *,
     device: torch.device | str = "cuda",
     process_group: Optional[dist.ProcessGroup] = None,
@@ -155,10 +164,10 @@ def _load_hf_checkpoint(
     same object.
     """
     # Resolve HF repo id or local path into a local directory.
-    hf_dir = os.path.expanduser(pretrain)
+    hf_dir = os.path.expanduser(model_name_or_path)
     if not os.path.isdir(hf_dir):
         from huggingface_hub import snapshot_download
-        hf_dir = snapshot_download(repo_id=pretrain, repo_type="model")
+        hf_dir = snapshot_download(repo_id=model_name_or_path, repo_type="model")
 
     # DCP-based load (distributed or single-process).
     if process_group is None and not (dist.is_initialized() and dist.get_world_size() > 1):
@@ -304,15 +313,11 @@ def _save_hf_checkpoint(
 def _save_dcp_checkpoint(
     model: nn.Module,
     save_dir: str,
-    tag: str,
     unwrap_fn: UnwrapFn,
     is_rank_0: bool,
     optimizer: Optional[Optimizer] = None,
     scheduler=None,
     client_state: Optional[Dict] = None,
-    max_num: int = 3,
-    max_mem: int = 1000,
-    save_latest: bool = True,
     process_group: Optional[dist.ProcessGroup] = None,
 ):
     """Save FSDP2 distributed checkpoint.
@@ -324,20 +329,16 @@ def _save_dcp_checkpoint(
     - Custom client state (e.g., consumed_samples)
 
     Args:
-        tag: Checkpoint name (e.g., "step_1000")
-        max_num: Maximum number of checkpoints to keep
-        max_mem: Maximum total checkpoint size in GB
+        save_dir: Exact DCP target directory, e.g.
+            ``.../global_step_100/dcp_checkpoint/_actor``.
     """
-    if not tag:
-        raise ValueError("Checkpoint tag required")
+    checkpoint_path = save_dir
 
     os.makedirs(save_dir, exist_ok=True)
-    if is_rank_0:
-        _cleanup_old_checkpoints(save_dir, max_num, max_mem)
-    dist.barrier(group=process_group) if process_group is not None else dist.barrier()
+    if dist.is_initialized():
+        dist.barrier(group=process_group)
 
     unwrapped = unwrap_fn(model)
-    checkpoint_path = os.path.join(save_dir, tag)
 
     # Stateful wrapper for DCP
     class AppState(Stateful):
@@ -354,7 +355,8 @@ def _save_dcp_checkpoint(
 
     if is_rank_0:
         os.makedirs(checkpoint_path, exist_ok=True)
-    dist.barrier(group=process_group) if process_group is not None else dist.barrier()
+    if dist.is_initialized():
+        dist.barrier(group=process_group)
 
     with warnings.catch_warnings():
         # `warnings.filterwarnings` expects `category` to be a Warning subclass,
@@ -363,11 +365,11 @@ def _save_dcp_checkpoint(
         warnings.filterwarnings("ignore", category=UserWarning)
         dcp.save({"app": AppState()}, checkpoint_id=checkpoint_path, process_group=process_group)
 
-    dist.barrier(group=process_group) if process_group is not None else dist.barrier()
+    if dist.is_initialized():
+        dist.barrier(group=process_group)
 
-    # Update 'latest' marker
-    if save_latest and is_rank_0:
-        # Save non-tensor extras (client_state, scheduler) on rank0.
+    # Always write extra_state.pt and STABLE on rank0.
+    if is_rank_0:
         extra_path = os.path.join(checkpoint_path, "extra_state.pt")
         torch.save(
             {
@@ -380,18 +382,11 @@ def _save_dcp_checkpoint(
         # when resolving checkpoints by mtime (prime-rl style).
         with open(os.path.join(checkpoint_path, "STABLE"), "w") as f:
             f.write("ok\n")
-        with open(os.path.join(save_dir, "latest"), "w") as f:
-            f.write(tag)
-
-        # Clean up *after* saving so max_num is respected even on the last save.
-        _cleanup_old_checkpoints(save_dir, max_num, max_mem)
-
 
 def _load_dcp_checkpoint(
     model: nn.Module,
     load_dir: str,
     unwrap_fn: UnwrapFn,
-    tag: Optional[str] = None,
     optimizer: Optional[Optimizer] = None,
     scheduler=None,
     load_optimizer_states: bool = True,
@@ -399,43 +394,18 @@ def _load_dcp_checkpoint(
     load_module_strict: bool = True,
     load_module_only: bool = False,
     process_group: Optional[dist.ProcessGroup] = None,
-) -> Tuple[str, Dict[str, Any]]:
+) -> Dict[str, Any]:
     """Load FSDP2 distributed checkpoint.
 
     Args:
-        tag: Checkpoint tag (reads 'latest' file if None)
-        load_module_only: If True, skip optimizer/scheduler
-
-    Returns:
-        (tag, client_state) tuple
+        load_dir: Exact DCP checkpoint directory.
+        load_module_only: If True, skip optimizer/scheduler.
     """
-    if not os.path.exists(load_dir):
+    if not os.path.isdir(load_dir):
         raise FileNotFoundError(f"Checkpoint dir not found: {load_dir}")
-
-    # Resolve tag from 'latest' file or find most recent
-    resolved_tag = tag
-    if not resolved_tag:
-        latest_file = os.path.join(load_dir, "latest")
-        if os.path.isfile(latest_file):
-            with open(latest_file) as f:
-                resolved_tag = f.read().strip()
-        else:
-            subdirs = sorted(
-                [d for d in os.listdir(load_dir) if os.path.isdir(os.path.join(load_dir, d)) and d != "latest"],
-                key=lambda d: os.path.getmtime(os.path.join(load_dir, d)),
-            )
-            # Prefer completed checkpoints if STABLE markers exist.
-            stable_subdirs = [d for d in subdirs if os.path.isfile(os.path.join(load_dir, d, "STABLE"))]
-            if stable_subdirs:
-                subdirs = stable_subdirs
-            resolved_tag = subdirs[-1] if subdirs else None
-
-    if not resolved_tag:
-        raise FileNotFoundError("No checkpoint tag found")
-
-    checkpoint_path = os.path.join(load_dir, resolved_tag)
-    if not os.path.isdir(checkpoint_path):
-        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+    if not os.path.isfile(os.path.join(load_dir, ".metadata")):
+        raise FileNotFoundError(f"Not a DCP checkpoint directory: {load_dir}")
+    checkpoint_path = load_dir
 
     unwrapped = unwrap_fn(model)
     should_load_optimizer = load_optimizer_states and optimizer and not load_module_only
@@ -474,7 +444,10 @@ def _load_dcp_checkpoint(
     # Load non-tensor extras saved by rank0 (client_state + scheduler state).
     extra_data = {}
     extra_path = os.path.join(checkpoint_path, "extra_state.pt")
-    if dist.is_initialized() and dist.get_rank() == 0 and os.path.isfile(extra_path):
+    if dist.is_initialized():
+        if dist.get_rank() == 0 and os.path.isfile(extra_path):
+            extra_data = torch.load(extra_path, map_location="cpu")
+    elif os.path.isfile(extra_path):
         extra_data = torch.load(extra_path, map_location="cpu")
     if dist.is_initialized():
         broadcast_list = [extra_data]
@@ -487,4 +460,4 @@ def _load_dcp_checkpoint(
         if scheduler_state is not None:
             scheduler.load_state_dict(scheduler_state)
 
-    return resolved_tag, client_state
+    return client_state
