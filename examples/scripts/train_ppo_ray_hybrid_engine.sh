@@ -1,5 +1,7 @@
 set -x
 
+# Resume example (explicit step dir, not /dcp_checkpoint):
+# --resume_from_path /path/to/ckpt/dcp_ckpt/global_step_<N>
 python3 -m openrlhf.cli.train_ppo_ray \
    --ref_num_nodes 1 \
    --ref_num_gpus_per_node 8 \
@@ -13,8 +15,8 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --vllm_tensor_parallel_size 2 \
    --colocate_all_models \
    --vllm_gpu_memory_utilization 0.5 \
-   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-   --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \
+   --model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
+   --reward_model_name_or_path OpenRLHF/Llama-3-8b-rm-700k \
    --ckpt_save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
    --save_hf_ckpt \
    --train_batch_size 128 \

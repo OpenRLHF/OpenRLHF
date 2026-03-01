@@ -271,7 +271,7 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 
 **本番環境機能**
 - Wandb（`--use_wandb`）とTensorBoard（`--use_tensorboard`）ロギング
-- チェックポイント復旧（`--load_checkpoint`、`--save_steps`）
+- チェックポイント復旧（`--resume_from_path`、`--ckpt_save_path`、`--save_steps`。定期checkpointには `--save_steps > 0`。`--resume_from_path` は `/path/to/ckpt/dcp_ckpt/global_step_100` のような明示的な step ディレクトリを指定）
 - 評価データセット（`--eval_dataset`）
 
 </details>

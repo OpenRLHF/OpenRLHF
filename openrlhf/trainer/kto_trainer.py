@@ -215,22 +215,23 @@ class KTOTrainer(ABC):
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
-            tag = f"global_step{global_step}"
+            tag = f"global_step_{global_step}"
+            step_dir = os.path.join(self.strategy.dcp_ckpt_path, tag)
+            any_checkpoint_saved = False
             if not self.disable_fsdp2_ckpt:
                 self.strategy.save_dcp_checkpoint(
                     self.model.model,
-                    self.strategy.dcp_ckpt_path,
-                    tag,
-                    args.max_ckpt_num,
-                    args.max_ckpt_mem,
-                    client_states,
+                    os.path.join(step_dir, "dcp_checkpoint"),
+                    client_state=client_states,
                     optimizer=self.optimizer,
                     scheduler=self.scheduler,
                 )
+                any_checkpoint_saved = True
             if self.save_hf_ckpt:
-                self.strategy.save_hf_checkpoint(
-                    self.model, self.tokenizer, self.strategy.hf_ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem
-                )
+                self.strategy.save_hf_checkpoint(self.model, self.tokenizer, os.path.join(step_dir, "hf_checkpoint"))
+                any_checkpoint_saved = True
+            if any_checkpoint_saved:
+                self.strategy.cleanup_old_checkpoints(tag)
 
     def evaluate(self, eval_dataloader, steps=0):
         self.model.eval()

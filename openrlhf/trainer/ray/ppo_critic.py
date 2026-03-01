@@ -163,7 +163,7 @@ class CriticModelActor(BaseModelActor):
         self.disable_fsdp2_ckpt = args.disable_fsdp2_ckpt
 
         self._setup_distributed(strategy)
-        init_value_head = strategy.args.pretrain == strategy.args.critic_pretrain
+        init_value_head = strategy.args.model_name_or_path == strategy.args.critic_model_name_or_path
         critic = get_llm_for_sequence_regression(
             pretrain,
             "critic",
@@ -210,10 +210,20 @@ class CriticModelActor(BaseModelActor):
         self.critic_scheduler = critic_scheduler
 
         # load checkpoint
-        if args.load_checkpoint and os.path.exists(os.path.join(self.strategy.dcp_ckpt_path, "_actor")):
-            ckpt_path = os.path.join(self.strategy.dcp_ckpt_path, "_critic")
-            strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            strategy.load_dcp_checkpoint(self.critic, ckpt_path, optimizer=self.critic_optim, scheduler=self.critic_scheduler)
+        resume_from_path = getattr(args, "resume_from_path", None)
+        if resume_from_path:
+            actor_dir = os.path.join(resume_from_path, "dcp_checkpoint", "_actor")
+            if not os.path.isdir(actor_dir):
+                raise FileNotFoundError(
+                    f"Invalid resume_from_path: expected actor checkpoint directory at {actor_dir}"
+                )
+            critic_dir = os.path.join(resume_from_path, "dcp_checkpoint", "_critic")
+            if not os.path.isdir(critic_dir):
+                raise FileNotFoundError(
+                    f"Invalid resume_from_path: expected critic checkpoint directory at {critic_dir}"
+                )
+            strategy.print(f"Loading critic checkpoint: {critic_dir}")
+            strategy.load_dcp_checkpoint(self.critic, critic_dir, optimizer=self.critic_optim, scheduler=self.critic_scheduler)
 
         # initial offload
         if strategy.args.fsdp2_enable_sleep:
@@ -265,17 +275,17 @@ class CriticModelActor(BaseModelActor):
         return status
 
     def save_checkpoint(self, tag):
-        args = self.strategy.args
-        if not self.disable_fsdp2_ckpt:
-            self.strategy.save_dcp_checkpoint(
-                self.critic,
-                os.path.join(self.strategy.dcp_ckpt_path, "_critic"),
-                tag,
-                args.max_ckpt_num,
-                args.max_ckpt_mem,
-                optimizer=self.critic_optim,
-                scheduler=self.critic_scheduler,
-            )
+        if self.disable_fsdp2_ckpt:
+            return False
+
+        step_dir = os.path.join(self.strategy.dcp_ckpt_path, tag)
+        self.strategy.save_dcp_checkpoint(
+            self.critic,
+            os.path.join(step_dir, "dcp_checkpoint", "_critic"),
+            optimizer=self.critic_optim,
+            scheduler=self.critic_scheduler,
+        )
+        return True
 
     def reload_states(self):
         self.strategy.reload_optimizer_states(self.critic_optim)

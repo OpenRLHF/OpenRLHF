@@ -18,7 +18,7 @@ def generate(args):
 
     # Build model (non meta-init: real weights loaded by from_pretrained)
     model = Actor(
-        args.pretrain,
+        args.model_name_or_path,
         device_map="auto" if torch.cuda.is_available() else None,
         attn_implementation=args.attn_implementation,
         torch_dtype=convert_to_torch_dtype(args.param_dtype),
@@ -26,7 +26,7 @@ def generate(args):
     model.model.eval()
 
     tokenizer = get_tokenizer(
-        args.pretrain, model.model, "left", dummy_strategy, use_fast=not args.disable_fast_tokenizer
+        args.model_name_or_path, model.model, "left", dummy_strategy, use_fast=not args.disable_fast_tokenizer
     )
 
     if args.ta_prompt:
@@ -115,7 +115,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
 
-    parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")
+    parser.add_argument("--model_name_or_path", type=str, default=None, help="HF model name or path")
 
     parser.add_argument("--max_len", type=int, default=4096)
     parser.add_argument("--greedy_sampling", action="store_true", default=False, help="Use Greedy sampling")

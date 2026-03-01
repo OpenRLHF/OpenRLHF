@@ -20,7 +20,7 @@ def train(args):
 
     # configure model
     model = Actor(
-        args.pretrain,
+        args.model_name_or_path,
         attn_implementation=args.attn_implementation,
         torch_dtype=torch.float32,
         use_liger_kernel=args.use_liger_kernel,
@@ -28,17 +28,17 @@ def train(args):
     )
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
+    tokenizer = get_tokenizer(args.model_name_or_path, model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
     strategy.print(model)
 
     # load weights for ref model
     ref_model = Actor(
-        args.pretrain,
+        args.model_name_or_path,
         attn_implementation=args.attn_implementation,
         torch_dtype=convert_to_torch_dtype(args.param_dtype),
         packing_samples=args.packing_samples,
     )
-    get_tokenizer(args.pretrain, ref_model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
+    get_tokenizer(args.model_name_or_path, ref_model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
 
     # gradient_checkpointing
     if args.gradient_checkpointing:
@@ -50,10 +50,10 @@ def train(args):
     model = strategy.apply_parallelism(model)
     # Reference model is inference-only; cpu_offload controls FSDP2 CPUOffloadPolicy.
     ref_model = strategy.apply_parallelism(ref_model, force_cpu_offload=args.ref_offload)
-    strategy.load_hf_checkpoint(model, args.pretrain)
+    strategy.load_hf_checkpoint(model, args.model_name_or_path)
 
     strategy.load_hf_checkpoint(
-        ref_model, args.pretrain, force_cpu_offload=args.ref_offload
+        ref_model, args.model_name_or_path, force_cpu_offload=args.ref_offload
     )
 
     # configure optimizer
@@ -117,10 +117,16 @@ def train(args):
 
     # load checkpoint
     consumed_samples = 0
-    if args.load_checkpoint and os.path.exists(strategy.dcp_ckpt_path):
-        _, states = strategy.load_dcp_checkpoint(model.model, strategy.dcp_ckpt_path, optimizer=optim, scheduler=scheduler)
+    resume_from_path = args.resume_from_path
+    if resume_from_path:
+        dcp_dir = os.path.join(resume_from_path, "dcp_checkpoint")
+        if not os.path.isdir(dcp_dir):
+            raise FileNotFoundError(
+                f"Invalid resume_from_path: expected DCP directory at {dcp_dir}"
+            )
+        states = strategy.load_dcp_checkpoint(model.model, dcp_dir, optimizer=optim, scheduler=scheduler)
         consumed_samples = states["consumed_samples"]
-        strategy.print(f"Loaded the checkpoint: {strategy.dcp_ckpt_path}, consumed_samples: {consumed_samples}")
+        strategy.print(f"Loaded checkpoint from: {dcp_dir}, consumed_samples: {consumed_samples}")
 
     os.makedirs(args.ckpt_save_path, exist_ok=True)
 
@@ -154,9 +160,13 @@ if __name__ == "__main__":
     parser.add_argument("--disable_fsdp2_ckpt", action="store_true", default=False)
     parser.add_argument("--logging_steps", type=int, default=1)
     parser.add_argument("--eval_steps", type=int, default=-1)
-    parser.add_argument("--max_ckpt_num", type=int, default=3)
-    parser.add_argument("--max_ckpt_mem", type=int, default=1e8)
-    parser.add_argument("--load_checkpoint", action="store_true", default=False)
+    parser.add_argument("--max_checkpoints_to_keep", type=int, default=3, help="Maximum checkpoints to keep. Use -1 to keep all checkpoints; value must be -1 or a positive integer.")
+    parser.add_argument(
+        "--resume_from_path",
+        type=str,
+        default=None,
+        help="Resume training from an explicit step directory (must contain dcp_checkpoint).",
+    )
 
     # FSDP2
     parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
@@ -203,13 +213,13 @@ if __name__ == "__main__":
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--fsdp2_tp_size", type=int, default=1, help="FSDP2 tensor parallel size")
     parser.add_argument(
-        "--sequence_parallel",
+        "--fsdp2_tp_sequence_parallel",
         action="store_true",
         default=False,
         help="Enable sequence parallelism for FSDP2+TP (requires --fsdp2_tp_size > 1).",
     )
     parser.add_argument(
-        "--tp_loss_parallel",
+        "--fsdp2_tp_loss_parallel",
         action="store_true",
         default=False,
         help="Enable vocab-sharded lm_head logits and TP loss-parallel path (requires --fsdp2_tp_size > 1).",
@@ -220,7 +230,7 @@ if __name__ == "__main__":
         "--hf_max_shard_size_gb",
         type=float,
         default=5,
-        help="Max shard size (GB) when saving HF safetensors via DCP.",
+        help="Max size (in GB) per .safetensors shard file when saving HuggingFace checkpoints, e.g. 5 means each file <= 5GB.",
     )
 
     # Context Parallel
@@ -237,7 +247,7 @@ if __name__ == "__main__":
     # KTO
     parser.add_argument("--max_epochs", type=int, default=1)
     parser.add_argument("--beta", type=float, default=0.01)
-    parser.add_argument("--pretrain", type=str, default="bigscience/bloomz-1b7")
+    parser.add_argument("--model_name_or_path", type=str, default="bigscience/bloomz-1b7")
     parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
     parser.add_argument("--lr_scheduler", type=str, default="cosine_with_min_lr")

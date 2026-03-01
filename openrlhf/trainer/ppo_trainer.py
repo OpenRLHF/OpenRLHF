@@ -214,17 +214,25 @@ class BasePPOTrainer(ABC):
         # TODO: save best model on dev, use loss/perplexity/others on whole dev dataset as metric
         client_states = client_states or {}
         if global_step % self.args.save_steps == 0:
-            tag = f"global_step{global_step}"
+            tag = f"global_step_{global_step}"
             refs = self.actor_model_group.async_run_method(
                 method_name="save_checkpoint", tag=tag, client_states=client_states
             )
             if self.critic_model_group is not None:
                 refs.extend(self.critic_model_group.async_run_method(method_name="save_checkpoint", tag=tag))
-            ray.get(refs)
+            any_checkpoint_saved_results = ray.get(refs)
+            if any(any_checkpoint_saved_results):
+                # All roles saved – write top-level latest + cleanup
+                ray.get(self.actor_model_group.async_run_method(method_name="cleanup_old_checkpoints", tag=tag))
 
     def init_checkpoint_states(self) -> Dict:
-        ckpt_path = os.path.join(self.self.strategy.dcp_ckpt_path, "_actor")
-        if self.args.load_checkpoint and os.path.exists(ckpt_path):
+        resume_from_path = getattr(self.args, "resume_from_path", None)
+        if resume_from_path:
+            actor_dir = os.path.join(resume_from_path, "dcp_checkpoint", "_actor")
+            if not os.path.isdir(actor_dir):
+                raise FileNotFoundError(
+                    f"Invalid resume_from_path: expected actor checkpoint directory at {actor_dir}"
+                )
             checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
                 0
             ]

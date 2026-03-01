@@ -474,29 +474,32 @@ class PolicyModelActor(BaseModelActor):
 
         # load checkpoint
         self.checkpoint_states = {}
-        ckpt_path = os.path.join(self.strategy.dcp_ckpt_path, "_actor")
-        if args.load_checkpoint and os.path.exists(ckpt_path):
-            strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            ckpt_id, states = strategy.load_dcp_checkpoint(
-                self.actor.model, ckpt_path, optimizer=self.actor_optim, scheduler=self.actor_scheduler
+        resume_from_path = getattr(args, "resume_from_path", None)
+        if resume_from_path:
+            actor_dir = os.path.join(resume_from_path, "dcp_checkpoint", "_actor")
+            if not os.path.isdir(actor_dir):
+                raise FileNotFoundError(
+                    f"Invalid resume_from_path: expected actor checkpoint directory at {actor_dir}"
+                )
+            strategy.print(f"Loading actor checkpoint: {actor_dir}")
+            states = strategy.load_dcp_checkpoint(
+                self.actor.model, actor_dir, optimizer=self.actor_optim, scheduler=self.actor_scheduler
             )
             self.checkpoint_states = states
             if args.enable_ema and self.ema_model is not None:
-                ema_ckpt_path = os.path.join(self.strategy.dcp_ckpt_path, "_ema")
-                if os.path.exists(ema_ckpt_path):
-                    try:
-                        ema_tag = os.path.basename(str(ckpt_id))
-                        strategy.print(f"Loading EMA checkpoint: {ema_ckpt_path} (tag={ema_tag})")
-                        strategy.load_dcp_checkpoint(
-                            self.ema_model.model,
-                            ema_ckpt_path,
-                            tag=ema_tag,
-                            load_module_only=True,
-                            load_optimizer_states=False,
-                            load_lr_scheduler_states=False,
-                        )
-                    except Exception as e:
-                        strategy.print(f"[EMA] Failed to load EMA checkpoint from {ema_ckpt_path}: {e}")
+                ema_dir = os.path.join(resume_from_path, "dcp_checkpoint", "_ema")
+                if not os.path.isdir(ema_dir):
+                    raise FileNotFoundError(
+                        f"Invalid resume_from_path: expected EMA checkpoint directory at {ema_dir}"
+                    )
+                strategy.print(f"Loading EMA checkpoint: {ema_dir}")
+                strategy.load_dcp_checkpoint(
+                    self.ema_model.model,
+                    ema_dir,
+                    load_module_only=True,
+                    load_optimizer_states=False,
+                    load_lr_scheduler_states=False,
+                )
 
         # initial offload
         if strategy.args.fsdp2_enable_sleep:
@@ -581,37 +584,38 @@ class PolicyModelActor(BaseModelActor):
         if isinstance(self.strategy, FSDP2Strategy):
             self.strategy.reload_model(self.actor)
 
-    def save_checkpoint(self, tag, client_states):
+    def save_checkpoint(self, tag, client_states=None):
         args = self.strategy.args
+        step_dir = os.path.join(self.strategy.dcp_ckpt_path, tag)
+        dcp_dir = os.path.join(step_dir, "dcp_checkpoint")
+        any_checkpoint_saved = False
         if not self.disable_fsdp2_ckpt:
             self.strategy.save_dcp_checkpoint(
                 self.actor.model,
-                os.path.join(self.strategy.dcp_ckpt_path, "_actor"),
-                tag,
-                args.max_ckpt_num,
-                args.max_ckpt_mem,
-                client_states,
+                os.path.join(dcp_dir, "_actor"),
+                client_state=client_states or {},
                 optimizer=self.actor_optim,
                 scheduler=self.actor_scheduler,
             )
+            any_checkpoint_saved = True
             if args.enable_ema and self.ema_model is not None:
                 self.strategy.save_dcp_checkpoint(
                     self.ema_model.model,
-                    os.path.join(self.strategy.dcp_ckpt_path, "_ema"),
-                    tag,
-                    args.max_ckpt_num,
-                    args.max_ckpt_mem,
+                    os.path.join(dcp_dir, "_ema"),
                     client_state={},
-                    save_latest=True,
                 )
+                any_checkpoint_saved = True
         if self.save_hf_ckpt:
             self.strategy.save_hf_checkpoint(
                 self.ema_model if args.enable_ema else self.actor,
                 self.tokenizer,
-                self.strategy.hf_ckpt_path,
-                tag,
-                args.max_ckpt_num,
-                args.max_ckpt_mem,
+                os.path.join(step_dir, "hf_checkpoint"),
             )
+            any_checkpoint_saved = True
         # wait
         torch_dist_barrier_and_cuda_sync()
+        return any_checkpoint_saved
+
+    def cleanup_old_checkpoints(self, tag):
+        """Called by PPOTrainer after all roles finish saving."""
+        self.strategy.cleanup_old_checkpoints(tag)

@@ -28,11 +28,11 @@ def batch_generate_vllm(args):
     dummy_strategy.args = args
 
     # configure tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.pretrain, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
 
     # configure model
     llm = LLM(
-        model=args.pretrain,
+        model=args.model_name_or_path,
         tensor_parallel_size=args.tp_size,
         trust_remote_code=True,
         seed=args.seed,
@@ -97,7 +97,7 @@ def batch_generate(args):
 
     # configure model (non meta-init: real weights loaded by from_pretrained)
     model = Actor(
-        args.pretrain,
+        args.model_name_or_path,
         device_map=f"cuda:{torch.cuda.current_device()}",
         attn_implementation=args.attn_implementation,
         torch_dtype=convert_to_torch_dtype(args.param_dtype),
@@ -105,7 +105,7 @@ def batch_generate(args):
     model.model.eval()
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
+    tokenizer = get_tokenizer(args.model_name_or_path, model.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
 
     # tokenizer
     def tokenize_fn(texts):
@@ -216,7 +216,7 @@ def batch_rm_inference(args):
     # configure model
     # load huggingface model/config
     model = get_llm_for_sequence_regression(
-        args.pretrain,
+        args.model_name_or_path,
         "reward",
         normalize_reward=True,
         attn_implementation=args.attn_implementation,
@@ -225,13 +225,13 @@ def batch_rm_inference(args):
     )
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
+    tokenizer = get_tokenizer(args.model_name_or_path, model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
 
     # prepare models
     model = strategy.apply_parallelism(model)
     strategy.load_hf_checkpoint(
         model,
-        args.pretrain,
+        args.model_name_or_path,
         init_value_head=False,
         value_head_prefix=args.value_head_prefix,
     )
@@ -354,13 +354,13 @@ if __name__ == "__main__":
         help="Control fully_shard reshard_after_forward flag",
     )
     parser.add_argument(
-        "--sequence_parallel",
+        "--fsdp2_tp_sequence_parallel",
         action="store_true",
         default=False,
         help="Enable sequence parallelism for FSDP2+TP (requires --fsdp2_tp_size > 1).",
     )
     parser.add_argument(
-        "--tp_loss_parallel",
+        "--fsdp2_tp_loss_parallel",
         action="store_true",
         default=False,
         help="Enable vocab-sharded lm_head logits and TP loss-parallel path (requires --fsdp2_tp_size > 1).",
@@ -390,7 +390,7 @@ if __name__ == "__main__":
     )
 
     # Models
-    parser.add_argument("--pretrain", type=str, default=None, help="HF pretrain model name or path")
+    parser.add_argument("--model_name_or_path", type=str, default=None, help="HF pretrain model name or path")
     parser.add_argument(
         "--value_head_prefix", type=str, default="value_head", help="value_head prefix for Reward Model"
     )

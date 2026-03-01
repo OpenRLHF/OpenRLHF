@@ -9,6 +9,8 @@
 
 set -x 
 
+# Resume example (explicit step dir, not /dcp_checkpoint):
+# --resume_from_path /path/to/ckpt/dcp_ckpt/global_step_<N>
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{"working_dir": "/openrlhf"}' \
    -- python3 -m openrlhf.cli.train_ppo_ray \
@@ -21,7 +23,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_num_engines 2 \
    --vllm_tensor_parallel_size 2 \
    --colocate_actor_ref \
-   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
+   --model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
    --remote_rm_url /openrlhf/examples/python/reward_func.py \
    --ckpt_save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
    --micro_train_batch_size 8 \

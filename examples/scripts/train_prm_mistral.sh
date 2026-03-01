@@ -8,7 +8,7 @@ openrlhf.cli.train_prm \
    --eval_steps 100 \
    --train_batch_size 256 \
    --micro_train_batch_size 8 \
-   --pretrain mistralai/Mistral-7B-v0.1  \
+   --model_name_or_path mistralai/Mistral-7B-v0.1  \
    --param_dtype bf16 \
    --max_epochs 1 \
    --max_len 8192 \
@@ -17,7 +17,6 @@ openrlhf.cli.train_prm \
    --input_key input \
    --label_key value \
    --attn_implementation flash_attention_2 \
-   --load_checkpoint \
    --gradient_checkpointing \
    --packing_samples \
    --wandb_group prm \
@@ -26,6 +25,8 @@ openrlhf.cli.train_prm \
 EOF
      # --use_wandb [WANDB_TOKENS] or True (use wandb login command)
      # --packing_samples
+     # Resume example (explicit step dir, not /dcp_checkpoint):
+     # --resume_from_path /path/to/ckpt/dcp_ckpt/global_step_<N>
 
 
 if [[ ${1} != "slurm" ]]; then

@@ -56,7 +56,7 @@ def train(args):
         vllm_engines = create_vllm_engines(
             args.vllm_num_engines,
             args.vllm_tensor_parallel_size,
-            args.pretrain,
+            args.model_name_or_path,
             args.seed,
             args.full_determinism,
             args.enable_prefix_caching,
@@ -95,7 +95,7 @@ def train(args):
         pg = None
 
     # if colocated, create placement group for critic and reward model explicitly.
-    if args.critic_pretrain and args.colocate_critic_reward:
+    if args.critic_model_name_or_path and args.colocate_critic_reward:
         assert (
             args.critic_num_nodes == args.reward_num_nodes
             and args.critic_num_gpus_per_node == args.reward_num_gpus_per_node
@@ -105,7 +105,7 @@ def train(args):
         pg = placement_group(bundles, strategy="PACK")
         ray.get(pg.ready())
 
-    if args.critic_pretrain:
+    if args.critic_model_name_or_path:
         critic_model = RayActorGroup(
             args.critic_num_nodes,
             args.critic_num_gpus_per_node,
@@ -138,7 +138,7 @@ def train(args):
 
     # init PPO trainer (Single controller)
     ppo_trainer = PPOTrainer.remote(
-        args.pretrain,
+        args.model_name_or_path,
         strategy,
         actor_model,
         critic_model,
@@ -159,17 +159,17 @@ def train(args):
 
     # init actor/reference/reward model
     refs = []
-    refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.pretrain, max_steps, vllm_engines))
+    refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.model_name_or_path, max_steps, vllm_engines))
     if ref_model is not None:
-        refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.pretrain))
-    if reward_model is not None and args.reward_pretrain:
-        refs.extend(reward_model.async_init_model_from_pretrained(strategy, args.reward_pretrain))
+        refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.model_name_or_path))
+    if reward_model is not None and args.reward_model_name_or_path:
+        refs.extend(reward_model.async_init_model_from_pretrained(strategy, args.reward_model_name_or_path))
     ray.get(refs)
 
-    if critic_model is not None and args.critic_pretrain:
+    if critic_model is not None and args.critic_model_name_or_path:
         # critic scheduler initialization depends on max_step, so we have to init critic after actor
         # TODO: use first reward model as critic model
-        refs.extend(critic_model.async_init_model_from_pretrained(strategy, args.critic_pretrain, max_steps))
+        refs.extend(critic_model.async_init_model_from_pretrained(strategy, args.critic_model_name_or_path, max_steps))
         ray.get(refs)
 
     # train actor and critic model
@@ -266,9 +266,13 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt_save_path", type=str, default="./ckpt")
     parser.add_argument("--save_hf_ckpt", action="store_true", default=False)
     parser.add_argument("--disable_fsdp2_ckpt", action="store_true", default=False)
-    parser.add_argument("--max_ckpt_num", type=int, default=3)
-    parser.add_argument("--max_ckpt_mem", type=int, default=1e8)
-    parser.add_argument("--load_checkpoint", action="store_true", default=False)
+    parser.add_argument("--max_checkpoints_to_keep", type=int, default=3, help="Maximum checkpoints to keep. Use -1 to keep all checkpoints; value must be -1 or a positive integer.")
+    parser.add_argument(
+        "--resume_from_path",
+        type=str,
+        default=None,
+        help="Resume training from an explicit step directory (must contain dcp_checkpoint).",
+    )
 
     # FSDP2
     parser.add_argument("--local_rank", type=int, default=-1, help="Local rank (for torchrun)")
@@ -313,13 +317,13 @@ if __name__ == "__main__":
     )
     parser.add_argument("--fsdp2_tp_size", type=int, default=1, help="FSDP2 tensor parallel size")
     parser.add_argument(
-        "--sequence_parallel",
+        "--fsdp2_tp_sequence_parallel",
         action="store_true",
         default=False,
         help="Enable sequence parallelism for FSDP2+TP (requires --fsdp2_tp_size > 1).",
     )
     parser.add_argument(
-        "--tp_loss_parallel",
+        "--fsdp2_tp_loss_parallel",
         action="store_true",
         default=False,
         help="Enable vocab-sharded lm_head logits and TP loss-parallel path (requires --fsdp2_tp_size > 1).",
@@ -330,7 +334,7 @@ if __name__ == "__main__":
         "--hf_max_shard_size_gb",
         type=float,
         default=5,
-        help="Max shard size (GB) when saving HF safetensors via DCP.",
+        help="Max size (in GB) per .safetensors shard file when saving HuggingFace checkpoints, e.g. 5 means each file <= 5GB.",
     )
 
     # packing samples using Flash Attention2
@@ -438,10 +442,10 @@ if __name__ == "__main__":
     )
 
     #  Models
-    parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")
-    parser.add_argument("--reward_pretrain", type=str, default=None, help="HF model name or path")
+    parser.add_argument("--model_name_or_path", type=str, default=None, help="HF model name or path")
+    parser.add_argument("--reward_model_name_or_path", type=str, default=None, help="HF model name or path")
     parser.add_argument("--remote_rm_url", type=str, default=None, help="remote RM API (HTTP)")
-    parser.add_argument("--critic_pretrain", type=str, default=None, help="HF model name or path")
+    parser.add_argument("--critic_model_name_or_path", type=str, default=None, help="HF model name or path")
     parser.add_argument("--value_head_prefix", type=str, default="score")
     parser.add_argument("--ref_reward_offload", action="store_true", default=False)
     parser.add_argument("--agent_func_path", type=str, default=None, help="Agent script path")
@@ -505,12 +509,12 @@ if __name__ == "__main__":
         args.remote_rm_url = "agent"
 
     if args.advantage_estimator not in ["gae"]:
-        args.critic_pretrain = None
-    elif args.critic_pretrain is None:
+        args.critic_model_name_or_path = None
+    elif args.critic_model_name_or_path is None:
         if not args.remote_rm_url:
-            args.critic_pretrain = args.reward_pretrain.split(",")[0]
+            args.critic_model_name_or_path = args.reward_model_name_or_path.split(",")[0]
         else:
-            args.critic_pretrain = args.pretrain
+            args.critic_model_name_or_path = args.model_name_or_path
 
     if args.advantage_estimator in ["rloo", "reinforce_baseline", "group_norm"]:
         assert args.n_samples_per_prompt > 1, f"{args.advantage_estimator} requires n_samples_per_prompt > 1"

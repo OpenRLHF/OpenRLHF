@@ -266,7 +266,7 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 
 **生产特性**
 - Wandb（`--use_wandb`）和 TensorBoard（`--use_tensorboard`）日志
-- 检查点恢复（`--load_checkpoint`、`--save_steps`）
+- 检查点恢复（`--resume_from_path`、`--ckpt_save_path`、`--save_steps`；要启用周期性 checkpoint 请设置 `--save_steps > 0`；`--resume_from_path` 必须指向显式 step 目录，例如 `/path/to/ckpt/dcp_ckpt/global_step_100`）
 - 评估数据集（`--eval_dataset`）
 
 </details>
@@ -336,7 +336,7 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 <a id="监督微调"></a>
 ### 监督微调
 
-OpenRLHF 的模型检查点与 HuggingFace 模型完全兼容。您可以使用 `--pretrain {name or path}`、`--reward_pretrain {name or path}` 和 `--critic_pretrain {name or path}` 指定模型名称或路径。我们在 [HuggingFace OpenRLHF](https://huggingface.co/OpenRLHF) 上提供了一些预训练检查点和数据集。
+OpenRLHF 的模型检查点与 HuggingFace 模型完全兼容。您可以使用 `--model_name_or_path {name or path}`、`--reward_model_name_or_path {name or path}` 和 `--critic_model_name_or_path {name or path}` 指定模型名称或路径。我们在 [HuggingFace OpenRLHF](https://huggingface.co/OpenRLHF) 上提供了一些预训练检查点和数据集。
 
 然后您可以使用我们在 [examples/scripts](./examples/scripts/) 目录中提供的启动脚本，或使用以下命令开始训练。
 
@@ -353,8 +353,8 @@ torchrun --standalone --nproc-per-node 8 -m openrlhf.cli.train_sft \
    --train_batch_size 256 \
    --micro_train_batch_size 2 \
    --max_samples 500000 \
-   --pretrain meta-llama/Meta-Llama-3-8B \
-   --save_path ./checkpoint/llama3-8b-sft \
+   --model_name_or_path meta-llama/Meta-Llama-3-8B \
+   --ckpt_save_path ./checkpoint/llama3-8b-sft \
    --save_steps -1 \
    --logging_steps 1 \
    --eval_steps -1 \
@@ -381,13 +381,13 @@ torchrun --standalone --nproc-per-node 8 -m openrlhf.cli.train_sft \
 
 ```bash
 torchrun --standalone --nproc-per-node 8 -m openrlhf.cli.train_rm \
-   --save_path ./checkpoint/llama3-8b-rm \
+   --ckpt_save_path ./checkpoint/llama3-8b-rm \
    --save_steps -1 \
    --logging_steps 1 \
    --eval_steps -1 \
    --train_batch_size 256 \
    --micro_train_batch_size 1 \
-   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
+   --model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
    --param_dtype bf16 \
    --max_epochs 1 \
    --max_len 8192 \
@@ -444,10 +444,9 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_tensor_parallel_size 2 \
    --colocate_all_models \
    --vllm_gpu_memory_utilization 0.5 \
-   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-   --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \
-   --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
-   --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
+   --model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
+   --reward_model_name_or_path OpenRLHF/Llama-3-8b-rm-700k \
+   --ckpt_save_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
    --save_hf_ckpt \
    --train_batch_size 128 \
    --rollout_batch_size 1024 \
@@ -554,7 +553,7 @@ def reward_func(queries, prompts, labels):
 ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
-  --pretrain meta-llama/Meta-Llama-3-8B \
+  --model_name_or_path meta-llama/Meta-Llama-3-8B \
   --use_dynamic_batch \
   --remote_rm_url /path/to/reward_func.py \
   --label_key answer \
