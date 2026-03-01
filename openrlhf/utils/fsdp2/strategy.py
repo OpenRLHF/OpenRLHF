@@ -45,11 +45,11 @@ from openrlhf.utils import convert_to_torch_dtype
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 from .checkpoint import (
+    _cleanup_old_checkpoints,
     _load_hf_checkpoint,
     _save_hf_checkpoint,
     _load_dcp_checkpoint,
     _save_dcp_checkpoint,
-    _cleanup_old_checkpoints,
 )
 from .tp.tp_parallel import apply_tensor_parallel
 from .utils import (
@@ -74,17 +74,17 @@ class FSDP2Strategy(ABC):
         # Parallelism config
         self.fsdp2_cp_size = args.fsdp2_cp_size
         self.fsdp2_tp_size = args.fsdp2_tp_size
-        self.tp_loss_parallel = args.tp_loss_parallel
+        self.fsdp2_tp_loss_parallel = args.fsdp2_tp_loss_parallel
 
-        # tp_loss_parallel requires TP > 1 (lm_head outputs vocab-sharded DTensor logits)
-        if self.tp_loss_parallel and self.fsdp2_tp_size <= 1:
-            raise ValueError("--tp_loss_parallel requires --fsdp2_tp_size > 1.")
+        # fsdp2_tp_loss_parallel requires TP > 1 (lm_head outputs vocab-sharded DTensor logits)
+        if self.fsdp2_tp_loss_parallel and self.fsdp2_tp_size <= 1:
+            raise ValueError("--fsdp2_tp_loss_parallel requires --fsdp2_tp_size > 1.")
 
         # FSDP config
         self.param_dtype = args.param_dtype
         self.fsdp2_cpu_offload = args.fsdp2_cpu_offload
         self.fsdp2_reshard_after_forward = args.fsdp2_reshard_after_forward
-        self.sequence_parallel = args.sequence_parallel
+        self.sequence_parallel = args.fsdp2_tp_sequence_parallel
 
         # CPUOffloadPolicy and manual offload (fsdp2_enable_sleep) are mutually exclusive:
         # FSDP2 manages CPU offload automatically when fsdp2_cpu_offload is enabled.
@@ -139,10 +139,10 @@ class FSDP2Strategy(ABC):
         # Sequence Parallel (SP) is only meaningful with TP>1.
         if self.sequence_parallel:
             if self.fsdp2_tp_size <= 1:
-                raise ValueError("Invalid config: --sequence_parallel requires --fsdp2_tp_size > 1.")
+                raise ValueError("Invalid config: --fsdp2_tp_sequence_parallel requires --fsdp2_tp_size > 1.")
             if not getattr(self.args, "packing_samples", False):
                 raise ValueError(
-                    "--sequence_parallel requires --packing_samples to be enabled, "
+                    "--fsdp2_tp_sequence_parallel requires --packing_samples to be enabled, "
                     "because HF's causal mask creation uses inputs_embeds.shape[1] "
                     "which would be seq/tp_size after SP sharding, causing mask length mismatch."
                 )
@@ -238,7 +238,7 @@ class FSDP2Strategy(ABC):
                 self.mesh["tp"],
                 sequence_parallel=self.sequence_parallel,
                 validate=True,
-                shard_logits=self.tp_loss_parallel,
+                shard_logits=self.fsdp2_tp_loss_parallel,
             )
         else:
             self.print("[FSDP2] Skipping TP (fsdp2_tp_size=1)")
@@ -303,7 +303,7 @@ class FSDP2Strategy(ABC):
     def load_hf_checkpoint(
         self,
         model: nn.Module,
-        pretrain: str,
+        model_name_or_path: str,
         *,
         force_cpu_offload: bool = False,
         init_value_head: bool = False,
@@ -321,7 +321,7 @@ class FSDP2Strategy(ABC):
 
         _load_hf_checkpoint(
             unwrapped,
-            pretrain,
+            model_name_or_path,
             device=device,
             process_group=self._gloo_group,
         )
@@ -542,18 +542,8 @@ class FSDP2Strategy(ABC):
     # Checkpointing
     # -------------------------------------------------------------------------
 
-    def save_hf_checkpoint(self, model, tokenizer, output_dir, tag=None, max_num=None, max_mem=None, **kwargs):
-        """Save HF checkpoint, optionally under a sub-tag with rotation cleanup.
-
-        Args:
-            model: Model to save.
-            tokenizer: Tokenizer to save alongside the model.
-            output_dir: Root directory for saving.
-            tag: If provided, save under ``output_dir/tag`` and apply rotation cleanup.
-            max_num: Max number of checkpoints to keep (used with tag).
-            max_mem: Max total checkpoint size in GB (used with tag).
-        """
-        save_dir = os.path.join(output_dir, tag) if tag else output_dir
+    def save_hf_checkpoint(self, model, tokenizer, save_dir):
+        """Save HF checkpoint to an exact target directory."""
 
         # Convert fp32 master weights to the training compute dtype (e.g. bf16) for deployment
         save_dtype = convert_to_torch_dtype(self.param_dtype)
@@ -571,19 +561,11 @@ class FSDP2Strategy(ABC):
             metadata=get_checkpoint_metadata(self),
         )
 
-        if tag and self.is_rank_0():
-            os.makedirs(output_dir, exist_ok=True)
-            _cleanup_old_checkpoints(output_dir, max_num, max_mem)
-
     def save_dcp_checkpoint(
         self,
         model,
         save_dir,
-        tag=None,
-        max_num=3,
-        max_mem=1000,
         client_state=None,
-        save_latest=True,
         optimizer=None,
         scheduler=None,
     ):
@@ -591,15 +573,11 @@ class FSDP2Strategy(ABC):
         _save_dcp_checkpoint(
             model,
             save_dir,
-            tag,
             self._unwrap_model,
             self.is_rank_0(),
             optimizer=optimizer,
             scheduler=scheduler,
             client_state=client_state,
-            max_num=max_num,
-            max_mem=max_mem,
-            save_latest=save_latest,
             process_group=self._gloo_group,
         )
 
@@ -607,7 +585,6 @@ class FSDP2Strategy(ABC):
         self,
         model,
         load_dir,
-        tag=None,
         load_module_strict=True,
         load_optimizer_states=True,
         load_lr_scheduler_states=True,
@@ -619,7 +596,6 @@ class FSDP2Strategy(ABC):
             model,
             load_dir,
             self._unwrap_model,
-            tag=tag,
             optimizer=optimizer,
             scheduler=scheduler,
             load_optimizer_states=load_optimizer_states,
@@ -627,6 +603,15 @@ class FSDP2Strategy(ABC):
             load_module_strict=load_module_strict,
             load_module_only=load_module_only,
             process_group=self._gloo_group,
+        )
+
+    def cleanup_old_checkpoints(self, tag: str):
+        """Write top-level latest marker and clean old step directories."""
+        _cleanup_old_checkpoints(
+            self.dcp_ckpt_path,
+            self.args.max_checkpoints_to_keep,
+            tag=tag,
+            is_rank_0=self.is_rank_0(),
         )
 
     # -------------------------------------------------------------------------

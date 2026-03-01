@@ -18,13 +18,14 @@ AGENT_FUNC_PATH="examples/python/agent_func.py"
 # AGENT_FUNC_PATH="{OpenRLHF-Agent/examples/single_turn/agent_func.py}"
 
 CKPT_ARGS=(
-   --pretrain ${MODEL_PATH}
-   # --reward_pretrain ${REWARD_MODEL}
-   --load_checkpoint
+   --model_name_or_path ${MODEL_PATH}
+   # --reward_model_name_or_path ${REWARD_MODEL}
+   # Resume example (explicit step dir, not /dcp_checkpoint):
+   # --resume_from_path /path/to/ckpt/dcp_ckpt/global_step_<N>
 
    --ckpt_save_path ${SAVE_PATH}
    --save_hf_ckpt
-   --max_ckpt_num 3
+   --max_checkpoints_to_keep 3
    --save_steps 10
 )
 

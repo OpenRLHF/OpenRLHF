@@ -50,6 +50,8 @@ done
 sleep 30s
 
 # ===== submit ray job =====
+# Resume example (explicit step dir, not /dcp_checkpoint):
+# --resume_from_path /path/to/ckpt/dcp_ckpt/global_step_<N>
 # Job start
 srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" bash -c \
 "pip install ray[default]==$RAY_VERSION \
@@ -68,8 +70,8 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --vllm_tensor_parallel_size 2 \
     --colocate_critic_reward \
     --colocate_actor_ref \
-    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-    --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
+    --model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
+    --reward_model_name_or_path OpenRLHF/Llama-3-8b-rm-mixture \
     --ckpt_save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
     --micro_train_batch_size 8 \
     --train_batch_size 128 \

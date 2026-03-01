@@ -15,7 +15,7 @@ logger = init_logger(__name__)
 class RewardModelProxy:
     def __init__(self, args):
         self.reward_model = get_llm_for_sequence_regression(
-            args.reward_pretrain,
+            args.reward_model_name_or_path,
             "reward",
             normalize_reward=args.normalize_reward,
             attn_implementation=args.attn_implementation,
@@ -27,7 +27,7 @@ class RewardModelProxy:
         self.reward_model.eval()
 
         self.tokenizer = get_tokenizer(
-            args.reward_pretrain, self.reward_model, "left", None, use_fast=not args.disable_fast_tokenizer
+            args.reward_model_name_or_path, self.reward_model, "left", None, use_fast=not args.disable_fast_tokenizer
         )
         self.max_length = args.max_len
         self.batch_size = args.batch_size
@@ -71,7 +71,7 @@ class RewardModelProxy:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--reward_pretrain", type=str, default=None, help="HF model name or path")
+    parser.add_argument("--reward_model_name_or_path", type=str, default=None, help="HF model name or path")
     parser.add_argument("--normalize_reward", action="store_true", default=False, help="Enable Reward Normalization")
     parser.add_argument("--value_head_prefix", type=str, default="score")
     parser.add_argument("--max_len", type=int, default=2048)
