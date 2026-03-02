@@ -144,7 +144,7 @@ class TrainingActor(BasePPOTrainer):
         self.rollout_queue = rollout_queue
         self.rollout_slots = rollout_slots
 
-    def fit(self, global_step: int = 0):
+    def fit(self, global_step: int = 0) -> None:
         while True:
             payload = self.rollout_queue.get(block=True)
             if payload == "done":
