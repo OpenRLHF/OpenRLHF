@@ -105,7 +105,7 @@ class BasePPOTrainer(ABC):
         self.wandb_logger = WandbLogger(self.args) if self.args.use_wandb else None
         self.tensorboard_logger = TensorboardLogger(self.args) if self.args.use_tensorboard else None
 
-    def fit(self):
+    def fit(self, global_step: int = 0) -> None:
         raise NotImplementedError("fit method is not implemented")
 
     def train_step(self, rollout_samples, global_step: int) -> Tuple[Dict, int]:
@@ -288,11 +288,14 @@ class PPOTrainer(BasePPOTrainer):
     def get_max_steps(self):
         return self.max_steps
 
-    def fit(self) -> None:
+    def fit(self, global_step: int = 0) -> None:
         checkpoint_states = self.init_checkpoint_states()
         # Restore step and start_epoch
         start_episode = checkpoint_states["episode"]
-        global_step = checkpoint_states["global_step"]
+        # Use checkpoint's global_step if resuming, otherwise use the parameter
+        is_resuming = checkpoint_states["global_step"] > 0
+        if is_resuming:
+            global_step = checkpoint_states["global_step"]
         total_consumed_prompts = checkpoint_states["total_consumed_prompts"]
         # Keep vLLM weights and dataloader states in sync when resuming.
         if global_step:
