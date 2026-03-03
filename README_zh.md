@@ -290,7 +290,7 @@ sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
 
 # 3. 安装 OpenRLHF（选择一个）
 pip install openrlhf                    # 基础
-pip install openrlhf[vllm]              # + vLLM 0.15.0（推荐）
+pip install openrlhf[vllm]              # + vLLM 0.16.0（推荐）
 pip install openrlhf[vllm_latest]       # + 最新 vLLM
 pip install openrlhf[vllm,ring,liger]   # + 所有优化
 ```
@@ -304,7 +304,7 @@ pip install -e .
 ```
 
 > [!TIP]
-> 我们推荐 **vLLM 0.15.0+** 以获得最佳性能。参见 [Dockerfiles](./dockerfile/) 和 [Nvidia-Docker 安装脚本](./examples/scripts/nvidia_docker_install.sh)。
+> 我们推荐 **vLLM 0.16.0+** 以获得最佳性能。参见 [Dockerfiles](./dockerfile/) 和 [Nvidia-Docker 安装脚本](./examples/scripts/nvidia_docker_install.sh)。
 
 ### 准备数据集
 
