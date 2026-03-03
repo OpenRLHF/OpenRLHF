@@ -88,18 +88,17 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             setattr(self, value_head_prefix, nn.Linear(config.hidden_size, 1, bias=False))
 
             self.packing_samples = packing_samples
-
-            # mean std
             self.normalize_reward = config.normalize_reward
             self.register_buffer("mean", torch.zeros(1), persistent=False)
             self.register_buffer("std", torch.ones(1), persistent=False)
+            self.reset_buffers()
 
-            # load mean/std from config.json
-            if hasattr(config, "mean"):
-                if not getattr(self.mean, "is_meta", False):
-                    self.mean[0] = config.mean
-                if not getattr(self.std, "is_meta", False):
-                    self.std[0] = config.std
+        def reset_buffers(self):
+            """Reset non-persistent buffers from config (analogous to reset_parameters)."""
+            if getattr(self.mean, "is_meta", False):
+                return
+            self.mean.fill_(float(getattr(self.config, "mean", 0.0)))
+            self.std.fill_(float(getattr(self.config, "std", 1.0)))
 
         def forward(
             self,
@@ -154,18 +153,17 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             setattr(self, value_head_prefix, nn.Linear(config.hidden_size, 1, bias=False))
 
             self.packing_samples = packing_samples
-
-            # mean std
             self.normalize_reward = config.normalize_reward
             self.register_buffer("mean", torch.zeros(1), persistent=False)
             self.register_buffer("std", torch.ones(1), persistent=False)
+            self.reset_buffers()
 
-            # load mean/std from config.json
-            if hasattr(config, "mean"):
-                if not getattr(self.mean, "is_meta", False):
-                    self.mean[0] = config.mean
-                if not getattr(self.std, "is_meta", False):
-                    self.std[0] = config.std
+        def reset_buffers(self):
+            """Reset non-persistent buffers from config (analogous to reset_parameters)."""
+            if getattr(self.mean, "is_meta", False):
+                return
+            self.mean.fill_(float(getattr(self.config, "mean", 0.0)))
+            self.std.fill_(float(getattr(self.config, "std", 1.0)))
 
         def forward(
             self,
