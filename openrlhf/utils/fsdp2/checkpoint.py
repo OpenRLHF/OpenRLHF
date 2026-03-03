@@ -30,7 +30,7 @@ from torch.distributed.checkpoint.state_dict import (
 from torch.distributed.checkpoint.stateful import Stateful
 from torch.optim import Optimizer
 
-from .utils import ensure_tied_word_embeddings
+from .utils import ensure_tied_word_embeddings, reinit_rotary_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -39,45 +39,18 @@ UnwrapFn = Callable[[nn.Module], nn.Module]
 
 @torch.no_grad()
 def _fixup_after_load(model: nn.Module) -> None:
-    """Fixes after to_empty() + sharded load.
+    """Reinitialize non-persistent state after to_empty() + DCP load.
 
-    - Re-tie embeddings if needed
-    - Recompute rotary inv_freq (non-persistent buffer in some HF models)
-    - Initialize reward-model mean/std buffers (persistent=False, not in ckpt)
+    Delegates to reusable utilities in utils.py and model-level hooks:
+    1. Re-tie word embeddings (backbone)
+    2. Recompute rotary inv_freq (backbone)
+    3. Reset model-specific buffers (e.g. reward normalization stats)
     """
     backbone = model.get_base_model() if hasattr(model, "get_base_model") else model
-
-    # Re-tie embeddings if required by config.
     ensure_tied_word_embeddings(backbone)
-
-    # Rotary embedding inv_freq fix
-    rotary_emb = None
-    if hasattr(backbone, "model") and hasattr(backbone.model, "rotary_emb"):
-        rotary_emb = backbone.model.rotary_emb
-    elif hasattr(backbone, "rotary_emb"):
-        rotary_emb = backbone.rotary_emb
-    if rotary_emb is not None and hasattr(rotary_emb, "inv_freq") and hasattr(rotary_emb, "rope_init_fn") and hasattr(rotary_emb, "config"):
-        device = rotary_emb.inv_freq.device if torch.is_tensor(rotary_emb.inv_freq) else torch.device("cpu")
-        new_inv_freq, attention_scaling = rotary_emb.rope_init_fn(rotary_emb.config, device)
-        if hasattr(rotary_emb, "attention_scaling"):
-            rotary_emb.attention_scaling = attention_scaling
-        rotary_emb.inv_freq.copy_(new_inv_freq)
-
-    # Reward/Critic mean/std buffers.
-    config = getattr(model, "config", None) or getattr(backbone, "config", None)
-    for name in ("mean", "std"):
-        if not hasattr(model, name):
-            continue
-        buffer = getattr(model, name)
-        if not torch.is_tensor(buffer) or buffer.is_meta:
-            continue
-        if name == "mean":
-            buffer.zero_()
-        else:
-            buffer.fill_(1.0)
-        # If config carries normalization stats, prefer them.
-        if config is not None and hasattr(config, name):
-            buffer.fill_(float(getattr(config, name)))
+    reinit_rotary_embedding(backbone)
+    if hasattr(model, "reset_buffers"):
+        model.reset_buffers()
 
 
 def _compute_shard_mapping(

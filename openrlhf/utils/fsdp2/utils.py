@@ -6,6 +6,7 @@ FSDP2 Utilities
 - move_optimizer_state: Move optimizer state between devices
 - clip_grad_norm_dtensor: Sharding-aware grad norm clipping for DTensor
 - ensure_tied_word_embeddings: Keep tied embeddings stable
+- reinit_rotary_embedding: Recompute rotary inv_freq after materialization
 """
 
 import math
@@ -213,3 +214,22 @@ def ensure_tied_word_embeddings(model: nn.Module) -> bool:
         out_emb.weight = in_emb.weight
         return True
     return False
+
+
+@torch.no_grad()
+def reinit_rotary_embedding(backbone: nn.Module) -> None:
+    """Recompute rotary inv_freq after meta-init materialization.
+
+    HuggingFace registers inv_freq as a non-persistent buffer, so it's lost
+    after to_empty() + DCP load and must be recomputed via rope_init_fn.
+    """
+    # HF places rotary_emb on LlamaModel (backbone.model) or directly on backbone.
+    rotary_emb = getattr(getattr(backbone, "model", backbone), "rotary_emb", None)
+    if rotary_emb is None or not all(hasattr(rotary_emb, a) for a in ("inv_freq", "rope_init_fn", "config")):
+        return
+
+    device = rotary_emb.inv_freq.device if torch.is_tensor(rotary_emb.inv_freq) else torch.device("cpu")
+    inv_freq, attention_scaling = rotary_emb.rope_init_fn(rotary_emb.config, device)
+    rotary_emb.inv_freq.copy_(inv_freq)
+    if hasattr(rotary_emb, "attention_scaling"):
+        rotary_emb.attention_scaling = attention_scaling
