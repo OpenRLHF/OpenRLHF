@@ -2,7 +2,7 @@ import argparse
 import math
 import os
 from datetime import datetime
-
+import yaml
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import SFTDataset
@@ -11,6 +11,12 @@ from openrlhf.models import Actor
 from openrlhf.trainer.sft_trainer import SFTTrainer
 from openrlhf.utils import get_strategy, get_tokenizer
 
+
+def load_config_from_yaml(config_path):
+    """Load configuration from YAML file."""
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+    return config
 
 def train(args):
     # configure strategy
@@ -64,6 +70,7 @@ def train(args):
         input_template=args.input_template,
         multiturn=args.multiturn,
     )
+    strategy.print(f"TRAIN_DATASET length: {len(train_dataset)}")
     # prepare dataloader
     train_dataloader = strategy.setup_dataloader(
         train_dataset,
@@ -253,8 +260,25 @@ if __name__ == "__main__":
 
     # ModelScope parameters
     parser.add_argument("--use_ms", action="store_true", default=False)
+    parser.add_argument("--config", type=str, default=None, help="Path to YAML config file")
 
     args = parser.parse_args()
+
+
+    if args.config:
+        print(f"Loading configuration from: {args.config}")
+        if not os.path.exists(args.config):
+            raise FileNotFoundError(f"Config file not found: {args.config}")
+        yaml_config = load_config_from_yaml(args.config)
+        # Create a namespace object from the YAML config
+        config_args = argparse.Namespace(**yaml_config)
+        # Merge: CLI arguments override YAML config values
+        for key, value in vars(args).items():
+            if key == "config":
+                continue
+            if key not in yaml_config:
+                setattr(config_args, key, value)
+        args = config_args
 
     if args.multiturn:
         assert args.apply_chat_template, "apply_chat_template must be enabled when using multiturn format"
