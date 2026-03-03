@@ -293,7 +293,8 @@ class PPOTrainer(BasePPOTrainer):
         # Restore step and start_epoch
         start_episode = checkpoint_states["episode"]
         # Use checkpoint's global_step if resuming, otherwise use the parameter
-        if checkpoint_states["global_step"] > 0:
+        is_resuming = checkpoint_states["global_step"] > 0
+        if is_resuming:
             global_step = checkpoint_states["global_step"]
         total_consumed_prompts = checkpoint_states["total_consumed_prompts"]
         # Keep vLLM weights and dataloader states in sync when resuming.
