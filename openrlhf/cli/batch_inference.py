@@ -251,6 +251,12 @@ if __name__ == "__main__":
     parser.add_argument("--use_ms", action="store_true", default=False)
 
     parser.add_argument(
+        "--use_tool_calls",
+        action="store_true",
+        default=False,
+    )
+
+    parser.add_argument(
         "--save_prop",
         type=int,
         default=10,

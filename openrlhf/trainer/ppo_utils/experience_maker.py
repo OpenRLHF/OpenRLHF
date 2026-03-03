@@ -327,7 +327,14 @@ class SamplesGenerator:
         remote_reward_model = kwargs.get("remote_reward_model", None)
         for i, llm in enumerate(llms):
             prompt_token_ids = all_prompt_token_ids[i * batch_size : (i + 1) * batch_size]
-            refs.append(llm.add_requests.remote(sampling_params=sampling_params, prompt_token_ids=prompt_token_ids))
+            refs.append(
+                llm.add_requests.remote(
+                    sampling_params=sampling_params,
+                    prompt_token_ids=prompt_token_ids,
+                    tokenizer=self.tokenizer,
+                    remote_reward_model=remote_reward_model,
+                )
+            )
         ray.get(refs)
 
         # Retrieve and combine results from all outputs

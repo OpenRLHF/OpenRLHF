@@ -3,6 +3,26 @@ import json
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_reward",
+            "description": "Get the score expected to be maximized (from 0 to 1) associated to at most 3 SMILES based on the optimization objective. Can only be called only once per conversation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "smiles": {
+                        "type": "list[string]",
+                        "description": "SMILES representations of the molecules (at most 3).",
+                    },
+                },
+                "required": ["smiles"],
+            },
+        },
+    }
+]
+
 
 def preprocess_data(
     data,
@@ -10,17 +30,28 @@ def preprocess_data(
     input_key="input",
     label_key="meta",
     apply_chat_template=None,
+    use_tools=True,
     return_tokens=False,
+    system_prompt: str | None = None,
 ) -> str:
     if apply_chat_template:
         chat = data[input_key]
         if isinstance(chat, str):
             chat = [{"role": "user", "content": chat}]
+        tools = TOOLS if use_tools else None
+        chat = [dict(content=c["content"], role=c["role"]) for c in chat]
+        if system_prompt is not None:
+            with open(system_prompt, "r") as f:
+                s_prompt = json.load(f)
+            if chat[0]["role"] == "system":
+                chat[0] = s_prompt
+            else:
+                chat = [s_prompt] + chat
         # Apply chat template
         try:
-            chat = apply_chat_template(chat, tokenize=return_tokens, add_generation_prompt=True)
+            chat = apply_chat_template(chat, tokenize=return_tokens, add_generation_prompt=True, tools=tools)
         except ValueError:
-            chat = apply_chat_template(chat, tokenize=return_tokens)
+            chat = apply_chat_template(chat, tokenize=return_tokens, tools=tools)
 
         if return_tokens:
             prompt = chat
@@ -71,7 +102,9 @@ class PromptDataset(Dataset):
                 input_key,
                 label_key,
                 apply_chat_template,
+                use_tools=self.strategy.args.use_tool_calls,
                 return_tokens=return_tokens,
+                system_prompt=getattr(self.strategy.args, "system_prompt", None),
             )
             self.prompts.append(prompt)
             self.metadatas.append(metadata)

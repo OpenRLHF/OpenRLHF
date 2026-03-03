@@ -1,10 +1,14 @@
+import json
 import os
 import queue
 from typing import Any, List
 
 import ray
+import torch
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+from vllm.inputs import TokensPrompt
+from vllm.sampling_params import BeamSearchParams, SamplingParams
 
 from openrlhf.utils.logging_utils import init_logger
 
@@ -90,15 +94,177 @@ class LLMRayActor(BaseLLMRayActor):
     def wake_up(self):
         self.llm.wake_up()
 
-    def add_requests(self, sampling_params, prompt_token_ids):
+    def get_tool_call_results(self, prompt_token_ids, responses, tokenizer, remote_reward_model):
+        def validate_tool_call_args(args):
+            if not isinstance(args, dict):
+                return False
+            if "smiles" not in args:
+                return False
+            if not isinstance(args["smiles"], list):
+                return False
+            for smiles in args["smiles"]:
+                if not isinstance(smiles, str):
+                    return False
+            return True
+
+        # Perform tool calls if detected
+        idx_tool_call = []
+        tool_calls_res_map = {}  # Map from tool call result index to the original response index
+        prompt_list = []
+        query_list = []
+        last_idx = 0
+
+        errors = {}
+        for i, prompt_token_id in enumerate(prompt_token_ids):
+            response = responses[i]
+            resp = response.outputs[0].text
+            if len(resp.split("<tool_call>")) > 1 and len(resp.split("</tool_call>")) > 1:
+                # This response contains tool calls, so we need to handle it
+                # If it is the 2nd tool call return an error as a result
+                if resp.count("<tool_call>") > 1:
+                    errors[i] = "ERROR: Max number of tool calls exceeded."
+                    continue
+                elif "<tool_response>" in resp.split("<tool_call>")[-1]:  # Tool call already answered
+                    continue
+                # Extract the tool call arguments from the response
+                json_args = resp.split("<tool_call>")[-1].split("</tool_call>")[0].replace("\n", "")
+                try:
+                    tool_call = json.loads(json_args)
+                except json.JSONDecodeError:
+                    logger.error(f"Failed to decode tool call JSON: {json_args}")
+                    continue
+                args = tool_call["arguments"]
+                # Append the tool call result to the response
+                assert tokenizer is not None
+                current_completion = prompt_token_id + response.outputs[0].token_ids
+                if not current_completion[-1] == tokenizer.eos_token_id:
+                    continue
+                assert remote_reward_model is not None, "remote_reward_model must be provided for tool calls"
+                # Validate the tool call arguments
+                if isinstance(args, list) and len(args) == 1:
+                    args = args[0]
+                if not validate_tool_call_args(args):
+                    continue
+
+                tool_calls_res_map[i] = []
+                for smiles in args["smiles"]:
+                    query_list.append("<answer> " + smiles + " </answer>")
+                    prompt_list.append(tokenizer.decode(prompt_token_id))
+                    tool_calls_res_map[i].append(last_idx)
+
+                    last_idx += 1
+                idx_tool_call.append(i)
+
+        tool_calls_res = remote_reward_model.get_rewards.remote(
+            queries_list=query_list,
+            prompts_list=prompt_list,
+            labels_list=[None] * len(prompt_list),
+        )
+        tool_calls_res = ray.get(tool_calls_res)
+        tool_calls_res = sum(
+            [res["rewards"].tolist() for res in tool_calls_res if res is not None], []
+        )  # Flatten the list of results for each idx
+        tool_calls_res = {
+            i: [tool_calls_res[idx] for idx in tool_calls_res_map[i]] for i in idx_tool_call
+        }  # Get the results for each idx_tool_call (with possible multiple results)
+        for i in errors:
+            tool_calls_res[i] = [errors[i]]
+        return tool_calls_res
+
+    def get_prompt_with_tool_results(self, prompt_token_ids, responses, mm_datas, tokenizer, remote_reward_model):
+        """
+        Process the responses to extract tool call results and append them to the original prompt.
+        """
+        tool_calls_res = self.get_tool_call_results(prompt_token_ids, responses, tokenizer, remote_reward_model)
+
+        second_generation_request = []
+        second_mm_datas = [mm_datas[i] for i in tool_calls_res] if mm_datas else None
+
+        for i in tool_calls_res:
+            prompt_token_id = prompt_token_ids[i]
+            response = responses[i]
+            assert tool_calls_res[i] != []
+            result = tool_calls_res[i]
+            for i, r in enumerate(result):
+                if isinstance(r, (int, float)):
+                    # Turn to str with at most 2 decimal places
+                    result[i] = f"{float(r):.2f}"
+                else:
+                    logger.warning(f"Tool call result is not a number: {r}")
+            result = ";".join(result)
+            tool_response = f"\n<|im_start|>user\n<tool_response>\n{str(result)}\n</tool_response><|im_end|>\n<|im_start|>assistant\n"
+            tool_response_token_ids = tokenizer(
+                tool_response,
+            )["input_ids"]
+
+            # Append the tool response to the response
+            new_token_ids = prompt_token_id + response.outputs[0].token_ids + tool_response_token_ids
+            if not second_mm_datas:
+                second_generation_request.append(TokensPrompt(prompt_token_ids=new_token_ids))
+            else:
+                second_generation_request.append(
+                    TokensPrompt(prompt_token_ids=new_token_ids, mm_data=second_mm_datas[i])
+                )
+        return second_generation_request, list(tool_calls_res.keys())
+
+    def apply_tool_calls(
+        self,
+        prompt_token_ids,
+        responses,
+        mm_datas=None,
+        tokenizer=None,
+        remote_reward_model=None,
+        sampling_params=None,
+    ):
+        second_generation_request, idx_tool_call = self.get_prompt_with_tool_results(
+            prompt_token_ids, responses, mm_datas, tokenizer, remote_reward_model
+        )
+        if len(idx_tool_call) > 0:
+            # If there are tool calls, we need to generate a second round of responses
+            second_generation_responses = self.llm.generate(
+                prompts=second_generation_request, sampling_params=sampling_params
+            )
+            for i, idx in enumerate(idx_tool_call):
+                n = len(responses[idx].prompt_token_ids)
+                final_output = (
+                    second_generation_responses[i].prompt_token_ids[n:]
+                    + second_generation_responses[i].outputs[0].token_ids
+                )
+
+                decoded_output = tokenizer.batch_decode([final_output])[0]
+                responses[idx].outputs[0].token_ids = final_output
+                responses[idx].outputs[0].text = decoded_output
+        return responses
+
+    def add_requests(self, sampling_params, prompt_token_ids, mm_datas=None, tokenizer=None, remote_reward_model=None):
         """
         Process requests from rank0 and generate responses.
         Since only rank0 will send requests, we don't need to track actor ranks.
         """
-        from vllm.inputs import TokensPrompt
 
-        requests = [TokensPrompt(prompt_token_ids=r) for r in prompt_token_ids]
-        responses = self.llm.generate(prompts=requests, sampling_params=sampling_params)
+        if isinstance(prompt_token_ids, torch.Tensor):
+            prompt_token_ids = prompt_token_ids.tolist()
+
+        if not mm_datas:
+            requests = [TokensPrompt(prompt_token_ids=r) for r in prompt_token_ids]
+        else:
+            assert len(prompt_token_ids) == len(mm_datas), "prompt_token_ids and mm_datas must have the same length"
+            requests = [
+                TokensPrompt(prompt_token_ids=r, mm_data=mm_data) for r, mm_data in zip(prompt_token_ids, mm_datas)
+            ]
+        if isinstance(sampling_params, SamplingParams):
+            responses = self.llm.generate(prompts=requests, sampling_params=sampling_params)
+        elif isinstance(sampling_params, BeamSearchParams):
+            responses = self.llm.beam_search(prompts=requests, sampling_params=sampling_params)
+        for _ in range(2):
+            responses = self.apply_tool_calls(
+                prompt_token_ids,
+                responses,
+                mm_datas=mm_datas,
+                tokenizer=tokenizer,
+                remote_reward_model=remote_reward_model,
+                sampling_params=sampling_params,
+            )
         self.response_queues.put(responses)
 
     def get_responses(self):

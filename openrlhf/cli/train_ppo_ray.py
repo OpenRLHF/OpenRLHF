@@ -448,6 +448,13 @@ if __name__ == "__main__":
     # ModelScope parameters
     parser.add_argument("--use_ms", action="store_true", default=False)
 
+    # Tool calls
+    parser.add_argument(
+        "--use_tool_calls",
+        action="store_true",
+        default=False,
+    )
+
     args = parser.parse_args()
 
     # Validate arguments

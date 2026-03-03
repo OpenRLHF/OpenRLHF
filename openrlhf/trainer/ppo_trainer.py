@@ -102,10 +102,10 @@ class BasePPOTrainer(ABC):
             wandb.define_metric("eval/epoch")
             wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
             self.generated_samples_table = wandb.Table(
-                columns=["global_step", "prompt", "completion", "reward"]
+                columns=["global_step", "prompt", "smiles", "used_tools", "reward"]
             )
             self.generated_samples_dataframe = pd.DataFrame(
-                columns=["global_step", "prompt", "completion", "reward"]
+                columns=["global_step", "prompt", "completion", "smiles", "used_tools", "reward"]
             )
 
         # Initialize TensorBoard writer if wandb is not available
@@ -177,14 +177,43 @@ class BasePPOTrainer(ABC):
                     # https://github.com/wandb/wandb/issues/2981#issuecomment-1997445737
                     new_data = []
                     for line in logs_dict.pop("generated_samples"):
+                        # line is a list of [prompt, completion, reward]
                         prompt, completion, reward = line
                         reward = float(reward) if reward is not None else 0.0
-                        line = [global_step, prompt, completion, reward]
+                        smiles = completion.split("<answer>")[-1].strip()
+                        if smiles is None or len(completion.split("</answer>")[0].split("<answer>")) == 1:
+                            smiles = "invalid"
+                        else:
+                            smiles = completion.split("<answer>")[-1].split("</answer>")[0].strip()
+                            from rdkit import Chem
+
+                            if not Chem.MolFromSmiles(smiles):
+                                smiles = "invalid"
+                        if completion.count("<tool_call>") > 1:
+                            # Parse the las tool count and get the arguments "smiles"
+                            used_tools = completion.split("<tool_call>")[2].split("</tool_call>")[0].replace("\n", "")
+                            try:
+                                args = json.loads(used_tools)
+                                smiles_tool_call = args.get("arguments", {}).get("smiles", "invalid")
+                                smiles_tool_call = (
+                                    ";".join(smiles_tool_call)
+                                    if isinstance(smiles_tool_call, list)
+                                    else smiles_tool_call
+                                )
+                            except Exception as e:
+                                smiles_tool_call = "invalid"
+                        else:
+                            smiles_tool_call = "invalid"
+
+                        line = [global_step, prompt, smiles, smiles_tool_call, reward]
+
                         new_data.append(line)
                         self.generated_samples_dataframe.loc[len(self.generated_samples_dataframe)] = [
                             global_step,
                             prompt,
                             completion,
+                            smiles,
+                            """"arguments": {""" in completion,
                             reward,
                         ]
 
