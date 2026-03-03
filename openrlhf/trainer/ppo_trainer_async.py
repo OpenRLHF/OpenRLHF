@@ -67,7 +67,7 @@ class GenerateSamplesActor:
     def load_state_dict(self, state_dict):
         self.prompts_dataloader.load_state_dict(state_dict)
 
-    def fit(self, episode: int, total_consumed_prompts: int):
+    def fit(self, episode: int, total_consumed_prompts: int) -> None:
         for episode in range(episode, self.args.num_episodes):
             dataset_length = len(self.prompts_dataloader)
             pbar = tqdm(
