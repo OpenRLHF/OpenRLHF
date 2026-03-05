@@ -62,13 +62,9 @@ class Actor(nn.Module):
                 if use_liger_kernel:
                     from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
-                    model = AutoLigerKernelForCausalLM.from_config(
-                        cfg, dtype=torch_dtype, trust_remote_code=True
-                    )
+                    model = AutoLigerKernelForCausalLM.from_config(cfg, dtype=torch_dtype, trust_remote_code=True)
                 else:
-                    model = AutoModelForCausalLM.from_config(
-                        cfg, dtype=torch_dtype, trust_remote_code=True
-                    )
+                    model = AutoModelForCausalLM.from_config(cfg, dtype=torch_dtype, trust_remote_code=True)
 
             self.model = model
             if hasattr(self.model, "config") and hasattr(self.model.config, "use_cache"):

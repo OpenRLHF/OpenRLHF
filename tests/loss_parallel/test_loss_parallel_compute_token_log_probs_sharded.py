@@ -123,10 +123,14 @@ def _reference_token_log_probs(
     token_log_probs = torch.zeros_like(labels, dtype=scaled_logits.dtype)
     valid_mask = labels != ignore_index
     if valid_mask.any():
-        token_log_probs[valid_mask] = full_log_probs[valid_mask].gather(
-            dim=-1,
-            index=labels[valid_mask].unsqueeze(-1),
-        ).squeeze(-1)
+        token_log_probs[valid_mask] = (
+            full_log_probs[valid_mask]
+            .gather(
+                dim=-1,
+                index=labels[valid_mask].unsqueeze(-1),
+            )
+            .squeeze(-1)
+        )
     return token_log_probs
 
 
@@ -166,7 +170,9 @@ def _worker_compute_token_log_probs(rank: int, world_size: int, port: int) -> No
         valid_mask = labels != IGNORE_INDEX
         assert_close(sharded_log_probs[valid_mask], api_log_probs[valid_mask], rtol=RTOL, atol=ATOL)
 
-        upstream = torch.linspace(0.3, 1.3, steps=sharded_log_probs.numel(), dtype=torch.float32).view_as(sharded_log_probs)
+        upstream = torch.linspace(0.3, 1.3, steps=sharded_log_probs.numel(), dtype=torch.float32).view_as(
+            sharded_log_probs
+        )
         (sharded_log_probs * upstream).sum().backward()
 
         dense_ref = full_logits.clone().detach().requires_grad_(True)

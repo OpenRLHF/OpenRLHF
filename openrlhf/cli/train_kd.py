@@ -36,7 +36,9 @@ def train(args):
     )
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.model_name_or_path, model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
+    tokenizer = get_tokenizer(
+        args.model_name_or_path, model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer
+    )
 
     strategy.print(model)
 
@@ -129,9 +131,7 @@ def train(args):
     if resume_from_path:
         dcp_dir = os.path.join(resume_from_path, "dcp_checkpoint")
         if not os.path.isdir(dcp_dir):
-            raise FileNotFoundError(
-                f"Invalid resume_from_path: expected DCP directory at {dcp_dir}"
-            )
+            raise FileNotFoundError(f"Invalid resume_from_path: expected DCP directory at {dcp_dir}")
         states = strategy.load_dcp_checkpoint(model.model, dcp_dir, optimizer=optim, scheduler=scheduler)
         consumed_samples = states["consumed_samples"]
         strategy.print(f"Loaded checkpoint from: {dcp_dir}, consumed_samples: {consumed_samples}")
@@ -171,7 +171,12 @@ if __name__ == "__main__":
     parser.add_argument("--disable_fsdp2_ckpt", action="store_true", default=False)
     parser.add_argument("--logging_steps", type=int, default=1)
     parser.add_argument("--eval_steps", type=int, default=-1)
-    parser.add_argument("--max_checkpoints_to_keep", type=int, default=3, help="Maximum checkpoints to keep. Use -1 to keep all checkpoints; value must be -1 or a positive integer.")
+    parser.add_argument(
+        "--max_checkpoints_to_keep",
+        type=int,
+        default=3,
+        help="Maximum checkpoints to keep. Use -1 to keep all checkpoints; value must be -1 or a positive integer.",
+    )
     parser.add_argument(
         "--resume_from_path",
         type=str,

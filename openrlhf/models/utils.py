@@ -7,10 +7,6 @@ from torch.distributed.tensor import DTensor
 from openrlhf.utils.fsdp2.tp.loss_parallel import compute_entropy_sharded, compute_token_log_probs_sharded
 
 
-
-
-
-
 def compute_approx_kl(
     log_probs: torch.Tensor,
     log_probs_base: torch.Tensor,
@@ -86,6 +82,7 @@ def compute_entropy(logits: torch.Tensor):
         return compute_entropy_sharded(logits)
     return _compute_entropy_local(logits)
 
+
 @torch.compile
 def _compute_entropy_local(logits: torch.Tensor):
     """Compute entropy from local (non-sharded) logits."""
@@ -119,7 +116,9 @@ def compute_token_log_probs(logits: torch.Tensor, labels: torch.Tensor, temperat
     return _compute_token_log_probs_local(logits, labels, temperature)
 
 
-def _compute_token_log_probs_local(logits: torch.Tensor, labels: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:
+def _compute_token_log_probs_local(
+    logits: torch.Tensor, labels: torch.Tensor, temperature: float = 1.0
+) -> torch.Tensor:
     """Compute per-token log probs from local (non-sharded) logits."""
     if temperature != 1.0:
         logits = logits / temperature  # Avoid in-place op to prevent modifying caller's tensor

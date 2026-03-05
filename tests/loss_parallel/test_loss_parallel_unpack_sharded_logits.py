@@ -99,7 +99,9 @@ def _worker_unpack_sharded_logits(rank: int, world_size: int, port: int) -> None
         local_logits = _slice_local_logits(full_logits, rank)
         sharded_logits = _make_sharded_logits(local_logits, mesh)
 
-        group, unpacked_local, local_vocab, global_vocab, vocab_start, vocab_end = _unpack_sharded_logits(sharded_logits)
+        group, unpacked_local, local_vocab, global_vocab, vocab_start, vocab_end = _unpack_sharded_logits(
+            sharded_logits
+        )
         expected_start, expected_end = _get_vocab_shard_bounds(rank)
 
         assert dist.get_rank(group) == rank

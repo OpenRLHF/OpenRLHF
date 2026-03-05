@@ -223,7 +223,9 @@ class CriticModelActor(BaseModelActor):
                     f"Invalid resume_from_path: expected critic checkpoint directory at {critic_dir}"
                 )
             strategy.print(f"Loading critic checkpoint: {critic_dir}")
-            strategy.load_dcp_checkpoint(self.critic, critic_dir, optimizer=self.critic_optim, scheduler=self.critic_scheduler)
+            strategy.load_dcp_checkpoint(
+                self.critic, critic_dir, optimizer=self.critic_optim, scheduler=self.critic_scheduler
+            )
 
         # initial offload
         if strategy.args.fsdp2_enable_sleep:

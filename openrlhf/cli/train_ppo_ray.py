@@ -1,5 +1,4 @@
 import argparse
-import os
 from datetime import datetime
 
 import ray
@@ -159,7 +158,9 @@ def train(args):
 
     # init actor/reference/reward model
     refs = []
-    refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.model_name_or_path, max_steps, vllm_engines))
+    refs.extend(
+        actor_model.async_init_model_from_pretrained(strategy, args.model_name_or_path, max_steps, vllm_engines)
+    )
     if ref_model is not None:
         refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.model_name_or_path))
     if reward_model is not None and args.reward_model_name_or_path:
@@ -272,7 +273,12 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt_save_path", type=str, default="./ckpt")
     parser.add_argument("--save_hf_ckpt", action="store_true", default=False)
     parser.add_argument("--disable_fsdp2_ckpt", action="store_true", default=False)
-    parser.add_argument("--max_checkpoints_to_keep", type=int, default=3, help="Maximum checkpoints to keep. Use -1 to keep all checkpoints; value must be -1 or a positive integer.")
+    parser.add_argument(
+        "--max_checkpoints_to_keep",
+        type=int,
+        default=3,
+        help="Maximum checkpoints to keep. Use -1 to keep all checkpoints; value must be -1 or a positive integer.",
+    )
     parser.add_argument(
         "--resume_from_path",
         type=str,

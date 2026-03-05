@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 # === Custom ParallelStyle classes ===
 
+
 class ReplicateParallel(ParallelStyle):
     """Replicate parameters as DTensors without sharding, with custom I/O layout control.
 
@@ -104,6 +105,7 @@ class SequenceParallelPreserveGrad(SequenceParallel):
 
 # === Base utilities ===
 
+
 def _parse_parallel_style(style_name: str) -> ParallelStyle:
     """Convert a string shorthand to a ``ParallelStyle`` instance.
 
@@ -126,6 +128,7 @@ def _parse_parallel_style(style_name: str) -> ParallelStyle:
 
 
 # === Architecture-specific TP plan definitions ===
+
 
 def _attn_mlp_plan() -> dict[str, ParallelStyle]:
     """Return TP plan entries for attention and MLP projections.
@@ -218,6 +221,7 @@ def _build_qwen_tp_plan(model: nn.Module, sequence_parallel: bool) -> dict[str, 
     RMSNorm layers (``q_norm``, ``k_norm``) that operate on already
     head-sharded activations after the QKV reshape.
     """
+
     def _replicate_on_head_dim() -> ReplicateParallel:
         """Create a ReplicateParallel that preserves Shard(2) on the head dimension.
 
@@ -231,6 +235,7 @@ def _build_qwen_tp_plan(model: nn.Module, sequence_parallel: bool) -> dict[str, 
             output_layout=Shard(2),
             use_local_output=True,
         )
+
     plan = _build_default_tp_plan(sequence_parallel, SequenceParallelPreserveGrad)
     plan["model.layers.*.self_attn.q_norm"] = _replicate_on_head_dim()
     plan["model.layers.*.self_attn.k_norm"] = _replicate_on_head_dim()
@@ -253,6 +258,7 @@ _MODEL_PLANS = {
 
 
 # === Plan parsing and modification ===
+
 
 def _extract_hf_tp_plan(model: nn.Module) -> dict[str, ParallelStyle] | None:
     """Extract and normalize the TP plan from a HuggingFace model's ``_tp_plan`` attribute.
@@ -350,6 +356,7 @@ def _prune_plan(plan: dict[str, ParallelStyle], model: nn.Module) -> dict[str, P
 
 # === Public plan entry ===
 
+
 def get_tp_plan(
     model: nn.Module,
     sequence_parallel: bool = False,
@@ -397,6 +404,7 @@ def get_tp_plan(
 
 
 # === Model parallelization orchestration ===
+
 
 def validate_tp_mesh(model: nn.Module, tp_mesh: DeviceMesh) -> None:
     """Validate that attention heads are divisible by the TP mesh size.

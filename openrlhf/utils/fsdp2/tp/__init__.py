@@ -6,11 +6,11 @@ Files:
 """
 
 from .loss_parallel import (
+    compute_argmax_sharded,
     compute_entropy_sharded,
     compute_kd_loss_sharded,
     compute_token_log_probs_sharded,
     gather_token_logits_sharded,
-    compute_argmax_sharded,
 )
 from .tp_parallel import (
     ReplicateParallel,

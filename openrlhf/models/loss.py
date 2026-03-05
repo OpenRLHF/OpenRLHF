@@ -8,10 +8,11 @@ import torch.nn.functional as F
 from torch.distributed.tensor import DTensor
 
 from openrlhf.utils.fsdp2.tp.loss_parallel import (
+    compute_argmax_sharded,
     compute_kd_loss_sharded,
     gather_token_logits_sharded,
-    compute_argmax_sharded,
 )
+
 from .utils import compute_token_log_probs, masked_mean
 
 

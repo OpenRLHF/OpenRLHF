@@ -98,7 +98,9 @@ def _worker_sharded_logsumexp(rank: int, world_size: int, port: int) -> None:
         assert_close(sharded_lse_sum, expected_lse, rtol=RTOL, atol=ATOL)
         assert_close(sharded_lse_mean, expected_lse, rtol=RTOL, atol=ATOL)
 
-        upstream = torch.linspace(0.2, 1.2, steps=sharded_lse_mean.numel(), dtype=torch.float32).view_as(sharded_lse_mean)
+        upstream = torch.linspace(0.2, 1.2, steps=sharded_lse_mean.numel(), dtype=torch.float32).view_as(
+            sharded_lse_mean
+        )
         (sharded_lse_mean * upstream).sum().backward()
 
         dense_ref = full_logits.clone().detach().requires_grad_(True)
