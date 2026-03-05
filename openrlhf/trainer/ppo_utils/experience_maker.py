@@ -366,12 +366,12 @@ class SamplesGenerator:
             temperature=generate_kwargs.get("temperature", 1.0),
             top_p=generate_kwargs.get("top_p", 1.0),
             top_k=generate_kwargs.get("top_k", -1),
-            max_tokens=generate_kwargs.get("max_new_tokens", 1024),
+            max_tokens=generate_kwargs.get("max_new_tokens"),
             min_tokens=generate_kwargs.get("min_new_tokens", 1),
             skip_special_tokens=generate_kwargs.get("skip_special_tokens", False),
             logprobs=1 if self.args.enable_vllm_is_correction else None,
         )
-        truncate_length = generate_kwargs.get("prompt_max_len", 1024) + generate_kwargs.get("max_new_tokens", 1024)
+        truncate_length = generate_kwargs.get("max_len", 2048)
 
         # Snapshot current pending rollout counts to balance upcoming work.
         pending_counts = ray.get([engine.get_num_unfinished_requests.remote() for engine in self.vllm_engines])
@@ -396,6 +396,7 @@ class SamplesGenerator:
                 max_length=truncate_length,
                 hf_tokenizer=self.tokenizer,
                 num_samples=self.args.n_samples_per_prompt,
+                max_tool_response_length=generate_kwargs.get("max_tool_response_length"),
             )
             refs.append(ref)
 
@@ -403,7 +404,7 @@ class SamplesGenerator:
 
     def _process_response_into_experience(self, response, **generate_kwargs) -> Experience:
         """Turn a single vLLM response into an Experience."""
-        truncate_length = generate_kwargs.get("prompt_max_len", 1024) + generate_kwargs.get("max_new_tokens", 1024)
+        truncate_length = generate_kwargs.get("max_len", 2048)
 
         # Base rollout fields from the output.
         tokenized_observation = response["observation_tokens"].copy()
@@ -442,7 +443,7 @@ class SamplesGenerator:
             "response_length": torch.tensor([response_length]),
             "total_length": torch.tensor([total_length]),
             "response_clip_ratio": torch.tensor([is_clipped]),
-            "truncated": torch.tensor([is_truncated]),
+            "is_truncated": torch.tensor([response.get("is_truncated", is_clipped)], dtype=torch.float),
         }
         if reward_val is not None:
             info["reward"] = torch.tensor([reward_val])
@@ -711,8 +712,20 @@ class RemoteExperienceMaker:
         """
         args = self.strategy.args
 
-        # Apply length penalties (DAPO overlong / ProRL stop properly) - BEFORE dynamic indices processing
+        # Apply length penalties (DAPO overlong) - BEFORE dynamic indices processing
         apply_length_penalties(experiences, args)
+
+        if args.mask_truncated_samples:
+            for experience in experiences:
+                is_truncated = experience.info.get("is_truncated")
+                if is_truncated is None:
+                    continue
+                not_truncated_mask = (is_truncated < 0.5).to(experience.rewards.dtype)
+                experience.rewards = experience.rewards * not_truncated_mask
+                experience.action_mask = (
+                    experience.action_mask
+                    * not_truncated_mask.unsqueeze(-1).to(dtype=experience.action_mask.dtype)
+                )
 
         # get rewards from experiences
         exp_len = [len(experience.index) for experience in experiences]
@@ -799,6 +812,9 @@ class RemoteExperienceMaker:
             advantages_vector = torch.cat(all_advantages, dim=0).float()
             action_masks_vector = torch.cat(all_action_masks, dim=0)
             num_actions = action_masks_vector.sum()
+            if num_actions.item() <= 0:
+                logger.warning("All action masks are zero after masking truncated samples. Skip advantage normalization.")
+                return experiences
 
             # mean
             mean = (advantages_vector * action_masks_vector).sum() / num_actions

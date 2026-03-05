@@ -322,7 +322,15 @@ class AgentExecutor(AgentExecutorBase):
         logger.info("NeMo Gym services configuration completed")
 
     async def execute(
-        self, prompt: str, label: str, sampling_params: SamplingParams, max_length: int, llm_engine, hf_tokenizer
+        self,
+        prompt: str,
+        label: str,
+        sampling_params: SamplingParams,
+        max_length: int,
+        llm_engine,
+        hf_tokenizer,
+        *,
+        max_tool_response_length=None,
     ):
         """
         Execute a single rollout for the given prompt and collect results.

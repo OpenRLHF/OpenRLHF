@@ -36,8 +36,8 @@ while (($iter < $TRAINING_ITERS)); do
 openrlhf.cli.batch_inference
    --eval_task generate_vllm \
    --model_name_or_path $POLICY_MODEL_PATH \
+   --max_len 4096 \
    --max_new_tokens 2048 \
-   --prompt_max_len 2048 \
    --dataset OpenRLHF/prompt-collection-v0.1 \
    --input_key context_messages \
    --apply_chat_template \
