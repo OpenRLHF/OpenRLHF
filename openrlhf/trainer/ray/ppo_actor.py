@@ -403,10 +403,13 @@ class PolicyModelActor(BaseModelActor):
         self.vllm_engines = vllm_engines
         self.max_steps = max_steps
 
-        if getattr(args, "vllm_num_engines", 0) > 0:
-            # To prevent hanging during NCCL synchronization of weights between DeepSpeed and vLLM.
-            # see https://github.com/vllm-project/vllm/blob/c6b0a7d3ba03ca414be1174e9bd86a97191b7090/vllm/worker/worker_base.py#L445
-            if getattr(args, "vllm_sync_backend", "nccl") == "nccl":
+        # Skip for vLLM >= 0.16 where NCCL_CUMEM_ENABLE=0 causes ncclCommInitRank to fail
+        # with "unhandled cuda error" under NCCL 2.27+.
+        if getattr(args, "vllm_sync_backend", "nccl") == "nccl":
+            import vllm
+            from packaging import version as pkg_version
+
+            if pkg_version.parse(vllm.__version__) < pkg_version.parse("0.16"):
                 os.environ["NCCL_CUMEM_ENABLE"] = "0"
 
         self._setup_distributed(strategy)
