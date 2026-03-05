@@ -83,9 +83,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert DCP actor/critic checkpoint to HuggingFace format")
 
     # Required
-    parser.add_argument("--model_type", type=str, required=True, choices=["actor", "critic"], help="Checkpoint model type.")
-    parser.add_argument("--model_name_or_path", type=str, required=True, help="Base model path (for model structure + tokenizer/config)")
-    parser.add_argument("--ckpt_path", type=str, required=True, help="DCP checkpoint directory (e.g. ./ckpt/dcp_ckpt/global_step_100/dcp_checkpoint/_critic)")
+    parser.add_argument(
+        "--model_type", type=str, required=True, choices=["actor", "critic"], help="Checkpoint model type."
+    )
+    parser.add_argument(
+        "--model_name_or_path",
+        type=str,
+        required=True,
+        help="Base model path (for model structure + tokenizer/config)",
+    )
+    parser.add_argument(
+        "--ckpt_path",
+        type=str,
+        required=True,
+        help="DCP checkpoint directory (e.g. ./ckpt/dcp_ckpt/global_step_100/dcp_checkpoint/_critic)",
+    )
     parser.add_argument("--output_dir", type=str, required=True, help="HF output directory")
 
     # Model options
@@ -95,7 +107,9 @@ if __name__ == "__main__":
 
     # FSDP2 / distributed
     parser.add_argument("--param_dtype", type=str, default="bf16", choices=["bf16", "fp16"], help="Model data type")
-    parser.add_argument("--attn_implementation", type=str, default="flash_attention_2", help="Attention implementation")
+    parser.add_argument(
+        "--attn_implementation", type=str, default="flash_attention_2", help="Attention implementation"
+    )
     parser.add_argument("--local_rank", type=int, default=-1, help="Local rank (for torchrun)")
     parser.add_argument("--fsdp2_tp_size", type=int, default=1, help="Tensor parallel size")
     parser.add_argument("--fsdp2_cp_size", type=int, default=1, help="Context parallel size")

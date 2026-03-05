@@ -111,7 +111,9 @@ def _worker_gather_token_logits(rank: int, world_size: int, port: int) -> None:
         expected_gathered = full_logits.index_select(dim=-1, index=token_ids)
         assert_close(gathered_sharded, expected_gathered, rtol=RTOL, atol=ATOL)
 
-        upstream = torch.linspace(0.4, 1.4, steps=gathered_sharded.numel(), dtype=torch.float32).view_as(gathered_sharded)
+        upstream = torch.linspace(0.4, 1.4, steps=gathered_sharded.numel(), dtype=torch.float32).view_as(
+            gathered_sharded
+        )
         (gathered_sharded * upstream).sum().backward()
 
         dense_ref = full_logits.clone().detach().requires_grad_(True)

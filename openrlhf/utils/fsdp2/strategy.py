@@ -46,10 +46,10 @@ from openrlhf.utils.distributed_sampler import DistributedSampler
 
 from .checkpoint import (
     _cleanup_old_checkpoints,
-    _load_hf_checkpoint,
-    _save_hf_checkpoint,
     _load_dcp_checkpoint,
+    _load_hf_checkpoint,
     _save_dcp_checkpoint,
+    _save_hf_checkpoint,
 )
 from .tp.tp_parallel import apply_tensor_parallel
 from .utils import (
@@ -293,7 +293,9 @@ class FSDP2Strategy(ABC):
                 )
 
         if not isinstance(model, FSDPModule):
-            fully_shard(model, mesh=mesh, mp_policy=mixed_precision, offload_policy=offload_policy, reshard_after_forward=False)
+            fully_shard(
+                model, mesh=mesh, mp_policy=mixed_precision, offload_policy=offload_policy, reshard_after_forward=False
+            )
         return model
 
     # -------------------------------------------------------------------------

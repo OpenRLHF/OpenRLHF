@@ -128,7 +128,9 @@ def _worker_compute_entropy(rank: int, world_size: int, port: int) -> None:
         api_entropy = compute_entropy_api(full_logits.clone())
         assert_close(entropy_sharded, api_entropy, rtol=RTOL, atol=ATOL)
 
-        upstream = torch.linspace(0.1, 1.1, steps=entropy_sharded.numel(), dtype=torch.float32).view_as(entropy_sharded)
+        upstream = torch.linspace(0.1, 1.1, steps=entropy_sharded.numel(), dtype=torch.float32).view_as(
+            entropy_sharded
+        )
         (entropy_sharded * upstream).sum().backward()
 
         dense_ref = full_logits.clone().detach().requires_grad_(True)

@@ -88,9 +88,7 @@ def generate(args):
         seqs = outputs[0] if isinstance(outputs, (tuple, list)) else outputs
         generated_ids = seqs[:, input_ids.shape[1] :]
         if _TRANSFORMERS_V5:
-            response = tokenizer.decode(
-                generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
-            )[0]
+            response = tokenizer.decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True)[0]
         else:
             response = tokenizer.batch_decode(
                 generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True

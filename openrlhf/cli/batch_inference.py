@@ -108,7 +108,9 @@ def batch_generate(args):
     model.model.eval()
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.model_name_or_path, model.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
+    tokenizer = get_tokenizer(
+        args.model_name_or_path, model.model, "left", strategy, use_fast=not args.disable_fast_tokenizer
+    )
 
     # tokenizer
     def tokenize_fn(texts):
@@ -238,7 +240,9 @@ def batch_rm_inference(args):
     )
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.model_name_or_path, model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
+    tokenizer = get_tokenizer(
+        args.model_name_or_path, model, "left", strategy, use_fast=not args.disable_fast_tokenizer
+    )
 
     # prepare models
     model = strategy.apply_parallelism(model)

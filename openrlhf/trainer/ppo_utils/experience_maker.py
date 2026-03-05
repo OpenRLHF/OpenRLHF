@@ -10,7 +10,7 @@ import torch
 from tqdm import tqdm
 from vllm import SamplingParams
 
-from openrlhf.models.utils import compute_approx_kl, reward_with_kl_penalty, masked_mean
+from openrlhf.models.utils import compute_approx_kl, masked_mean, reward_with_kl_penalty
 from openrlhf.trainer.ppo_utils.length_penalty import apply_length_penalties
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
@@ -722,9 +722,8 @@ class RemoteExperienceMaker:
                     continue
                 not_truncated_mask = (is_truncated < 0.5).to(experience.rewards.dtype)
                 experience.rewards = experience.rewards * not_truncated_mask
-                experience.action_mask = (
-                    experience.action_mask
-                    * not_truncated_mask.unsqueeze(-1).to(dtype=experience.action_mask.dtype)
+                experience.action_mask = experience.action_mask * not_truncated_mask.unsqueeze(-1).to(
+                    dtype=experience.action_mask.dtype
                 )
 
         # get rewards from experiences
@@ -813,7 +812,9 @@ class RemoteExperienceMaker:
             action_masks_vector = torch.cat(all_action_masks, dim=0)
             num_actions = action_masks_vector.sum()
             if num_actions.item() <= 0:
-                logger.warning("All action masks are zero after masking truncated samples. Skip advantage normalization.")
+                logger.warning(
+                    "All action masks are zero after masking truncated samples. Skip advantage normalization."
+                )
                 return experiences
 
             # mean

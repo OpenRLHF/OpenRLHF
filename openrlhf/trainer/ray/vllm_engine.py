@@ -178,10 +178,7 @@ class LLMRayActor:
         }
         if max_tool_response_length is not None:
             execute_kwargs["max_tool_response_length"] = max_tool_response_length
-        tasks = [
-            self.executor.execute(**execute_kwargs)
-            for _ in range(num_samples)
-        ]
+        tasks = [self.executor.execute(**execute_kwargs) for _ in range(num_samples)]
         return await asyncio.gather(*tasks)
 
 

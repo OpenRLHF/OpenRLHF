@@ -128,14 +128,18 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             done = step_result["done"]
             extra_logs = step_result.get("extra_logs", {})
 
-            feedback_tokens = hf_tokenizer(
-                environment_feedback_text, add_special_tokens=False, return_tensors="pt"
-            )["input_ids"][0].tolist()
+            feedback_tokens = hf_tokenizer(environment_feedback_text, add_special_tokens=False, return_tensors="pt")[
+                "input_ids"
+            ][0].tolist()
 
             if max_tool_response_length is not None and len(feedback_tokens) > max_tool_response_length:
                 head_len = (max_tool_response_length + 1) // 2
                 tail_len = max_tool_response_length - head_len
-                feedback_tokens = feedback_tokens[:head_len] + feedback_tokens[-tail_len:] if tail_len > 0 else feedback_tokens[:head_len]
+                feedback_tokens = (
+                    feedback_tokens[:head_len] + feedback_tokens[-tail_len:]
+                    if tail_len > 0
+                    else feedback_tokens[:head_len]
+                )
                 environment_feedback_text = hf_tokenizer.decode(feedback_tokens, skip_special_tokens=False)
 
             observation_text = observation_text + action_text + environment_feedback_text

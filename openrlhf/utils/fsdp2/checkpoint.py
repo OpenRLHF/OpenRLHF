@@ -140,6 +140,7 @@ def _load_hf_checkpoint(
     hf_dir = os.path.expanduser(model_name_or_path)
     if not os.path.isdir(hf_dir):
         from huggingface_hub import snapshot_download
+
         hf_dir = snapshot_download(repo_id=model_name_or_path, repo_type="model")
 
     # DCP-based load (distributed or single-process).
@@ -193,9 +194,7 @@ def _save_hf_checkpoint(
         os.makedirs(output_dir, exist_ok=True)
 
     # Sharded (distributed) state dict.
-    model_state = get_model_state_dict(
-        model, options=StateDictOptions(full_state_dict=False, cpu_offload=True)
-    )
+    model_state = get_model_state_dict(model, options=StateDictOptions(full_state_dict=False, cpu_offload=True))
 
     # Cast to the desired save dtype (e.g. fp32 master weights → bf16 for deployment).
     if save_dtype is not None:
@@ -355,6 +354,7 @@ def _save_dcp_checkpoint(
         # when resolving checkpoints by mtime (prime-rl style).
         with open(os.path.join(checkpoint_path, "STABLE"), "w") as f:
             f.write("ok\n")
+
 
 def _load_dcp_checkpoint(
     model: nn.Module,
