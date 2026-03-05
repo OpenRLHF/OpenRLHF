@@ -202,9 +202,10 @@ class BasePPOTrainer(ABC):
         # This is critical for avoiding OOM when vLLM wakes up with full KV cache
         # Note: reference/reward models are prepared via prepare(..., cpu_offload=...).
         if self.args.fsdp2_enable_sleep:
-            ray.get(self.actor_model_group.async_run_method(method_name="offload_model"))
+            offload_refs = self.actor_model_group.async_run_method(method_name="offload_model")
             if self.critic_model_group is not None:
-                ray.get(self.critic_model_group.async_run_method(method_name="offload_model"))
+                offload_refs.extend(self.critic_model_group.async_run_method(method_name="offload_model"))
+            ray.get(offload_refs)
 
     def save_logs_and_checkpoints(self, global_step: int, logs_dict=None, client_states=None) -> None:
         logs_dict = logs_dict or {}
