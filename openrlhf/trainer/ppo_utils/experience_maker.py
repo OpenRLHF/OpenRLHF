@@ -588,9 +588,10 @@ class RemoteExperienceMaker:
         # Hybrid engine (colocated vLLM + FSDP2): reload actor/critic to GPU before computing
         # logprobs/values. Note: reference/reward models are prepared via prepare(..., cpu_offload=...).
         if self.args.fsdp2_enable_sleep:
-            ray.get(self.actor_model_group.async_run_method(method_name="reload_model"))
+            reload_refs = self.actor_model_group.async_run_method(method_name="reload_model")
             if self.critic_model_group is not None:
-                ray.get(self.critic_model_group.async_run_method(method_name="reload_model"))
+                reload_refs.extend(self.critic_model_group.async_run_method(method_name="reload_model"))
+            ray.get(reload_refs)
 
         # Batch call actor model
         action_log_probs_ref = self.actor_model_group.async_run_method_batch(
