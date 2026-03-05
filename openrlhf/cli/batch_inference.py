@@ -417,12 +417,11 @@ if __name__ == "__main__":
         "--apply_chat_template", action="store_true", default=False, help="HF tokenizer apply_chat_template"
     )
     parser.add_argument("--input_template", type=str, default=None)
-    parser.add_argument("--max_len", type=int, default=2048, help="Max tokens for the samples")
+    parser.add_argument("--max_len", type=int, default=2048, help="Max total sequence length")
     parser.add_argument("--max_samples", type=int, default=1e8, help="Max number of samples")
     parser.add_argument("--output_path", type=str, default=None, help="Output JSON data path")
 
     # For generation
-    parser.add_argument("--prompt_max_len", type=int, default=1024, help="Max tokens for prompt")
     parser.add_argument("--max_new_tokens", type=int, default=1024, help="Max new tokens in generation")
     parser.add_argument("--greedy_sampling", action="store_true", default=False, help="Use Greedy sampling")
     parser.add_argument("--top_p", type=float, default=1.0, help="top_p for Sampling")
@@ -459,6 +458,8 @@ if __name__ == "__main__":
     parser.add_argument("--use_ms", action="store_true", default=False)
 
     args = parser.parse_args()
+    args.prompt_max_len = args.max_len - args.max_new_tokens
+
     if args.eval_task == "generate":
         batch_generate(args)
     elif args.eval_task == "generate_vllm":

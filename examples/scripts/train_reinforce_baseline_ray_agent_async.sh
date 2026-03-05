@@ -36,8 +36,7 @@ ROLLOUT_ARGS=(
    --prompt_data ${DATASET_PATH}
    --input_key prompt
    --label_key label
-   --prompt_max_len 10240
-   --generate_max_len 64000
+   --max_len 74240
    --apply_chat_template
    --packing_samples
 

@@ -98,7 +98,9 @@ def masked_mean(tensor: torch.Tensor, mask: Optional[torch.Tensor], dim: int = N
     """Compute mean with optional mask."""
     if mask is None:
         return tensor.mean(dim=dim)
-    return (tensor * mask).sum(dim=dim) / mask.sum(dim=dim)
+    numerator = (tensor * mask).sum(dim=dim)
+    denominator = mask.sum(dim=dim).clamp_min(1).to(dtype=numerator.dtype)
+    return numerator / denominator
 
 
 def masked_normalize(tensor: torch.Tensor, mask: torch.Tensor, dim: int = 1, eps: float = 1e-8) -> torch.Tensor:

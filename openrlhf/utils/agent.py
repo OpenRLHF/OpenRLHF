@@ -11,7 +11,17 @@ logger = init_logger(__name__)
 
 class AgentExecutorBase(ABC):
     @abstractmethod
-    async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine):
+    async def execute(
+        self,
+        prompt,
+        label,
+        sampling_params,
+        max_length: int,
+        hf_tokenizer,
+        llm_engine,
+        *,
+        max_tool_response_length=None,
+    ):
         raise NotImplementedError("AgentExecutorBase.execute is not implemented")
 
 
@@ -33,9 +43,20 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
         assert issubclass(agent_instance_cls, AgentInstanceBase), "AgentInstance must inherit from AgentInstanceBase"
         self.agent_instance_cls = agent_instance_cls
 
-    async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine):
+    async def execute(
+        self,
+        prompt,
+        label,
+        sampling_params,
+        max_length: int,
+        hf_tokenizer,
+        llm_engine,
+        *,
+        max_tool_response_length=None,
+    ):
         # Treat each AgentInstance as an isolated environment; bind every prompt to its own independent instance
         agent_instance = self.agent_instance_cls()
+        sampling_params = deepcopy(sampling_params)
 
         # Initialize with reset function
         initial_states = {"observation": prompt, "label": label}
@@ -48,14 +69,13 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
         ][0].tolist()
 
         # Truncate initial observation if it's too long to leave room for generation
-        min_generation_tokens = sampling_params.max_tokens if hasattr(sampling_params, "max_tokens") else 1
-        max_initial_length = max_length - min_generation_tokens
+        max_initial_length = max(max_length - 1, 0)
         if len(current_obs_tokens) > max_initial_length:
             logger.warning(
                 f"Initial observation length ({len(current_obs_tokens)}) exceeds max_initial_length ({max_initial_length}). "
                 f"Truncating to fit within max_length ({max_length})."
             )
-            current_obs_tokens = current_obs_tokens[-max_initial_length:]
+            current_obs_tokens = current_obs_tokens[-max_initial_length:] if max_initial_length > 0 else []
             # Also update observation_text to match truncated tokens
             observation_text = hf_tokenizer.decode(current_obs_tokens, skip_special_tokens=False)
 
@@ -64,6 +84,7 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
         total_reward = 0
         final_scores = 0
         extra_logs = {}
+        is_truncated = False
 
         if sampling_params.logprobs is not None:
             rollout_log_probs = [0.0] * len(current_obs_tokens)
@@ -76,12 +97,16 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             sampling_params.max_tokens = max_length - len(current_obs_tokens)
             # No budget to generate, break
             if sampling_params.max_tokens <= 0:
+                is_truncated = True
                 break
 
             # Generate response asynchronously (input and output are token ids)
             request_output = await llm_engine.generate(current_obs_tokens, deepcopy(sampling_params))
             action_tokens = request_output.outputs[0].token_ids
             action_text = request_output.outputs[0].text
+
+            if request_output.outputs[0].finish_reason == "length":
+                is_truncated = True
 
             # Record action range in token space
             action_start = len(current_obs_tokens)
@@ -103,15 +128,18 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             done = step_result["done"]
             extra_logs = step_result.get("extra_logs", {})
 
-            # Concatenate observation, action, and environment_feedback, then tokenize
+            feedback_tokens = hf_tokenizer(
+                environment_feedback_text, add_special_tokens=False, return_tensors="pt"
+            )["input_ids"][0].tolist()
+
+            if max_tool_response_length is not None and len(feedback_tokens) > max_tool_response_length:
+                head_len = (max_tool_response_length + 1) // 2
+                tail_len = max_tool_response_length - head_len
+                feedback_tokens = feedback_tokens[:head_len] + feedback_tokens[-tail_len:] if tail_len > 0 else feedback_tokens[:head_len]
+                environment_feedback_text = hf_tokenizer.decode(feedback_tokens, skip_special_tokens=False)
+
             observation_text = observation_text + action_text + environment_feedback_text
-            current_obs_tokens = (
-                current_obs_tokens
-                + action_tokens
-                + hf_tokenizer(environment_feedback_text, add_special_tokens=False, return_tensors="pt")["input_ids"][
-                    0
-                ].tolist()
-            )
+            current_obs_tokens = current_obs_tokens + action_tokens + feedback_tokens
 
             # Calculate rollout log probs
             if sampling_params.logprobs is not None:
@@ -138,6 +166,7 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             "action_ranges": action_ranges,
             "rollout_log_probs": rollout_log_probs,
             "extra_logs": extra_logs,
+            "is_truncated": is_truncated,
         }
         return final_response
 
@@ -160,7 +189,17 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
             spec.loader.exec_module(reward_module)
             self.reward_func = reward_module.reward_func
 
-    async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine):
+    async def execute(
+        self,
+        prompt,
+        label,
+        sampling_params,
+        max_length: int,
+        hf_tokenizer,
+        llm_engine,
+        *,
+        max_tool_response_length=None,
+    ):
         # Tokenize the initial observation.
         prompt_token_ids = hf_tokenizer(prompt, add_special_tokens=False, return_tensors="pt")["input_ids"][0].tolist()
 
@@ -177,8 +216,6 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
         request_output = await llm_engine.generate(prompt_token_ids, deepcopy(sampling_params))
         generation_output = request_output.outputs[0]
         action_token_ids = generation_output.token_ids
-
-        # Check if response was truncated (hit max_tokens length limit)
         is_truncated = generation_output.finish_reason == "length"
 
         # Stitch prompt + action together for downstream consumers.
@@ -208,6 +245,7 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
             "reward": None,
             "scores": None,
             "extra_logs": {},
+            "is_truncated": is_truncated,
         }
 
         # Compute reward/score after generation.

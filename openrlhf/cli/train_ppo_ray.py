@@ -42,7 +42,7 @@ def train(args):
     # init vLLM engine for text generation
     vllm_engines = None
     if args.vllm_num_engines is not None and args.vllm_num_engines > 0:
-        max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
+        vllm_max_model_len = args.vllm_max_model_len or args.max_len
         if args.colocate_all_models and not args.async_train:
             assert (
                 args.actor_num_nodes * args.actor_num_gpus_per_node
@@ -61,7 +61,7 @@ def train(args):
             args.full_determinism,
             args.enable_prefix_caching,
             args.enforce_eager,
-            max_len,
+            vllm_max_model_len,
             pg if args.colocate_all_models and not args.async_train else None,
             args.vllm_gpu_memory_utilization,
             args.vllm_enable_sleep,
@@ -147,9 +147,9 @@ def train(args):
         vllm_engines,
         # generate kwargs
         do_sample=True,
-        prompt_max_len=args.prompt_max_len,
-        max_new_tokens=args.generate_max_len,
-        max_length=args.max_len,
+        max_len=args.max_len,
+        max_new_tokens=args.max_new_tokens,
+        max_tool_response_length=args.max_tool_response_length,
         temperature=args.temperature,
         top_p=args.top_p,
     )
@@ -237,6 +237,12 @@ if __name__ == "__main__":
         type=float,
         default=0.95,
         help="vLLM gpu_memory_utilization",
+    )
+    parser.add_argument(
+        "--vllm_max_model_len",
+        type=int,
+        default=None,
+        help="vLLM max context length for KV cache. Defaults to --max_len. Set larger for agent/multi-turn scenarios.",
     )
     # Your Efficient RL Framework Secretly Brings You Off-Policy RL Training: https://fengyao.notion.site/off-policy-rl
     parser.add_argument("--enable_vllm_is_correction", action="store_true", default=False)
@@ -353,9 +359,14 @@ if __name__ == "__main__":
     )
     parser.add_argument("--micro_rollout_batch_size", type=int, default=8)
     parser.add_argument("--max_epochs", type=int, default=1)
-    parser.add_argument("--prompt_max_len", type=int, default=1024, help="Max tokens for each prompt")
-    parser.add_argument("--generate_max_len", type=int, default=1024, help="Max tokens to generate in PPO")
-    parser.add_argument("--max_len", type=int, default=None, help="deprecated max_len")
+    parser.add_argument("--max_len", type=int, default=2048, help="Max total sequence length (prompt + response)")
+    parser.add_argument(
+        "--max_new_tokens",
+        type=int,
+        default=None,
+        help="Max tokens to generate per response. "
+        "Not required in agent mode (generation budget is dynamically managed by max_len).",
+    )
     parser.add_argument("--max_samples", type=int, default=1e8, help="Max number of samples")
     parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
     parser.add_argument("--l2", type=float, default=0.0, help="weight decay loss")
@@ -430,11 +441,16 @@ if __name__ == "__main__":
     )
     parser.add_argument("--overlong_penalty_factor", type=float, default=1, help="overlong penalty factor")
     parser.add_argument(
-        "--stop_properly_penalty_coef",
-        type=float,
+        "--mask_truncated_samples",
+        action="store_true",
+        default=False,
+        help="Zero out rewards and action masks for truncated samples.",
+    )
+    parser.add_argument(
+        "--max_tool_response_length",
+        type=int,
         default=None,
-        help="Penalty coefficient [0,1] for truncated samples (finish_reason='length'). "
-        "Truncated sample rewards are scaled by this coefficient to encourage proper stopping.",
+        help="Max tokens for each environment/tool feedback step. Truncate from the middle when exceeded.",
     )
 
     # Context Parallel
@@ -538,6 +554,9 @@ if __name__ == "__main__":
             "[Warning] input_template contains \\n characters instead of newline. "
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
+
+    if args.max_tool_response_length is not None:
+        assert args.max_tool_response_length > 0, "max_tool_response_length must be positive"
 
     if args.fsdp2_cp_size > 1:
         assert args.packing_samples, "packing_samples must be enabled when using ring attention"

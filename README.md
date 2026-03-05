@@ -453,9 +453,9 @@ ray job submit --address="http://127.0.0.1:8265" \
    --use_dynamic_batch \
    --n_samples_per_prompt 1 \
    --max_epochs 1 \
-   --prompt_max_len 1024 \
+   --max_len 2048 \
    --max_samples 100000 \
-   --generate_max_len 1024 \
+   --max_new_tokens 1024 \
    --param_dtype bf16 \
    --actor_learning_rate 5e-7 \
    --critic_learning_rate 9e-6 \
