@@ -102,6 +102,11 @@ def get_llm_for_sequence_regression(
     else:
         nf4_config = None
 
+    # Enable detailed logging for model loading to debug value_head
+    import logging
+
+    logging.getLogger("transformers.modeling_utils").setLevel(logging.WARNING)
+
     model = cls_class.from_pretrained(
         model_name_or_path,
         config=config,
@@ -111,6 +116,21 @@ def get_llm_for_sequence_regression(
         device_map=device_map,
         **kwargs,
     )
+
+    # Debug: Check value_head weights after from_pretrained using print for visibility
+    value_head_layer = getattr(model, value_head_prefix, None)
+    if value_head_layer is not None and hasattr(value_head_layer, "weight"):
+        weight = value_head_layer.weight.data
+        print(
+            f"[VALUE_HEAD_DEBUG] {model_type} value_head (prefix={value_head_prefix}) after from_pretrained: "
+            f"mean={weight.mean().item():.6f}, std={weight.std().item():.6f}, "
+            f"min={weight.min().item():.6f}, max={weight.max().item():.6f}, shape={weight.shape}"
+        )
+        # Check if weights look random (high std, near-zero mean) vs initialized
+        if abs(weight.mean().item()) < 0.01 and weight.std().item() > 0.1:
+            print(f"[VALUE_HEAD_DEBUG] WARNING: value_head weights appear to be RANDOM (not loaded from checkpoint)!")
+        else:
+            print(f"[VALUE_HEAD_DEBUG] value_head weights appear to be loaded from checkpoint.")
 
     # LoRA
     if lora_rank > 0:
@@ -217,7 +237,12 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             )
             last_hidden_states = outputs["last_hidden_state"]
 
-            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
+            # Cast hidden states to value_head weight dtype for FSDP2 compatibility
+            value_head = getattr(self, self.value_head_prefix)
+            if last_hidden_states.dtype != value_head.weight.dtype:
+                last_hidden_states = last_hidden_states.to(value_head.weight.dtype)
+
+            values = value_head(last_hidden_states).squeeze(-1)
 
             if self.packing_samples:
                 values = gather_and_pad_tensor(values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
@@ -285,7 +310,13 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 return outputs
 
             last_hidden_states = outputs["last_hidden_state"]
-            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)  # (1, total_seqs)
+
+            # Cast hidden states to value_head weight dtype for FSDP2 compatibility
+            value_head = getattr(self, self.value_head_prefix)
+            if last_hidden_states.dtype != value_head.weight.dtype:
+                last_hidden_states = last_hidden_states.to(value_head.weight.dtype)
+
+            values = value_head(last_hidden_states).squeeze(-1)  # (1, total_seqs)
 
             if self.packing_samples:
                 values = gather_and_pad_tensor(values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)

@@ -1,13 +1,11 @@
 from typing import Optional
 
-import deepspeed
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
-from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
 from .utils import compute_entropy, log_probs_from_logits
@@ -33,6 +31,7 @@ class Actor(nn.Module):
         packing_samples (bool, optional): Whether to pack samples during training. Defaults to False.
         temperature (float, optional): Temperature for action selection. Defaults to 1.0.
         use_liger_kernel (bool, optional): Whether to use Liger Kernel for the model. Defaults to False.
+        backend (str, optional): Training backend ("deepspeed" or "fsdp2"). Defaults to "deepspeed".
     """
 
     def __init__(
@@ -50,10 +49,12 @@ class Actor(nn.Module):
         packing_samples=False,
         temperature=1.0,
         use_liger_kernel=False,
+        backend="deepspeed",
         **kwargs,
     ) -> None:
         super().__init__()
         self.temperature = temperature
+        self.backend = backend
 
         if isinstance(pretrain_or_model, str):
             # Support multiple attention mechanism implementations
@@ -61,10 +62,12 @@ class Actor(nn.Module):
 
             # Note: dschf is defined in function scope to avoid global effects
             # https://huggingface.co/docs/transformers/deepspeed#non-trainer-deepspeed-integration
-            if ds_config is not None and ds_config["zero_optimization"]["stage"] == 3:
+            # Only use DeepSpeed config for DeepSpeed backend with ZeRO stage 3
+            dschf = None
+            if backend == "deepspeed" and ds_config is not None and ds_config["zero_optimization"]["stage"] == 3:
+                from transformers.integrations.deepspeed import HfDeepSpeedConfig
+
                 dschf = HfDeepSpeedConfig(ds_config)
-            else:
-                dschf = None
 
             # Determine torch dtype based on param_dtype parameter, default: bf16
             from openrlhf.utils.utils import convert_to_torch_dtype
@@ -128,13 +131,16 @@ class Actor(nn.Module):
                 print("[MoE] set output_router_logits as True")
                 self.model.config.output_router_logits = True
 
-                # set_z3_leaf_modules is required for MoE models
-                for m in self.model.modules():
-                    # https://github.com/microsoft/DeepSpeed/pull/4966
-                    if "SparseMoeBlock" in m.__class__.__name__:
-                        deepspeed.utils.set_z3_leaf_modules(self.model, [m.__class__])
-                        print(f"Setting zero3 leaf for model on class with name: {m.__class__.__name__}")
-                        break
+                # set_z3_leaf_modules is required for MoE models (DeepSpeed only)
+                if backend == "deepspeed":
+                    import deepspeed
+
+                    for m in self.model.modules():
+                        # https://github.com/microsoft/DeepSpeed/pull/4966
+                        if "SparseMoeBlock" in m.__class__.__name__:
+                            deepspeed.utils.set_z3_leaf_modules(self.model, [m.__class__])
+                            print(f"Setting zero3 leaf for model on class with name: {m.__class__.__name__}")
+                            break
 
             # https://github.com/huggingface/transformers/issues/26877
             # Use `model.generate(use_cache=True)` instead.`
@@ -171,7 +177,11 @@ class Actor(nn.Module):
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
 
+        # Note: For FSDP2, the MixedPrecisionPolicy handles dtype casting automatically.
+        # For DeepSpeed, dtype casting is handled by the engine.
+        # Therefore, we don't need explicit autocast here - both backends handle it internally.
         output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids)
+
         # https://github.com/OpenRLHF/OpenRLHF/pull/634
         output["logits"] = output["logits"].to(torch.float32)
 
