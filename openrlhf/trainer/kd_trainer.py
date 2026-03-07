@@ -42,7 +42,7 @@ class KDTrainer(ABC):
         max_epochs: int = 2,
         tokenizer=None,
         save_hf_ckpt: bool = False,
-        disable_ds_ckpt: bool = False,
+        disable_fsdp2_ckpt: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -58,7 +58,7 @@ class KDTrainer(ABC):
         self.tokenizer = tokenizer
         self.optimizer = optim
         self.args = strategy.args
-        self.disable_ds_ckpt = disable_ds_ckpt
+        self.disable_fsdp2_ckpt = disable_fsdp2_ckpt
         self.save_hf_ckpt = save_hf_ckpt
 
         self.loss_fn = GPTLMLoss()
@@ -131,8 +131,15 @@ class KDTrainer(ABC):
             for inputs, attention_masks, loss_masks in self.train_dataloader:
                 inputs = inputs.squeeze(1).to(torch.cuda.current_device())
                 attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
-                output = self.model(inputs, attention_mask=attention_mask, return_output=True)
-                prompts_id_len = (loss_masks != 0).int().argmax(dim=-1).squeeze(-1)
+                output = self.model(
+                    inputs,
+                    attention_mask=attention_mask,
+                    return_output=True,
+                    allgather_logits=True,
+                    ring_attn_group=self.strategy.ring_attn_group,
+                )
+                # Keep batch dimension even when batch_size == 1.
+                prompts_id_len = (loss_masks != 0).int().argmax(dim=-1).view(-1)
 
                 # loss function
                 labels = torch.where(
@@ -148,9 +155,13 @@ class KDTrainer(ABC):
                 gpt_loss = self.loss_fn(output.logits, labels)
 
                 with torch.no_grad():
-                    teacher_logits = self.teacher_model(inputs, attention_mask=attention_mask, return_output=True)[
-                        "logits"
-                    ]
+                    teacher_logits = self.teacher_model(
+                        inputs,
+                        attention_mask=attention_mask,
+                        return_output=True,
+                        allgather_logits=True,
+                        ring_attn_group=self.strategy.ring_attn_group,
+                    )["logits"]
                 distil_loss = self.kd_loss(output.logits, teacher_logits, labels)
 
                 loss = gpt_loss * (1 - self.args.kd_coef) + distil_loss * self.args.kd_coef
@@ -206,14 +217,23 @@ class KDTrainer(ABC):
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
-            tag = f"global_step{global_step}"
-            if not self.disable_ds_ckpt:
-                self.strategy.save_ckpt(
-                    self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+            tag = f"global_step_{global_step}"
+            step_dir = os.path.join(self.strategy.dcp_ckpt_path, tag)
+            any_checkpoint_saved = False
+            if not self.disable_fsdp2_ckpt:
+                self.strategy.save_dcp_checkpoint(
+                    self.model.model,
+                    os.path.join(step_dir, "dcp_checkpoint"),
+                    client_state=client_states,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
                 )
+                any_checkpoint_saved = True
             if self.save_hf_ckpt:
-                save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
-                self.strategy.save_model(self.model, self.tokenizer, save_path)
+                self.strategy.save_hf_checkpoint(self.model, self.tokenizer, os.path.join(step_dir, "hf_checkpoint"))
+                any_checkpoint_saved = True
+            if any_checkpoint_saved:
+                self.strategy.cleanup_old_checkpoints(tag)
 
     def evaluate(self, eval_dataloader, steps=0):
         times = 0
@@ -229,8 +249,15 @@ class KDTrainer(ABC):
             for inputs, attention_masks, loss_masks in eval_dataloader:
                 inputs = inputs.squeeze(1).to(torch.cuda.current_device())
                 attention_mask = attention_masks.squeeze(1).to(torch.cuda.current_device())
-                logits = self.model(inputs, attention_mask=attention_mask, return_output=True)["logits"]
-                prompts_id_len = (loss_masks != 0).int().argmax(dim=-1).squeeze(-1)
+                logits = self.model(
+                    inputs,
+                    attention_mask=attention_mask,
+                    return_output=True,
+                    allgather_logits=True,
+                    ring_attn_group=self.strategy.ring_attn_group,
+                )["logits"]
+                # Keep batch dimension even when batch_size == 1.
+                prompts_id_len = (loss_masks != 0).int().argmax(dim=-1).view(-1)
 
                 labels = torch.where(
                     attention_mask.bool(),

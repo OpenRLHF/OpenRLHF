@@ -50,6 +50,8 @@ done
 sleep 30s
 
 # ===== submit ray job =====
+# Resume example (explicit step dir, not /dcp_checkpoint):
+# --resume_from_path /path/to/ckpt/dcp_ckpt/global_step_<N>
 # Job start
 srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" bash -c \
 "pip install ray[default]==$RAY_VERSION \
@@ -68,18 +70,17 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --vllm_tensor_parallel_size 2 \
     --colocate_critic_reward \
     --colocate_actor_ref \
-    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-    --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
-    --save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
+    --model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
+    --reward_model_name_or_path OpenRLHF/Llama-3-8b-rm-mixture \
+    --ckpt_save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
     --micro_train_batch_size 8 \
     --train_batch_size 128 \
     --micro_rollout_batch_size 16 \
     --rollout_batch_size 1024 \
     --max_samples 100000 \
     --max_epochs 1 \
-    --prompt_max_len 1024 \
-    --generate_max_len 1024 \
-    --zero_stage 3 \
+    --max_len 2048 \
+    --max_new_tokens 1024 \
     --param_dtype bf16 \
     --actor_learning_rate 5e-7 \
     --critic_learning_rate 9e-6 \
@@ -88,7 +89,6 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --input_key context_messages \
     --apply_chat_template \
     --normalize_reward \
-    --adam_offload \
     --packing_samples \
     --vllm_sync_backend nccl \
     --gradient_checkpointing \

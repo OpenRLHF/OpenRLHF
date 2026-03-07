@@ -13,9 +13,7 @@ from transformers.trainer import get_scheduler
 from openrlhf.models import ValueLoss, get_llm_for_sequence_regression
 from openrlhf.models.utils import masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
-from openrlhf.utils import get_tokenizer
-from openrlhf.utils.deepspeed import DeepspeedStrategy
-from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
+from openrlhf.utils.fsdp2.strategy import FSDP2Strategy
 
 from ..ppo_utils import NaiveReplayBuffer
 from .launcher import BaseModelActor
@@ -66,9 +64,7 @@ class CriticPPOTrainer(ABC):
             self.replay_buffer.setup_dynamic_batch(self.strategy)
 
         not_shuffle = (
-            self.strategy.ring_attn_group is not None
-            or self.args.ds_tensor_parallel_size > 1
-            or self.args.use_dynamic_batch
+            self.strategy.ring_attn_group is not None or self.args.fsdp2_tp_size > 1 or self.args.use_dynamic_batch
         )
         dataloader = DataLoader(
             self.replay_buffer,
@@ -144,7 +140,7 @@ class CriticPPOTrainer(ABC):
         if self.args.use_dynamic_batch:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
 
-        self.strategy.backward(loss, self.critic, self.critic_optim)
+        self.strategy.backward(loss, self.critic, self.critic_optim, name="critic")
         if self.args.use_dynamic_batch:
             if self.replay_buffer.dynamic_optimizer_step[step]:
                 self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
@@ -162,38 +158,40 @@ class CriticPPOTrainer(ABC):
 
 @ray.remote(num_gpus=1)
 class CriticModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps):
+    def init_model_from_pretrained(self, strategy: FSDP2Strategy, pretrain, max_steps):
         args = strategy.args
-        self.disable_ds_ckpt = args.disable_ds_ckpt
+        self.disable_fsdp2_ckpt = args.disable_fsdp2_ckpt
 
         self._setup_distributed(strategy)
+        init_value_head = strategy.args.model_name_or_path == strategy.args.critic_model_name_or_path
         critic = get_llm_for_sequence_regression(
             pretrain,
             "critic",
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
-            param_dtype=strategy.args.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.load_in_4bit,
-            lora_rank=strategy.args.lora_rank,
-            lora_alpha=strategy.args.lora_alpha,
-            target_modules=strategy.args.target_modules,
-            lora_dropout=strategy.args.lora_dropout,
-            ds_config=strategy.get_ds_train_config(is_actor=False),
+            torch_dtype=torch.float32,
             value_head_prefix=strategy.args.value_head_prefix,
-            init_value_head=strategy.args.pretrain == strategy.args.critic_pretrain,
             packing_samples=strategy.args.packing_samples,
         )
         strategy.print(critic)
         strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
         strategy.print("mean: {}, std {}".format(critic.mean, critic.std))
 
-        # configure tokenizer
-        if strategy.args.save_value_network:
-            self.tokenizer = get_tokenizer(
-                pretrain, critic, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer
+        if args.gradient_checkpointing:
+            critic.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
 
-        # configure optimizer
+        # Wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
+        critic = strategy.apply_parallelism(critic)
+        strategy.load_hf_checkpoint(
+            critic,
+            pretrain,
+            init_value_head=init_value_head,
+            value_head_prefix=strategy.args.value_head_prefix,
+        )
+
+        # configure optimizer (after model wrapping for FSDP2)
         critic_optim = strategy.create_optimizer(
             critic, lr=args.critic_learning_rate, betas=args.adam_betas, weight_decay=args.l2
         )
@@ -207,25 +205,30 @@ class CriticModelActor(BaseModelActor):
             scheduler_specific_kwargs={"min_lr": args.critic_learning_rate * 0.1},
         )
 
-        if args.gradient_checkpointing:
-            critic.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
-            )
-
-        # prepare models/optimizers...
-        self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare(
-            (critic, critic_optim, critic_scheduler),
-            is_rlhf=True,
-        )
+        self.critic = critic
+        self.critic_optim = critic_optim
+        self.critic_scheduler = critic_scheduler
 
         # load checkpoint
-        if args.load_checkpoint and os.path.exists(os.path.join(args.ckpt_path, "_actor")):
-            ckpt_path = os.path.join(args.ckpt_path, "_critic")
-            strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            strategy.load_ckpt(self.critic, ckpt_path)
+        resume_from_path = getattr(args, "resume_from_path", None)
+        if resume_from_path:
+            actor_dir = os.path.join(resume_from_path, "dcp_checkpoint", "_actor")
+            if not os.path.isdir(actor_dir):
+                raise FileNotFoundError(
+                    f"Invalid resume_from_path: expected actor checkpoint directory at {actor_dir}"
+                )
+            critic_dir = os.path.join(resume_from_path, "dcp_checkpoint", "_critic")
+            if not os.path.isdir(critic_dir):
+                raise FileNotFoundError(
+                    f"Invalid resume_from_path: expected critic checkpoint directory at {critic_dir}"
+                )
+            strategy.print(f"Loading critic checkpoint: {critic_dir}")
+            strategy.load_dcp_checkpoint(
+                self.critic, critic_dir, optimizer=self.critic_optim, scheduler=self.critic_scheduler
+            )
 
         # initial offload
-        if strategy.args.deepspeed_enable_sleep:
+        if strategy.args.fsdp2_enable_sleep:
             self.offload_states()
 
         # configure Trainer
@@ -273,25 +276,31 @@ class CriticModelActor(BaseModelActor):
         torch.cuda.synchronize()
         return status
 
-    def save_model(self):
-        args = self.strategy.args
-
-        # save model checkpoint after fitting on only rank0
-        self.strategy.save_model(
-            self.critic,
-            self.tokenizer,
-            args.save_path + "_critic",
-        )
-
     def save_checkpoint(self, tag):
-        args = self.strategy.args
-        if not self.disable_ds_ckpt:
-            self.strategy.save_ckpt(
-                self.critic, os.path.join(args.ckpt_path, "_critic"), tag, args.max_ckpt_num, args.max_ckpt_mem
-            )
+        if self.disable_fsdp2_ckpt:
+            return False
+
+        step_dir = os.path.join(self.strategy.dcp_ckpt_path, tag)
+        self.strategy.save_dcp_checkpoint(
+            self.critic,
+            os.path.join(step_dir, "dcp_checkpoint", "_critic"),
+            optimizer=self.critic_optim,
+            scheduler=self.critic_scheduler,
+        )
+        return True
 
     def reload_states(self):
-        reload_deepspeed_states(self.critic)
+        self.strategy.reload_optimizer_states(self.critic_optim)
 
     def offload_states(self):
-        offload_deepspeed_states(self.critic)
+        self.strategy.offload_optimizer_states(self.critic_optim)
+
+    def offload_model(self):
+        """Offload model to CPU for rollout phase (hybrid engine mode)."""
+        if isinstance(self.strategy, FSDP2Strategy):
+            self.strategy.offload_model(self.critic)
+
+    def reload_model(self):
+        """Reload model to GPU for forward pass (hybrid engine mode)."""
+        if isinstance(self.strategy, FSDP2Strategy):
+            self.strategy.reload_model(self.critic)

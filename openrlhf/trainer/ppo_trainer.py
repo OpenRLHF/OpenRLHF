@@ -18,7 +18,7 @@ from openrlhf.trainer.ppo_utils.kl_controller import AdaptiveKLController, Fixed
 from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
-from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils.fsdp2.strategy import FSDP2Strategy
 from openrlhf.utils.logging_utils import TensorboardLogger, WandbLogger, init_logger
 from openrlhf.utils.utils import get_tokenizer
 
@@ -68,7 +68,7 @@ class BasePPOTrainer(ABC):
 
     def __init__(
         self,
-        strategy: DeepspeedStrategy,
+        strategy: FSDP2Strategy,
         actor_model_group: RayActorGroup,
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,
@@ -160,7 +160,7 @@ class BasePPOTrainer(ABC):
             status.update(ray.get(ref)[0])
             ray.get(group.async_run_method(method_name="offload_states"))
 
-        if self.args.deepspeed_enable_sleep:
+        if self.args.fsdp2_enable_sleep:
             # Colocated/sleeping: run critic first, then actor.
             if run_critic:
                 _run_sleep(self.critic_model_group)
@@ -185,7 +185,8 @@ class BasePPOTrainer(ABC):
         When vllm_enable_sleep is enabled, we use fine-grained control:
         1. Wake up only weights (not KV cache) to minimize GPU memory during weight sync
         2. Broadcast weights from actor model to vLLM
-        3. Keep vLLM in weights-only state; KV cache will be woken up later before generation
+        3. Optionally offload training model to CPU after sync (fsdp2_offload_during_rollout)
+        4. Put vLLM back to sleep to free GPU memory for next training phase
 
         This approach reduces peak GPU memory during gradient sync by avoiding
         simultaneous allocation of both weights and KV cache.
@@ -197,8 +198,14 @@ class BasePPOTrainer(ABC):
 
         ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
 
-        # NOTE: We keep vLLM in weights-only state after weight sync.
-        # KV cache will be woken up before generation in SamplesGenerator.
+        # Offload actor model to CPU to free GPU memory for vLLM during rollout
+        # This is critical for avoiding OOM when vLLM wakes up with full KV cache
+        # Note: reference/reward models are prepared via prepare(..., cpu_offload=...).
+        if self.args.fsdp2_enable_sleep:
+            offload_refs = self.actor_model_group.async_run_method(method_name="offload_model")
+            if self.critic_model_group is not None:
+                offload_refs.extend(self.critic_model_group.async_run_method(method_name="offload_model"))
+            ray.get(offload_refs)
 
     def save_logs_and_checkpoints(self, global_step: int, logs_dict=None, client_states=None) -> None:
         logs_dict = logs_dict or {}
@@ -212,17 +219,25 @@ class BasePPOTrainer(ABC):
         # TODO: save best model on dev, use loss/perplexity/others on whole dev dataset as metric
         client_states = client_states or {}
         if global_step % self.args.save_steps == 0:
-            tag = f"global_step{global_step}"
+            tag = f"global_step_{global_step}"
             refs = self.actor_model_group.async_run_method(
                 method_name="save_checkpoint", tag=tag, client_states=client_states
             )
             if self.critic_model_group is not None:
                 refs.extend(self.critic_model_group.async_run_method(method_name="save_checkpoint", tag=tag))
-            ray.get(refs)
+            any_checkpoint_saved_results = ray.get(refs)
+            if any(any_checkpoint_saved_results):
+                # All roles saved – write top-level latest + cleanup
+                ray.get(self.actor_model_group.async_run_method(method_name="cleanup_old_checkpoints", tag=tag))
 
     def init_checkpoint_states(self) -> Dict:
-        ckpt_path = os.path.join(self.args.ckpt_path, "_actor")
-        if self.args.load_checkpoint and os.path.exists(ckpt_path):
+        resume_from_path = getattr(self.args, "resume_from_path", None)
+        if resume_from_path:
+            actor_dir = os.path.join(resume_from_path, "dcp_checkpoint", "_actor")
+            if not os.path.isdir(actor_dir):
+                raise FileNotFoundError(
+                    f"Invalid resume_from_path: expected actor checkpoint directory at {actor_dir}"
+                )
             checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
                 0
             ]
@@ -246,7 +261,7 @@ class PPOTrainer(BasePPOTrainer):
     def __init__(
         self,
         pretrain: str,
-        strategy: DeepspeedStrategy,
+        strategy: FSDP2Strategy,
         actor_model_group: RayActorGroup,
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,

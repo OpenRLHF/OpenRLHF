@@ -165,19 +165,20 @@ class LLMRayActor:
         max_length: int,
         hf_tokenizer,
         num_samples: int = 1,
+        max_tool_response_length=None,
     ):
         """Generate N samples for a single prompt."""
-        tasks = [
-            self.executor.execute(
-                prompt=prompt,
-                label=label,
-                sampling_params=sampling_params,
-                max_length=max_length,
-                hf_tokenizer=hf_tokenizer,
-                llm_engine=self,
-            )
-            for _ in range(num_samples)
-        ]
+        execute_kwargs = {
+            "prompt": prompt,
+            "label": label,
+            "sampling_params": sampling_params,
+            "max_length": max_length,
+            "hf_tokenizer": hf_tokenizer,
+            "llm_engine": self,
+        }
+        if max_tool_response_length is not None:
+            execute_kwargs["max_tool_response_length"] = max_tool_response_length
+        tasks = [self.executor.execute(**execute_kwargs) for _ in range(num_samples)]
         return await asyncio.gather(*tasks)
 
 
@@ -189,7 +190,7 @@ def create_vllm_engines(
     full_determinism: bool,
     enable_prefix_caching: bool,
     enforce_eager: bool,
-    max_model_len: int,
+    max_model_len: Optional[int],
     shared_pg=None,
     gpu_memory_utilization=None,
     vllm_enable_sleep=False,

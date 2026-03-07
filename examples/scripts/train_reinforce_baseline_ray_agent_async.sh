@@ -18,14 +18,14 @@ AGENT_FUNC_PATH="examples/python/agent_func.py"
 # AGENT_FUNC_PATH="{OpenRLHF-Agent/examples/single_turn/agent_func.py}"
 
 CKPT_ARGS=(
-   --pretrain ${MODEL_PATH}
-   # --reward_pretrain ${REWARD_MODEL}
-   --load_checkpoint
+   --model_name_or_path ${MODEL_PATH}
+   # --reward_model_name_or_path ${REWARD_MODEL}
+   # Resume example (explicit step dir, not /dcp_checkpoint):
+   # --resume_from_path /path/to/ckpt/dcp_ckpt/global_step_<N>
 
-   --save_path ${SAVE_PATH}
-   --ckpt_path "${SAVE_PATH}/ckpt"
+   --ckpt_save_path ${SAVE_PATH}
    --save_hf_ckpt
-   --max_ckpt_num 3
+   --max_checkpoints_to_keep 3
    --save_steps 10
 )
 
@@ -36,8 +36,7 @@ ROLLOUT_ARGS=(
    --prompt_data ${DATASET_PATH}
    --input_key prompt
    --label_key label
-   --prompt_max_len 10240
-   --generate_max_len 64000
+   --max_len 74240
    --apply_chat_template
    --packing_samples
 
@@ -69,14 +68,11 @@ ENGINE_ARGS=(
    --vllm_tensor_parallel_size 2
    --vllm_gpu_memory_utilization 0.7
    --colocate_all_models
-   --deepspeed_enable_sleep
+   --fsdp2_enable_sleep
    --vllm_sync_backend nccl
    --enforce_eager
-
-   --zero_stage 3
    --gradient_checkpointing
-   # --adam_offload
-   --ring_attn_size 2
+	--fsdp2_cp_size 2
    --ring_head_stride 2
    --param_dtype bf16
 )
