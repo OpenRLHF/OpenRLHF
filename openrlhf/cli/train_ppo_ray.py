@@ -371,7 +371,7 @@ if __name__ == "__main__":
         type=int,
         default=None,
         help="Max tokens to generate per response. "
-        "Not required in agent mode (generation budget is dynamically managed by max_len).",
+        "In agent mode, generation budget is dynamically managed by --max_len.",
     )
     parser.add_argument("--max_samples", type=int, default=1e8, help="Max number of samples")
     parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
@@ -447,10 +447,10 @@ if __name__ == "__main__":
     )
     parser.add_argument("--overlong_penalty_factor", type=float, default=1, help="overlong penalty factor")
     parser.add_argument(
-        "--mask_truncated_samples",
-        action="store_true",
-        default=False,
-        help="Zero out rewards and action masks for truncated samples.",
+        "--stop_properly_penalty_coef",
+        type=float,
+        default=None,
+        help="Optional auxiliary penalty strength [0,1] for truncated samples.",
     )
     parser.add_argument(
         "--max_tool_response_length",

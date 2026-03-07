@@ -378,12 +378,14 @@ class SamplesGenerator:
         engine_heap = [(count, idx) for idx, count in enumerate(pending_counts)]
         heapq.heapify(engine_heap)
 
+        n_samples_per_prompt = generate_kwargs.get("n_samples_per_prompt", self.args.n_samples_per_prompt)
+
         # Pre-compute engine assignment to keep loads even.
         engine_indices = []
         for _ in prompts:
             current_load, engine_idx = heapq.heappop(engine_heap)
             engine_indices.append(engine_idx)
-            heapq.heappush(engine_heap, (current_load + self.args.n_samples_per_prompt, engine_idx))
+            heapq.heappush(engine_heap, (current_load + n_samples_per_prompt, engine_idx))
 
         refs = []
         for idx, (prompt, label) in enumerate(zip(prompts, labels)):
@@ -395,7 +397,7 @@ class SamplesGenerator:
                 sampling_params=sampling_params,
                 max_length=truncate_length,
                 hf_tokenizer=self.tokenizer,
-                num_samples=self.args.n_samples_per_prompt,
+                num_samples=n_samples_per_prompt,
                 max_tool_response_length=generate_kwargs.get("max_tool_response_length"),
             )
             refs.append(ref)
@@ -430,14 +432,10 @@ class SamplesGenerator:
         else:
             rollout_log_probs = None
 
-        # Collect simple stats about lengths and clipping.
-        ones_indices = torch.where(action_mask)[0]
-        response_length = (ones_indices[-1] - ones_indices[0] + 1).item() if len(ones_indices) else 0
+        response_length = action_mask.sum().item()
+
         total_length = attention_mask.float().sum()
         is_clipped = total_length >= truncate_length
-
-        # Check if response was truncated (hit max_tokens limit, finish_reason == "length")
-        is_truncated = response.get("truncated", False)
 
         info = {
             "response_length": torch.tensor([response_length]),
@@ -464,8 +462,8 @@ class SamplesGenerator:
             rollout_log_probs=rollout_log_probs.unsqueeze(0) if rollout_log_probs is not None else None,
             prompts=[response["prompt"]],
             labels=[response["label"]],
-            rewards=torch.tensor([reward_val]) if reward_val is not None else None,
-            scores=torch.tensor([score_val]) if score_val is not None else None,
+            rewards=torch.tensor([reward_val], dtype=torch.float32) if reward_val is not None else None,
+            scores=torch.tensor([score_val], dtype=torch.float32) if score_val is not None else None,
             info=info,
         )
 
@@ -715,17 +713,6 @@ class RemoteExperienceMaker:
         # Apply length penalties (DAPO overlong) - BEFORE dynamic indices processing
         apply_length_penalties(experiences, args)
 
-        if args.mask_truncated_samples:
-            for experience in experiences:
-                is_truncated = experience.info.get("is_truncated")
-                if is_truncated is None:
-                    continue
-                not_truncated_mask = (is_truncated < 0.5).to(experience.rewards.dtype)
-                experience.rewards = experience.rewards * not_truncated_mask
-                experience.action_mask = experience.action_mask * not_truncated_mask.unsqueeze(-1).to(
-                    dtype=experience.action_mask.dtype
-                )
-
         # get rewards from experiences
         exp_len = [len(experience.index) for experience in experiences]
         # indices is an identity mapping when not using dynamic batch; otherwise, it maps back to the original indices after rearrange samples
@@ -813,7 +800,7 @@ class RemoteExperienceMaker:
             num_actions = action_masks_vector.sum()
             if num_actions.item() <= 0:
                 logger.warning(
-                    "All action masks are zero after masking truncated samples. Skip advantage normalization."
+                    "All action masks are zero. Skip advantage normalization."
                 )
                 return experiences
 
