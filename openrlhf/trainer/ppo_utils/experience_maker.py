@@ -799,9 +799,7 @@ class RemoteExperienceMaker:
             action_masks_vector = torch.cat(all_action_masks, dim=0)
             num_actions = action_masks_vector.sum()
             if num_actions.item() <= 0:
-                logger.warning(
-                    "All action masks are zero. Skip advantage normalization."
-                )
+                logger.warning("All action masks are zero. Skip advantage normalization.")
                 return experiences
 
             # mean
