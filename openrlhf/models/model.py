@@ -190,6 +190,10 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 self.mean[0] = config.mean
                 self.std[0] = config.std
 
+            # Required by Transformers v5 to register derived model metadata such as
+            # all_tied_weights_keys before from_pretrained() finalizes loading.
+            self.post_init()
+
         def forward(
             self,
             input_ids: torch.LongTensor = None,
@@ -253,6 +257,10 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             if hasattr(config, "mean"):
                 self.mean[0] = config.mean
                 self.std[0] = config.std
+
+            # Required by Transformers v5 to register derived model metadata such as
+            # all_tied_weights_keys before from_pretrained() finalizes loading.
+            self.post_init()
 
         def forward(
             self,
