@@ -317,23 +317,29 @@ def _with_loss_parallel_lm_head(plan: dict[str, ParallelStyle], sequence_paralle
 def ensure_score_layer_in_plan(
     model: nn.Module,
     plan: dict[str, ParallelStyle],
+    sequence_parallel: bool = False,
 ) -> dict[str, ParallelStyle]:
     """Add value-head layer handling for Reward/Critic models.
 
     The value head name is read from ``model.value_head_prefix`` (set by
     ``_get_reward_model`` / ``_get_critic_model``), falling back to ``"score"``.
+
+    When *sequence_parallel* is True, the input from ``model.norm`` is
+    Shard(1) on the sequence dimension, so we must all-gather it before
+    the value-head linear to produce full-sequence outputs.
     """
     prefix = getattr(model, "value_head_prefix", "score")
     head = getattr(model, prefix, None)
     if isinstance(head, nn.Module):
         plan = dict(plan)
+        input_layout = Shard(1) if sequence_parallel else Replicate()
         plan[prefix] = ReplicateParallel(
-            input_layout=Replicate(),
+            input_layout=input_layout,
             desired_input_layout=Replicate(),
             output_layout=Replicate(),
             use_local_output=True,
         )
-        logger.info("Added ReplicateParallel for %s layer (Reward/Critic model)", prefix)
+        logger.info("Added ReplicateParallel for %s layer (Reward/Critic model, SP=%s)", prefix, sequence_parallel)
     return plan
 
 
@@ -486,7 +492,7 @@ def apply_tensor_parallel(
     if tp_plan is None:
         tp_plan = get_tp_plan(model, sequence_parallel, shard_logits=shard_logits)
 
-    tp_plan = ensure_score_layer_in_plan(model, tp_plan)
+    tp_plan = ensure_score_layer_in_plan(model, tp_plan, sequence_parallel=sequence_parallel)
 
     parallelize_module(model, tp_mesh, tp_plan)
 
