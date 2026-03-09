@@ -143,7 +143,9 @@ class CriticPPOTrainer(ABC):
             sync_gradients = bool(self.replay_buffer.dynamic_optimizer_step[step])
 
         self.strategy.backward(loss, self.critic, self.critic_optim, name="critic", sync_gradients=sync_gradients)
-        self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic", sync_gradients=sync_gradients)
+        self.strategy.optimizer_step(
+            self.critic_optim, self.critic, self.critic_scheduler, name="critic", sync_gradients=sync_gradients
+        )
 
         # status
         status = {
