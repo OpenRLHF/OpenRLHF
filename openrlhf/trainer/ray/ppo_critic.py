@@ -137,15 +137,13 @@ class CriticPPOTrainer(ABC):
         else:
             aux_loss = 0
         loss = critic_loss + aux_loss * self.args.aux_loss_coef
+        sync_gradients = None
         if self.args.use_dynamic_batch:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
+            sync_gradients = bool(self.replay_buffer.dynamic_optimizer_step[step])
 
-        self.strategy.backward(loss, self.critic, self.critic_optim, name="critic")
-        if self.args.use_dynamic_batch:
-            if self.replay_buffer.dynamic_optimizer_step[step]:
-                self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
-        else:
-            self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
+        self.strategy.backward(loss, self.critic, self.critic_optim, name="critic", sync_gradients=sync_gradients)
+        self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic", sync_gradients=sync_gradients)
 
         # status
         status = {

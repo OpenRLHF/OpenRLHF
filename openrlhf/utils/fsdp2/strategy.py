@@ -410,43 +410,74 @@ class FSDP2Strategy(ABC):
             {"params": no_decay, "weight_decay": 0.0},
         ]
 
-    def backward(self, loss, model, optimizer, name="model", **kwargs):
+    def backward(self, loss, model, optimizer, name="model", sync_gradients=None, **kwargs):
         """Backward with gradient accumulation.
 
         No explicit CP loss scaling is needed here — see module docstring for
         why the all_gather reduce_scatter factor cancels FSDP's dp_cp averaging.
+
+        Args:
+            sync_gradients: Whether to reduce-scatter gradients on this
+                backward pass.  ``None`` (default) falls back to the internal
+                ``accumulated_gradient`` counter.  Pass ``True``/``False``
+                explicitly in dynamic-batch mode where the accumulation
+                schedule is determined externally.
         """
         if self.accumulated_gradient > 1:
             loss = loss / self.accumulated_gradient
 
         unwrapped = self._unwrap_model(model)
-        if isinstance(unwrapped, FSDPModule) and self.accumulated_gradient > 1:
-            key = f"step_{name}"
-            is_final = (self.time_steps.get(key, 0) + 1) % self.accumulated_gradient == 0
-            unwrapped.set_requires_gradient_sync(is_final)
+        if isinstance(unwrapped, FSDPModule):
+            if sync_gradients is not None:
+                unwrapped.set_requires_gradient_sync(sync_gradients)
+            elif self.accumulated_gradient > 1:
+                key = f"step_{name}"
+                sync = (self.time_steps.get(key, 0) + 1) % self.accumulated_gradient == 0
+                unwrapped.set_requires_gradient_sync(sync)
 
         loss.backward()
 
-    def optimizer_step(self, optimizer, model, scheduler, name="model", **kwargs):
-        """Optimizer step with gradient accumulation."""
+    def optimizer_step(self, optimizer, model, scheduler, name="model", sync_gradients=None, **kwargs):
+        """Optimizer step with gradient accumulation.
+
+        Args:
+            sync_gradients: When provided, overrides the internal counter.
+                ``False`` skips the step (gradients are still accumulating);
+                ``True`` forces execution.
+        """
         key = f"step_{name}"
         self.time_steps[key] += 1
-        if self.time_steps[key] % self.accumulated_gradient != 0:
+
+        if sync_gradients is not None:
+            if not sync_gradients:
+                return
+        elif self.time_steps[key] % self.accumulated_gradient != 0:
             return
 
         if self.max_norm > 0:
-            # DTensor-compatible clipping (standard clip_grad_norm_ fails with mixed meshes)
             clip_grad_norm_dtensor(self._unwrap_model(model), max_norm=self.max_norm)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         if scheduler:
             scheduler.step()
 
-    def moving_average(self, model, model_ema, beta=0.992, device="cpu"):
-        """Update EMA model."""
+    def moving_average(self, model, model_ema, beta=0.992, device="cpu", sync_gradients=None):
+        """Update EMA model.
+
+        Args:
+            sync_gradients: When provided, overrides the internal counter.
+                ``False`` skips the update (gradients are still accumulating);
+                ``True`` forces it.
+        """
         self.time_steps["ema"] += 1
-        if self.time_steps["ema"] % max(1, self.accumulated_gradient) == 0:
-            moving_average_fsdp2(model, model_ema, self._unwrap_model, beta)
+
+        if sync_gradients is not None:
+            if not sync_gradients:
+                return
+        elif self.time_steps["ema"] % max(1, self.accumulated_gradient) != 0:
+            return
+
+        moving_average_fsdp2(model, model_ema, self._unwrap_model, beta)
 
     # -------------------------------------------------------------------------
     # Data
