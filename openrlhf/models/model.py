@@ -92,6 +92,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             self.register_buffer("mean", torch.zeros(1), persistent=False)
             self.register_buffer("std", torch.ones(1), persistent=False)
             self.reset_buffers()
+            self.post_init()
 
         def reset_buffers(self):
             """Reset non-persistent buffers from config (analogous to reset_parameters)."""
@@ -99,10 +100,6 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 return
             self.mean.fill_(float(getattr(self.config, "mean", 0.0)))
             self.std.fill_(float(getattr(self.config, "std", 1.0)))
-
-            # Required by Transformers v5 to register derived model metadata such as
-            # all_tied_weights_keys before from_pretrained() finalizes loading.
-            self.post_init()
 
         def forward(
             self,
@@ -161,6 +158,7 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             self.register_buffer("mean", torch.zeros(1), persistent=False)
             self.register_buffer("std", torch.ones(1), persistent=False)
             self.reset_buffers()
+            self.post_init()
 
         def reset_buffers(self):
             """Reset non-persistent buffers from config (analogous to reset_parameters)."""
@@ -168,10 +166,6 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 return
             self.mean.fill_(float(getattr(self.config, "mean", 0.0)))
             self.std.fill_(float(getattr(self.config, "std", 1.0)))
-
-            # Required by Transformers v5 to register derived model metadata such as
-            # all_tied_weights_keys before from_pretrained() finalizes loading.
-            self.post_init()
 
         def forward(
             self,
