@@ -13,6 +13,7 @@ from transformers.trainer import get_scheduler
 from openrlhf.models import ValueLoss, get_llm_for_sequence_regression
 from openrlhf.models.utils import masked_mean
 from openrlhf.trainer.ppo_utils.experience_maker import Experience
+from openrlhf.utils import get_tokenizer
 from openrlhf.utils.fsdp2.strategy import FSDP2Strategy
 
 from ..ppo_utils import NaiveReplayBuffer
@@ -209,6 +210,10 @@ class CriticModelActor(BaseModelActor):
         self.critic = critic
         self.critic_optim = critic_optim
         self.critic_scheduler = critic_scheduler
+        self.tokenizer = get_tokenizer(
+            pretrain, strategy._unwrap_model(critic), "left", strategy,
+            use_fast=not strategy.args.disable_fast_tokenizer,
+        )
 
         # load checkpoint
         if getattr(args, "resume_training", False) and not dcp_checkpoint_from_path:
@@ -287,6 +292,13 @@ class CriticModelActor(BaseModelActor):
             scheduler=self.critic_scheduler,
         )
         return True
+
+    def save_model(self):
+        self.strategy.save_hf_checkpoint(
+            self.critic,
+            self.tokenizer,
+            os.path.join(self.strategy.last_hf_ckpt_path, "critic"),
+        )
 
     def reload_states(self):
         self.strategy.reload_optimizer_states(self.critic_optim)

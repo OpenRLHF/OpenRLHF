@@ -178,6 +178,8 @@ def train(args):
 
     # save model
     ray.get(actor_model.async_save_model())
+    if args.save_value_network and critic_model is not None:
+        ray.get(critic_model.async_save_model())
 
 
 if __name__ == "__main__":

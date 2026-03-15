@@ -147,7 +147,7 @@ def batch_generate(args):
             prompts_dataset,
             num_replicas=dist.get_world_size(),
             rank=dist.get_rank(),
-            shuffle=True,
+            shuffle=False,
             seed=strategy.seed,
             drop_last=False,
         )

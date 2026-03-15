@@ -469,6 +469,11 @@ def _load_dcp_checkpoint(
     if not isinstance(extras, dict):
         if not load_module_only:
             raise FileNotFoundError(f"Full resume requires a valid extra_state.pt at: {extra_path}")
+        if getattr(unwrapped, "normalize_reward", False):
+            raise FileNotFoundError(
+                f"Reward/critic model requires extra_state.pt for normalize_reward/mean/std, "
+                f"but it is missing or corrupted at: {extra_path}"
+            )
         extras = {}
 
     # Restore reward normalization stats to config and buffers.

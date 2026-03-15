@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.machinery
 import importlib.util
 import sys
 import types
@@ -20,8 +21,10 @@ def _install_flash_attn_stubs_if_missing() -> None:
 
     flash_attn_module = types.ModuleType("flash_attn")
     flash_attn_module.__path__ = []  # type: ignore[attr-defined]
+    flash_attn_module.__spec__ = importlib.machinery.ModuleSpec("flash_attn", loader=None, is_package=True)
 
     bert_padding_module = types.ModuleType("flash_attn.bert_padding")
+    bert_padding_module.__spec__ = importlib.machinery.ModuleSpec("flash_attn.bert_padding", loader=None)
     bert_padding_module.index_first_axis = lambda *args, **kwargs: None
     bert_padding_module.pad_input = lambda *args, **kwargs: None
     bert_padding_module.rearrange = lambda *args, **kwargs: None
@@ -29,8 +32,10 @@ def _install_flash_attn_stubs_if_missing() -> None:
 
     utils_module = types.ModuleType("flash_attn.utils")
     utils_module.__path__ = []  # type: ignore[attr-defined]
+    utils_module.__spec__ = importlib.machinery.ModuleSpec("flash_attn.utils", loader=None, is_package=True)
 
     distributed_module = types.ModuleType("flash_attn.utils.distributed")
+    distributed_module.__spec__ = importlib.machinery.ModuleSpec("flash_attn.utils.distributed", loader=None)
     distributed_module.all_gather = lambda *args, **kwargs: None
 
     sys.modules["flash_attn"] = flash_attn_module
