@@ -158,6 +158,15 @@ class DeepspeedStrategy(ABC):
             model = model.model
         model.step()
 
+    def get_grad_norm(self, model: nn.Module) -> float:
+        """Get the global gradient norm from DeepSpeed engine (pre-clipping)."""
+        if isinstance(model, Actor):
+            model = model.model
+        if hasattr(model, "get_global_grad_norm"):
+            grad_norm = model.get_global_grad_norm()
+            return grad_norm if grad_norm is not None else 0.0
+        return 0.0
+
     def setup_dataloader(
         self,
         replay_buffer,

@@ -156,6 +156,7 @@ class CriticPPOTrainer(ABC):
             "critic_loss": critic_loss.detach().item(),
             "values": masked_mean(values, experience.action_mask).detach().item(),
             "critic_lr": self.critic_scheduler.get_last_lr()[0],
+            "critic_grad_norm": self.strategy.get_grad_norm(self.critic),
         }
         return status
 

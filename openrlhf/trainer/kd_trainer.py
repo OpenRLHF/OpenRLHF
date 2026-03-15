@@ -162,6 +162,7 @@ class KDTrainer(ABC):
                     "gpt_loss": gpt_loss.item(),
                     "distil_loss": distil_loss.item(),
                     "lr": self.scheduler.get_last_lr()[0],
+                    "grad_norm": self.strategy.get_grad_norm(self.model),
                 }
                 # step bar
                 logs_dict = self.strategy.all_reduce(logs_dict)

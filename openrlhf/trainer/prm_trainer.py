@@ -167,6 +167,7 @@ class ProcessRewardModelTrainer(ABC):
                     "prm_loss": prm_loss.item(),
                     "acc": acc.item(),
                     "lr": self.scheduler.get_last_lr()[0],
+                    "grad_norm": self.strategy.get_grad_norm(self.model),
                 }
                 if self.aux_loss:
                     logs_dict["aux_loss"] = aux_loss.item()
