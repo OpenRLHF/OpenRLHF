@@ -287,6 +287,7 @@ class RewardModelTrainer(ABC):
             unwrap_model = self.strategy._unwrap_model(self.model)
             unwrap_model.config.mean = reward_mean.item()
             unwrap_model.config.std = reward_std.item()
+            unwrap_model.reset_buffers()
 
             bar_dict = {
                 "eval_loss": loss_mean,

@@ -52,8 +52,11 @@ def train(args):
     model = strategy.apply_parallelism(model)
     # Teacher is inference-only; cpu_offload controls FSDP2 CPUOffloadPolicy.
     teacher_model = strategy.apply_parallelism(teacher_model, force_cpu_offload=args.teacher_offload)
-    strategy.load_hf_checkpoint(model, args.model_name_or_path)
+    strategy.model_to_empty(model)
+    if not args.dcp_checkpoint_from_path:
+        strategy.load_hf_checkpoint(model, args.model_name_or_path)
 
+    strategy.model_to_empty(teacher_model, force_cpu_offload=args.teacher_offload)
     strategy.load_hf_checkpoint(
         teacher_model,
         args.teacher_model,
@@ -127,14 +130,19 @@ def train(args):
 
     # load checkpoint
     consumed_samples = 0
-    resume_from_path = args.resume_from_path
-    if resume_from_path:
-        dcp_dir = os.path.join(resume_from_path, "dcp_checkpoint")
+    if args.resume_training and not args.dcp_checkpoint_from_path:
+        raise ValueError("--resume_training requires --dcp_checkpoint_from_path.")
+    if args.dcp_checkpoint_from_path:
+        dcp_dir = os.path.join(args.dcp_checkpoint_from_path, "dcp_checkpoint")
         if not os.path.isdir(dcp_dir):
-            raise FileNotFoundError(f"Invalid resume_from_path: expected DCP directory at {dcp_dir}")
-        states = strategy.load_dcp_checkpoint(model.model, dcp_dir, optimizer=optim, scheduler=scheduler)
-        consumed_samples = states["consumed_samples"]
-        strategy.print(f"Loaded checkpoint from: {dcp_dir}, consumed_samples: {consumed_samples}")
+            raise FileNotFoundError(f"Expected DCP directory at {dcp_dir}")
+        if args.resume_training:
+            states = strategy.load_dcp_resume(model, dcp_dir, optimizer=optim, scheduler=scheduler)
+            consumed_samples = states["consumed_samples"]
+            strategy.print(f"Resumed training from: {dcp_dir}, consumed_samples: {consumed_samples}")
+        else:
+            strategy.load_dcp_resume(model, dcp_dir, load_module_only=True)
+            strategy.print(f"Loaded model weights only from: {dcp_dir}")
 
     os.makedirs(args.ckpt_save_path, exist_ok=True)
 
@@ -178,10 +186,16 @@ if __name__ == "__main__":
         help="Maximum checkpoints to keep. Use -1 to keep all checkpoints; value must be -1 or a positive integer.",
     )
     parser.add_argument(
-        "--resume_from_path",
+        "--dcp_checkpoint_from_path",
         type=str,
         default=None,
-        help="Resume training from an explicit step directory (must contain dcp_checkpoint).",
+        help="Load weights from an explicit step directory (must contain dcp_checkpoint).",
+    )
+    parser.add_argument(
+        "--resume_training",
+        action="store_true",
+        default=False,
+        help="Also restore optimizer, scheduler, and consumed_samples from --dcp_checkpoint_from_path.",
     )
 
     # FSDP2

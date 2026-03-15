@@ -46,6 +46,7 @@ from openrlhf.utils.distributed_sampler import DistributedSampler
 
 from .checkpoint import (
     _cleanup_old_checkpoints,
+    _fixup_after_load,
     _load_dcp_checkpoint,
     _load_hf_checkpoint,
     _save_dcp_checkpoint,
@@ -308,31 +309,113 @@ class FSDP2Strategy(ABC):
         model_name_or_path: str,
         *,
         force_cpu_offload: bool = False,
-        init_value_head: bool = False,
-        value_head_prefix: str = "score",
+        init_missing_value_head: bool = False,
+        force_init_value_head: bool = False,
     ) -> bool:
-        """Materialize (to_empty) and load pretrained weights into an already wrapped model.
+        """Load pretrained HF weights into an already-materialized model.
+
+        The caller must have called ``model_to_empty`` before this method.
+
+        Args:
+            init_missing_value_head: If True and ``score.weight`` is missing
+                from the checkpoint, randomly initialize it.  Use this when
+                training a new reward/critic model from a base LM.  Inference
+                callers must NOT set this — a missing score.weight means the
+                checkpoint is wrong and should fail fast.
+            force_init_value_head: Always reinitialize ``score.weight``, even
+                if it exists in the checkpoint.
 
         Returns:
           True on success.
         """
         unwrapped = self._unwrap_model(model)
 
+        missing_keys = set(
+            _load_hf_checkpoint(
+                unwrapped,
+                model_name_or_path,
+                process_group=self._gloo_group,
+            )
+        )
+
+        # Value-head handling: only initialize score.weight when the caller
+        # explicitly opts in.  Inference paths must NOT auto-init a random
+        # reward head — that silently produces garbage scores.
+        if force_init_value_head:
+            self.print("Initializing `score.weight` after HF load (forced reinitialization).")
+            self._init_value_head_after_load(unwrapped)
+            missing_keys.discard("score.weight")
+        elif init_missing_value_head and "score.weight" in missing_keys:
+            self.print("Initializing `score.weight` after HF load (missing from checkpoint).")
+            self._init_value_head_after_load(unwrapped)
+            missing_keys.discard("score.weight")
+
+        if missing_keys:
+            sample_keys = ", ".join(sorted(missing_keys)[:8])
+            raise RuntimeError(
+                "HF checkpoint is missing required keys after FSDP2 materialization: "
+                f"{sample_keys}. Refusing to leave parameters uninitialized."
+            )
+
+        self._post_load_fixup(model, force_cpu_offload=force_cpu_offload)
+        return True
+
+    def _post_load_fixup(self, model: nn.Module, *, force_cpu_offload: bool = False) -> None:
+        """Repair non-persistent state after to_empty() + weight load.
+
+        Handles: tied word embeddings, rotary inv_freq, reward norm buffers.
+        Called by both ``load_hf_checkpoint`` and ``load_dcp_resume``.
+        """
+        unwrapped = self._unwrap_model(model)
+        _fixup_after_load(unwrapped)
+        if self.fsdp2_cpu_offload or force_cpu_offload:
+            self._move_buffers_to_cuda(unwrapped)
+
+    def model_to_empty(self, model: nn.Module, *, force_cpu_offload: bool = False) -> None:
+        """Materialize a meta-init model onto the target device without loading weights.
+
+        Call this before creating the optimizer so that the optimizer binds to
+        the real (materialized) parameter objects.  ``load_dcp_resume`` will
+        then fill the values in-place via ``set_state_dict``.
+        """
+        unwrapped = self._unwrap_model(model)
         load_to_cpu = self.fsdp2_cpu_offload or force_cpu_offload
         device = "cpu" if load_to_cpu else torch.device("cuda", torch.cuda.current_device())
+        unwrapped.to_empty(device=device)
 
-        _load_hf_checkpoint(
-            unwrapped,
-            model_name_or_path,
-            device=device,
+    def load_dcp_resume(
+        self,
+        model: nn.Module,
+        load_dir: str,
+        *,
+        force_cpu_offload: bool = False,
+        load_module_only: bool = False,
+        optimizer=None,
+        scheduler=None,
+    ) -> dict:
+        """Load DCP checkpoint into an already-materialized model.
+
+        The model must have been materialized (e.g. via ``model_to_empty``)
+        before calling this, and the optimizer must have been created after
+        materialization so that it references the correct parameter objects.
+
+        Flow: DCP load (in-place) → fixup.
+        Returns client_state dict.
+        """
+        client_state = _load_dcp_checkpoint(
+            model,
+            load_dir,
+            self._unwrap_model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            load_optimizer_states=not load_module_only,
+            load_lr_scheduler_states=not load_module_only,
+            load_module_only=load_module_only,
             process_group=self._gloo_group,
         )
 
-        if load_to_cpu:
-            self._move_buffers_to_cuda(unwrapped)
-        if init_value_head:
-            self._init_value_head_after_load(unwrapped, value_head_prefix=value_head_prefix)
-        return True
+        self._post_load_fixup(model, force_cpu_offload=force_cpu_offload)
+        return client_state
 
     @torch.no_grad()
     def _move_buffers_to_cuda(self, model: nn.Module) -> None:
@@ -344,14 +427,13 @@ class FSDP2Strategy(ABC):
             buf.data = buf.data.to(device)
 
     @torch.no_grad()
-    def _init_value_head_after_load(self, model: nn.Module, value_head_prefix: str) -> None:
+    def _init_value_head_after_load(self, model: nn.Module) -> None:
         """Initialize value head weights after meta-init materialization."""
-        value_head = getattr(model, value_head_prefix, None)
+        value_head = getattr(model, "score", None)
         if value_head is None or not hasattr(value_head, "weight"):
-            return
+            raise RuntimeError("Reward/Critic model must expose `score.weight` before HF load.")
 
         weight = value_head.weight
-        weight_key = f"{value_head_prefix}.weight"
         if dist.is_initialized() and dist.get_rank() != 0:
             state = {}
         else:
@@ -362,7 +444,7 @@ class FSDP2Strategy(ABC):
             std = 1.0 / float(hidden_size + 1)
             init_weight = torch.empty(shape, device="cpu", dtype=dtype)
             init_weight.normal_(mean=0.0, std=std)
-            state = {weight_key: init_weight}
+            state = {"score.weight": init_weight}
 
         set_model_state_dict(
             model,
@@ -611,30 +693,6 @@ class FSDP2Strategy(ABC):
             optimizer=optimizer,
             scheduler=scheduler,
             client_state=client_state,
-            process_group=self._gloo_group,
-        )
-
-    def load_dcp_checkpoint(
-        self,
-        model,
-        load_dir,
-        load_module_strict=True,
-        load_optimizer_states=True,
-        load_lr_scheduler_states=True,
-        load_module_only=False,
-        optimizer=None,
-        scheduler=None,
-    ):
-        return _load_dcp_checkpoint(
-            model,
-            load_dir,
-            self._unwrap_model,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            load_optimizer_states=load_optimizer_states,
-            load_lr_scheduler_states=load_lr_scheduler_states,
-            load_module_strict=load_module_strict,
-            load_module_only=load_module_only,
             process_group=self._gloo_group,
         )
 

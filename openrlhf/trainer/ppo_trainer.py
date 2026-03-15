@@ -231,13 +231,10 @@ class BasePPOTrainer(ABC):
                 ray.get(self.actor_model_group.async_run_method(method_name="cleanup_old_checkpoints", tag=tag))
 
     def init_checkpoint_states(self) -> Dict:
-        resume_from_path = getattr(self.args, "resume_from_path", None)
-        if resume_from_path:
-            actor_dir = os.path.join(resume_from_path, "dcp_checkpoint", "_actor")
+        if getattr(self.args, "dcp_checkpoint_from_path", None) and getattr(self.args, "resume_training", False):
+            actor_dir = os.path.join(self.args.dcp_checkpoint_from_path, "dcp_checkpoint", "_actor")
             if not os.path.isdir(actor_dir):
-                raise FileNotFoundError(
-                    f"Invalid resume_from_path: expected actor checkpoint directory at {actor_dir}"
-                )
+                raise FileNotFoundError(f"Expected actor checkpoint directory at {actor_dir}")
             checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
                 0
             ]

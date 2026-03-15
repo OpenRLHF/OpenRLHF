@@ -121,6 +121,10 @@ class ReferenceModelActor(BaseModelActor):
             model,
             force_cpu_offload=strategy.args.ref_reward_offload,
         )
+        self.strategy.model_to_empty(
+            self.model,
+            force_cpu_offload=strategy.args.ref_reward_offload,
+        )
         self.strategy.load_hf_checkpoint(
             self.model,
             pretrain,
@@ -158,7 +162,6 @@ class RewardModelActor(BaseModelActor):
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
             torch_dtype=convert_to_torch_dtype(strategy.args.param_dtype),
-            value_head_prefix=strategy.args.value_head_prefix,
             packing_samples=strategy.args.packing_samples,
         )
         strategy.print(model)
@@ -169,12 +172,14 @@ class RewardModelActor(BaseModelActor):
             model,
             force_cpu_offload=strategy.args.ref_reward_offload,
         )
+        self.strategy.model_to_empty(
+            self.model,
+            force_cpu_offload=strategy.args.ref_reward_offload,
+        )
         self.strategy.load_hf_checkpoint(
             self.model,
             pretrain,
             force_cpu_offload=strategy.args.ref_reward_offload,
-            init_value_head=False,
-            value_head_prefix=strategy.args.value_head_prefix,
         )
         strategy.print("mean: {}, std {}".format(getattr(self.model, "mean", None), getattr(self.model, "std", None)))
         self.model.eval()

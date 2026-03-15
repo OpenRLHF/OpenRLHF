@@ -20,8 +20,8 @@ AGENT_FUNC_PATH="examples/python/agent_func.py"
 CKPT_ARGS=(
    --model_name_or_path ${MODEL_PATH}
    # --reward_model_name_or_path ${REWARD_MODEL}
-   # Resume example (explicit step dir, not /dcp_checkpoint):
-   # --resume_from_path /path/to/ckpt/dcp_ckpt/global_step_<N>
+   # Resume example (explicit step dir, not /dcp_checkpoint; add --resume_training to restore optimizer):
+   # --dcp_checkpoint_from_path /path/to/ckpt/dcp_ckpt/global_step_<N> --resume_training
 
    --ckpt_save_path ${SAVE_PATH}
    --save_hf_ckpt

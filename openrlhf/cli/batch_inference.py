@@ -236,7 +236,6 @@ def batch_rm_inference(args):
         normalize_reward=True,
         attn_implementation=args.attn_implementation,
         torch_dtype=convert_to_torch_dtype(args.param_dtype),
-        value_head_prefix=args.value_head_prefix,
     )
 
     # configure tokenizer
@@ -246,12 +245,8 @@ def batch_rm_inference(args):
 
     # prepare models
     model = strategy.apply_parallelism(model)
-    strategy.load_hf_checkpoint(
-        model,
-        args.model_name_or_path,
-        init_value_head=False,
-        value_head_prefix=args.value_head_prefix,
-    )
+    strategy.model_to_empty(model)
+    strategy.load_hf_checkpoint(model, args.model_name_or_path)
     model.eval()
 
     dataset = blending_datasets(
@@ -408,10 +403,6 @@ if __name__ == "__main__":
 
     # Models
     parser.add_argument("--model_name_or_path", type=str, default=None, help="HF pretrain model name or path")
-    parser.add_argument(
-        "--value_head_prefix", type=str, default="value_head", help="value_head prefix for Reward Model"
-    )
-
     # Custom dataset
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--dataset_probs", type=str, default=None)

@@ -20,7 +20,6 @@ class RewardModelProxy:
             normalize_reward=args.normalize_reward,
             attn_implementation=args.attn_implementation,
             torch_dtype=convert_to_torch_dtype(args.param_dtype),
-            value_head_prefix=args.value_head_prefix,
             packing_samples=args.packing_samples,
             device_map="auto",
         )
@@ -73,7 +72,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--reward_model_name_or_path", type=str, default=None, help="HF model name or path")
     parser.add_argument("--normalize_reward", action="store_true", default=False, help="Enable Reward Normalization")
-    parser.add_argument("--value_head_prefix", type=str, default="score")
     parser.add_argument("--max_len", type=int, default=2048)
 
     parser.add_argument("--port", type=int, default=5000, help="Port number for the server")

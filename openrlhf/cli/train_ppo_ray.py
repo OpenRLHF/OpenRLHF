@@ -280,10 +280,16 @@ if __name__ == "__main__":
         help="Maximum checkpoints to keep. Use -1 to keep all checkpoints; value must be -1 or a positive integer.",
     )
     parser.add_argument(
-        "--resume_from_path",
+        "--dcp_checkpoint_from_path",
         type=str,
         default=None,
-        help="Resume training from an explicit step directory (must contain dcp_checkpoint).",
+        help="Load weights from an explicit step directory (must contain dcp_checkpoint).",
+    )
+    parser.add_argument(
+        "--resume_training",
+        action="store_true",
+        default=False,
+        help="Also restore optimizer, scheduler, and consumed_samples from --dcp_checkpoint_from_path.",
     )
 
     # FSDP2
@@ -475,7 +481,12 @@ if __name__ == "__main__":
     parser.add_argument("--reward_model_name_or_path", type=str, default=None, help="HF model name or path")
     parser.add_argument("--remote_rm_url", type=str, default=None, help="remote RM API (HTTP)")
     parser.add_argument("--critic_model_name_or_path", type=str, default=None, help="HF model name or path")
-    parser.add_argument("--value_head_prefix", type=str, default="score")
+    parser.add_argument(
+        "--force_init_value_head",
+        action="store_true",
+        default=False,
+        help="Always reinitialize score.weight after HF load for critic models.",
+    )
     parser.add_argument("--ref_reward_offload", action="store_true", default=False)
     parser.add_argument("--agent_func_path", type=str, default=None, help="Agent script path")
 

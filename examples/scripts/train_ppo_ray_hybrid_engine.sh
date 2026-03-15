@@ -1,7 +1,7 @@
 set -x
 
-# Resume example (explicit step dir, not /dcp_checkpoint):
-# --resume_from_path /path/to/ckpt/dcp_ckpt/global_step_<N>
+# Resume example (explicit step dir, not /dcp_checkpoint; add --resume_training to restore optimizer):
+# --dcp_checkpoint_from_path /path/to/ckpt/dcp_ckpt/global_step_<N> --resume_training
 python3 -m openrlhf.cli.train_ppo_ray \
    --ref_num_nodes 1 \
    --ref_num_gpus_per_node 8 \

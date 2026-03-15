@@ -11,6 +11,17 @@ from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
 logger = init_logger(__name__)
 
 
+def _init_value_head(model, config):
+    """Set up score head and reward normalization buffers on a model instance."""
+    model.score = nn.Linear(config.hidden_size, 1, bias=False)
+    model.normalize_reward = config.normalize_reward
+    model.register_buffer("mean", torch.zeros(1), persistent=False)
+    model.register_buffer("std", torch.ones(1), persistent=False)
+    if not getattr(model.mean, "is_meta", False):
+        model.mean.fill_(float(getattr(config, "mean", 0.0)))
+        model.std.fill_(float(getattr(config, "std", 1.0)))
+
+
 # Construct transformer with a value head for sequence classification.
 # https://github.com/huggingface/transformers/blob/405b56269812056d9593869e22b7b264d806cb1e/src/transformers/models/llama/modeling_llama.py#L1254
 def get_llm_for_sequence_regression(
@@ -21,7 +32,6 @@ def get_llm_for_sequence_regression(
     device_map: Optional[str] = "meta",
     normalize_reward=False,
     attn_implementation="flash_attention_2",
-    value_head_prefix="score",
     packing_samples=False,
 ) -> nn.Module:
     """Build a sequence-regression model.
@@ -37,17 +47,14 @@ def get_llm_for_sequence_regression(
     config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
     config.normalize_reward = normalize_reward
     config._attn_implementation = attn_implementation
-
-    # Prioritize using the value_head_prefix in the model configuration.
-    value_head_prefix = getattr(config, "value_head_prefix", value_head_prefix)
-    logger.info(f"set value_head_prefix to `{value_head_prefix}`")
+    config.value_head_prefix = "score"
 
     base_class = AutoModel._model_mapping[type(config)]
     base_pretrained_class = base_class.__base__
     if model_type == "reward":
-        cls_class = _get_reward_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
+        cls_class = _get_reward_model(base_pretrained_class, base_class, packing_samples)
     else:
-        cls_class = _get_critic_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
+        cls_class = _get_critic_model(base_pretrained_class, base_class, packing_samples)
 
     if device_map == "meta":
         with torch.device("meta"):
@@ -60,10 +67,23 @@ def get_llm_for_sequence_regression(
         }
         if device_map is not None:
             load_kwargs["device_map"] = device_map
-        model = cls_class.from_pretrained(
+        model, loading_info = cls_class.from_pretrained(
             model_name_or_path,
+            output_loading_info=True,
             **load_kwargs,
         )
+        # Fail-fast: if the checkpoint is missing keys, HF from_pretrained
+        # silently random-inits them.  For reward/critic models this means a
+        # random score head producing garbage.  Refuse to continue.
+        missing = set(loading_info.get("missing_keys", []))
+        if missing:
+            sample = ", ".join(sorted(missing)[:8])
+            raise RuntimeError(
+                f"{model_type} checkpoint '{model_name_or_path}' is missing "
+                f"required keys: {sample}. Refusing to run with uninitialized "
+                f"weights. For FSDP2 training from a base LM, use "
+                f"device_map='meta' and load_hf_checkpoint(init_missing_value_head=True)."
+            )
 
     model_config = model.config.to_dict()
     if "output_router_logits" in model_config:
@@ -76,30 +96,22 @@ def get_llm_for_sequence_regression(
     return model
 
 
-def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="score", packing_samples=False):
+def _get_reward_model(base_pretrained_model, base_llm_model, packing_samples=False):
     class RewardModel(base_pretrained_model):
         supports_gradient_checkpointing = True
 
         def __init__(self, config: AutoConfig):
             super().__init__(config)
             setattr(self, self.base_model_prefix, base_llm_model(config))
-
-            self.value_head_prefix = value_head_prefix
-            setattr(self, value_head_prefix, nn.Linear(config.hidden_size, 1, bias=False))
-
             self.packing_samples = packing_samples
-            self.normalize_reward = config.normalize_reward
-            self.register_buffer("mean", torch.zeros(1), persistent=False)
-            self.register_buffer("std", torch.ones(1), persistent=False)
-            self.reset_buffers()
+            _init_value_head(self, config)
             self.post_init()
 
         def reset_buffers(self):
-            """Reset non-persistent buffers from config (analogous to reset_parameters)."""
-            if getattr(self.mean, "is_meta", False):
-                return
-            self.mean.fill_(float(getattr(self.config, "mean", 0.0)))
-            self.std.fill_(float(getattr(self.config, "std", 1.0)))
+            """Refresh GPU buffers from current config values."""
+            if not getattr(self.mean, "is_meta", False):
+                self.mean.fill_(float(getattr(self.config, "mean", 0.0)))
+                self.std.fill_(float(getattr(self.config, "std", 1.0)))
 
         def forward(
             self,
@@ -128,7 +140,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             )
             last_hidden_states = outputs["last_hidden_state"]
 
-            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
+            values = self.score(last_hidden_states).squeeze(-1)
 
             if self.packing_samples:
                 values = gather_and_pad_tensor(values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
@@ -142,30 +154,22 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
     return RewardModel
 
 
-def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="score", packing_samples=False):
+def _get_critic_model(base_pretrained_model, base_llm_model, packing_samples=False):
     class CriticModel(base_pretrained_model):
         supports_gradient_checkpointing = True
 
         def __init__(self, config: AutoConfig):
             super().__init__(config)
             setattr(self, self.base_model_prefix, base_llm_model(config))
-
-            self.value_head_prefix = value_head_prefix
-            setattr(self, value_head_prefix, nn.Linear(config.hidden_size, 1, bias=False))
-
             self.packing_samples = packing_samples
-            self.normalize_reward = config.normalize_reward
-            self.register_buffer("mean", torch.zeros(1), persistent=False)
-            self.register_buffer("std", torch.ones(1), persistent=False)
-            self.reset_buffers()
+            _init_value_head(self, config)
             self.post_init()
 
         def reset_buffers(self):
-            """Reset non-persistent buffers from config (analogous to reset_parameters)."""
-            if getattr(self.mean, "is_meta", False):
-                return
-            self.mean.fill_(float(getattr(self.config, "mean", 0.0)))
-            self.std.fill_(float(getattr(self.config, "std", 1.0)))
+            """Refresh GPU buffers from current config values."""
+            if not getattr(self.mean, "is_meta", False):
+                self.mean.fill_(float(getattr(self.config, "mean", 0.0)))
+                self.std.fill_(float(getattr(self.config, "std", 1.0)))
 
         def forward(
             self,
@@ -198,7 +202,7 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 return outputs
 
             last_hidden_states = outputs["last_hidden_state"]
-            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)  # (1, total_seqs)
+            values = self.score(last_hidden_states).squeeze(-1)  # (1, total_seqs)
 
             if self.packing_samples:
                 values = gather_and_pad_tensor(values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)

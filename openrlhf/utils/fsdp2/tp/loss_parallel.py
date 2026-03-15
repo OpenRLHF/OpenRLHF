@@ -164,6 +164,14 @@ def compute_entropy_sharded(logits: DTensor) -> torch.Tensor:
         @staticmethod
         def backward(ctx, grad_out: torch.Tensor):  # type: ignore[override]
             local_probs, local_log_probs, entropy = ctx.saved_tensors
+            # Derivation of ∂H/∂x_j where H = -Σ_i p_i log(p_i), p_i = softmax(x)_i:
+            #   ∂p_i/∂x_j = p_i(δ_ij - p_j)
+            #   ∂H/∂x_j   = -Σ_i (∂p_i/∂x_j)(1 + log p_i)
+            #              = -Σ_i p_i(δ_ij - p_j)(1 + log p_i)
+            #              = -p_j(1 + log p_j) + p_j·Σ_i p_i(1 + log p_i)
+            #              = -p_j(1 + log p_j) + p_j·(1 - H)
+            #              = -p_j·(H + log p_j)
+            #
             # dH/dx_i = -p_i * (H + log(p_i)), derived from d/dx[-sum(p*log(p))]
             grad_local_logits = grad_out.unsqueeze(-1) * (-local_probs * (entropy.unsqueeze(-1) + local_log_probs))
             return grad_local_logits, None

@@ -6,8 +6,7 @@ Usage:
         --model_type critic \
         --model_name_or_path Qwen/Qwen2.5-Math-7B \
         --ckpt_path ./ckpt/dcp_ckpt/global_step_100/dcp_checkpoint/_critic \
-        --output_dir ./output/critic_hf \
-        --value_head_prefix score
+        --output_dir ./output/critic_hf
 
     # Convert an actor checkpoint:
     torchrun --nproc_per_node=8 -m openrlhf.cli.convert_dcp_to_hf \
@@ -35,7 +34,6 @@ def convert(args):
             normalize_reward=args.normalize_reward,
             attn_implementation=args.attn_implementation,
             torch_dtype=convert_to_torch_dtype("fp32"),
-            value_head_prefix=args.value_head_prefix,
             packing_samples=args.packing_samples,
         )
     else:
@@ -49,31 +47,13 @@ def convert(args):
     # 2. FSDP2 prepare (TP + FSDP sharding)
     model = strategy.apply_parallelism(model)
 
-    # 3. Materialize parameters by loading base HF weights.
-    if args.model_type == "critic":
-        strategy.load_hf_checkpoint(
-            model,
-            args.model_name_or_path,
-            init_value_head=True,
-            value_head_prefix=args.value_head_prefix,
-        )
-    else:
-        strategy.load_hf_checkpoint(model, args.model_name_or_path)
-
-    # 4. Load DCP model weights (skip optimizer/scheduler).
-    strategy.load_dcp_checkpoint(
-        model,
-        args.ckpt_path,
-        load_module_only=True,
-    )
+    # 3. Materialize and load DCP checkpoint directly (skip redundant HF load).
+    strategy.model_to_empty(model)
+    strategy.load_dcp_resume(model, args.ckpt_path, load_module_only=True)
     strategy.print(f"Loaded DCP checkpoint: {args.ckpt_path}")
 
-    # 5. Save value_head_prefix in config so from_pretrained can find it (critic only)
+    # 5. Save as HF safetensors
     unwrapped = strategy._unwrap_model(model)
-    if args.model_type == "critic":
-        unwrapped.config.value_head_prefix = args.value_head_prefix
-
-    # 6. Save as HF safetensors
     tokenizer = get_tokenizer(args.model_name_or_path, unwrapped, "left", strategy)
     strategy.save_hf_checkpoint(model, tokenizer, args.output_dir)
     strategy.print(f"Saved HF checkpoint to {args.output_dir}")
@@ -101,7 +81,6 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", type=str, required=True, help="HF output directory")
 
     # Model options
-    parser.add_argument("--value_head_prefix", type=str, default="score", help="Value head name (critic only).")
     parser.add_argument("--normalize_reward", action="store_true", default=False, help="Enable reward normalization")
     parser.add_argument("--packing_samples", action="store_true", default=False, help="Enable packing samples")
 

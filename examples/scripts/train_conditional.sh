@@ -40,8 +40,8 @@ openrlhf.cli.train_sft \
     --learning_rate 5e-6 \
     --gradient_checkpointing
 EOF
-# Resume example (explicit step dir, not /dcp_checkpoint):
-# --resume_from_path /path/to/ckpt/dcp_ckpt/global_step_<N>
+# Resume example (explicit step dir, not /dcp_checkpoint; add --resume_training to restore optimizer):
+# --dcp_checkpoint_from_path /path/to/ckpt/dcp_ckpt/global_step_<N> --resume_training
 
 if [ ! -e $RM_OUTPUT ]; then
     torchrun --standalone --nproc-per-node ${NPROC_PER_NODE:-8} -m $get_rewards_commands

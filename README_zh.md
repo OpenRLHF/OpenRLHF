@@ -265,7 +265,7 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 
 **生产特性**
 - Wandb（`--use_wandb`）和 TensorBoard（`--use_tensorboard`）日志
-- 检查点恢复（`--resume_from_path`、`--ckpt_save_path`、`--save_steps`；要启用周期性 checkpoint 请设置 `--save_steps > 0`；`--resume_from_path` 必须指向显式 step 目录，例如 `/path/to/ckpt/dcp_ckpt/global_step_100`）
+- 检查点恢复（`--dcp_checkpoint_from_path`、`--resume_training`、`--ckpt_save_path`、`--save_steps`；要启用周期性 checkpoint 请设置 `--save_steps > 0`；`--dcp_checkpoint_from_path` 必须指向显式 step 目录，例如 `/path/to/ckpt/dcp_ckpt/global_step_100`；加 `--resume_training` 可同时恢复 optimizer/scheduler 状态）
 - 评估数据集（`--eval_dataset`）
 
 </details>

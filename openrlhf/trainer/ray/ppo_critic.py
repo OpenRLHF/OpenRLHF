@@ -163,14 +163,12 @@ class CriticModelActor(BaseModelActor):
         self.disable_fsdp2_ckpt = args.disable_fsdp2_ckpt
 
         self._setup_distributed(strategy)
-        init_value_head = strategy.args.model_name_or_path == strategy.args.critic_model_name_or_path
         critic = get_llm_for_sequence_regression(
             pretrain,
             "critic",
             normalize_reward=strategy.args.normalize_reward,
             attn_implementation=strategy.args.attn_implementation,
             torch_dtype=torch.float32,
-            value_head_prefix=strategy.args.value_head_prefix,
             packing_samples=strategy.args.packing_samples,
         )
         strategy.print(critic)
@@ -184,12 +182,15 @@ class CriticModelActor(BaseModelActor):
 
         # Wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
         critic = strategy.apply_parallelism(critic)
-        strategy.load_hf_checkpoint(
-            critic,
-            pretrain,
-            init_value_head=init_value_head,
-            value_head_prefix=strategy.args.value_head_prefix,
-        )
+        dcp_checkpoint_from_path = getattr(args, "dcp_checkpoint_from_path", None)
+        strategy.model_to_empty(critic)
+        if not dcp_checkpoint_from_path:
+            strategy.load_hf_checkpoint(
+                critic,
+                pretrain,
+                init_missing_value_head=True,
+                force_init_value_head=strategy.args.force_init_value_head,
+            )
 
         # configure optimizer (after model wrapping for FSDP2)
         critic_optim = strategy.create_optimizer(
@@ -210,22 +211,20 @@ class CriticModelActor(BaseModelActor):
         self.critic_scheduler = critic_scheduler
 
         # load checkpoint
-        resume_from_path = getattr(args, "resume_from_path", None)
-        if resume_from_path:
-            actor_dir = os.path.join(resume_from_path, "dcp_checkpoint", "_actor")
-            if not os.path.isdir(actor_dir):
-                raise FileNotFoundError(
-                    f"Invalid resume_from_path: expected actor checkpoint directory at {actor_dir}"
-                )
-            critic_dir = os.path.join(resume_from_path, "dcp_checkpoint", "_critic")
+        if getattr(args, "resume_training", False) and not dcp_checkpoint_from_path:
+            raise ValueError("--resume_training requires --dcp_checkpoint_from_path.")
+        if dcp_checkpoint_from_path:
+            critic_dir = os.path.join(dcp_checkpoint_from_path, "dcp_checkpoint", "_critic")
             if not os.path.isdir(critic_dir):
-                raise FileNotFoundError(
-                    f"Invalid resume_from_path: expected critic checkpoint directory at {critic_dir}"
+                raise FileNotFoundError(f"Expected critic checkpoint directory at {critic_dir}")
+            if args.resume_training:
+                strategy.print(f"Resuming critic training from: {critic_dir}")
+                strategy.load_dcp_resume(
+                    self.critic, critic_dir, optimizer=self.critic_optim, scheduler=self.critic_scheduler
                 )
-            strategy.print(f"Loading critic checkpoint: {critic_dir}")
-            strategy.load_dcp_checkpoint(
-                self.critic, critic_dir, optimizer=self.critic_optim, scheduler=self.critic_scheduler
-            )
+            else:
+                strategy.print(f"Loading critic model weights only from: {critic_dir}")
+                strategy.load_dcp_resume(self.critic, critic_dir, load_module_only=True)
 
         # initial offload
         if strategy.args.fsdp2_enable_sleep:

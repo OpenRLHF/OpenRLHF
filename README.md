@@ -264,7 +264,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 
 **Production Features**
 - Wandb (`--use_wandb`) and TensorBoard (`--use_tensorboard`) logging
-- Checkpoint recovery (`--resume_from_path`, `--ckpt_save_path`, `--save_steps`; set `--save_steps > 0` for periodic checkpoints; `--resume_from_path` must be an explicit step directory like `/path/to/ckpt/dcp_ckpt/global_step_100`)
+- Checkpoint recovery (`--dcp_checkpoint_from_path`, `--resume_training`, `--ckpt_save_path`, `--save_steps`; set `--save_steps > 0` for periodic checkpoints; `--dcp_checkpoint_from_path` must be an explicit step directory like `/path/to/ckpt/dcp_ckpt/global_step_100`; add `--resume_training` to also restore optimizer/scheduler state)
 - Evaluation datasets (`--eval_dataset`)
 
 </details>

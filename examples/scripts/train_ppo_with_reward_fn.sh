@@ -9,8 +9,8 @@
 
 set -x 
 
-# Resume example (explicit step dir, not /dcp_checkpoint):
-# --resume_from_path /path/to/ckpt/dcp_ckpt/global_step_<N>
+# Resume example (explicit step dir, not /dcp_checkpoint; add --resume_training to restore optimizer):
+# --dcp_checkpoint_from_path /path/to/ckpt/dcp_ckpt/global_step_<N> --resume_training
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{"working_dir": "/openrlhf"}' \
    -- python3 -m openrlhf.cli.train_ppo_ray \

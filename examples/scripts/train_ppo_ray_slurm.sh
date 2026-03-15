@@ -50,8 +50,8 @@ done
 sleep 30s
 
 # ===== submit ray job =====
-# Resume example (explicit step dir, not /dcp_checkpoint):
-# --resume_from_path /path/to/ckpt/dcp_ckpt/global_step_<N>
+# Resume example (explicit step dir, not /dcp_checkpoint; add --resume_training to restore optimizer):
+# --dcp_checkpoint_from_path /path/to/ckpt/dcp_ckpt/global_step_<N> --resume_training
 # Job start
 srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" bash -c \
 "pip install ray[default]==$RAY_VERSION \

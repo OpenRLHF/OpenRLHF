@@ -455,12 +455,17 @@ class PolicyModelActor(BaseModelActor):
         if ema_model:
             ema_model = strategy.apply_parallelism(ema_model, force_cpu_offload=True)
 
-        strategy.load_hf_checkpoint(actor, pretrain)
-
-        # Materialize EMA storage and initialize from actor weights (avoid double IO).
+        dcp_checkpoint_from_path = getattr(args, "dcp_checkpoint_from_path", None)
+        strategy.model_to_empty(actor)
         if ema_model is not None:
-            strategy._unwrap_model(ema_model).to_empty(device="cpu")
-            moving_average_fsdp2(actor, ema_model, strategy._unwrap_model, beta=0.0)
+            strategy.model_to_empty(ema_model, force_cpu_offload=True)
+
+        if not dcp_checkpoint_from_path:
+            strategy.load_hf_checkpoint(actor, pretrain)
+
+            # Initialize EMA from actor weights (avoid double IO).
+            if ema_model is not None:
+                moving_average_fsdp2(actor, ema_model, strategy._unwrap_model, beta=0.0)
 
         # configure optimizer (after model wrapping for FSDP2)
         actor_optim = strategy.create_optimizer(
@@ -482,31 +487,28 @@ class PolicyModelActor(BaseModelActor):
 
         # load checkpoint
         self.checkpoint_states = {}
-        resume_from_path = getattr(args, "resume_from_path", None)
-        if resume_from_path:
-            actor_dir = os.path.join(resume_from_path, "dcp_checkpoint", "_actor")
+        if getattr(args, "resume_training", False) and not dcp_checkpoint_from_path:
+            raise ValueError("--resume_training requires --dcp_checkpoint_from_path.")
+        if dcp_checkpoint_from_path:
+            actor_dir = os.path.join(dcp_checkpoint_from_path, "dcp_checkpoint", "_actor")
             if not os.path.isdir(actor_dir):
-                raise FileNotFoundError(
-                    f"Invalid resume_from_path: expected actor checkpoint directory at {actor_dir}"
+                raise FileNotFoundError(f"Expected actor checkpoint directory at {actor_dir}")
+            if args.resume_training:
+                strategy.print(f"Resuming actor training from: {actor_dir}")
+                self.checkpoint_states = strategy.load_dcp_resume(
+                    self.actor, actor_dir, optimizer=self.actor_optim, scheduler=self.actor_scheduler
                 )
-            strategy.print(f"Loading actor checkpoint: {actor_dir}")
-            states = strategy.load_dcp_checkpoint(
-                self.actor.model, actor_dir, optimizer=self.actor_optim, scheduler=self.actor_scheduler
-            )
-            self.checkpoint_states = states
+            else:
+                strategy.print(f"Loading actor model weights only from: {actor_dir}")
+                strategy.load_dcp_resume(self.actor, actor_dir, load_module_only=True)
             if args.enable_ema and self.ema_model is not None:
-                ema_dir = os.path.join(resume_from_path, "dcp_checkpoint", "_ema")
+                ema_dir = os.path.join(dcp_checkpoint_from_path, "dcp_checkpoint", "_ema")
                 if not os.path.isdir(ema_dir):
-                    raise FileNotFoundError(
-                        f"Invalid resume_from_path: expected EMA checkpoint directory at {ema_dir}"
-                    )
-                strategy.print(f"Loading EMA checkpoint: {ema_dir}")
-                strategy.load_dcp_checkpoint(
-                    self.ema_model.model,
-                    ema_dir,
-                    load_module_only=True,
-                    load_optimizer_states=False,
-                    load_lr_scheduler_states=False,
+                    raise FileNotFoundError(f"Expected EMA checkpoint directory at {ema_dir}")
+                strategy.print(f"Loading EMA model weights from: {ema_dir}")
+                strategy.load_dcp_resume(
+                    self.ema_model, ema_dir,
+                    load_module_only=True, force_cpu_offload=True,
                 )
 
         # initial offload

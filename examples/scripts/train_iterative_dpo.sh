@@ -86,8 +86,8 @@ openrlhf.cli.train_dpo \
    --learning_rate 5e-7 \
    --gradient_checkpointing
 EOF
-   # Resume example (explicit step dir, not /dcp_checkpoint):
-   # --resume_from_path /path/to/ckpt/dcp_ckpt/global_step_<N>
+   # Resume example (explicit step dir, not /dcp_checkpoint; add --resume_training to restore optimizer):
+   # --dcp_checkpoint_from_path /path/to/ckpt/dcp_ckpt/global_step_<N> --resume_training
    echo $dpo_commands
    torchrun --standalone --nproc-per-node ${NPROC_PER_NODE:-8} -m $dpo_commands
    checkSuccess "DPO"
