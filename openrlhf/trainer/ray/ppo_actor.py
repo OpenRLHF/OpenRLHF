@@ -507,8 +507,10 @@ class PolicyModelActor(BaseModelActor):
                     raise FileNotFoundError(f"Expected EMA checkpoint directory at {ema_dir}")
                 strategy.print(f"Loading EMA model weights from: {ema_dir}")
                 strategy.load_dcp_resume(
-                    self.ema_model, ema_dir,
-                    load_module_only=True, force_cpu_offload=True,
+                    self.ema_model,
+                    ema_dir,
+                    load_module_only=True,
+                    force_cpu_offload=True,
                 )
 
         # initial offload

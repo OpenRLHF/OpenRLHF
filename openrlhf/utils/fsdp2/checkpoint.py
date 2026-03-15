@@ -189,7 +189,6 @@ def _load_hf_checkpoint(
 
         hf_dir = snapshot_download(repo_id=model_name_or_path, repo_type="model")
 
-
     if not any(f.endswith(".safetensors") for f in os.listdir(hf_dir)):
         raise FileNotFoundError(f"No .safetensors files found under: {hf_dir}")
 
