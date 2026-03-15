@@ -9,6 +9,22 @@ from openrlhf.utils import convert_to_torch_dtype, get_tokenizer
 _TRANSFORMERS_V5 = int(transformers.__version__.split(".")[0]) >= 5
 
 
+def _update_history_after_response(
+    user_prompt: str,
+    conversations: list[dict[str, str]] | None,
+    response: str,
+    *,
+    apply_chat_template: bool,
+) -> tuple[str, list[dict[str, str]] | None]:
+    if apply_chat_template:
+        if conversations is None:
+            raise ValueError("conversations must be initialized when apply_chat_template is enabled")
+        conversations.append({"role": "assistant", "content": response})
+        return user_prompt, conversations
+
+    return user_prompt + response, conversations
+
+
 def generate(args):
     # dummy strategy
     class Empty:
@@ -38,8 +54,7 @@ def generate(args):
     else:
         user_prompt = ""
 
-    if args.apply_chat_template:
-        conversations = []
+    conversations = [] if args.apply_chat_template else None
 
     while True:
         inputs = input("Please enter a prompt (or type 'exit' to quit): ")
@@ -93,8 +108,12 @@ def generate(args):
             response = tokenizer.batch_decode(
                 generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
             )[0]
-        if args.apply_chat_template:
-            conversations.append({"role": "assistant", "content": response})
+        user_prompt, conversations = _update_history_after_response(
+            user_prompt,
+            conversations,
+            response,
+            apply_chat_template=args.apply_chat_template,
+        )
 
         print(response)
 
