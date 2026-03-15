@@ -10,7 +10,7 @@ import torch
 from tqdm import tqdm
 from vllm import SamplingParams
 
-from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
+from openrlhf.models.utils import compute_approx_kl, masked_mean, reward_with_kl_penalty
 from openrlhf.trainer.ppo_utils.length_penalty import apply_length_penalties
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
@@ -366,24 +366,26 @@ class SamplesGenerator:
             temperature=generate_kwargs.get("temperature", 1.0),
             top_p=generate_kwargs.get("top_p", 1.0),
             top_k=generate_kwargs.get("top_k", -1),
-            max_tokens=generate_kwargs.get("max_new_tokens", 1024),
+            max_tokens=generate_kwargs.get("max_new_tokens"),
             min_tokens=generate_kwargs.get("min_new_tokens", 1),
             skip_special_tokens=generate_kwargs.get("skip_special_tokens", False),
             logprobs=1 if self.args.enable_vllm_is_correction else None,
         )
-        truncate_length = generate_kwargs.get("prompt_max_len", 1024) + generate_kwargs.get("max_new_tokens", 1024)
+        truncate_length = generate_kwargs.get("max_len", 2048)
 
         # Snapshot current pending rollout counts to balance upcoming work.
         pending_counts = ray.get([engine.get_num_unfinished_requests.remote() for engine in self.vllm_engines])
         engine_heap = [(count, idx) for idx, count in enumerate(pending_counts)]
         heapq.heapify(engine_heap)
 
+        n_samples_per_prompt = generate_kwargs.get("n_samples_per_prompt", self.args.n_samples_per_prompt)
+
         # Pre-compute engine assignment to keep loads even.
         engine_indices = []
         for _ in prompts:
             current_load, engine_idx = heapq.heappop(engine_heap)
             engine_indices.append(engine_idx)
-            heapq.heappush(engine_heap, (current_load + self.args.n_samples_per_prompt, engine_idx))
+            heapq.heappush(engine_heap, (current_load + n_samples_per_prompt, engine_idx))
 
         refs = []
         for idx, (prompt, label) in enumerate(zip(prompts, labels)):
@@ -395,7 +397,8 @@ class SamplesGenerator:
                 sampling_params=sampling_params,
                 max_length=truncate_length,
                 hf_tokenizer=self.tokenizer,
-                num_samples=self.args.n_samples_per_prompt,
+                num_samples=n_samples_per_prompt,
+                max_tool_response_length=generate_kwargs.get("max_tool_response_length"),
             )
             refs.append(ref)
 
@@ -403,7 +406,7 @@ class SamplesGenerator:
 
     def _process_response_into_experience(self, response, **generate_kwargs) -> Experience:
         """Turn a single vLLM response into an Experience."""
-        truncate_length = generate_kwargs.get("prompt_max_len", 1024) + generate_kwargs.get("max_new_tokens", 1024)
+        truncate_length = generate_kwargs.get("max_len", 2048)
 
         # Base rollout fields from the output.
         tokenized_observation = response["observation_tokens"].copy()
@@ -429,20 +432,16 @@ class SamplesGenerator:
         else:
             rollout_log_probs = None
 
-        # Collect simple stats about lengths and clipping.
-        ones_indices = torch.where(action_mask)[0]
-        response_length = (ones_indices[-1] - ones_indices[0] + 1).item() if len(ones_indices) else 0
+        response_length = action_mask.sum().item()
+
         total_length = attention_mask.float().sum()
         is_clipped = total_length >= truncate_length
-
-        # Check if response was truncated (hit max_tokens limit, finish_reason == "length")
-        is_truncated = response.get("truncated", False)
 
         info = {
             "response_length": torch.tensor([response_length]),
             "total_length": torch.tensor([total_length]),
             "response_clip_ratio": torch.tensor([is_clipped]),
-            "truncated": torch.tensor([is_truncated]),
+            "is_truncated": torch.tensor([response.get("is_truncated", is_clipped)], dtype=torch.float),
         }
         if reward_val is not None:
             info["reward"] = torch.tensor([reward_val])
@@ -463,8 +462,8 @@ class SamplesGenerator:
             rollout_log_probs=rollout_log_probs.unsqueeze(0) if rollout_log_probs is not None else None,
             prompts=[response["prompt"]],
             labels=[response["label"]],
-            rewards=torch.tensor([reward_val]) if reward_val is not None else None,
-            scores=torch.tensor([score_val]) if score_val is not None else None,
+            rewards=torch.tensor([reward_val], dtype=torch.float32) if reward_val is not None else None,
+            scores=torch.tensor([score_val], dtype=torch.float32) if score_val is not None else None,
             info=info,
         )
 
@@ -504,14 +503,14 @@ class RemoteExperienceMaker:
             effective_actor_num = (
                 self.args.actor_num_nodes
                 * self.args.actor_num_gpus_per_node
-                // self.args.ring_attn_size
-                // self.args.ds_tensor_parallel_size
+                // self.args.fsdp2_cp_size
+                // self.args.fsdp2_tp_size
             )
             minimum_batch_num = get_minimum_num_micro_batch_size(
                 total_lengths,
                 self.args.rollout_max_tokens_per_gpu,
-                self.args.ring_attn_size,
-                self.args.ds_tensor_parallel_size,
+                self.args.fsdp2_cp_size,
+                self.args.fsdp2_tp_size,
             )
             minimum_batch_num = minimum_batch_num // effective_actor_num * effective_actor_num
             num_batch = max(minimum_batch_num, effective_actor_num)
@@ -585,6 +584,14 @@ class RemoteExperienceMaker:
             ray.get(r_refs)
             ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
 
+        # Hybrid engine (colocated vLLM + FSDP2): reload actor/critic to GPU before computing
+        # logprobs/values. Note: reference/reward models are prepared via prepare(..., cpu_offload=...).
+        if self.args.fsdp2_enable_sleep:
+            reload_refs = self.actor_model_group.async_run_method(method_name="reload_model")
+            if self.critic_model_group is not None:
+                reload_refs.extend(self.critic_model_group.async_run_method(method_name="reload_model"))
+            ray.get(reload_refs)
+
         # Batch call actor model
         action_log_probs_ref = self.actor_model_group.async_run_method_batch(
             method_name="forward",
@@ -614,7 +621,7 @@ class RemoteExperienceMaker:
                 ray.get(value_ref)
                 ray.get(self.critic_model_group.async_run_method(method_name="empty_cache"))
         else:
-            value_ref = ray.put([[None]] * (len(samples_list) * args.ring_attn_size * args.ds_tensor_parallel_size))
+            value_ref = ray.put([[None]] * (len(samples_list) * args.fsdp2_cp_size * args.fsdp2_tp_size))
 
         # Batch call initial model
         if self.initial_model_group is not None:
@@ -630,13 +637,13 @@ class RemoteExperienceMaker:
                 ray.get(self.initial_model_group.async_run_method(method_name="empty_cache"))
         else:
             base_action_log_probs_ref = ray.put(
-                [[None]] * (len(samples_list) * args.ring_attn_size * args.ds_tensor_parallel_size)
+                [[None]] * (len(samples_list) * args.fsdp2_cp_size * args.fsdp2_tp_size)
             )
 
         # Wait for all remote calls to complete and flatten the results
-        # Note: the results duplicated ring_attn_size * ds_tensor_parallel_size times
+        # Note: the results duplicated cp_size * tp_size times
         # This is because the actors in ring group and tp group will return the same output
-        duplicate_factor = args.ring_attn_size * args.ds_tensor_parallel_size
+        duplicate_factor = args.fsdp2_cp_size * args.fsdp2_tp_size
         action_log_probs_list = sum(ray.get(action_log_probs_ref)[::duplicate_factor], [])
         base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref)[::duplicate_factor], [])
         value_list = sum(ray.get(value_ref)[::duplicate_factor], [])
@@ -703,7 +710,7 @@ class RemoteExperienceMaker:
         """
         args = self.strategy.args
 
-        # Apply length penalties (DAPO overlong / ProRL stop properly) - BEFORE dynamic indices processing
+        # Apply length penalties (DAPO overlong) - BEFORE dynamic indices processing
         apply_length_penalties(experiences, args)
 
         # get rewards from experiences
@@ -739,7 +746,7 @@ class RemoteExperienceMaker:
 
         # calculate return and advantages
         for experience, reward in zip(experiences, rewards):
-            reward = compute_reward(
+            reward = reward_with_kl_penalty(
                 reward,
                 self.kl_ctl.value,
                 experience.kl,
@@ -791,6 +798,9 @@ class RemoteExperienceMaker:
             advantages_vector = torch.cat(all_advantages, dim=0).float()
             action_masks_vector = torch.cat(all_action_masks, dim=0)
             num_actions = action_masks_vector.sum()
+            if num_actions.item() <= 0:
+                logger.warning("All action masks are zero. Skip advantage normalization.")
+                return experiences
 
             # mean
             mean = (advantages_vector * action_masks_vector).sum() / num_actions

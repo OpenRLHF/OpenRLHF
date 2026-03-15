@@ -224,7 +224,7 @@ class AgentExecutor(AgentExecutorBase):
                             "role": "assistant",
                             "content": generated_text,
                         },
-                        "finish_reason": "stop",
+                        "finish_reason": request_output.outputs[0].finish_reason or "stop",
                         "logprobs": {"content": generated_logprobs_list},
                     }
                 ],
@@ -322,7 +322,15 @@ class AgentExecutor(AgentExecutorBase):
         logger.info("NeMo Gym services configuration completed")
 
     async def execute(
-        self, prompt: str, label: str, sampling_params: SamplingParams, max_length: int, llm_engine, hf_tokenizer
+        self,
+        prompt: str,
+        label: str,
+        sampling_params: SamplingParams,
+        max_length: int,
+        llm_engine,
+        hf_tokenizer,
+        *,
+        max_tool_response_length=None,
     ):
         """
         Execute a single rollout for the given prompt and collect results.
@@ -385,6 +393,8 @@ class AgentExecutor(AgentExecutorBase):
         # Convert to expected format
         observation_tokens = torch.tensor(observation_tokens, dtype=torch.long).tolist()
 
+        finish_reason = response_output.get("finish_reason", "stop")
+
         # Package final response for training
         final_response = {
             "prompt": prompt,
@@ -395,6 +405,7 @@ class AgentExecutor(AgentExecutorBase):
             "extra_logs": {},
             "action_ranges": action_ranges,
             "rollout_log_probs": rollout_log_probs,
+            "is_truncated": finish_reason == "length",
         }
 
         return final_response

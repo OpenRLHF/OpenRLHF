@@ -35,7 +35,7 @@ OpenRLHF is **the first** high-performance, production-ready open-source RLHF fr
 ## 📖 Table of Contents
 
 - [🗞️ News](#news)
-- [🏗️ Architecture Foundation](#architecture-foundation-ray--vllm-distribution) - Ray + vLLM + DeepSpeed distributed infrastructure
+- [🏗️ Architecture Foundation](#architecture-foundation-ray--vllm-distribution) - Ray + vLLM + FSDP2 distributed infrastructure
 - [🎯 Design Paradigm](#design-paradigm-agent-based-execution) - Unified agent-based execution pipeline
 - [🚀 RL Algorithms](#state-of-the-art-rl-algorithms) - PPO, REINFORCE++, GRPO, RLOO
 - [📋 Features Overview](#comprehensive-features) - Complete RLHF pipeline capabilities
@@ -43,7 +43,7 @@ OpenRLHF is **the first** high-performance, production-ready open-source RLHF fr
 - [🎓 Training Guide](#supervised-fine-tuning) - SFT, Reward Model, RL Training
 - [🎯 Single-Turn Agent](#single-turn-agent-reinforced-fine-tuning-with-custom-rewards) - Custom reward functions
 - [🤖 Multi-Turn Agent](#multi-turn-agent-complex-environment-interactions) - Complex environments
-- [🔧 Advanced Topics](#advanced-topics) - LoRA, performance tuning
+- [🔧 Advanced Topics](#advanced-topics) - Performance tuning
 
 ---
 
@@ -92,8 +92,8 @@ OpenRLHF leverages [Ray](https://github.com/ray-project/ray) for efficient distr
 **vLLM - High-Performance Inference Engine**  
 RLHF training spends **80% of the time on sample generation**. Powered by [vLLM](https://github.com/vllm-project/vllm) with Auto Tensor Parallelism (AutoTP) and Pipeline Parallelism (PP), OpenRLHF delivers high-throughput, memory-efficient generation.
 
-**DeepSpeed - Memory-Efficient Training**  
-Built on [DeepSpeed](https://github.com/deepspeedai/DeepSpeed) ZeRO-3, [deepcompile](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/deepcompile/README.md), [AutoTP](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/huggingface-tp/README.md), and RingAttention. Enables large model training without heavyweight frameworks while working directly with HuggingFace models.
+**FSDP2 - Memory-Efficient Training**  
+Built on PyTorch FSDP2 (composable `fully_shard`), DTensor-based tensor parallelism, and RingAttention (context parallel). Supports mixed precision, (optional) CPU offload, and distributed checkpoints while working directly with HuggingFace models.
 
 **Transformers - Model Interface**  
 Native integration with HuggingFace Transformers for seamless model loading, state management, and fine-tuning of pretrained models.
@@ -253,19 +253,18 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
     - Example: `./examples/scripts/train_dapo_ray_hybrid_engine.sh`
 
 **Scalability**
-- DeepSpeed AutoTP for tensor parallelism (see `--ds_tensor_parallel_size` in training scripts)
-- [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh) for long context (`--ring_attn_size`)
+- FSDP2 tensor parallelism (see `--fsdp2_tp_size` in training scripts)
+- [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh) for long context (`--fsdp2_cp_size`)
 - Multi-node training with [SLURM](./examples/scripts/train_ppo_ray_slurm.sh)
 
 **Model Support**
-- [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh) (`--lora_rank`, `--load_in_4bit`)
 - [Mixture of Experts (MoE)](./examples/test_scripts/train_sft_moe.sh) (`--aux_loss_coef`)
 - FlashAttention (`--attn_implementation`)
 - HuggingFace chat templates (`--apply_chat_template`)
 
 **Production Features**
 - Wandb (`--use_wandb`) and TensorBoard (`--use_tensorboard`) logging
-- Checkpoint recovery (`--load_checkpoint`, `--save_steps`)
+- Checkpoint recovery (`--dcp_checkpoint_from_path`, `--resume_training`, `--ckpt_save_path`, `--save_steps`; set `--save_steps > 0` for periodic checkpoints; `--dcp_checkpoint_from_path` must be an explicit step directory like `/path/to/ckpt/dcp_ckpt/global_step_100`; add `--resume_training` to also restore optimizer/scheduler state)
 - Evaluation datasets (`--eval_dataset`)
 
 </details>
@@ -335,7 +334,7 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 <a id="supervised-fine-tuning"></a>
 ### Supervised Fine-tuning
 
-OpenRLHF's model checkpoint is fully compatible with HuggingFace models. You can specify the model name or path using `--pretrain  {name or path}`, `--reward_pretrain  {name or path}` and `--critic_pretrain  {name or path}`. We have provided some pre-trained checkpoints and datasets on [HuggingFace OpenRLHF](https://huggingface.co/OpenRLHF).
+OpenRLHF's model checkpoint is fully compatible with HuggingFace models. You can specify the model name or path using `--model_name_or_path  {name or path}`, `--reward_model_name_or_path  {name or path}` and `--critic_model_name_or_path  {name or path}`. We have provided some pre-trained checkpoints and datasets on [HuggingFace OpenRLHF](https://huggingface.co/OpenRLHF).
 
 Then you can use the startup scripts we provide in the [examples/scripts](./examples/scripts/) directory, or start the training using the following commands.
 
@@ -343,7 +342,7 @@ Then you can use the startup scripts we provide in the [examples/scripts](./exam
 <summary>SFT command</summary>
 
 ```bash
-deepspeed --module openrlhf.cli.train_sft \
+torchrun --standalone --nproc-per-node 8 -m openrlhf.cli.train_sft \
    --max_len 4096 \
    --dataset Open-Orca/OpenOrca \
    --input_key question \
@@ -352,12 +351,11 @@ deepspeed --module openrlhf.cli.train_sft \
    --train_batch_size 256 \
    --micro_train_batch_size 2 \
    --max_samples 500000 \
-   --pretrain meta-llama/Meta-Llama-3-8B \
-   --save_path ./checkpoint/llama3-8b-sft \
+   --model_name_or_path meta-llama/Meta-Llama-3-8B \
+   --ckpt_save_path ./checkpoint/llama3-8b-sft \
    --save_steps -1 \
    --logging_steps 1 \
    --eval_steps -1 \
-   --zero_stage 2 \
    --max_epochs 1 \
    --packing_samples \
    --param_dtype bf16 \
@@ -367,7 +365,7 @@ deepspeed --module openrlhf.cli.train_sft \
 
 # Additional options:
 # --apply_chat_template                # Use HF tokenizer chat template
-# --ring_attn_size 2                   # Enable RingAttention (install ring_flash_attn first)
+# --fsdp2_cp_size 2                    # Enable RingAttention (install ring_flash_attn first)
 # --multiturn                          # Multi-turn fine-tuning loss
 # --pretrain_mode                      # Continued pre-training mode
 ```
@@ -381,18 +379,17 @@ deepspeed --module openrlhf.cli.train_sft \
 <summary>Reward model training command</summary>
 
 ```bash
-deepspeed --module openrlhf.cli.train_rm \
-   --save_path ./checkpoint/llama3-8b-rm \
+torchrun --standalone --nproc-per-node 8 -m openrlhf.cli.train_rm \
+   --ckpt_save_path ./checkpoint/llama3-8b-rm \
    --save_steps -1 \
    --logging_steps 1 \
    --eval_steps -1 \
    --train_batch_size 256 \
    --micro_train_batch_size 1 \
-   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
+   --model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
    --param_dtype bf16 \
    --max_epochs 1 \
    --max_len 8192 \
-   --zero_stage 3 \
    --learning_rate 9e-6 \
    --dataset OpenRLHF/preference_dataset_mixture2_and_safe_pku \
    --apply_chat_template \
@@ -412,7 +409,7 @@ It is recommended to set the `--value_prefix_head` option of the Reward Model to
 reward_model = AutoModelForSequenceClassification.from_pretrained(
               reward_model_path,
               num_labels=1,
-              torch_dtype=torch.bfloat16,
+              dtype=torch.bfloat16,
               attn_implementation="flash_attention_2",
               use_cache=False,
           )
@@ -447,20 +444,18 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_tensor_parallel_size 2 \
    --colocate_all_models \
    --vllm_gpu_memory_utilization 0.5 \
-   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-   --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \
-   --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
-   --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
+   --model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
+   --reward_model_name_or_path OpenRLHF/Llama-3-8b-rm-700k \
+   --ckpt_save_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
    --save_hf_ckpt \
    --train_batch_size 128 \
    --rollout_batch_size 1024 \
    --use_dynamic_batch \
    --n_samples_per_prompt 1 \
    --max_epochs 1 \
-   --prompt_max_len 1024 \
+   --max_len 2048 \
    --max_samples 100000 \
-   --generate_max_len 1024 \
-   --zero_stage 3 \
+   --max_new_tokens 1024 \
    --param_dtype bf16 \
    --actor_learning_rate 5e-7 \
    --critic_learning_rate 9e-6 \
@@ -474,7 +469,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --vllm_sync_backend nccl \
    --enforce_eager \
    --vllm_enable_sleep \
-   --deepspeed_enable_sleep \
+   --fsdp2_enable_sleep \
    --use_wandb {wandb_token}
 
 # Algorithm Variants (all use single-turn agent execution):
@@ -500,7 +495,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 > **Ray Environment Setup**: Let Ray auto-deploy with `--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`
 
 > [!NOTE]
-> **Troubleshooting GPU index errors**: Set `export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1` if you encounter DeepSpeed GPU device setup issues.
+> **Troubleshooting GPU index errors**: Set `export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1` if you encounter Ray GPU device setup issues.
 
 📚 **More Examples**: See [examples/scripts](./examples/scripts/) and [Documentation](https://openrlhf.readthedocs.io/en/latest/usage.html)
 
@@ -558,7 +553,7 @@ def reward_func(queries, prompts, labels):
 ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
-  --pretrain meta-llama/Meta-Llama-3-8B \
+  --model_name_or_path meta-llama/Meta-Llama-3-8B \
   --use_dynamic_batch \
   --remote_rm_url /path/to/reward_func.py \
   --label_key answer \
@@ -677,19 +672,6 @@ ray job submit --address="http://127.0.0.1:8265" \
 <a id="advanced-topics"></a>
 ## 🔧 Advanced Topics
 
-### LoRA: Merging Adapters
-
-When using LoRA/QLoRA, OpenRLHF saves only the adapter weights. To deploy or continue training, merge the adapter with the base model:
-
-```bash
-python -m openrlhf.cli.lora_combiner \
-    --model_path meta-llama/Meta-Llama-3-8B \
-    --lora_path ./checkpoint/llama3-8b-rm \
-    --output_path ./checkpoint/llama-3-8b-rm-combined \
-    --is_rm \
-    --param_dtype bf16
-```
-
 ### Performance Tuning Guide
 
 Optimize OpenRLHF for your hardware and workload with these recommendations:
@@ -709,25 +691,23 @@ Optimize OpenRLHF for your hardware and workload with these recommendations:
 
 | Optimization | Flag | When to Use |
 |--------------|------|-------------|
-| **Hybrid Engine** | `--colocate_all_models`<br>`--vllm_enable_sleep`<br>`--deepspeed_enable_sleep` | Sufficient GPU memory |
+| **Hybrid Engine** | `--colocate_all_models`<br>`--vllm_enable_sleep`<br>`--fsdp2_enable_sleep` | Sufficient GPU memory |
 | **Async Training** | `--async_train` | Convergence validated, need throughput |
 | **Sample Packing** | `--packing_samples` | Always (especially training) |
-| **DeepCompile** | `--deepcompile` | PyTorch 2.0+ |
-| **Overlap Comm** | `--overlap_comm` | Sufficient GPU memory |
 | **Dynamic Batch** | `--use_dynamic_batch` | Variable sequence lengths |
 | **Prefix Caching** | vLLM config | `n_samples_per_prompt` > 1 |
 
 #### 💾 Memory Management
 
 **When you have enough memory**:
-- ✅ Disable `--adam_offload`
-- ✅ Enable `--overlap_comm`
+- ✅ Disable `--fsdp2_cpu_offload`
 - ✅ Use `--colocate_critic_reward` and `--colocate_actor_ref`
 
 **When hitting OOM**:
 - ❌ Disable all `--colocate_*` options
 - ✅ Reduce batch sizes
 - ✅ Enable gradient checkpointing
+- ✅ Enable `--fsdp2_cpu_offload` (if needed)
 
 #### 🎮 Batch Size Tuning
 
@@ -799,6 +779,7 @@ We would like to express our gratitude to the following projects and organizatio
 - [OpenAI GPT ↗](https://github.com/openai/gpt-3)
 - [LLaMA ↗](https://llama.meta.com/)
 - [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
+- [PyTorch ↗](https://github.com/pytorch/pytorch)
 - [Ray ↗](https://github.com/ray-project/ray)
 
 Our project would also like to thank [ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/ColossalChat) and [DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat). In the early stages of the project, we referred to their code design. 

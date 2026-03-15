@@ -6,6 +6,7 @@ import jsonlines
 import torch
 import transformers
 from torch import distributed as dist
+from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
@@ -14,7 +15,7 @@ _TRANSFORMERS_V5 = int(transformers.__version__.split(".")[0]) >= 5
 from openrlhf.datasets import PromptDataset, SFTDataset
 from openrlhf.datasets.utils import blending_datasets
 from openrlhf.models import Actor, get_llm_for_sequence_regression
-from openrlhf.utils import get_processor, get_strategy, get_tokenizer
+from openrlhf.utils import convert_to_torch_dtype, get_processor, get_strategy, get_tokenizer
 
 
 def batch_generate_vllm(args):
@@ -30,11 +31,11 @@ def batch_generate_vllm(args):
     dummy_strategy.args = args
 
     # configure tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.pretrain, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
 
     # configure model
     llm = LLM(
-        model=args.pretrain,
+        model=args.model_name_or_path,
         tensor_parallel_size=args.tp_size,
         trust_remote_code=True,
         seed=args.seed,
@@ -97,19 +98,19 @@ def batch_generate(args):
     strategy = get_strategy(args)
     strategy.setup_distributed(timeout=timedelta(minutes=720))
 
-    # configure model
+    # configure model (non meta-init: real weights loaded by from_pretrained)
     model = Actor(
-        args.pretrain,
+        args.model_name_or_path,
+        device_map=f"cuda:{torch.cuda.current_device()}",
         attn_implementation=args.attn_implementation,
-        param_dtype=args.param_dtype,  # default: bf16
+        torch_dtype=convert_to_torch_dtype(args.param_dtype),
     )
+    model.model.eval()
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model.model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
-
-    # prepare models
-    model = strategy.prepare(model)
-    model.eval()
+    tokenizer = get_tokenizer(
+        args.model_name_or_path, model.model, "left", strategy, use_fast=not args.disable_fast_tokenizer
+    )
 
     # tokenizer
     def tokenize_fn(texts):
@@ -121,7 +122,8 @@ def batch_generate(args):
             padding=True,
             truncation=True,
         )
-        return {k: v.to(torch.cuda.current_device()) for k, v in batch.items()}
+        device = next(model.model.parameters()).device
+        return {k: v.to(device) for k, v in batch.items()}
 
     prompts_data = blending_datasets(
         args.dataset,
@@ -139,8 +141,24 @@ def batch_generate(args):
         prompts_data = prompts_data.select(range(start_idx, min(end_idx, len(prompts_data))))
 
     prompts_dataset = PromptDataset(prompts_data, tokenizer, strategy, input_template=args.input_template)
+    sampler = None
+    if dist.is_initialized():
+        sampler = DistributedSampler(
+            prompts_dataset,
+            num_replicas=dist.get_world_size(),
+            rank=dist.get_rank(),
+            shuffle=False,
+            seed=strategy.seed,
+            drop_last=False,
+        )
     prompts_dataloader = strategy.setup_dataloader(
-        prompts_dataset, args.micro_batch_size, True, False, collate_fn=prompts_dataset.collate_fn, drop_last=False
+        prompts_dataset,
+        args.micro_batch_size,
+        True,
+        False,
+        collate_fn=prompts_dataset.collate_fn,
+        drop_last=False,
+        sampler=sampler,
     )
     pbar = tqdm(
         prompts_dataloader,
@@ -213,19 +231,22 @@ def batch_rm_inference(args):
     # configure model
     # load huggingface model/config
     model = get_llm_for_sequence_regression(
-        args.pretrain,
+        args.model_name_or_path,
         "reward",
         normalize_reward=True,
         attn_implementation=args.attn_implementation,
-        param_dtype=args.param_dtype,  # default: bf16
-        value_head_prefix=args.value_head_prefix,
+        torch_dtype=convert_to_torch_dtype(args.param_dtype),
     )
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
+    tokenizer = get_tokenizer(
+        args.model_name_or_path, model, "left", strategy, use_fast=not args.disable_fast_tokenizer
+    )
 
     # prepare models
-    model = strategy.prepare(model)
+    model = strategy.apply_parallelism(model)
+    strategy.model_to_empty(model)
+    strategy.load_hf_checkpoint(model, args.model_name_or_path)
     model.eval()
 
     dataset = blending_datasets(
@@ -239,8 +260,35 @@ def batch_rm_inference(args):
     dataset = SFTDataset(
         dataset, tokenizer, args.max_len, strategy, pretrain_mode=False, input_template=args.input_template
     )
+
+    # Wrap SFTDataset to carry original indices through DataLoader so that
+    # shuffled batches can be mapped back to (prompt, response) text pairs.
+    class _IndexedDataset(torch.utils.data.Dataset):
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __len__(self):
+            return len(self._inner)
+
+        def __getitem__(self, idx):
+            input_ids, attention_mask, loss_mask = self._inner[idx]
+            return idx, input_ids, attention_mask, loss_mask
+
+    indexed_dataset = _IndexedDataset(dataset)
+
+    def collate_fn(item_list):
+        indices = torch.tensor([item[0] for item in item_list], dtype=torch.long)
+        base_items = [(item[1], item[2], item[3]) for item in item_list]
+        input_ids, attention_masks, loss_masks = dataset.collate_fn(base_items)
+        return indices, input_ids, attention_masks, loss_masks
+
     dataloader = strategy.setup_dataloader(
-        dataset, args.micro_batch_size, True, False, dataset.collate_fn, drop_last=False
+        indexed_dataset,
+        args.micro_batch_size,
+        True,
+        False,
+        collate_fn,
+        drop_last=False,
     )
     pbar = tqdm(
         dataloader,
@@ -252,12 +300,18 @@ def batch_rm_inference(args):
 
     output_dataset = []
     with torch.no_grad():
-        for _, input_ids, attention_masks, info in pbar:
+        for indices, input_ids, attention_masks, _loss_masks in pbar:
             input_ids = input_ids.squeeze(1).to(torch.cuda.current_device())
             attention_masks = attention_masks.squeeze(1).to(torch.cuda.current_device())
             rewards = model(input_ids, attention_masks)
-            for prompt, output, reward in zip(info["input"], info["output"], rewards):
-                output_dataset.append({"input": prompt, "output": output, "reward": reward.item()})
+            for idx, reward in zip(indices.tolist(), rewards):
+                output_dataset.append(
+                    {
+                        "input": dataset.prompts[idx],
+                        "output": dataset.responses[idx],
+                        "reward": reward.item(),
+                    }
+                )
 
             dist.barrier()
 
@@ -296,8 +350,34 @@ if __name__ == "__main__":
     parser.add_argument(
         "--eval_task", type=str, default=None, help="Set to generate_vllm, generate (HF generate) or rm"
     )
-    parser.add_argument("--zero_stage", type=int, default=0, help="DeepSpeed ZeRO Stage")
-    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed cli")
+    parser.add_argument("--local_rank", type=int, default=-1, help="Local rank (for torchrun)")
+    parser.add_argument("--fsdp2_tp_size", type=int, default=1, help="FSDP2 tensor parallel size")
+    parser.add_argument("--fsdp2_cp_size", type=int, default=1, help="FSDP2 context parallel size")
+    parser.add_argument(
+        "--fsdp2_cpu_offload",
+        action="store_true",
+        default=False,
+        help="Offload FSDP2 params/grads/optimizer to CPU",
+    )
+    parser.add_argument(
+        "--fsdp2_reshard_after_forward",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Control fully_shard reshard_after_forward flag",
+    )
+    parser.add_argument(
+        "--fsdp2_tp_sequence_parallel",
+        action="store_true",
+        default=False,
+        help="Enable sequence parallelism for FSDP2+TP (requires --fsdp2_tp_size > 1).",
+    )
+    parser.add_argument(
+        "--fsdp2_tp_loss_parallel",
+        action="store_true",
+        default=False,
+        help="Enable vocab-sharded lm_head logits and TP loss-parallel path (requires --fsdp2_tp_size > 1).",
+    )
+
     parser.add_argument(
         "--param_dtype",
         type=str,
@@ -322,11 +402,7 @@ if __name__ == "__main__":
     )
 
     # Models
-    parser.add_argument("--pretrain", type=str, default=None, help="HF pretrain model name or path")
-    parser.add_argument(
-        "--value_head_prefix", type=str, default="value_head", help="value_head prefix for Reward Model"
-    )
-
+    parser.add_argument("--model_name_or_path", type=str, default=None, help="HF pretrain model name or path")
     # Custom dataset
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--dataset_probs", type=str, default=None)
@@ -336,12 +412,11 @@ if __name__ == "__main__":
         "--apply_chat_template", action="store_true", default=False, help="HF tokenizer apply_chat_template"
     )
     parser.add_argument("--input_template", type=str, default=None)
-    parser.add_argument("--max_len", type=int, default=2048, help="Max tokens for the samples")
+    parser.add_argument("--max_len", type=int, default=2048, help="Max total sequence length")
     parser.add_argument("--max_samples", type=int, default=1e8, help="Max number of samples")
     parser.add_argument("--output_path", type=str, default=None, help="Output JSON data path")
 
     # For generation
-    parser.add_argument("--prompt_max_len", type=int, default=1024, help="Max tokens for prompt")
     parser.add_argument("--max_new_tokens", type=int, default=1024, help="Max new tokens in generation")
     parser.add_argument("--greedy_sampling", action="store_true", default=False, help="Use Greedy sampling")
     parser.add_argument("--top_p", type=float, default=1.0, help="top_p for Sampling")
@@ -378,6 +453,8 @@ if __name__ == "__main__":
     parser.add_argument("--use_ms", action="store_true", default=False)
 
     args = parser.parse_args()
+    args.prompt_max_len = args.max_len - args.max_new_tokens
+
     if args.eval_task == "generate":
         batch_generate(args)
     elif args.eval_task == "generate_vllm":

@@ -41,7 +41,7 @@ def train(args):
     # init vLLM engine for text generation
     vllm_engines = None
     if args.vllm_num_engines is not None and args.vllm_num_engines > 0:
-        max_len = args.max_len if args.max_len else args.prompt_max_len + args.generate_max_len
+        vllm_max_model_len = args.vllm_max_model_len or args.max_len
         if args.colocate_all_models and not args.async_train:
             assert (
                 args.actor_num_nodes * args.actor_num_gpus_per_node
@@ -55,12 +55,12 @@ def train(args):
         vllm_engines = create_vllm_engines(
             args.vllm_num_engines,
             args.vllm_tensor_parallel_size,
-            args.pretrain,
+            args.model_name_or_path,
             args.seed,
             args.full_determinism,
             args.enable_prefix_caching,
             args.enforce_eager,
-            max_len,
+            vllm_max_model_len,
             pg if args.colocate_all_models and not args.async_train else None,
             args.vllm_gpu_memory_utilization,
             args.vllm_enable_sleep,
@@ -75,7 +75,7 @@ def train(args):
         PolicyModelActor,
         pg=pg,
         num_gpus_per_actor=0.2 if pg else 1,
-        duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
+        duplicate_actors=args.fsdp2_cp_size * args.fsdp2_tp_size,
     )
 
     if args.init_kl_coef > 0:
@@ -85,7 +85,7 @@ def train(args):
             ReferenceModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
+            duplicate_actors=args.fsdp2_cp_size * args.fsdp2_tp_size,
         )
     else:
         ref_model = None
@@ -94,7 +94,7 @@ def train(args):
         pg = None
 
     # if colocated, create placement group for critic and reward model explicitly.
-    if args.critic_pretrain and args.colocate_critic_reward:
+    if args.critic_model_name_or_path and args.colocate_critic_reward:
         assert (
             args.critic_num_nodes == args.reward_num_nodes
             and args.critic_num_gpus_per_node == args.reward_num_gpus_per_node
@@ -104,14 +104,14 @@ def train(args):
         pg = placement_group(bundles, strategy="PACK")
         ray.get(pg.ready())
 
-    if args.critic_pretrain:
+    if args.critic_model_name_or_path:
         critic_model = RayActorGroup(
             args.critic_num_nodes,
             args.critic_num_gpus_per_node,
             CriticModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
+            duplicate_actors=args.fsdp2_cp_size * args.fsdp2_tp_size,
         )
     else:
         critic_model = None
@@ -124,7 +124,7 @@ def train(args):
             RewardModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.ring_attn_size * args.ds_tensor_parallel_size,
+            duplicate_actors=args.fsdp2_cp_size * args.fsdp2_tp_size,
         )
     else:
         reward_model = None
@@ -137,7 +137,7 @@ def train(args):
 
     # init PPO trainer (Single controller)
     ppo_trainer = PPOTrainer.remote(
-        args.pretrain,
+        args.model_name_or_path,
         strategy,
         actor_model,
         critic_model,
@@ -146,9 +146,9 @@ def train(args):
         vllm_engines,
         # generate kwargs
         do_sample=True,
-        prompt_max_len=args.prompt_max_len,
-        max_new_tokens=args.generate_max_len,
-        max_length=args.max_len,
+        max_len=args.max_len,
+        max_new_tokens=args.max_new_tokens,
+        max_tool_response_length=args.max_tool_response_length,
         temperature=args.temperature,
         top_p=args.top_p,
     )
@@ -158,17 +158,19 @@ def train(args):
 
     # init actor/reference/reward model
     refs = []
-    refs.extend(actor_model.async_init_model_from_pretrained(strategy, args.pretrain, max_steps, vllm_engines))
+    refs.extend(
+        actor_model.async_init_model_from_pretrained(strategy, args.model_name_or_path, max_steps, vllm_engines)
+    )
     if ref_model is not None:
-        refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.pretrain))
-    if reward_model is not None and args.reward_pretrain:
-        refs.extend(reward_model.async_init_model_from_pretrained(strategy, args.reward_pretrain))
+        refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.model_name_or_path))
+    if reward_model is not None and args.reward_model_name_or_path:
+        refs.extend(reward_model.async_init_model_from_pretrained(strategy, args.reward_model_name_or_path))
     ray.get(refs)
 
-    if critic_model is not None and args.critic_pretrain:
+    if critic_model is not None and args.critic_model_name_or_path:
         # critic scheduler initialization depends on max_step, so we have to init critic after actor
         # TODO: use first reward model as critic model
-        refs.extend(critic_model.async_init_model_from_pretrained(strategy, args.critic_pretrain, max_steps))
+        refs.extend(critic_model.async_init_model_from_pretrained(strategy, args.critic_model_name_or_path, max_steps))
         ray.get(refs)
 
     # train actor and critic model
@@ -176,8 +178,7 @@ def train(args):
 
     # save model
     ray.get(actor_model.async_save_model())
-
-    if args.critic_pretrain and args.save_value_network and critic_model is not None:
+    if args.save_value_network and critic_model is not None:
         ray.get(critic_model.async_save_model())
 
 
@@ -224,7 +225,7 @@ if __name__ == "__main__":
         default=1,
         help="tensor parallel size of vLLM Engine for multi-GPU inference",
     )
-    parser.add_argument("--vllm_sync_backend", type=str, default="nccl", help="DeepSpeed -> vLLM weight sync backend")
+    parser.add_argument("--vllm_sync_backend", type=str, default="nccl", help="Train -> vLLM weight sync backend")
     parser.add_argument("--vllm_sync_with_ray", action="store_true", default=False)
     parser.add_argument("--enable_prefix_caching", action="store_true", default=False)
     parser.add_argument("--enforce_eager", action="store_true", default=False, help="Disable CUDA graph in vLLM")
@@ -239,6 +240,12 @@ if __name__ == "__main__":
         type=float,
         default=0.95,
         help="vLLM gpu_memory_utilization",
+    )
+    parser.add_argument(
+        "--vllm_max_model_len",
+        type=int,
+        default=None,
+        help="vLLM max context length for KV cache. Defaults to --max_len. Set larger for agent/multi-turn scenarios.",
     )
     # Your Efficient RL Framework Secretly Brings You Off-Policy RL Training: https://fengyao.notion.site/off-policy-rl
     parser.add_argument("--enable_vllm_is_correction", action="store_true", default=False)
@@ -265,21 +272,43 @@ if __name__ == "__main__":
     parser.add_argument("--eval_steps", type=int, default=-1)
     parser.add_argument("--save_steps", type=int, default=-1)
     parser.add_argument("--logging_steps", type=int, default=1)
-    parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_ppo_ray")
+    parser.add_argument("--ckpt_save_path", type=str, default="./ckpt")
     parser.add_argument("--save_hf_ckpt", action="store_true", default=False)
-    parser.add_argument("--disable_ds_ckpt", action="store_true", default=False)
-    parser.add_argument("--max_ckpt_num", type=int, default=3)
-    parser.add_argument("--max_ckpt_mem", type=int, default=1e8)
-    parser.add_argument("--load_checkpoint", action="store_true", default=False)
+    parser.add_argument("--disable_fsdp2_ckpt", action="store_true", default=False)
     parser.add_argument(
-        "--use_ds_universal_ckpt", action="store_true", help="Use deepspeed universal checkpoint", default=False
+        "--max_checkpoints_to_keep",
+        type=int,
+        default=3,
+        help="Maximum checkpoints to keep. Use -1 to keep all checkpoints; value must be -1 or a positive integer.",
+    )
+    parser.add_argument(
+        "--dcp_checkpoint_from_path",
+        type=str,
+        default=None,
+        help="Load weights from an explicit step directory (must contain dcp_checkpoint).",
+    )
+    parser.add_argument(
+        "--resume_training",
+        action="store_true",
+        default=False,
+        help="Also restore optimizer, scheduler, and consumed_samples from --dcp_checkpoint_from_path.",
     )
 
-    # DeepSpeed
-    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
-    parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
+    # FSDP2
+    parser.add_argument("--local_rank", type=int, default=-1, help="Local rank (for torchrun)")
+    parser.add_argument(
+        "--fsdp2_cpu_offload",
+        action="store_true",
+        default=False,
+        help="Offload FSDP2 params/grads/optimizer to CPU",
+    )
+    parser.add_argument(
+        "--fsdp2_reshard_after_forward",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Control fully_shard reshard_after_forward flag",
+    )
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
-    parser.add_argument("--deepcompile", action="store_true", default=False)
     parser.add_argument(
         "--param_dtype",
         type=str,
@@ -290,8 +319,6 @@ if __name__ == "__main__":
     ## Make EMA as an optional feature
     parser.add_argument("--enable_ema", action="store_true", help="Enable EMA checkpoint for the model.")
     parser.add_argument("--ema_beta", type=float, default=0.992, help="EMA beta coefficient")
-    parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
-    parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument("--actor_init_on_gpu", action="store_true", default=False)
     parser.add_argument(
         "--attn_implementation",
@@ -300,17 +327,35 @@ if __name__ == "__main__":
         help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
     )
     parser.add_argument("--use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
-    parser.add_argument("--grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
-    parser.add_argument("--overlap_comm", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument(
-        "--deepspeed_enable_sleep",
+        "--fsdp2_enable_sleep",
         action="store_true",
         default=False,
-        help="Enable sleep mode for deepspeed when using --colocate_all_models",
+        help="Enable sleep mode for FSDP2 when using --colocate_all_models",
     )
-    parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed tensor parallel size")
+    parser.add_argument("--fsdp2_tp_size", type=int, default=1, help="FSDP2 tensor parallel size")
+    parser.add_argument(
+        "--fsdp2_tp_sequence_parallel",
+        action="store_true",
+        default=False,
+        help="Enable sequence parallelism for FSDP2+TP (requires --fsdp2_tp_size > 1).",
+    )
+    parser.add_argument(
+        "--fsdp2_tp_loss_parallel",
+        action="store_true",
+        default=False,
+        help="Enable vocab-sharded lm_head logits and TP loss-parallel path (requires --fsdp2_tp_size > 1).",
+    )
+
+    # HF safetensors sharded export (DCP writer)
+    parser.add_argument(
+        "--hf_max_shard_size_gb",
+        type=float,
+        default=5,
+        help="Max size (in GB) per .safetensors shard file when saving HuggingFace checkpoints, e.g. 5 means each file <= 5GB.",
+    )
 
     # packing samples using Flash Attention2
     parser.add_argument("--packing_samples", action="store_true", default=False)
@@ -320,15 +365,7 @@ if __name__ == "__main__":
     parser.add_argument("--rollout_max_tokens_per_gpu", type=int, default=None)
     parser.add_argument("--train_max_tokens_per_gpu", type=int, default=16192)
 
-    # LoRA
-    parser.add_argument("--load_in_4bit", action="store_true", default=False)
-    parser.add_argument("--lora_rank", type=int, default=0)
-    parser.add_argument("--lora_alpha", type=int, default=16)
-    parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")
-    parser.add_argument("--lora_dropout", type=float, default=0)
-
     # PPO
-    parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--num_episodes", type=int, default=1)
     parser.add_argument("--rollout_batch_size", type=int, default=1024, help="Batch size for make experience")
     parser.add_argument(
@@ -336,9 +373,14 @@ if __name__ == "__main__":
     )
     parser.add_argument("--micro_rollout_batch_size", type=int, default=8)
     parser.add_argument("--max_epochs", type=int, default=1)
-    parser.add_argument("--prompt_max_len", type=int, default=1024, help="Max tokens for each prompt")
-    parser.add_argument("--generate_max_len", type=int, default=1024, help="Max tokens to generate in PPO")
-    parser.add_argument("--max_len", type=int, default=None, help="deprecated max_len")
+    parser.add_argument("--max_len", type=int, default=2048, help="Max total sequence length (prompt + response)")
+    parser.add_argument(
+        "--max_new_tokens",
+        type=int,
+        default=None,
+        help="Max tokens to generate per response. "
+        "In agent mode, generation budget is dynamically managed by --max_len.",
+    )
     parser.add_argument("--max_samples", type=int, default=1e8, help="Max number of samples")
     parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
     parser.add_argument("--l2", type=float, default=0.0, help="weight decay loss")
@@ -416,12 +458,17 @@ if __name__ == "__main__":
         "--stop_properly_penalty_coef",
         type=float,
         default=None,
-        help="Penalty coefficient [0,1] for truncated samples (finish_reason='length'). "
-        "Truncated sample rewards are scaled by this coefficient to encourage proper stopping.",
+        help="Optional auxiliary penalty strength [0,1] for truncated samples.",
+    )
+    parser.add_argument(
+        "--max_tool_response_length",
+        type=int,
+        default=None,
+        help="Max tokens for each environment/tool feedback step. Truncate from the middle when exceeded.",
     )
 
     # Context Parallel
-    parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")
+    parser.add_argument("--fsdp2_cp_size", type=int, default=1, help="FSDP2 context parallel size")
     parser.add_argument(
         "--ring_head_stride",
         type=int,
@@ -432,11 +479,16 @@ if __name__ == "__main__":
     )
 
     #  Models
-    parser.add_argument("--pretrain", type=str, default=None, help="HF model name or path")
-    parser.add_argument("--reward_pretrain", type=str, default=None, help="HF model name or path")
+    parser.add_argument("--model_name_or_path", type=str, default=None, help="HF model name or path")
+    parser.add_argument("--reward_model_name_or_path", type=str, default=None, help="HF model name or path")
     parser.add_argument("--remote_rm_url", type=str, default=None, help="remote RM API (HTTP)")
-    parser.add_argument("--critic_pretrain", type=str, default=None, help="HF model name or path")
-    parser.add_argument("--value_head_prefix", type=str, default="score")
+    parser.add_argument("--critic_model_name_or_path", type=str, default=None, help="HF model name or path")
+    parser.add_argument(
+        "--force_init_value_head",
+        action="store_true",
+        default=False,
+        help="Always reinitialize score.weight after HF load for critic models.",
+    )
     parser.add_argument("--ref_reward_offload", action="store_true", default=False)
     parser.add_argument("--agent_func_path", type=str, default=None, help="Agent script path")
 
@@ -499,12 +551,12 @@ if __name__ == "__main__":
         args.remote_rm_url = "agent"
 
     if args.advantage_estimator not in ["gae"]:
-        args.critic_pretrain = None
-    elif args.critic_pretrain is None:
+        args.critic_model_name_or_path = None
+    elif args.critic_model_name_or_path is None:
         if not args.remote_rm_url:
-            args.critic_pretrain = args.reward_pretrain.split(",")[0]
+            args.critic_model_name_or_path = args.reward_model_name_or_path.split(",")[0]
         else:
-            args.critic_pretrain = args.pretrain
+            args.critic_model_name_or_path = args.model_name_or_path
 
     if args.advantage_estimator in ["rloo", "reinforce_baseline", "group_norm"]:
         assert args.n_samples_per_prompt > 1, f"{args.advantage_estimator} requires n_samples_per_prompt > 1"
@@ -522,15 +574,15 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
-    if args.ring_attn_size > 1:
-        if not args.packing_samples:
-            print("[Warning] --ring_attn_size > 1 requires --packing_samples.")
-            args.packing_samples = True
+    if args.max_tool_response_length is not None:
+        assert args.max_tool_response_length > 0, "max_tool_response_length must be positive"
+
+    if args.fsdp2_cp_size > 1:
+        assert args.packing_samples, "packing_samples must be enabled when using ring attention"
 
     if args.use_dynamic_batch:
         if not args.packing_samples:
-            print("[Warning] Please --packing_samples to accelerate when --use_dynamic_batch is enabled.")
-            args.packing_samples = True
+            print("[Warning] Please use --packing_samples to accelerate when --use_dynamic_batch is enabled.")
         if args.rollout_max_tokens_per_gpu is None:
             print("[Warning] Set --rollout_max_tokens_per_gpu to --train_max_tokens_per_gpu.")
             args.rollout_max_tokens_per_gpu = args.train_max_tokens_per_gpu
@@ -546,9 +598,6 @@ if __name__ == "__main__":
     if args.vllm_enable_sleep and not args.colocate_all_models:
         print("Set args.vllm_enable_sleep to False when args.colocate_all_models is disabled.")
         args.vllm_enable_sleep = False
-
-    if args.colocate_all_models and args.async_train:
-        print("[Warning] Using --colocate_all_models in async RLHF only colocates DeepSpeed models.")
 
     if args.async_train:
         assert not args.vllm_enable_sleep, "Async RLHF is not supported with --vllm_enable_sleep."
@@ -580,7 +629,7 @@ if __name__ == "__main__":
 
     assert (
         args.n_samples_per_prompt * args.rollout_batch_size // args.micro_rollout_batch_size
-        >= args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size // args.ds_tensor_parallel_size
+        >= args.actor_num_nodes * args.actor_num_gpus_per_node // args.fsdp2_cp_size // args.fsdp2_tp_size
     ), "The number of sample batches must be greater than or equal to the effective number of actor processes."
 
     if args.use_ms:

@@ -13,14 +13,13 @@ RM_OUTPUT=./checkpoint/llama-2-8b-csft/rm.jsonl
 read -r -d '' get_rewards_commands <<EOF
 openrlhf.cli.batch_inference \
     --eval_task rm \
-    --pretrain OpenRLHF/Llama-3-8b-rm-mixture \
+    --model_name_or_path OpenRLHF/Llama-3-8b-rm-mixture \
     --param_dtype bf16 \
     --max_len 4096 \
     --dataset OpenRLHF/preference_dataset_mixture2_and_safe_pku \
     --input_key chosen \
     --apply_chat_template \
     --max_samples 128000 \
-    --zero_stage 0 \
     --post_processor csft \
     --normalize_reward
     --micro_batch_size 4 \
@@ -34,17 +33,18 @@ openrlhf.cli.train_sft \
     --dataset_probs 1.0 \
     --train_batch_size 128 \
     --micro_train_batch_size 2 \
-    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-    --save_path ./checkpoint/llama-3-8b-csft \
-    --zero_stage 2 \
+    --model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
+    --ckpt_save_path ./checkpoint/llama-3-8b-csft \
     --max_epochs 1 \
     --param_dtype bf16 \
     --learning_rate 5e-6 \
     --gradient_checkpointing
 EOF
+# Resume example (explicit step dir, not /dcp_checkpoint; add --resume_training to restore optimizer):
+# --dcp_checkpoint_from_path /path/to/ckpt/dcp_ckpt/global_step_<N> --resume_training
 
 if [ ! -e $RM_OUTPUT ]; then
-    deepspeed --module $get_rewards_commands
+    torchrun --standalone --nproc-per-node ${NPROC_PER_NODE:-8} -m $get_rewards_commands
     checkSuccess "RM"
 fi
-deepspeed --module $sft_commands
+torchrun --standalone --nproc-per-node ${NPROC_PER_NODE:-8} -m $sft_commands

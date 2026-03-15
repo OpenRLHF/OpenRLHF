@@ -25,7 +25,7 @@ class ProcessRewardModelTrainer(ABC):
         max_norm (float, defaults to 0.5): Maximum gradient norm for gradient clipping.
         max_epochs (int, defaults to 2): Maximum number of training epochs.
         save_hf_ckpt (bool): Whether to save huggingface-format model weight.
-        disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight.
+        disable_fsdp2_ckpt (bool): Whether to disable FSDP2 distributed checkpoints (used for training recovery).
     """
 
     def __init__(
@@ -41,7 +41,7 @@ class ProcessRewardModelTrainer(ABC):
         max_epochs: int = 2,
         tokenizer=None,
         save_hf_ckpt: bool = False,
-        disable_ds_ckpt: bool = False,
+        disable_fsdp2_ckpt: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -56,7 +56,7 @@ class ProcessRewardModelTrainer(ABC):
         self.optimizer = optim
         self.args = strategy.args
         self.save_hf_ckpt = save_hf_ckpt
-        self.disable_ds_ckpt = disable_ds_ckpt
+        self.disable_fsdp2_ckpt = disable_fsdp2_ckpt
 
         # set placeholder token
         self.placeholder_token_id = convert_token_to_id(strategy.args.placeholder_token, self.tokenizer)
@@ -148,6 +148,7 @@ class ProcessRewardModelTrainer(ABC):
                     attention_mask=attention_mask,
                     return_output=True,
                     allgather_logits=True,
+                    ring_attn_group=self.strategy.ring_attn_group,
                 )
 
                 # mixtral
@@ -207,14 +208,23 @@ class ProcessRewardModelTrainer(ABC):
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
-            tag = f"global_step{global_step}"
-            if not self.disable_ds_ckpt:
-                self.strategy.save_ckpt(
-                    self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+            tag = f"global_step_{global_step}"
+            step_dir = os.path.join(self.strategy.dcp_ckpt_path, tag)
+            any_checkpoint_saved = False
+            if not self.disable_fsdp2_ckpt:
+                self.strategy.save_dcp_checkpoint(
+                    self.model.model,
+                    os.path.join(step_dir, "dcp_checkpoint"),
+                    client_state=client_states,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
                 )
+                any_checkpoint_saved = True
             if self.save_hf_ckpt:
-                save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
-                self.strategy.save_model(self.model, self.tokenizer, save_path)
+                self.strategy.save_hf_checkpoint(self.model, self.tokenizer, os.path.join(step_dir, "hf_checkpoint"))
+                any_checkpoint_saved = True
+            if any_checkpoint_saved:
+                self.strategy.cleanup_old_checkpoints(tag)
 
     def evaluate(self, eval_dataloader, steps=0):
         times = 0
@@ -239,6 +249,7 @@ class ProcessRewardModelTrainer(ABC):
                     attention_mask=attention_mask,
                     return_output=True,
                     allgather_logits=True,
+                    ring_attn_group=self.strategy.ring_attn_group,
                 )
 
                 loss, acc = self.loss_fn(inputs, output.logits, labels, return_acc=True)

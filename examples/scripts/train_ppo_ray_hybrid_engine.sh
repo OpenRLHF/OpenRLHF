@@ -1,5 +1,7 @@
 set -x
 
+# Resume example (explicit step dir, not /dcp_checkpoint; add --resume_training to restore optimizer):
+# --dcp_checkpoint_from_path /path/to/ckpt/dcp_ckpt/global_step_<N> --resume_training
 python3 -m openrlhf.cli.train_ppo_ray \
    --ref_num_nodes 1 \
    --ref_num_gpus_per_node 8 \
@@ -13,19 +15,17 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --vllm_tensor_parallel_size 2 \
    --colocate_all_models \
    --vllm_gpu_memory_utilization 0.5 \
-   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-   --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \
-   --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
-   --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
+   --model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
+   --reward_model_name_or_path OpenRLHF/Llama-3-8b-rm-700k \
+   --ckpt_save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
    --save_hf_ckpt \
    --train_batch_size 128 \
    --rollout_batch_size 1024 \
    --n_samples_per_prompt 1 \
    --max_epochs 1 \
-   --prompt_max_len 1024 \
+   --max_len 2048 \
+   --max_new_tokens 1024 \
    --max_samples 100000 \
-   --generate_max_len 1024 \
-   --zero_stage 3 \
    --param_dtype bf16 \
    --actor_learning_rate 5e-7 \
    --critic_learning_rate 9e-6 \
@@ -39,14 +39,14 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --vllm_sync_backend nccl \
    --enforce_eager \
    --vllm_enable_sleep \
-   --deepspeed_enable_sleep \
+   --fsdp2_enable_sleep \
    --use_dynamic_batch \
    --train_max_tokens_per_gpu 16384 \
    --enable_vllm_is_correction
 
-# Enable tensor parallelism for DeepSpeed
-#    --ds_tensor_parallel_size 2 \
+# Enable tensor parallelism for FSDP2
+#    --fsdp2_tp_size 2 \
 
 # Enable Ring-Attention
-#    --ring_attn_size 4 \
+#    --fsdp2_cp_size 4 \
 #    --ring_head_stride 2 \

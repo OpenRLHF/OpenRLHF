@@ -35,9 +35,9 @@ while (($iter < $TRAINING_ITERS)); do
    read -r -d '' generate_commands <<EOF
 openrlhf.cli.batch_inference
    --eval_task generate_vllm \
-   --pretrain $POLICY_MODEL_PATH \
+   --model_name_or_path $POLICY_MODEL_PATH \
+   --max_len 4096 \
    --max_new_tokens 2048 \
-   --prompt_max_len 2048 \
    --dataset OpenRLHF/prompt-collection-v0.1 \
    --input_key context_messages \
    --apply_chat_template \
@@ -57,18 +57,17 @@ EOF
    read -r -d '' get_rewards_commands <<EOF
 openrlhf.cli.batch_inference
    --eval_task rm \
-   --pretrain OpenRLHF/Llama-3-8b-rm-mixture \
+   --model_name_or_path OpenRLHF/Llama-3-8b-rm-mixture \
    --param_dtype bf16 \
    --max_len 4096 \
    --dataset $GENERATE_OUTPUT  \
    --dataset_probs 1.0 \
-   --zero_stage 0 \
    --post_processor iter_dpo \
    --micro_batch_size 4 \
    --output_path $RM_OUTPUT
 EOF
    echo $get_rewards_commands
-   deepspeed --module $get_rewards_commands
+   torchrun --standalone --nproc-per-node ${NPROC_PER_NODE:-8} -m $get_rewards_commands
    checkSuccess "RM"
 
    read -r -d '' dpo_commands <<EOF
@@ -79,17 +78,18 @@ openrlhf.cli.train_dpo \
    --prompt_key prompt \
    --train_batch_size 128 \
    --micro_train_batch_size 2 \
-   --pretrain $POLICY_MODEL_PATH \
-   --ref_pretrain $REF_MODEL_PATH \
-   --save_path $MODEL_OUTPUT_PATH \
-   --zero_stage 3 \
+   --model_name_or_path $POLICY_MODEL_PATH \
+   --ref_model_name_or_path $REF_MODEL_PATH \
+   --ckpt_save_path $MODEL_OUTPUT_PATH \
    --max_epochs 1 \
    --param_dtype bf16 \
    --learning_rate 5e-7 \
    --gradient_checkpointing
 EOF
+   # Resume example (explicit step dir, not /dcp_checkpoint; add --resume_training to restore optimizer):
+   # --dcp_checkpoint_from_path /path/to/ckpt/dcp_ckpt/global_step_<N> --resume_training
    echo $dpo_commands
-   deepspeed --module $dpo_commands
+   torchrun --standalone --nproc-per-node ${NPROC_PER_NODE:-8} -m $dpo_commands
    checkSuccess "DPO"
 
    iter=$((iter + 1))
