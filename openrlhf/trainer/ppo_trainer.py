@@ -338,12 +338,7 @@ class PPOTrainer(BasePPOTrainer):
 
                 # Generation timing (rollout via vLLM)
                 status["timing/generation"] = generation_time
-                status["timing/step_total"] = (
-                    generation_time
-                    + status.get("timing/make_experience", 0)
-                    + status.get("timing/ppo_train", 0)
-                    + status.get("timing/broadcast", 0)
-                )
+                status["timing/step_total"] = sum(v for k, v in status.items() if k.startswith("timing/"))
 
                 # Add generated samples to status dictionary
                 if self.args.dynamic_filtering:
