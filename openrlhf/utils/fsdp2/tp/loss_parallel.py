@@ -257,10 +257,12 @@ def compute_argmax_sharded(logits: DTensor, mask: torch.Tensor) -> torch.Tensor:
 
     Two-step allreduce:
         1. Find the global max *value* across all ranks.
-        2. The rank holding that max converts its local argmax to a global index;
-           others contribute -1. A second allreduce(MAX) picks the global index.
+        2. Every rank whose local max matches the global max contributes its first
+           matching global index; others contribute a sentinel larger than any
+           vocab index. A second allreduce(MIN) picks the first global index,
+           matching ``torch.argmax`` tie-breaking semantics.
     """
-    group, local_logits, _, _, vocab_start, _ = _unpack_sharded_logits(logits)
+    group, local_logits, _, global_vocab_size, vocab_start, _ = _unpack_sharded_logits(logits)
     masked_local_logits = local_logits.detach()[mask].float()
     local_max, local_argmax = masked_local_logits.max(dim=-1)
 
@@ -268,14 +270,13 @@ def compute_argmax_sharded(logits: DTensor, mask: torch.Tensor) -> torch.Tensor:
     global_max = local_max.clone()
     dist.all_reduce(global_max, op=dist.ReduceOp.MAX, group=group)
 
-    # Step 2: only the rank whose local_max equals global_max contributes
-    # its global index (local_argmax + vocab_start); others emit -1
+    # Step 2: all winning ranks contribute their first matching global index;
+    # allreduce(MIN) then selects the first global index among tied maxima.
     candidate_idx = torch.where(
         local_max == global_max,
         local_argmax + vocab_start,
-        torch.full_like(local_argmax, -1),
+        torch.full_like(local_argmax, global_vocab_size),
     )
-    # allreduce(MAX) selects the valid global index (>= 0) from the winning rank
     global_argmax = candidate_idx.clone()
-    dist.all_reduce(global_argmax, op=dist.ReduceOp.MAX, group=group)
+    dist.all_reduce(global_argmax, op=dist.ReduceOp.MIN, group=group)
     return global_argmax
