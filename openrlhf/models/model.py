@@ -11,6 +11,7 @@ from transformers.integrations.deepspeed import HfDeepSpeedConfig
 from openrlhf.utils.logging_utils import init_logger
 
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
+from .utils import set_z3_leaf_modules
 
 logger = init_logger(__name__)
 
@@ -140,13 +141,7 @@ def get_llm_for_sequence_regression(
         print("[MoE] set output_router_logits as True")
         model.config.output_router_logits = True
 
-        # set_z3_leaf_modules is required for MoE models
-        for m in model.modules():
-            # https://github.com/microsoft/DeepSpeed/pull/4966
-            if "SparseMoeBlock" in m.__class__.__name__:
-                deepspeed.utils.set_z3_leaf_modules(model, [m.__class__])
-                print(f"Setting zero3 leaf for model on class with name: {m.__class__.__name__}")
-                break
+    set_z3_leaf_modules(model)
 
     # https://github.com/huggingface/transformers/issues/26877
     model.config.use_cache = False

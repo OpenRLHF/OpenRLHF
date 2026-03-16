@@ -1,6 +1,5 @@
 from typing import Optional
 
-import deepspeed
 import torch
 import torch.distributed as dist
 import torch.nn as nn
@@ -10,7 +9,7 @@ from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
-from .utils import compute_entropy, log_probs_from_logits
+from .utils import compute_entropy, log_probs_from_logits, set_z3_leaf_modules
 
 
 class Actor(nn.Module):
@@ -128,13 +127,7 @@ class Actor(nn.Module):
                 print("[MoE] set output_router_logits as True")
                 self.model.config.output_router_logits = True
 
-                # set_z3_leaf_modules is required for MoE models
-                for m in self.model.modules():
-                    # https://github.com/microsoft/DeepSpeed/pull/4966
-                    if "SparseMoeBlock" in m.__class__.__name__:
-                        deepspeed.utils.set_z3_leaf_modules(self.model, [m.__class__])
-                        print(f"Setting zero3 leaf for model on class with name: {m.__class__.__name__}")
-                        break
+            set_z3_leaf_modules(self.model)
 
             # https://github.com/huggingface/transformers/issues/26877
             # Use `model.generate(use_cache=True)` instead.`
