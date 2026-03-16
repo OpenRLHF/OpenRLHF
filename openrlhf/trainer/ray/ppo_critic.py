@@ -210,7 +210,10 @@ class CriticModelActor(BaseModelActor):
         self.critic_optim = critic_optim
         self.critic_scheduler = critic_scheduler
         self.tokenizer = get_tokenizer(
-            pretrain, strategy._unwrap_model(critic), "left", strategy,
+            pretrain,
+            strategy._unwrap_model(critic),
+            "left",
+            strategy,
             use_fast=not strategy.args.disable_fast_tokenizer,
         )
 
