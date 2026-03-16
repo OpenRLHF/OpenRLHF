@@ -454,6 +454,10 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     args.prompt_max_len = args.max_len - args.max_new_tokens
+    if args.prompt_max_len < 0:
+        raise ValueError(
+            f"--max_new_tokens ({args.max_new_tokens}) must be <= --max_len ({args.max_len}) in batch inference."
+        )
 
     if args.eval_task == "generate":
         batch_generate(args)
