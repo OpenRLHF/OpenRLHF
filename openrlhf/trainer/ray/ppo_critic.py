@@ -189,7 +189,6 @@ class CriticModelActor(BaseModelActor):
             strategy.load_hf_checkpoint(
                 critic,
                 pretrain,
-                init_missing_value_head=True,
                 force_init_value_head=strategy.args.force_init_value_head,
             )
 

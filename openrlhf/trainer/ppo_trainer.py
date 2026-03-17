@@ -154,11 +154,12 @@ class BasePPOTrainer(ABC):
         run_actor = global_steps > self.args.freezing_actor_steps and self.actor_model_group is not None
 
         def _run_sleep(group, **kwargs):
-            # Sleep mode: reload -> fit -> offload (smaller GPU memory).
+            ray.get(group.async_run_method(method_name="reload_model"))
             ray.get(group.async_run_method(method_name="reload_states"))
             ref = group.async_run_method(method_name="fit", **kwargs)
             status.update(ray.get(ref)[0])
             ray.get(group.async_run_method(method_name="offload_states"))
+            ray.get(group.async_run_method(method_name="offload_model"))
 
         if self.args.fsdp2_enable_sleep:
             # Colocated/sleeping: run critic first, then actor.
