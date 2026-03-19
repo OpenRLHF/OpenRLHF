@@ -177,6 +177,7 @@ class DPOTrainer(ABC):
                     "chosen_reward": chosen_reward.mean().item(),
                     "reject_reward": reject_reward.mean().item(),
                     "lr": self.scheduler.get_last_lr()[0],
+                    "grad_norm": self.strategy.get_grad_norm(self.model),
                 }
                 if self.nll_loss:
                     logs_dict["nll_loss"] = nll_loss.item()
