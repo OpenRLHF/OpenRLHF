@@ -38,7 +38,7 @@ class RewardModelTrainer(ABC):
         max_norm=0.5,
         max_epochs: int = 2,
         loss="sigmoid",
-        disable_ds_ckpt=False,
+        disable_fsdp2_ckpt=False,
         save_hf_ckpt=False,
     ) -> None:
         super().__init__()
@@ -52,7 +52,7 @@ class RewardModelTrainer(ABC):
         self.optimizer = optim
         self.tokenizer = tokenizer
         self.args = strategy.args
-        self.disable_ds_ckpt = disable_ds_ckpt
+        self.disable_fsdp2_ckpt = disable_fsdp2_ckpt
         self.save_hf_ckpt = save_hf_ckpt
 
         if loss == "sigmoid":
@@ -223,14 +223,23 @@ class RewardModelTrainer(ABC):
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
-            tag = f"global_step{global_step}"
-            if not self.disable_ds_ckpt:
-                self.strategy.save_ckpt(
-                    self.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+            tag = f"global_step_{global_step}"
+            step_dir = os.path.join(self.strategy.dcp_ckpt_path, tag)
+            any_checkpoint_saved = False
+            if not self.disable_fsdp2_ckpt:
+                self.strategy.save_dcp_checkpoint(
+                    self.model,
+                    os.path.join(step_dir, "dcp_checkpoint"),
+                    client_state=client_states,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
                 )
+                any_checkpoint_saved = True
             if self.save_hf_ckpt:
-                save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
-                self.strategy.save_model(self.model, self.tokenizer, save_path)
+                self.strategy.save_hf_checkpoint(self.model, self.tokenizer, os.path.join(step_dir, "hf_checkpoint"))
+                any_checkpoint_saved = True
+            if any_checkpoint_saved:
+                self.strategy.cleanup_old_checkpoints(tag)
 
     def evaluate(self, eval_dataloader, steps=0):
         step_bar = tqdm(
@@ -279,6 +288,7 @@ class RewardModelTrainer(ABC):
             unwrap_model = self.strategy._unwrap_model(self.model)
             unwrap_model.config.mean = reward_mean.item()
             unwrap_model.config.std = reward_std.item()
+            unwrap_model.reset_buffers()
 
             bar_dict = {
                 "eval_loss": loss_mean,
@@ -309,7 +319,10 @@ class RewardModelTrainer(ABC):
         """
         input_ids, att_masks = self.concatenated_inputs(chosen_ids, c_mask, reject_ids, r_mask)
         all_values, output = model(
-            input_ids, attention_mask=att_masks, return_output=True, ring_attn_group=self.strategy.ring_attn_group
+            input_ids,
+            attention_mask=att_masks,
+            return_output=True,
+            ring_attn_group=self.strategy.ring_attn_group,
         )
         chosen_rewards = all_values[: chosen_ids.shape[0]]
         rejected_rewards = all_values[chosen_ids.shape[0] :]
