@@ -189,6 +189,16 @@ def move_optimizer_state(optimizer: torch.optim.Optimizer, device: str | torch.d
         torch.cuda.synchronize()
 
 
+@torch.no_grad()
+def move_buffers_to_cuda(model: nn.Module) -> None:
+    """Move all non-meta buffers to CUDA. Needed for CPU-offloaded FSDP2 models."""
+    device = torch.device("cuda", torch.cuda.current_device())
+    for _name, buf in model.named_buffers():
+        if getattr(buf, "is_meta", False) or buf.device == device:
+            continue
+        buf.data = buf.data.to(device)
+
+
 def get_checkpoint_metadata(strategy) -> dict:
     """Build metadata for FSDP2 checkpoint (saved as fsdp2_runtime.json)."""
     return {
@@ -223,32 +233,42 @@ def reinit_rotary_embedding(backbone: nn.Module) -> None:
 
     HuggingFace registers inv_freq as a non-persistent buffer, so it's lost
     after to_empty() + checkpoint load and must be recomputed.
-    """
-    # HF places rotary_emb on LlamaModel (backbone.model) or directly on backbone.
-    rotary_emb = getattr(getattr(backbone, "model", backbone), "rotary_emb", None)
-    if rotary_emb is None or not all(hasattr(rotary_emb, name) for name in ("inv_freq", "config")):
-        return
 
+    Searches all modules (model-level and per-layer) to handle both
+    Transformers V4 (per-layer rotary_emb) and V5 (model-level rotary_emb).
+    """
+    inner = getattr(backbone, "model", backbone)
+    for _name, mod in inner.named_modules():
+        if not hasattr(mod, "inv_freq") or not hasattr(mod, "config"):
+            continue
+        _reinit_single_rotary(mod)
+
+
+@torch.no_grad()
+def _reinit_single_rotary(rotary_emb: nn.Module) -> None:
+    """Reinitialize a single rotary embedding module's inv_freq buffer."""
     device = rotary_emb.inv_freq.device
 
+    # V4 path: instance has rope_init_fn (older transformers)
     if hasattr(rotary_emb, "rope_init_fn"):
         inv_freq, attention_scaling = rotary_emb.rope_init_fn(rotary_emb.config, device)
-        rotary_emb.inv_freq.copy_(inv_freq.to(device=rotary_emb.inv_freq.device, dtype=rotary_emb.inv_freq.dtype))
+        rotary_emb.inv_freq.copy_(inv_freq.to(device=device, dtype=rotary_emb.inv_freq.dtype))
         if hasattr(rotary_emb, "attention_scaling"):
             rotary_emb.attention_scaling = attention_scaling
         return
 
+    # V5 path: reconstruct from class (uses config.rope_parameters internally)
     try:
-        fresh_rotary = type(rotary_emb)(rotary_emb.config, device=device)
+        fresh = type(rotary_emb)(rotary_emb.config, device=device)
     except TypeError:
-        fresh_rotary = type(rotary_emb)(rotary_emb.config)
+        fresh = type(rotary_emb)(rotary_emb.config)
 
-    for name in ("inv_freq", "original_inv_freq"):
-        dst = getattr(rotary_emb, name, None)
-        src = getattr(fresh_rotary, name, None)
+    for buf_name in ("inv_freq", "original_inv_freq"):
+        dst = getattr(rotary_emb, buf_name, None)
+        src = getattr(fresh, buf_name, None)
         if torch.is_tensor(dst) and torch.is_tensor(src):
             dst.copy_(src.to(device=dst.device, dtype=dst.dtype))
 
     for attr in ("attention_scaling", "max_seq_len_cached", "original_max_seq_len", "rope_type"):
-        if hasattr(fresh_rotary, attr):
-            setattr(rotary_emb, attr, getattr(fresh_rotary, attr))
+        if hasattr(fresh, attr):
+            setattr(rotary_emb, attr, getattr(fresh, attr))

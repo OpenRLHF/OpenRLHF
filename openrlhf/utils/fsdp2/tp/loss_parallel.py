@@ -1,8 +1,10 @@
 """Loss-parallel utilities for vocab-sharded DTensor logits.
 
-When TP (Tensor Parallelism) is enabled, the LM head's vocab dimension is sharded
-across ranks. This module provides sharded versions of common loss/metric operations
-so they can work directly on sharded logits without gathering the full vocab.
+When TP shards the LM head's vocab dimension across ranks, these functions
+compute loss/metrics directly on sharded logits without gathering the full vocab.
+
+Key pattern: each rank holds logits[..., vocab_start:vocab_end]. Shared operations
+(logsumexp, argmax) use all-reduce across the TP group.
 """
 
 import torch
@@ -11,35 +13,50 @@ import torch.distributed.nn.functional as dist_nn
 from torch.distributed.tensor import DTensor
 
 
+# =============================================================================
+# Primitives
+# =============================================================================
+
+
 def _allreduce_sum(x: torch.Tensor, group, *, mean_grad: bool = False) -> torch.Tensor:
-    """All-reduce SUM with selectable backward semantics."""
+    """All-reduce SUM in forward. If mean_grad=True, backward uses SUM/world_size.
+
+    mean_grad=True is needed when a loss is computed from sharded pieces:
+    forward aggregates via SUM, but each rank's gradient should be averaged
+    (not duplicated) to get the correct global gradient.
+    """
     if not dist.is_initialized():
         return x
 
     if not mean_grad:
+        # Standard: forward=SUM, backward=SUM
         return dist_nn.all_reduce(x, op=dist.ReduceOp.SUM, group=group)
 
+    # Custom: forward=SUM, backward=SUM/N (mean gradient)
     class _AllReduceSumMeanGrad(torch.autograd.Function):
         @staticmethod
-        def forward(ctx, x: torch.Tensor, group) -> torch.Tensor:  # type: ignore[override]
+        def forward(ctx, x, group):
             ctx.group = group
-            ctx.group_size = dist.get_world_size(group=group)
+            ctx.world_size = dist.get_world_size(group=group)
             out = x.clone()
             dist.all_reduce(out, op=dist.ReduceOp.SUM, group=group)
             return out
 
         @staticmethod
-        def backward(ctx, grad_out: torch.Tensor):  # type: ignore[override]
+        def backward(ctx, grad_out):
             grad = grad_out.clone()
             dist.all_reduce(grad, op=dist.ReduceOp.SUM, group=ctx.group)
-            grad.div_(float(ctx.group_size))
+            grad.div_(float(ctx.world_size))
             return grad, None
 
     return _AllReduceSumMeanGrad.apply(x, group)
 
 
 def _unpack_sharded_logits(tensor: DTensor):
-    """Extract sharding info from a vocab-sharded DTensor."""
+    """Extract local shard and global index range from a vocab-sharded DTensor.
+
+    Returns: (group, local_logits, local_vocab_size, global_vocab_size, vocab_start, vocab_end)
+    """
     mesh = tensor.device_mesh
     group = mesh.get_group()
     rank = dist.get_rank(group)
@@ -47,41 +64,38 @@ def _unpack_sharded_logits(tensor: DTensor):
     local_logits = tensor.to_local()
     local_vocab_size = local_logits.size(-1)
 
-    # All-gather each rank's local vocab size — shards may differ when vocab_size % world != 0
+    # All-gather vocab sizes (shards may differ when vocab_size % world != 0)
     size_tensor = torch.tensor(local_vocab_size, device=local_logits.device, dtype=torch.int64)
     size_list = [torch.zeros_like(size_tensor) for _ in range(world)]
     dist.all_gather(size_list, size_tensor, group=group)
     sizes = [int(s.item()) for s in size_list]
-    # Compute this rank's global vocab index range: [vocab_start, vocab_end)
+
     vocab_start = sum(sizes[:rank])
     vocab_end = vocab_start + sizes[rank]
     global_vocab_size = sum(sizes)
     return group, local_logits, local_vocab_size, global_vocab_size, vocab_start, vocab_end
 
 
-def _sharded_logsumexp(
-    local_logits: torch.Tensor,
-    group,
-    dim: int = -1,
-    *,
-    mean_grad: bool = False,
-) -> torch.Tensor:
-    """Compute logsumexp over sharded vocab dimension.
+def _sharded_logsumexp(local_logits: torch.Tensor, group, dim: int = -1, *, mean_grad: bool = False) -> torch.Tensor:
+    """Numerically stable logsumexp over sharded vocab: max-shift trick.
 
-    Uses the max-shift trick for numerical stability:
-        logsumexp(x) = max(x) + log(sum(exp(x - max(x))))
+    logsumexp(x) = max(x) + log(sum(exp(x - max(x))))
     """
-    # Step 1: find the global max across all ranks (for numerical stability)
+    # Global max for numerical stability
     local_max = local_logits.max(dim=dim).values
     global_max = local_max.detach().clone()
     dist.all_reduce(global_max, op=dist.ReduceOp.MAX, group=group)
-    # Step 2: each rank computes exp(x_local - global_max) to avoid overflow, then sums locally
-    local_exp = torch.exp(local_logits - global_max.unsqueeze(dim))
-    local_exp_sum = local_exp.sum(dim=dim)
-    # Step 3: allreduce the partial exp sums to get the global sum
+
+    # Each rank: exp(x - max) → sum → all-reduce
+    local_exp_sum = torch.exp(local_logits - global_max.unsqueeze(dim)).sum(dim=dim)
     global_exp_sum = _allreduce_sum(local_exp_sum, group, mean_grad=mean_grad)
-    # Reassemble: logsumexp = global_max + log(global_exp_sum)
+
     return global_max + torch.log(global_exp_sum)
+
+
+# =============================================================================
+# Sharded loss/metric functions
+# =============================================================================
 
 
 def compute_token_log_probs_sharded(
@@ -90,113 +104,96 @@ def compute_token_log_probs_sharded(
     temperature: float = 1.0,
     ignore_index: int = -100,
 ) -> torch.Tensor:
-    """Sharded version of ``_compute_token_log_probs_local`` (openrlhf.models.utils).
+    """Sharded log_prob: log_prob(label) = logit[label] - logsumexp(logits).
 
-    Core formula: log_prob(label) = logit[label] - logsumexp(logits)
+    Each rank checks if the label falls in its vocab shard, gathers the logit
+    if so (zero otherwise), then all-reduces to get the global label logit.
     """
     group, local_logits, local_vocab_size, _, vocab_start, vocab_end = _unpack_sharded_logits(logits)
     local_logits_f32 = local_logits.float()
     if temperature != 1.0:
         local_logits_f32 = local_logits_f32 / temperature
 
-    # logsumexp over the full (global) vocab, computed in sharded fashion
-    logsumexp_global = _sharded_logsumexp(local_logits_f32, group, dim=-1, mean_grad=True)
+    logsumexp = _sharded_logsumexp(local_logits_f32, group, dim=-1, mean_grad=True)
 
     labels = labels.to(local_logits_f32.device)
-    local_label_indices = labels - vocab_start
-    # label_in_shard: True only if this rank's vocab shard contains the target label
-    label_in_shard = (labels >= vocab_start) & (labels < vocab_end) & (labels != ignore_index)
-    # clamped_local_idx: clamped index so gather() won't OOB — the value is discarded when label_in_shard=False
-    clamped_local_idx = local_label_indices.clamp(0, max(local_vocab_size - 1, 0))
-    gathered_logits = local_logits_f32.gather(dim=-1, index=clamped_local_idx.unsqueeze(-1)).squeeze(-1)
-    # Zero out contributions from ranks that don't own the label's vocab entry
-    local_label_logits = torch.where(label_in_shard, gathered_logits, torch.zeros_like(gathered_logits))
+    local_idx = labels - vocab_start
+    in_shard = (labels >= vocab_start) & (labels < vocab_end) & (labels != ignore_index)
 
-    # Allreduce: exactly one rank contributes the real logit value; others contribute zero
+    # Safe gather: clamp index to valid range, zero out non-owners after
+    safe_idx = local_idx.clamp(0, max(local_vocab_size - 1, 0))
+    gathered = local_logits_f32.gather(dim=-1, index=safe_idx.unsqueeze(-1)).squeeze(-1)
+    local_label_logits = torch.where(in_shard, gathered, torch.zeros_like(gathered))
+
+    # Exactly one rank owns each label; SUM gives the correct global logit
     global_label_logits = _allreduce_sum(local_label_logits, group, mean_grad=True)
 
-    # log_prob = logit[label] - logsumexp(logits)
-    log_probs = global_label_logits - logsumexp_global
-    log_probs = torch.where(labels == ignore_index, torch.zeros_like(log_probs), log_probs)
-    return log_probs
+    log_probs = global_label_logits - logsumexp
+    return torch.where(labels == ignore_index, torch.zeros_like(log_probs), log_probs)
 
 
 def compute_entropy_sharded(logits: DTensor) -> torch.Tensor:
-    """Sharded version of ``_compute_entropy_local`` (openrlhf.models.utils).
+    """Sharded entropy: H = -sum(p * log(p)) where p = softmax(logits).
 
-    Entropy: H = -sum(p * log(p)), computed as:
-        1. max-shift for numerical stability (same as _sharded_logsumexp)
-        2. local softmax → allreduce normalizer → local p*log(p) → allreduce sum
+    Uses a custom autograd Function for correct gradients:
+    dH/dx_j = -p_j * (H + log(p_j))
     """
 
-    class _ShardedEntropyFn(torch.autograd.Function):
+    class _ShardedEntropy(torch.autograd.Function):
         @staticmethod
-        def forward(ctx, local_logits: torch.Tensor, group) -> torch.Tensor:  # type: ignore[override]
+        def forward(ctx, local_logits, group):
             dim = -1
-            # --- max-shift trick (same idea as _sharded_logsumexp) ---
+
+            # Max-shift for numerical stability
             local_max = local_logits.max(dim=dim).values
             global_max = local_max.detach().clone()
             dist.all_reduce(global_max, op=dist.ReduceOp.MAX, group=group)
 
-            # logits_shifted = x - max(x), so exp(logits_shifted) won't overflow
-            logits_shifted = local_logits - global_max.unsqueeze(dim)
-            local_exp = torch.exp(logits_shifted)
-            local_exp_sum = local_exp.sum(dim=dim)
+            shifted = local_logits - global_max.unsqueeze(dim)
+            local_exp = torch.exp(shifted)
 
-            # Allreduce to get the global partition function Z = sum(exp(logits_shifted))
-            global_exp_sum = local_exp_sum.detach().clone()
-            dist.all_reduce(global_exp_sum, op=dist.ReduceOp.SUM, group=group)
+            # Global partition function Z
+            Z = local_exp.sum(dim=dim).detach().clone()
+            dist.all_reduce(Z, op=dist.ReduceOp.SUM, group=group)
 
-            # p_i = exp(logits_shifted_i) / Z  (local softmax using global normalizer)
-            local_probs = local_exp / global_exp_sum.unsqueeze(dim)
-            # log(p_i) = logits_shifted_i - log(Z)
-            local_log_probs = logits_shifted - torch.log(global_exp_sum).unsqueeze(dim)
+            # p = exp(shifted) / Z, log(p) = shifted - log(Z)
+            local_probs = local_exp / Z.unsqueeze(dim)
+            local_log_probs = shifted - torch.log(Z).unsqueeze(dim)
 
-            # sum(p * log(p)) — each rank computes its local vocab slice, then allreduce
-            local_plogp_sum = (local_probs * local_log_probs).sum(dim=dim)
-            global_plogp_sum = local_plogp_sum.detach().clone()
-            dist.all_reduce(global_plogp_sum, op=dist.ReduceOp.SUM, group=group)
-            entropy = -global_plogp_sum
+            # H = -sum(p * log(p)), computed locally then all-reduced
+            plogp_sum = (local_probs * local_log_probs).sum(dim=dim).detach().clone()
+            dist.all_reduce(plogp_sum, op=dist.ReduceOp.SUM, group=group)
+            entropy = -plogp_sum
 
             ctx.save_for_backward(local_probs, local_log_probs, entropy)
             return entropy
 
         @staticmethod
-        def backward(ctx, grad_out: torch.Tensor):  # type: ignore[override]
+        def backward(ctx, grad_out):
             local_probs, local_log_probs, entropy = ctx.saved_tensors
-            # Derivation of ∂H/∂x_j where H = -Σ_i p_i log(p_i), p_i = softmax(x)_i:
-            #   ∂p_i/∂x_j = p_i(δ_ij - p_j)
-            #   ∂H/∂x_j   = -Σ_i (∂p_i/∂x_j)(1 + log p_i)
-            #              = -Σ_i p_i(δ_ij - p_j)(1 + log p_i)
-            #              = -p_j(1 + log p_j) + p_j·Σ_i p_i(1 + log p_i)
-            #              = -p_j(1 + log p_j) + p_j·(1 - H)
-            #              = -p_j·(H + log p_j)
-            #
-            # dH/dx_i = -p_i * (H + log(p_i)), derived from d/dx[-sum(p*log(p))]
-            grad_local_logits = grad_out.unsqueeze(-1) * (-local_probs * (entropy.unsqueeze(-1) + local_log_probs))
-            return grad_local_logits, None
+            # dH/dx_j = -p_j * (H + log(p_j))
+            grad = grad_out.unsqueeze(-1) * (-local_probs * (entropy.unsqueeze(-1) + local_log_probs))
+            return grad, None
 
     group, local_logits, _, _, _, _ = _unpack_sharded_logits(logits)
-    return _ShardedEntropyFn.apply(local_logits.float(), group)
+    return _ShardedEntropy.apply(local_logits.float(), group)
 
 
 def gather_token_logits_sharded(logits: DTensor, token_ids: torch.Tensor) -> torch.Tensor:
-    """Sharded version of ``torch.gather``/``index_select`` for vocab-sharded DTensor logits.
+    """Sharded gather: extract logits for specific token_ids from vocab-sharded DTensor.
 
-    Same pattern as the label-gather in compute_token_log_probs_sharded:
-    check if token_id is in the local shard → safe index → zero out non-owners → allreduce.
+    Same shard-check + all-reduce pattern as compute_token_log_probs_sharded.
     """
     group, local_logits, _, _, vocab_start, vocab_end = _unpack_sharded_logits(logits)
     token_ids = token_ids.to(local_logits.device)
-    local_token_indices = token_ids - vocab_start
-    # token_in_shard: True if this rank's vocab shard contains the requested token_id
-    token_in_shard = (token_ids >= vocab_start) & (token_ids < vocab_end)
-    # clamped_local_idx: clamped to valid range; result discarded when token_in_shard=False
-    clamped_local_idx = local_token_indices.clamp(0, max=local_logits.size(-1) - 1)
-    gathered_logits = local_logits.index_select(dim=-1, index=clamped_local_idx)
-    # Only the owning rank keeps its gathered value; others contribute zero
-    local_masked_logits = torch.where(token_in_shard, gathered_logits, torch.zeros_like(gathered_logits))
-    return _allreduce_sum(local_masked_logits, group, mean_grad=True)
+
+    local_idx = token_ids - vocab_start
+    in_shard = (token_ids >= vocab_start) & (token_ids < vocab_end)
+    safe_idx = local_idx.clamp(0, max=local_logits.size(-1) - 1)
+
+    gathered = local_logits.index_select(dim=-1, index=safe_idx)
+    masked = torch.where(in_shard, gathered, torch.zeros_like(gathered))
+    return _allreduce_sum(masked, group, mean_grad=True)
 
 
 def compute_kd_loss_sharded(
@@ -205,78 +202,65 @@ def compute_kd_loss_sharded(
     label: torch.Tensor,
     ignore_index: int = -100,
 ) -> torch.Tensor:
-    """Sharded version of ``KDLoss.forward`` (openrlhf.models.loss).
+    """Sharded KD loss: -sum(teacher_prob * student_log_prob), averaged over valid tokens.
 
-    Core formula: KD loss = -sum(teacher_prob * student_log_prob)
-    Teacher and student may independently be DTensor or plain Tensor,
-    so logsumexp is computed with the sharded or local path accordingly.
+    Teacher and student may independently be DTensor or plain Tensor.
     """
 
-    def _get_local_logits(logits: torch.Tensor, vocab_start: int, vocab_end: int) -> torch.Tensor:
-        """Get local vocab slice from logits (handles both DTensor and regular Tensor)."""
-        if isinstance(logits, DTensor):
-            return logits.to_local()
-        return logits[..., vocab_start:vocab_end]
+    def _get_local(t, vocab_start, vocab_end):
+        return t.to_local() if isinstance(t, DTensor) else t[..., vocab_start:vocab_end]
 
-    # Use whichever tensor is a DTensor to derive the sharding metadata
-    dtensor_ref = logits if isinstance(logits, DTensor) else teacher_logits
-    if not isinstance(dtensor_ref, DTensor):
-        raise TypeError("compute_kd_loss_sharded requires logits or teacher_logits to be DTensor")
+    # Derive sharding metadata from whichever tensor is a DTensor
+    ref = logits if isinstance(logits, DTensor) else teacher_logits
+    if not isinstance(ref, DTensor):
+        raise TypeError("compute_kd_loss_sharded requires at least one DTensor input")
 
-    group, _, _, _, vocab_start, vocab_end = _unpack_sharded_logits(dtensor_ref)
+    group, _, _, _, vocab_start, vocab_end = _unpack_sharded_logits(ref)
 
-    local_student_logits = _get_local_logits(logits, vocab_start, vocab_end).float()
-    local_teacher_logits = _get_local_logits(teacher_logits, vocab_start, vocab_end).float()
+    local_student = _get_local(logits, vocab_start, vocab_end).float()
+    local_teacher = _get_local(teacher_logits, vocab_start, vocab_end).float()
 
-    # logsumexp: use sharded path if the tensor is DTensor, otherwise local-only is correct
+    # logsumexp: sharded path for DTensor, local for plain Tensor
     if isinstance(teacher_logits, DTensor):
-        teacher_logsumexp = _sharded_logsumexp(local_teacher_logits, group, dim=-1, mean_grad=False)
+        teacher_lse = _sharded_logsumexp(local_teacher, group, dim=-1, mean_grad=False)
     else:
-        teacher_logsumexp = torch.logsumexp(teacher_logits.float(), dim=-1)
+        teacher_lse = torch.logsumexp(teacher_logits.float(), dim=-1)
 
     if isinstance(logits, DTensor):
-        student_logsumexp = _sharded_logsumexp(local_student_logits, group, dim=-1, mean_grad=False)
+        student_lse = _sharded_logsumexp(local_student, group, dim=-1, mean_grad=False)
     else:
-        student_logsumexp = torch.logsumexp(logits.float(), dim=-1)
+        student_lse = torch.logsumexp(logits.float(), dim=-1)
 
-    # teacher_prob * student_log_prob, summed over the local vocab slice
-    local_teacher_probs = torch.exp(local_teacher_logits - teacher_logsumexp.unsqueeze(-1))
-    local_student_logprobs = local_student_logits - student_logsumexp.unsqueeze(-1)
-    local_cross_entropy = (local_teacher_probs * local_student_logprobs).sum(dim=-1)
-
-    # Allreduce partial sums across ranks to get the global cross-entropy
-    global_cross_entropy = _allreduce_sum(local_cross_entropy, group, mean_grad=True)
+    # Cross-entropy: sum(teacher_prob * student_log_prob) per position
+    teacher_probs = torch.exp(local_teacher - teacher_lse.unsqueeze(-1))
+    student_log_probs = local_student - student_lse.unsqueeze(-1)
+    local_ce = (teacher_probs * student_log_probs).sum(dim=-1)
+    global_ce = _allreduce_sum(local_ce, group, mean_grad=True)
 
     mask = (label != ignore_index).float()
-    # KD loss = -cross_entropy, averaged over non-ignored tokens
-    return -(global_cross_entropy.view(-1) * mask.view(-1)).sum() / mask.sum()
+    return -(global_ce.view(-1) * mask.view(-1)).sum() / mask.sum()
 
 
 def compute_argmax_sharded(logits: DTensor, mask: torch.Tensor) -> torch.Tensor:
-    """Sharded version of ``torch.argmax`` for vocab-sharded DTensor logits.
+    """Sharded argmax: two-step all-reduce for global max value + index.
 
-    Two-step allreduce:
-        1. Find the global max *value* across all ranks.
-        2. Every rank whose local max matches the global max contributes its first
-           matching global index; others contribute a sentinel larger than any
-           vocab index. A second allreduce(MIN) picks the first global index,
-           matching ``torch.argmax`` tie-breaking semantics.
+    Step 1: all-reduce MAX to find global max value.
+    Step 2: winning ranks contribute their global index, all-reduce MIN picks first.
     """
     group, local_logits, _, global_vocab_size, vocab_start, _ = _unpack_sharded_logits(logits)
-    masked_local_logits = local_logits.detach()[mask].float()
-    local_max, local_argmax = masked_local_logits.max(dim=-1)
+    masked_local = local_logits.detach()[mask].float()
+    local_max, local_argmax = masked_local.max(dim=-1)
 
-    # Step 1: find the global maximum value
+    # Global max value
     global_max = local_max.clone()
     dist.all_reduce(global_max, op=dist.ReduceOp.MAX, group=group)
 
-    # Step 2: all winning ranks contribute their first matching global index;
-    # allreduce(MIN) then selects the first global index among tied maxima.
-    candidate_idx = torch.where(
+    # Winning ranks contribute global index; others contribute sentinel (>any valid index)
+    candidate = torch.where(
         local_max == global_max,
         local_argmax + vocab_start,
         torch.full_like(local_argmax, global_vocab_size),
     )
-    global_argmax = candidate_idx.clone()
+    global_argmax = candidate.clone()
     dist.all_reduce(global_argmax, op=dist.ReduceOp.MIN, group=group)
     return global_argmax

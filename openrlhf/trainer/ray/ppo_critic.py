@@ -1,6 +1,5 @@
 import math
 import os
-from abc import ABC
 from typing import Dict, Optional, Union
 
 import ray
@@ -20,7 +19,7 @@ from ..ppo_utils import NaiveReplayBuffer
 from .launcher import BaseModelActor
 
 
-class CriticPPOTrainer(ABC):
+class CriticPPOTrainer:
     def __init__(
         self,
         strategy,
@@ -144,6 +143,7 @@ class CriticPPOTrainer(ABC):
             sync_gradients = bool(self.replay_buffer.dynamic_optimizer_step[step])
 
         self.strategy.backward(loss, self.critic, self.critic_optim, name="critic", sync_gradients=sync_gradients)
+        critic_grad_norm = self.strategy.get_grad_norm(self.critic)
         self.strategy.optimizer_step(
             self.critic_optim, self.critic, self.critic_scheduler, name="critic", sync_gradients=sync_gradients
         )
@@ -153,6 +153,7 @@ class CriticPPOTrainer(ABC):
             "critic_loss": critic_loss.detach().item(),
             "values": masked_mean(values, experience.action_mask).detach().item(),
             "critic_lr": self.critic_scheduler.get_last_lr()[0],
+            "critic_grad_norm": critic_grad_norm,
         }
         return status
 

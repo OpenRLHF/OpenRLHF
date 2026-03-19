@@ -2,11 +2,10 @@
 Tensor Parallelism for FSDP2
 ============================
 
-This module provides DTensor tensor parallelism support including:
-- Custom ParallelStyle variants (ReplicateParallel, SequenceParallelPreserveGrad)
-- TP plans for common HF model families (LLaMA, Qwen, Mistral)
-- Model parallelization utilities
-- Ring Attention compatibility hooks
+Applies DTensor-based TP to HuggingFace causal LM models.
+
+Plan resolution order: custom_plan > HF model._tp_plan > default.
+Each plan maps module-name glob patterns to ParallelStyle instances.
 """
 
 from __future__ import annotations
@@ -33,15 +32,17 @@ from ..utils import ensure_tied_word_embeddings
 logger = logging.getLogger(__name__)
 
 
-# === Custom ParallelStyle classes ===
+# =============================================================================
+# Custom ParallelStyle classes
+# =============================================================================
 
 
 class ReplicateParallel(ParallelStyle):
-    """Replicate parameters as DTensors without sharding, with custom I/O layout control.
+    """Replicate parameters without sharding, with custom I/O layout control.
 
-    Upstream PyTorch only provides sharding styles (Colwise/Rowwise/SequenceParallel).
-    This fills the gap for modules that must NOT be sharded (e.g. score head, Q/K
-    RMSNorm) but still need DTensor mesh metadata for FSDP2 grad norm & checkpointing.
+    Upstream PyTorch only has sharding styles (Colwise/Rowwise/SequenceParallel).
+    This fills the gap for modules that should NOT be sharded (e.g. score head,
+    Q/K RMSNorm) but still need DTensor metadata for FSDP2 grad norm & checkpointing.
     """
 
     def __init__(
@@ -63,7 +64,6 @@ class ReplicateParallel(ParallelStyle):
         input_tensor = inputs[0]
         if not isinstance(input_tensor, DTensor):
             input_tensor = DTensor.from_local(input_tensor, device_mesh, (input_layout,), run_check=False)
-
         if input_layout != desired_input_layout:
             input_tensor = input_tensor.redistribute(placements=(desired_input_layout,), async_op=True)
         return (input_tensor, *inputs[1:])
@@ -85,11 +85,11 @@ class ReplicateParallel(ParallelStyle):
 
 
 class SequenceParallelPreserveGrad(SequenceParallel):
-    """SequenceParallel that preserves ``requires_grad`` when re-wrapping parameters.
+    """SequenceParallel that preserves requires_grad when wrapping parameters.
 
-    Upstream ``SequenceParallel._replicate_module_fn`` wraps params via
-    ``nn.Parameter(dtensor)`` which resets requires_grad=True unconditionally,
-    silently unfreezing frozen params. Critical for LoRA / partial fine-tuning.
+    Upstream SequenceParallel._replicate_module_fn wraps params via
+    nn.Parameter(dtensor) which resets requires_grad=True, silently unfreezing
+    frozen params. Critical for LoRA / partial fine-tuning.
     """
 
     def _replicate_module_fn(self, name: str, module: nn.Module, device_mesh: DeviceMesh) -> None:
@@ -103,172 +103,90 @@ class SequenceParallelPreserveGrad(SequenceParallel):
             )
 
 
-# === Base utilities ===
+# =============================================================================
+# TP plan building
+# =============================================================================
 
-
-def _parse_parallel_style(style_name: str) -> ParallelStyle:
-    """Convert a string shorthand to a ``ParallelStyle`` instance.
-
-    Args:
-        style_name: One of ``"colwise"``, ``"rowwise"``, ``"colwise_rep"``,
-            ``"rowwise_rep"``, ``"sequence_parallel"``, ``"replicate"``.
-
-    Returns:
-        The corresponding ``ParallelStyle`` instance.
-    """
-    styles: dict[str, ParallelStyle] = {
-        "colwise": ColwiseParallel(),
-        "rowwise": RowwiseParallel(),
-        "colwise_rep": ColwiseParallel(output_layouts=Replicate()),
-        "rowwise_rep": RowwiseParallel(input_layouts=Replicate()),
-        "sequence_parallel": SequenceParallelPreserveGrad(),
-        "replicate": ReplicateParallel(),
-    }
-    return styles[style_name]
-
-
-# === Architecture-specific TP plan definitions ===
-
-
-def _attn_mlp_plan() -> dict[str, ParallelStyle]:
-    """Return TP plan entries for attention and MLP projections.
-
-    Covers both separate (q_proj / k_proj / v_proj) and fused (qkv_proj,
-    gate_up_proj) projection variants so a single plan works for models
-    regardless of their linear fusion strategy.
-    """
-    return {
-        "model.layers.*.self_attn.q_proj": ColwiseParallel(),
-        "model.layers.*.self_attn.k_proj": ColwiseParallel(),
-        "model.layers.*.self_attn.v_proj": ColwiseParallel(),
-        "model.layers.*.self_attn.qkv_proj": ColwiseParallel(),
-        "model.layers.*.self_attn.o_proj": RowwiseParallel(),
-        "model.layers.*.mlp.gate_proj": ColwiseParallel(),
-        "model.layers.*.mlp.up_proj": ColwiseParallel(),
-        "model.layers.*.mlp.gate_up_proj": ColwiseParallel(),
-        "model.layers.*.mlp.down_proj": RowwiseParallel(),
-    }
-
-
-def _build_default_tp_plan(
-    sequence_parallel: bool = False,
-    layernorm_cls: type[ParallelStyle] = SequenceParallel,
-) -> dict[str, ParallelStyle]:
-    """Build the default TP plan for LLaMA-style transformer models.
-
-    This serves as the foundation plan used by all architecture-specific
-    builders.  When *sequence_parallel* is True the plan adds Shard(1)
-    placements for layernorms, embeddings, and residual connections.
-
-    Args:
-        sequence_parallel: Enable sequence-parallel sharding on dim 1.
-        layernorm_cls: ParallelStyle class used for per-layer layernorms
-            when sequence parallelism is active.
-
-    Returns:
-        A dict mapping module-name glob patterns to ``ParallelStyle`` instances.
-    """
-    plan: dict[str, ParallelStyle] = {
-        "model.embed_tokens": RowwiseParallel(input_layouts=Replicate()),
-        # Return full logits (all-gather vocab) as a local tensor for simple loss functions.
-        "lm_head": ColwiseParallel(output_layouts=Replicate(), use_local_output=True),
-        **_attn_mlp_plan(),
-    }
-
-    if sequence_parallel:
-        plan.update(
-            {
-                # Embedding: output Shard(1) for SP
-                "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
-                # Final norm: SP (preserve requires_grad)
-                # NOTE: return local tensor to avoid DTensor view/alias ops in HF heads
-                # (e.g. `hidden_states[:, slice_indices, :]` in LlamaForCausalLM).
-                "model.norm": SequenceParallelPreserveGrad(use_local_output=True),
-                # LayerNorms: SP (input Shard(1), output Shard(1) as local tensor)
-                "model.layers.*.input_layernorm": layernorm_cls(use_local_output=True),
-                "model.layers.*.post_attention_layernorm": layernorm_cls(use_local_output=True),
-                # AllGather before Attention / MLP: Shard(1) -> Replicate
-                "model.layers.*.self_attn": PrepareModuleInput(
-                    input_kwarg_layouts={"hidden_states": Shard(1)},
-                    desired_input_kwarg_layouts={"hidden_states": Replicate()},
-                    # Always feed local tensors into attention kernels (flash-attn / ring-flash-attn).
-                    use_local_output=True,
-                ),
-                "model.layers.*.mlp": PrepareModuleInput(
-                    input_layouts=Shard(1),
-                    desired_input_layouts=Replicate(),
-                    use_local_output=True,
-                ),
-                # Reduce-scatter back to Shard(1) for residual connections
-                "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
-                "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
-                # lm_head: input Shard(1), output Replicate() (full vocab logits)
-                "lm_head": ColwiseParallel(
-                    input_layouts=Shard(1),
-                    output_layouts=Replicate(),
-                    use_local_output=True,
-                ),
-            }
-        )
-
-    return plan
-
-
-def _build_qwen_tp_plan(model: nn.Module, sequence_parallel: bool) -> dict[str, ParallelStyle]:
-    """Build TP plan for Qwen2 / Qwen3 model families.
-
-    Extends the default plan with head-dimension sharding for the Q/K
-    RMSNorm layers (``q_norm``, ``k_norm``) that operate on already
-    head-sharded activations after the QKV reshape.
-    """
-
-    def _replicate_on_head_dim() -> ReplicateParallel:
-        """Create a ReplicateParallel that preserves Shard(2) on the head dimension.
-
-        Used for norms that operate on head-sharded activations with shape
-        ``(batch, seq, num_heads, head_dim)`` — e.g. Q/K RMSNorm in Qwen models.
-        Shard(2) marks the heads dimension so DTensor correctly all-reduces grads.
-        """
-        return ReplicateParallel(
-            input_layout=Shard(2),
-            desired_input_layout=Shard(2),
-            output_layout=Shard(2),
-            use_local_output=True,
-        )
-
-    plan = _build_default_tp_plan(sequence_parallel, SequenceParallelPreserveGrad)
-    plan["model.layers.*.self_attn.q_norm"] = _replicate_on_head_dim()
-    plan["model.layers.*.self_attn.k_norm"] = _replicate_on_head_dim()
-    return plan
-
-
-# Registry of architecture-specific TP plan factories.
-#
-# Each entry maps a HuggingFace model class name to a factory callable with signature:
-#
-#     def factory(model: nn.Module, sequence_parallel: bool) -> dict[str, ParallelStyle]
-#
-# To add support for a new model architecture:
-#   1. Write a ``_build_<arch>_tp_plan`` function (or reuse an existing one).
-#   2. Add the model class name and factory to this dict.
-_MODEL_PLANS = {
-    "Qwen2ForCausalLM": _build_qwen_tp_plan,
-    "Qwen3ForCausalLM": _build_qwen_tp_plan,
+# Attention + MLP projections (covers both separate and fused variants)
+_ATTN_MLP_PLAN: dict[str, ParallelStyle] = {
+    "model.layers.*.self_attn.q_proj": ColwiseParallel(),
+    "model.layers.*.self_attn.k_proj": ColwiseParallel(),
+    "model.layers.*.self_attn.v_proj": ColwiseParallel(),
+    "model.layers.*.self_attn.qkv_proj": ColwiseParallel(),  # fused QKV
+    "model.layers.*.self_attn.o_proj": RowwiseParallel(),
+    "model.layers.*.mlp.gate_proj": ColwiseParallel(),
+    "model.layers.*.mlp.up_proj": ColwiseParallel(),
+    "model.layers.*.mlp.gate_up_proj": ColwiseParallel(),  # fused gate+up
+    "model.layers.*.mlp.down_proj": RowwiseParallel(),
 }
 
 
-# === Plan parsing and modification ===
+def _build_default_tp_plan(sequence_parallel: bool = False) -> dict[str, ParallelStyle]:
+    """Build TP plan for LLaMA-style transformers.
+
+    Without SP: embeddings/lm_head use Replicate I/O, attention+MLP use Colwise/Rowwise.
+    With SP: activations are Shard(1) between layers, all-gathered before attention/MLP.
+    """
+    if not sequence_parallel:
+        return {
+            "model.embed_tokens": RowwiseParallel(input_layouts=Replicate()),
+            "lm_head": ColwiseParallel(output_layouts=Replicate(), use_local_output=True),
+            **_ATTN_MLP_PLAN,
+        }
+
+    # Sequence Parallel: activations sharded on seq dim (Shard(1)) between layers
+    return {
+        **_ATTN_MLP_PLAN,
+        "model.embed_tokens": RowwiseParallel(input_layouts=Replicate(), output_layouts=Shard(1)),
+        "model.norm": SequenceParallelPreserveGrad(use_local_output=True),
+        "model.layers.*.input_layernorm": SequenceParallelPreserveGrad(use_local_output=True),
+        "model.layers.*.post_attention_layernorm": SequenceParallelPreserveGrad(use_local_output=True),
+        # All-gather before Attention/MLP: Shard(1) → Replicate → local tensor for flash-attn
+        "model.layers.*.self_attn": PrepareModuleInput(
+            input_kwarg_layouts={"hidden_states": Shard(1)},
+            desired_input_kwarg_layouts={"hidden_states": Replicate()},
+            use_local_output=True,
+        ),
+        "model.layers.*.mlp": PrepareModuleInput(
+            input_layouts=Shard(1),
+            desired_input_layouts=Replicate(),
+            use_local_output=True,
+        ),
+        # Reduce-scatter back to Shard(1) after Attention/MLP
+        "model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
+        "model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
+        # lm_head: Shard(1) input → Replicate output (full vocab logits)
+        "lm_head": ColwiseParallel(input_layouts=Shard(1), output_layouts=Replicate(), use_local_output=True),
+    }
 
 
-def _extract_hf_tp_plan(model: nn.Module) -> dict[str, ParallelStyle] | None:
-    """Extract and normalize the TP plan from a HuggingFace model's ``_tp_plan`` attribute.
+# =============================================================================
+# Plan resolution and modification
+# =============================================================================
 
-    Searches the model class, instance, and inner ``model`` attribute for
-    ``_tp_plan`` dicts, merges them with appropriate prefixes, and converts
-    any string shorthands to ``ParallelStyle`` instances.
+_STYLE_SHORTHAND = {
+    "colwise": lambda: ColwiseParallel(),
+    "rowwise": lambda: RowwiseParallel(),
+    "colwise_rep": lambda: ColwiseParallel(output_layouts=Replicate()),
+    "rowwise_rep": lambda: RowwiseParallel(input_layouts=Replicate()),
+    "sequence_parallel": lambda: SequenceParallelPreserveGrad(),
+    "replicate": lambda: ReplicateParallel(),
+}
 
-    Returns:
-        The normalized plan dict, or ``None`` if no ``_tp_plan`` was found.
+
+def _parse_parallel_style(style_name: str) -> ParallelStyle:
+    """Convert string shorthand (e.g. "colwise") to ParallelStyle instance."""
+    return _STYLE_SHORTHAND[style_name]()
+
+
+def _extract_hf_tp_plan(model: nn.Module, sequence_parallel: bool = False) -> dict[str, ParallelStyle] | None:
+    """Read _tp_plan from HuggingFace model class/instance and normalize it.
+
+    Searches: type(model)._tp_plan, model._tp_plan, model.model._tp_plan.
+    Inner-model entries get "model." prefix. String shorthands are converted.
+
+    If the HF plan is too sparse (e.g. only lm_head), merges with the default
+    plan so that attention/MLP projections are still parallelized.
     """
     hf_entries: dict[str, ParallelStyle | str] = {}
     for src in [type(model), model, getattr(model, "model", None)]:
@@ -279,32 +197,61 @@ def _extract_hf_tp_plan(model: nn.Module) -> dict[str, ParallelStyle] | None:
         return None
 
     hf_entries.setdefault("model.embed_tokens", "rowwise_rep")
-    normalized_plan: dict[str, ParallelStyle] = {
+    plan: dict[str, ParallelStyle] = {
         k: _parse_parallel_style(v) if isinstance(v, str) else v for k, v in hf_entries.items()
     }
 
-    # Always return full-vocab logits (Replicate) to keep loss functions simple.
-    if "lm_head" not in normalized_plan:
-        normalized_plan["lm_head"] = ColwiseParallel(output_layouts=Replicate(), use_local_output=True)
-    else:
-        style = normalized_plan["lm_head"]
-        if isinstance(style, ColwiseParallel):
-            normalized_plan["lm_head"] = ColwiseParallel(
-                input_layouts=style.input_layouts[0],
-                output_layouts=Replicate(),
-                use_local_output=True,
-            )
+    # If the HF plan is too sparse (no attention/MLP entries), merge with
+    # the default plan so we don't silently skip sharding heavy linear layers.
+    has_attn_mlp = any("self_attn" in k or "mlp" in k for k in plan)
+    if not has_attn_mlp:
+        default = _build_default_tp_plan(sequence_parallel)
+        # Default plan provides the base; HF entries override it
+        merged = dict(default)
+        merged.update(plan)
+        plan = merged
 
-    return normalized_plan
+    # Always return full-vocab logits (Replicate) for simple loss functions
+    if "lm_head" not in plan:
+        plan["lm_head"] = ColwiseParallel(output_layouts=Replicate(), use_local_output=True)
+    elif isinstance(plan["lm_head"], ColwiseParallel):
+        plan["lm_head"] = ColwiseParallel(
+            input_layouts=plan["lm_head"].input_layouts[0],
+            output_layouts=Replicate(),
+            use_local_output=True,
+        )
+
+    return plan
+
+
+def _add_qwen_norm_entries(plan: dict[str, ParallelStyle]) -> dict[str, ParallelStyle]:
+    """Add Qwen-specific q_norm/k_norm ReplicateParallel entries.
+
+    These norms operate on head-sharded activations (batch, seq, num_heads, head_dim)
+    after the QKV reshape. Shard(2) marks the heads dimension.
+    """
+    plan = dict(plan)
+    for name in ("q_norm", "k_norm"):
+        key = f"model.layers.*.self_attn.{name}"
+        plan[key] = ReplicateParallel(
+            input_layout=Shard(2),
+            desired_input_layout=Shard(2),
+            output_layout=Shard(2),
+            use_local_output=True,
+        )
+    return plan
+
+
+# Architecture-specific TP plan augmentations.
+# Maps HuggingFace model class name → function that adds extra entries to a plan.
+_MODEL_PLAN_AUGMENTATIONS = {
+    "Qwen2ForCausalLM": _add_qwen_norm_entries,
+    "Qwen3ForCausalLM": _add_qwen_norm_entries,
+}
 
 
 def _with_loss_parallel_lm_head(plan: dict[str, ParallelStyle], sequence_parallel: bool) -> dict[str, ParallelStyle]:
-    """Return a copy of *plan* with lm_head outputting vocab-sharded DTensor logits (Shard(-1)).
-
-    This is used when loss-parallel is enabled so that the loss function
-    receives sharded logits instead of the default all-gathered Replicate
-    output.
-    """
+    """Override lm_head to output vocab-sharded DTensor (Shard(-1)) for loss-parallel."""
     plan = dict(plan)
     plan["lm_head"] = ColwiseParallel(
         input_layouts=Shard(1) if sequence_parallel else Replicate(),
@@ -314,19 +261,15 @@ def _with_loss_parallel_lm_head(plan: dict[str, ParallelStyle], sequence_paralle
     return plan
 
 
-def ensure_value_head_in_plan(
+def _ensure_value_head_in_plan(
     model: nn.Module,
     plan: dict[str, ParallelStyle],
     sequence_parallel: bool = False,
 ) -> dict[str, ParallelStyle]:
-    """Add ``score`` layer TP handling for Reward/Critic models.
+    """Add ReplicateParallel for score layer if model is Reward/Critic.
 
-    For non-value models (no ``score`` attribute), returns *plan* unchanged.
-
-    The ``score`` head produces per-token scalar values that must NOT be
-    sharded across TP ranks, so we use ``ReplicateParallel``.  When
-    *sequence_parallel* is True, the preceding norm output is Shard(1) on
-    the sequence dimension and needs an all-gather before the linear.
+    The score head produces per-token scalars — must NOT be vocab-sharded.
+    With SP, input is Shard(1) and needs all-gather before the linear.
     """
     head = getattr(model, "score", None)
     if head is None:
@@ -342,90 +285,57 @@ def ensure_value_head_in_plan(
         output_layout=Replicate(),
         use_local_output=True,
     )
-    logger.info("Added ReplicateParallel for score layer (Reward/Critic model, SP=%s)", sequence_parallel)
+    logger.info("Added ReplicateParallel for score layer (SP=%s)", sequence_parallel)
     return plan
 
 
 def _prune_plan(plan: dict[str, ParallelStyle], model: nn.Module) -> dict[str, ParallelStyle]:
-    """Drop TP plan entries that don't match any module in the model.
-
-    Avoids noisy warnings from `parallelize_module` when a plan includes
-    optional/fused module names (e.g. `qkv_proj`, `gate_up_proj`).
-    """
+    """Drop plan entries that don't match any module (avoids warnings for optional fused layers)."""
     module_names = {name for name, _ in model.named_modules()}
-
-    def matches(pattern: str) -> bool:
-        return any(fnmatch(name, pattern) for name in module_names)
-
-    kept = {k: v for k, v in plan.items() if matches(k)}
-    if (num_pruned := len(plan) - len(kept)) > 0:
-        logger.debug("Pruned %s unmatched TP plan entries", num_pruned)
-    return kept
+    return {k: v for k, v in plan.items() if any(fnmatch(name, k) for name in module_names)}
 
 
-# === Public plan entry ===
+# =============================================================================
+# Public API
+# =============================================================================
 
 
 def get_tp_plan(
     model: nn.Module,
     sequence_parallel: bool = False,
-    custom_plan: dict[str, ParallelStyle | str] | None = None,
     shard_logits: bool = False,
+    custom_plan: dict[str, ParallelStyle] | None = None,
 ) -> dict[str, ParallelStyle]:
-    """Get TP plan: custom > model-specific > HuggingFace > base.
+    """Resolve TP plan: custom_plan > HF model._tp_plan > default LLaMA-style plan.
 
-    Args:
-        model: The model to parallelize.
-        sequence_parallel: Enable sequence-parallel sharding.
-        custom_plan: User-provided plan (string shorthands are auto-converted).
-        shard_logits: If True, override lm_head to output vocab-sharded logits.
-
-    Returns:
-        A pruned dict mapping module-name patterns to ``ParallelStyle`` instances.
-
-    Raises:
-        ValueError: If no plan entries match any module in the model.
+    Architecture-specific augmentations (e.g. Qwen q_norm/k_norm) are applied
+    unless a fully custom plan is provided.
     """
-    plan: dict[str, ParallelStyle] | None = None
+    plan = custom_plan or _extract_hf_tp_plan(model, sequence_parallel) or _build_default_tp_plan(sequence_parallel)
 
-    if custom_plan:
-        plan = {k: _parse_parallel_style(v) if isinstance(v, str) else v for k, v in custom_plan.items()}
-    else:
-        model_cls_name = type(model).__name__
-        if model_cls_name in _MODEL_PLANS:
+    # Apply architecture-specific augmentations (unless caller provided a full custom plan)
+    if not custom_plan:
+        augment_fn = _MODEL_PLAN_AUGMENTATIONS.get(type(model).__name__)
+        if augment_fn is not None:
             try:
-                plan = _MODEL_PLANS[model_cls_name](model, sequence_parallel)
+                plan = augment_fn(plan)
             except Exception as e:
-                logger.warning("Plan failed for %s: %s", model_cls_name, e)
-
-        if plan is None:
-            plan = _extract_hf_tp_plan(model) or _build_default_tp_plan(sequence_parallel)
+                logger.warning("TP plan augmentation failed for %s: %s", type(model).__name__, e)
 
     if shard_logits:
         plan = _with_loss_parallel_lm_head(plan, sequence_parallel)
+
     plan = _prune_plan(plan, model)
     if not plan:
         raise ValueError(
-            "No TP plan entries matched any modules for this model. "
-            f"model_cls={type(model).__name__}. Provide a custom TP plan or disable TP (fsdp2_tp_size=1)."
+            f"No TP plan entries matched any modules (model_cls={type(model).__name__}). "
+            "Disable TP (fsdp2_tp_size=1) or ensure the model has _tp_plan."
         )
     return plan
 
 
-# === Model parallelization orchestration ===
-
-
 def validate_tp_mesh(model: nn.Module, tp_mesh: DeviceMesh) -> None:
-    """Validate that attention heads are divisible by the TP mesh size.
-
-    Args:
-        model: The model whose config to check.
-        tp_mesh: The TP device mesh.
-
-    Raises:
-        ValueError: If ``num_attention_heads`` or ``num_key_value_heads``
-            is not divisible by the TP size.
-    """
+    """Check that attention heads are divisible by TP size."""
     if tp_mesh.size() == 1:
         return
     cfg = getattr(model, "config", None)
@@ -441,15 +351,9 @@ def validate_tp_mesh(model: nn.Module, tp_mesh: DeviceMesh) -> None:
 
 
 def maybe_enable_async_tp(tp_mesh: DeviceMesh, enabled: bool = False) -> None:
-    """Enable Async Tensor Parallel (Symmetric Memory) for NVLink environments.
-
-    See torchtitan for reference. This requires:
-    1. torch.compile support
-    2. NVLink / Symmetric Memory support
-    """
+    """Enable Async TP (Symmetric Memory) for NVLink environments."""
     if not enabled:
         return
-
     try:
         import torch._inductor.config
         from torch.distributed._symmetric_memory import enable_symm_mem_for_group
@@ -464,42 +368,25 @@ def maybe_enable_async_tp(tp_mesh: DeviceMesh, enabled: bool = False) -> None:
 def apply_tensor_parallel(
     model: nn.Module,
     tp_mesh: DeviceMesh,
-    tp_plan: dict[str, ParallelStyle] | None = None,
     sequence_parallel: bool = False,
     validate: bool = True,
     enable_async_tp: bool = False,
     shard_logits: bool = False,
+    custom_plan: dict[str, ParallelStyle] | None = None,
 ) -> nn.Module:
-    """Apply Tensor Parallelism (DTensor parallel) to a model.
-
-    Args:
-        model: The model to parallelize.
-        tp_mesh: TP device mesh. If size 1, returns the model unchanged.
-        tp_plan: Pre-built TP plan. If None, one is resolved automatically.
-        sequence_parallel: Enable sequence-parallel sharding.
-        validate: Validate head divisibility before parallelizing.
-        enable_async_tp: Enable Async TP (requires NVLink).
-        shard_logits: Output vocab-sharded logits from lm_head.
-
-    Returns:
-        The parallelized model.
-    """
-
+    """Apply Tensor Parallelism to a model. Returns model unchanged if tp_mesh.size() == 1."""
     if tp_mesh.size() == 1:
         return model
 
     maybe_enable_async_tp(tp_mesh, enabled=enable_async_tp)
-
     if validate:
         validate_tp_mesh(model, tp_mesh)
-    if tp_plan is None:
-        tp_plan = get_tp_plan(model, sequence_parallel, shard_logits=shard_logits)
+    tp_plan = get_tp_plan(model, sequence_parallel, shard_logits=shard_logits, custom_plan=custom_plan)
 
-    tp_plan = ensure_value_head_in_plan(model, tp_plan, sequence_parallel=sequence_parallel)
-
+    tp_plan = _ensure_value_head_in_plan(model, tp_plan, sequence_parallel=sequence_parallel)
     parallelize_module(model, tp_mesh, tp_plan)
 
-    # Re-tie weights if necessary (must happen after parallelize_module)
+    # Re-tie weights after TP (parallelize_module may break tied embeddings)
     if ensure_tied_word_embeddings(model):
         logger.info("Re-tied embeddings after TP")
 

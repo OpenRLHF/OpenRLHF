@@ -1,6 +1,5 @@
 import os
 import time
-from abc import ABC
 from datetime import timedelta
 from typing import Dict, Tuple
 
@@ -63,7 +62,7 @@ def prepare_datasets(strategy, tokenizer):
     return prompts_dataloader, eval_dataloader, max_steps
 
 
-class BasePPOTrainer(ABC):
+class BasePPOTrainer:
     """Training-side base class: model orchestration, logging/eval, PPO steps."""
 
     def __init__(

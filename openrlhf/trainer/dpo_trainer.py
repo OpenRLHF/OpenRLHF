@@ -1,5 +1,4 @@
 import os
-from abc import ABC
 
 import torch
 from torch.optim import Optimizer
@@ -7,9 +6,10 @@ from tqdm import tqdm
 
 from openrlhf.models import DPOLoss
 from openrlhf.utils.distributed_sampler import DistributedSampler
+from openrlhf.utils.logging_utils import TensorboardLogger, WandbLogger
 
 
-class DPOTrainer(ABC):
+class DPOTrainer:
     """
     Trainer for Direct Preference Optimization (DPO) training.
 
@@ -69,39 +69,13 @@ class DPOTrainer(ABC):
         # NLL loss
         self.nll_loss = self.args.nll_loss_coef > 1e-8
 
-        # packing samples
-        self.packing_samples = strategy.args.packing_samples
-
-        # wandb/tensorboard setting
-        self._wandb = None
-        self._tensorboard = None
-        if self.strategy.args.use_wandb and self.strategy.is_rank_0():
-            import wandb
-
-            self._wandb = wandb
-            if not wandb.api.api_key:
-                wandb.login(key=strategy.args.use_wandb)
-            wandb.init(
-                entity=strategy.args.wandb_org,
-                project=strategy.args.wandb_project,
-                group=strategy.args.wandb_group,
-                name=strategy.args.wandb_run_name,
-                config=strategy.args.__dict__,
-                reinit=True,
-            )
-
-            wandb.define_metric("train/global_step")
-            wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
-            wandb.define_metric("eval/global_step")
-            wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
-
-        # Initialize TensorBoard writer if wandb is not available
-        if self.strategy.args.use_tensorboard and self._wandb is None and self.strategy.is_rank_0():
-            from torch.utils.tensorboard import SummaryWriter
-
-            os.makedirs(self.strategy.args.use_tensorboard, exist_ok=True)
-            log_dir = os.path.join(self.strategy.args.use_tensorboard, strategy.args.wandb_run_name)
-            self._tensorboard = SummaryWriter(log_dir=log_dir)
+        # Tracking backends
+        self.wandb_logger = WandbLogger(self.args) if self.args.use_wandb and self.strategy.is_rank_0() else None
+        self.tensorboard_logger = (
+            TensorboardLogger(self.args)
+            if self.args.use_tensorboard and not self.wandb_logger and self.strategy.is_rank_0()
+            else None
+        )
 
     def fit(self, args, consumed_samples=0, num_update_steps_per_epoch=None):
         # get eval and save steps
@@ -200,22 +174,18 @@ class DPOTrainer(ABC):
 
             epoch_bar.update()
 
-        if self._wandb is not None and self.strategy.is_rank_0():
-            self._wandb.finish()
-        if self._tensorboard is not None and self.strategy.is_rank_0():
-            self._tensorboard.close()
+        if self.wandb_logger:
+            self.wandb_logger.close()
+        if self.tensorboard_logger:
+            self.tensorboard_logger.close()
 
     # logs/checkpoints/evaluate
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
         if global_step % args.logging_steps == 0:
-            # wandb
-            if self._wandb is not None and self.strategy.is_rank_0():
-                logs = {"train/%s" % k: v for k, v in {**logs_dict, "global_step": global_step}.items()}
-                self._wandb.log(logs)
-            # TensorBoard
-            elif self._tensorboard is not None and self.strategy.is_rank_0():
-                for k, v in logs_dict.items():
-                    self._tensorboard.add_scalar(f"train/{k}", v, global_step)
+            if self.wandb_logger:
+                self.wandb_logger.log_train(global_step, logs_dict)
+            if self.tensorboard_logger:
+                self.tensorboard_logger.log_train(global_step, logs_dict)
 
         # eval
         if global_step % args.eval_steps == 0 and self.eval_dataloader is not None:
@@ -285,13 +255,10 @@ class DPOTrainer(ABC):
             logs = self.strategy.all_reduce(logs)
             step_bar.set_postfix(logs)
 
-            if self.strategy.is_rank_0():
-                if self._wandb is not None:
-                    logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": steps}.items()}
-                    self._wandb.log(logs)
-                elif self._tensorboard is not None:
-                    for k, v in logs.items():
-                        self._tensorboard.add_scalar(f"eval/{k}", v, steps)
+            if self.wandb_logger:
+                self.wandb_logger.log_eval(steps, logs)
+            if self.tensorboard_logger:
+                self.tensorboard_logger.log_eval(steps, logs)
         self.model.train()  # reset model state
 
     def concatenated_forward(self, model, chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens):

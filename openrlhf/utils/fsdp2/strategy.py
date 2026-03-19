@@ -25,7 +25,6 @@ Reference: Automodel, torchtitan both merge DP+CP for FSDP mesh.
 """
 
 import os
-from abc import ABC
 from collections import defaultdict
 from datetime import timedelta
 
@@ -36,6 +35,7 @@ import torch.optim as optim
 from torch.distributed.checkpoint.state_dict import StateDictOptions, set_model_state_dict
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import CPUOffloadPolicy, FSDPModule, MixedPrecisionPolicy, fully_shard
+from torch.distributed.tensor import DTensor
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import enable_full_determinism, set_seed
 
@@ -56,12 +56,13 @@ from .tp.tp_parallel import apply_tensor_parallel
 from .utils import (
     clip_grad_norm_dtensor,
     get_checkpoint_metadata,
+    move_buffers_to_cuda,
     move_optimizer_state,
     moving_average_fsdp2,
 )
 
 
-class FSDP2Strategy(ABC):
+class FSDP2Strategy:
     """FSDP2 strategy with DP/CP/TP support."""
 
     def __init__(
@@ -95,6 +96,7 @@ class FSDP2Strategy(ABC):
 
         # State
         self.time_steps = defaultdict(int)
+        self._last_grad_norm_by_model = {}
         self.mesh = None
         self._gloo_group = None
 
@@ -113,92 +115,74 @@ class FSDP2Strategy(ABC):
         """Initialize distributed environment."""
         enable_full_determinism(self.seed) if self.full_determinism else set_seed(self.seed)
 
+        # 1. Process group
         if self.args.local_rank != -1:
             os.environ["LOCAL_RANK"] = str(self.args.local_rank)
         local_rank = int(os.environ.get("LOCAL_RANK", -1))
         if local_rank >= 0:
             torch.cuda.set_device(local_rank)
 
-        # Explicit backend + device_id reduces NCCL barrier warnings and avoids
-        # hangs when global-rank-to-GPU mapping is heterogeneous.
         backend = "nccl" if torch.cuda.is_available() else "gloo"
         device_id = local_rank if (backend == "nccl" and local_rank >= 0) else None
         dist.init_process_group(backend=backend, timeout=timeout, device_id=device_id)
         self.world_size = dist.get_world_size()
-
-        # Gloo group for CPU-safe barriers: NCCL requires GPU tensors, which
-        # fail when model is offloaded to CPU.
+        # Gloo group for CPU-safe barriers (NCCL requires GPU tensors)
         self._gloo_group = dist.new_group(backend="gloo")
 
-        # Validate and compute parallelism sizes
-        cp_tp_factor = self.fsdp2_cp_size * self.fsdp2_tp_size
-        assert (
-            self.world_size % cp_tp_factor == 0
-        ), f"world_size({self.world_size}) not divisible by cp*tp({cp_tp_factor})"
-        self.fsdp2_dp_size = self.world_size // cp_tp_factor
+        # 2. Device mesh (dp, cp, tp)
+        cp_tp = self.fsdp2_cp_size * self.fsdp2_tp_size
+        assert self.world_size % cp_tp == 0, f"world_size({self.world_size}) not divisible by cp*tp({cp_tp})"
+        self.fsdp2_dp_size = self.world_size // cp_tp
 
-        # Sequence Parallel (SP) is only meaningful with TP>1.
         if self.sequence_parallel:
             if self.fsdp2_tp_size <= 1:
-                raise ValueError("Invalid config: --fsdp2_tp_sequence_parallel requires --fsdp2_tp_size > 1.")
+                raise ValueError("--fsdp2_tp_sequence_parallel requires --fsdp2_tp_size > 1.")
             if not getattr(self.args, "packing_samples", False):
                 raise ValueError(
-                    "--fsdp2_tp_sequence_parallel requires --packing_samples to be enabled, "
-                    "because HF's causal mask creation uses inputs_embeds.shape[1] "
-                    "which would be seq/tp_size after SP sharding, causing mask length mismatch."
+                    "--fsdp2_tp_sequence_parallel requires --packing_samples "
+                    "(HF causal mask uses inputs_embeds.shape[1] which would be seq/tp after SP sharding)."
                 )
 
-        # Always create 3D mesh even if some dims are size=1, so all parameters
-        # share the same mesh structure (avoids mismatch in clip_grad_norm etc.)
         self.mesh = init_device_mesh(
             "cuda",
             (self.fsdp2_dp_size, self.fsdp2_cp_size, self.fsdp2_tp_size),
             mesh_dim_names=("dp", "cp", "tp"),
         )
-
-        # Merge DP+CP for FSDP reduce-scatter (see module docstring for rationale)
+        # Merge DP+CP for FSDP reduce-scatter (see module docstring)
         self.fsdp_mesh = self.mesh["dp", "cp"]._flatten(mesh_dim_name="dp_cp")
 
-        # Process groups:
-        #   dp_cp_group — metrics reduction across all FSDP ranks
-        #   dp_group    — data sampling (CP ranks share same data)
-        #   cp_group    — Ring Attention KV communication
         self.dp_cp_group = self.fsdp_mesh.get_group()
         self.dp_group = self.mesh["dp"].get_group()
         self.cp_group = self.mesh["cp"].get_group()
 
-        # Initialize ring attention defaults
+        # 3. Ring Attention (context parallelism)
         set_ring_attn_group(None)
         set_ring_attn_pad_multiple(1)
 
         if self.sequence_parallel and self.fsdp2_tp_size > 1:
-            # Pad packed sequence length to be divisible by TP degree for SP
             set_ring_attn_pad_multiple(self.fsdp2_tp_size)
 
         if self.fsdp2_cp_size > 1:
             set_ring_attn_group(self.cp_group)
             try:
                 from ring_flash_attn import substitute_hf_flash_attn
-            except ModuleNotFoundError as e:  # pragma: no cover
+            except ModuleNotFoundError as e:
                 raise RuntimeError(
                     "ring_flash_attn is required when --fsdp2_cp_size > 1. "
                     "Install ring_flash_attn or set --fsdp2_cp_size 1."
                 ) from e
-
             substitute_hf_flash_attn(self.cp_group, getattr(self.args, "ring_head_stride", 1))
 
-        # Gradient accumulation: only DP contributes to effective batch size
-        batch_per_step = self.micro_train_batch_size * self.fsdp2_dp_size
+        # 4. Gradient accumulation
         if getattr(self.args, "use_dynamic_batch", False):
             self.accumulated_gradient = 1
         else:
+            batch_per_step = self.micro_train_batch_size * self.fsdp2_dp_size
             accum_steps, remainder = divmod(self.train_batch_size, batch_per_step)
             if accum_steps < 1 or remainder != 0:
                 raise ValueError(
-                    "Invalid batch config for FSDP2: require "
-                    "`train_batch_size = micro_train_batch_size * fsdp2_dp_size * grad_accum_steps` "
-                    f"(got train_batch_size={self.train_batch_size}, "
-                    f"micro_train_batch_size={self.micro_train_batch_size}, fsdp2_dp_size={self.fsdp2_dp_size})."
+                    f"Invalid batch config: train_batch_size({self.train_batch_size}) must equal "
+                    f"micro_train_batch_size({self.micro_train_batch_size}) * dp({self.fsdp2_dp_size}) * N."
                 )
             self.accumulated_gradient = accum_steps
 
@@ -207,8 +191,6 @@ class FSDP2Strategy(ABC):
             f"tp={self.fsdp2_tp_size} grad_accum={self.accumulated_gradient} "
             f"fsdp_mesh_size={self.fsdp2_dp_size * self.fsdp2_cp_size}"
         )
-
-        # TP-aware loss is handled by DTensor-aware helpers (no monkey patch needed).
 
     @property
     def ring_attn_group(self):
@@ -338,15 +320,12 @@ class FSDP2Strategy(ABC):
             )
         )
 
-        # Value-head handling: only initialize score.weight when the caller
-        # explicitly opts in.  Inference paths must NOT auto-init a random
-        # reward head — that silently produces garbage scores.
-        if force_init_value_head:
-            self.print("Initializing `score.weight` after HF load (forced reinitialization).")
-            self._init_value_head_after_load(unwrapped)
-            missing_keys.discard("score.weight")
-        elif init_missing_value_head and "score.weight" in missing_keys:
-            self.print("Initializing `score.weight` after HF load (missing from checkpoint).")
+        # Value-head: only init score.weight when caller explicitly opts in.
+        # Inference paths must NOT auto-init — a missing score.weight means a bad checkpoint.
+        should_init = force_init_value_head or (init_missing_value_head and "score.weight" in missing_keys)
+        if should_init:
+            reason = "forced" if force_init_value_head else "missing from checkpoint"
+            self.print(f"[FSDP2] Initializing score.weight ({reason})")
             self._init_value_head_after_load(unwrapped)
             missing_keys.discard("score.weight")
 
@@ -369,7 +348,41 @@ class FSDP2Strategy(ABC):
         unwrapped = self._unwrap_model(model)
         _fixup_after_load(unwrapped)
         if self.fsdp2_cpu_offload or force_cpu_offload:
-            self._move_buffers_to_cuda(unwrapped)
+            move_buffers_to_cuda(unwrapped)
+
+    @torch.no_grad()
+    def _init_value_head_after_load(self, model: nn.Module) -> None:
+        """Initialize score.weight after meta-init + checkpoint load.
+
+        Generates random weights on rank 0, broadcasts to all ranks via set_model_state_dict.
+        Used when training reward/critic from a base LM that lacks score.weight.
+        """
+        value_head = getattr(model, "score", None)
+        if value_head is None or not hasattr(value_head, "weight"):
+            raise RuntimeError("Reward/Critic model must expose `score.weight`.")
+
+        weight = value_head.weight
+        if dist.is_initialized() and dist.get_rank() != 0:
+            state = {}
+        else:
+            shape = tuple(weight.shape)
+            dtype = weight.dtype
+            hidden_size = shape[1] if len(shape) >= 2 else max(1, shape[0])
+            std = 1.0 / float(hidden_size + 1)
+            init_weight = torch.empty(shape, device="cpu", dtype=dtype)
+            init_weight.normal_(mean=0.0, std=std)
+            state = {"score.weight": init_weight}
+
+        set_model_state_dict(
+            model,
+            state,
+            options=StateDictOptions(
+                full_state_dict=True,
+                cpu_offload=True,
+                strict=False,
+                broadcast_from_rank0=dist.is_initialized(),
+            ),
+        )
 
     def model_to_empty(self, model: nn.Module, *, force_cpu_offload: bool = False) -> None:
         """Materialize a meta-init model onto the target device without loading weights.
@@ -417,46 +430,6 @@ class FSDP2Strategy(ABC):
         self._post_load_fixup(model, force_cpu_offload=force_cpu_offload)
         return client_state
 
-    @torch.no_grad()
-    def _move_buffers_to_cuda(self, model: nn.Module) -> None:
-        """Keep buffers on CUDA for CPU-offloaded FSDP2 models."""
-        device = torch.device("cuda", torch.cuda.current_device())
-        for _name, buf in model.named_buffers():
-            if getattr(buf, "is_meta", False) or buf.device == device:
-                continue
-            buf.data = buf.data.to(device)
-
-    @torch.no_grad()
-    def _init_value_head_after_load(self, model: nn.Module) -> None:
-        """Initialize value head weights after meta-init materialization."""
-        value_head = getattr(model, "score", None)
-        if value_head is None or not hasattr(value_head, "weight"):
-            raise RuntimeError("Reward/Critic model must expose `score.weight` before HF load.")
-
-        weight = value_head.weight
-        if dist.is_initialized() and dist.get_rank() != 0:
-            state = {}
-        else:
-            shape = tuple(weight.shape)
-            dtype = weight.dtype
-            hidden_size = shape[1] if len(shape) >= 2 else max(1, shape[0])
-            # Match existing init convention: std = 1 / (hidden_size + 1)
-            std = 1.0 / float(hidden_size + 1)
-            init_weight = torch.empty(shape, device="cpu", dtype=dtype)
-            init_weight.normal_(mean=0.0, std=std)
-            state = {"score.weight": init_weight}
-
-        set_model_state_dict(
-            model,
-            state,
-            options=StateDictOptions(
-                full_state_dict=True,
-                cpu_offload=True,
-                strict=False,
-                broadcast_from_rank0=dist.is_initialized(),
-            ),
-        )
-
     # -------------------------------------------------------------------------
     # Training
     # -------------------------------------------------------------------------
@@ -467,7 +440,6 @@ class FSDP2Strategy(ABC):
             kwargs["foreach"] = False
         weight_decay = kwargs.pop("weight_decay", 0.0)
         param_groups = self._get_optimizer_grouped_parameters(self._unwrap_model(model), weight_decay)
-        # fused=True only works on CUDA and is incompatible with CPU offload
         fused = torch.cuda.is_available() and not self.fsdp2_cpu_offload
         return optim.AdamW(param_groups, fused=fused, **kwargs)
 
@@ -478,62 +450,41 @@ class FSDP2Strategy(ABC):
         no_decay_name_list=("bias", "layer_norm.weight", "layernorm.weight", "norm.weight", "ln_f.weight"),
     ):
         """Separate parameters into weight-decay and no-weight-decay groups."""
-        decay = []
-        no_decay = []
+        decay, no_decay = [], []
         for name, param in model.named_parameters():
             if not param.requires_grad:
                 continue
-            if any(nd in name for nd in no_decay_name_list):
-                no_decay.append(param)
-            else:
-                decay.append(param)
+            (no_decay if any(nd in name for nd in no_decay_name_list) else decay).append(param)
         return [
             {"params": decay, "weight_decay": weight_decay},
             {"params": no_decay, "weight_decay": 0.0},
         ]
 
     def backward(self, loss, model, optimizer, name="model", sync_gradients=None, **kwargs):
-        """Backward with gradient accumulation.
+        """Backward pass with sharded gradient accumulation.
 
-        No explicit CP loss scaling is needed here — see module docstring for
-        why the all_gather reduce_scatter factor cancels FSDP's dp_cp averaging.
-
-        For FSDP2, we always enable gradient sync (reduce-scatter) even during
-        accumulation steps.  This avoids FSDP2 storing **unsharded** accumulated
-        gradients (O(params) per GPU) and instead accumulates **sharded**
-        gradients (O(params/world_size) per GPU), saving ~(world_size-1)/world_size
-        memory.
-
-        Args:
-            sync_gradients: Whether this is a gradient-sync step.
-                ``None`` (default) falls back to the internal
-                ``accumulated_gradient`` counter.  Pass ``True``/``False``
-                explicitly in dynamic-batch mode where the accumulation
-                schedule is determined externally.
+        FSDP2 reduce-scatters on every backward, keeping grads sharded at O(params/world).
+        On non-sync steps, sharded grads are buffered and restored at optimizer_step.
         """
         if self.accumulated_gradient > 1:
             loss = loss / self.accumulated_gradient
 
         unwrapped = self._unwrap_model(model)
 
-        # Determine whether this is a sync (optimizer-step) round.
+        # Peek at whether the NEXT optimizer_step will be a sync step
+        key = f"step_{name}"
         if sync_gradients is not None:
             is_sync = bool(sync_gradients)
-        elif self.accumulated_gradient > 1:
-            key = f"step_{name}"
-            is_sync = (self.time_steps.get(key, 0) + 1) % self.accumulated_gradient == 0
         else:
-            is_sync = True
+            is_sync = (self.time_steps.get(key, 0) + 1) % max(1, self.accumulated_gradient) == 0
 
         if isinstance(unwrapped, FSDPModule):
-            # Always reduce-scatter so grads stay sharded (memory-efficient).
             unwrapped.set_requires_gradient_sync(True)
 
         loss.backward()
 
-        # On accumulation (non-sync) steps: save the sharded .grad into a
-        # per-parameter buffer and clear .grad so the next micro-batch starts
-        # fresh.  The buffer is restored in optimizer_step on the sync step.
+        # Buffer sharded grads on non-sync (accumulation) steps:
+        # save .grad into per-param buffer and clear .grad so next micro-batch starts fresh
         if isinstance(unwrapped, FSDPModule) and not is_sync:
             for p in unwrapped.parameters():
                 if p.grad is not None:
@@ -545,23 +496,17 @@ class FSDP2Strategy(ABC):
                     p.grad = None
 
     def optimizer_step(self, optimizer, model, scheduler, name="model", sync_gradients=None, **kwargs):
-        """Optimizer step with gradient accumulation.
-
-        Args:
-            sync_gradients: When provided, overrides the internal counter.
-                ``False`` skips the step (gradients are still accumulating);
-                ``True`` forces execution.
-        """
+        """Optimizer step — only executes on sync steps (every accumulated_gradient steps)."""
         key = f"step_{name}"
         self.time_steps[key] += 1
-
         if sync_gradients is not None:
-            if not sync_gradients:
-                return
-        elif self.time_steps[key] % self.accumulated_gradient != 0:
+            is_sync = bool(sync_gradients)
+        else:
+            is_sync = self.time_steps[key] % max(1, self.accumulated_gradient) == 0
+        if not is_sync:
             return
 
-        # Restore accumulated sharded grads from previous micro-batches.
+        # Restore accumulated sharded grads from previous micro-batches
         unwrapped = self._unwrap_model(model)
         if isinstance(unwrapped, FSDPModule):
             for p in unwrapped.parameters():
@@ -573,29 +518,28 @@ class FSDP2Strategy(ABC):
                         p.grad = acc
                     del p._fsdp2_acc_grad
 
+        # Cache pre-clip grad norm for callers that read it after optimizer_step
+        # (e.g. SFT/DPO/RM trainers where get_grad_norm is called post-step).
+        norm = self._compute_grad_norm(unwrapped)
+        if norm is not None:
+            self._last_grad_norm_by_model[id(unwrapped)] = norm
+
         if self.max_norm > 0:
-            clip_grad_norm_dtensor(self._unwrap_model(model), max_norm=self.max_norm)
+            clip_grad_norm_dtensor(unwrapped, max_norm=self.max_norm)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         if scheduler:
             scheduler.step()
 
     def moving_average(self, model, model_ema, beta=0.992, device="cpu", sync_gradients=None):
-        """Update EMA model.
-
-        Args:
-            sync_gradients: When provided, overrides the internal counter.
-                ``False`` skips the update (gradients are still accumulating);
-                ``True`` forces it.
-        """
+        """Update EMA model — only on sync steps."""
         self.time_steps["ema"] += 1
-
         if sync_gradients is not None:
-            if not sync_gradients:
-                return
-        elif self.time_steps["ema"] % max(1, self.accumulated_gradient) != 0:
+            is_sync = bool(sync_gradients)
+        else:
+            is_sync = self.time_steps["ema"] % max(1, self.accumulated_gradient) == 0
+        if not is_sync:
             return
-
         moving_average_fsdp2(model, model_ema, self._unwrap_model, beta)
 
     # -------------------------------------------------------------------------
@@ -747,69 +691,53 @@ class FSDP2Strategy(ABC):
     # -------------------------------------------------------------------------
 
     def all_reduce(self, data, op="mean", with_context_parallel=True):
-        """All-reduce across DP group (optionally including CP).
-
-        Args:
-            data: Data to reduce (tensor, scalar, or dict).
-            op: Reduction operation ("mean", "max", "sum").
-            with_context_parallel: If True, reduce across DP+CP (for metrics).
-                                   If False, reduce across DP only.
-        """
+        """All-reduce across DP (optionally DP+CP). Accepts tensor, scalar, or dict."""
         assert op in ("mean", "max", "sum")
-
         if isinstance(data, dict):
             return {k: self.all_reduce(v, op, with_context_parallel) for k, v in data.items()}
-
         if not dist.is_initialized():
             return data
 
-        process_group = self.dp_cp_group if with_context_parallel and self.fsdp2_cp_size > 1 else self.dp_group
-        group_size = dist.get_world_size(group=process_group)
+        group = self.dp_cp_group if with_context_parallel and self.fsdp2_cp_size > 1 else self.dp_group
 
         was_tensor = isinstance(data, torch.Tensor)
         tensor = data if was_tensor else torch.tensor(data, device="cuda")
-
         from_cpu = tensor.device.type == "cpu"
         if from_cpu:
             tensor = tensor.cuda()
 
         reduce_op = {"mean": dist.ReduceOp.SUM, "max": dist.ReduceOp.MAX, "sum": dist.ReduceOp.SUM}[op]
-        dist.all_reduce(tensor, op=reduce_op, group=process_group)
+        dist.all_reduce(tensor, op=reduce_op, group=group)
         if op == "mean":
-            tensor = tensor / group_size
+            tensor /= dist.get_world_size(group=group)
 
         if from_cpu:
             tensor = tensor.cpu()
-
         return tensor if was_tensor else tensor.item()
 
     def all_gather(self, data):
-        """All-gather across DP group (not CP/TP, as they share same data)."""
+        """All-gather across DP (not CP/TP — they share the same data)."""
         if isinstance(data, dict):
             return {k: self.all_gather(v) for k, v in data.items()}
-
         if not dist.is_initialized():
             return data
 
-        process_group = self.dp_group
-        group_size = dist.get_world_size(group=process_group)
+        group = self.dp_group
 
         was_tensor = isinstance(data, torch.Tensor)
         tensor = data if was_tensor else torch.tensor(data, device="cuda")
-
+        from_cpu = tensor.device.type == "cpu"
+        if from_cpu:
+            tensor = tensor.cuda()
         if tensor.dim() == 0:
             tensor = tensor.view(1)
 
-        from_cpu = tensor.device.type == "cpu"
-        gpu_tensor = tensor.cuda() if from_cpu else tensor
-
-        shards = [torch.zeros_like(gpu_tensor) for _ in range(group_size)]
-        dist.all_gather(shards, gpu_tensor, group=process_group)
+        shards = [torch.zeros_like(tensor) for _ in range(dist.get_world_size(group=group))]
+        dist.all_gather(shards, tensor, group=group)
         result = torch.cat(shards)
 
         if from_cpu:
             result = result.cpu()
-
         return result if was_tensor else result.tolist()
 
     # -------------------------------------------------------------------------
@@ -829,6 +757,45 @@ class FSDP2Strategy(ABC):
 
     def get_world_size(self):
         return dist.get_world_size() if dist.is_initialized() else 1
+
+    def get_grad_norm(self, model) -> float:
+        """Return current grad norm, including FSDP2 accumulation buffers.
+
+        If grads were already cleared by optimizer_step(), fall back to the most
+        recently cached pre-step value so trainer-side logging remains meaningful.
+        """
+        unwrapped = self._unwrap_model(model)
+        live_norm = self._compute_grad_norm(unwrapped)
+        if live_norm is not None:
+            self._last_grad_norm_by_model[id(unwrapped)] = live_norm
+            return live_norm
+        return self._last_grad_norm_by_model.get(id(unwrapped), 0.0)
+
+    @staticmethod
+    def _compute_grad_norm(model: nn.Module) -> float | None:
+        """Compute total norm from live grads and FSDP2 accumulation buffers."""
+        grads = []
+        for p in model.parameters():
+            grad = p.grad
+            acc = getattr(p, "_fsdp2_acc_grad", None)
+            if grad is None and acc is None:
+                continue
+            if grad is None:
+                grads.append(acc.detach())
+            elif acc is None:
+                grads.append(grad.detach())
+            else:
+                grads.append((grad.detach() + acc.detach()))
+
+        if not grads:
+            return None
+
+        total_norm = torch.nn.utils.get_total_norm(grads, norm_type=2.0, error_if_nonfinite=False)
+        if isinstance(total_norm, DTensor):
+            if total_norm.to_local().device.type == "cpu" and torch.cuda.is_available():
+                total_norm = total_norm.to(device=torch.device("cuda", torch.cuda.current_device()))
+            total_norm = total_norm.full_tensor()
+        return total_norm.detach().float().cpu().item()
 
     def _unwrap_model(self, model):
         """Unwrap Actor wrapper to get the underlying module."""

@@ -1,7 +1,6 @@
 import math
 import os
 import socket
-from abc import ABC
 from typing import Dict, List, Optional, Union
 
 import ray
@@ -30,7 +29,7 @@ from .launcher import BaseModelActor
 from .utils import get_physical_gpu_id
 
 
-class ActorPPOTrainer(ABC):
+class ActorPPOTrainer:
     def __init__(
         self,
         strategy,
@@ -190,6 +189,7 @@ class ActorPPOTrainer(ABC):
                     "tot_len": status["total_length"],
                     "kl": status["kl"],
                     "act_lr": status["actor_lr"],
+                    "act_gnorm": status["actor_grad_norm"],
                 }
 
                 if "entropy_loss" in status:
@@ -276,6 +276,8 @@ class ActorPPOTrainer(ABC):
             sync_gradients = bool(self.replay_buffer.dynamic_optimizer_step[step])
 
         self.strategy.backward(loss, self.actor, self.actor_optim, name="actor", sync_gradients=sync_gradients)
+        # Capture grad norm before optimizer_step zeros the grads
+        actor_grad_norm = self.strategy.get_grad_norm(self.actor)
         self.strategy.optimizer_step(
             self.actor_optim, self.actor, self.actor_scheduler, name="actor", sync_gradients=sync_gradients
         )
@@ -288,6 +290,7 @@ class ActorPPOTrainer(ABC):
         status = {
             "policy_loss": actor_loss.detach().item(),
             "actor_lr": self.actor_scheduler.get_last_lr()[0],
+            "actor_grad_norm": actor_grad_norm,
         }
         if self.args.entropy_loss_coef is not None:
             status["entropy_loss"] = entropy_loss.detach().item()

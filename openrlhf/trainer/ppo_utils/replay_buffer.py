@@ -1,5 +1,4 @@
 import random
-from abc import ABC
 from dataclasses import dataclass, fields
 from typing import List, Optional
 
@@ -163,7 +162,7 @@ def balance_experiences(experiences, args):
     return [make_experience_batch(items) for items in interval_merged]
 
 
-class NaiveReplayBuffer(ABC):
+class NaiveReplayBuffer:
     """Naive replay buffer class. It stores experience.
 
     Args:
