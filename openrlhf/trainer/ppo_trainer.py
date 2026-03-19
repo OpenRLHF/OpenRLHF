@@ -110,7 +110,9 @@ class BasePPOTrainer(ABC):
 
     def train_step(self, rollout_samples, global_step: int) -> Tuple[Dict, int]:
         # Turn raw rollouts into PPO-ready trajectories with rewards.
+        t0 = time.time()
         experiences = self.experience_maker.make_experience_batch(rollout_samples)
+        make_experience_time = time.time() - t0
 
         # Peek at the first decoded sample for quick sanity check.
         _decode = self.tokenizer.decode if _TRANSFORMERS_V5 else self.tokenizer.batch_decode
@@ -131,16 +133,25 @@ class BasePPOTrainer(ABC):
         ray.get(refs)
 
         # Perform PPO optimization for actor/critic and gather metrics.
+        t0 = time.time()
         status = self.ppo_train(global_step)
+        ppo_train_time = time.time() - t0
 
         # Sync weights to vLLM.
+        t0 = time.time()
         if self.vllm_engines is not None:
             self.broadcast_to_vllm()
+        broadcast_time = time.time() - t0
 
         # Refresh KL controller with the latest measurement.
         if "kl" in status:
             # TODO: KL controller must be FixedKLController; AdaptiveKLController is incompatible here.
             self.kl_ctl.update(status["kl"], self.args.rollout_batch_size * self.args.n_samples_per_prompt)
+
+        # Per-phase timing breakdown
+        status["timing/make_experience"] = make_experience_time
+        status["timing/ppo_train"] = ppo_train_time
+        status["timing/broadcast"] = broadcast_time
 
         status["generated_samples"] = sample0
         return status, global_step + 1
@@ -313,15 +324,21 @@ class PPOTrainer(BasePPOTrainer):
             )
             while True:
                 # Draw one mini-batch of prompts; stop when loader is exhausted.
+                t_gen_start = time.time()
                 rollout_samples, filter_pass_rate, prompts_consumed, is_exhausted = (
                     self.samples_generator.generate_samples(**self.generate_kwargs)
                 )
+                generation_time = time.time() - t_gen_start
                 total_consumed_prompts += prompts_consumed
                 if is_exhausted:
                     break
 
                 # Run PPO update on this batch and bump the global step counter.
                 status, global_step = self.train_step(rollout_samples, global_step)
+
+                # Generation timing (rollout via vLLM)
+                status["timing/generation"] = generation_time
+                status["timing/step_total"] = sum(v for k, v in status.items() if k.startswith("timing/"))
 
                 # Add generated samples to status dictionary
                 if self.args.dynamic_filtering:

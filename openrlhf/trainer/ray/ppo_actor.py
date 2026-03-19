@@ -296,7 +296,11 @@ class ActorPPOTrainer(ABC):
                 self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
 
         # status
-        status = {"policy_loss": actor_loss.detach().item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}
+        status = {
+            "policy_loss": actor_loss.detach().item(),
+            "actor_lr": self.actor_scheduler.get_last_lr()[0],
+            "actor_grad_norm": self.strategy.get_grad_norm(self.actor),
+        }
         if self.args.entropy_loss_coef is not None:
             status["entropy_loss"] = entropy_loss.detach().item()
 
