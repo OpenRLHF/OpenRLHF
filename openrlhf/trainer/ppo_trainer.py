@@ -173,6 +173,13 @@ class BasePPOTrainer(ABC):
             ray.get(group.async_run_method(method_name="offload_model"))
 
         if self.args.fsdp2_enable_sleep:
+            # Models may still be on GPU from make_experience_batch forward passes.
+            # Offload first so _run_sleep only loads one model at a time.
+            offload_refs = self.actor_model_group.async_run_method(method_name="offload_model")
+            if self.critic_model_group is not None:
+                offload_refs.extend(self.critic_model_group.async_run_method(method_name="offload_model"))
+            ray.get(offload_refs)
+
             # Colocated/sleeping: run critic first, then actor.
             if run_critic:
                 _run_sleep(self.critic_model_group)

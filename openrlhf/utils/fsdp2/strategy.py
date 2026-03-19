@@ -498,9 +498,15 @@ class FSDP2Strategy(ABC):
         No explicit CP loss scaling is needed here — see module docstring for
         why the all_gather reduce_scatter factor cancels FSDP's dp_cp averaging.
 
+        For FSDP2, we always enable gradient sync (reduce-scatter) even during
+        accumulation steps.  This avoids FSDP2 storing **unsharded** accumulated
+        gradients (O(params) per GPU) and instead accumulates **sharded**
+        gradients (O(params/world_size) per GPU), saving ~(world_size-1)/world_size
+        memory.
+
         Args:
-            sync_gradients: Whether to reduce-scatter gradients on this
-                backward pass.  ``None`` (default) falls back to the internal
+            sync_gradients: Whether this is a gradient-sync step.
+                ``None`` (default) falls back to the internal
                 ``accumulated_gradient`` counter.  Pass ``True``/``False``
                 explicitly in dynamic-batch mode where the accumulation
                 schedule is determined externally.
@@ -509,15 +515,34 @@ class FSDP2Strategy(ABC):
             loss = loss / self.accumulated_gradient
 
         unwrapped = self._unwrap_model(model)
+
+        # Determine whether this is a sync (optimizer-step) round.
+        if sync_gradients is not None:
+            is_sync = bool(sync_gradients)
+        elif self.accumulated_gradient > 1:
+            key = f"step_{name}"
+            is_sync = (self.time_steps.get(key, 0) + 1) % self.accumulated_gradient == 0
+        else:
+            is_sync = True
+
         if isinstance(unwrapped, FSDPModule):
-            if sync_gradients is not None:
-                unwrapped.set_requires_gradient_sync(sync_gradients)
-            elif self.accumulated_gradient > 1:
-                key = f"step_{name}"
-                sync = (self.time_steps.get(key, 0) + 1) % self.accumulated_gradient == 0
-                unwrapped.set_requires_gradient_sync(sync)
+            # Always reduce-scatter so grads stay sharded (memory-efficient).
+            unwrapped.set_requires_gradient_sync(True)
 
         loss.backward()
+
+        # On accumulation (non-sync) steps: save the sharded .grad into a
+        # per-parameter buffer and clear .grad so the next micro-batch starts
+        # fresh.  The buffer is restored in optimizer_step on the sync step.
+        if isinstance(unwrapped, FSDPModule) and not is_sync:
+            for p in unwrapped.parameters():
+                if p.grad is not None:
+                    acc = getattr(p, "_fsdp2_acc_grad", None)
+                    if acc is not None:
+                        acc.add_(p.grad)
+                    else:
+                        p._fsdp2_acc_grad = p.grad.clone()
+                    p.grad = None
 
     def optimizer_step(self, optimizer, model, scheduler, name="model", sync_gradients=None, **kwargs):
         """Optimizer step with gradient accumulation.
@@ -535,6 +560,18 @@ class FSDP2Strategy(ABC):
                 return
         elif self.time_steps[key] % self.accumulated_gradient != 0:
             return
+
+        # Restore accumulated sharded grads from previous micro-batches.
+        unwrapped = self._unwrap_model(model)
+        if isinstance(unwrapped, FSDPModule):
+            for p in unwrapped.parameters():
+                acc = getattr(p, "_fsdp2_acc_grad", None)
+                if acc is not None:
+                    if p.grad is not None:
+                        p.grad.add_(acc)
+                    else:
+                        p.grad = acc
+                    del p._fsdp2_acc_grad
 
         if self.max_norm > 0:
             clip_grad_norm_dtensor(self._unwrap_model(model), max_norm=self.max_norm)
