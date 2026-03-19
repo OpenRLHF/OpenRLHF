@@ -222,15 +222,33 @@ def reinit_rotary_embedding(backbone: nn.Module) -> None:
     """Recompute rotary inv_freq after meta-init materialization.
 
     HuggingFace registers inv_freq as a non-persistent buffer, so it's lost
-    after to_empty() + DCP load and must be recomputed via rope_init_fn.
+    after to_empty() + checkpoint load and must be recomputed.
     """
     # HF places rotary_emb on LlamaModel (backbone.model) or directly on backbone.
     rotary_emb = getattr(getattr(backbone, "model", backbone), "rotary_emb", None)
-    if rotary_emb is None or not all(hasattr(rotary_emb, a) for a in ("inv_freq", "rope_init_fn", "config")):
+    if rotary_emb is None or not all(hasattr(rotary_emb, name) for name in ("inv_freq", "config")):
         return
 
-    device = rotary_emb.inv_freq.device if torch.is_tensor(rotary_emb.inv_freq) else torch.device("cpu")
-    inv_freq, attention_scaling = rotary_emb.rope_init_fn(rotary_emb.config, device)
-    rotary_emb.inv_freq.copy_(inv_freq)
-    if hasattr(rotary_emb, "attention_scaling"):
-        rotary_emb.attention_scaling = attention_scaling
+    device = rotary_emb.inv_freq.device
+
+    if hasattr(rotary_emb, "rope_init_fn"):
+        inv_freq, attention_scaling = rotary_emb.rope_init_fn(rotary_emb.config, device)
+        rotary_emb.inv_freq.copy_(inv_freq.to(device=rotary_emb.inv_freq.device, dtype=rotary_emb.inv_freq.dtype))
+        if hasattr(rotary_emb, "attention_scaling"):
+            rotary_emb.attention_scaling = attention_scaling
+        return
+
+    try:
+        fresh_rotary = type(rotary_emb)(rotary_emb.config, device=device)
+    except TypeError:
+        fresh_rotary = type(rotary_emb)(rotary_emb.config)
+
+    for name in ("inv_freq", "original_inv_freq"):
+        dst = getattr(rotary_emb, name, None)
+        src = getattr(fresh_rotary, name, None)
+        if torch.is_tensor(dst) and torch.is_tensor(src):
+            dst.copy_(src.to(device=dst.device, dtype=dst.dtype))
+
+    for attr in ("attention_scaling", "max_seq_len_cached", "original_max_seq_len", "rope_type"):
+        if hasattr(fresh_rotary, attr):
+            setattr(rotary_emb, attr, getattr(fresh_rotary, attr))
