@@ -228,13 +228,7 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 |------|------|------|
 | **SFT** | [train_sft.sh](./examples/scripts/train_sft.sh) | 带打包的监督微调 |
 | **DPO/IPO/cDPO** | [train_dpo_llama.sh](./examples/scripts/train_dpo_llama.sh) | 直接偏好优化 |
-| **KTO** | [train_kto_llama.sh](./examples/scripts/train_kto_llama.sh) | Kahneman-Tversky 优化 |
-| **迭代 DPO** | [train_iterative_dpo.sh](./examples/scripts/train_iterative_dpo.sh) | 在线偏好学习 |
 | **奖励模型** | [train_rm.sh](./examples/scripts/train_rm.sh) | 训练奖励模型 |
-| **过程奖励模型** | [train_prm_mistral.sh](./examples/scripts/train_prm_mistral.sh) | 逐步奖励模型 |
-| **拒绝采样** | [train_rejection_sampling_llama.sh](./examples/scripts/train_rejection_sampling_llama.sh) | Best-of-N 采样 |
-| **条件 SFT** | [train_conditional.sh](./examples/scripts/train_conditional.sh) | 质量条件训练 |
-| **蒸馏** | [train_knowledge_distillation.sh](./examples/scripts/train_knowledge_distillation.sh) | 知识迁移 |
 
 </details>
 

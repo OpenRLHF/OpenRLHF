@@ -227,13 +227,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 |--------|--------|-------------|
 | **SFT** | [train_sft.sh](./examples/scripts/train_sft.sh) | Supervised fine-tuning with packing |
 | **DPO/IPO/cDPO** | [train_dpo_llama.sh](./examples/scripts/train_dpo_llama.sh) | Direct preference optimization |
-| **KTO** | [train_kto_llama.sh](./examples/scripts/train_kto_llama.sh) | Kahneman-Tversky optimization |
-| **Iterative DPO** | [train_iterative_dpo.sh](./examples/scripts/train_iterative_dpo.sh) | Online preference learning |
 | **Reward Model** | [train_rm.sh](./examples/scripts/train_rm.sh) | Train reward models |
-| **Process RM** | [train_prm_mistral.sh](./examples/scripts/train_prm_mistral.sh) | Step-by-step reward models |
-| **Rejection Sampling** | [train_rejection_sampling_llama.sh](./examples/scripts/train_rejection_sampling_llama.sh) | Best-of-N sampling |
-| **Conditional SFT** | [train_conditional.sh](./examples/scripts/train_conditional.sh) | Quality-conditioned training |
-| **Distillation** | [train_knowledge_distillation.sh](./examples/scripts/train_knowledge_distillation.sh) | Knowledge transfer |
 
 </details>
 
