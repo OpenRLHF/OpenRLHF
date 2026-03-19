@@ -159,7 +159,7 @@ class RewardModelTrainer(ABC):
                     aux_loss = 0
 
                 loss = preference_loss + aux_loss * self.args.aux_loss_coef
-                self.strategy.backward(loss, self.model, self.optimizer)
+                self.strategy.backward(loss)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 acc = (chosen_reward > reject_reward).float().mean().item()

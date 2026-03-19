@@ -163,7 +163,7 @@ class KTOTrainer(ABC):
                     aux_loss = 0
 
                 loss = kto_loss + aux_loss * self.args.aux_loss_coef
-                self.strategy.backward(loss, self.model, self.optimizer)
+                self.strategy.backward(loss)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 loss_sum += loss.item()

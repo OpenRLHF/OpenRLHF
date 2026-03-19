@@ -270,19 +270,18 @@ class ActorPPOTrainer(ABC):
             if self.args.entropy_loss_coef != 0:
                 loss -= entropy_loss * self.args.entropy_loss_coef
 
-        sync_gradients = None
+        opt_update_boundary = True
         if self.args.use_dynamic_batch:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
-            sync_gradients = bool(self.replay_buffer.dynamic_optimizer_step[step])
+            opt_update_boundary = self.replay_buffer.dynamic_is_last_micro_batch[step]
 
-        self.strategy.backward(loss, self.actor, self.actor_optim, name="actor", sync_gradients=sync_gradients)
-        self.strategy.optimizer_step(
-            self.actor_optim, self.actor, self.actor_scheduler, name="actor", sync_gradients=sync_gradients
-        )
-        if self.ema_model:
-            self.strategy.moving_average(
-                self.actor, self.ema_model, self.ema_beta, "cuda", sync_gradients=sync_gradients
+        self.strategy.backward(loss)
+        if opt_update_boundary:
+            params_updated = self.strategy.optimizer_step(
+                self.actor_optim, self.actor, self.actor_scheduler, name="actor"
             )
+            if params_updated and self.ema_model:
+                self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta)
 
         # status
         status = {"policy_loss": actor_loss.detach().item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}

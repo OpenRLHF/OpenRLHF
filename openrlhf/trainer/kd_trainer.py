@@ -165,7 +165,7 @@ class KDTrainer(ABC):
                 distil_loss = self.kd_loss(output.logits, teacher_logits, labels)
 
                 loss = gpt_loss * (1 - self.args.kd_coef) + distil_loss * self.args.kd_coef
-                self.strategy.backward(loss, self.model, self.optimizer)
+                self.strategy.backward(loss)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 loss_sum += gpt_loss.item()

@@ -159,7 +159,7 @@ class ProcessRewardModelTrainer(ABC):
 
                 prm_loss, acc = self.loss_fn(inputs, output.logits, labels, return_acc=True)
                 loss = prm_loss + aux_loss * self.args.aux_loss_coef
-                self.strategy.backward(loss, self.model, self.optimizer)
+                self.strategy.backward(loss)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 loss_sum += loss.item()

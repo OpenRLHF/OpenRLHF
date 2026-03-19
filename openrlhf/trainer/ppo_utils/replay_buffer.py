@@ -191,7 +191,7 @@ class NaiveReplayBuffer(ABC):
         self.dynamic_batch = dynamic_batch
         self.dynamic_indices: List[List[int]] = []
         self.dynamic_loss_scale: List[float] = []
-        self.dynamic_optimizer_step: List[int] = []
+        self.dynamic_is_last_micro_batch: List[bool] = []
 
     @torch.no_grad()
     def append(self, experience: Experience) -> None:
@@ -207,6 +207,9 @@ class NaiveReplayBuffer(ABC):
 
     def clear(self) -> None:
         self.items.clear()
+        self.dynamic_indices.clear()
+        self.dynamic_loss_scale.clear()
+        self.dynamic_is_last_micro_batch.clear()
 
     @torch.no_grad()
     def sample(self) -> Experience:
@@ -276,14 +279,13 @@ class NaiveReplayBuffer(ABC):
         self.dynamic_indices = micro_batch_indices
         self.sample_batch_size = 1
 
-        # adjust optimizer step and loss scale
+        # Scale each micro-batch loss by its sample share and mark step boundaries.
         loss_scales = []
-        optimizer_steps = []
+        is_last_micro_batch = []
         for partitions in data_partitions:
             sample_num = sum(len(partition) for partition in partitions)
             loss_scale = [len(partition) / sample_num for partition in partitions]
-            optimizer_step = [0] * (len(partitions) - 1) + [1]
             loss_scales.extend(loss_scale)
-            optimizer_steps.extend(optimizer_step)
+            is_last_micro_batch.extend([False] * (len(partitions) - 1) + [True])
         self.dynamic_loss_scale = loss_scales
-        self.dynamic_optimizer_step = optimizer_steps
+        self.dynamic_is_last_micro_batch = is_last_micro_batch
