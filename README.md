@@ -126,8 +126,8 @@ OpenRLHF **unifies generation and training through token-in-token-out agent exec
                  │                         │
       ┌──────────┴──────────┐   ┌─────────┴──────────┐
       ↓                     ↓   ↓                    ↓
-  Standard RLHF      Custom Reward   Multi-Step    External Env
-  (One-shot gen)     Function      Reasoning     (NeMo Gym)
+  Standard RLHF      Custom Reward   Multi-Step
+  (One-shot gen)     Function      Reasoning
       ↓                     ↓           ↓                ↓
       └─────────────────────┴───────────┴────────────────┘
                               │
@@ -213,7 +213,6 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 - Multi-step interactions with environment feedback
 - Works with all RL algorithms
 - [Custom agent functions](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh) (`--agent_func_path`)
-- NeMo Gym integration: see `examples/python/agent_func_nemogym_executor.py` for an agent executor that integrates NeMo Gym rollouts
 - Async pipeline (`--async_train`) for higher throughput: [train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)
 
 </details>
@@ -659,7 +658,6 @@ ray job submit --address="http://127.0.0.1:8265" \
 - Single-turn: [train_ppo_ray_hybrid_engine.sh](./examples/scripts/train_ppo_ray_hybrid_engine.sh)
 - Custom reward: [train_ppo_with_reward_fn.sh](./examples/scripts/train_ppo_with_reward_fn.sh)
 - Multi-turn: [train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)
-- NeMo Gym: `examples/python/agent_func_nemogym_executor.py`
 
 ---
 

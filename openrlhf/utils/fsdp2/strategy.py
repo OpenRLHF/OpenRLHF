@@ -463,8 +463,16 @@ class FSDP2Strategy:
     def backward(self, loss, model, optimizer, name="model", sync_gradients=None, **kwargs):
         """Backward pass with sharded gradient accumulation.
 
-        FSDP2 reduce-scatters on every backward, keeping grads sharded at O(params/world).
-        On non-sync steps, sharded grads are buffered and restored at optimizer_step.
+        FSDP2 gradient accumulation strategy:
+        - FSDP2 always reduce-scatters gradients on every backward call, keeping
+          each rank's .grad at O(params/world_size) memory.
+        - Unlike DeepSpeed, we cannot disable gradient sync — FSDP2's reduce-scatter
+          is needed to produce correctly sharded gradients.
+        - For gradient accumulation (accumulated_gradient > 1), we manually buffer
+          sharded .grad into per-parameter `_fsdp2_acc_grad` on non-sync steps,
+          then restore them in optimizer_step() before the optimizer runs.
+        - This achieves the same effect as DeepSpeed's no_sync(), but within
+          FSDP2's always-sync design.
         """
         if self.accumulated_gradient > 1:
             loss = loss / self.accumulated_gradient

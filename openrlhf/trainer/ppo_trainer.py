@@ -415,7 +415,7 @@ class PPOTrainer(BasePPOTrainer):
         for samples in samples_list:
             rewards_list.append(samples.rewards)
         # Reshape rewards to (num_prompts, n_samples_per_prompt)
-        rewards = torch.tensor(rewards_list).reshape(-1, n_samples_per_prompt)
+        rewards = torch.cat(rewards_list).reshape(-1, n_samples_per_prompt)
 
         # Collect local statistics for each data source
         global_metrics = {}  # {datasource: {"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}}

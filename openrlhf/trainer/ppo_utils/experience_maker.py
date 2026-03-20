@@ -640,9 +640,13 @@ class RemoteExperienceMaker:
                 [[None]] * (len(samples_list) * args.fsdp2_cp_size * args.fsdp2_tp_size)
             )
 
-        # Wait for all remote calls to complete and flatten the results
-        # Note: the results duplicated cp_size * tp_size times
-        # This is because the actors in ring group and tp group will return the same output
+        # Wait for all remote calls to complete and flatten the results.
+        #
+        # De-duplication: Each effective DP rank has (cp_size * tp_size) physical
+        # GPU actors that process the SAME data shard (CP splits sequences, TP splits
+        # parameters, but they all return identical final outputs after all-gather).
+        # We take every N-th result (stride = cp_size * tp_size) to keep only one
+        # copy per DP rank, then flatten the per-rank lists into a single list.
         duplicate_factor = args.fsdp2_cp_size * args.fsdp2_tp_size
         action_log_probs_list = sum(ray.get(action_log_probs_ref)[::duplicate_factor], [])
         base_action_log_probs_list = sum(ray.get(base_action_log_probs_ref)[::duplicate_factor], [])

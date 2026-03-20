@@ -199,7 +199,7 @@ class ActorPPOTrainer:
                 pbar.set_postfix(short_status)
 
         if status_list:
-            status_mean = status_list[0]
+            status_mean = {k: v for k, v in status_list[0].items()}
             for m in status_list[1:]:
                 for k, v in m.items():
                     status_mean[k] += v
