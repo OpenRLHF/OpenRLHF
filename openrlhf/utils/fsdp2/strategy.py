@@ -460,6 +460,21 @@ class FSDP2Strategy:
             {"params": no_decay, "weight_decay": 0.0},
         ]
 
+    def _is_sync_step(self, key: str, sync_gradients=None, *, peek_next: bool = False) -> bool:
+        """Determine whether the current (or next) step is a gradient sync step.
+
+        Args:
+            key: Time-step counter key (e.g. "step_actor", "ema").
+            sync_gradients: Explicit override; if not None, used directly.
+            peek_next: If True, check the *next* step count without incrementing.
+        """
+        if sync_gradients is not None:
+            return bool(sync_gradients)
+        step = self.time_steps.get(key, 0)
+        if peek_next:
+            step += 1
+        return step % max(1, self.accumulated_gradient) == 0
+
     def backward(self, loss, model, optimizer, name="model", sync_gradients=None, **kwargs):
         """Backward pass with sharded gradient accumulation.
 
@@ -481,10 +496,7 @@ class FSDP2Strategy:
 
         # Peek at whether the NEXT optimizer_step will be a sync step
         key = f"step_{name}"
-        if sync_gradients is not None:
-            is_sync = bool(sync_gradients)
-        else:
-            is_sync = (self.time_steps.get(key, 0) + 1) % max(1, self.accumulated_gradient) == 0
+        is_sync = self._is_sync_step(key, sync_gradients, peek_next=True)
 
         if isinstance(unwrapped, FSDPModule):
             unwrapped.set_requires_gradient_sync(True)
@@ -507,10 +519,7 @@ class FSDP2Strategy:
         """Optimizer step — only executes on sync steps (every accumulated_gradient steps)."""
         key = f"step_{name}"
         self.time_steps[key] += 1
-        if sync_gradients is not None:
-            is_sync = bool(sync_gradients)
-        else:
-            is_sync = self.time_steps[key] % max(1, self.accumulated_gradient) == 0
+        is_sync = self._is_sync_step(key, sync_gradients)
         if not is_sync:
             return
 
@@ -542,11 +551,7 @@ class FSDP2Strategy:
     def moving_average(self, model, model_ema, beta=0.992, device="cpu", sync_gradients=None):
         """Update EMA model — only on sync steps."""
         self.time_steps["ema"] += 1
-        if sync_gradients is not None:
-            is_sync = bool(sync_gradients)
-        else:
-            is_sync = self.time_steps["ema"] % max(1, self.accumulated_gradient) == 0
-        if not is_sync:
+        if not self._is_sync_step("ema", sync_gradients):
             return
         moving_average_fsdp2(model, model_ema, self._unwrap_model, beta)
 

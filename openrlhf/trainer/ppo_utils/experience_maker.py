@@ -107,7 +107,7 @@ class Experience:
         self.labels = labels or []
         self.rewards = rewards
         self.scores = scores
-        self.info = info or []
+        self.info = info or {}
 
     @torch.no_grad()
     def to_device(self, device: torch.device):

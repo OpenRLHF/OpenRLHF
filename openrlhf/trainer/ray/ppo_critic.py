@@ -63,13 +63,14 @@ class CriticPPOTrainer:
         if self.args.use_dynamic_batch:
             self.replay_buffer.setup_dynamic_batch(self.strategy)
 
-        not_shuffle = (
+        # Ring attention, TP, and dynamic batching require deterministic ordering.
+        should_shuffle = not (
             self.strategy.ring_attn_group is not None or self.args.fsdp2_tp_size > 1 or self.args.use_dynamic_batch
         )
         dataloader = DataLoader(
             self.replay_buffer,
             batch_size=self.replay_buffer.sample_batch_size,
-            shuffle=not not_shuffle,
+            shuffle=should_shuffle,
             drop_last=True,
             pin_memory=self.dataloader_pin_memory,
             collate_fn=self.replay_buffer.collate_fn,
@@ -311,10 +312,8 @@ class CriticModelActor(BaseModelActor):
 
     def offload_model(self):
         """Offload model to CPU for rollout phase (hybrid engine mode)."""
-        if isinstance(self.strategy, FSDP2Strategy):
-            self.strategy.offload_model(self.critic)
+        self.strategy.offload_model(self.critic)
 
     def reload_model(self):
         """Reload model to GPU for forward pass (hybrid engine mode)."""
-        if isinstance(self.strategy, FSDP2Strategy):
-            self.strategy.reload_model(self.critic)
+        self.strategy.reload_model(self.critic)

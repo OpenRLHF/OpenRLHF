@@ -190,9 +190,10 @@ def _extract_hf_tp_plan(model: nn.Module, sequence_parallel: bool = False) -> di
     """
     hf_entries: dict[str, ParallelStyle | str] = {}
     for src in [type(model), model, getattr(model, "model", None)]:
-        if src and hasattr(src, "_tp_plan"):
+        tp_plan = getattr(src, "_tp_plan", None) if src else None
+        if tp_plan:
             prefix = "model." if src == getattr(model, "model", None) else ""
-            hf_entries.update({f"{prefix}{k}": v for k, v in src._tp_plan.items()})
+            hf_entries.update({f"{prefix}{k}": v for k, v in tp_plan.items()})
     if not hf_entries:
         return None
 
