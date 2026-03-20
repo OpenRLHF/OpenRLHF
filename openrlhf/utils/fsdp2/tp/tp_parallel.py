@@ -175,8 +175,23 @@ _STYLE_SHORTHAND = {
 
 
 def _parse_parallel_style(style_name: str) -> ParallelStyle:
-    """Convert string shorthand (e.g. "colwise") to ParallelStyle instance."""
-    return _STYLE_SHORTHAND[style_name]()
+    """Convert string shorthand (e.g. "colwise") to ParallelStyle instance.
+
+    Falls back to HF's ParallelInterface mapping for styles not in our shorthand
+    (e.g. "colwise_gather_output" added in Transformers v5).
+    """
+    if style_name in _STYLE_SHORTHAND:
+        return _STYLE_SHORTHAND[style_name]()
+    # Fallback: HF Transformers v5+ defines its own style mapping
+    try:
+        from transformers.integrations.tensor_parallel import ParallelInterface
+
+        hf_mapping = ParallelInterface._global_mapping
+        if style_name in hf_mapping:
+            return hf_mapping[style_name]
+    except (ImportError, AttributeError):
+        pass
+    raise KeyError(f"Unknown TP style: {style_name!r}. Add it to _STYLE_SHORTHAND or upgrade transformers.")
 
 
 def _extract_hf_tp_plan(model: nn.Module, sequence_parallel: bool = False) -> dict[str, ParallelStyle] | None:
