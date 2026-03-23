@@ -7,7 +7,6 @@ from tqdm import tqdm
 from openrlhf.trainer.ppo_trainer import BasePPOTrainer, prepare_datasets
 from openrlhf.trainer.ppo_utils.experience_maker import SamplesGenerator
 from openrlhf.trainer.ray.launcher import RayActorGroup
-from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.utils import get_tokenizer
@@ -17,11 +16,7 @@ logger = init_logger(__name__)
 
 @ray.remote(num_cpus=0)
 class VLLMLock:
-    """Cross-actor mutex for vLLM critical section.
-
-    Ensures generation and weight broadcast do not overlap on the same vLLM engines,
-    so every sample in a batch is generated with consistent weights.
-    """
+    """Cross-actor mutex for vLLM critical section."""
 
     def __init__(self):
         self._lock = asyncio.Lock()
@@ -60,8 +55,10 @@ class GenerateSamplesActor:
             vllm_engines=vllm_engines,
         )
 
-        self.vllm_lock = vllm_lock  # None in partial_rollout mode
+        self.vllm_lock = vllm_lock
         self.rollout_queue = rollout_queue
+        # Token bucket: size == rollout_queue capacity.
+        # Generator MUST take a token BEFORE generating; trainer returns token AFTER consuming.
         self.rollout_slots = rollout_slots
 
     def get_max_steps(self):
@@ -82,17 +79,15 @@ class GenerateSamplesActor:
                 # Backpressure: only generate if we have queue capacity (token available).
                 self.rollout_slots.get(block=True)
 
-                if self.vllm_lock is not None:
-                    # Normal async: hold lock so weight broadcast cannot overlap with generation.
-                    ray.get(self.vllm_lock.acquire.remote())
+                # vLLM critical section: generation must not overlap with broadcast_to_vllm().
+                ray.get(self.vllm_lock.acquire.remote())
                 try:
                     rollout_samples, filter_pass_rate, prompts_consumed, is_exhausted = (
                         self.samples_generator.generate_samples(**self.generate_kwargs)
                     )
                     total_consumed_prompts += prompts_consumed
                 finally:
-                    if self.vllm_lock is not None:
-                        ray.get(self.vllm_lock.release.remote())
+                    ray.get(self.vllm_lock.release.remote())
 
                 produced = bool(rollout_samples)
                 if produced:
@@ -128,6 +123,8 @@ class TrainingActor(BasePPOTrainer):
         reward_model_group,
         reference_model_group,
         vllm_engines,
+        eval_dataloader,
+        samples_generator,
         *,
         vllm_lock,
         rollout_queue,
@@ -145,7 +142,10 @@ class TrainingActor(BasePPOTrainer):
             tokenizer,
         )
 
-        self.vllm_lock = vllm_lock  # None in partial_rollout mode
+        self.eval_dataloader = eval_dataloader
+        self.samples_generator = samples_generator
+
+        self.vllm_lock = vllm_lock
         self.rollout_queue = rollout_queue
         self.rollout_slots = rollout_slots
 
@@ -166,10 +166,17 @@ class TrainingActor(BasePPOTrainer):
                 status["dynamic_filtering_pass_rate"] = filter_pass_rate
 
             log_status = {k: v for k, v in status.items() if k not in ["generated_samples"]}
-            logger.info(f"Global step {global_step}: {log_status}")
+            logger.info(f"✨ Global step {global_step}: {log_status}")
 
             client_states.update({"global_step": global_step})
             self.save_logs_and_checkpoints(global_step, status, client_states)
+
+            if global_step % self.args.eval_steps == 0 and self.eval_dataloader:
+                eval_generate_kwargs = dict(
+                    temperature=self.args.eval_temperature,
+                    n_samples_per_prompt=self.args.eval_n_samples_per_prompt,
+                )
+                self.run_evaluation(global_step, self.eval_dataloader, self.samples_generator, **eval_generate_kwargs)
 
         if self.wandb_logger:
             self.wandb_logger.close()
@@ -177,21 +184,12 @@ class TrainingActor(BasePPOTrainer):
             self.tensorboard_logger.close()
 
     def broadcast_to_vllm(self):
-        if self.vllm_lock is not None:
-            # Normal async: hold lock so generation cannot overlap with weight broadcast.
-            ray.get(self.vllm_lock.acquire.remote())
-            try:
-                super().broadcast_to_vllm()
-            finally:
-                ray.get(self.vllm_lock.release.remote())
-        else:
-            # Partial rollout: pause vLLM (freeze in-flight requests), update weights, resume.
-            # In-flight requests continue with new weights after resume.
-            batch_vllm_engine_call(self.vllm_engines, "pause_generation")
-            try:
-                super().broadcast_to_vllm()
-            finally:
-                batch_vllm_engine_call(self.vllm_engines, "resume_generation")
+        # vLLM critical section: must not overlap with generation.
+        ray.get(self.vllm_lock.acquire.remote())
+        try:
+            super().broadcast_to_vllm()
+        finally:
+            ray.get(self.vllm_lock.release.remote())
 
 
 @ray.remote
@@ -225,22 +223,27 @@ class PPOTrainerAsync:
         for _ in range(queue_size):
             self.rollout_slots.put(None, block=True)
 
-        partial_rollout = getattr(strategy.args, "partial_rollout", False)
-        if partial_rollout:
-            # Partial rollout: no lock, trainer uses vLLM pause/resume for weight sync.
-            vllm_lock = None
-        else:
-            # Normal async: lock ensures generation and weight broadcast never overlap.
-            vllm_lock = VLLMLock.remote()
+        # Cross-actor mutex for vLLM critical section.
+        self.vllm_lock = VLLMLock.remote()
 
         self.generator_actor = GenerateSamplesActor.remote(
             pretrain=pretrain,
             strategy=strategy,
             vllm_engines=vllm_engines,
-            vllm_lock=vllm_lock,
+            vllm_lock=self.vllm_lock,
             rollout_queue=self.rollout_queue,
             rollout_slots=self.rollout_slots,
             **generate_kwargs,
+        )
+
+        tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
+        _, eval_dataloader, _ = prepare_datasets(strategy, tokenizer)
+        eval_samples_generator = SamplesGenerator(
+            strategy=strategy,
+            prompts_dataloader=None,
+            eval_dataloader=eval_dataloader,
+            tokenizer=tokenizer,
+            vllm_engines=vllm_engines,
         )
 
         self.trainer_actor = TrainingActor.remote(
@@ -251,7 +254,9 @@ class PPOTrainerAsync:
             reward_model_group=reward_model_group,
             reference_model_group=reference_model_group,
             vllm_engines=vllm_engines,
-            vllm_lock=vllm_lock,
+            eval_dataloader=eval_dataloader,
+            samples_generator=eval_samples_generator,
+            vllm_lock=self.vllm_lock,
             rollout_queue=self.rollout_queue,
             rollout_slots=self.rollout_slots,
         )
@@ -282,3 +287,4 @@ class PPOTrainerAsync:
 
     def get_max_steps(self):
         return ray.get(self.generator_actor.get_max_steps.remote())
+

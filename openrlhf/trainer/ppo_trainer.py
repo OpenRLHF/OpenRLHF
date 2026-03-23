@@ -14,6 +14,12 @@ _TRANSFORMERS_V5 = int(transformers.__version__.split(".")[0]) >= 5
 from openrlhf.datasets import PromptDataset
 from openrlhf.datasets.utils import blending_datasets
 from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker, SamplesGenerator
+from openrlhf.trainer.ppo_utils.eval_utils import (
+    aggregate_eval_metrics,
+    build_eval_records,
+    get_eval_sample_preview,
+    save_eval_samples,
+)
 from openrlhf.trainer.ppo_utils.kl_controller import AdaptiveKLController, FixedKLController
 from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ray.launcher import RayActorGroup
@@ -107,6 +113,50 @@ class BasePPOTrainer(ABC):
 
     def fit(self, global_step: int = 0) -> None:
         raise NotImplementedError("fit method is not implemented")
+
+    @torch.no_grad()
+    def run_evaluation(self, global_step: int, eval_dataloader, samples_generator, **generate_kwargs) -> Dict:
+        start_time = time.time()
+        logger.info(f"⏰ Evaluation start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        prompt_metadata = {}
+        eval_index = 0
+        for datasources, prompts, labels in eval_dataloader:
+            for datasource, prompt, label in zip(datasources, prompts, labels):
+                prompt_metadata.setdefault(prompt, []).append(
+                    {
+                        "datasource": datasource,
+                        "label": label,
+                        "eval_index": eval_index,
+                    }
+                )
+                eval_index += 1
+
+        samples_list = samples_generator.generate_eval_samples(**generate_kwargs)
+        n_samples_per_prompt = generate_kwargs["n_samples_per_prompt"]
+
+        records = build_eval_records(samples_list, prompt_metadata)
+        logs = aggregate_eval_metrics(records, n_samples_per_prompt)
+        logs["generation_time"] = time.time() - start_time
+        logs["eval_samples"] = get_eval_sample_preview(records)
+
+        eval_sample_dir = getattr(self.args, "eval_sample_save_path", None) or os.path.join(self.args.ckpt_path, "eval")
+        save_path = save_eval_samples(records, eval_sample_dir, global_step)
+        if save_path is not None:
+            logs["saved_samples"] = 1.0
+            logs["saved_sample_count"] = float(min(len(records), 128))
+            logger.info(f"Saved PPO eval samples to {save_path}")
+
+        if self.wandb_logger:
+            self.wandb_logger.log_eval(global_step, logs)
+        if self.tensorboard_logger:
+            self.tensorboard_logger.log_eval(global_step, logs)
+
+        end_time = time.time()
+        duration = end_time - start_time
+        time_str = str(timedelta(seconds=duration)).split(".")[0]
+        logger.info(f"✨ Evaluation completed in {time_str}, global_step {global_step}, eval_metrics: {logs}")
+        return logs
 
     def train_step(self, rollout_samples, global_step: int) -> Tuple[Dict, int]:
         # Turn raw rollouts into PPO-ready trajectories with rewards.
@@ -373,67 +423,5 @@ class PPOTrainer(BasePPOTrainer):
     @torch.no_grad()
     def evaluate(self, global_step, **generate_kwargs):
         """Evaluate model performance on eval dataset."""
-        start_time = time.time()
-        logger.info(f"⏰ Evaluation start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        return self.run_evaluation(global_step, self.eval_dataloader, self.samples_generator, **generate_kwargs)
 
-        # First collect all prompts and labels
-        prompt_to_datasource = {}  # Dictionary to store mapping between prompts and their data sources
-        for datasources, prompts, labels in self.eval_dataloader:
-            # Create mapping for each prompt to its corresponding data source
-            for prompt, datasource in zip(prompts, datasources):
-                prompt_to_datasource[prompt] = datasource
-
-        # Generate samples and calculate rewards
-        samples_list = self.samples_generator.generate_eval_samples(**generate_kwargs)
-
-        # duplicate prompts and labels for each sample
-        all_prompts = sum([s.prompts for s in samples_list], [])
-
-        n_samples_per_prompt = generate_kwargs["n_samples_per_prompt"]
-
-        # Get rewards from samples, such as agent rewards or remote reward models
-        rewards_list = []
-        for samples in samples_list:
-            rewards_list.append(samples.rewards)
-        # Reshape rewards to (num_prompts, n_samples_per_prompt)
-        rewards = torch.tensor(rewards_list).reshape(-1, n_samples_per_prompt)
-
-        # Collect local statistics for each data source
-        global_metrics = {}  # {datasource: {"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}}
-
-        # Process rewards in chunks of n_samples_per_prompt
-        num_prompts = len(all_prompts) // n_samples_per_prompt
-        for i in range(num_prompts):
-            # Get the original prompt (first one in the chunk)
-            original_prompt = all_prompts[i * n_samples_per_prompt]
-            datasource = prompt_to_datasource[original_prompt]  # Get corresponding data source using the mapping
-            if datasource not in global_metrics:
-                global_metrics[datasource] = {f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}
-
-            # Get rewards for this chunk
-            chunk_rewards = rewards[i]
-
-            # Calculate pass@k and pass@1
-            if n_samples_per_prompt > 1:
-                global_metrics[datasource][f"pass{n_samples_per_prompt}"] += chunk_rewards.max().float().item()
-            global_metrics[datasource]["pass1"] += chunk_rewards.mean().float().item()
-            global_metrics[datasource]["count"] += 1
-
-        # Calculate global averages
-        logs = {}
-        for datasource, metrics in global_metrics.items():
-            logs[f"eval_{datasource}_pass{n_samples_per_prompt}"] = (
-                metrics[f"pass{n_samples_per_prompt}"] / metrics["count"]
-            )
-            logs[f"eval_{datasource}_pass1"] = metrics["pass1"] / metrics["count"]
-
-        # Log to wandb/tensorboard
-        if self.wandb_logger:
-            self.wandb_logger.log_eval(global_step, logs)
-        if self.tensorboard_logger:
-            self.tensorboard_logger.log_eval(global_step, logs)
-
-        end_time = time.time()
-        duration = end_time - start_time
-        time_str = str(timedelta(seconds=duration)).split(".")[0]
-        logger.info(f"✨ Evaluation completed in {time_str}, global_step {global_step}, eval_metrics: {logs}")

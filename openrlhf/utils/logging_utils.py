@@ -81,6 +81,9 @@ class WandbLogger:
         wandb.define_metric("eval/*", step_metric="eval/epoch", step_sync=True)
         self.handle = wandb
         self.samples_table = wandb.Table(columns=["global_step", "text", "reward"])
+        self.eval_samples_table = wandb.Table(
+            columns=["global_step", "datasource", "prompt", "label", "reward", "response_length", "truncated"]
+        )
 
     def log_train(self, global_step: int, logs_dict: Dict[str, Any]) -> None:
         logs_dict = dict(logs_dict)
@@ -99,6 +102,22 @@ class WandbLogger:
 
     def log_eval(self, global_step: int, logs_dict: Dict[str, Any]) -> None:
         logs_dict = dict(logs_dict)
+
+        eval_samples = logs_dict.pop("eval_samples", None)
+        if eval_samples:
+            new_table = self.handle.Table(columns=self.eval_samples_table.columns, data=self.eval_samples_table.data)
+            for sample in eval_samples:
+                new_table.add_data(
+                    global_step,
+                    sample.get("datasource"),
+                    sample.get("prompt"),
+                    sample.get("label"),
+                    sample.get("reward"),
+                    sample.get("response_length"),
+                    sample.get("truncated"),
+                )
+            self.eval_samples_table = new_table
+            self.handle.log({"eval/samples": new_table})
 
         metrics = {k: v for k, v in logs_dict.items() if v is not None}
         logs = {"eval/%s" % k: v for k, v in {**metrics, "global_step": global_step}.items()}
@@ -130,7 +149,18 @@ class TensorboardLogger:
 
     def log_eval(self, global_step: int, logs_dict: Dict[str, Any]) -> None:
         for k, v in logs_dict.items():
-            self.writer.add_scalar(f"eval/{k}", v, global_step)
+            if k == "eval_samples" and v:
+                formatted_lines = []
+                for idx, sample in enumerate(v[:8], start=1):
+                    formatted_lines.append(
+                        f"[{idx}] datasource={sample.get('datasource')} reward={sample.get('reward')} "
+                        f"len={sample.get('response_length')} truncated={sample.get('truncated')}\n"
+                        f"prompt: {sample.get('prompt')}\nlabel: {sample.get('label')}"
+                    )
+                self.writer.add_text("eval/samples", "\n\n".join(formatted_lines), global_step)
+            elif v is not None:
+                self.writer.add_scalar(f"eval/{k}", v, global_step)
 
     def close(self) -> None:
         self.writer.close()
+
