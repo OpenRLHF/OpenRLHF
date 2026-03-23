@@ -76,24 +76,57 @@ def compute_eval_metrics(eval_dataloader, samples_list, n_samples_per_prompt):
         for prompt, datasource in zip(prompts, datasources):
             prompt_to_datasource[prompt] = datasource
 
-    all_prompts = sum([s.prompts for s in samples_list], [])
-    rewards = torch.tensor([s.rewards for s in samples_list]).reshape(-1, n_samples_per_prompt)
+    # Single pass: collect prompts, rewards, response_length, truncated
+    all_prompts = []
+    all_rewards = []
+    all_response_lengths = []
+    all_truncated = []
+    for s in samples_list:
+        all_prompts.extend(s.prompts)
+        all_rewards.append(s.rewards)
+        info = s.info if isinstance(s.info, dict) else {}
+        all_response_lengths.append(info["response_length"].item() if "response_length" in info else None)
+        all_truncated.append(info["truncated"].item() if "truncated" in info else None)
+
+    rewards = torch.tensor(all_rewards).reshape(-1, n_samples_per_prompt)
 
     metrics = {}
     for i in range(len(all_prompts) // n_samples_per_prompt):
         ds = prompt_to_datasource.get(all_prompts[i * n_samples_per_prompt], "unknown")
         if ds not in metrics:
-            metrics[ds] = {f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}
+            metrics[ds] = {f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0, "lengths": [], "truncated": []}
         chunk = rewards[i]
         if n_samples_per_prompt > 1:
             metrics[ds][f"pass{n_samples_per_prompt}"] += chunk.max().float().item()
         metrics[ds]["pass1"] += chunk.mean().float().item()
         metrics[ds]["count"] += 1
 
+        start = i * n_samples_per_prompt
+        for j in range(start, start + n_samples_per_prompt):
+            if all_response_lengths[j] is not None:
+                metrics[ds]["lengths"].append(all_response_lengths[j])
+            if all_truncated[j] is not None:
+                metrics[ds]["truncated"].append(all_truncated[j])
+
     logs = {}
+    total_lengths = []
+    total_truncated = []
     for ds, m in metrics.items():
         logs[f"eval_{ds}_pass{n_samples_per_prompt}"] = m[f"pass{n_samples_per_prompt}"] / m["count"]
         logs[f"eval_{ds}_pass1"] = m["pass1"] / m["count"]
+        if m["lengths"]:
+            logs[f"eval_{ds}_response_length_mean"] = sum(m["lengths"]) / len(m["lengths"])
+            total_lengths.extend(m["lengths"])
+        if m["truncated"]:
+            logs[f"eval_{ds}_truncated_rate"] = sum(m["truncated"]) / len(m["truncated"])
+            total_truncated.extend(m["truncated"])
+
+    if total_lengths:
+        logs["eval_response_length_mean"] = sum(total_lengths) / len(total_lengths)
+    if total_truncated:
+        logs["eval_truncated_rate"] = sum(total_truncated) / len(total_truncated)
+    logs["eval_num_samples"] = float(len(all_prompts))
+
     return logs
 
 
