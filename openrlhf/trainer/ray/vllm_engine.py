@@ -124,6 +124,12 @@ class LLMRayActor:
     async def reset_prefix_cache(self):
         await self.llm.reset_prefix_cache()
 
+    async def pause_generation(self):
+        await self.llm.pause_generation(mode="keep")
+
+    async def resume_generation(self):
+        await self.llm.resume_generation()
+
     async def sleep(self, level=1):
         await self.llm.sleep(level=level)
 

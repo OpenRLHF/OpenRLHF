@@ -305,23 +305,26 @@ class SamplesGenerator:
     def _generate_vllm(
         self, dataloader_iter, num_prompts: int, dynamic_filtering, **generate_kwargs
     ) -> Tuple[List[Experience], int, bool]:
-        """Generate a batch of Experiences with optional reward filtering."""
+        """Generate a batch of Experiences with optional reward filtering.
+
+        Dispatches num_prompts to vLLM engines, collects all results, and returns.
+        When dynamic_filtering is enabled, filtered prompts are replaced with new ones.
+        """
         prompts_consumed = 0
+        accepted_experiences: List[Experience] = []
+
         prompts, labels, exhausted = _collect_prompt_batch(dataloader_iter, num_prompts)
-        # Stop early if the prompt source is fully consumed.
         if exhausted:
-            return [], prompts_consumed, exhausted
+            return [], prompts_consumed, True
 
         pending_refs = self._dispatch_prompts_to_vllm(prompts, labels, **generate_kwargs)
         prompts_consumed += len(prompts)
 
-        accepted_experiences: List[Experience] = []
         pbar = tqdm(range(num_prompts), desc="Generate samples")
 
         while pending_refs:
             ready_refs, pending_refs = ray.wait(pending_refs, num_returns=1, timeout=10.0)
             for ref in ready_refs:
-                # Build Experience objects for each vLLM response returned from this worker.
                 experiences = [
                     self._process_response_into_experience(response, **generate_kwargs) for response in ray.get(ref)
                 ]
@@ -337,26 +340,20 @@ class SamplesGenerator:
                         )
                         experiences = []
 
-                # Accept experiences and stop once enough have been gathered.
                 if experiences:
                     accepted_experiences.extend(experiences)
                     pbar.set_postfix({"prompts_consumed": prompts_consumed})
                     pbar.update()
-
-                # If rejected, request a new prompt to keep filling the batch.
-                else:
-                    # Pull another prompt when the current one fails filtering.
+                elif dynamic_filtering:
+                    # Dispatch replacement for filtered prompt.
                     new_prompts, new_labels, exhausted = _collect_prompt_batch(dataloader_iter, 1)
                     prompts_consumed += len(new_prompts)
-                    # Cancel outstanding work if the dataloader is drained.
                     if exhausted:
                         for remaining_ref in pending_refs:
                             ray.cancel(remaining_ref)
                         return [], prompts_consumed, True
-                    # Otherwise dispatch the new prompt to keep filling the queue.
-                    else:
-                        new_refs = self._dispatch_prompts_to_vllm(new_prompts, new_labels, **generate_kwargs)
-                        pending_refs.extend(new_refs)
+                    new_refs = self._dispatch_prompts_to_vllm(new_prompts, new_labels, **generate_kwargs)
+                    pending_refs.extend(new_refs)
 
         return accepted_experiences, prompts_consumed, exhausted
 
