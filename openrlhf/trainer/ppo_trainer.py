@@ -13,13 +13,13 @@ _TRANSFORMERS_V5 = int(transformers.__version__.split(".")[0]) >= 5
 
 from openrlhf.datasets import PromptDataset
 from openrlhf.datasets.utils import blending_datasets
-from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker, SamplesGenerator
 from openrlhf.trainer.ppo_utils.eval_utils import (
     aggregate_eval_metrics,
     build_eval_records,
     get_eval_sample_preview,
     save_eval_samples,
 )
+from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker, SamplesGenerator
 from openrlhf.trainer.ppo_utils.kl_controller import AdaptiveKLController, FixedKLController
 from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ray.launcher import RayActorGroup
@@ -140,7 +140,9 @@ class BasePPOTrainer(ABC):
         logs["generation_time"] = time.time() - start_time
         logs["eval_samples"] = get_eval_sample_preview(records)
 
-        eval_sample_dir = getattr(self.args, "eval_sample_save_path", None) or os.path.join(self.args.ckpt_path, "eval")
+        eval_sample_dir = getattr(self.args, "eval_sample_save_path", None) or os.path.join(
+            self.args.ckpt_path, "eval"
+        )
         save_path = save_eval_samples(records, eval_sample_dir, global_step)
         if save_path is not None:
             logs["saved_samples"] = 1.0
@@ -424,4 +426,3 @@ class PPOTrainer(BasePPOTrainer):
     def evaluate(self, global_step, **generate_kwargs):
         """Evaluate model performance on eval dataset."""
         return self.run_evaluation(global_step, self.eval_dataloader, self.samples_generator, **generate_kwargs)
-

@@ -116,7 +116,9 @@ def aggregate_eval_metrics(records: List[Dict[str, Any]], n_samples_per_prompt: 
     for datasource, datasource_records in grouped_by_datasource.items():
         ds_rewards = [float(r["reward"]) for r in datasource_records if r.get("reward") is not None]
         ds_lengths = [float(r["response_length"]) for r in datasource_records if r.get("response_length") is not None]
-        ds_truncated = [1.0 if r.get("truncated") else 0.0 for r in datasource_records if r.get("truncated") is not None]
+        ds_truncated = [
+            1.0 if r.get("truncated") else 0.0 for r in datasource_records if r.get("truncated") is not None
+        ]
 
         logs[f"{datasource}_reward_mean"] = _safe_mean(ds_rewards)
         logs[f"{datasource}_response_length_mean"] = _safe_mean(ds_lengths)
@@ -140,9 +142,9 @@ def aggregate_eval_metrics(records: List[Dict[str, Any]], n_samples_per_prompt: 
                     ds_passk.append(max(prompt_rewards))
 
         logs[f"{datasource}_pass1"] = _safe_mean(ds_pass1)
-        logs[f"{datasource}_pass{n_samples_per_prompt}"] = _safe_mean(ds_passk) if n_samples_per_prompt > 1 else logs[
-            f"{datasource}_pass1"
-        ]
+        logs[f"{datasource}_pass{n_samples_per_prompt}"] = (
+            _safe_mean(ds_passk) if n_samples_per_prompt > 1 else logs[f"{datasource}_pass1"]
+        )
 
     return logs
 
@@ -163,7 +165,9 @@ def get_eval_sample_preview(records: List[Dict[str, Any]], max_samples: int = 8)
     return preview
 
 
-def save_eval_samples(records: List[Dict[str, Any]], save_dir: str, global_step: int, max_samples: int = 128) -> Optional[str]:
+def save_eval_samples(
+    records: List[Dict[str, Any]], save_dir: str, global_step: int, max_samples: int = 128
+) -> Optional[str]:
     if not records or not save_dir:
         return None
 

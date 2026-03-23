@@ -287,4 +287,3 @@ class PPOTrainerAsync:
 
     def get_max_steps(self):
         return ray.get(self.generator_actor.get_max_steps.remote())
-
