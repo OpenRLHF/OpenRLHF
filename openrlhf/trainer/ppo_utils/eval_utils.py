@@ -93,19 +93,22 @@ def aggregate_eval_metrics(records: List[Dict[str, Any]], n_samples_per_prompt: 
     grouped_by_prompt = defaultdict(list)
     grouped_by_datasource = defaultdict(list)
     for record in records:
-        prompt_key = (record.get("datasource", "unknown"), record.get("eval_index"), record.get("prompt"))
+        prompt_key = (record.get("datasource", "unknown"), record.get("prompt"))
         grouped_by_prompt[prompt_key].append(record)
         grouped_by_datasource[record.get("datasource", "unknown")].append(record)
 
     pass_at_k_values = []
     pass1_values = []
     for prompt_records in grouped_by_prompt.values():
-        prompt_rewards = [float(r["reward"]) for r in prompt_records if r.get("reward") is not None]
-        if not prompt_rewards:
-            continue
-        pass1_values.append(sum(prompt_rewards) / len(prompt_rewards))
-        if n_samples_per_prompt > 1:
-            pass_at_k_values.append(max(prompt_rewards))
+        valid_prompt_records = [r for r in prompt_records if r.get("reward") is not None]
+        for start in range(0, len(valid_prompt_records), n_samples_per_prompt):
+            prompt_group = valid_prompt_records[start : start + n_samples_per_prompt]
+            prompt_rewards = [float(r["reward"]) for r in prompt_group]
+            if not prompt_rewards:
+                continue
+            pass1_values.append(sum(prompt_rewards) / len(prompt_rewards))
+            if n_samples_per_prompt > 1:
+                pass_at_k_values.append(max(prompt_rewards))
 
     logs["pass1"] = _safe_mean(pass1_values)
     logs[f"pass{n_samples_per_prompt}"] = _safe_mean(pass_at_k_values) if n_samples_per_prompt > 1 else logs["pass1"]
@@ -121,17 +124,20 @@ def aggregate_eval_metrics(records: List[Dict[str, Any]], n_samples_per_prompt: 
 
         datasource_prompt_groups = defaultdict(list)
         for record in datasource_records:
-            datasource_prompt_groups[(record.get("eval_index"), record.get("prompt"))].append(record)
+            datasource_prompt_groups[record.get("prompt")].append(record)
 
         ds_pass1 = []
         ds_passk = []
         for prompt_records in datasource_prompt_groups.values():
-            prompt_rewards = [float(r["reward"]) for r in prompt_records if r.get("reward") is not None]
-            if not prompt_rewards:
-                continue
-            ds_pass1.append(sum(prompt_rewards) / len(prompt_rewards))
-            if n_samples_per_prompt > 1:
-                ds_passk.append(max(prompt_rewards))
+            valid_prompt_records = [r for r in prompt_records if r.get("reward") is not None]
+            for start in range(0, len(valid_prompt_records), n_samples_per_prompt):
+                prompt_group = valid_prompt_records[start : start + n_samples_per_prompt]
+                prompt_rewards = [float(r["reward"]) for r in prompt_group]
+                if not prompt_rewards:
+                    continue
+                ds_pass1.append(sum(prompt_rewards) / len(prompt_rewards))
+                if n_samples_per_prompt > 1:
+                    ds_passk.append(max(prompt_rewards))
 
         logs[f"{datasource}_pass1"] = _safe_mean(ds_pass1)
         logs[f"{datasource}_pass{n_samples_per_prompt}"] = _safe_mean(ds_passk) if n_samples_per_prompt > 1 else logs[

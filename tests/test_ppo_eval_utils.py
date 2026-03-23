@@ -1,13 +1,19 @@
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 from types import SimpleNamespace
 
 import torch
 
-from openrlhf.trainer.ppo_utils.eval_utils import (
-    aggregate_eval_metrics,
-    build_eval_records,
-    get_eval_sample_preview,
-    save_eval_samples,
-)
+_EVAL_UTILS_PATH = Path(__file__).resolve().parents[1] / "openrlhf" / "trainer" / "ppo_utils" / "eval_utils.py"
+_SPEC = spec_from_file_location("test_eval_utils", _EVAL_UTILS_PATH)
+_MODULE = module_from_spec(_SPEC)
+assert _SPEC is not None and _SPEC.loader is not None
+_SPEC.loader.exec_module(_MODULE)
+
+aggregate_eval_metrics = _MODULE.aggregate_eval_metrics
+build_eval_records = _MODULE.build_eval_records
+get_eval_sample_preview = _MODULE.get_eval_sample_preview
+save_eval_samples = _MODULE.save_eval_samples
 
 
 def _make_sample(prompt, label, reward, response_length, truncated, datasource="math"):

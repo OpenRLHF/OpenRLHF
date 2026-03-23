@@ -163,4 +163,3 @@ class TensorboardLogger:
 
     def close(self) -> None:
         self.writer.close()
-
