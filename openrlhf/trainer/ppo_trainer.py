@@ -63,6 +63,40 @@ def prepare_datasets(strategy, tokenizer):
     return prompts_dataloader, eval_dataloader, max_steps
 
 
+def compute_eval_metrics(eval_dataloader, samples_list, n_samples_per_prompt):
+    """Compute pass@k eval metrics from generated samples.
+
+    Shared by both sync and async evaluation paths.
+    """
+    if not samples_list:
+        return {}
+
+    prompt_to_datasource = {}
+    for datasources, prompts, labels in eval_dataloader:
+        for prompt, datasource in zip(prompts, datasources):
+            prompt_to_datasource[prompt] = datasource
+
+    all_prompts = sum([s.prompts for s in samples_list], [])
+    rewards = torch.tensor([s.rewards for s in samples_list]).reshape(-1, n_samples_per_prompt)
+
+    metrics = {}
+    for i in range(len(all_prompts) // n_samples_per_prompt):
+        ds = prompt_to_datasource.get(all_prompts[i * n_samples_per_prompt], "unknown")
+        if ds not in metrics:
+            metrics[ds] = {f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}
+        chunk = rewards[i]
+        if n_samples_per_prompt > 1:
+            metrics[ds][f"pass{n_samples_per_prompt}"] += chunk.max().float().item()
+        metrics[ds]["pass1"] += chunk.mean().float().item()
+        metrics[ds]["count"] += 1
+
+    logs = {}
+    for ds, m in metrics.items():
+        logs[f"eval_{ds}_pass{n_samples_per_prompt}"] = m[f"pass{n_samples_per_prompt}"] / m["count"]
+        logs[f"eval_{ds}_pass1"] = m["pass1"] / m["count"]
+    return logs
+
+
 class BasePPOTrainer(ABC):
     """Training-side base class: model orchestration, logging/eval, PPO steps."""
 
@@ -376,58 +410,9 @@ class PPOTrainer(BasePPOTrainer):
         start_time = time.time()
         logger.info(f"⏰ Evaluation start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
-        # First collect all prompts and labels
-        prompt_to_datasource = {}  # Dictionary to store mapping between prompts and their data sources
-        for datasources, prompts, labels in self.eval_dataloader:
-            # Create mapping for each prompt to its corresponding data source
-            for prompt, datasource in zip(prompts, datasources):
-                prompt_to_datasource[prompt] = datasource
-
-        # Generate samples and calculate rewards
         samples_list = self.samples_generator.generate_eval_samples(**generate_kwargs)
+        logs = compute_eval_metrics(self.eval_dataloader, samples_list, generate_kwargs["n_samples_per_prompt"])
 
-        # duplicate prompts and labels for each sample
-        all_prompts = sum([s.prompts for s in samples_list], [])
-
-        n_samples_per_prompt = generate_kwargs["n_samples_per_prompt"]
-
-        # Get rewards from samples, such as agent rewards or remote reward models
-        rewards_list = []
-        for samples in samples_list:
-            rewards_list.append(samples.rewards)
-        # Reshape rewards to (num_prompts, n_samples_per_prompt)
-        rewards = torch.tensor(rewards_list).reshape(-1, n_samples_per_prompt)
-
-        # Collect local statistics for each data source
-        global_metrics = {}  # {datasource: {"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}}
-
-        # Process rewards in chunks of n_samples_per_prompt
-        num_prompts = len(all_prompts) // n_samples_per_prompt
-        for i in range(num_prompts):
-            # Get the original prompt (first one in the chunk)
-            original_prompt = all_prompts[i * n_samples_per_prompt]
-            datasource = prompt_to_datasource[original_prompt]  # Get corresponding data source using the mapping
-            if datasource not in global_metrics:
-                global_metrics[datasource] = {f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}
-
-            # Get rewards for this chunk
-            chunk_rewards = rewards[i]
-
-            # Calculate pass@k and pass@1
-            if n_samples_per_prompt > 1:
-                global_metrics[datasource][f"pass{n_samples_per_prompt}"] += chunk_rewards.max().float().item()
-            global_metrics[datasource]["pass1"] += chunk_rewards.mean().float().item()
-            global_metrics[datasource]["count"] += 1
-
-        # Calculate global averages
-        logs = {}
-        for datasource, metrics in global_metrics.items():
-            logs[f"eval_{datasource}_pass{n_samples_per_prompt}"] = (
-                metrics[f"pass{n_samples_per_prompt}"] / metrics["count"]
-            )
-            logs[f"eval_{datasource}_pass1"] = metrics["pass1"] / metrics["count"]
-
-        # Log to wandb/tensorboard
         if self.wandb_logger:
             self.wandb_logger.log_eval(global_step, logs)
         if self.tensorboard_logger:
