@@ -1,5 +1,7 @@
 set -x
 
+# Resume example (explicit step dir, not /dcp_checkpoint; add --resume_training to restore optimizer):
+# --dcp_checkpoint_from_path /path/to/ckpt/dcp_ckpt/global_step_<N> --resume_training
 python3 -m openrlhf.cli.train_ppo_ray \
    --ref_num_nodes 1 \
    --ref_num_gpus_per_node 8 \
@@ -17,10 +19,9 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --dynamic_filtering \
    --dynamic_filtering_reward_range 0 1 \
    --eps_clip_low_high 0.2 0.27 \
-   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
+   --model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
    --remote_rm_url /openrlhf/examples/python/reward_func.py \
-   --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
-   --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
+   --ckpt_save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
    --save_steps 20 \
    --save_hf_ckpt \
    --micro_train_batch_size 8 \
@@ -30,8 +31,8 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --n_samples_per_prompt 8 \
    --max_epochs 1 \
    --max_len 2048 \
+   --max_new_tokens 1024 \
    --max_samples 20000 \
-   --zero_stage 3 \
    --param_dtype bf16 \
    --actor_learning_rate 5e-7 \
    --prompt_data OpenRLHF/prompt-collection-v0.1 \
@@ -42,8 +43,8 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --vllm_sync_backend nccl \
    --enforce_eager \
    --vllm_enable_sleep \
-   --deepspeed_enable_sleep \
-   --vllm_enable_is_correction
+   --fsdp2_enable_sleep \
+   --enable_vllm_is_correction
 
 # You could also try
 #   --kl_estimator k2 \

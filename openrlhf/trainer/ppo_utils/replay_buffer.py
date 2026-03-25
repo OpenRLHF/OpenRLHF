@@ -112,9 +112,7 @@ def balance_experiences(experiences, args):
     items_all.sort(key=lambda x: x.total_length, reverse=True)
 
     # split experience into chunks
-    effective_num = (
-        args.actor_num_nodes * args.actor_num_gpus_per_node // args.ring_attn_size // args.ds_tensor_parallel_size
-    )
+    effective_num = args.actor_num_nodes * args.actor_num_gpus_per_node // args.fsdp2_cp_size // args.fsdp2_tp_size
     split_items = [items_all[i : i + effective_num] for i in range(0, len(items_all), effective_num)]
     half = len(split_items) // 2
     first_half = split_items[:half]
@@ -160,7 +158,7 @@ class NaiveReplayBuffer(ABC):
         self.dynamic_batch = dynamic_batch
         self.dynamic_indices: List[List[int]] = []
         self.dynamic_loss_scale: List[float] = []
-        self.dynamic_optimizer_step: List[int] = []
+        self.dynamic_is_last_micro_batch: List[bool] = []
 
     @torch.no_grad()
     def append(self, experience: Experience) -> None:
@@ -176,6 +174,9 @@ class NaiveReplayBuffer(ABC):
 
     def clear(self) -> None:
         self.items.clear()
+        self.dynamic_indices.clear()
+        self.dynamic_loss_scale.clear()
+        self.dynamic_is_last_micro_batch.clear()
 
     @torch.no_grad()
     def sample(self) -> Experience:
@@ -209,7 +210,7 @@ class NaiveReplayBuffer(ABC):
         sample_lengths = [sample.total_length.item() for sample in self.items]
 
         world_size = dist.get_world_size()
-        dp_size = world_size // args.ring_attn_size // args.ds_tensor_parallel_size
+        dp_size = world_size // args.fsdp2_cp_size // args.fsdp2_tp_size
         local_train_batch_size = args.train_batch_size // dp_size
         num_steps = args.rollout_batch_size * args.n_samples_per_prompt // args.train_batch_size
 
@@ -221,8 +222,8 @@ class NaiveReplayBuffer(ABC):
                 get_minimum_num_micro_batch_size(
                     sample_lengths[start:end],
                     args.train_max_tokens_per_gpu,
-                    args.ring_attn_size,
-                    args.ds_tensor_parallel_size,
+                    args.fsdp2_cp_size,
+                    args.fsdp2_tp_size,
                 )
             )
 
@@ -245,14 +246,13 @@ class NaiveReplayBuffer(ABC):
         self.dynamic_indices = micro_batch_indices
         self.sample_batch_size = 1
 
-        # adjust optimizer step and loss scale
+        # Scale each micro-batch loss by its sample share and mark step boundaries.
         loss_scales = []
-        optimizer_steps = []
+        is_last_micro_batch = []
         for partitions in data_partitions:
             sample_num = sum(len(partition) for partition in partitions)
             loss_scale = [len(partition) / sample_num for partition in partitions]
-            optimizer_step = [0] * (len(partitions) - 1) + [1]
             loss_scales.extend(loss_scale)
-            optimizer_steps.extend(optimizer_step)
+            is_last_micro_batch.extend([False] * (len(partitions) - 1) + [True])
         self.dynamic_loss_scale = loss_scales
-        self.dynamic_optimizer_step = optimizer_steps
+        self.dynamic_is_last_micro_batch = is_last_micro_batch

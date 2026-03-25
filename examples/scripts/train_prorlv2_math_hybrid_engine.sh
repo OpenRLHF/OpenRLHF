@@ -43,10 +43,9 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --dynamic_filtering \
    --dynamic_filtering_reward_range 0 1 \
    --eps_clip_low_high 0.2 0.27 \
-   --pretrain ${MODEL_PATH} \
+   --model_name_or_path ${MODEL_PATH} \
    --remote_rm_url ${REWARD_FUNC_PATH} \
-   --save_path ${SAVE_PATH} \
-   --ckpt_path "${SAVE_PATH}/ckpt" \
+   --ckpt_save_path ${SAVE_PATH} \
    --save_steps 5 \
    --save_hf_ckpt \
    --train_batch_size 1024 \
@@ -54,9 +53,8 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --n_samples_per_prompt 16 \
    --use_dynamic_batch \
    --num_episodes 100 \
-   --max_len 9216 \
    --max_new_tokens 8192 \
-   --zero_stage 3 \
+   --max_len 9216 \
    --param_dtype bf16 \
    --actor_learning_rate 1e-6 \
    --prompt_data ${DATASET_PATH} \
@@ -72,7 +70,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --vllm_sync_backend nccl \
    --enforce_eager \
    --vllm_enable_sleep \
-   --deepspeed_enable_sleep \
+   --fsdp2_enable_sleep \
    --enable_vllm_is_correction \
    --vllm_is_truncated_threshold 0.5 5.0 \
    --vllm_is_correction_type icepop \
@@ -99,7 +97,6 @@ python3 -m openrlhf.cli.train_ppo_ray \
 # Option 2: Stop Properly Penalty (based on vLLM finish_reason == "length")
 #   --stop_properly_penalty_coef 0.0: Penalty coefficient [0,1] for truncated samples
 #   Truncated sample rewards are scaled by this coefficient (0.0 = zero reward for truncated)
-#   This encourages the model to generate complete responses within max_tokens limit
 #
 # Additional options you may try:
 #   --async_train                    # Enable async training for higher throughput
