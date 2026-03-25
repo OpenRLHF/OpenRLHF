@@ -130,8 +130,7 @@ class TensorboardLogger:
 
     def log_eval(self, global_step: int, logs_dict: Dict[str, Any]) -> None:
         for k, v in logs_dict.items():
-            if v is not None:
-                self.writer.add_scalar(f"eval/{k}", v, global_step)
+            self.writer.add_scalar(f"eval/{k}", v, global_step)
 
     def close(self) -> None:
         self.writer.close()

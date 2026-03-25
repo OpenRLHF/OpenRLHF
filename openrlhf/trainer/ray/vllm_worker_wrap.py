@@ -36,7 +36,8 @@ class WorkerWrap:
         if torch.distributed.get_rank() == 0:
             print(f"update weight: {name}, dtype: {dtype}, shape: {shape}")
 
-        assert dtype == self.model_config.dtype, f"mismatch dtype: src {dtype}, dst {self.model_config.dtype}"
+        # Note: dtype mismatch is allowed here (e.g., fp32 from FSDP2 master weights).
+        # vLLM's load_weights uses param.data.copy_() which handles dtype conversion automatically.
         weight = torch.empty(shape, dtype=dtype, device="cuda")
         if self._model_update_with_ray:
             import ray.util.collective as collective
@@ -59,8 +60,6 @@ class WorkerWrap:
         if torch.distributed.get_rank() == 0:
             print(f"update weight: {name}, dtype: {dtype}, shape: {shape}")
 
-        assert dtype == self.model_config.dtype, f"mismatch dtype: src {dtype}, dst {self.model_config.dtype}"
-
         handle = ipc_handles[get_physical_gpu_id()]
         device_id = self.device.index
         func, args = handle
@@ -69,5 +68,8 @@ class WorkerWrap:
         # in case two processes have different CUDA_VISIBLE_DEVICES
         list_args[6] = device_id
         weight = func(*list_args)
+
+        # Note: dtype mismatch is allowed here (e.g., fp32 from FSDP2 master weights).
+        # vLLM's load_weights uses param.data.copy_() which handles dtype conversion automatically.
         self.model_runner.model.load_weights(weights=[(name, weight)])
         torch.cuda.synchronize()

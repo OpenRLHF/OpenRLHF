@@ -46,7 +46,7 @@ class AgentInstance(AgentInstanceBase):
 
         # Check if episode is done
         done = self.step_idx >= self.max_steps
-        reward = torch.randint(0, 2, (1,)).float() if done else torch.tensor(0)
+        reward = torch.randint(0, 2, (1,)).float() if done else torch.tensor(0.0)
 
         # Generate environment feedback based on whether episode is done
         environment_feedback = (

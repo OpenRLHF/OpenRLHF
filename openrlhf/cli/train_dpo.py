@@ -3,13 +3,14 @@ import math
 import os
 from datetime import datetime
 
+import torch
 from transformers.trainer import get_scheduler
 
 from openrlhf.datasets import RewardDataset
 from openrlhf.datasets.utils import blending_datasets
 from openrlhf.models import Actor
 from openrlhf.trainer.dpo_trainer import DPOTrainer
-from openrlhf.utils import get_strategy, get_tokenizer
+from openrlhf.utils import convert_to_torch_dtype, get_strategy, get_tokenizer
 
 
 def train(args):
@@ -18,43 +19,47 @@ def train(args):
     strategy.setup_distributed()
 
     # configure model
-    # load huggingface model
     model = Actor(
-        args.pretrain,
+        args.model_name_or_path,
         attn_implementation=args.attn_implementation,
-        param_dtype=args.param_dtype,  # default: bf16
-        load_in_4bit=args.load_in_4bit,
-        lora_rank=args.lora_rank,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
-        target_modules=args.target_modules,
-        ds_config=strategy.get_ds_train_config(is_actor=True),
-        packing_samples=args.packing_samples,
+        torch_dtype=torch.float32,
         use_liger_kernel=args.use_liger_kernel,
+        packing_samples=args.packing_samples,
     )
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
+    tokenizer = get_tokenizer(
+        args.model_name_or_path, model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer
+    )
     strategy.print(model)
 
     # load weights for ref model
     ref_model = Actor(
-        args.ref_pretrain,
+        args.ref_model_name_or_path,
         attn_implementation=args.attn_implementation,
-        param_dtype=args.param_dtype,  # default: bf16
-        load_in_4bit=args.load_in_4bit,
-        ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
+        torch_dtype=convert_to_torch_dtype(args.param_dtype),
         packing_samples=args.packing_samples,
     )
-    if args.ref_offload:
-        ref_model._offload = True
-    get_tokenizer(args.pretrain, ref_model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
+    get_tokenizer(
+        args.model_name_or_path, ref_model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer
+    )
 
     # gradient_checkpointing
     if args.gradient_checkpointing:
         model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
         )
+
+    # Wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
+    model = strategy.apply_parallelism(model)
+    # Reference model is inference-only; cpu_offload controls FSDP2 CPUOffloadPolicy.
+    ref_model = strategy.apply_parallelism(ref_model, force_cpu_offload=args.ref_offload)
+    strategy.model_to_empty(model)
+    if not args.dcp_checkpoint_from_path:
+        strategy.load_hf_checkpoint(model, args.model_name_or_path)
+
+    strategy.model_to_empty(ref_model, force_cpu_offload=args.ref_offload)
+    strategy.load_hf_checkpoint(ref_model, args.ref_model_name_or_path, force_cpu_offload=args.ref_offload)
 
     # configure optimizer
     optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
@@ -125,17 +130,23 @@ def train(args):
         scheduler_specific_kwargs={"min_lr": args.learning_rate * args.min_lr_ratio},
     )
 
-    # strategy prepare
-    ((model, optim, scheduler), ref_model) = strategy.prepare((model, optim, scheduler), ref_model)
-
     # load checkpoint
     consumed_samples = 0
-    if args.load_checkpoint and os.path.exists(args.ckpt_path):
-        _, states = strategy.load_ckpt(model.model, args.ckpt_path)
-        consumed_samples = states["consumed_samples"]
-        strategy.print(f"Loaded the checkpoint: {args.ckpt_path}, consumed_samples: {consumed_samples}")
+    if args.resume_training and not args.dcp_checkpoint_from_path:
+        raise ValueError("--resume_training requires --dcp_checkpoint_from_path.")
+    if args.dcp_checkpoint_from_path:
+        dcp_dir = os.path.join(args.dcp_checkpoint_from_path, "dcp_checkpoint")
+        if not os.path.isdir(dcp_dir):
+            raise FileNotFoundError(f"Expected DCP directory at {dcp_dir}")
+        if args.resume_training:
+            states = strategy.load_dcp_resume(model, dcp_dir, optimizer=optim, scheduler=scheduler)
+            consumed_samples = states["consumed_samples"]
+            strategy.print(f"Resumed training from: {dcp_dir}, consumed_samples: {consumed_samples}")
+        else:
+            strategy.load_dcp_resume(model, dcp_dir, load_module_only=True)
+            strategy.print(f"Loaded model weights only from: {dcp_dir}")
 
-    os.makedirs(args.save_path, exist_ok=True)
+    os.makedirs(args.ckpt_save_path, exist_ok=True)
 
     # batch_size here is expected to be C(k,2), k means # response of each prompt
     # be limited with the format of dataset 'Dahoas/rm-static', we'd better use batch_size as 1
@@ -152,36 +163,48 @@ def train(args):
         beta=args.beta,
         max_epochs=args.max_epochs,
         save_hf_ckpt=args.save_hf_ckpt,
-        disable_ds_ckpt=args.disable_ds_ckpt,
+        disable_fsdp2_ckpt=args.disable_fsdp2_ckpt,
     )
 
     trainer.fit(args, consumed_samples, num_update_steps_per_epoch)
 
     # save model checkpoint after fitting on only rank0
-    strategy.save_model(model, tokenizer, args.save_path)
+    strategy.save_hf_checkpoint(model, tokenizer, strategy.last_hf_ckpt_path)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # Checkpoints
-    parser.add_argument("--save_path", type=str, default="./ckpt")
+    parser.add_argument("--ckpt_save_path", type=str, default="./ckpt")
     parser.add_argument("--save_steps", type=int, default=-1)
     parser.add_argument("--save_hf_ckpt", action="store_true", default=False)
-    parser.add_argument("--disable_ds_ckpt", action="store_true", default=False)
+    parser.add_argument("--disable_fsdp2_ckpt", action="store_true", default=False)
     parser.add_argument("--logging_steps", type=int, default=1)
     parser.add_argument("--eval_steps", type=int, default=-1)
-    parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_dpo")
-    parser.add_argument("--max_ckpt_num", type=int, default=3)
-    parser.add_argument("--max_ckpt_mem", type=int, default=1e8)
-    parser.add_argument("--use_ds_universal_ckpt", action="store_true", default=False)
+    parser.add_argument(
+        "--max_checkpoints_to_keep",
+        type=int,
+        default=3,
+        help="Maximum checkpoints to keep. Use -1 to keep all checkpoints; value must be -1 or a positive integer.",
+    )
 
-    # DeepSpeed
+    # FSDP2
     parser.add_argument("--micro_train_batch_size", type=int, default=8, help="batch size per GPU")
     parser.add_argument("--train_batch_size", type=int, default=128, help="Global training batch size")
-    parser.add_argument("--load_checkpoint", action="store_true", default=False)
+    parser.add_argument(
+        "--dcp_checkpoint_from_path",
+        type=str,
+        default=None,
+        help="Load weights from an explicit step directory (must contain dcp_checkpoint).",
+    )
+    parser.add_argument(
+        "--resume_training",
+        action="store_true",
+        default=False,
+        help="Also restore optimizer, scheduler, and consumed_samples from --dcp_checkpoint_from_path.",
+    )
     parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
-    parser.add_argument("--deepcompile", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--full_determinism",
@@ -190,8 +213,19 @@ if __name__ == "__main__":
         help="Enable reproducible behavior during distributed training",
     )
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
-    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
-    parser.add_argument("--zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
+    parser.add_argument("--local_rank", type=int, default=-1, help="Local rank (for torchrun)")
+    parser.add_argument(
+        "--fsdp2_cpu_offload",
+        action="store_true",
+        default=False,
+        help="Offload FSDP2 params/grads/optimizer to CPU",
+    )
+    parser.add_argument(
+        "--fsdp2_reshard_after_forward",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Control fully_shard reshard_after_forward flag",
+    )
     parser.add_argument(
         "--param_dtype",
         type=str,
@@ -203,8 +237,6 @@ if __name__ == "__main__":
     parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
     parser.add_argument("--lr_scheduler", type=str, default="cosine_with_min_lr")
-    parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
-    parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument(
         "--attn_implementation",
         type=str,
@@ -212,10 +244,28 @@ if __name__ == "__main__":
         help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
     )
     parser.add_argument("--use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
-    parser.add_argument("--grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
-    parser.add_argument("--overlap_comm", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
-    parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed Tensor parallel size")
+    parser.add_argument("--fsdp2_tp_size", type=int, default=1, help="FSDP2 tensor parallel size")
+    parser.add_argument(
+        "--fsdp2_tp_sequence_parallel",
+        action="store_true",
+        default=False,
+        help="Enable sequence parallelism for FSDP2+TP (requires --fsdp2_tp_size > 1).",
+    )
+    parser.add_argument(
+        "--fsdp2_tp_loss_parallel",
+        action="store_true",
+        default=False,
+        help="Enable vocab-sharded lm_head logits and TP loss-parallel path (requires --fsdp2_tp_size > 1).",
+    )
+
+    # HF safetensors sharded export (DCP writer)
+    parser.add_argument(
+        "--hf_max_shard_size_gb",
+        type=float,
+        default=5,
+        help="Max size (in GB) per .safetensors shard file when saving HuggingFace checkpoints, e.g. 5 means each file <= 5GB.",
+    )
 
     # DPO
     parser.add_argument("--max_epochs", type=int, default=1)
@@ -235,8 +285,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
 
-    # Context Parallel
-    parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")
+    # Context Parallel (ring attention)
+    parser.add_argument("--fsdp2_cp_size", type=int, default=1, help="FSDP2 context parallel size")
     parser.add_argument(
         "--ring_head_stride",
         type=int,
@@ -246,19 +296,12 @@ if __name__ == "__main__":
         "A larger value may results in faster training but will consume more memory.",
     )
 
-    # LoRA
-    parser.add_argument("--load_in_4bit", action="store_true", default=False)
-    parser.add_argument("--lora_rank", type=int, default=0)
-    parser.add_argument("--lora_alpha", type=int, default=16)
-    parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")
-    parser.add_argument("--lora_dropout", type=float, default=0)
-
     # packing samples using Flash Attention2
     parser.add_argument("--packing_samples", action="store_true", default=False)
 
     # Custom dataset
-    parser.add_argument("--pretrain", type=str, default=None)
-    parser.add_argument("--ref_pretrain", type=str, default=None)
+    parser.add_argument("--model_name_or_path", type=str, default=None)
+    parser.add_argument("--ref_model_name_or_path", type=str, default=None)
     parser.add_argument("--dataset", type=str, default=None, help="Path to the training dataset")
     parser.add_argument("--dataset_probs", type=str, default=None, help="Sampling probabilities for training datasets")
     parser.add_argument("--eval_dataset", type=str, default=None, help="Path to the evaluation dataset")
@@ -295,8 +338,8 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if args.ref_pretrain is None or args.ref_pretrain == "":
-        args.ref_pretrain = args.pretrain
+    if args.ref_model_name_or_path is None or args.ref_model_name_or_path == "":
+        args.ref_model_name_or_path = args.model_name_or_path
 
     if args.input_template and "{}" not in args.input_template:
         print("[Warning] {} not in args.input_template, set to None")
@@ -308,7 +351,7 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
-    if args.ring_attn_size > 1:
+    if args.fsdp2_cp_size > 1:
         assert args.packing_samples, "packing_samples must be enabled when using ring attention"
 
     if args.packing_samples and "flash_attention" not in args.attn_implementation:

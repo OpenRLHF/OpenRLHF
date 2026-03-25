@@ -1,11 +1,19 @@
+import warnings
 from typing import Optional, Tuple
 
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.distributed.tensor import DTensor
 
-from .utils import masked_mean
+from openrlhf.utils.fsdp2.tp.loss_parallel import (
+    compute_argmax_sharded,
+    compute_kd_loss_sharded,
+    gather_token_logits_sharded,
+)
+
+from .utils import compute_token_log_probs, masked_mean
 
 
 class GPTLMLoss(nn.Module):
@@ -19,38 +27,27 @@ class GPTLMLoss(nn.Module):
         self.loss = nn.CrossEntropyLoss(ignore_index=self.IGNORE_INDEX)
 
         self.ring_attn_group = ring_attn_group
-        if self.ring_attn_group:
-            self.ring_attn_rank = dist.get_rank(self.ring_attn_group)
-            self.ring_attn_world_size = dist.get_world_size(self.ring_attn_group)
+        if ring_attn_group is not None:
+            is_rank0 = (not dist.is_available()) or (not dist.is_initialized()) or dist.get_rank() == 0
+            if is_rank0:
+                warnings.warn(
+                    "GPTLMLoss(ring_attn_group=...) is deprecated and ignored. "
+                    "Compute loss on gathered logits/labels (e.g. Actor(..., allgather_logits=True)) "
+                    "or use gathered log_probs + SFTLoss.",
+                    stacklevel=2,
+                )
 
     def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        # RingAttention
-        if self.ring_attn_group is not None:
-            total_seq_len = labels.size(-1)
-            seq_len_per_process = total_seq_len // self.ring_attn_world_size
-            start_idx = self.ring_attn_rank * seq_len_per_process
-            end_idx = min(start_idx + seq_len_per_process, total_seq_len)
-            labels = labels[..., start_idx:end_idx]
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
 
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-
-            # if labels are all IGNORE_INDEX, then nn.CrossEntropyLoss will be nan
-            if torch.all(shift_labels == self.IGNORE_INDEX):
-                # Use mean of logits multiplied by 0 to maintain gradient flow
-                loss = shift_logits.mean() * 0
-            else:
-                loss = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-
-            dist.all_reduce(loss, op=dist.ReduceOp.SUM, group=self.ring_attn_group)
-            loss = loss / self.ring_attn_world_size
-        else:
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-
-            loss = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-
-        return loss
+        if torch.all(shift_labels == self.IGNORE_INDEX):
+            return shift_logits.mean() * 0
+        if isinstance(shift_logits, DTensor):
+            log_probs = compute_token_log_probs(shift_logits, shift_labels)
+            mask = shift_labels != self.IGNORE_INDEX
+            return -(log_probs * mask).sum() / mask.sum()
+        return self.loss(shift_logits.float().view(-1, shift_logits.size(-1)), shift_labels.view(-1))
 
 
 class SFTLoss(nn.Module):
@@ -279,3 +276,189 @@ class DPOLoss(nn.Module):
         rejected_rewards = self.beta * (policy_rejected_logps - reference_rejected_logps).detach()
 
         return loss, chosen_rewards, rejected_rewards
+
+
+# Adapted from https://github.com/ContextualAI/HALOs/blob/ca9b7e3eeea220c0944ad8095d641da33f907a7e/trainers.py#L742
+class VanillaKTOLoss(nn.Module):
+    """
+    KTO loss for even sampling
+    """
+
+    def __init__(self, beta: float) -> None:
+        super().__init__()
+        self.beta = beta
+
+    def forward(
+        self,
+        policy_chosen_logps: torch.FloatTensor,
+        policy_rejected_logps: torch.FloatTensor,
+        reference_chosen_logps: torch.FloatTensor,
+        reference_rejected_logps: torch.FloatTensor,
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        chosen_KL = (policy_chosen_logps - reference_chosen_logps).mean().clamp(min=0)
+        rejected_KL = (policy_rejected_logps - reference_rejected_logps).mean().clamp(min=0)
+
+        chosen_logratios = policy_chosen_logps - reference_chosen_logps
+        rejected_logratios = policy_rejected_logps - reference_rejected_logps
+
+        losses = torch.cat(
+            (
+                1 - F.sigmoid(self.beta * (chosen_logratios - rejected_KL)),
+                1 - F.sigmoid(self.beta * (chosen_KL - rejected_logratios)),
+            ),
+            0,
+        ).mean()
+
+        chosen_rewards = self.beta * (policy_chosen_logps - reference_chosen_logps).detach()
+        rejected_rewards = self.beta * (policy_rejected_logps - reference_rejected_logps).detach()
+        return losses, chosen_rewards, rejected_rewards
+
+
+# Adapted from https://github.com/ContextualAI/HALOs/blob/ca9b7e3eeea220c0944ad8095d641da33f907a7e/trainers.py#L770
+class KTOLoss(nn.Module):
+    """
+    KTO loss for uneven sampling
+    """
+
+    def __init__(
+        self, beta: float, desirable_weight: float, undesirable_weight: float, world_size: int, device: torch.device
+    ) -> None:
+        super().__init__()
+        self.beta = beta
+        self.world_size = world_size
+        self.device = device
+        self.desirable_weight = desirable_weight
+        self.undesirable_weight = undesirable_weight
+
+    def forward(
+        self,
+        policy_chosen_logps: torch.FloatTensor,
+        policy_rejected_logps: torch.FloatTensor,
+        policy_KL_logps: torch.FloatTensor,
+        reference_chosen_logps: torch.FloatTensor,
+        reference_rejected_logps: torch.FloatTensor,
+        reference_KL_logps: torch.FloatTensor,
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        KL = (policy_KL_logps - reference_KL_logps).mean().detach()
+        # all_reduce sums up the KL estimates across all devices (gradient will also be scaled by world size)
+        dist.all_reduce(KL, op=dist.ReduceOp.SUM)
+        # take average (will also scale gradients appropriately)
+        KL = (KL / self.world_size).clamp(min=0)
+
+        if policy_chosen_logps.shape[0] != 0:
+            chosen_logratios = policy_chosen_logps - reference_chosen_logps
+            chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - KL))
+            chosen_rewards = self.beta * chosen_logratios.detach()
+        else:
+            # important to cast to policy_dtype; otherwise error will occur during all_gather
+            chosen_losses = torch.Tensor([]).to(policy_rejected_logps.dtype).to(self.device)
+            chosen_rewards = torch.Tensor([]).to(policy_rejected_logps.dtype).to(self.device)
+
+        if policy_rejected_logps.shape[0] != 0:
+            rejected_logratios = policy_rejected_logps - reference_rejected_logps
+            rejected_losses = 1 - F.sigmoid(self.beta * (KL - rejected_logratios))
+            rejected_rewards = self.beta * rejected_logratios.detach()
+        else:
+            # important to cast to policy_dtype; otherwise error will occur during all_gather
+            rejected_losses = torch.Tensor([]).to(policy_chosen_logps.dtype).to(self.device)
+            rejected_rewards = torch.Tensor([]).to(policy_chosen_logps.dtype).to(self.device)
+
+        losses = torch.cat(
+            (self.desirable_weight * chosen_losses, self.undesirable_weight * rejected_losses), 0
+        ).mean()
+        return losses, chosen_rewards, rejected_rewards, KL
+
+
+# Adapted from https://github.com/microsoft/LMOps/blob/main/minillm/finetune.py#L166
+class KDLoss(nn.Module):
+    """
+    Language Model Knowledge Distillation Loss
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.IGNORE_INDEX = -100
+
+    def forward(self, logits: torch.Tensor, teacher_logits: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
+        if isinstance(logits, DTensor) or isinstance(teacher_logits, DTensor):
+            return compute_kd_loss_sharded(logits, teacher_logits, label, self.IGNORE_INDEX)
+
+        teacher_probs = F.softmax(teacher_logits, dim=-1, dtype=torch.float32)
+        inf_mask = torch.isinf(logits)
+        logprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
+        prod_probs = torch.masked_fill(teacher_probs * logprobs, inf_mask, 0)
+        x = torch.sum(prod_probs, dim=-1).view(-1)
+        mask = (label != self.IGNORE_INDEX).int()
+        return -torch.sum(x * mask.view(-1), dim=0) / torch.sum(mask.view(-1), dim=0)
+
+
+class PRMLoss(nn.Module):
+    """
+    Process Reward Model Loss
+    """
+
+    def __init__(self, placeholder_token_id: int, reward_token_ids: Optional[list[int]] = None):
+        super().__init__()
+        self.IGNORE_INDEX = -100
+        self.loss = nn.CrossEntropyLoss(ignore_index=self.IGNORE_INDEX)
+        self.placeholder_token_id = placeholder_token_id
+        self.reward_token_ids = reward_token_ids
+
+    def forward(self, inputs: torch.Tensor, logits: torch.Tensor, labels: torch.Tensor, *, return_acc: bool = False):
+        placeholder_mask = inputs == self.placeholder_token_id
+        if labels.dtype == torch.float:
+            # soft label
+            assert len(self.reward_token_ids) == 2, "reward_token_ids should have 2 tokens for soft labels"
+            token_ids = torch.tensor(self.reward_token_ids, dtype=torch.long)
+            if isinstance(logits, DTensor):
+                logits = gather_token_logits_sharded(logits, token_ids)
+            else:
+                logits = logits.index_select(dim=-1, index=token_ids.to(device=logits.device))
+            logits = logits[placeholder_mask].squeeze(1)
+            labels = labels[placeholder_mask]
+            positive_labels = labels.to(logits.dtype)
+            negative_labels = 1 - positive_labels
+            negative_labels[positive_labels != -100] = 1 - positive_labels[positive_labels != -100]
+            labels = torch.stack([positive_labels, negative_labels], dim=-1)
+        elif self.reward_token_ids is not None:
+            # hard label with reward_token_ids set. (otherwise the whole vocab will be trained together.)
+            token_ids = torch.tensor(self.reward_token_ids, dtype=torch.long)
+            if isinstance(logits, DTensor):
+                logits = gather_token_logits_sharded(logits, token_ids)
+            else:
+                logits = logits.index_select(dim=-1, index=token_ids.to(device=logits.device))
+            logits = logits[placeholder_mask].squeeze(1)
+            labels = labels[placeholder_mask]
+            # this is slow....
+            for i, token in enumerate(self.reward_token_ids):
+                labels = torch.where(labels == token, i, labels)
+        else:
+            labels_ph = labels[placeholder_mask]
+            if isinstance(logits, DTensor):
+                # Avoid DTensor advanced indexing; compute token log-probs first (returns local tensor).
+                log_probs = compute_token_log_probs(logits, labels)
+                log_probs_ph = log_probs[placeholder_mask]
+
+                mask = labels_ph != self.IGNORE_INDEX
+                loss = -(log_probs_ph.view(-1) * mask.view(-1)).sum() / mask.sum()
+
+                if not return_acc:
+                    return loss
+
+                with torch.no_grad():
+                    global_argmax = compute_argmax_sharded(logits, placeholder_mask)
+                    acc = (global_argmax == labels_ph).float()
+                    acc = (acc * mask).sum() / mask.sum()
+                return loss, acc
+
+            logits = logits[placeholder_mask].squeeze(1)
+            labels = labels_ph
+
+        loss = self.loss(logits.float(), labels)
+        if not return_acc:
+            return loss
+
+        if labels.dtype == logits.dtype:
+            labels = labels.argmax(dim=-1)
+        acc = (logits.argmax(dim=-1) == labels).float().mean()
+        return loss, acc

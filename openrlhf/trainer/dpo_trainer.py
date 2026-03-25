@@ -26,7 +26,7 @@ class DPOTrainer(ABC):
         beta (float, defaults to 0.01): Coefficient for regularizing the preference loss.
         max_epochs (int, defaults to 2): Maximum number of training epochs.
         save_hf_ckpt (bool): Whether to save huggingface-format model weight.
-        disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight. (Deepspeed model weight is used for training recovery)
+        disable_fsdp2_ckpt (bool): Whether to disable FSDP2 distributed checkpoints (used for training recovery).
     """
 
     def __init__(
@@ -43,7 +43,7 @@ class DPOTrainer(ABC):
         beta=0.01,
         max_epochs: int = 2,
         save_hf_ckpt: bool = False,
-        disable_ds_ckpt: bool = False,
+        disable_fsdp2_ckpt: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -58,7 +58,7 @@ class DPOTrainer(ABC):
         self.tokenizer = tokenizer
         self.args = strategy.args
         self.save_hf_ckpt = save_hf_ckpt
-        self.disable_ds_ckpt = disable_ds_ckpt
+        self.disable_fsdp2_ckpt = disable_fsdp2_ckpt
 
         self.beta = beta
         self.loss_fn = DPOLoss(self.beta, self.args.label_smoothing, self.args.ipo)
@@ -104,15 +104,6 @@ class DPOTrainer(ABC):
             self._tensorboard = SummaryWriter(log_dir=log_dir)
 
     def fit(self, args, consumed_samples=0, num_update_steps_per_epoch=None):
-        # Infer num_update_steps_per_epoch from dataloader if not provided
-        if num_update_steps_per_epoch is None:
-            num_update_steps_per_epoch = len(self.train_dataloader)
-        if num_update_steps_per_epoch <= 0:
-            raise ValueError(
-                f"num_update_steps_per_epoch must be positive, got {num_update_steps_per_epoch}. "
-                "Check that your dataset is not smaller than train_batch_size."
-            )
-
         # get eval and save steps
         if args.eval_steps == -1:
             args.eval_steps = num_update_steps_per_epoch  # Evaluate once per epoch
@@ -145,14 +136,13 @@ class DPOTrainer(ABC):
 
             self.model.train()
             self.ref_model.eval()
-            device = next(self.model.parameters()).device
             # train
             for data in self.train_dataloader:
                 chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens = data
-                chosen_ids = chosen_ids.squeeze(1).to(device)
-                c_mask = c_mask.squeeze(1).to(device)
-                reject_ids = reject_ids.squeeze(1).to(device)
-                r_mask = r_mask.squeeze(1).to(device)
+                chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
+                c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
+                reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
+                r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
 
                 chosen_logps, rejected_logps, aux_loss, nll_loss = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens
@@ -174,7 +164,7 @@ class DPOTrainer(ABC):
                     nll_loss = 0
 
                 loss = preference_loss + aux_loss * self.args.aux_loss_coef + nll_loss * self.args.nll_loss_coef
-                self.strategy.backward(loss, self.model, self.optimizer)
+                self.strategy.backward(loss)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 acc = (chosen_reward > reject_reward).float().mean().item()
@@ -187,7 +177,6 @@ class DPOTrainer(ABC):
                     "chosen_reward": chosen_reward.mean().item(),
                     "reject_reward": reject_reward.mean().item(),
                     "lr": self.scheduler.get_last_lr()[0],
-                    "grad_norm": self.strategy.get_grad_norm(self.model),
                 }
                 if self.nll_loss:
                     logs_dict["nll_loss"] = nll_loss.item()
@@ -236,14 +225,23 @@ class DPOTrainer(ABC):
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
-            tag = f"global_step{global_step}"
-            if not self.disable_ds_ckpt:
-                self.strategy.save_ckpt(
-                    self.model.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+            tag = f"global_step_{global_step}"
+            step_dir = os.path.join(self.strategy.dcp_ckpt_path, tag)
+            any_checkpoint_saved = False
+            if not self.disable_fsdp2_ckpt:
+                self.strategy.save_dcp_checkpoint(
+                    self.model.model,
+                    os.path.join(step_dir, "dcp_checkpoint"),
+                    client_state=client_states,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
                 )
+                any_checkpoint_saved = True
             if self.save_hf_ckpt:
-                save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
-                self.strategy.save_model(self.model, self.tokenizer, save_path)
+                self.strategy.save_hf_checkpoint(self.model, self.tokenizer, os.path.join(step_dir, "hf_checkpoint"))
+                any_checkpoint_saved = True
+            if any_checkpoint_saved:
+                self.strategy.cleanup_old_checkpoints(tag)
 
     def evaluate(self, eval_dataloader, steps=0):
         self.model.eval()
@@ -256,13 +254,12 @@ class DPOTrainer(ABC):
             acc_sum = 0
             loss_sum = 0
             times = 0
-            device = next(self.model.parameters()).device
             for data in eval_dataloader:
                 chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens = data
-                chosen_ids = chosen_ids.squeeze(1).to(device)
-                c_mask = c_mask.squeeze(1).to(device)
-                reject_ids = reject_ids.squeeze(1).to(device)
-                r_mask = r_mask.squeeze(1).to(device)
+                chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
+                c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
+                reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
+                r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
 
                 chosen_logps, rejected_logps, aux_loss, _ = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens
