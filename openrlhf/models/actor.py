@@ -3,49 +3,46 @@ from typing import Optional
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from peft import LoraConfig, TaskType, get_peft_model
-from peft.tuners.lora import LoraLayer
-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
-from transformers.integrations.deepspeed import HfDeepSpeedConfig
+from transformers import AutoConfig, AutoModelForCausalLM
 
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
-from .utils import compute_entropy, log_probs_from_logits, set_z3_leaf_modules
+from .utils import compute_entropy, compute_token_log_probs
 
 
 class Actor(nn.Module):
     """
-    Base class for Actor models in reinforcement learning.
+    Actor model for reinforcement learning.
 
-    This class serves as a foundation for implementing various actor models, which are responsible for selecting actions based on the policy learned from the environment.
+    - ``device_map="meta"`` (default): build an HF causal-LM on the ``meta``
+      device (no weight allocation). Weights are loaded later via
+      ``strategy.load_pretrained``.
+    - ``device_map!="meta"``: load real weights via HuggingFace
+      ``from_pretrained`` and forward ``device_map`` to it (e.g. ``"auto"``,
+      ``"cuda:0"``, or ``"cpu"``). If ``device_map is None``, HF defaults are
+      used (typically CPU).
 
     Args:
-        pretrain_or_model (nn.Module): A pretrained model or a new model instance to be used as the actor.
-        attn_implementation (str, optional): Attention mechanism implementation to use. Defaults to "flash_attention_2".
-        param_dtype (str, optional): Model data type ("bf16", "fp16"). Defaults to "bf16".
-        load_in_4bit (bool, optional): Load the model in 4-bit precision. Defaults to False.
-        lora_rank (int, optional): Rank for LoRA adaptation. Defaults to 0.
-        lora_alpha (int, optional): Alpha parameter for LoRA. Defaults to 16.
-        lora_dropout (float, optional): Dropout rate for LoRA layers. Defaults to 0.
-        target_modules (list, optional): List of target modules for applying LoRA. Defaults to None.
-        ds_config (dict, optional): Configuration for DeepSpeed, enabling model partitioning across multiple GPUs. Defaults to None.
-        device_map (dict, optional): Device mapping for loading the model onto specific devices. Defaults to None.
-        packing_samples (bool, optional): Whether to pack samples during training. Defaults to False.
-        temperature (float, optional): Temperature for action selection. Defaults to 1.0.
-        use_liger_kernel (bool, optional): Whether to use Liger Kernel for the model. Defaults to False.
+        pretrain (str): HuggingFace model name or local path.
+        attn_implementation (str): Attention implementation. Defaults to ``"flash_attention_2"``.
+        dtype (torch.dtype): Model dtype for meta-init and ``from_pretrained``.
+            Training models typically pass ``torch.float32`` (FSDP mixed-precision handles cast);
+            ref/inference models pass ``torch.bfloat16`` or ``torch.float16``.
+        device_map (str | None): Device placement for model weights. Use ``"meta"``
+            to create structure-only meta tensors; use ``"auto"`` for automatic
+            placement with Accelerate; use ``"cuda:{rank}"`` to place the whole
+            model on a specific GPU.
+        use_liger_kernel (bool): Use Liger Kernel optimised causal LM. Defaults to ``False``.
+        packing_samples (bool): Pack samples during training. Defaults to ``False``.
+        temperature (float): Temperature for log-prob computation. Defaults to 1.0.
     """
 
     def __init__(
         self,
-        pretrain_or_model,
+        pretrain: str,
+        *,
         attn_implementation="flash_attention_2",
-        param_dtype="bf16",
-        load_in_4bit=False,
-        lora_rank=0,
-        lora_alpha=16,
-        lora_dropout=0,
-        target_modules=None,
-        ds_config=None,
-        device_map=None,
+        torch_dtype: torch.dtype = torch.float32,
+        device_map: Optional[str] = "meta",
         packing_samples=False,
         temperature=1.0,
         use_liger_kernel=False,
@@ -53,90 +50,52 @@ class Actor(nn.Module):
     ) -> None:
         super().__init__()
         self.temperature = temperature
+        self.packing_samples = packing_samples
 
-        if isinstance(pretrain_or_model, str):
-            # Support multiple attention mechanism implementations
-            attn_impl = attn_implementation
+        if device_map == "meta":
+            # -- Build causal-LM structure on meta device (no weight allocation) --
+            cfg = AutoConfig.from_pretrained(pretrain, trust_remote_code=True)
+            cfg.use_cache = False
+            cfg._attn_implementation = attn_implementation
 
-            # Note: dschf is defined in function scope to avoid global effects
-            # https://huggingface.co/docs/transformers/deepspeed#non-trainer-deepspeed-integration
-            if ds_config is not None and ds_config["zero_optimization"]["stage"] == 3:
-                dschf = HfDeepSpeedConfig(ds_config)
-            else:
-                dschf = None
+            with torch.device("meta"):
+                if use_liger_kernel:
+                    from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
-            # Determine torch dtype based on param_dtype parameter, default: bf16
-            from openrlhf.utils.utils import convert_to_torch_dtype
+                    model = AutoLigerKernelForCausalLM.from_config(cfg, dtype=torch_dtype, trust_remote_code=True)
+                else:
+                    model = AutoModelForCausalLM.from_config(cfg, dtype=torch_dtype, trust_remote_code=True)
 
-            torch_dtype = convert_to_torch_dtype(param_dtype)
-
-            if load_in_4bit:
-                assert param_dtype == "bf16", "we only support bnb_4bit_compute_dtype = bf16"
-                nf4_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_quant_type="nf4",
-                    bnb_4bit_use_double_quant=True,
-                    bnb_4bit_compute_dtype=torch.bfloat16,
-                )
-            else:
-                nf4_config = None
-
+            self.model = model
+            if hasattr(self.model, "config") and hasattr(self.model.config, "use_cache"):
+                self.model.config.use_cache = False
+        else:
+            # -- Load real weights via from_pretrained --
+            model_cls = AutoModelForCausalLM
             if use_liger_kernel:
                 from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
-                model_class = AutoLigerKernelForCausalLM
-            else:
-                model_class = AutoModelForCausalLM
+                model_cls = AutoLigerKernelForCausalLM
 
-            self.model = model_class.from_pretrained(
-                pretrain_or_model,
-                trust_remote_code=True,
-                attn_implementation=attn_impl,
-                quantization_config=nf4_config,
-                torch_dtype=torch_dtype,  # default: bf16
-                device_map=device_map,
-            )
+            load_kwargs = {
+                "dtype": torch_dtype,
+                "attn_implementation": attn_implementation,
+                "trust_remote_code": True,
+            }
+            if device_map is not None:
+                load_kwargs["device_map"] = device_map
 
-            # LoRA
-            if lora_rank > 0:
-                # https://github.com/huggingface/peft/issues/137
-                self.model.enable_input_require_grads()
-                lora_config = LoraConfig(
-                    task_type=TaskType.CAUSAL_LM,
-                    r=lora_rank,
-                    lora_alpha=lora_alpha,
-                    target_modules=target_modules,
-                    lora_dropout=lora_dropout,
-                    bias="none",
-                )
-                self.model = get_peft_model(self.model, lora_config)
+            model = model_cls.from_pretrained(pretrain, **load_kwargs)
 
-                if load_in_4bit:
-                    for name, module in self.model.named_modules():
-                        if isinstance(module, LoraLayer):
-                            module = module.to(torch.bfloat16)
-                        if "norm" in name:
-                            module = module.to(torch.float32)
-                        if "lm_head" in name or "embed_tokens" in name:
-                            if hasattr(module, "weight"):
-                                module = module.to(torch.bfloat16)
+            self.model = model
+            if hasattr(self.model, "config") and hasattr(self.model.config, "use_cache"):
+                self.model.config.use_cache = False
 
-            # MoE - balancing loss
-            model_config = self.model.config.to_dict()
-            if "output_router_logits" in model_config:
-                print("[MoE] set output_router_logits as True")
-                self.model.config.output_router_logits = True
-
-            set_z3_leaf_modules(self.model)
-
-            # https://github.com/huggingface/transformers/issues/26877
-            # Use `model.generate(use_cache=True)` instead.`
-            self.model.config.use_cache = False
-
-            # packing samples using Flash Attention 2
-            self.packing_samples = packing_samples
-        else:
-            self.model = pretrain_or_model
+        # MoE - balancing loss
+        model_config = self.model.config.to_dict()
+        if "output_router_logits" in model_config:
+            print("[MoE] set output_router_logits as True")
+            self.model.config.output_router_logits = True
 
     def forward(
         self,
@@ -184,7 +143,7 @@ class Actor(nn.Module):
                 )
             return output
 
-        log_probs = log_probs_from_logits(output["logits"], rolled_sequences, temperature=self.temperature)
+        log_probs = compute_token_log_probs(output["logits"], rolled_sequences, temperature=self.temperature)
 
         if self.packing_samples:
             log_probs = gather_and_pad_tensor(log_probs, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
@@ -196,6 +155,9 @@ class Actor(nn.Module):
         action_log_probs = log_probs[:, -action_mask.shape[1] :] * action_mask.float()
 
         return (action_log_probs, output) if return_output else action_log_probs
+
+    def generate(self, *args, **kwargs):
+        return self.model.generate(*args, **kwargs)
 
     def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs={"use_reentrant": False}):
         self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)

@@ -55,20 +55,20 @@ class SFTDataset(Dataset):
     ) -> None:
         super().__init__()
         self.tokenizer = tokenizer
-        self.strategy = strategy
         self.pretrain_mode = pretrain_mode
         self.max_length = max_length
         self.multiturn = multiturn
+        args = strategy.args
 
         # chat template
         self.input_template = input_template
-        self.input_key = getattr(self.strategy.args, "input_key", None)
-        self.output_key = getattr(self.strategy.args, "output_key", None)
-        self.apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
+        self.input_key = getattr(args, "input_key", None)
+        self.output_key = getattr(args, "output_key", None)
+        self.apply_chat_template = getattr(args, "apply_chat_template", False)
 
         if self.apply_chat_template:
             self.apply_chat_template = self.tokenizer.apply_chat_template
-            tokenizer_chat_template = getattr(self.strategy.args, "tokenizer_chat_template", None)
+            tokenizer_chat_template = getattr(args, "tokenizer_chat_template", None)
             if tokenizer_chat_template:
                 self.tokenizer.chat_template = tokenizer_chat_template
 

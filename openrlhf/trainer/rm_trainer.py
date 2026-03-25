@@ -38,7 +38,7 @@ class RewardModelTrainer(ABC):
         max_norm=0.5,
         max_epochs: int = 2,
         loss="sigmoid",
-        disable_ds_ckpt=False,
+        disable_fsdp2_ckpt=False,
         save_hf_ckpt=False,
     ) -> None:
         super().__init__()
@@ -52,7 +52,7 @@ class RewardModelTrainer(ABC):
         self.optimizer = optim
         self.tokenizer = tokenizer
         self.args = strategy.args
-        self.disable_ds_ckpt = disable_ds_ckpt
+        self.disable_fsdp2_ckpt = disable_fsdp2_ckpt
         self.save_hf_ckpt = save_hf_ckpt
 
         if loss == "sigmoid":
@@ -103,15 +103,6 @@ class RewardModelTrainer(ABC):
             self._tensorboard = SummaryWriter(log_dir=log_dir)
 
     def fit(self, args, consumed_samples=0, num_update_steps_per_epoch=None):
-        # Infer num_update_steps_per_epoch from dataloader if not provided
-        if num_update_steps_per_epoch is None:
-            num_update_steps_per_epoch = len(self.train_dataloader)
-        if num_update_steps_per_epoch <= 0:
-            raise ValueError(
-                f"num_update_steps_per_epoch must be positive, got {num_update_steps_per_epoch}. "
-                "Check that your dataset is not smaller than train_batch_size."
-            )
-
         # get eval and save steps
         if args.eval_steps == -1:
             args.eval_steps = num_update_steps_per_epoch  # Evaluate once per epoch
@@ -141,20 +132,19 @@ class RewardModelTrainer(ABC):
             )
 
             self.model.train()
-            device = next(self.model.parameters()).device
             for data in self.train_dataloader:
                 chosen_ids, c_mask, reject_ids, r_mask, margin = data
-                chosen_ids = chosen_ids.squeeze(1).to(device)
-                c_mask = c_mask.squeeze(1).to(device)
-                reject_ids = reject_ids.squeeze(1).to(device)
-                r_mask = r_mask.squeeze(1).to(device)
+                chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
+                c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
+                reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
+                r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
 
                 chosen_reward, reject_reward, aux_loss = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask
                 )
 
                 if self.margin_loss:
-                    margin = torch.tensor(margin).to(device)
+                    margin = torch.tensor(margin).to(torch.cuda.current_device())
                 else:
                     margin = None
 
@@ -169,7 +159,7 @@ class RewardModelTrainer(ABC):
                     aux_loss = 0
 
                 loss = preference_loss + aux_loss * self.args.aux_loss_coef
-                self.strategy.backward(loss, self.model, self.optimizer)
+                self.strategy.backward(loss)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 acc = (chosen_reward > reject_reward).float().mean().item()
@@ -182,7 +172,6 @@ class RewardModelTrainer(ABC):
                     "chosen_reward": chosen_reward.mean().item(),
                     "reject_reward": reject_reward.mean().item(),
                     "lr": self.scheduler.get_last_lr()[0],
-                    "grad_norm": self.strategy.get_grad_norm(self.model),
                 }
                 if self.aux_loss:
                     logs_dict["aux_loss"] = aux_loss.item()
@@ -233,14 +222,23 @@ class RewardModelTrainer(ABC):
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
         if global_step % args.save_steps == 0:
-            tag = f"global_step{global_step}"
-            if not self.disable_ds_ckpt:
-                self.strategy.save_ckpt(
-                    self.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+            tag = f"global_step_{global_step}"
+            step_dir = os.path.join(self.strategy.dcp_ckpt_path, tag)
+            any_checkpoint_saved = False
+            if not self.disable_fsdp2_ckpt:
+                self.strategy.save_dcp_checkpoint(
+                    self.model,
+                    os.path.join(step_dir, "dcp_checkpoint"),
+                    client_state=client_states,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
                 )
+                any_checkpoint_saved = True
             if self.save_hf_ckpt:
-                save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
-                self.strategy.save_model(self.model, self.tokenizer, save_path)
+                self.strategy.save_hf_checkpoint(self.model, self.tokenizer, os.path.join(step_dir, "hf_checkpoint"))
+                any_checkpoint_saved = True
+            if any_checkpoint_saved:
+                self.strategy.cleanup_old_checkpoints(tag)
 
     def evaluate(self, eval_dataloader, steps=0):
         step_bar = tqdm(
@@ -253,20 +251,19 @@ class RewardModelTrainer(ABC):
             acc = 0
             rewards = []
             loss_sum = 0
-            device = next(self.model.parameters()).device
             for data in eval_dataloader:
                 chosen_ids, c_mask, reject_ids, r_mask, margin = data
-                chosen_ids = chosen_ids.squeeze(1).to(device)
-                c_mask = c_mask.squeeze(1).to(device)
-                reject_ids = reject_ids.squeeze(1).to(device)
-                r_mask = r_mask.squeeze(1).to(device)
+                chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
+                c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
+                reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
+                r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
 
                 chosen_reward, reject_reward, _ = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask
                 )
 
                 if self.margin_loss:
-                    margin = torch.tensor(margin).to(device)
+                    margin = torch.tensor(margin).to(torch.cuda.current_device())
                 else:
                     margin = None
 
@@ -290,6 +287,7 @@ class RewardModelTrainer(ABC):
             unwrap_model = self.strategy._unwrap_model(self.model)
             unwrap_model.config.mean = reward_mean.item()
             unwrap_model.config.std = reward_std.item()
+            unwrap_model.reset_buffers()
 
             bar_dict = {
                 "eval_loss": loss_mean,
@@ -320,7 +318,10 @@ class RewardModelTrainer(ABC):
         """
         input_ids, att_masks = self.concatenated_inputs(chosen_ids, c_mask, reject_ids, r_mask)
         all_values, output = model(
-            input_ids, attention_mask=att_masks, return_output=True, ring_attn_group=self.strategy.ring_attn_group
+            input_ids,
+            attention_mask=att_masks,
+            return_output=True,
+            ring_attn_group=self.strategy.ring_attn_group,
         )
         chosen_rewards = all_values[: chosen_ids.shape[0]]
         rejected_rewards = all_values[chosen_ids.shape[0] :]

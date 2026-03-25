@@ -1,7 +1,7 @@
 set -x
 
 python -m openrlhf.cli.serve_rm \
-    --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \
+    --reward_model_name_or_path OpenRLHF/Llama-3-8b-rm-700k \
     --port 5000 \
     --param_dtype bf16 \
     --attn_implementation flash_attention_2 \
