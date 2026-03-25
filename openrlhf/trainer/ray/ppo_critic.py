@@ -138,22 +138,28 @@ class CriticPPOTrainer(ABC):
         else:
             aux_loss = 0
         loss = critic_loss + aux_loss * self.args.aux_loss_coef
-        sync_gradients = None
+        opt_update_boundary = True
         if self.args.use_dynamic_batch:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
-            sync_gradients = bool(self.replay_buffer.dynamic_optimizer_step[step])
+            opt_update_boundary = self.replay_buffer.dynamic_is_last_micro_batch[step]
 
-        self.strategy.backward(loss, self.critic, self.critic_optim, name="critic", sync_gradients=sync_gradients)
-        self.strategy.optimizer_step(
-            self.critic_optim, self.critic, self.critic_scheduler, name="critic", sync_gradients=sync_gradients
-        )
+        self.strategy.backward(loss, self.critic, name="critic", sync_gradients=opt_update_boundary)
+        critic_grad_norm = self.strategy.get_grad_norm(self.critic)
+        if opt_update_boundary:
+            self.strategy.optimizer_step(
+                self.critic_optim,
+                self.critic,
+                self.critic_scheduler,
+                name="critic",
+                grad_norm=critic_grad_norm,
+            )
 
         # status
         status = {
             "critic_loss": critic_loss.detach().item(),
             "values": masked_mean(values, experience.action_mask).detach().item(),
             "critic_lr": self.critic_scheduler.get_last_lr()[0],
-            "critic_grad_norm": self.strategy.get_grad_norm(self.critic),
+            "critic_grad_norm": critic_grad_norm,
         }
         return status
 

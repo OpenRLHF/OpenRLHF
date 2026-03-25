@@ -17,11 +17,61 @@ import torch.nn as nn
 from torch.distributed.tensor import DTensor
 
 
+def _group_parameters_by_sharding(parameters: list[torch.nn.Parameter]) -> dict[tuple[object, object], list[torch.nn.Parameter]]:
+    """Group parameters by DTensor sharding layout."""
+
+    sharding_groups = {}
+    for parameter in parameters:
+        if isinstance(parameter, DTensor):
+            key = (parameter.device_mesh, parameter.placements)
+        else:
+            key = ("regular", "regular")
+        sharding_groups.setdefault(key, []).append(parameter)
+    return sharding_groups
+
+
+def _gather_norm_to_cpu(norm: torch.Tensor | DTensor) -> torch.Tensor:
+    """Convert a possibly sharded norm tensor into a regular CPU scalar tensor."""
+
+    if isinstance(norm, DTensor):
+        if norm.to_local().device.type == "cpu" and torch.cuda.is_available():
+            norm = norm.to(device=torch.device("cuda", torch.cuda.current_device()))
+        norm = norm.full_tensor()
+    return norm.detach().float().cpu()
+
+
+def _compute_group_grad_norms(
+    sharding_groups: dict[tuple[object, object], list[torch.nn.Parameter]],
+    norm_type: float,
+) -> list[torch.Tensor]:
+    """Compute gradient norm for each sharding group, returned as CPU scalars."""
+
+    group_grad_norms = []
+    for group_parameters in sharding_groups.values():
+        grads = [parameter.grad for parameter in group_parameters]
+        norm = torch.nn.utils.get_total_norm(grads, norm_type, error_if_nonfinite=False)
+        group_grad_norms.append(_gather_norm_to_cpu(norm))
+    return group_grad_norms
+
+
+def _reduce_group_grad_norms_to_total(group_grad_norms: list[torch.Tensor], norm_type: float) -> torch.Tensor:
+    """Reduce per-group gradient norms into a single total norm."""
+
+    if not group_grad_norms:
+        return torch.tensor(0.0)
+    if len(group_grad_norms) == 1:
+        return group_grad_norms[0]
+    if math.isinf(norm_type):
+        return torch.stack(group_grad_norms).max()
+    return sum(group_grad_norm**norm_type for group_grad_norm in group_grad_norms) ** (1.0 / norm_type)
+
+
 @torch.no_grad()
 def clip_grad_norm_dtensor(
     model: nn.Module,
     max_norm: float,
     norm_type: float = 2.0,
+    total_norm: float | torch.Tensor | None = None,
 ) -> float:
     """Clip gradients for FSDP2 + TP models.
 
@@ -42,47 +92,12 @@ def clip_grad_norm_dtensor(
         return 0.0
 
     norm_type = float(norm_type)
-
-    # Group parameters by their sharding pattern (mesh + placements)
-    # Different sharding patterns must be handled separately for clip_grads_with_norm_
-    sharding_groups = {}
-    for p in parameters:
-        if isinstance(p, DTensor):
-            # DeviceMesh and Placement are hashable.
-            key = (p.device_mesh, p.placements)
-        else:
-            key = ("regular", "regular")
-        sharding_groups.setdefault(key, []).append(p)
-
-    # Compute norm for each sharding group
-    group_norms = []
-    for group_params in sharding_groups.values():
-        grads = [p.grad for p in group_params]
-        norm = torch.nn.utils.get_total_norm(grads, norm_type, error_if_nonfinite=False)
-        if isinstance(norm, DTensor):
-            # get_total_norm may return a DTensor with partial norm placement; full_tensor()
-            # materializes a regular tensor containing the global scalar norm.
-            # Under CPUOffloadPolicy, DTensor grads (and thus norm) can live on CPU.
-            # DTensor full_tensor() triggers collectives on the local tensor device; NCCL
-            # collectives don't support CPU tensors. Move the scalar DTensor to CUDA
-            # before materializing the full scalar.
-            if norm.to_local().device.type == "cpu" and torch.cuda.is_available():
-                norm = norm.to(device=torch.device("cuda", torch.cuda.current_device()))
-            norm = norm.full_tensor()
-        # Keep as a plain CPU scalar tensor for device-agnostic clipping below.
-        group_norms.append(norm.detach().float().cpu())
-
-    # Combine norms across groups
-    if len(group_norms) == 0:
-        total_norm = torch.tensor(0.0)
-    elif len(group_norms) == 1:
-        total_norm = group_norms[0]
+    sharding_groups = _group_parameters_by_sharding(parameters)
+    if total_norm is None:
+        group_grad_norms = _compute_group_grad_norms(sharding_groups, norm_type)
+        total_norm = _reduce_group_grad_norms_to_total(group_grad_norms, norm_type)
     else:
-        if math.isinf(norm_type):
-            total_norm = torch.stack(group_norms).max()
-        else:
-            # Combine p-norms: (sum of p-th powers)^(1/p)
-            total_norm = sum(gn**norm_type for gn in group_norms) ** (1.0 / norm_type)
+        total_norm = torch.as_tensor(total_norm, dtype=torch.float32).cpu()
 
     # If no clipping is needed, skip the (potentially large) in-place scaling pass.
     # total_norm is a CPU scalar tensor, so this check does not introduce GPU sync.
@@ -94,6 +109,22 @@ def clip_grad_norm_dtensor(
         torch.nn.utils.clip_grads_with_norm_(group_params, max_norm, total_norm)
 
     return total_norm.item()
+
+
+@torch.no_grad()
+def get_grad_norm_dtensor(
+    model: nn.Module,
+    norm_type: float = 2.0,
+) -> float:
+    """Return the current global gradient norm for a DTensor-sharded model."""
+
+    parameters = [parameter for parameter in model.parameters() if parameter.grad is not None]
+    if not parameters:
+        return 0.0
+
+    sharding_groups = _group_parameters_by_sharding(parameters)
+    group_grad_norms = _compute_group_grad_norms(sharding_groups, float(norm_type))
+    return _reduce_group_grad_norms_to_total(group_grad_norms, float(norm_type)).item()
 
 
 def _dtensor_to_local(t: torch.Tensor) -> torch.Tensor:

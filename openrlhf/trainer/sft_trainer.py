@@ -151,14 +151,15 @@ class SFTTrainer(ABC):
                     aux_loss = 0
                 gpt_loss = self.loss_fn(per_token_log_probs, loss_mask[:, :-1])
                 loss = gpt_loss + aux_loss * self.args.aux_loss_coef
-                self.strategy.backward(loss, self.model, self.optimizer)
-                self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
+                self.strategy.backward(loss, self.model)
+                grad_norm = self.strategy.get_grad_norm(self.model)
+                self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler, grad_norm=grad_norm)
 
                 loss_sum += gpt_loss.item()
                 logs_dict = {
                     "gpt_loss": gpt_loss.item(),
                     "lr": self.scheduler.get_last_lr()[0],
-                    "grad_norm": self.strategy.get_grad_norm(self.model),
+                    "grad_norm": grad_norm,
                 }
                 if self.aux_loss:
                     logs_dict["aux_loss"] = aux_loss.item()

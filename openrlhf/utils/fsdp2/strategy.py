@@ -55,6 +55,7 @@ from .checkpoint import (
 from .tp.tp_parallel import apply_tensor_parallel
 from .utils import (
     clip_grad_norm_dtensor,
+    get_grad_norm_dtensor,
     get_checkpoint_metadata,
     move_optimizer_state,
     moving_average_fsdp2,
@@ -94,7 +95,7 @@ class FSDP2Strategy(ABC):
             print("[FSDP2] Warning: fsdp2_enable_sleep disabled because fsdp2_cpu_offload is enabled")
 
         # State
-        self.time_steps = defaultdict(int)
+        self.optimizer_step_counters = defaultdict(int)
         self.mesh = None
         self._gloo_group = None
 
@@ -492,18 +493,11 @@ class FSDP2Strategy(ABC):
             {"params": no_decay, "weight_decay": 0.0},
         ]
 
-    def backward(self, loss, model, optimizer, name="model", sync_gradients=None, **kwargs):
-        """Backward with gradient accumulation.
+    def backward(self, loss, model, name="model", sync_gradients=None):
+        """Backward pass with loss scaling for gradient accumulation.
 
         No explicit CP loss scaling is needed here — see module docstring for
         why the all_gather reduce_scatter factor cancels FSDP's dp_cp averaging.
-
-        Args:
-            sync_gradients: Whether to reduce-scatter gradients on this
-                backward pass.  ``None`` (default) falls back to the internal
-                ``accumulated_gradient`` counter.  Pass ``True``/``False``
-                explicitly in dynamic-batch mode where the accumulation
-                schedule is determined externally.
         """
         if self.accumulated_gradient > 1:
             loss = loss / self.accumulated_gradient
@@ -514,52 +508,44 @@ class FSDP2Strategy(ABC):
                 unwrapped.set_requires_gradient_sync(sync_gradients)
             elif self.accumulated_gradient > 1:
                 key = f"step_{name}"
-                sync = (self.time_steps.get(key, 0) + 1) % self.accumulated_gradient == 0
+                sync = (self.optimizer_step_counters[key] + 1) % self.accumulated_gradient == 0
                 unwrapped.set_requires_gradient_sync(sync)
-
         loss.backward()
 
-    def optimizer_step(self, optimizer, model, scheduler, name="model", sync_gradients=None, **kwargs):
+    def optimizer_step(self, optimizer, model, scheduler, name="model", grad_norm: float | None = None):
         """Optimizer step with gradient accumulation.
 
-        Args:
-            sync_gradients: When provided, overrides the internal counter.
-                ``False`` skips the step (gradients are still accumulating);
-                ``True`` forces execution.
+        Returns:
+            True if the optimizer updated parameters on this call.
         """
         key = f"step_{name}"
-        self.time_steps[key] += 1
+        self.optimizer_step_counters[key] += 1
+        if self.optimizer_step_counters[key] % self.accumulated_gradient != 0:
+            return False
 
-        if sync_gradients is not None:
-            if not sync_gradients:
-                return
-        elif self.time_steps[key] % self.accumulated_gradient != 0:
-            return
-
+        unwrapped_model = self._unwrap_model(model)
         if self.max_norm > 0:
-            clip_grad_norm_dtensor(self._unwrap_model(model), max_norm=self.max_norm)
+            if grad_norm is None:
+                grad_norm = get_grad_norm_dtensor(unwrapped_model)
+            clip_grad_norm_dtensor(unwrapped_model, max_norm=self.max_norm, total_norm=grad_norm)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         if scheduler:
             scheduler.step()
+        return True
 
-    def moving_average(self, model, model_ema, beta=0.992, device="cpu", sync_gradients=None):
-        """Update EMA model.
-
-        Args:
-            sync_gradients: When provided, overrides the internal counter.
-                ``False`` skips the update (gradients are still accumulating);
-                ``True`` forces it.
-        """
-        self.time_steps["ema"] += 1
-
-        if sync_gradients is not None:
-            if not sync_gradients:
-                return
-        elif self.time_steps["ema"] % max(1, self.accumulated_gradient) != 0:
-            return
-
+    def moving_average(self, model, model_ema, beta=0.992):
+        """Update EMA model after a completed optimizer step."""
         moving_average_fsdp2(model, model_ema, self._unwrap_model, beta)
+
+    # -------------------------------------------------------------------------
+    # Utilities
+    # -------------------------------------------------------------------------
+
+    def get_grad_norm(self, model) -> float:
+        """Return the current global gradient norm for a sharded model."""
+
+        return get_grad_norm_dtensor(self._unwrap_model(model))
 
     # -------------------------------------------------------------------------
     # Data

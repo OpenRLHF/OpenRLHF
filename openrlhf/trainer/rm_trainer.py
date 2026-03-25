@@ -159,8 +159,9 @@ class RewardModelTrainer(ABC):
                     aux_loss = 0
 
                 loss = preference_loss + aux_loss * self.args.aux_loss_coef
-                self.strategy.backward(loss, self.model, self.optimizer)
-                self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
+                self.strategy.backward(loss, self.model)
+                grad_norm = self.strategy.get_grad_norm(self.model)
+                self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler, grad_norm=grad_norm)
 
                 acc = (chosen_reward > reject_reward).float().mean().item()
                 acc_sum += acc
@@ -172,7 +173,7 @@ class RewardModelTrainer(ABC):
                     "chosen_reward": chosen_reward.mean().item(),
                     "reject_reward": reject_reward.mean().item(),
                     "lr": self.scheduler.get_last_lr()[0],
-                    "grad_norm": self.strategy.get_grad_norm(self.model),
+                    "grad_norm": grad_norm,
                 }
                 if self.aux_loss:
                     logs_dict["aux_loss"] = aux_loss.item()
