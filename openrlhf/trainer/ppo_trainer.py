@@ -63,6 +63,72 @@ def prepare_datasets(strategy, tokenizer):
     return prompts_dataloader, eval_dataloader, max_steps
 
 
+def compute_eval_metrics(eval_dataloader, samples_list, n_samples_per_prompt):
+    """Compute pass@k eval metrics from generated samples.
+
+    Shared by both sync and async evaluation paths.
+    """
+    if not samples_list:
+        return {}
+
+    prompt_to_datasource = {}
+    for datasources, prompts, labels in eval_dataloader:
+        for prompt, datasource in zip(prompts, datasources):
+            prompt_to_datasource[prompt] = datasource
+
+    # Single pass: collect prompts, rewards, response_length, truncated
+    all_prompts = []
+    all_rewards = []
+    all_response_lengths = []
+    all_truncated = []
+    for s in samples_list:
+        all_prompts.extend(s.prompts)
+        all_rewards.append(s.rewards)
+        all_response_lengths.append(s.response_length.item() if s.response_length is not None else None)
+        all_truncated.append(s.truncated.item() if s.truncated is not None else None)
+
+    rewards = torch.tensor(all_rewards).reshape(-1, n_samples_per_prompt)
+
+    metrics = {}
+    for i in range(len(all_prompts) // n_samples_per_prompt):
+        ds = prompt_to_datasource.get(all_prompts[i * n_samples_per_prompt], "unknown")
+        if ds not in metrics:
+            metrics[ds] = {f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0, "lengths": [], "truncated": []}
+        chunk = rewards[i]
+        if n_samples_per_prompt > 1:
+            metrics[ds][f"pass{n_samples_per_prompt}"] += chunk.max().float().item()
+        metrics[ds]["pass1"] += chunk.mean().float().item()
+        metrics[ds]["count"] += 1
+
+        start = i * n_samples_per_prompt
+        for j in range(start, start + n_samples_per_prompt):
+            if all_response_lengths[j] is not None:
+                metrics[ds]["lengths"].append(all_response_lengths[j])
+            if all_truncated[j] is not None:
+                metrics[ds]["truncated"].append(all_truncated[j])
+
+    logs = {}
+    total_lengths = []
+    total_truncated = []
+    for ds, m in metrics.items():
+        logs[f"eval_{ds}_pass{n_samples_per_prompt}"] = m[f"pass{n_samples_per_prompt}"] / m["count"]
+        logs[f"eval_{ds}_pass1"] = m["pass1"] / m["count"]
+        if m["lengths"]:
+            logs[f"eval_{ds}_response_length_mean"] = sum(m["lengths"]) / len(m["lengths"])
+            total_lengths.extend(m["lengths"])
+        if m["truncated"]:
+            logs[f"eval_{ds}_truncated_rate"] = sum(m["truncated"]) / len(m["truncated"])
+            total_truncated.extend(m["truncated"])
+
+    if total_lengths:
+        logs["eval_response_length_mean"] = sum(total_lengths) / len(total_lengths)
+    if total_truncated:
+        logs["eval_truncated_rate"] = sum(total_truncated) / len(total_truncated)
+    logs["eval_num_samples"] = float(len(all_prompts))
+
+    return logs
+
+
 class BasePPOTrainer(ABC):
     """Training-side base class: model orchestration, logging/eval, PPO steps."""
 
@@ -122,6 +188,9 @@ class BasePPOTrainer(ABC):
         ]
         print(sample0)
 
+        # Compute ground-truth rollout stats BEFORE dynamic batch splitting
+        rollout_stats = self._compute_rollout_stats(experiences)
+
         # Balance experiences across DP ranks if needed.
         if self.args.use_dynamic_batch:
             experiences = balance_experiences(experiences, self.args)
@@ -152,6 +221,9 @@ class BasePPOTrainer(ABC):
         status["timing/make_experience"] = make_experience_time
         status["timing/ppo_train"] = ppo_train_time
         status["timing/broadcast"] = broadcast_time
+
+        # Merge rollout stats (ground-truth, pre-dynamic-batch)
+        status.update(rollout_stats)
 
         status["generated_samples"] = sample0
         return status, global_step + 1
@@ -241,6 +313,23 @@ class BasePPOTrainer(ABC):
             if any(any_checkpoint_saved_results):
                 # All roles saved – write top-level latest + cleanup
                 ray.get(self.actor_model_group.async_run_method(method_name="cleanup_old_checkpoints", tag=tag))
+
+    def _compute_rollout_stats(self, experiences) -> Dict:
+        """Compute ground-truth rollout statistics before dynamic batch splitting."""
+        all_rewards = torch.cat([exp.info["reward"] for exp in experiences if "reward" in exp.info])
+        all_response_lengths = torch.cat(
+            [exp.response_length for exp in experiences if exp.response_length is not None]
+        )
+        all_truncated = torch.cat([exp.truncated for exp in experiences if exp.truncated is not None])
+
+        stats = {
+            "rollout/reward_mean": all_rewards.float().mean().item(),
+            "rollout/reward_std": all_rewards.float().std().item() if len(all_rewards) > 1 else 0.0,
+            "rollout/response_length_mean": all_response_lengths.float().mean().item(),
+            "rollout/truncated_rate": all_truncated.float().mean().item(),
+            "rollout/num_samples": float(len(all_rewards)),
+        }
+        return stats
 
     def init_checkpoint_states(self) -> Dict:
         if getattr(self.args, "dcp_checkpoint_from_path", None) and getattr(self.args, "resume_training", False):
@@ -389,58 +478,9 @@ class PPOTrainer(BasePPOTrainer):
         start_time = time.time()
         logger.info(f"⏰ Evaluation start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
-        # First collect all prompts and labels
-        prompt_to_datasource = {}  # Dictionary to store mapping between prompts and their data sources
-        for datasources, prompts, labels in self.eval_dataloader:
-            # Create mapping for each prompt to its corresponding data source
-            for prompt, datasource in zip(prompts, datasources):
-                prompt_to_datasource[prompt] = datasource
-
-        # Generate samples and calculate rewards
         samples_list = self.samples_generator.generate_eval_samples(**generate_kwargs)
+        logs = compute_eval_metrics(self.eval_dataloader, samples_list, generate_kwargs["n_samples_per_prompt"])
 
-        # duplicate prompts and labels for each sample
-        all_prompts = sum([s.prompts for s in samples_list], [])
-
-        n_samples_per_prompt = generate_kwargs["n_samples_per_prompt"]
-
-        # Get rewards from samples, such as agent rewards or remote reward models
-        rewards_list = []
-        for samples in samples_list:
-            rewards_list.append(samples.rewards)
-        # Reshape rewards to (num_prompts, n_samples_per_prompt)
-        rewards = torch.tensor(rewards_list).reshape(-1, n_samples_per_prompt)
-
-        # Collect local statistics for each data source
-        global_metrics = {}  # {datasource: {"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}}
-
-        # Process rewards in chunks of n_samples_per_prompt
-        num_prompts = len(all_prompts) // n_samples_per_prompt
-        for i in range(num_prompts):
-            # Get the original prompt (first one in the chunk)
-            original_prompt = all_prompts[i * n_samples_per_prompt]
-            datasource = prompt_to_datasource[original_prompt]  # Get corresponding data source using the mapping
-            if datasource not in global_metrics:
-                global_metrics[datasource] = {f"pass{n_samples_per_prompt}": 0, "pass1": 0, "count": 0}
-
-            # Get rewards for this chunk
-            chunk_rewards = rewards[i]
-
-            # Calculate pass@k and pass@1
-            if n_samples_per_prompt > 1:
-                global_metrics[datasource][f"pass{n_samples_per_prompt}"] += chunk_rewards.max().float().item()
-            global_metrics[datasource]["pass1"] += chunk_rewards.mean().float().item()
-            global_metrics[datasource]["count"] += 1
-
-        # Calculate global averages
-        logs = {}
-        for datasource, metrics in global_metrics.items():
-            logs[f"eval_{datasource}_pass{n_samples_per_prompt}"] = (
-                metrics[f"pass{n_samples_per_prompt}"] / metrics["count"]
-            )
-            logs[f"eval_{datasource}_pass1"] = metrics["pass1"] / metrics["count"]
-
-        # Log to wandb/tensorboard
         if self.wandb_logger:
             self.wandb_logger.log_eval(global_step, logs)
         if self.tensorboard_logger:

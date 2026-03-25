@@ -103,6 +103,15 @@ class RewardModelTrainer(ABC):
             self._tensorboard = SummaryWriter(log_dir=log_dir)
 
     def fit(self, args, consumed_samples=0, num_update_steps_per_epoch=None):
+        # Infer num_update_steps_per_epoch from dataloader if not provided
+        if num_update_steps_per_epoch is None:
+            num_update_steps_per_epoch = len(self.train_dataloader)
+        if num_update_steps_per_epoch <= 0:
+            raise ValueError(
+                f"num_update_steps_per_epoch must be positive, got {num_update_steps_per_epoch}. "
+                "Check that your dataset is not smaller than train_batch_size."
+            )
+
         # get eval and save steps
         if args.eval_steps == -1:
             args.eval_steps = num_update_steps_per_epoch  # Evaluate once per epoch
@@ -132,19 +141,20 @@ class RewardModelTrainer(ABC):
             )
 
             self.model.train()
+            device = next(self.model.parameters()).device
             for data in self.train_dataloader:
                 chosen_ids, c_mask, reject_ids, r_mask, margin = data
-                chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
-                c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
-                reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
-                r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
+                chosen_ids = chosen_ids.squeeze(1).to(device)
+                c_mask = c_mask.squeeze(1).to(device)
+                reject_ids = reject_ids.squeeze(1).to(device)
+                r_mask = r_mask.squeeze(1).to(device)
 
                 chosen_reward, reject_reward, aux_loss = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask
                 )
 
                 if self.margin_loss:
-                    margin = torch.tensor(margin).to(torch.cuda.current_device())
+                    margin = torch.tensor(margin).to(device)
                 else:
                     margin = None
 
@@ -253,19 +263,20 @@ class RewardModelTrainer(ABC):
             acc = 0
             rewards = []
             loss_sum = 0
+            device = next(self.model.parameters()).device
             for data in eval_dataloader:
                 chosen_ids, c_mask, reject_ids, r_mask, margin = data
-                chosen_ids = chosen_ids.squeeze(1).to(torch.cuda.current_device())
-                c_mask = c_mask.squeeze(1).to(torch.cuda.current_device())
-                reject_ids = reject_ids.squeeze(1).to(torch.cuda.current_device())
-                r_mask = r_mask.squeeze(1).to(torch.cuda.current_device())
+                chosen_ids = chosen_ids.squeeze(1).to(device)
+                c_mask = c_mask.squeeze(1).to(device)
+                reject_ids = reject_ids.squeeze(1).to(device)
+                r_mask = r_mask.squeeze(1).to(device)
 
                 chosen_reward, reject_reward, _ = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask
                 )
 
                 if self.margin_loss:
-                    margin = torch.tensor(margin).to(torch.cuda.current_device())
+                    margin = torch.tensor(margin).to(device)
                 else:
                     margin = None
 

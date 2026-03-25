@@ -6,10 +6,20 @@ Based on https://github.com/Freder-chen/OpenRLHF-Agent/blob/main/src/openrlhf_ag
 from __future__ import annotations
 
 import re
+import signal
+import threading
 
 import sympy
 from pylatexenc import latex2text
 from sympy.parsing import sympy_parser
+
+
+class _SympyTimeout(Exception):
+    pass
+
+
+def _sympy_timeout_handler(signum, frame):
+    raise _SympyTimeout()
 
 
 def _strip_string(string: str) -> str:
@@ -272,13 +282,30 @@ def count_unknown_letters_in_expr(expr: str) -> int:
     return len(letters_in_expr)
 
 
-def are_equal_under_sympy(ground_truth_normalized: str, given_normalized: str) -> bool:
+def are_equal_under_sympy(ground_truth_normalized: str, given_normalized: str, timeout: int = 120) -> bool:
     are_equal = False
     try:
         expr = f"({ground_truth_normalized})-({given_normalized})"
         if should_allow_eval(expr):
             sympy_diff = _sympy_parse(expr)
-            simplified = sympy.simplify(sympy_diff)
+
+            # Use signal.alarm to enforce a hard timeout on sympy.simplify,
+            # which can hang indefinitely on certain expressions.
+            # signal.alarm only works in the main thread; in worker threads
+            # (e.g. Ray actors) we fall back to no timeout.
+            use_alarm = threading.current_thread() is threading.main_thread()
+            if use_alarm:
+                prev_handler = signal.signal(signal.SIGALRM, _sympy_timeout_handler)
+                signal.alarm(timeout)
+            try:
+                simplified = sympy.simplify(sympy_diff)
+            except _SympyTimeout:
+                return False
+            finally:
+                if use_alarm:
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, prev_handler)
+
             if simplified == 0:
                 are_equal = True
     except Exception:

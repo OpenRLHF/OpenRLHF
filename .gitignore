@@ -149,3 +149,5 @@ core
 *jianh*
 *test_scripts*
 */checkpoint/*
+exp
+wandb

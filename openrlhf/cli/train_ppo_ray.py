@@ -267,6 +267,14 @@ if __name__ == "__main__":
     # Async training using ray
     parser.add_argument("--async_train", action="store_true", default=False, help="Enable async training")
     parser.add_argument("--async_queue_size", type=int, default=1, help="Queue size for async sampler<->trainer")
+    parser.add_argument(
+        "--partial_rollout",
+        action="store_true",
+        default=False,
+        help="Enable partial rollout in async mode. Uses vLLM pause/resume for weight sync "
+        "instead of locking, allowing generation to overlap with training. "
+        "In-flight samples may contain tokens from both old and new weights.",
+    )
 
     # Checkpoints
     parser.add_argument("--eval_steps", type=int, default=-1)
@@ -378,8 +386,7 @@ if __name__ == "__main__":
         "--max_new_tokens",
         type=int,
         default=None,
-        help="Max tokens to generate per response. "
-        "In agent mode, generation budget is dynamically managed by --max_len.",
+        help="Max tokens to generate per sample. If None, dynamically computed as max_len - prompt_len per sample.",
     )
     parser.add_argument("--max_samples", type=int, default=1e8, help="Max number of samples")
     parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
@@ -458,7 +465,8 @@ if __name__ == "__main__":
         "--stop_properly_penalty_coef",
         type=float,
         default=None,
-        help="Optional auxiliary penalty strength [0,1] for truncated samples.",
+        help="Penalty for truncated samples (finish_reason='length'). "
+        "If >= 0: multiplicative scaling [0,1]. If < 0: fixed reward override (e.g., -0.5).",
     )
     parser.add_argument(
         "--max_tool_response_length",
@@ -601,6 +609,9 @@ if __name__ == "__main__":
 
     if args.async_train:
         assert not args.vllm_enable_sleep, "Async RLHF is not supported with --vllm_enable_sleep."
+
+    if args.partial_rollout:
+        assert args.async_train, "--partial_rollout requires --async_train."
 
     if args.eval_dataset:
         assert args.remote_rm_url, "`--eval_dataset` is only supported with `--remote_rm_url`."

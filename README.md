@@ -127,7 +127,7 @@ OpenRLHF **unifies generation and training through token-in-token-out agent exec
       ┌──────────┴──────────┐   ┌─────────┴──────────┐
       ↓                     ↓   ↓                    ↓
   Standard RLHF      Custom Reward   Multi-Step    External Env
-  (One-shot gen)     Function      Reasoning     (NeMo Gym)
+  (One-shot gen)     Function      Reasoning     (OpenAI Agent Server)
       ↓                     ↓           ↓                ↓
       └─────────────────────┴───────────┴────────────────┘
                               │
@@ -213,7 +213,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 - Multi-step interactions with environment feedback
 - Works with all RL algorithms
 - [Custom agent functions](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh) (`--agent_func_path`)
-- NeMo Gym integration: see `examples/python/agent_func_nemogym_executor.py` for an agent executor that integrates NeMo Gym rollouts
+- OpenAI-compatible server: see `examples/python/agent_func_openai_server_executor.py` for an agent executor that wraps vLLM as a local OpenAI Agent Server
 - Async pipeline (`--async_train`) for higher throughput: [train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)
 
 </details>
@@ -282,7 +282,7 @@ sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
 
 # 3. Install OpenRLHF (choose one)
 pip install openrlhf                    # Basic
-pip install openrlhf[vllm]              # + vLLM 0.17.1 (recommended)
+pip install openrlhf[vllm]              # + vLLM 0.18.0 (recommended)
 pip install openrlhf[vllm_latest]       # + Latest vLLM
 pip install openrlhf[vllm,ring,liger]   # + All optimizations
 ```
@@ -296,7 +296,7 @@ pip install -e .
 ```
 
 > [!TIP]
-> We recommend **vLLM 0.17.1+** for best performance. See [Dockerfiles](./dockerfile/) and [Nvidia-Docker Install Script](./examples/scripts/nvidia_docker_install.sh).
+> We recommend **vLLM 0.18.0+** for best performance. See [Dockerfiles](./dockerfile/) and [Nvidia-Docker Install Script](./examples/scripts/nvidia_docker_install.sh).
 
 ### Prepare Datasets
 
@@ -643,6 +643,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 **Async Pipeline** (for higher throughput):
 - Enable: `--async_train`
 - Buffer size: `--async_queue_size 1` (larger = more off-policy, default 1)
+- Partial rollout: `--partial_rollout` — uses vLLM pause/resume for weight sync instead of locking, allowing generation to overlap with training. In-flight samples may contain tokens from both old and new weights.
 
 **Training Modes**:
 - **Synchronous**: Default, better stability
@@ -659,7 +660,21 @@ ray job submit --address="http://127.0.0.1:8265" \
 - Single-turn: [train_ppo_ray_hybrid_engine.sh](./examples/scripts/train_ppo_ray_hybrid_engine.sh)
 - Custom reward: [train_ppo_with_reward_fn.sh](./examples/scripts/train_ppo_with_reward_fn.sh)
 - Multi-turn: [train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)
-- NeMo Gym: `examples/python/agent_func_nemogym_executor.py`
+
+### OpenAI-Compatible Agent Server
+
+For multi-turn agents that need an OpenAI-compatible chat API (e.g., integrating external tool-use frameworks), [`agent_func_openai_server_executor.py`](./examples/python/agent_func_openai_server_executor.py) wraps vLLM as a local `/v1/chat/completions` server while collecting token-level traces for RL training.
+
+- Exposes standard OpenAI endpoints (`/v1/chat/completions`, `/v1/models`, `/tokenize`)
+- Automatically collects token IDs and logprobs per session for RL training
+- Delta-tokenization reuses prefix tokens across multi-turn calls
+- Override `run_agent()` to plug in your own multi-turn workflow
+
+```bash
+python3 -m openrlhf.cli.train_ppo_ray \
+  --agent_func_path examples/python/agent_func_openai_server_executor.py \
+  ... # other training args
+```
 
 ---
 
@@ -687,6 +702,7 @@ Optimize OpenRLHF for your hardware and workload with these recommendations:
 |--------------|------|-------------|
 | **Hybrid Engine** | `--colocate_all_models`<br>`--vllm_enable_sleep`<br>`--fsdp2_enable_sleep` | Sufficient GPU memory |
 | **Async Training** | `--async_train` | Convergence validated, need throughput |
+| **Partial Rollout** | `--partial_rollout` | Async mode, maximize generation/training overlap |
 | **Sample Packing** | `--packing_samples` | Always (especially training) |
 | **Dynamic Batch** | `--use_dynamic_batch` | Variable sequence lengths |
 | **Prefix Caching** | vLLM config | `n_samples_per_prompt` > 1 |

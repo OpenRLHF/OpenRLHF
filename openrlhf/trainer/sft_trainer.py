@@ -101,6 +101,15 @@ class SFTTrainer(ABC):
             self._tensorboard = SummaryWriter(log_dir=log_dir)
 
     def fit(self, args, consumed_samples=0, num_update_steps_per_epoch=None):
+        # Infer num_update_steps_per_epoch from dataloader if not provided
+        if num_update_steps_per_epoch is None:
+            num_update_steps_per_epoch = len(self.train_dataloader)
+        if num_update_steps_per_epoch <= 0:
+            raise ValueError(
+                f"num_update_steps_per_epoch must be positive, got {num_update_steps_per_epoch}. "
+                "Check that your dataset is not smaller than train_batch_size."
+            )
+
         # get eval and save steps
         if args.eval_steps == -1:
             args.eval_steps = num_update_steps_per_epoch  # Evaluate once per epoch
@@ -108,6 +117,8 @@ class SFTTrainer(ABC):
             args.save_steps = float("inf")  # do not save ckpt
 
         # Restore step and start_epoch
+        # step is 1-indexed: the logging check (step % accum_grad == 0) fires at multiples of accum_grad,
+        # so +1 ensures we don't re-log the last completed global_step on resume.
         step = consumed_samples // args.train_batch_size * self.strategy.accumulated_gradient + 1
         start_epoch = consumed_samples // args.train_batch_size // num_update_steps_per_epoch
         consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train_batch_size)
@@ -132,10 +143,11 @@ class SFTTrainer(ABC):
 
             # train
             self.model.train()
+            device = next(self.model.parameters()).device
             for inputs, attention_masks, loss_masks in self.train_dataloader:
-                inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
-                attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
-                loss_mask = loss_masks.to(torch.cuda.current_device()).squeeze(1)
+                inputs = inputs.to(device).squeeze(1)
+                attention_mask = attention_masks.to(device).squeeze(1)
+                loss_mask = loss_masks.to(device).squeeze(1)
                 per_token_log_probs, output = self.model(
                     inputs,
                     attention_mask=attention_mask,
@@ -235,10 +247,11 @@ class SFTTrainer(ABC):
                 disable=not self.strategy.is_rank_0(),
             )
 
+            device = next(self.model.parameters()).device
             for inputs, attention_masks, loss_masks in eval_dataloader:
-                inputs = inputs.to(torch.cuda.current_device()).squeeze(1)
-                attention_mask = attention_masks.to(torch.cuda.current_device()).squeeze(1)
-                loss_mask = loss_masks.to(torch.cuda.current_device()).squeeze(1)
+                inputs = inputs.to(device).squeeze(1)
+                attention_mask = attention_masks.to(device).squeeze(1)
+                loss_mask = loss_masks.to(device).squeeze(1)
                 per_token_log_probs = self.model(
                     inputs,
                     attention_mask=attention_mask,

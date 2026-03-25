@@ -1,7 +1,7 @@
 import random
 from abc import ABC
-from dataclasses import dataclass, fields
-from typing import List, Optional
+from dataclasses import fields
+from typing import List
 
 import torch
 from torch import distributed as dist
@@ -11,121 +11,88 @@ from openrlhf.utils.seqlen_balancing import get_minimum_num_micro_batch_size, ge
 from openrlhf.utils.utils import zero_pad_sequences
 
 
-@dataclass
-class BufferItem:
-    """BufferItem is an item of experience data.
-
-    Shapes of each tensor:
-    sequences: (S)
-    action_log_probs: (A)
-    base_action_log_probs: (A)
-    values: (1)
-    returns: (1)
-    advantages: (1)
-    attention_mask: (S)
-    action_mask: (A)
-
-    "A" is the number of actions.
-    """
-
-    sequences: torch.Tensor
-    action_log_probs: torch.Tensor
-    base_action_log_probs: torch.Tensor
-    rollout_log_probs: torch.Tensor
-    values: torch.Tensor
-    returns: torch.Tensor
-    advantages: torch.Tensor
-    attention_mask: Optional[torch.LongTensor]
-    action_mask: Optional[torch.BoolTensor]
-    info: Optional[dict]
-
-
-def split_experience_batch(experience: Experience) -> List[BufferItem]:
-    """Split a batch of experiences into individual BufferItems."""
+def split_experience_batch(experience: Experience) -> List[Experience]:
+    """Split a batched Experience into individual single-sample Experiences."""
     batch_size = len(experience.sequences)
-    # Get fields from BufferItem, excluding 'info'
-    keys = tuple(field.name for field in fields(BufferItem) if field.name != "info")
     experience.index = None
-
-    # Validate batch size for all attributes
-    for key in keys:
-        value = getattr(experience, key)
-        if value is not None:
-            if isinstance(value, (torch.Tensor, list)):
-                if len(value) != batch_size:
-                    raise ValueError(f"Size of {key} ({len(value)}) does not match batch_size ({batch_size})")
 
     items = []
     for i in range(batch_size):
-        # Process main attributes
-        item = {key: (getattr(experience, key)[i] if getattr(experience, key) is not None else None) for key in keys}
-
-        # Process info dictionary
-        item["info"] = {}
-        for k, v in experience.info.items():
-            if isinstance(v, (torch.Tensor, list)):
-                if len(v) != batch_size:
-                    raise ValueError(f"Size of info[{k}] ({len(v)}) does not match batch_size ({batch_size})")
-                item["info"][k] = v[i]
-            else:
-                raise TypeError(f"Unsupported type for info[{k}]: {type(v)}")
-
-        items.append(BufferItem(**item))
+        kwargs = {}
+        for f in fields(Experience):
+            value = getattr(experience, f.name)
+            if value is None:
+                kwargs[f.name] = None
+            elif isinstance(value, torch.Tensor):
+                if len(value) != batch_size:
+                    raise ValueError(f"Size of {f.name} ({len(value)}) does not match batch_size ({batch_size})")
+                kwargs[f.name] = value[i]
+            elif isinstance(value, dict):
+                d = {}
+                for k, v in value.items():
+                    if isinstance(v, (torch.Tensor, list)):
+                        if len(v) != batch_size:
+                            raise ValueError(
+                                f"Size of {f.name}[{k}] ({len(v)}) does not match batch_size ({batch_size})"
+                            )
+                        d[k] = v[i]
+                    else:
+                        raise TypeError(f"Unsupported type for {f.name}[{k}]: {type(v)}")
+                kwargs[f.name] = d
+            elif isinstance(value, list):
+                kwargs[f.name] = [value[i]] if len(value) == batch_size else value
+        items.append(Experience(**kwargs))
 
     return items
 
 
-def make_experience_batch(items: List[BufferItem], packing_samples=False) -> Experience:
-    """Combine individual BufferItems into a batch of experiences."""
+def make_experience_batch(items: List[Experience], packing_samples=False) -> Experience:
+    """Combine individual single-sample Experiences into a batched Experience."""
     if not items:
         raise ValueError("Empty items list")
 
-    # Get fields from BufferItem, excluding 'info'
-    keys = tuple(field.name for field in fields(BufferItem) if field.name != "info")
-
-    # Process main attributes
-    kwargs = {
-        key: (
-            zero_pad_sequences([getattr(item, key) for item in items], "right", stack=True)
-            if getattr(items[0], key) is not None
-            else None
-        )
-        for key in keys
-    }
-
-    # Process info dictionary
-    kwargs["info"] = {}
-    for key in items[0].info.keys():
-        values = [item.info[key] for item in items]
-        if not values:
-            continue
-
-        # Validate all items have the same type
-        first_type = type(values[0])
-        if not all(isinstance(v, first_type) for v in values):
-            raise TypeError(f"Inconsistent types in info[{key}]")
-
-        # Convert to tensor if all values are numeric
-        if all(isinstance(v, (int, float)) for v in values):
-            kwargs["info"][key] = torch.tensor(values)
-        else:
-            kwargs["info"][key] = values
+    kwargs = {}
+    for f in fields(Experience):
+        first = getattr(items[0], f.name)
+        if first is None:
+            kwargs[f.name] = None
+        elif isinstance(first, torch.Tensor):
+            tensors = [getattr(item, f.name) for item in items]
+            if Experience.is_step_tensor_field(f.name):
+                kwargs[f.name] = zero_pad_sequences(tensors, "right", stack=True)
+            elif Experience.is_episode_tensor_field(f.name) or first.dim() == 0:
+                kwargs[f.name] = torch.stack(tensors)
+            else:
+                raise ValueError(f"Unsupported tensor field batching rule for {f.name}")
+        elif isinstance(first, dict):
+            kwargs[f.name] = {}
+            for key in first.keys():
+                vals = [getattr(item, f.name)[key] for item in items]
+                if not vals:
+                    continue
+                first_type = type(vals[0])
+                if not all(isinstance(v, first_type) for v in vals):
+                    raise TypeError(f"Inconsistent types in {f.name}[{key}]")
+                if all(isinstance(v, (int, float)) for v in vals):
+                    kwargs[f.name][key] = torch.tensor(vals)
+                else:
+                    kwargs[f.name][key] = vals
+        elif isinstance(first, list):
+            kwargs[f.name] = sum((getattr(item, f.name) for item in items), [])
 
     return Experience(**kwargs)
 
 
-def remove_padding_in_sequences(items):
+def remove_padding_in_sequences(items: List[Experience]) -> List[Experience]:
+    """Remove right padding from per-step fields of single-sample Experiences."""
     for item in items:
-        # Calculate right padding using attention_mask
         right_pad = item.attention_mask.flip(0).argmax()
         right_pad = None if right_pad == 0 else -right_pad
 
-        # Remove right padding for all tensors
-        keys = tuple(field.name for field in fields(BufferItem) if field.name != "info")
-        for key in keys:
-            value = getattr(item, key)
-            if value is not None:
-                setattr(item, key, value[:right_pad])
+        for f in fields(Experience):
+            value = getattr(item, f.name)
+            if isinstance(value, torch.Tensor) and Experience.is_step_tensor_field(f.name):
+                setattr(item, f.name, value[:right_pad])
 
     return items
 
@@ -142,7 +109,7 @@ def balance_experiences(experiences, args):
     items_all = []
     for item in experiences:
         items_all.extend(split_experience_batch(item))
-    items_all.sort(key=lambda x: x.info["total_length"], reverse=True)
+    items_all.sort(key=lambda x: x.total_length, reverse=True)
 
     # split experience into chunks
     effective_num = args.actor_num_nodes * args.actor_num_gpus_per_node // args.fsdp2_cp_size // args.fsdp2_tp_size
@@ -187,7 +154,7 @@ class NaiveReplayBuffer(ABC):
         self.cpu_offload = cpu_offload
         self.packing_samples = packing_samples
         self.target_device = torch.device(f"cuda:{torch.cuda.current_device()}")
-        self.items: List[BufferItem] = []
+        self.items: List[Experience] = []
         self.dynamic_batch = dynamic_batch
         self.dynamic_indices: List[List[int]] = []
         self.dynamic_loss_scale: List[float] = []
@@ -225,7 +192,7 @@ class NaiveReplayBuffer(ABC):
         else:
             return len(self.items)
 
-    def __getitem__(self, idx: int) -> BufferItem:
+    def __getitem__(self, idx: int) -> Experience:
         if self.dynamic_batch:
             indices = self.dynamic_indices[idx]
             return [self.items[i] for i in indices]
@@ -240,7 +207,7 @@ class NaiveReplayBuffer(ABC):
 
     def setup_dynamic_batch(self, strategy):
         args = strategy.args
-        sample_lengths = [sample.info["total_length"].item() for sample in self.items]
+        sample_lengths = [sample.total_length.item() for sample in self.items]
 
         world_size = dist.get_world_size()
         dp_size = world_size // args.fsdp2_cp_size // args.fsdp2_tp_size

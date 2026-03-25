@@ -163,7 +163,7 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             if done:
                 break
 
-        # Store the final response when agent execution is complete
+        # Store the final response when agent execution is complete.
         return {
             "prompt": prompt,
             "label": label,
@@ -173,6 +173,7 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             "action_ranges": action_ranges,
             "rollout_log_probs": rollout_log_probs,
             "extra_logs": extra_logs,
+            "truncated": is_truncated,
             "is_truncated": is_truncated,
         }
 
@@ -208,20 +209,19 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
     ):
         prompt_token_ids = hf_tokenizer(prompt, add_special_tokens=False, return_tensors="pt")["input_ids"][0].tolist()
 
-        if sampling_params.max_tokens is not None:
-            max_prompt_length = max(max_length - sampling_params.max_tokens, 0)
-        else:
-            max_prompt_length = max(max_length - 1, 0)
-            sampling_params = deepcopy(sampling_params)
-            sampling_params.max_tokens = max_length
+        effective_params = sampling_params
+        if sampling_params.max_tokens is None:
+            effective_params = deepcopy(sampling_params)
+            effective_params.max_tokens = max(1, max_length - len(prompt_token_ids))
+
+        max_prompt_length = max(max_length - effective_params.max_tokens, 0)
         if len(prompt_token_ids) > max_prompt_length:
             logger.warning(
-                f"Prompt length ({len(prompt_token_ids)}) exceeds limit ({max_prompt_length}). "
-                f"Truncating to fit within max_length ({max_length})."
+                f"Prompt length ({len(prompt_token_ids)}) exceeds max_prompt_length ({max_prompt_length}). "
+                f"Truncating to fit within max_length ({max_length}) with max_tokens ({effective_params.max_tokens})."
             )
             prompt_token_ids = prompt_token_ids[-max_prompt_length:] if max_prompt_length > 0 else []
-        sampling_params.max_tokens = min(sampling_params.max_tokens, max_length - len(prompt_token_ids))
-        request_output = await llm_engine.generate(prompt_token_ids, deepcopy(sampling_params))
+        request_output = await llm_engine.generate(prompt_token_ids, deepcopy(effective_params))
         generation_output = request_output.outputs[0]
         action_token_ids = generation_output.token_ids
         is_truncated = generation_output.finish_reason == "length"
@@ -248,6 +248,7 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
             "action_ranges": action_ranges,
             "rollout_log_probs": rollout_log_probs,
             # Truncation flag (finish_reason == "length")
+            "truncated": is_truncated,
             "is_truncated": is_truncated,
             # Reward-related fields (filled by reward/agent variants).
             "reward": None,

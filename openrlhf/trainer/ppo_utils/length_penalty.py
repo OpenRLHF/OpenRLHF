@@ -44,7 +44,11 @@ def apply_overlong_penalty(
     total_penalized = 0
 
     for experience in experiences:
-        response_lengths = experience.info["response_length"]
+        response_lengths = experience.response_length
+        if response_lengths is None:
+            response_lengths = experience.info.get("response_length")
+        if response_lengths is None:
+            continue
         batch_size = len(response_lengths)
 
         for j in range(batch_size):
@@ -76,21 +80,27 @@ def apply_stop_properly_penalty(
     Returns:
         Number of truncated samples
     """
-    assert (
-        0 <= stop_properly_penalty_coef <= 1
-    ), f"stop_properly_penalty_coef must be in [0, 1], got {stop_properly_penalty_coef}"
+    if stop_properly_penalty_coef >= 0:
+        assert (
+            0 <= stop_properly_penalty_coef <= 1
+        ), f"stop_properly_penalty_coef must be in [0, 1] or negative, got {stop_properly_penalty_coef}"
 
     total_truncated = 0
 
     for experience in experiences:
-        is_truncated = experience.info.get("is_truncated", None)
-        if is_truncated is None:
+        truncated_flags = experience.truncated
+        if truncated_flags is None:
+            truncated_flags = experience.info.get("is_truncated")
+        if truncated_flags is None:
             continue
 
-        batch_size = len(is_truncated)
+        batch_size = len(truncated_flags)
         for j in range(batch_size):
-            if is_truncated[j].item() > 0.5:
-                experience.rewards[j] = experience.rewards[j] * stop_properly_penalty_coef
+            if truncated_flags[j].item():
+                if stop_properly_penalty_coef < 0:
+                    experience.rewards[j] = stop_properly_penalty_coef
+                else:
+                    experience.rewards[j] = experience.rewards[j] * stop_properly_penalty_coef
                 total_truncated += 1
 
     return total_truncated
@@ -138,3 +148,7 @@ def apply_length_penalties(experiences: List, args) -> None:
             f"[ProRL Stop Properly Penalty] {num_truncated}/{total_samples} samples truncated, "
             f"coef={args.stop_properly_penalty_coef}"
         )
+
+    for experience in experiences:
+        if "reward" in experience.info and experience.rewards is not None:
+            experience.info["reward"] = experience.rewards.clone()
