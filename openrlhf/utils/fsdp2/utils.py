@@ -17,7 +17,9 @@ import torch.nn as nn
 from torch.distributed.tensor import DTensor
 
 
-def _group_parameters_by_sharding(parameters: list[torch.nn.Parameter]) -> dict[tuple[object, object], list[torch.nn.Parameter]]:
+def _group_parameters_by_sharding(
+    parameters: list[torch.nn.Parameter],
+) -> dict[tuple[object, object], list[torch.nn.Parameter]]:
     """Group parameters by DTensor sharding layout."""
 
     sharding_groups = {}

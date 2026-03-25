@@ -55,8 +55,8 @@ from .checkpoint import (
 from .tp.tp_parallel import apply_tensor_parallel
 from .utils import (
     clip_grad_norm_dtensor,
-    get_grad_norm_dtensor,
     get_checkpoint_metadata,
+    get_grad_norm_dtensor,
     move_optimizer_state,
     moving_average_fsdp2,
 )
