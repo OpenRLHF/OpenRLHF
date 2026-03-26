@@ -315,7 +315,9 @@ class BasePPOTrainer(ABC):
             return metric_value > self.best_eval_metric
         return metric_value < self.best_eval_metric
 
-    def maybe_save_best_checkpoint(self, global_step: int, eval_logs: Dict, client_states: Optional[Dict] = None) -> bool:
+    def maybe_save_best_checkpoint(
+        self, global_step: int, eval_logs: Dict, client_states: Optional[Dict] = None
+    ) -> bool:
         if not getattr(self.args, "save_best_only", False):
             return False
 

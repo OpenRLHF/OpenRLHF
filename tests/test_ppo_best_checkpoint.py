@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+
 class _DummyTrainer:
     def __init__(self, args):
         self.args = args
