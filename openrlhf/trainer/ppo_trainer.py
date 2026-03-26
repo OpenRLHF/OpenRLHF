@@ -2,7 +2,7 @@ import os
 import time
 from abc import ABC
 from datetime import timedelta
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import ray
 import torch
@@ -170,6 +170,7 @@ class BasePPOTrainer(ABC):
         # Tracking backends
         self.wandb_logger = WandbLogger(self.args) if self.args.use_wandb else None
         self.tensorboard_logger = TensorboardLogger(self.args) if self.args.use_tensorboard else None
+        self.best_eval_metric: Optional[float] = None
 
     def fit(self, global_step: int = 0) -> None:
         raise NotImplementedError("fit method is not implemented")
@@ -296,12 +297,58 @@ class BasePPOTrainer(ABC):
         client_states = client_states or {}
         if global_step % self.args.save_steps == 0:
             tag = f"global_step{global_step}"
-            refs = self.actor_model_group.async_run_method(
-                method_name="save_checkpoint", tag=tag, client_states=client_states
-            )
-            if self.critic_model_group is not None:
-                refs.extend(self.critic_model_group.async_run_method(method_name="save_checkpoint", tag=tag))
-            ray.get(refs)
+            self._save_checkpoint(tag, client_states)
+
+    def _save_checkpoint(self, tag: str, client_states: Optional[Dict] = None) -> None:
+        client_states = client_states or {}
+        refs = self.actor_model_group.async_run_method(
+            method_name="save_checkpoint", tag=tag, client_states=client_states
+        )
+        if self.critic_model_group is not None:
+            refs.extend(self.critic_model_group.async_run_method(method_name="save_checkpoint", tag=tag))
+        ray.get(refs)
+
+    def _is_better_metric(self, metric_value: float) -> bool:
+        if self.best_eval_metric is None:
+            return True
+        if getattr(self.args, "greater_is_better", True):
+            return metric_value > self.best_eval_metric
+        return metric_value < self.best_eval_metric
+
+    def maybe_save_best_checkpoint(self, global_step: int, eval_logs: Dict, client_states: Optional[Dict] = None) -> bool:
+        if not getattr(self.args, "save_best_only", False):
+            return False
+
+        metric_name = getattr(self.args, "metric_for_best_model", None)
+        if not metric_name:
+            return False
+
+        metric_value = eval_logs.get(metric_name)
+        if metric_value is None:
+            logger.warning(f"metric_for_best_model='{metric_name}' not found in eval logs; skip best-checkpoint save")
+            return False
+
+        metric_value = float(metric_value)
+        if not self._is_better_metric(metric_value):
+            return False
+
+        previous_best = self.best_eval_metric
+        self.best_eval_metric = metric_value
+        best_tag = f"best_global_step{global_step}"
+        best_client_states = dict(client_states or {})
+        best_client_states.update(
+            {
+                "best_eval_metric": self.best_eval_metric,
+                "best_model_global_step": global_step,
+                "best_model_metric_name": metric_name,
+            }
+        )
+        self._save_checkpoint(best_tag, best_client_states)
+        logger.info(
+            f"🏆 Saved new best checkpoint at step {global_step}: {metric_name}={metric_value} "
+            f"(previous_best={previous_best})"
+        )
+        return True
 
     def _compute_rollout_stats(self, experiences) -> Dict:
         """Compute ground-truth rollout statistics before dynamic batch splitting."""
@@ -327,12 +374,14 @@ class BasePPOTrainer(ABC):
                 0
             ]
             logger.info(f"checkpoint_states: {checkpoint_states}")
+            self.best_eval_metric = checkpoint_states.get("best_eval_metric")
             return checkpoint_states
         return {
             "episode": 0,
             "global_step": 0,
             "total_consumed_prompts": 0,
             "data_loader_state_dict": {},
+            "best_eval_metric": None,
         }
 
 
@@ -441,6 +490,7 @@ class PPOTrainer(BasePPOTrainer):
                     "global_step": global_step,
                     "total_consumed_prompts": total_consumed_prompts,
                     "data_loader_state_dict": self.prompts_dataloader.state_dict(),
+                    "best_eval_metric": self.best_eval_metric,
                 }
                 self.save_logs_and_checkpoints(global_step, status, client_states)
 
@@ -449,7 +499,8 @@ class PPOTrainer(BasePPOTrainer):
                     eval_generate_kwargs = self.generate_kwargs.copy()
                     eval_generate_kwargs["temperature"] = self.args.eval_temperature
                     eval_generate_kwargs["n_samples_per_prompt"] = self.args.eval_n_samples_per_prompt
-                    self.evaluate(global_step, **eval_generate_kwargs)
+                    eval_logs = self.evaluate(global_step, **eval_generate_kwargs)
+                    self.maybe_save_best_checkpoint(global_step, eval_logs, client_states)
 
                 pbar.update(prompts_consumed)
 
@@ -477,3 +528,4 @@ class PPOTrainer(BasePPOTrainer):
         duration = end_time - start_time
         time_str = str(timedelta(seconds=duration)).split(".")[0]
         logger.info(f"✨ Evaluation completed in {time_str}, global_step {global_step}, eval_metrics: {logs}")
+        return logs

@@ -273,6 +273,24 @@ if __name__ == "__main__":
     parser.add_argument("--save_steps", type=int, default=-1)
     parser.add_argument("--logging_steps", type=int, default=1)
     parser.add_argument("--ckpt_path", type=str, default="./ckpt/checkpoints_ppo_ray")
+    parser.add_argument(
+        "--save_best_only",
+        action="store_true",
+        default=False,
+        help="Save an extra best checkpoint when the selected eval metric improves.",
+    )
+    parser.add_argument(
+        "--metric_for_best_model",
+        type=str,
+        default=None,
+        help="Eval metric name used for best-checkpoint selection, e.g. eval_math_pass4.",
+    )
+    parser.add_argument(
+        "--greater_is_better",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether larger values of metric_for_best_model indicate a better checkpoint.",
+    )
     parser.add_argument("--save_hf_ckpt", action="store_true", default=False)
     parser.add_argument("--disable_ds_ckpt", action="store_true", default=False)
     parser.add_argument("--max_ckpt_num", type=int, default=3)

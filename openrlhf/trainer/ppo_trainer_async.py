@@ -211,6 +211,11 @@ class TrainingActor(BasePPOTrainer):
                     self.wandb_logger.log_eval(eval_step, eval_metrics)
                 if self.tensorboard_logger:
                     self.tensorboard_logger.log_eval(eval_step, eval_metrics)
+                self.maybe_save_best_checkpoint(
+                    eval_step,
+                    eval_metrics,
+                    {"global_step": global_step, "best_eval_metric": self.best_eval_metric},
+                )
                 # Reset so the next training step's timing excludes eval overhead.
                 step_start_time = time.time()
                 continue
