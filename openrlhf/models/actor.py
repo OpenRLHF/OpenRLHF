@@ -49,6 +49,7 @@ class Actor(nn.Module):
         packing_samples=False,
         temperature=1.0,
         use_liger_kernel=False,
+        from_scratch=False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -88,14 +89,25 @@ class Actor(nn.Module):
             else:
                 model_class = AutoModelForCausalLM
 
-            self.model = model_class.from_pretrained(
-                pretrain_or_model,
-                trust_remote_code=True,
-                attn_implementation=attn_impl,
-                quantization_config=nf4_config,
-                torch_dtype=torch_dtype,  # default: bf16
-                device_map=device_map,
-            )
+            if from_scratch:
+                from transformers import AutoConfig
+
+                config = AutoConfig.from_pretrained(pretrain_or_model, trust_remote_code=True)
+                self.model = model_class.from_config(
+                    config,
+                    trust_remote_code=True,
+                    attn_implementation=attn_impl,
+                    torch_dtype=torch_dtype,
+                )
+            else:
+                self.model = model_class.from_pretrained(
+                    pretrain_or_model,
+                    trust_remote_code=True,
+                    attn_implementation=attn_impl,
+                    quantization_config=nf4_config,
+                    torch_dtype=torch_dtype,  # default: bf16
+                    device_map=device_map,
+                )
 
             # LoRA
             if lora_rank > 0:
