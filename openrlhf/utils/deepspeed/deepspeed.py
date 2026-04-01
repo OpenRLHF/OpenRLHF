@@ -1,6 +1,5 @@
 import gc
 import json
-import logging
 import os
 import shutil
 from abc import ABC
@@ -621,6 +620,6 @@ class DeepspeedStrategy(ABC):
             load_module_only=load_module_only,
         )
         if load_path is None:
-            logging.warning(f"[deepspeed] No checkpoint found at {load_dir}, skipping checkpoint loading.")
+            self.print(f"Warning: [deepspeed] No checkpoint found at {load_dir}, skipping checkpoint loading.")
             return None, {}
         return load_path, states
