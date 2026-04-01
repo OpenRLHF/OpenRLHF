@@ -92,6 +92,9 @@ class Actor(nn.Module):
             if from_scratch:
                 from transformers import AutoConfig
 
+                if load_in_4bit or device_map is not None:
+                    print("[Warning] 'load_in_4bit' and 'device_map' are ignored when 'from_scratch' is True")
+
                 config = AutoConfig.from_pretrained(pretrain_or_model, trust_remote_code=True)
                 self.model = model_class.from_config(
                     config,
