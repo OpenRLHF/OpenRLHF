@@ -182,6 +182,7 @@ class DeepspeedStrategy(ABC):
         drop_last=True,
         sampler=None,
         consumed_samples=0,
+        num_workers: int = 0,
     ):
         # DDP only mode, replay buffers on each rank are different.
         if sampler is None and dist.is_initialized():
@@ -207,6 +208,8 @@ class DeepspeedStrategy(ABC):
             shuffle=shuffle if sampler is None else False,
             collate_fn=collate_fn,
             pin_memory=pin_memory,
+            num_workers=num_workers,
+            persistent_workers=num_workers > 0,
         )
 
     def _unwrap_model(self, model) -> nn.Module:

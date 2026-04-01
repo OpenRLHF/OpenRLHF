@@ -69,6 +69,7 @@ def train(args):
         True,
         True,
         train_dataset.collate_fn,
+        num_workers=args.dataloader_num_workers,
     )
 
     if getattr(args, "eval_dataset", None):
@@ -95,6 +96,7 @@ def train(args):
         True,
         False,
         eval_dataset.collate_fn,
+        num_workers=args.dataloader_num_workers,
     )
 
     # scheduler
@@ -203,6 +205,7 @@ if __name__ == "__main__":
     parser.add_argument("--overlap_comm", action="store_true", default=False)
     parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
+    parser.add_argument("--dataloader_num_workers", type=int, default=0, help="Number of dataloader workers for IO")
     parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed Tensor parallel size")
 
     # Models
