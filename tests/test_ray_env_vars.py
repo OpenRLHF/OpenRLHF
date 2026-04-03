@@ -35,7 +35,9 @@ def _mock_ray_module():
     ]
     for mod in modules_to_fake:
         originals[mod] = sys.modules.get(mod)
-        sys.modules[mod] = fake_ray if mod == "ray" else getattr(fake_ray, mod.split(".", 1)[-1].replace(".", "_"), MagicMock())
+        sys.modules[mod] = (
+            fake_ray if mod == "ray" else getattr(fake_ray, mod.split(".", 1)[-1].replace(".", "_"), MagicMock())
+        )
 
     # Also fake the sub-modules that train_ppo_ray.py imports transitively
     # through openrlhf.trainer.ray.*
@@ -173,11 +175,13 @@ class TestRayEnvVarsUserOverride:
         assert env_vars["RAY_ENABLE_ZERO_COPY_TORCH_TENSORS"] == "0"
 
     def test_multiple_user_overrides(self):
-        env_vars = _get_ray_init_env_vars({
-            "NCCL_DEBUG": "INFO",
-            "TOKENIZERS_PARALLELISM": "false",
-            "RAY_ENABLE_ZERO_COPY_TORCH_TENSORS": "0",
-        })
+        env_vars = _get_ray_init_env_vars(
+            {
+                "NCCL_DEBUG": "INFO",
+                "TOKENIZERS_PARALLELISM": "false",
+                "RAY_ENABLE_ZERO_COPY_TORCH_TENSORS": "0",
+            }
+        )
         assert env_vars["NCCL_DEBUG"] == "INFO"
         assert env_vars["TOKENIZERS_PARALLELISM"] == "false"
         assert env_vars["RAY_ENABLE_ZERO_COPY_TORCH_TENSORS"] == "0"

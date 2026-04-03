@@ -26,9 +26,7 @@ def train(args):
                 "env_vars": {
                     "TOKENIZERS_PARALLELISM": os.environ.get("TOKENIZERS_PARALLELISM", "true"),
                     "NCCL_DEBUG": os.environ.get("NCCL_DEBUG", "WARN"),
-                    "RAY_ENABLE_ZERO_COPY_TORCH_TENSORS": os.environ.get(
-                        "RAY_ENABLE_ZERO_COPY_TORCH_TENSORS", "1"
-                    ),
+                    "RAY_ENABLE_ZERO_COPY_TORCH_TENSORS": os.environ.get("RAY_ENABLE_ZERO_COPY_TORCH_TENSORS", "1"),
                 }
             }
         )
