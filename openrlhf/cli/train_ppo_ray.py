@@ -1,4 +1,5 @@
 import argparse
+import os
 from datetime import datetime
 
 import ray
@@ -18,12 +19,16 @@ from openrlhf.utils import get_strategy
 def train(args):
     # initialize ray if not initialized
     if not ray.is_initialized():
+        # Use os.environ.get() to respect user-set values (e.g. NCCL_DEBUG=INFO via
+        # ray job submit --runtime-env-json), falling back to sensible defaults.
         ray.init(
             runtime_env={
                 "env_vars": {
-                    "TOKENIZERS_PARALLELISM": "true",
-                    "NCCL_DEBUG": "WARN",
-                    "RAY_ENABLE_ZERO_COPY_TORCH_TENSORS": "1",
+                    "TOKENIZERS_PARALLELISM": os.environ.get("TOKENIZERS_PARALLELISM", "true"),
+                    "NCCL_DEBUG": os.environ.get("NCCL_DEBUG", "WARN"),
+                    "RAY_ENABLE_ZERO_COPY_TORCH_TENSORS": os.environ.get(
+                        "RAY_ENABLE_ZERO_COPY_TORCH_TENSORS", "1"
+                    ),
                 }
             }
         )
