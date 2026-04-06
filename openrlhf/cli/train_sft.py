@@ -113,7 +113,7 @@ def train(args):
     )
 
     # prepare models
-    (model, optim, scheduler) = strategy.prepare((model, optim, scheduler))
+    model, optim, scheduler = strategy.prepare((model, optim, scheduler))
 
     # load checkpoint
     consumed_samples = 0
