@@ -186,6 +186,65 @@ class LLMRayActor:
         ]
         return await asyncio.gather(*tasks)
 
+    async def generate_responses_batch(
+        self,
+        prompts: List[str],
+        labels: List[str],
+        sampling_params,
+        max_length: int,
+        hf_tokenizer,
+        num_samples: int = 1,
+    ):
+        """Generate samples for multiple prompts concurrently.
+
+        Submits all prompts to vLLM's AsyncLLMEngine at once via asyncio.gather,
+        allowing vLLM's continuous batching to process them efficiently.
+
+        Args:
+            prompts: List of prompt strings
+            labels: List of label strings (same length as prompts)
+            sampling_params: vLLM SamplingParams
+            max_length: Maximum sequence length
+            hf_tokenizer: HuggingFace tokenizer
+            num_samples: Number of samples per prompt
+
+        Returns:
+            List of results, with num_samples results per prompt
+        """
+        tasks = []
+        for prompt, label in zip(prompts, labels):
+            for _ in range(num_samples):
+                tasks.append(
+                    self.executor.execute(
+                        prompt=prompt,
+                        label=label,
+                        sampling_params=sampling_params,
+                        max_length=max_length,
+                        hf_tokenizer=hf_tokenizer,
+                        llm_engine=self,
+                    )
+                )
+        # All tasks submitted concurrently - vLLM will batch them internally
+        results = await asyncio.gather(*tasks)
+        return results
+
+    # ==================== ES (Evolutionary Strategies) Support ====================
+
+    async def model_mutate(self, seed: Optional[int], std: Optional[float]) -> Optional[int]:
+
+        return await self.llm.collective_rpc("model_mutate", args=(seed, std))
+
+    async def apply_es_gradient(self, updates: List) -> bool:
+        return await self.llm.collective_rpc("apply_es_gradient", args=(updates,))
+
+    async def get_mutation_seed(self) -> Optional[int]:
+        """Get current mutation seed from worker."""
+        return await self.llm.collective_rpc("get_mutation_seed", args=())
+
+    async def save_hf_checkpoint(self, output_dir: str, tokenizer_path: str) -> bool:
+        """Export current vLLM model weights to a HuggingFace-style directory (ES training)."""
+        return await self.llm.collective_rpc("save_hf_checkpoint", args=(output_dir, tokenizer_path))
+
 
 def create_vllm_engines(
     num_engines: int,
@@ -202,6 +261,8 @@ def create_vllm_engines(
     logprobs_mode=None,
     agent_func_path: Optional[str] = None,
     remote_rm_url: Optional[str] = None,
+    worker_extension_cls: str = "openrlhf.trainer.ray.vllm_worker_wrap.WorkerWrap",
+    vllm_max_num_seqs: Optional[int] = None,
 ):
     """Spin up a set of vLLM Ray actors with consistent placement."""
     vllm_engines = []
@@ -232,7 +293,7 @@ def create_vllm_engines(
         actor_kwargs = {
             "model": pretrain,
             "enforce_eager": enforce_eager,
-            "worker_extension_cls": "openrlhf.trainer.ray.vllm_worker_wrap.WorkerWrap",
+            "worker_extension_cls": worker_extension_cls,
             "tensor_parallel_size": tensor_parallel_size,
             "seed": seed + i,
             "distributed_executor_backend": distributed_executor_backend,
@@ -260,6 +321,9 @@ def create_vllm_engines(
             assert version.parse(vllm.__version__) > version.parse(
                 "0.10.0"
             ), "vLLM > 0.10.0 is required for logprobs_mode"
+
+        if vllm_max_num_seqs is not None:
+            actor_kwargs["max_num_seqs"] = vllm_max_num_seqs
 
         vllm_engines.append(
             LLMRayActor.options(

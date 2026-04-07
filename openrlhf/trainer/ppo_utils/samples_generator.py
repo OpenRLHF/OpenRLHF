@@ -283,7 +283,8 @@ class SamplesGenerator:
         for key, value in extra_logs.items():
             if isinstance(value, torch.Tensor):
                 value = value.flatten()[0].item()
-            info[key] = torch.tensor([value])
+            x = float("nan") if value is None else float(value)
+            info[key] = torch.tensor([x])
 
         return Experience(
             sequences=sequences.unsqueeze(0),
