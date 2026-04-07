@@ -119,7 +119,7 @@ class PolicyLoss(nn.Module):
         action_mask: Optional[torch.Tensor] = None,
         rollout_log_probs: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        if self.policy_loss_type == "ppo":
+        if self.policy_loss_type in ["ppo", "cfpo"]:
             log_ratio = log_probs - old_log_probs
             ratio = log_ratio.exp()
         elif self.policy_loss_type == "gspo":
@@ -136,9 +136,14 @@ class PolicyLoss(nn.Module):
         surr1 = ratio * advantages
         surr2 = ratio.clamp(1 - self.clip_eps_low, 1 + self.clip_eps_high) * advantages
 
-        if self.dual_clip is None:
+        if self.dual_clip is None and self.policy_loss_type != "cfpo":
             # Standard PPO
             loss = -torch.min(surr1, surr2)
+        elif self.policy_loss_type == "cfpo":
+            # CFPO: https://arxiv.org/abs/2601.22801
+            # Loss = -(advantage * ratio - |advantage| * (ratio - 1)^2 / (2 * clip_eps))
+            loss = -(advantages * ratio - torch.abs(advantages) * torch.pow(ratio - 1, 2) / (2 * self.clip_eps_low))
+
         else:
             # Standard PPO clipping
             clip1 = torch.min(surr1, surr2)
