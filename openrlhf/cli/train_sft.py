@@ -3,8 +3,6 @@ import math
 import os
 from datetime import datetime
 
-from transformers.trainer import get_scheduler
-
 from openrlhf.datasets import SFTDataset
 from openrlhf.datasets.utils import blending_datasets
 from openrlhf.models import Actor
@@ -41,9 +39,6 @@ def train(args):
         model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
         )
-
-    # configure optimizer
-    optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
 
     # prepare for data and dataset
     train_data = blending_datasets(
@@ -104,16 +99,8 @@ def train(args):
     num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
 
-    scheduler = get_scheduler(
-        args.lr_scheduler,
-        optim,
-        num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
-        num_training_steps=max_steps,
-        scheduler_specific_kwargs={"min_lr": args.learning_rate * 0.1},
-    )
-
-    # prepare models
-    model, optim, scheduler = strategy.prepare((model, optim, scheduler))
+    # prepare models — optimizer & scheduler created by DeepSpeed from config
+    (model, optim, scheduler) = strategy.prepare((model, args.learning_rate, max_steps))
 
     # load checkpoint
     consumed_samples = 0
@@ -209,8 +196,14 @@ if __name__ == "__main__":
     parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
     parser.add_argument("--pretrain_mode", action="store_true", default=False, help="Use pretrain loss")
     parser.add_argument("--lr_scheduler", type=str, default="cosine_with_min_lr")
+    parser.add_argument("--min_lr_ratio", type=float, default=0.1, help="Minimum LR as a ratio of initial LR")
     parser.add_argument("--l2", type=float, default=0, help="weight decay loss")
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
+
+    # Muon optimizer (requires deepspeed >= 0.18.2)
+    parser.add_argument("--optim", type=str, default="adam", choices=["adam", "muon"], help="Optimizer type")
+    parser.add_argument("--muon_lr", type=float, default=0.02, help="Learning rate for Muon param group (2D weights)")
+    parser.add_argument("--muon_momentum", type=float, default=0.95, help="Momentum for Muon optimizer")
 
     # ring-attention
     parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")

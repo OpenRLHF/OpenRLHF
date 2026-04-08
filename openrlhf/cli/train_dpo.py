@@ -3,8 +3,6 @@ import math
 import os
 from datetime import datetime
 
-from transformers.trainer import get_scheduler
-
 from openrlhf.datasets import RewardDataset
 from openrlhf.datasets.utils import blending_datasets
 from openrlhf.models import Actor
@@ -55,9 +53,6 @@ def train(args):
         model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
         )
-
-    # configure optimizer
-    optim = strategy.create_optimizer(model, lr=args.learning_rate, betas=args.adam_betas, weight_decay=args.l2)
 
     # prepare for data and dataset
     train_data = blending_datasets(
@@ -119,16 +114,8 @@ def train(args):
     num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
 
-    scheduler = get_scheduler(
-        args.lr_scheduler,
-        optim,
-        num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
-        num_training_steps=max_steps,
-        scheduler_specific_kwargs={"min_lr": args.learning_rate * args.min_lr_ratio},
-    )
-
-    # strategy prepare
-    (model, optim, scheduler), ref_model = strategy.prepare((model, optim, scheduler), ref_model)
+    # strategy prepare — optimizer & scheduler created by DeepSpeed from config
+    ((model, optim, scheduler), ref_model) = strategy.prepare((model, args.learning_rate, max_steps), ref_model)
 
     # load checkpoint
     consumed_samples = 0
@@ -238,6 +225,11 @@ if __name__ == "__main__":
         "--nll_loss_coef", type=float, default=0, help="Regularization with NLL loss, see LLama 3.1 tech report."
     )
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
+
+    # Muon optimizer (requires deepspeed >= 0.18.2)
+    parser.add_argument("--optim", type=str, default="adam", choices=["adam", "muon"], help="Optimizer type")
+    parser.add_argument("--muon_lr", type=float, default=0.02, help="Learning rate for Muon param group (2D weights)")
+    parser.add_argument("--muon_momentum", type=float, default=0.95, help="Momentum for Muon optimizer")
 
     # Context Parallel
     parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")

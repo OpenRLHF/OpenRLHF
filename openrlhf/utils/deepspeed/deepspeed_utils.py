@@ -16,6 +16,7 @@ def get_train_ds_config(
     use_ds_universal_ckpt=False,
     deepcompile=False,
     tensor_parallel_size=1,
+    optim_config=None,
 ):
     device = "cpu" if offload else "none"
     zero_opt_dict = {
@@ -42,7 +43,7 @@ def get_train_ds_config(
     if stage == 3:
         zero_opt_dict["reduce_scatter"] = True
 
-    return {
+    ds_config = {
         "steps_per_print": 100,
         "zero_optimization": zero_opt_dict,
         "bf16": {
@@ -65,6 +66,50 @@ def get_train_ds_config(
             "autotp_size": tensor_parallel_size,
         },
     }
+
+    # Optimizer — always config-based, DeepSpeed creates it from this config.
+    # DS auto-selects FusedAdam / DeepSpeedCPUAdam based on offload setting.
+    if optim_config is not None:
+        ds_config["optimizer"] = optim_config
+
+    return ds_config
+
+
+def build_optim_config(
+    optim,
+    *,
+    lr,
+    weight_decay=0.0,
+    adam_betas=(0.9, 0.95),
+    muon_lr=0.02,
+    muon_momentum=0.95,
+):
+    """Build DeepSpeed optimizer config dict from resolved optimizer args.
+
+    To add a new optimizer, add an elif branch and extend --optim choices in CLI.
+    """
+    if optim == "muon":
+        # DS Muon: muon_lr overrides lr for the Muon group, adam_lr overrides lr for the Adam group.
+        # DS stamps a single weight_decay to both groups; use --l2 to control it.
+        return {
+            "type": "Muon",
+            "params": {
+                "muon_lr": muon_lr,
+                "adam_lr": lr,
+                "momentum": muon_momentum,
+                "weight_decay": weight_decay,
+            },
+        }
+    if optim == "adam":
+        return {
+            "type": "AdamW",
+            "params": {
+                "lr": lr,
+                "betas": list(adam_betas),
+                "weight_decay": weight_decay,
+            },
+        }
+    raise ValueError(f"Unsupported optimizer: {optim}")
 
 
 def get_eval_ds_config(

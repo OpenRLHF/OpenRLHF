@@ -1,4 +1,3 @@
-import math
 import os
 import socket
 from abc import ABC
@@ -12,14 +11,16 @@ import torch.distributed
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from transformers.trainer import get_scheduler
 
 from openrlhf.models import Actor, PolicyLoss
 from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils.experience import Experience
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
-from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
+from openrlhf.utils.deepspeed.deepspeed_utils import (
+    offload_deepspeed_states,
+    reload_deepspeed_states,
+)
 from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.vlm_utils import merge_mm_train_inputs
@@ -513,33 +514,19 @@ class PolicyModelActor(BaseModelActor):
         else:
             ema_model = None
 
-        # configure optimizer
-        actor_optim = strategy.create_optimizer(
-            actor, lr=args.actor_learning_rate, betas=strategy.args.adam_betas, weight_decay=args.l2
-        )
-
-        actor_scheduler = get_scheduler(
-            args.lr_scheduler,
-            actor_optim,
-            num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
-            num_training_steps=max_steps,
-            scheduler_specific_kwargs={"min_lr": args.actor_learning_rate * 0.1},
-        )
-
         if args.gradient_checkpointing:
             actor.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
 
-        # prepare models/optimizers...
+        # prepare models/optimizers — optimizer & scheduler created by DeepSpeed from config
         self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare(
-            (actor, actor_optim, actor_scheduler),
-            is_rlhf=True,
+            (actor, args.actor_learning_rate, max_steps),
         )
 
         if ema_model:
             ema_model._offload = True
-            self.ema_model = strategy.prepare(ema_model, is_rlhf=True)
+            self.ema_model = strategy.prepare(ema_model)
         else:
             self.ema_model = None
 

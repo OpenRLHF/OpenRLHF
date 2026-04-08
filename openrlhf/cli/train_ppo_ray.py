@@ -406,6 +406,7 @@ if __name__ == "__main__":
     parser.add_argument("--critic_learning_rate", type=float, default=9e-6)
     parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
     parser.add_argument("--lr_scheduler", type=str, default="cosine_with_min_lr")
+    parser.add_argument("--min_lr_ratio", type=float, default=0.1, help="Minimum LR as a ratio of initial LR")
     parser.add_argument("--kl_target", type=float, default=None)
     parser.add_argument("--kl_horizon", type=int, default=10000)
     parser.add_argument("--init_kl_coef", type=float, default=0.01, help="KL penalty in PPO")
@@ -428,6 +429,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
     parser.add_argument("--reward_clip_range", type=float, nargs=2, default=(-10, 10), help="Reward clip range")
+
+    # Muon optimizer (requires deepspeed >= 0.18.2)
+    parser.add_argument("--optim", type=str, default="adam", choices=["adam", "muon"], help="Optimizer type")
+    parser.add_argument("--muon_lr", type=float, default=0.02, help="Learning rate for Muon param group (2D weights)")
+    parser.add_argument("--muon_momentum", type=float, default=0.95, help="Momentum for Muon optimizer")
 
     # Reinforce/GRPO, etc
     parser.add_argument(

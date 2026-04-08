@@ -1,4 +1,3 @@
-import math
 import os
 from abc import ABC
 from typing import Dict, Optional, Union
@@ -8,14 +7,16 @@ import torch
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from transformers.trainer import get_scheduler
 
 from openrlhf.models import ValueLoss, get_llm_for_sequence_regression
 from openrlhf.models.utils import masked_mean
 from openrlhf.trainer.ppo_utils.experience import Experience
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
-from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
+from openrlhf.utils.deepspeed.deepspeed_utils import (
+    offload_deepspeed_states,
+    reload_deepspeed_states,
+)
 
 from ..ppo_utils import NaiveReplayBuffer
 from .launcher import BaseModelActor
@@ -194,29 +195,14 @@ class CriticModelActor(BaseModelActor):
                 pretrain, critic, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer
             )
 
-        # configure optimizer
-        critic_optim = strategy.create_optimizer(
-            critic, lr=args.critic_learning_rate, betas=args.adam_betas, weight_decay=args.l2
-        )
-
-        # configure scheduler
-        critic_scheduler = get_scheduler(
-            args.lr_scheduler,
-            critic_optim,
-            num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
-            num_training_steps=max_steps,
-            scheduler_specific_kwargs={"min_lr": args.critic_learning_rate * 0.1},
-        )
-
         if args.gradient_checkpointing:
             critic.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
 
-        # prepare models/optimizers...
+        # prepare models/optimizers — optimizer & scheduler created by DeepSpeed from config
         self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare(
-            (critic, critic_optim, critic_scheduler),
-            is_rlhf=True,
+            (critic, args.critic_learning_rate, max_steps),
         )
 
         # load checkpoint
