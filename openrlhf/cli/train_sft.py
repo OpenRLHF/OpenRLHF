@@ -31,6 +31,7 @@ def train(args):
         ds_config=strategy.get_ds_train_config(is_actor=True),
         packing_samples=args.packing_samples,
         use_liger_kernel=args.use_liger_kernel,
+        from_scratch=args.from_scratch,
     )
     # configure tokenizer
     tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
@@ -208,6 +209,12 @@ if __name__ == "__main__":
     parser.add_argument("--learning_rate", type=float, default=5e-6)
     parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
     parser.add_argument("--pretrain_mode", action="store_true", default=False, help="Use pretrain loss")
+    parser.add_argument(
+        "--from_scratch",
+        action="store_true",
+        default=False,
+        help="Initialize model from config with random weights instead of loading pretrained weights",
+    )
     parser.add_argument("--lr_scheduler", type=str, default="cosine_with_min_lr")
     parser.add_argument("--l2", type=float, default=0, help="weight decay loss")
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
