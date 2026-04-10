@@ -196,7 +196,9 @@ class SFTTrainer(ABC):
                     global_accumulated_tokens = torch.tensor([accumulated_num_tokens], device=device)
                     dist.all_reduce(global_accumulated_loss, op=dist.ReduceOp.SUM, group=self.strategy.dp_group)
                     dist.all_reduce(global_accumulated_tokens, op=dist.ReduceOp.SUM, group=self.strategy.dp_group)
-                    logs_dict["loss_mean"] = (global_accumulated_loss / global_accumulated_tokens.clamp(min=1.0)).item()
+                    logs_dict["loss_mean"] = (
+                        global_accumulated_loss / global_accumulated_tokens.clamp(min=1.0)
+                    ).item()
                     accumulated_loss_sum = 0.0
                     accumulated_num_tokens = 0.0
                     global_step = step // self.strategy.accumulated_gradient
