@@ -1,18 +1,25 @@
 """VLM (Vision-Language Model) utilities for multimodal RLHF training.
 
 Handles image loading, processor-based tokenization, and multimodal tensor
-extraction for models like Qwen2.5-VL, Gemma3/4, LLaVA, InternVL etc.
+extraction for Qwen3.5 and Gemma4 vision-language models.
 """
 
 import io
+import logging
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 from PIL import Image
 
+logger = logging.getLogger(__name__)
+
 
 def load_images(image_refs: Union[str, List[str], Image.Image, List[Any]]) -> List[Image.Image]:
-    """Load PIL images from paths, URLs, or pass-through PIL objects."""
+    """Load PIL images from paths, URLs, or pass-through PIL objects.
+
+    Invalid entries (missing files, broken URLs, unsupported types) are
+    skipped with a warning instead of crashing the training run.
+    """
     if image_refs is None:
         return []
     if not isinstance(image_refs, list):
@@ -20,29 +27,33 @@ def load_images(image_refs: Union[str, List[str], Image.Image, List[Any]]) -> Li
 
     pil_images = []
     for img in image_refs:
-        if isinstance(img, Image.Image):
-            pil_images.append(img)
-        elif isinstance(img, str):
-            if img.startswith(("http://", "https://")):
-                import requests
+        try:
+            if isinstance(img, Image.Image):
+                pil_images.append(img)
+            elif isinstance(img, str):
+                if img.startswith(("http://", "https://")):
+                    import requests
 
-                pil_images.append(Image.open(io.BytesIO(requests.get(img).content)))
+                    pil_images.append(Image.open(io.BytesIO(requests.get(img, timeout=30).content)))
+                else:
+                    pil_images.append(Image.open(img))
             else:
-                pil_images.append(Image.open(img))
+                logger.warning(f"Skipping unsupported image type: {type(img)}")
+        except Exception as e:
+            logger.warning(f"Failed to load image {img!r}: {e}")
     return pil_images
 
 
 def process_prompt_with_images(
     processor, prompt: str, images: Any
 ) -> Tuple[List[int], Optional[Dict], List[Image.Image]]:
-    """Tokenize a prompt with images using a VLM processor.
-
-    Handles image loading internally — *images* can be paths, URLs, or PIL objects.
+    """Tokenize a prompt with images using a VLM processor (AutoProcessor).
 
     Returns:
         (token_ids, mm_train_inputs, pil_images)
-        - mm_train_inputs: dict of tensors (pixel_values, image_grid_thw …) or None
-        - pil_images: loaded PIL images (needed for vLLM multi_modal_data)
+        - mm_train_inputs: dict of multimodal tensors (pixel_values, image_grid_thw, ...)
+          or None when no images are present.
+        - pil_images: loaded PIL images (reused for vLLM multi_modal_data).
     """
     pil_images = load_images(images)
     if not pil_images:
@@ -52,9 +63,11 @@ def process_prompt_with_images(
     proc_out = processor(text=[prompt], images=pil_images, return_tensors="pt")
     token_ids = proc_out["input_ids"][0].tolist()
 
-    # Extract multimodal tensors only (pixel_values, image_grid_thw, …).
-    # mm_token_type_ids is excluded — it is sequence-length dependent and
-    # reconstructed from input_ids during training (see Actor.forward).
+    # Keep only multimodal tensors (pixel_values, image_grid_thw, ...).
+    # Token-type fields are excluded because they are sequence-length
+    # dependent and get reconstructed from input_ids during training
+    # (see Actor.forward) — the training sequence includes the response
+    # while the processor only saw the prompt.
     _skip_keys = {"input_ids", "attention_mask", "token_type_ids", "mm_token_type_ids"}
     mm_train_inputs = {k: v for k, v in proc_out.items() if k not in _skip_keys}
 
@@ -64,11 +77,13 @@ def process_prompt_with_images(
 def merge_mm_train_inputs(mm_train_inputs_list: list, device) -> Dict[str, torch.Tensor]:
     """Merge per-sample multimodal tensor dicts into a single batched dict.
 
-    Each element is a dict like {"pixel_values": (N, D), "image_grid_thw": (N, 3)}.
-    Tensors are concatenated along dim=0.  None entries are skipped.
+    ``mm_train_inputs_list`` comes from Experience: each element is either a
+    list of per-sample dicts (one dict or None per sample) or a single dict/None.
+    Tensors are concatenated along dim=0 and moved to *device*.
     """
     merged: Dict[str, list] = {}
     for item in mm_train_inputs_list:
+        # Each item is a list of per-sample dicts (from Experience.mm_train_inputs).
         for mm_dict in (item if isinstance(item, list) else [item]):
             if mm_dict is None:
                 continue

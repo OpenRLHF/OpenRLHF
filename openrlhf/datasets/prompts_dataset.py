@@ -1,3 +1,5 @@
+import copy
+
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
@@ -27,7 +29,8 @@ def preprocess_data(data, input_template=None, input_key="input", label_key=None
         if isinstance(chat, str):
             chat = [{"role": "user", "content": _str_to_content_list(chat)}]
         elif isinstance(chat, list):
-            # Multi-turn: convert <image> tags in each message's string content
+            # Deep copy to avoid mutating the original dataset entries.
+            chat = copy.deepcopy(chat)
             for msg in chat:
                 if isinstance(msg.get("content"), str):
                     msg["content"] = _str_to_content_list(msg["content"])

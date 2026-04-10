@@ -49,6 +49,7 @@ class Actor(nn.Module):
         packing_samples=False,
         temperature=1.0,
         use_liger_kernel=False,
+        freeze_visual_encoder=False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -81,8 +82,7 @@ class Actor(nn.Module):
             else:
                 nf4_config = None
 
-            # Detect VLM: load the full vision-language model when the config
-            # advertises a vision_config (e.g. Qwen3.5, Gemma4, LLaVA, InternVL).
+            # Detect VLM via vision_config in HuggingFace config (Qwen3.5, Gemma4).
             self.is_vlm = False
             try:
                 _cfg = AutoConfig.from_pretrained(pretrain_or_model, trust_remote_code=True)
@@ -90,6 +90,12 @@ class Actor(nn.Module):
                     self.is_vlm = True
             except Exception:
                 pass
+
+            if self.is_vlm and use_liger_kernel:
+                raise ValueError(
+                    "use_liger_kernel is not compatible with VLM models. "
+                    "Liger kernel only supports CausalLM, not ImageTextToText."
+                )
 
             if use_liger_kernel:
                 from liger_kernel.transformers import AutoLigerKernelForCausalLM
@@ -109,9 +115,11 @@ class Actor(nn.Module):
                 device_map=device_map,
             )
 
-            # VLM: freeze vision encoder — only train language model backbone.
-            # Qwen: model.visual.*, Gemma: model.vision_tower.* + model.multi_modal_projector.*
-            if self.is_vlm:
+            # VLM: optionally freeze the vision encoder so only the language
+            # model backbone is trained.  Both Qwen3.5 and Gemma4 place
+            # language params under "language_model.*" / "lm_head.*";
+            # everything else (visual encoder, projector) gets frozen.
+            if self.is_vlm and freeze_visual_encoder:
                 for name, param in self.model.named_parameters():
                     if "language_model" not in name and "lm_head" not in name:
                         param.requires_grad = False
@@ -181,24 +189,21 @@ class Actor(nn.Module):
         else:
             # https://github.com/OpenRLHF/OpenRLHF/issues/217
             rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
-            # VLM: let the model compute its own position_ids (e.g. M-RoPE for Qwen).
-            # Reconstruct image/video token type masks from sequences — the processor
-            # version only covers prompt tokens, but training sequences include the response.
+            # VLM: let the model compute its own position_ids
+            # (Qwen3.5 uses M-RoPE 3D positions, Gemma4 uses standard positions).
             if getattr(self, "is_vlm", False):
                 position_ids = None
+                # Reconstruct token type mask: 0=text, 1=image, 2=video.
+                # The processor version only covers prompt tokens, but training
+                # sequences include the response so we rebuild from token IDs.
                 if mm_inputs:
-                    image_token_id = getattr(self.model.config, "image_token_id", None)
-                    video_token_id = getattr(self.model.config, "video_token_id", None)
-                    if image_token_id is not None:
-                        token_type_ids = (sequences == image_token_id).to(torch.int32)
-                        if video_token_id is not None:
-                            token_type_ids[sequences == video_token_id] = 2
-                        # Qwen uses mm_token_type_ids (for M-RoPE 3D positions)
-                        if "image_grid_thw" in mm_inputs:
-                            mm_inputs["mm_token_type_ids"] = token_type_ids
-                        # Gemma uses token_type_ids (for bidirectional attention on images)
-                        else:
-                            mm_inputs["token_type_ids"] = token_type_ids
+                    cfg = self.model.config
+                    token_type_ids = (sequences == cfg.image_token_id).to(torch.int32)
+                    if getattr(cfg, "video_token_id", None) is not None:
+                        token_type_ids[sequences == cfg.video_token_id] = 2
+                    # Qwen: mm_token_type_ids (M-RoPE); Gemma: token_type_ids (bidir attn)
+                    key = "mm_token_type_ids" if "image_grid_thw" in mm_inputs else "token_type_ids"
+                    mm_inputs[key] = token_type_ids
             else:
                 position_ids = attention_mask.long().cumsum(-1) - 1
                 position_ids.masked_fill_(attention_mask == 0, 1)
