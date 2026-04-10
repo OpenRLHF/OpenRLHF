@@ -128,6 +128,11 @@ class RemoteExperienceMaker:
             sequences=sequences_list, action_mask=action_mask_list, attention_mask=attention_mask_list
         )
 
+        # VLM: pre-processed multimodal inputs only needed by actor model
+        actor_forward_kwargs = dict(forward_kwargs)
+        if any(s.mm_train_inputs for s in samples_list):
+            actor_forward_kwargs["mm_train_inputs_list"] = [s.mm_train_inputs for s in samples_list]
+
         # ── Dispatch all model forward calls ──
 
         # Reward model
@@ -145,11 +150,11 @@ class RemoteExperienceMaker:
         else:
             r_refs = None
 
-        # Actor model
+        # Actor model (only actor receives mm_train_inputs_list for VLM)
         action_log_probs_ref = self._dispatch_forward(
             self.actor_model_group,
             args.colocate_all_models or args.colocate_actor_ref,
-            **forward_kwargs,
+            **actor_forward_kwargs,
         )
 
         # Critic model

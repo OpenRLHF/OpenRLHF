@@ -38,7 +38,16 @@ def get_strategy(args):
 
 
 def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=True):
-    tokenizer = AutoTokenizer.from_pretrained(pretrain, trust_remote_code=True, use_fast=use_fast)
+    # For VLM models, return AutoProcessor (wraps tokenizer + image processor).
+    # This allows downstream code to detect VLM via hasattr(tokenizer, "image_processor").
+    is_vlm = getattr(model, "is_vlm", False) if model is not None else False
+    if is_vlm:
+        from transformers import AutoProcessor
+
+        tokenizer = AutoProcessor.from_pretrained(pretrain, trust_remote_code=True)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(pretrain, trust_remote_code=True, use_fast=use_fast)
+
     tokenizer.padding_side = padding_side
     # NOTE: When enable vLLM, do not resize_token_embeddings, or the vocab size will mismatch with vLLM.
     # https://github.com/facebookresearch/llama-recipes/pull/196

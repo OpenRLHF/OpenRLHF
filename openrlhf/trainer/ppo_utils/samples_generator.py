@@ -20,20 +20,21 @@ def _collect_prompt_batch(dataloader_iter, num_prompts: int):
     collecting the returned prompts. Callers should still process any partial
     batch that was collected before exhaustion.
     """
-    prompts, labels = [], []
+    prompts, labels, images = [], [], []
     exhausted = False
 
     while len(prompts) < num_prompts:
         try:
-            _, batch_prompts, batch_labels = next(dataloader_iter)
+            _, batch_prompts, batch_labels, batch_images = next(dataloader_iter)
             remaining = num_prompts - len(prompts)
             prompts.extend(batch_prompts[:remaining])
             labels.extend(batch_labels[:remaining])
+            images.extend(batch_images[:remaining])
         except StopIteration:
             exhausted = True
             break
 
-    return prompts, labels, exhausted
+    return prompts, labels, images, exhausted
 
 
 class SamplesGenerator:
@@ -145,12 +146,12 @@ class SamplesGenerator:
         prompts_consumed = 0
         accepted_experiences: List[Experience] = []
 
-        prompts, labels, exhausted = _collect_prompt_batch(dataloader_iter, num_prompts)
+        prompts, labels, images, exhausted = _collect_prompt_batch(dataloader_iter, num_prompts)
         if not prompts:
             return [], prompts_consumed, True
 
         target_num_prompts = len(prompts)
-        pending_refs = self._dispatch_prompts_to_vllm(prompts, labels, **generate_kwargs)
+        pending_refs = self._dispatch_prompts_to_vllm(prompts, labels, images=images, **generate_kwargs)
         prompts_consumed += target_num_prompts
 
         pbar = tqdm(range(target_num_prompts), desc="Generate samples")
@@ -179,19 +180,23 @@ class SamplesGenerator:
                     pbar.update()
                 elif dynamic_filtering:
                     # Dispatch replacement for filtered prompt.
-                    new_prompts, new_labels, exhausted = _collect_prompt_batch(dataloader_iter, 1)
+                    new_prompts, new_labels, new_images, exhausted = _collect_prompt_batch(dataloader_iter, 1)
                     prompts_consumed += len(new_prompts)
                     if exhausted and not new_prompts:
                         for remaining_ref in pending_refs:
                             ray.cancel(remaining_ref)
                         return [], prompts_consumed, True
                     if new_prompts:
-                        new_refs = self._dispatch_prompts_to_vllm(new_prompts, new_labels, **generate_kwargs)
+                        new_refs = self._dispatch_prompts_to_vllm(
+                            new_prompts, new_labels, images=new_images, **generate_kwargs
+                        )
                         pending_refs.extend(new_refs)
 
         return accepted_experiences, prompts_consumed, exhausted
 
-    def _dispatch_prompts_to_vllm(self, prompts: List[str], labels: List[str], **generate_kwargs) -> List:
+    def _dispatch_prompts_to_vllm(
+        self, prompts: List[str], labels: List[str], *, images: List = None, **generate_kwargs
+    ) -> List:
         """Send prompts to rollout executors and return Ray object refs."""
         sampling_params = SamplingParams(
             temperature=generate_kwargs.get("temperature", 1.0),
@@ -217,8 +222,11 @@ class SamplesGenerator:
             engine_indices.append(engine_idx)
             heapq.heappush(engine_heap, (current_load + n_samples, engine_idx))
 
+        if images is None:
+            images = [None] * len(prompts)
+
         refs = []
-        for idx, (prompt, label) in enumerate(zip(prompts, labels)):
+        for idx, (prompt, label, img) in enumerate(zip(prompts, labels, images)):
             # Spread work across engines/workers in load-aware order.
             llm_engine = self.vllm_engines[engine_indices[idx]]
             ref = llm_engine.generate_responses.remote(
@@ -228,6 +236,7 @@ class SamplesGenerator:
                 max_length=truncate_length,
                 hf_tokenizer=self.tokenizer,
                 num_samples=n_samples,
+                images=img,
             )
             refs.append(ref)
 
@@ -292,6 +301,8 @@ class SamplesGenerator:
             rollout_log_probs=rollout_log_probs.unsqueeze(0) if rollout_log_probs is not None else None,
             prompts=[response["prompt"]],
             labels=[response["label"]],
+            images=[response.get("images")],
+            mm_train_inputs=[response.get("mm_train_inputs")],
             rewards=torch.tensor([reward_val]) if reward_val is not None else None,
             scores=torch.tensor([score_val]) if score_val is not None else None,
             response_length=torch.tensor([response_length]),

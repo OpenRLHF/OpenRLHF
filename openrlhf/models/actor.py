@@ -5,7 +5,7 @@ import torch.distributed as dist
 import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
@@ -81,10 +81,22 @@ class Actor(nn.Module):
             else:
                 nf4_config = None
 
+            # Detect VLM: load the full vision-language model when the config
+            # advertises a vision_config (e.g. Qwen3.5, Gemma4, LLaVA, InternVL).
+            self.is_vlm = False
+            try:
+                _cfg = AutoConfig.from_pretrained(pretrain_or_model, trust_remote_code=True)
+                if hasattr(_cfg, "vision_config"):
+                    self.is_vlm = True
+            except Exception:
+                pass
+
             if use_liger_kernel:
                 from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
                 model_class = AutoLigerKernelForCausalLM
+            elif self.is_vlm:
+                model_class = AutoModelForImageTextToText
             else:
                 model_class = AutoModelForCausalLM
 
@@ -96,6 +108,13 @@ class Actor(nn.Module):
                 torch_dtype=torch_dtype,  # default: bf16
                 device_map=device_map,
             )
+
+            # VLM: freeze everything outside the language-model backbone.
+            if self.is_vlm:
+                trainable_prefixes = ("language_model", "lm_head")
+                for name, param in self.model.named_parameters():
+                    if not any(name.startswith(p) or f".{p}" in name for p in trainable_prefixes):
+                        param.requires_grad = False
 
             # LoRA
             if lora_rank > 0:
@@ -149,6 +168,7 @@ class Actor(nn.Module):
         ring_attn_group: Optional[dist.ProcessGroup] = None,
         packed_seq_lens: Optional[list[int]] = None,
         return_entropy=False,
+        **mm_inputs,
     ) -> torch.Tensor:
         """Returns action log probs"""
         batch, seqlen = sequences.size()
@@ -164,7 +184,7 @@ class Actor(nn.Module):
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
 
-        output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids)
+        output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids, **mm_inputs)
         # https://github.com/OpenRLHF/OpenRLHF/pull/634
         output["logits"] = output["logits"].to(torch.float32)
 

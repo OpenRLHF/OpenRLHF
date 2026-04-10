@@ -53,6 +53,7 @@ OpenRLHF 是**首个**结合 **Ray + vLLM 分布式架构**与**统一 Agent 设
 <details>
 <summary>展开新闻</summary>
 
+- [2026/4] OpenRLHF 0.10 新增 **VLM（视觉语言模型）RLHF 支持** — 支持 Qwen3.5 等 VLM 的端到端图像输入训练。训练脚本：[train_vlm_math_hybrid_engine.sh](./examples/scripts/train_vlm_math_hybrid_engine.sh)
 - [2026/2] [ProRL V2](https://developer.nvidia.com/blog/scaling-llm-reinforcement-learning-with-prolonged-training-using-prorl-v2/) 使用 REINFORCE++-baseline 通过长期 RL 训练训练最先进的 1.5B 推理模型。训练脚本：[train_prorlv2_math_hybrid_engine.sh](./examples/scripts/train_prorlv2_math_hybrid_engine.sh)
 - [2025/10] [ScaleRL](https://arxiv.org/abs/2510.13786) 验证了 REINFORCE++-baseline 在大规模训练场景中的有效性。发布 [REINFORCE++ PPT](https://docs.google.com/presentation/d/1stieP_3PM1z4Hq1YWR3GywFkxcHEAlstXMaS23KlGN4)
 - [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) 使用与 REINFORCE++-baseline 非常相似的方法训练推理模型。
@@ -253,6 +254,7 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 - 使用 [SLURM](./examples/scripts/train_ppo_ray_slurm.sh) 的多节点训练
 
 **模型支持**
+- [VLM（视觉语言模型）](./examples/scripts/train_vlm_math_hybrid_engine.sh) — 已测试 Qwen3.5（`--image_key`、`--max_images_per_prompt`）
 - [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--lora_rank`、`--load_in_4bit`）
 - [专家混合（MoE）](./examples/test_scripts/train_sft_moe.sh)（`--aux_loss_coef`）
 - FlashAttention（`--attn_implementation`）

@@ -87,7 +87,7 @@ def compute_eval_metrics(eval_dataloader, samples_list, n_samples_per_prompt):
         return {}
 
     prompt_to_datasource = {}
-    for datasources, prompts, labels in eval_dataloader:
+    for datasources, prompts, labels, _images in eval_dataloader:
         for prompt, datasource in zip(prompts, datasources):
             prompt_to_datasource[prompt] = datasource
 

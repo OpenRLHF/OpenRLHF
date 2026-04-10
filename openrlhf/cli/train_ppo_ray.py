@@ -78,6 +78,7 @@ def train(args):
             "processed_logprobs" if args.enable_vllm_is_correction else None,
             agent_func_path=args.agent_func_path,
             remote_rm_url=args.remote_rm_url,
+            max_images_per_prompt=getattr(args, "max_images_per_prompt", 0),
         )
 
     actor_model = RayActorGroup(
@@ -513,6 +514,12 @@ if __name__ == "__main__":
     parser.add_argument("--dynamic_filtering", action="store_true", default=False, help="Enable dynamic filtering")
     parser.add_argument(
         "--dynamic_filtering_reward_range", nargs=2, default=(0, 1), type=float, help="Dynamic filtering rewards range"
+    )
+
+    # VLM (Vision-Language Model) parameters
+    parser.add_argument("--image_key", type=str, default="images", help="Dataset key for image paths/URLs")
+    parser.add_argument(
+        "--max_images_per_prompt", type=int, default=0, help="Max images per prompt for vLLM (0 = text-only)"
     )
 
     # TensorBoard parameters

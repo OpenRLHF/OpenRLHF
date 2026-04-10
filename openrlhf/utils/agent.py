@@ -160,9 +160,25 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
             spec.loader.exec_module(reward_module)
             self.reward_func = reward_module.reward_func
 
-    async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine):
-        # Tokenize the initial observation.
-        prompt_token_ids = hf_tokenizer(prompt, add_special_tokens=False, return_tensors="pt")["input_ids"][0].tolist()
+    async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine, images=None):
+        # Load PIL images once (avoids duplicate downloads for URL-based images).
+        pil_images = []
+        if images:
+            from openrlhf.utils.vlm_utils import load_images
+
+            pil_images = load_images(images)
+
+        # Tokenize the initial observation. For VLM, use processor to handle image tokens.
+        mm_train_inputs = None
+        if pil_images and hasattr(hf_tokenizer, "image_processor"):
+            # hf_tokenizer is actually a processor for VLM models
+            from openrlhf.utils.vlm_utils import process_prompt_with_images
+
+            prompt_token_ids, mm_train_inputs = process_prompt_with_images(hf_tokenizer, prompt, pil_images)
+        else:
+            prompt_token_ids = hf_tokenizer(prompt, add_special_tokens=False, return_tensors="pt")["input_ids"][
+                0
+            ].tolist()
 
         # Compute dynamic max_tokens when not explicitly set (prompt + response share max_length budget)
         effective_params = sampling_params
@@ -179,8 +195,13 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
             )
             prompt_token_ids = prompt_token_ids[-max_prompt_length:]
 
+        # Reuse already-loaded PIL images for vLLM generation.
+        mm_data = {"image": pil_images} if pil_images else None
+
         # Generate one continuation from the engine.
-        request_output = await llm_engine.generate(prompt_token_ids, deepcopy(effective_params))
+        request_output = await llm_engine.generate(
+            prompt_token_ids, deepcopy(effective_params), multi_modal_data=mm_data
+        )
         generation_output = request_output.outputs[0]
         action_token_ids = generation_output.token_ids
 
@@ -201,9 +222,11 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
 
         # Store the final response.
         output = {
-            # Original prompt/label are echoed for convenience.
+            # Original prompt/label/images are echoed for convenience.
             "prompt": prompt,
             "label": label,
+            "images": images,
+            "mm_train_inputs": mm_train_inputs,
             # Token/text observations and action span.
             "observation_tokens": observation_token_ids,
             "action_ranges": action_ranges,

@@ -48,13 +48,17 @@ class PromptDataset(Dataset):
         if apply_chat_template:
             apply_chat_template = self.tokenizer.apply_chat_template
 
+        self.image_key = getattr(self.strategy.args, "image_key", "images")
+
         self.prompts = []
         self.labels = []
+        self.images = []
         self.datasources = []
         for data in tqdm(dataset, desc="Preprocessing data", disable=not self.strategy.is_rank_0()):
             prompt, label = preprocess_data(data, input_template, input_key, label_key, apply_chat_template)
             self.prompts.append(prompt)
             self.labels.append(label)
+            self.images.append(data.get(self.image_key, None))
             self.datasources.append(data.get("datasource", "default"))
 
     def __len__(self):
@@ -62,15 +66,17 @@ class PromptDataset(Dataset):
         return length
 
     def __getitem__(self, idx):
-        return self.datasources[idx], self.prompts[idx], self.labels[idx]
+        return self.datasources[idx], self.prompts[idx], self.labels[idx], self.images[idx]
 
     def collate_fn(self, item_list):
         datasources = []
         prompts = []
         labels = []
-        for datasource, prompt, label in item_list:
+        images = []
+        for datasource, prompt, label, img in item_list:
             datasources.append(datasource)
             prompts.append(prompt)
             labels.append(label)
+            images.append(img)
 
-        return datasources, prompts, labels
+        return datasources, prompts, labels, images

@@ -254,6 +254,15 @@ class ActorPPOTrainer(ABC):
         advantages = experience.advantages
         base_action_log_probs = experience.base_action_log_probs
 
+        # VLM: merge pre-processed multimodal inputs for training forward
+        mm_inputs = {}
+        if (
+            hasattr(experience, "mm_train_inputs")
+            and experience.mm_train_inputs
+            and getattr(self.actor, "is_vlm", False)
+        ):
+            mm_inputs = PolicyModelActor._merge_mm_train_inputs(experience.mm_train_inputs, sequences.device)
+
         # actor loss
         action_log_probs, output = self.actor(
             sequences,
@@ -263,6 +272,7 @@ class ActorPPOTrainer(ABC):
             ring_attn_group=self.strategy.ring_attn_group,
             packed_seq_lens=packed_seq_lens,
             return_entropy=self.args.entropy_loss_coef is not None,
+            **mm_inputs,
         )
 
         # loss function
@@ -373,7 +383,7 @@ class ActorPPOTrainer(ABC):
 
         torch.cuda.empty_cache()
         model = self.actor.model.module
-        count, num_params = 0, len(list(model.named_parameters()))
+        count = 0
 
         def _broadcast_param(param, count, num_params):
             use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
@@ -430,7 +440,14 @@ class ActorPPOTrainer(ABC):
 
         sync_fn = _handle_cuda_ipc if self.use_cuda_ipc else _broadcast_param
 
-        for name, param in model.named_parameters():
+        # For VLM models, only sync trainable params (language model backbone).
+        # Frozen vision encoder weights are identical between training and vLLM.
+        params_to_sync = [
+            (n, p) for n, p in model.named_parameters() if p.requires_grad or not getattr(self.actor, "is_vlm", False)
+        ]
+        num_params = len(params_to_sync)
+
+        for name, param in params_to_sync:
             count += 1  # empty_cache at last param
             with _gather_params_ctx(param):
                 sync_fn(param, count, num_params)
@@ -576,9 +593,16 @@ class PolicyModelActor(BaseModelActor):
         action_mask: Optional[Union[int, list[int]]] = None,
         attention_mask: Optional[torch.Tensor] = None,
         packed_seq_lens=None,
+        mm_train_inputs_list=None,
     ) -> torch.Tensor:
         """Generates actor values."""
         device = torch.cuda.current_device()
+
+        # VLM: merge pre-processed multimodal inputs from all samples in batch
+        mm_inputs = {}
+        if mm_train_inputs_list and getattr(self.actor, "is_vlm", False):
+            mm_inputs = self._merge_mm_train_inputs(mm_train_inputs_list, device)
+
         self.actor.eval()
         with torch.no_grad():
             action_log_probs = self.actor(
@@ -586,9 +610,31 @@ class PolicyModelActor(BaseModelActor):
                 action_mask.to(device),
                 attention_mask.to(device),
                 ring_attn_group=self.strategy.ring_attn_group,
+                **mm_inputs,
             )
         self.actor.train()  # reset model state
         return action_log_probs.to("cpu")
+
+    @staticmethod
+    def _merge_mm_train_inputs(mm_train_inputs_list, device):
+        """Merge per-sample multimodal tensors into a batched dict for the forward pass.
+
+        Each element in mm_train_inputs_list is a list of per-sample dicts
+        (one per sample in the batch). We concatenate tensors along dim=0.
+        """
+        import torch
+
+        merged = {}
+        for per_sample_list in mm_train_inputs_list:
+            for mm_dict in (per_sample_list if isinstance(per_sample_list, list) else [per_sample_list]):
+                if mm_dict is None:
+                    continue
+                for key, val in mm_dict.items():
+                    if key not in merged:
+                        merged[key] = []
+                    merged[key].append(val if isinstance(val, torch.Tensor) else torch.tensor(val))
+
+        return {k: torch.cat(v, dim=0).to(device) for k, v in merged.items()} if merged else {}
 
     def broadcast_to_vllm(self):
         self.trainer.broadcast_to_vllm()
