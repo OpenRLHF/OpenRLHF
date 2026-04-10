@@ -137,9 +137,9 @@ class ReferenceModelActor(BaseModelActor):
         # VLM: merge pre-processed multimodal inputs from all samples in batch
         mm_inputs = {}
         if mm_train_inputs_list and getattr(self.model, "is_vlm", False):
-            from openrlhf.trainer.ray.ppo_actor import PolicyModelActor
+            from openrlhf.utils.vlm_utils import merge_mm_train_inputs
 
-            mm_inputs = PolicyModelActor._merge_mm_train_inputs(mm_train_inputs_list, device)
+            mm_inputs = merge_mm_train_inputs(mm_train_inputs_list, device)
 
         with torch.no_grad():
             log_probs = self.model(

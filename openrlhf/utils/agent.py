@@ -161,20 +161,13 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
             self.reward_func = reward_module.reward_func
 
     async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine, images=None):
-        # Load PIL images once (avoids duplicate downloads for URL-based images).
+        # Tokenize — for VLM the processor inserts image tokens and returns pixel tensors.
         pil_images = []
-        if images:
-            from openrlhf.utils.vlm_utils import load_images
-
-            pil_images = load_images(images)
-
-        # Tokenize the initial observation. For VLM, use processor to handle image tokens.
         mm_train_inputs = None
-        if pil_images and hasattr(hf_tokenizer, "image_processor"):
-            # hf_tokenizer is actually a processor for VLM models
+        if images and hasattr(hf_tokenizer, "image_processor"):
             from openrlhf.utils.vlm_utils import process_prompt_with_images
 
-            prompt_token_ids, mm_train_inputs = process_prompt_with_images(hf_tokenizer, prompt, pil_images)
+            prompt_token_ids, mm_train_inputs, pil_images = process_prompt_with_images(hf_tokenizer, prompt, images)
         else:
             prompt_token_ids = hf_tokenizer(prompt, add_special_tokens=False, return_tensors="pt")["input_ids"][
                 0

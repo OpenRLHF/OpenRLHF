@@ -2,11 +2,35 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 
 
+def _str_to_content_list(text: str):
+    """Convert a string with ``<image>`` tags to a VLM content list.
+
+    E.g. ``"<image>Find x."`` → ``[{"type": "image"}, {"type": "text", "text": "Find x."}]``
+    Returns the original string unchanged when no ``<image>`` tags are present.
+    """
+    if "<image>" not in text:
+        return text
+    parts = text.split("<image>")
+    content = []
+    for i, part in enumerate(parts):
+        if i > 0:
+            content.append({"type": "image"})
+        stripped = part.strip()
+        if stripped:
+            content.append({"type": "text", "text": stripped})
+    return content
+
+
 def preprocess_data(data, input_template=None, input_key="input", label_key=None, apply_chat_template=None) -> str:
     if apply_chat_template:
         chat = data[input_key]
         if isinstance(chat, str):
-            chat = [{"role": "user", "content": chat}]
+            chat = [{"role": "user", "content": _str_to_content_list(chat)}]
+        elif isinstance(chat, list):
+            # Multi-turn: convert <image> tags in each message's string content
+            for msg in chat:
+                if isinstance(msg.get("content"), str):
+                    msg["content"] = _str_to_content_list(msg["content"])
         prompt = apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
     else:
         prompt = data[input_key]

@@ -22,6 +22,7 @@ from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import offload_deepspeed_states, reload_deepspeed_states
 from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.logging_utils import init_logger
+from openrlhf.utils.vlm_utils import merge_mm_train_inputs
 
 from ..ppo_utils import NaiveReplayBuffer
 
@@ -261,7 +262,7 @@ class ActorPPOTrainer(ABC):
             and experience.mm_train_inputs
             and getattr(self.actor, "is_vlm", False)
         ):
-            mm_inputs = PolicyModelActor._merge_mm_train_inputs(experience.mm_train_inputs, sequences.device)
+            mm_inputs = merge_mm_train_inputs(experience.mm_train_inputs, sequences.device)
 
         # actor loss
         action_log_probs, output = self.actor(
@@ -440,8 +441,7 @@ class ActorPPOTrainer(ABC):
 
         sync_fn = _handle_cuda_ipc if self.use_cuda_ipc else _broadcast_param
 
-        # For VLM models with --freeze_visual_encoder, only sync trainable params.
-        # Frozen vision encoder weights are identical between training and vLLM.
+        # VLM: only sync trainable (language model) params — vision encoder is frozen.
         params_to_sync = [
             (n, p) for n, p in model.named_parameters() if p.requires_grad or not getattr(self.actor, "is_vlm", False)
         ]
@@ -602,7 +602,7 @@ class PolicyModelActor(BaseModelActor):
         # VLM: merge pre-processed multimodal inputs from all samples in batch
         mm_inputs = {}
         if mm_train_inputs_list and getattr(self.actor, "is_vlm", False):
-            mm_inputs = self._merge_mm_train_inputs(mm_train_inputs_list, device)
+            mm_inputs = merge_mm_train_inputs(mm_train_inputs_list, device)
 
         self.actor.eval()
         with torch.no_grad():
@@ -615,27 +615,6 @@ class PolicyModelActor(BaseModelActor):
             )
         self.actor.train()  # reset model state
         return action_log_probs.to("cpu")
-
-    @staticmethod
-    def _merge_mm_train_inputs(mm_train_inputs_list, device):
-        """Merge per-sample multimodal tensors into a batched dict for the forward pass.
-
-        Each element in mm_train_inputs_list is a list of per-sample dicts
-        (one per sample in the batch). We concatenate tensors along dim=0.
-        """
-        import torch
-
-        merged = {}
-        for per_sample_list in mm_train_inputs_list:
-            for mm_dict in (per_sample_list if isinstance(per_sample_list, list) else [per_sample_list]):
-                if mm_dict is None:
-                    continue
-                for key, val in mm_dict.items():
-                    if key not in merged:
-                        merged[key] = []
-                    merged[key].append(val if isinstance(val, torch.Tensor) else torch.tensor(val))
-
-        return {k: torch.cat(v, dim=0).to(device) for k, v in merged.items()} if merged else {}
 
     def broadcast_to_vllm(self):
         self.trainer.broadcast_to_vllm()

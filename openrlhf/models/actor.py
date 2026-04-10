@@ -109,12 +109,11 @@ class Actor(nn.Module):
                 device_map=device_map,
             )
 
-            # VLM: optionally freeze vision encoder, only train language model backbone.
-            # Qwen VL: visual.*, Gemma: vision_tower.* + multi_modal_projector.*
-            if self.is_vlm and kwargs.get("freeze_visual_encoder", False):
-                frozen_prefixes = ("visual.", "vision_tower.", "multi_modal_projector.")
+            # VLM: freeze vision encoder — only train language model backbone.
+            # Qwen: model.visual.*, Gemma: model.vision_tower.* + model.multi_modal_projector.*
+            if self.is_vlm:
                 for name, param in self.model.named_parameters():
-                    if any(name.startswith(p) for p in frozen_prefixes):
+                    if "language_model" not in name and "lm_head" not in name:
                         param.requires_grad = False
 
             # LoRA
@@ -182,11 +181,24 @@ class Actor(nn.Module):
         else:
             # https://github.com/OpenRLHF/OpenRLHF/issues/217
             rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
-            # VLM models (e.g. Qwen2.5-VL/Qwen3-VL with M-RoPE) compute their own
-            # position_ids internally from multimodal inputs like image_grid_thw.
-            # Passing explicit 1D position_ids would override that computation.
+            # VLM: let the model compute its own position_ids (e.g. M-RoPE for Qwen).
+            # Reconstruct image/video token type masks from sequences — the processor
+            # version only covers prompt tokens, but training sequences include the response.
             if getattr(self, "is_vlm", False):
                 position_ids = None
+                if mm_inputs:
+                    image_token_id = getattr(self.model.config, "image_token_id", None)
+                    video_token_id = getattr(self.model.config, "video_token_id", None)
+                    if image_token_id is not None:
+                        token_type_ids = (sequences == image_token_id).to(torch.int32)
+                        if video_token_id is not None:
+                            token_type_ids[sequences == video_token_id] = 2
+                        # Qwen uses mm_token_type_ids (for M-RoPE 3D positions)
+                        if "image_grid_thw" in mm_inputs:
+                            mm_inputs["mm_token_type_ids"] = token_type_ids
+                        # Gemma uses token_type_ids (for bidirectional attention on images)
+                        else:
+                            mm_inputs["token_type_ids"] = token_type_ids
             else:
                 position_ids = attention_mask.long().cumsum(-1) - 1
                 position_ids.masked_fill_(attention_mask == 0, 1)
