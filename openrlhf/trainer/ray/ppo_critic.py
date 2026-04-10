@@ -141,7 +141,7 @@ class CriticPPOTrainer(ABC):
         dist.all_reduce(global_num_tokens, op=torch.distributed.ReduceOp.SUM, group=self.strategy.dp_group)
 
         dp_size = self.strategy.dp_size
-        critic_loss = critic_loss_sum / global_num_tokens * dp_size
+        critic_loss = critic_loss_sum / global_num_tokens.clamp(min=1.0) * dp_size
 
         # mixtral
         if self.aux_loss:
@@ -162,7 +162,7 @@ class CriticPPOTrainer(ABC):
         # status
         values_sum = masked_sum(values, experience.action_mask)
         dist.all_reduce(values_sum, op=dist.ReduceOp.SUM, group=self.strategy.dp_group)
-        values_mean = (values_sum / global_num_tokens).detach().item()
+        values_mean = (values_sum / global_num_tokens.clamp(min=1.0)).detach().item()
 
         status = {
             "critic_loss": critic_loss.detach().item(),

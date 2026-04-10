@@ -280,7 +280,7 @@ class ActorPPOTrainer(ABC):
         )
 
         dp_size = self.strategy.dp_size
-        actor_loss = actor_loss_sum / global_num_tokens * dp_size
+        actor_loss = actor_loss_sum / global_num_tokens.clamp(min=1.0) * dp_size
 
         experience.info["ppo_clip_ratio"] = clip_ratio.detach()
         experience.info["ppo_kl"] = ppo_kl.detach()
@@ -300,13 +300,13 @@ class ActorPPOTrainer(ABC):
                 logprobs_diff = torch.zeros_like(action_log_probs)
 
             kl_loss_sum = masked_sum(kl, experience.action_mask)
-            kl_loss = kl_loss_sum / global_num_tokens * dp_size
+            kl_loss = kl_loss_sum / global_num_tokens.clamp(min=1.0) * dp_size
 
             logprobs_diff_sum = masked_sum(logprobs_diff, experience.action_mask)
             logprobs_diff = logprobs_diff_sum / global_num_tokens * dp_size
 
-            experience.info["kl"] = (kl_loss_sum / num_tokens).detach()
-            experience.info["logprobs_diff"] = (logprobs_diff_sum / num_tokens).detach()
+            experience.info["kl"] = (kl_loss_sum / num_tokens.clamp(min=1.0)).detach()
+            experience.info["logprobs_diff"] = (logprobs_diff_sum / num_tokens.clamp(min=1.0)).detach()
         else:
             kl_loss = 0
 
@@ -340,7 +340,7 @@ class ActorPPOTrainer(ABC):
 
         # Log local means so the weighted-reduction pipeline in ppo_train produces
         # correct global averages even when token counts differ across DP ranks.
-        actor_loss_mean = (actor_loss_sum / num_tokens).detach()
+        actor_loss_mean = (actor_loss_sum / num_tokens.clamp(min=1.0)).detach()
         metrics = {"policy_loss": actor_loss_mean}
         weights = {"policy_loss": "token"}
         if self.args.entropy_loss_coef is not None:
