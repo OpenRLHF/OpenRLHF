@@ -56,9 +56,31 @@ def process_prompt_with_images(
         - pil_images: loaded PIL images (reused for vLLM multi_modal_data).
     """
     pil_images = load_images(images)
+
+    # No images → text-only tokenization (valid for text-only samples in mixed datasets).
+    # Filter out None entries before checking — datasets may use [None] for text-only samples.
+    non_none_refs = [img for img in (images if isinstance(images, list) else [images])] if images else []
+    non_none_refs = [img for img in non_none_refs if img is not None]
     if not pil_images:
+        if non_none_refs:
+            # Caller provided real image references but none loaded successfully.
+            # Falling through to text-only would leave image placeholder
+            # tokens in the prompt with no matching pixel_values.
+            raise ValueError(
+                f"All images failed to load ({images!r}).  The prompt likely "
+                "contains image placeholder tokens that require pixel_values."
+            )
         token_ids = processor(text=prompt, add_special_tokens=False, return_tensors="pt")["input_ids"][0].tolist()
         return token_ids, None, []
+
+    # Warn on partial load failures — the prompt may expect more images
+    # than were actually loaded, which can misalign placeholder tokens.
+    expected = len(non_none_refs)
+    if len(pil_images) < expected:
+        logger.warning(
+            f"Only {len(pil_images)}/{expected} images loaded successfully. "
+            "Image placeholder tokens in the prompt may not match pixel_values."
+        )
 
     proc_out = processor(text=[prompt], images=pil_images, return_tensors="pt")
     token_ids = proc_out["input_ids"][0].tolist()

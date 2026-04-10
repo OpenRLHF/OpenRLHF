@@ -178,24 +178,34 @@ class Actor(nn.Module):
         return_entropy=False,
         **mm_inputs,
     ) -> torch.Tensor:
-        """Returns action log probs"""
+        """Forward pass with three return modes:
+
+        - ``action_mask`` provided  → action log probs over the response region
+        - ``return_logprobs=True``  → full-sequence log probs
+        - otherwise                 → raw model output (requires ``return_output=True``)
+
+        When ``return_output=True`` the model output object is returned as a
+        second element of a tuple in all modes.
+        """
         batch, seqlen = sequences.size()
-        foward_attention_mask = attention_mask
+
+        # ── 1. Prepare inputs (packing / position_ids / VLM token types) ──
         if self.packing_samples:
             sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices = unpad_and_slice_tensor(
                 sequences, attention_mask, ring_attn_group
             )
-            foward_attention_mask = None
+            forward_attention_mask = None
         else:
-            # https://github.com/OpenRLHF/OpenRLHF/issues/217
             rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
-            # VLM: let the model compute its own position_ids
-            # (Qwen3.5 uses M-RoPE 3D positions, Gemma4 uses standard positions).
+            forward_attention_mask = attention_mask
+
             if getattr(self, "is_vlm", False):
+                # VLM: let the model compute its own position_ids
+                # (Qwen3.5 uses M-RoPE 3D positions, Gemma4 uses standard positions).
                 position_ids = None
-                # Reconstruct token type mask: 0=text, 1=image, 2=video.
-                # The processor version only covers prompt tokens, but training
-                # sequences include the response so we rebuild from token IDs.
+                # Reconstruct token type mask (0=text, 1=image, 2=video) for
+                # the full sequence including the response.  The processor only
+                # produced this for the prompt.
                 if mm_inputs:
                     cfg = self.model.config
                     token_type_ids = (sequences == cfg.image_token_id).to(torch.int32)
@@ -205,13 +215,15 @@ class Actor(nn.Module):
                     key = "mm_token_type_ids" if "image_grid_thw" in mm_inputs else "token_type_ids"
                     mm_inputs[key] = token_type_ids
             else:
+                # Text-only: monotonic positions, padding positions set to 1
                 position_ids = attention_mask.long().cumsum(-1) - 1
                 position_ids.masked_fill_(attention_mask == 0, 1)
 
-        output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids, **mm_inputs)
-        # https://github.com/OpenRLHF/OpenRLHF/pull/634
+        # ── 2. LLM forward ──
+        output = self.model(sequences, attention_mask=forward_attention_mask, position_ids=position_ids, **mm_inputs)
         output["logits"] = output["logits"].to(torch.float32)
 
+        # ── 3. Optional entropy (attached to output for the caller) ──
         if return_entropy:
             assert return_output
             entropy = compute_entropy(output["logits"])
@@ -219,8 +231,8 @@ class Actor(nn.Module):
                 entropy = gather_and_pad_tensor(entropy, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
             setattr(output, "entropy", entropy[:, :-1])
 
-        return_action_log_probs = action_mask is not None
-        if not return_action_log_probs and not return_logprobs:
+        # ── 4. Early return: raw output when no log probs are needed ──
+        if action_mask is None and not return_logprobs:
             assert return_output
             if allgather_logits and self.packing_samples:
                 output["logits"] = gather_and_pad_tensor(
@@ -228,17 +240,17 @@ class Actor(nn.Module):
                 )
             return output
 
+        # ── 5. Compute log probs from logits ──
         log_probs = log_probs_from_logits(output["logits"], rolled_sequences, temperature=self.temperature)
-
         if self.packing_samples:
             log_probs = gather_and_pad_tensor(log_probs, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
-
         log_probs = log_probs[:, :-1]
-        if not return_action_log_probs and return_logprobs:
+
+        # ── 6. Return full log probs or action-masked log probs ──
+        if action_mask is None:
             return (log_probs, output) if return_output else log_probs
 
         action_log_probs = log_probs[:, -action_mask.shape[1] :] * action_mask.float()
-
         return (action_log_probs, output) if return_output else action_log_probs
 
     def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs={"use_reentrant": False}):

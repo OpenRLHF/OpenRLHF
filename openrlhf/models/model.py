@@ -199,6 +199,8 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             packed_seq_lens=None,
         ) -> torch.Tensor:
             batch, seqlen = input_ids.size()
+
+            # ── 1. Prepare inputs ──
             eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
             forward_attention_mask = attention_mask
             if self.packing_samples:
@@ -207,17 +209,17 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 )
                 forward_attention_mask = None
             else:
-                # https://github.com/OpenRLHF/OpenRLHF/issues/217
                 position_ids = attention_mask.long().cumsum(-1) - 1
                 position_ids.masked_fill_(attention_mask == 0, 1)
 
+            # ── 2. LLM forward + value head ──
             outputs = getattr(self, self.base_model_prefix)(
                 input_ids, attention_mask=forward_attention_mask, position_ids=position_ids
             )
             last_hidden_states = outputs["last_hidden_state"]
-
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
 
+            # ── 3. Extract reward at EOS position ──
             if self.packing_samples:
                 values = gather_and_pad_tensor(values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
             reward = values.gather(dim=1, index=eos_indices).squeeze(1)
@@ -268,6 +270,8 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             packed_seq_lens=None,
         ) -> torch.Tensor:
             batch, seqlen = input_ids.size()
+
+            # ── 1. Prepare inputs ──
             forward_attention_mask = attention_mask
             if self.packing_samples:
                 input_ids, position_ids, _, ring_attn_pad_len, indices = unpad_and_slice_tensor(
@@ -275,10 +279,10 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 )
                 forward_attention_mask = None
             else:
-                # https://github.com/OpenRLHF/OpenRLHF/issues/217
                 position_ids = attention_mask.long().cumsum(-1) - 1
                 position_ids.masked_fill_(attention_mask == 0, 1)
 
+            # ── 2. LLM forward ──
             outputs = getattr(self, self.base_model_prefix)(
                 input_ids, attention_mask=forward_attention_mask, position_ids=position_ids
             )
@@ -287,22 +291,19 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 assert return_output
                 return outputs
 
+            # ── 3. Value head → per-token values for the action region ──
             last_hidden_states = outputs["last_hidden_state"]
-            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)  # (1, total_seqs)
+            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
 
             if self.packing_samples:
                 values = gather_and_pad_tensor(values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
 
+            # Shift by one: value at position t predicts return from t+1
             values = values[:, :-1]
-            # normalize reward
             if self.normalize_reward:
                 values = (values - self.mean) / self.std
 
             action_values = values[:, -action_mask.shape[1] :] * action_mask.float()
-
-            if return_output:
-                return (action_values, outputs)
-            else:
-                return action_values
+            return (action_values, outputs) if return_output else action_values
 
     return CriticModel

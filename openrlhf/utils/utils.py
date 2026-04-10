@@ -38,9 +38,17 @@ def get_strategy(args):
 
 
 def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=True):
+    # Detect VLM from the pretrained config (vision_config present) so that
+    # we return an AutoProcessor even when ``model`` is None or is the raw HF
+    # model (which does not carry the Actor-level ``is_vlm`` flag).
+    is_vlm = False
+    if strategy is not None and getattr(strategy.args, "max_images_per_prompt", 0) > 0:
+        is_vlm = True
+    elif model is not None and getattr(model, "is_vlm", False):
+        is_vlm = True
+
     # For VLM models, return AutoProcessor (wraps tokenizer + image processor).
     # This allows downstream code to detect VLM via hasattr(tokenizer, "image_processor").
-    is_vlm = getattr(model, "is_vlm", False) if model is not None else False
     if is_vlm:
         from transformers import AutoProcessor
 
@@ -48,14 +56,25 @@ def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=
     else:
         tokenizer = AutoTokenizer.from_pretrained(pretrain, trust_remote_code=True, use_fast=use_fast)
 
-    tokenizer.padding_side = padding_side
+    # AutoProcessor (VLM) does not delegate tokenizer attributes like pad_token
+    # or padding_side.  Operate on the inner tokenizer when present.
+    inner_tokenizer = getattr(tokenizer, "tokenizer", tokenizer)
+    inner_tokenizer.padding_side = padding_side
     # NOTE: When enable vLLM, do not resize_token_embeddings, or the vocab size will mismatch with vLLM.
     # https://github.com/facebookresearch/llama-recipes/pull/196
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-        if model is not None:
-            model.config.pad_token_id = tokenizer.pad_token_id
+    if inner_tokenizer.pad_token is None:
+        inner_tokenizer.pad_token = inner_tokenizer.eos_token
+        inner_tokenizer.pad_token_id = inner_tokenizer.eos_token_id
+        if model is not None and hasattr(model, "config"):
+            model.config.pad_token_id = inner_tokenizer.pad_token_id
+
+    # Mirror essential tokenizer attributes onto the processor so that
+    # downstream code (e.g. tokenizer.pad_token_id) works transparently.
+    if is_vlm and inner_tokenizer is not tokenizer:
+        tokenizer.pad_token = inner_tokenizer.pad_token
+        tokenizer.pad_token_id = inner_tokenizer.pad_token_id
+        tokenizer.eos_token = inner_tokenizer.eos_token
+        tokenizer.eos_token_id = inner_tokenizer.eos_token_id
 
     return tokenizer
 
