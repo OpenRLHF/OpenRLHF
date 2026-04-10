@@ -135,6 +135,14 @@ class DeepspeedStrategy(ABC):
     def ring_attn_group(self):
         return get_ring_attn_group()
 
+    @property
+    def dp_size(self):
+        return self.world_size // self.ring_attn_size // self.ds_tensor_parallel_size
+
+    @property
+    def dp_group(self):
+        return self.ds_device_mesh["dp"].get_group()
+
     def create_optimizer(self, model, **kwargs) -> Optimizer:
         if isinstance(model, Actor):
             model = model.model

@@ -5,13 +5,14 @@ from typing import Dict, Optional, Union
 
 import ray
 import torch
+import torch.distributed as dist
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
 from openrlhf.models import ValueLoss, get_llm_for_sequence_regression
-from openrlhf.models.utils import masked_mean
+from openrlhf.models.utils import masked_sum
 from openrlhf.trainer.ppo_utils.experience import Experience
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
@@ -129,12 +130,19 @@ class CriticPPOTrainer(ABC):
         )
 
         # loss function
-        critic_loss = self.critic_loss_fn(
+        critic_loss_sum, num_tokens = self.critic_loss_fn(
             values,
             old_values,
             returns,
             action_mask=experience.action_mask,
         )
+
+        global_num_tokens = num_tokens.clone()
+        dist.all_reduce(global_num_tokens, op=torch.distributed.ReduceOp.SUM, group=self.strategy.dp_group)
+
+        dp_size = self.strategy.dp_size
+        critic_loss = critic_loss_sum / global_num_tokens * dp_size
+
         # mixtral
         if self.aux_loss:
             aux_loss = output.aux_loss
@@ -152,9 +160,13 @@ class CriticPPOTrainer(ABC):
             self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
 
         # status
+        values_sum = masked_sum(values, experience.action_mask)
+        dist.all_reduce(values_sum, op=dist.ReduceOp.SUM, group=self.strategy.dp_group)
+        values_mean = (values_sum / global_num_tokens).detach().item()
+
         status = {
             "critic_loss": critic_loss.detach().item(),
-            "values": masked_mean(values, experience.action_mask).detach().item(),
+            "values": values_mean,
             "critic_lr": self.critic_scheduler.get_last_lr()[0],
             "critic_grad_norm": self.strategy.get_grad_norm(self.critic),
         }
