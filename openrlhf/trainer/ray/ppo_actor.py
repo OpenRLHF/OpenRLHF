@@ -440,7 +440,7 @@ class ActorPPOTrainer(ABC):
 
         sync_fn = _handle_cuda_ipc if self.use_cuda_ipc else _broadcast_param
 
-        # For VLM models, only sync trainable params (language model backbone).
+        # For VLM models with --freeze_visual_encoder, only sync trainable params.
         # Frozen vision encoder weights are identical between training and vLLM.
         params_to_sync = [
             (n, p) for n, p in model.named_parameters() if p.requires_grad or not getattr(self.actor, "is_vlm", False)
@@ -491,6 +491,7 @@ class PolicyModelActor(BaseModelActor):
             packing_samples=strategy.args.packing_samples,
             temperature=strategy.args.temperature,
             use_liger_kernel=strategy.args.use_liger_kernel,
+            freeze_visual_encoder=getattr(strategy.args, "freeze_visual_encoder", False),
         )
         strategy.print(actor)
 

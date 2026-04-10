@@ -109,11 +109,12 @@ class Actor(nn.Module):
                 device_map=device_map,
             )
 
-            # VLM: freeze everything outside the language-model backbone.
-            if self.is_vlm:
-                trainable_prefixes = ("language_model", "lm_head")
+            # VLM: optionally freeze vision encoder, only train language model backbone.
+            # Qwen VL: visual.*, Gemma: vision_tower.* + multi_modal_projector.*
+            if self.is_vlm and kwargs.get("freeze_visual_encoder", False):
+                frozen_prefixes = ("visual.", "vision_tower.", "multi_modal_projector.")
                 for name, param in self.model.named_parameters():
-                    if not any(name.startswith(p) or f".{p}" in name for p in trainable_prefixes):
+                    if any(name.startswith(p) for p in frozen_prefixes):
                         param.requires_grad = False
 
             # LoRA
@@ -181,8 +182,14 @@ class Actor(nn.Module):
         else:
             # https://github.com/OpenRLHF/OpenRLHF/issues/217
             rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
+            # VLM models (e.g. Qwen2.5-VL/Qwen3-VL with M-RoPE) compute their own
+            # position_ids internally from multimodal inputs like image_grid_thw.
+            # Passing explicit 1D position_ids would override that computation.
+            if getattr(self, "is_vlm", False):
+                position_ids = None
+            else:
+                position_ids = attention_mask.long().cumsum(-1) - 1
+                position_ids.masked_fill_(attention_mask == 0, 1)
 
         output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids, **mm_inputs)
         # https://github.com/OpenRLHF/OpenRLHF/pull/634

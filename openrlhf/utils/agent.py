@@ -189,6 +189,12 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
         # Truncate prompt if it's too long to leave room for generation
         max_prompt_length = max_length - effective_params.max_tokens
         if len(prompt_token_ids) > max_prompt_length:
+            if pil_images:
+                raise ValueError(
+                    f"VLM prompt length ({len(prompt_token_ids)}) exceeds max_prompt_length ({max_prompt_length}). "
+                    f"Truncating VLM prompts would break image token alignment with pixel_values. "
+                    f"Please increase --max_len or decrease --max_new_tokens."
+                )
             logger.warning(
                 f"Prompt length ({len(prompt_token_ids)}) exceeds max_prompt_length ({max_prompt_length}). "
                 f"Truncating to fit within max_length ({max_length}) with max_tokens ({effective_params.max_tokens})."

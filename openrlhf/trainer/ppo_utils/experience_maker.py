@@ -128,10 +128,10 @@ class RemoteExperienceMaker:
             sequences=sequences_list, action_mask=action_mask_list, attention_mask=attention_mask_list
         )
 
-        # VLM: pre-processed multimodal inputs only needed by actor model
-        actor_forward_kwargs = dict(forward_kwargs)
+        # VLM: pre-processed multimodal inputs needed by actor and reference models
+        vlm_forward_kwargs = dict(forward_kwargs)
         if any(s.mm_train_inputs for s in samples_list):
-            actor_forward_kwargs["mm_train_inputs_list"] = [s.mm_train_inputs for s in samples_list]
+            vlm_forward_kwargs["mm_train_inputs_list"] = [s.mm_train_inputs for s in samples_list]
 
         # ── Dispatch all model forward calls ──
 
@@ -150,11 +150,11 @@ class RemoteExperienceMaker:
         else:
             r_refs = None
 
-        # Actor model (only actor receives mm_train_inputs_list for VLM)
+        # Actor model (receives mm_train_inputs_list for VLM)
         action_log_probs_ref = self._dispatch_forward(
             self.actor_model_group,
             args.colocate_all_models or args.colocate_actor_ref,
-            **actor_forward_kwargs,
+            **vlm_forward_kwargs,
         )
 
         # Critic model
@@ -171,12 +171,12 @@ class RemoteExperienceMaker:
         else:
             value_ref = dummy_ref
 
-        # Reference model
+        # Reference model (also receives mm_train_inputs_list for VLM)
         if self.initial_model_group is not None:
             base_action_log_probs_ref = self._dispatch_forward(
                 self.initial_model_group,
                 args.colocate_all_models or args.colocate_actor_ref,
-                **forward_kwargs,
+                **vlm_forward_kwargs,
             )
         else:
             base_action_log_probs_ref = dummy_ref

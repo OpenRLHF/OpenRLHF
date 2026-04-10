@@ -6,10 +6,10 @@
 #
 # Key VLM features:
 # - Auto-detects VLM models via vision_config in HuggingFace config
-# - Loads full VLM (AutoModelForImageTextToText) with frozen vision encoder
+# - Loads full VLM (AutoModelForImageTextToText)
 # - Uses AutoProcessor for correct image token insertion
 # - Passes images to vLLM for multimodal generation
-# - Only syncs trainable (language model) weights to vLLM
+# - --freeze_visual_encoder: freeze vision encoder, only sync language model weights to vLLM
 #
 # Dataset format (JSONL):
 #   {"prompt": [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Find x."}]}],
@@ -19,6 +19,7 @@
 # VLM-specific parameters:
 #   --image_key images               # Dataset key for image paths/URLs
 #   --max_images_per_prompt 1        # Max images per prompt for vLLM
+#   --freeze_visual_encoder          # Freeze vision encoder (only train language model)
 
 set -x
 
@@ -66,6 +67,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --label_key label \
    --image_key images \
    --max_images_per_prompt 1 \
+   --freeze_visual_encoder \
    --apply_chat_template \
    --gradient_checkpointing \
    --attn_implementation eager \
@@ -80,7 +82,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
 # Other VLMs with ForConditionalGeneration architecture (e.g. Gemma4,
 # LLaVA, InternVL) are auto-detected via vision_config but not yet tested.
 #
-# Vision encoder is frozen by default (only language model is trained).
+# With --freeze_visual_encoder, only language model is trained.
 # Weight sync to vLLM only transfers trainable parameters.
 #
 # Dataset format:

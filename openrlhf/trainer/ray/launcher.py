@@ -130,8 +130,17 @@ class ReferenceModelActor(BaseModelActor):
         attention_mask: Optional[torch.Tensor] = None,
         return_output=False,
         packed_seq_lens: Optional[list[int]] = None,
+        mm_train_inputs_list=None,
     ) -> torch.Tensor:
         device = torch.cuda.current_device()
+
+        # VLM: merge pre-processed multimodal inputs from all samples in batch
+        mm_inputs = {}
+        if mm_train_inputs_list and getattr(self.model, "is_vlm", False):
+            from openrlhf.trainer.ray.ppo_actor import PolicyModelActor
+
+            mm_inputs = PolicyModelActor._merge_mm_train_inputs(mm_train_inputs_list, device)
+
         with torch.no_grad():
             log_probs = self.model(
                 sequences.to(device),
@@ -139,6 +148,7 @@ class ReferenceModelActor(BaseModelActor):
                 attention_mask.to(device),
                 ring_attn_group=self.strategy.ring_attn_group,
                 packed_seq_lens=packed_seq_lens,
+                **mm_inputs,
             )
         return log_probs.to("cpu")
 

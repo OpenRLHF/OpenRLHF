@@ -521,6 +521,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_images_per_prompt", type=int, default=0, help="Max images per prompt for vLLM (0 = text-only)"
     )
+    parser.add_argument(
+        "--freeze_visual_encoder",
+        action="store_true",
+        default=False,
+        help="Freeze vision encoder weights (only train language model). Reduces memory and weight sync overhead.",
+    )
 
     # TensorBoard parameters
     parser.add_argument("--use_tensorboard", type=str, default=None, help="TensorBoard logging path")
@@ -550,6 +556,18 @@ if __name__ == "__main__":
 
     if args.advantage_estimator in ["rloo", "reinforce_baseline", "group_norm"]:
         assert args.n_samples_per_prompt > 1, f"{args.advantage_estimator} requires n_samples_per_prompt > 1"
+
+    # VLM constraints: critic and packing_samples are not supported
+    if args.max_images_per_prompt > 0:
+        assert args.critic_pretrain is None, (
+            "VLM training does not support critic model. "
+            "Use --advantage_estimator other than 'gae' (e.g., reinforce_baseline, rloo, group_norm)."
+        )
+        assert not args.packing_samples, (
+            "VLM training does not support --packing_samples. "
+            "Packing collapses the batch dimension, breaking alignment between image tokens and pixel_values. "
+            "VLM models also require model-computed position_ids (e.g., M-RoPE) which is incompatible with packing."
+        )
 
     if args.remote_rm_url:
         args.remote_rm_url = args.remote_rm_url.split(",")
