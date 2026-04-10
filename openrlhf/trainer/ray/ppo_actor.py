@@ -221,6 +221,7 @@ class ActorPPOTrainer(ABC):
                     "tot_len": merged_status.get("total_length", 0),
                     "kl": merged_status.get("kl", 0),
                     "act_lr": actor_lr,
+                    "grad_norm": merged_status.get("actor_grad_norm", 0),
                 }
                 if "entropy_loss" in merged_status:
                     short_status["ent_loss"] = merged_status["entropy_loss"]
