@@ -37,44 +37,46 @@ def get_strategy(args):
     return strategy
 
 
-def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=True):
-    # Detect VLM from the pretrained config (vision_config present) so that
-    # we return an AutoProcessor even when ``model`` is None or is the raw HF
-    # model (which does not carry the Actor-level ``is_vlm`` flag).
-    is_vlm = False
-    if strategy is not None and getattr(strategy.args, "max_images_per_prompt", 0) > 0:
-        is_vlm = True
-    elif model is not None and getattr(model, "is_vlm", False):
-        is_vlm = True
+def is_vlm_model(pretrain: str) -> bool:
+    """Check if a pretrained model is a VLM by looking for vision_config in its HF config."""
+    from transformers import AutoConfig
 
-    # For VLM models, return AutoProcessor (wraps tokenizer + image processor).
-    # This allows downstream code to detect VLM via hasattr(tokenizer, "image_processor").
+    try:
+        cfg = AutoConfig.from_pretrained(pretrain, trust_remote_code=True)
+        return hasattr(cfg, "vision_config")
+    except Exception:
+        return False
+
+
+def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=True):
+    is_vlm = getattr(model, "is_vlm", False) if model is not None else is_vlm_model(pretrain)
+
     if is_vlm:
         from transformers import AutoProcessor
 
+        # AutoProcessor wraps tokenizer + image_processor; downstream code
+        # detects VLM via hasattr(tokenizer, "image_processor").
         tokenizer = AutoProcessor.from_pretrained(pretrain, trust_remote_code=True)
+        # AutoProcessor doesn't delegate tokenizer attributes, so set them on
+        # the inner tokenizer and mirror the essentials back.
+        inner = tokenizer.tokenizer
+        inner.padding_side = padding_side
+        if inner.pad_token is None:
+            inner.pad_token = inner.eos_token
+            inner.pad_token_id = inner.eos_token_id
+        for attr in ("pad_token", "pad_token_id", "eos_token", "eos_token_id"):
+            setattr(tokenizer, attr, getattr(inner, attr))
     else:
         tokenizer = AutoTokenizer.from_pretrained(pretrain, trust_remote_code=True, use_fast=use_fast)
+        tokenizer.padding_side = padding_side
+        # NOTE: When enable vLLM, do not resize_token_embeddings, or the vocab size will mismatch with vLLM.
+        # https://github.com/facebookresearch/llama-recipes/pull/196
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+            tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    # AutoProcessor (VLM) does not delegate tokenizer attributes like pad_token
-    # or padding_side.  Operate on the inner tokenizer when present.
-    inner_tokenizer = getattr(tokenizer, "tokenizer", tokenizer)
-    inner_tokenizer.padding_side = padding_side
-    # NOTE: When enable vLLM, do not resize_token_embeddings, or the vocab size will mismatch with vLLM.
-    # https://github.com/facebookresearch/llama-recipes/pull/196
-    if inner_tokenizer.pad_token is None:
-        inner_tokenizer.pad_token = inner_tokenizer.eos_token
-        inner_tokenizer.pad_token_id = inner_tokenizer.eos_token_id
-        if model is not None and hasattr(model, "config"):
-            model.config.pad_token_id = inner_tokenizer.pad_token_id
-
-    # Mirror essential tokenizer attributes onto the processor so that
-    # downstream code (e.g. tokenizer.pad_token_id) works transparently.
-    if is_vlm and inner_tokenizer is not tokenizer:
-        tokenizer.pad_token = inner_tokenizer.pad_token
-        tokenizer.pad_token_id = inner_tokenizer.pad_token_id
-        tokenizer.eos_token = inner_tokenizer.eos_token
-        tokenizer.eos_token_id = inner_tokenizer.eos_token_id
+    if model is not None and tokenizer.pad_token_id is not None:
+        model.config.pad_token_id = tokenizer.pad_token_id
 
     return tokenizer
 

@@ -5,7 +5,7 @@ import torch.distributed as dist
 import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
-from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
@@ -82,14 +82,9 @@ class Actor(nn.Module):
             else:
                 nf4_config = None
 
-            # Detect VLM via vision_config in HuggingFace config (Qwen3.5, Gemma4).
-            self.is_vlm = False
-            try:
-                _cfg = AutoConfig.from_pretrained(pretrain_or_model, trust_remote_code=True)
-                if hasattr(_cfg, "vision_config"):
-                    self.is_vlm = True
-            except Exception:
-                pass
+            from openrlhf.utils.utils import is_vlm_model
+
+            self.is_vlm = is_vlm_model(pretrain_or_model)
 
             if self.is_vlm and use_liger_kernel:
                 raise ValueError(
