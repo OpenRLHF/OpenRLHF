@@ -155,6 +155,10 @@ class Actor(nn.Module):
             # Use `model.generate(use_cache=True)` instead.`
             self.model.config.use_cache = False
 
+            # Cache config before DeepSpeed wrapping (DS engine may expose .config as dict)
+            if self.is_vlm:
+                self._vlm_config = self.model.config
+
             # packing samples using Flash Attention 2
             self.packing_samples = packing_samples
         else:
@@ -193,7 +197,7 @@ class Actor(nn.Module):
                 # the full sequence including the response.  The processor only
                 # produced this for the prompt.
                 if mm_inputs:
-                    cfg = self.model.config
+                    cfg = self._vlm_config
                     token_type_ids = (sequences == cfg.image_token_id).to(torch.int32)
                     if getattr(cfg, "video_token_id", None) is not None:
                         token_type_ids[sequences == cfg.video_token_id] = 2
