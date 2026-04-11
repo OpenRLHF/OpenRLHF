@@ -366,7 +366,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--vllm_generate_batch_size", type=int, default=None, help="Batch size for vLLM generating samples"
     )
-    parser.add_argument("--micro_rollout_batch_size", type=int, default=8)
+    parser.add_argument("--micro_rollout_batch_size", type=int, default=1)
     parser.add_argument("--max_epochs", type=int, default=1)
     parser.add_argument("--max_len", type=int, default=2048, help="Max total sequence length (prompt + response)")
     parser.add_argument(
@@ -385,7 +385,7 @@ if __name__ == "__main__":
     parser.add_argument("--value_clip", type=float, default=0.5, help="PPO value clip range")
     parser.add_argument("--lambd", type=float, default=1, help="PPO GAE lambd")
     parser.add_argument("--gamma", type=float, default=1, help="PPO GAE gamma")
-    parser.add_argument("--micro_train_batch_size", type=int, default=4, help="batch size per GPU")
+    parser.add_argument("--micro_train_batch_size", type=int, default=1, help="batch size per GPU")
     parser.add_argument("--train_batch_size", type=int, default=128, help="Global training batch size")
     parser.add_argument("--normalize_reward", action="store_true", default=False, help="Enable Reward Normalization")
     parser.add_argument("--top_p", type=float, default=1.0)

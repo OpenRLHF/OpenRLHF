@@ -27,21 +27,22 @@ SCRIPT_DIR="$(dirname "$0")"
 WORK_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
 
 # Model and Dataset Configuration
-MODEL_PATH="Qwen/Qwen3.5-0.8B"
+MODEL_PATH="Qwen/Qwen3.5-2B"
 DATASET_PATH="hiyouga/geometry3k"   # or local JSONL file with images
-SAVE_PATH="${WORK_DIR}/exp/Qwen3.5-0.8B-VLM-RLHF"
+SAVE_PATH="${WORK_DIR}/exp/Qwen3.5-2B-VLM-RLHF"
 
 # Math reward function for answer verification
 REWARD_FUNC_PATH="${WORK_DIR}/examples/python/math_reward_func.py"
 
 python3 -m openrlhf.cli.train_ppo_ray \
    --ref_num_nodes 1 \
-   --ref_num_gpus_per_node 1 \
+   --ref_num_gpus_per_node 4 \
    --actor_num_nodes 1 \
-   --actor_num_gpus_per_node 1 \
-   --vllm_num_engines 2 \
+   --actor_num_gpus_per_node 4 \
+   --vllm_num_engines 4 \
    --vllm_tensor_parallel_size 1 \
-   --vllm_gpu_memory_utilization 0.95 \
+   --colocate_all_models \
+   --vllm_gpu_memory_utilization 0.7 \
    --init_kl_coef 0 \
    --gamma 1.0 \
    --use_kl_loss \
@@ -51,15 +52,18 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --remote_rm_url ${REWARD_FUNC_PATH} \
    --save_path ${SAVE_PATH} \
    --ckpt_path "${SAVE_PATH}/ckpt" \
+   --save_hf_ckpt \
    --save_steps 5 \
    --eval_steps -1 \
-   --train_batch_size 64 \
-   --rollout_batch_size 8 \
+   --micro_train_batch_size 1 \
+   --micro_rollout_batch_size 1 \
+   --train_batch_size 1024 \
+   --rollout_batch_size 128 \
    --n_samples_per_prompt 8 \
    --num_episodes 100 \
    --max_len 4096 \
    --max_new_tokens 2048 \
-   --zero_stage 2 \
+   --zero_stage 3 \
    --param_dtype bf16 \
    --actor_learning_rate 2e-6 \
    --prompt_data ${DATASET_PATH} \
@@ -72,7 +76,9 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --gradient_checkpointing \
    --attn_implementation eager \
    --vllm_sync_backend nccl \
-   --enforce_eager
+   --enforce_eager \
+   --vllm_enable_sleep \
+   --deepspeed_enable_sleep
 
 # VLM Notes:
 #
