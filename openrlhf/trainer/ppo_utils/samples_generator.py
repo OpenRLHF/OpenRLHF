@@ -1,5 +1,7 @@
 import heapq
-from typing import List, Optional, Tuple
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Any, List, Optional, Tuple
 
 import ray
 import torch
@@ -35,6 +37,55 @@ def _collect_prompt_batch(dataloader_iter, num_prompts: int):
             break
 
     return prompts, labels, images, exhausted
+
+
+def _build_action_mask_from_response(response, attention_mask: torch.Tensor, truncate_length: int) -> tuple[torch.Tensor, int]:
+    """Build the per-token PPO loss mask and count generated action tokens."""
+    action_ranges = response["action_ranges"]
+    action_loss_mask = response.get("action_loss_mask")
+    raw_action_token_count = sum(end - start for start, end in action_ranges)
+    if action_loss_mask is not None and len(action_loss_mask) != raw_action_token_count:
+        raise ValueError(
+            f"action_loss_mask length {len(action_loss_mask)} does not match generated token count {raw_action_token_count}"
+        )
+
+    action_mask = torch.zeros_like(attention_mask, dtype=torch.bool)
+    action_mask_offset = 0
+    truncated_action_token_count = 0
+
+    for start, end in action_ranges:
+        range_length = end - start
+        clipped_start = max(0, min(start, truncate_length))
+        clipped_end = max(clipped_start, min(end, truncate_length))
+        clipped_length = clipped_end - clipped_start
+
+        if clipped_length <= 0:
+            action_mask_offset += range_length
+            continue
+
+        truncated_action_token_count += clipped_length
+        if action_loss_mask is None:
+            action_mask[clipped_start:clipped_end] = True
+        else:
+            span_mask = torch.tensor(
+                action_loss_mask[action_mask_offset : action_mask_offset + range_length],
+                dtype=torch.bool,
+            )
+            action_mask[clipped_start:clipped_end] = span_mask[:clipped_length]
+
+        action_mask_offset += range_length
+
+    return action_mask, truncated_action_token_count
+
+
+@dataclass
+class FullyAsyncGenerationState:
+    """Carry prompt-group state across fully async sample generation calls."""
+
+    pending_refs: list[Any] = field(default_factory=list)
+    ready_prompt_groups: deque = field(default_factory=deque)
+    prompts_consumed_since_emit: int = 0
+    input_exhausted: bool = False
 
 
 class SamplesGenerator:
@@ -134,6 +185,152 @@ class SamplesGenerator:
         exhausted = self._dataloader_iter is None and len(self._sample_buffer) == 0
 
         return rollout_samples, filter_pass_rate, prompts_consumed, exhausted
+
+    @torch.no_grad()
+    def generate_samples_fully_async(self, **generate_kwargs) -> Tuple[List[Experience], Optional[float], int, bool]:
+        target_num_prompts = self.args.rollout_batch_size
+        prompt_groups = []
+        prompts_consumed = 0
+        exhausted = False
+
+        while len(prompt_groups) < target_num_prompts:
+            prompt_group, consumed_since_last_emit, exhausted = self.stream_prompt_group_fully_async(**generate_kwargs)
+            prompts_consumed += consumed_since_last_emit
+            if prompt_group is not None:
+                prompt_groups.append(prompt_group)
+            if exhausted:
+                break
+
+        experiences = [experience for prompt_group in prompt_groups for experience in prompt_group]
+
+        filter_pass_rate = None
+        if self.args.dynamic_filtering and prompts_consumed:
+            filter_pass_rate = len(prompt_groups) / prompts_consumed * 100
+
+        return experiences, filter_pass_rate, prompts_consumed, exhausted
+
+    @torch.no_grad()
+    def stream_prompt_group_fully_async(
+        self,
+        max_pending_prompts: Optional[int] = None,
+        **generate_kwargs,
+    ) -> Tuple[Optional[List[Experience]], int, bool]:
+        """Return the next ready prompt group from the fully async state machine."""
+        if getattr(self, "_dataloader_iter", None) is None:
+            self._dataloader_iter = iter(self.prompts_dataloader)
+
+        if self.args.vllm_enable_sleep:
+            batch_vllm_engine_call(self.vllm_engines, "wake_up")
+
+        state = self._get_fully_async_state()
+        target_pending_prompts = max_pending_prompts or self.args.rollout_batch_size
+
+        while not state.ready_prompt_groups:
+            self._top_up_fully_async_requests(state, target_pending_prompts, **generate_kwargs)
+
+            if state.ready_prompt_groups:
+                break
+
+            if state.input_exhausted and not state.pending_refs:
+                prompts_consumed = state.prompts_consumed_since_emit
+                state.prompts_consumed_since_emit = 0
+                if self.args.vllm_enable_sleep:
+                    batch_vllm_engine_call(self.vllm_engines, "sleep")
+                self._reset_fully_async_state()
+                return None, prompts_consumed, True
+
+            ready_refs, state.pending_refs = ray.wait(state.pending_refs, num_returns=1, timeout=10.0)
+            if not ready_refs:
+                continue
+
+            for ref in ready_refs:
+                self._consume_fully_async_ref(ref, state, **generate_kwargs)
+
+        prompt_group = state.ready_prompt_groups.popleft()
+        prompts_consumed = state.prompts_consumed_since_emit
+        state.prompts_consumed_since_emit = 0
+        exhausted = state.input_exhausted and not state.pending_refs and not state.ready_prompt_groups
+        if exhausted:
+            if self.args.vllm_enable_sleep:
+                batch_vllm_engine_call(self.vllm_engines, "sleep")
+            self._reset_fully_async_state()
+
+        return prompt_group, prompts_consumed, exhausted
+
+    def _get_fully_async_state(self) -> FullyAsyncGenerationState:
+        if getattr(self, "_fully_async_state", None) is None:
+            self._fully_async_state = FullyAsyncGenerationState()
+        return self._fully_async_state
+
+    def _reset_fully_async_state(self) -> None:
+        self._fully_async_state = None
+        self._dataloader_iter = None
+
+    def _top_up_fully_async_requests(
+        self,
+        state: FullyAsyncGenerationState,
+        target_pending_prompts: int,
+        **generate_kwargs,
+    ) -> None:
+        while not state.input_exhausted and len(state.pending_refs) < target_pending_prompts:
+            prompts, labels, exhausted = _collect_prompt_batch(self._dataloader_iter, 1)
+            if prompts:
+                state.pending_refs.extend(self._dispatch_prompts_to_vllm(prompts, labels, **generate_kwargs))
+                state.prompts_consumed_since_emit += len(prompts)
+            if exhausted:
+                state.input_exhausted = True
+                break
+
+    def _dispatch_filtered_replacement(
+        self,
+        state: FullyAsyncGenerationState,
+        **generate_kwargs,
+    ) -> None:
+        if state.input_exhausted:
+            return
+
+        prompts, labels, exhausted = _collect_prompt_batch(self._dataloader_iter, 1)
+        if prompts:
+            state.pending_refs.extend(self._dispatch_prompts_to_vllm(prompts, labels, **generate_kwargs))
+            state.prompts_consumed_since_emit += len(prompts)
+        if exhausted:
+            state.input_exhausted = True
+
+    def _consume_fully_async_ref(
+        self,
+        ref,
+        state: FullyAsyncGenerationState,
+        **generate_kwargs,
+    ) -> None:
+        prompt_group = [
+            self._process_response_into_experience(response, **generate_kwargs) for response in ray.get(ref)
+        ]
+
+        if self.args.dynamic_filtering and all(experience.scores is not None for experience in prompt_group):
+            scores = [experience.scores[0].item() for experience in prompt_group]
+            average_reward = sum(scores) / len(scores)
+            min_reward, max_reward = self.args.dynamic_filtering_reward_range
+            if not (min_reward < average_reward < max_reward):
+                logger.info(
+                    "Filtered out: avg_reward=%.2f, threshold=(%.2f, %.2f), scores=%s",
+                    average_reward,
+                    min_reward,
+                    max_reward,
+                    [f"{score:.2f}" for score in scores],
+                )
+                self._dispatch_filtered_replacement(state, **generate_kwargs)
+                return
+
+        state.ready_prompt_groups.append(prompt_group)
+
+    def _cannot_finish_fully_async_batch(
+        self,
+        state: FullyAsyncGenerationState,
+        target_num_prompts: int,
+    ) -> bool:
+        if not state.input_exhausted:
+            return False
+        return len(state.ready_prompt_groups) + len(state.pending_refs) < target_num_prompts
 
     def _generate_vllm(
         self, dataloader_iter, num_prompts: int, dynamic_filtering, **generate_kwargs
@@ -248,16 +445,12 @@ class SamplesGenerator:
 
         # Base rollout fields from the output.
         tokenized_observation = response["observation_tokens"].copy()
-        tokenized_ranges = response["action_ranges"]
         reward_val = response.get("reward", None)
         score_val = response.get("scores", None)
 
         sequences = torch.tensor(tokenized_observation, dtype=torch.long)
         attention_mask = torch.ones(len(tokenized_observation), dtype=torch.long)
-        # Mark the action span within the concatenated tokens.
-        action_mask = torch.zeros_like(attention_mask)
-        for start, end in tokenized_ranges:
-            action_mask[start:end] = 1
+        action_mask, response_length = _build_action_mask_from_response(response, attention_mask, truncate_length)
 
         # Truncate everything to the configured context window.
         sequences = sequences[:truncate_length].to("cpu")
@@ -271,8 +464,6 @@ class SamplesGenerator:
             rollout_log_probs = None
 
         # Collect simple stats about lengths and clipping.
-        ones_indices = torch.where(action_mask)[0]
-        response_length = (ones_indices[-1] - ones_indices[0] + 1).item() if len(ones_indices) else 0
         total_length = attention_mask.float().sum()
         is_clipped = total_length >= truncate_length
 
@@ -286,6 +477,15 @@ class SamplesGenerator:
             info["reward"] = torch.tensor([reward_val])
         if score_val is not None:
             info["score"] = torch.tensor([score_val])
+        min_weight_version = response.get("min_weight_version")
+        max_weight_version = response.get("max_weight_version")
+        partial_old_token_count = response.get("partial_old_token_count")
+        if min_weight_version is not None:
+            info["min_weight_version"] = torch.tensor([min_weight_version])
+        if max_weight_version is not None:
+            info["max_weight_version"] = torch.tensor([max_weight_version])
+        if partial_old_token_count is not None:
+            info["partial_old_token_count"] = torch.tensor([partial_old_token_count])
 
         # Convert extra logs to tensors for downstream consumers.
         extra_logs = response.get("extra_logs", {})

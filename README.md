@@ -650,7 +650,8 @@ ray job submit --address="http://127.0.0.1:8265" \
 **Async Pipeline** (for higher throughput):
 - Enable: `--async_train`
 - Buffer size: `--async_queue_size 1` (larger = more off-policy, default 1)
-- Partial rollout: `--partial_rollout` — uses vLLM pause/resume for weight sync instead of locking, allowing generation to overlap with training. In-flight samples may contain tokens from both old and new weights.
+了- Partial rollout: `--partial_rollout` — uses vLLM pause/resume for weight sync instead of locking, and keeps rollout requests continuously in flight so generation can overlap with training. In-flight samples may contain tokens from both old and new weights.
+- Mask old partial tokens: `--mask_offpolicy_in_partial_rollout` — when partial rollout spans multiple synced versions, only the newest-version tokens in each trajectory contribute to PPO loss.
 
 **Training Modes**:
 - **Synchronous**: Default, better stability
@@ -722,7 +723,7 @@ Optimize OpenRLHF for your hardware and workload with these recommendations:
 |--------------|------|-------------|
 | **Hybrid Engine** | `--colocate_all_models`<br>`--vllm_enable_sleep`<br>`--deepspeed_enable_sleep` | Sufficient GPU memory |
 | **Async Training** | `--async_train` | Convergence validated, need throughput |
-| **Partial Rollout** | `--partial_rollout` | Async mode, maximize generation/training overlap |
+| **Partial Rollout** | `--partial_rollout`<br>`--mask_offpolicy_in_partial_rollout` | Async mode, fully async rollout/training overlap with optional old-token masking |
 | **Sample Packing** | `--packing_samples` | Always (especially training) |
 | **DeepCompile** | `--deepcompile` | PyTorch 2.0+ |
 | **Overlap Comm** | `--overlap_comm` | Sufficient GPU memory |

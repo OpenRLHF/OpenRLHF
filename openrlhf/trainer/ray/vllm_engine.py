@@ -57,7 +57,10 @@ class LLMRayActor:
         else:
             self.executor = SingleTurnAgentExecutor(remote_rm_url)
 
+        self.partial_rollout = kwargs.pop("partial_rollout", False)
+        self.mask_offpolicy_in_partial_rollout = kwargs.pop("mask_offpolicy_in_partial_rollout", False)
         self.kwargs = kwargs
+        self.weight_version = 0
 
         engine_args = vllm.AsyncEngineArgs(*args, **self.kwargs)
         self.llm = vllm.AsyncLLMEngine.from_engine_args(engine_args)
@@ -124,8 +127,14 @@ class LLMRayActor:
     async def reset_prefix_cache(self):
         await self.llm.reset_prefix_cache()
 
-    async def pause_generation(self):
-        await self.llm.pause_generation(mode="keep")
+    def get_weight_version(self) -> int:
+        return self.weight_version
+
+    async def set_weight_version(self, weight_version: int):
+        self.weight_version = weight_version
+
+    async def pause_generation(self, mode="keep"):
+        await self.llm.pause_generation(mode=mode)
 
     async def resume_generation(self):
         await self.llm.resume_generation()
@@ -150,7 +159,6 @@ class LLMRayActor:
         prompt = TokensPrompt(prompt_token_ids=prompt_token_ids)
         if multi_modal_data:
             prompt["multi_modal_data"] = multi_modal_data
-
         generator = self.llm.generate(
             prompt,
             deepcopy(sampling_params),
@@ -209,6 +217,8 @@ def create_vllm_engines(
     agent_func_path: Optional[str] = None,
     remote_rm_url: Optional[str] = None,
     max_images_per_prompt: int = 0,
+    partial_rollout: bool = False,
+    mask_offpolicy_in_partial_rollout: bool = False,
 ):
     """Spin up a set of vLLM Ray actors with consistent placement."""
     vllm_engines = []
@@ -258,6 +268,8 @@ def create_vllm_engines(
             {
                 "agent_func_path": agent_func_path,
                 "remote_rm_url": remote_rm_url,
+                "partial_rollout": partial_rollout,
+                "mask_offpolicy_in_partial_rollout": mask_offpolicy_in_partial_rollout,
             }
         )
 

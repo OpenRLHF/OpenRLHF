@@ -79,6 +79,8 @@ def train(args):
             agent_func_path=args.agent_func_path,
             remote_rm_url=args.remote_rm_url,
             max_images_per_prompt=getattr(args, "max_images_per_prompt", 0),
+            partial_rollout=args.partial_rollout,
+            mask_offpolicy_in_partial_rollout=args.mask_offpolicy_in_partial_rollout,
         )
 
     actor_model = RayActorGroup(
@@ -275,9 +277,42 @@ if __name__ == "__main__":
         "--partial_rollout",
         action="store_true",
         default=False,
-        help="Enable partial rollout in async mode. Uses vLLM pause/resume for weight sync "
-        "instead of locking, allowing generation to overlap with training. "
+        help="Enable fully async partial rollout in async mode. Uses vLLM pause/resume for weight sync "
+        "and keeps rollout requests continuously in flight, allowing generation to overlap with training. "
         "In-flight samples may contain tokens from both old and new weights.",
+    )
+    parser.add_argument(
+        "--mask_offpolicy_in_partial_rollout",
+        action="store_true",
+        default=False,
+        help="Mask response tokens generated under older rollout weights when a sample spans multiple synced versions. "
+        "When enabled, only tokens from the newest weight version in each trajectory contribute to PPO loss.",
+    )
+    parser.add_argument(
+        "--staleness_threshold",
+        type=float,
+        default=0.0,
+        help="Freshness control for async training (ref: verl fully_async_policy). "
+        "0 = synchronous (generator pauses after producing exactly enough samples). "
+        ">0 = async (generator may produce up to (1+threshold)*sync_step*batch extra stale samples). "
+        "Recommended value: 0.3~0.5 for good speed/accuracy trade-off.",
+    )
+    parser.add_argument(
+        "--trigger_parameter_sync_step",
+        type=int,
+        default=1,
+        help="Number of local PPO training steps before syncing weights to vLLM (ref: verl fully_async_policy). "
+        "1 = sync every step (default, same as original behavior). "
+        ">1 = multi-step local training, reduces sync overhead but increases off-policy degree. "
+        "For fair comparison with sync training: set to train_batch_size / rollout_batch_size.",
+    )
+    parser.add_argument(
+        "--async_streaming",
+        action="store_true",
+        default=False,
+        help="Enable streaming sample-level generation in async mode (ref: verl fully_async_policy). "
+        "When enabled, samples are generated one-by-one and enqueued as soon as ready, "
+        "reducing long-tail latency compared to batch-level generation.",
     )
 
     # Checkpoints
@@ -615,6 +650,21 @@ if __name__ == "__main__":
 
     if args.partial_rollout:
         assert args.async_train, "--partial_rollout requires --async_train."
+
+    if args.mask_offpolicy_in_partial_rollout:
+        assert args.partial_rollout, "--mask_offpolicy_in_partial_rollout requires --partial_rollout."
+
+    if args.staleness_threshold > 0:
+        assert args.async_train, "--staleness_threshold > 0 requires --async_train."
+        assert args.staleness_threshold <= 2.0, (
+            f"--staleness_threshold={args.staleness_threshold} is too high. Recommended: 0.3~0.5, max: 2.0."
+        )
+
+    if args.trigger_parameter_sync_step > 1:
+        assert args.async_train, "--trigger_parameter_sync_step > 1 requires --async_train."
+
+    if args.async_streaming:
+        assert args.async_train, "--async_streaming requires --async_train."
 
     if args.eval_dataset:
         assert args.remote_rm_url, "`--eval_dataset` is only supported with `--remote_rm_url`."

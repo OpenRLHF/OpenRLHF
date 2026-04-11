@@ -649,6 +649,8 @@ ray job submit --address="http://127.0.0.1:8265" \
 **异步流水线**（提高吞吐量）：
 - 启用：`--async_train`
 - 缓冲区大小：`--async_queue_size 1`（越大 = 越多 off-policy，默认 1）
+- 部分 rollout：`--partial_rollout` — 使用 vLLM pause/resume 做权重同步，而不是整段加锁，并让 rollout 请求持续在飞，从而把生成和训练尽量重叠起来。飞行中的样本可能同时包含旧权重和新权重生成的 token。
+- 屏蔽旧 partial token：`--mask_offpolicy_in_partial_rollout` — 当一条轨迹跨越多个同步版本时，只让最新版本生成的 token 参与 PPO loss。
 
 **训练模式**：
 - **同步**：默认，更好的稳定性
@@ -706,6 +708,7 @@ python -m openrlhf.cli.lora_combiner \
 |------|------|---------|
 | **混合引擎** | `--colocate_all_models`<br>`--vllm_enable_sleep`<br>`--deepspeed_enable_sleep` | GPU 内存充足 |
 | **异步训练** | `--async_train` | 收敛已验证，需要吞吐量 |
+| **部分 Rollout** | `--partial_rollout`<br>`--mask_offpolicy_in_partial_rollout` | 异步模式，最大化全异步生成/训练重叠，并可选择屏蔽旧版本 token |
 | **样本打包** | `--packing_samples` | 始终（尤其是训练） |
 | **DeepCompile** | `--deepcompile` | PyTorch 2.0+ |
 | **重叠通信** | `--overlap_comm` | GPU 内存充足 |
