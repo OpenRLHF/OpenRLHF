@@ -116,6 +116,16 @@ class CriticPPOTrainer(ABC):
         action_mask = experience.action_mask
         packed_seq_lens = None
         attention_mask = experience.attention_mask
+        mm_inputs = {}
+        if (
+            hasattr(experience, "mm_train_inputs")
+            and experience.mm_train_inputs
+            and getattr(self.critic, "config", None) is not None
+            and hasattr(self.critic.config, "vision_config")
+        ):
+            from openrlhf.utils.vlm_utils import merge_mm_train_inputs
+
+            mm_inputs = merge_mm_train_inputs(experience.mm_train_inputs, sequences.device)
 
         # critic loss
         values, output = self.critic(
@@ -126,6 +136,7 @@ class CriticPPOTrainer(ABC):
             ring_attn_group=self.strategy.ring_attn_group,
             values_allgather=True,
             packed_seq_lens=packed_seq_lens,
+            multi_modal_inputs=mm_inputs or None,
         )
 
         # loss function
@@ -245,9 +256,15 @@ class CriticModelActor(BaseModelActor):
         action_mask: Optional[Union[int, list[int]]] = None,
         attention_mask: Optional[torch.Tensor] = None,
         packed_seq_lens=None,
+        mm_train_inputs_list=None,
     ) -> torch.Tensor:
         """Generates critic values."""
         device = torch.cuda.current_device()
+        mm_inputs = {}
+        if mm_train_inputs_list and getattr(self.critic, "config", None) is not None and hasattr(self.critic.config, "vision_config"):
+            from openrlhf.utils.vlm_utils import merge_mm_train_inputs
+
+            mm_inputs = merge_mm_train_inputs(mm_train_inputs_list, device)
         self.critic.eval()
         with torch.no_grad():
             value = self.critic(
@@ -256,6 +273,7 @@ class CriticModelActor(BaseModelActor):
                 attention_mask.to(device),
                 ring_attn_group=self.strategy.ring_attn_group,
                 values_allgather=True,
+                multi_modal_inputs=mm_inputs or None,
             )
         self.critic.train()  # reset model state
         return value.to("cpu")

@@ -54,7 +54,7 @@ class _FakeLLMEngine:
     def get_weight_version(self) -> int:
         return self._chunks[0]["version"] if self._chunks else self.weight_version
 
-    async def generate(self, prompt_token_ids, sampling_params):  # noqa: ARG002
+    async def generate(self, prompt_token_ids, sampling_params, multi_modal_data=None):  # noqa: ARG002
         self.observed_prompts.append(list(prompt_token_ids))
         chunk = self._chunks.pop(0)
         self.weight_version = chunk["version"]

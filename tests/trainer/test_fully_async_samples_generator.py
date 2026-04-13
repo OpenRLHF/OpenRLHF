@@ -134,19 +134,23 @@ def _build_samples_generator(module, prompts: list[str]):
     )
     generator.tokenizer = None
     generator.vllm_engines = []
-    generator.prompts_dataloader = [(None, [prompt], [f"label-{prompt}"]) for prompt in prompts]
+    generator.prompts_dataloader = [(None, [prompt], [f"label-{prompt}"], [None]) for prompt in prompts]
     generator.eval_dataloader = None
     return generator
 
 
 def _wire_fake_generation(module, generator, monkeypatch: pytest.MonkeyPatch):
     dispatched_prompts = []
+    dispatched_images = []
     ray_controller = _FakeRayController()
 
-    def fake_dispatch(prompts, labels, **generate_kwargs):  # noqa: ARG001
+    def fake_dispatch(prompts, labels, *, images=None, **generate_kwargs):  # noqa: ARG001
         refs = []
-        for prompt, label in zip(prompts, labels):
+        if images is None:
+            images = [None] * len(prompts)
+        for prompt, label, image in zip(prompts, labels, images):
             dispatched_prompts.append(prompt)
+            dispatched_images.append(image)
             refs.append(_FakeRef(prompt, label))
         return refs
 
@@ -159,14 +163,14 @@ def _wire_fake_generation(module, generator, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(generator, "_dispatch_prompts_to_vllm", fake_dispatch)
     monkeypatch.setattr(generator, "_process_response_into_experience", fake_process_response)
 
-    return dispatched_prompts, ray_controller
+    return dispatched_prompts, dispatched_images, ray_controller
 
 
 @pytest.mark.unit
 def test_generate_samples_fully_async_reuses_inflight_prompt_groups(monkeypatch: pytest.MonkeyPatch) -> None:
     module = _load_samples_generator_module()
     generator = _build_samples_generator(module, ["p0", "p1", "p2", "p3"])
-    dispatched_prompts, ray_controller = _wire_fake_generation(module, generator, monkeypatch)
+    dispatched_prompts, _dispatched_images, ray_controller = _wire_fake_generation(module, generator, monkeypatch)
 
     first_batch, first_filter_pass_rate, first_prompts_consumed, first_exhausted = (
         generator.generate_samples_fully_async()
@@ -193,7 +197,7 @@ def test_generate_samples_fully_async_reuses_inflight_prompt_groups(monkeypatch:
 def test_generate_samples_fully_async_returns_incomplete_tail(monkeypatch: pytest.MonkeyPatch) -> None:
     module = _load_samples_generator_module()
     generator = _build_samples_generator(module, ["p0", "p1", "p2"])
-    dispatched_prompts, ray_controller = _wire_fake_generation(module, generator, monkeypatch)
+    dispatched_prompts, _dispatched_images, ray_controller = _wire_fake_generation(module, generator, monkeypatch)
 
     first_batch, _, first_prompts_consumed, first_exhausted = generator.generate_samples_fully_async()
     tail_batch, tail_filter_pass_rate, tail_prompts_consumed, tail_exhausted = (
@@ -213,6 +217,29 @@ def test_generate_samples_fully_async_returns_incomplete_tail(monkeypatch: pytes
 
 
 @pytest.mark.unit
+def test_fully_async_path_preserves_images_when_dispatching(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_samples_generator_module()
+    generator = _build_samples_generator(module, ["p0", "p1"])
+    generator.prompts_dataloader = [
+        (None, ["p0"], ["label-p0"], [["img-0.png"]]),
+        (None, ["p1"], ["label-p1"], [["img-1.png"]]),
+    ]
+    dispatched_prompts, dispatched_images, _ray_controller = _wire_fake_generation(module, generator, monkeypatch)
+
+    first_group, consumed, exhausted = generator.stream_prompt_group_fully_async()
+    second_group, second_consumed, second_exhausted = generator.stream_prompt_group_fully_async()
+
+    assert [experience.prompts[0] for experience in first_group] == ["p0"]
+    assert [experience.prompts[0] for experience in second_group] == ["p1"]
+    assert consumed == 2
+    assert second_consumed == 0
+    assert exhausted is False
+    assert second_exhausted is True
+    assert dispatched_prompts == ["p0", "p1"]
+    assert dispatched_images == [["img-0.png"], ["img-1.png"]]
+
+
+@pytest.mark.unit
 def test_partial_rollout_path_uses_fully_async_generation_and_eval_pause_resume() -> None:
     module = ast.parse(PPO_TRAINER_ASYNC_PATH.read_text())
     source = PPO_TRAINER_ASYNC_PATH.read_text()
@@ -226,7 +253,7 @@ def test_partial_rollout_path_uses_fully_async_generation_and_eval_pause_resume(
         node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "GenerateSamplesActor"
     )
     fit_method = next(
-        node for node in generate_actor.body if isinstance(node, ast.FunctionDef) and node.name == "fit"
+        node for node in generate_actor.body if isinstance(node, ast.FunctionDef) and node.name == "_fit_body"
     )
     call_names = {
         child.func.attr

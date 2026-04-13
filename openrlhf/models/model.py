@@ -16,6 +16,35 @@ from .utils import set_z3_leaf_modules
 logger = init_logger(__name__)
 
 
+def _build_vlm_token_type_ids(input_ids: torch.LongTensor, config: AutoConfig) -> torch.Tensor:
+    """Reconstruct multimodal token types from a full token sequence."""
+    token_type_ids = (input_ids == config.image_token_id).to(torch.int32)
+    video_token_id = getattr(config, "video_token_id", None)
+    if video_token_id is not None:
+        token_type_ids[input_ids == video_token_id] = 2
+    return token_type_ids
+
+
+def _prepare_regression_model_kwargs(
+    *,
+    input_ids: torch.LongTensor,
+    attention_mask: Optional[torch.Tensor],
+    position_ids: torch.LongTensor,
+    config: AutoConfig,
+    multi_modal_inputs: Optional[dict] = None,
+) -> dict:
+    """Build base-model kwargs for reward/critic forwards, including VLM inputs."""
+    model_kwargs = {"attention_mask": attention_mask}
+    if multi_modal_inputs and hasattr(config, "vision_config"):
+        mm_inputs = dict(multi_modal_inputs)
+        key = "mm_token_type_ids" if ("image_grid_thw" in mm_inputs or "video_grid_thw" in mm_inputs) else "token_type_ids"
+        mm_inputs[key] = _build_vlm_token_type_ids(input_ids, config)
+        model_kwargs.update(mm_inputs)
+    else:
+        model_kwargs["position_ids"] = position_ids
+    return model_kwargs
+
+
 # Construct transformer with a value head for sequence classification.
 # https://github.com/huggingface/transformers/blob/405b56269812056d9593869e22b7b264d806cb1e/src/transformers/models/llama/modeling_llama.py#L1254
 def get_llm_for_sequence_regression(
@@ -197,6 +226,7 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             ring_attn_group=None,
             pad_sequence=False,
             packed_seq_lens=None,
+            multi_modal_inputs: Optional[dict] = None,
         ) -> torch.Tensor:
             batch, seqlen = input_ids.size()
             eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
@@ -211,9 +241,14 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 position_ids = attention_mask.long().cumsum(-1) - 1
                 position_ids.masked_fill_(attention_mask == 0, 1)
 
-            outputs = getattr(self, self.base_model_prefix)(
-                input_ids, attention_mask=forward_attention_mask, position_ids=position_ids
+            model_kwargs = _prepare_regression_model_kwargs(
+                input_ids=input_ids,
+                attention_mask=forward_attention_mask,
+                position_ids=position_ids,
+                config=self.config,
+                multi_modal_inputs=multi_modal_inputs,
             )
+            outputs = getattr(self, self.base_model_prefix)(input_ids, **model_kwargs)
             last_hidden_states = outputs["last_hidden_state"]
 
             values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
@@ -266,6 +301,7 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             ring_attn_group=None,
             values_allgather=False,
             packed_seq_lens=None,
+            multi_modal_inputs: Optional[dict] = None,
         ) -> torch.Tensor:
             batch, seqlen = input_ids.size()
             forward_attention_mask = attention_mask
@@ -279,9 +315,14 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
                 position_ids = attention_mask.long().cumsum(-1) - 1
                 position_ids.masked_fill_(attention_mask == 0, 1)
 
-            outputs = getattr(self, self.base_model_prefix)(
-                input_ids, attention_mask=forward_attention_mask, position_ids=position_ids
+            model_kwargs = _prepare_regression_model_kwargs(
+                input_ids=input_ids,
+                attention_mask=forward_attention_mask,
+                position_ids=position_ids,
+                config=self.config,
+                multi_modal_inputs=multi_modal_inputs,
             )
+            outputs = getattr(self, self.base_model_prefix)(input_ids, **model_kwargs)
 
             if action_mask is None:
                 assert return_output

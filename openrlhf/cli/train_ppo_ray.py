@@ -592,12 +592,8 @@ if __name__ == "__main__":
     if args.advantage_estimator in ["rloo", "reinforce_baseline", "group_norm"]:
         assert args.n_samples_per_prompt > 1, f"{args.advantage_estimator} requires n_samples_per_prompt > 1"
 
-    # VLM constraints: critic and packing_samples are not supported
+    # VLM constraints: packing_samples is not supported
     if args.max_images_per_prompt > 0:
-        assert args.critic_pretrain is None, (
-            "VLM training does not support critic model. "
-            "Use --advantage_estimator other than 'gae' (e.g., reinforce_baseline, rloo, group_norm)."
-        )
         assert not args.packing_samples, (
             "VLM training does not support --packing_samples. "
             "Packing collapses the batch dimension, breaking alignment between image tokens and pixel_values. "

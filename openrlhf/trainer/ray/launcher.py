@@ -184,8 +184,14 @@ class RewardModelActor(BaseModelActor):
         attention_mask: Optional[torch.Tensor] = None,
         packed_seq_lens=None,
         pad_sequence=False,
+        mm_train_inputs_list=None,
     ) -> torch.Tensor:
         device = torch.cuda.current_device()
+        mm_inputs = {}
+        if mm_train_inputs_list and getattr(self.model, "config", None) is not None and hasattr(self.model.config, "vision_config"):
+            from openrlhf.utils.vlm_utils import merge_mm_train_inputs
+
+            mm_inputs = merge_mm_train_inputs(mm_train_inputs_list, device)
         with torch.no_grad():
             reward = self.model(
                 sequences.to(device),
@@ -193,6 +199,7 @@ class RewardModelActor(BaseModelActor):
                 ring_attn_group=self.strategy.ring_attn_group,
                 pad_sequence=True,
                 packed_seq_lens=packed_seq_lens,
+                multi_modal_inputs=mm_inputs or None,
             )
         return reward.to("cpu")
 

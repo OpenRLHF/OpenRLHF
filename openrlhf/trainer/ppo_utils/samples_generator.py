@@ -273,9 +273,11 @@ class SamplesGenerator:
         **generate_kwargs,
     ) -> None:
         while not state.input_exhausted and len(state.pending_refs) < target_pending_prompts:
-            prompts, labels, exhausted = _collect_prompt_batch(self._dataloader_iter, 1)
+            prompts, labels, images, exhausted = _collect_prompt_batch(self._dataloader_iter, 1)
             if prompts:
-                state.pending_refs.extend(self._dispatch_prompts_to_vllm(prompts, labels, **generate_kwargs))
+                state.pending_refs.extend(
+                    self._dispatch_prompts_to_vllm(prompts, labels, images=images, **generate_kwargs)
+                )
                 state.prompts_consumed_since_emit += len(prompts)
             if exhausted:
                 state.input_exhausted = True
@@ -289,9 +291,11 @@ class SamplesGenerator:
         if state.input_exhausted:
             return
 
-        prompts, labels, exhausted = _collect_prompt_batch(self._dataloader_iter, 1)
+        prompts, labels, images, exhausted = _collect_prompt_batch(self._dataloader_iter, 1)
         if prompts:
-            state.pending_refs.extend(self._dispatch_prompts_to_vllm(prompts, labels, **generate_kwargs))
+            state.pending_refs.extend(
+                self._dispatch_prompts_to_vllm(prompts, labels, images=images, **generate_kwargs)
+            )
             state.prompts_consumed_since_emit += len(prompts)
         if exhausted:
             state.input_exhausted = True
