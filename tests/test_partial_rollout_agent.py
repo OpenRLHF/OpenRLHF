@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 import logging
-from pathlib import Path
 import sys
-from types import SimpleNamespace
 import types
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch

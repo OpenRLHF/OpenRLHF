@@ -39,7 +39,9 @@ def _collect_prompt_batch(dataloader_iter, num_prompts: int):
     return prompts, labels, images, exhausted
 
 
-def _build_action_mask_from_response(response, attention_mask: torch.Tensor, truncate_length: int) -> tuple[torch.Tensor, int]:
+def _build_action_mask_from_response(
+    response, attention_mask: torch.Tensor, truncate_length: int
+) -> tuple[torch.Tensor, int]:
     """Build the per-token PPO loss mask and count generated action tokens."""
     action_ranges = response["action_ranges"]
     action_loss_mask = response.get("action_loss_mask")

@@ -37,7 +37,11 @@ def _prepare_regression_model_kwargs(
     model_kwargs = {"attention_mask": attention_mask}
     if multi_modal_inputs and hasattr(config, "vision_config"):
         mm_inputs = dict(multi_modal_inputs)
-        key = "mm_token_type_ids" if ("image_grid_thw" in mm_inputs or "video_grid_thw" in mm_inputs) else "token_type_ids"
+        key = (
+            "mm_token_type_ids"
+            if ("image_grid_thw" in mm_inputs or "video_grid_thw" in mm_inputs)
+            else "token_type_ids"
+        )
         mm_inputs[key] = _build_vlm_token_type_ids(input_ids, config)
         model_kwargs.update(mm_inputs)
     else:

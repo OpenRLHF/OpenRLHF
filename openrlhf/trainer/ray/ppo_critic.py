@@ -261,7 +261,11 @@ class CriticModelActor(BaseModelActor):
         """Generates critic values."""
         device = torch.cuda.current_device()
         mm_inputs = {}
-        if mm_train_inputs_list and getattr(self.critic, "config", None) is not None and hasattr(self.critic.config, "vision_config"):
+        if (
+            mm_train_inputs_list
+            and getattr(self.critic, "config", None) is not None
+            and hasattr(self.critic.config, "vision_config")
+        ):
             from openrlhf.utils.vlm_utils import merge_mm_train_inputs
 
             mm_inputs = merge_mm_train_inputs(mm_train_inputs_list, device)

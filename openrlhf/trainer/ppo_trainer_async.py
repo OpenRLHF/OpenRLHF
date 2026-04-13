@@ -173,9 +173,7 @@ class GenerateSamplesActor:
         self._staleness_samples = 0
         self._required_samples = self.args.rollout_batch_size
         self._max_staleness_samples = int(
-            self._required_samples
-            * (self._staleness_threshold + 1)
-            * self._trigger_parameter_sync_step
+            self._required_samples * (self._staleness_threshold + 1) * self._trigger_parameter_sync_step
         )
 
         # threading.Condition 用于 staleness 暂停/恢复，
@@ -426,8 +424,8 @@ class GenerateSamplesActor:
                     ray.get(self.vllm_lock.acquire.remote())
                 try:
                     t0 = time.time()
-                    prompt_group, prompts_consumed, is_exhausted = self.samples_generator.stream_prompt_group_fully_async(
-                        **self.generate_kwargs
+                    prompt_group, prompts_consumed, is_exhausted = (
+                        self.samples_generator.stream_prompt_group_fully_async(**self.generate_kwargs)
                     )
                     generation_time = time.time() - t0
                     total_consumed_prompts += prompts_consumed
@@ -445,7 +443,14 @@ class GenerateSamplesActor:
                         "data_loader_state_dict": self.prompts_dataloader.state_dict(),
                     }
                     self.rollout_queue.put(
-                        ("sample", prompt_group, client_states, generation_time, self._current_param_version, prompts_consumed),
+                        (
+                            "sample",
+                            prompt_group,
+                            client_states,
+                            generation_time,
+                            self._current_param_version,
+                            prompts_consumed,
+                        ),
                         block=True,
                     )
                     if prompts_consumed:
@@ -513,9 +518,7 @@ class TrainingActor(BasePPOTrainer):
         # 聚合指标
         self._metrics_aggregator = defaultdict(list)
 
-        logger.info(
-            f"[TrainingActor] trigger_parameter_sync_step={self._trigger_parameter_sync_step}"
-        )
+        logger.info(f"[TrainingActor] trigger_parameter_sync_step={self._trigger_parameter_sync_step}")
 
     def _publish_global_step(self, global_step: int) -> None:
         """Publish the latest global_step to the generator via rollout_slots.
@@ -676,7 +679,9 @@ class TrainingActor(BasePPOTrainer):
             if not should_train:
                 payload = self.rollout_queue.get(block=True)
                 is_done, eval_handled = self._process_queue_payload(
-                    payload, buffered_prompt_groups, global_step,
+                    payload,
+                    buffered_prompt_groups,
+                    global_step,
                 )
                 if is_done:
                     stream_exhausted = True
@@ -694,7 +699,9 @@ class TrainingActor(BasePPOTrainer):
                 except Empty:
                     break
                 is_done, eval_handled = self._process_queue_payload(
-                    payload, buffered_prompt_groups, global_step,
+                    payload,
+                    buffered_prompt_groups,
+                    global_step,
                 )
                 if is_done:
                     stream_exhausted = True
@@ -761,6 +768,7 @@ class TrainingActor(BasePPOTrainer):
         而不是每个 train_step 都同步一次。这是参考 verl FullyAsyncTrainer 的核心优化。
         """
         import transformers
+
         _TRANSFORMERS_V5 = int(transformers.__version__.split(".")[0]) >= 5
 
         from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
@@ -850,9 +858,7 @@ class TrainingActor(BasePPOTrainer):
 
         # 通知 Generator 重置 staleness（参考 verl 的 reset_staleness）
         if self.generator_actor is not None:
-            rollouter_timing = ray.get(
-                self.generator_actor.reset_staleness.remote(self._current_param_version + 1)
-            )
+            rollouter_timing = ray.get(self.generator_actor.reset_staleness.remote(self._current_param_version + 1))
             # 将 rollouter 的 timing 信息记录到 aggregator
             for k, v in rollouter_timing.items():
                 self._metrics_aggregator[k].append(v)
@@ -1043,7 +1049,9 @@ class PPOTrainerAsync:
         start_episode = checkpoint_states["episode"]
         global_step = checkpoint_states["global_step"]
         total_consumed_prompts = checkpoint_states.get("total_consumed_prompts", 0)
-        resume_param_version = _compute_resume_param_version(global_step, self.strategy.args.trigger_parameter_sync_step)
+        resume_param_version = _compute_resume_param_version(
+            global_step, self.strategy.args.trigger_parameter_sync_step
+        )
         ray.get(
             [
                 self.trainer_actor.restore_async_state.remote(global_step, synced_weights=global_step > 0),
@@ -1062,7 +1070,8 @@ class PPOTrainerAsync:
 
         # 启动异步训练（ray.wait 模式：任一 Actor 崩溃即终止对端，防止死锁）
         generator_future = self.generator_actor.fit.remote(
-            start_episode=start_episode, total_consumed_prompts=total_consumed_prompts,
+            start_episode=start_episode,
+            total_consumed_prompts=total_consumed_prompts,
         )
         trainer_future = self.trainer_actor.fit.remote(global_step=global_step)
 

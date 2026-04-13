@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import importlib.util
 import logging
-from types import SimpleNamespace
-from pathlib import Path
 import sys
 import types
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 import torch
-from unittest.mock import patch
 
 PROJECT_ROOT = next(path for path in Path(__file__).resolve().parents if (path / "pyproject.toml").exists())
 EXPERIENCE_PATH = PROJECT_ROOT / "openrlhf/trainer/ppo_utils/experience.py"
@@ -32,8 +32,14 @@ def _load_experience_maker_module():
 
     models_utils_module = types.ModuleType("openrlhf.models.utils")
     models_utils_module.compute_approx_kl = lambda a, b, kl_estimator=None: a - b  # noqa: ARG005
-    models_utils_module.compute_reward = lambda reward, kl_ctl, kl, action_mask=None, reward_clip_range=None: reward  # noqa: ARG005
-    models_utils_module.masked_mean = lambda value, mask, dim=-1: (value * mask).sum(dim=dim) / mask.sum(dim=dim).clamp_min(1)  # noqa: ARG005
+    models_utils_module.compute_reward = (
+        lambda reward, kl_ctl, kl, action_mask=None, reward_clip_range=None: reward
+    )  # noqa: ARG005
+    models_utils_module.masked_mean = lambda value, mask, dim=-1: (value * mask).sum(dim=dim) / mask.sum(
+        dim=dim
+    ).clamp_min(
+        1
+    )  # noqa: ARG005
 
     length_penalty_module = types.ModuleType("openrlhf.trainer.ppo_utils.length_penalty")
     length_penalty_module.apply_length_penalties = lambda *args, **kwargs: None
@@ -46,7 +52,9 @@ def _load_experience_maker_module():
     seqlen_balancing_module.get_seqlen_balanced_partitions = lambda *args, **kwargs: []
 
     utils_module = types.ModuleType("openrlhf.utils.utils")
-    utils_module.zero_pad_sequences = lambda items, side="left", value=0, stack=False: torch.stack(items) if stack else torch.cat(items)  # noqa: ARG005
+    utils_module.zero_pad_sequences = lambda items, side="left", value=0, stack=False: (
+        torch.stack(items) if stack else torch.cat(items)
+    )  # noqa: ARG005
 
     stub_modules = {
         "openrlhf.trainer.ray.launcher": launcher_module,

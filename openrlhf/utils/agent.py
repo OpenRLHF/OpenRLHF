@@ -213,7 +213,9 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             if done:
                 break
 
-        max_weight_version = max(action_token_weight_versions) if action_token_weight_versions else llm_engine.get_weight_version()
+        max_weight_version = (
+            max(action_token_weight_versions) if action_token_weight_versions else llm_engine.get_weight_version()
+        )
         min_weight_version = min(action_token_weight_versions) if action_token_weight_versions else max_weight_version
         mask_offpolicy = getattr(llm_engine, "mask_offpolicy_in_partial_rollout", False)
         action_loss_mask = [
@@ -308,7 +310,9 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
         # Check if response was truncated (hit max_tokens length limit)
         is_truncated = generation_output["finish_reason"] == "length"
         action_token_weight_versions = generation_output["token_weight_versions"]
-        max_weight_version = max(action_token_weight_versions) if action_token_weight_versions else llm_engine.get_weight_version()
+        max_weight_version = (
+            max(action_token_weight_versions) if action_token_weight_versions else llm_engine.get_weight_version()
+        )
         min_weight_version = min(action_token_weight_versions) if action_token_weight_versions else max_weight_version
         mask_offpolicy = getattr(llm_engine, "mask_offpolicy_in_partial_rollout", False)
         action_loss_mask = [

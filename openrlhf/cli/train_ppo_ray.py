@@ -652,9 +652,9 @@ if __name__ == "__main__":
 
     if args.staleness_threshold > 0:
         assert args.async_train, "--staleness_threshold > 0 requires --async_train."
-        assert args.staleness_threshold <= 2.0, (
-            f"--staleness_threshold={args.staleness_threshold} is too high. Recommended: 0.3~0.5, max: 2.0."
-        )
+        assert (
+            args.staleness_threshold <= 2.0
+        ), f"--staleness_threshold={args.staleness_threshold} is too high. Recommended: 0.3~0.5, max: 2.0."
 
     if args.trigger_parameter_sync_step > 1:
         assert args.async_train, "--trigger_parameter_sync_step > 1 requires --async_train."

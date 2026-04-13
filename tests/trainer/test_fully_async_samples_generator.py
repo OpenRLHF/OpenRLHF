@@ -200,9 +200,7 @@ def test_generate_samples_fully_async_returns_incomplete_tail(monkeypatch: pytes
     dispatched_prompts, _dispatched_images, ray_controller = _wire_fake_generation(module, generator, monkeypatch)
 
     first_batch, _, first_prompts_consumed, first_exhausted = generator.generate_samples_fully_async()
-    tail_batch, tail_filter_pass_rate, tail_prompts_consumed, tail_exhausted = (
-        generator.generate_samples_fully_async()
-    )
+    tail_batch, tail_filter_pass_rate, tail_prompts_consumed, tail_exhausted = generator.generate_samples_fully_async()
 
     assert [experience.prompts[0] for experience in first_batch] == ["p0", "p1"]
     assert first_prompts_consumed == 3
