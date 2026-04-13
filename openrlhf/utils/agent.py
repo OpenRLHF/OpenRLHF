@@ -7,6 +7,84 @@ import aiohttp
 from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
+ABORT_FINISH_REASONS = {"abort", "aborted"}
+
+
+def _extract_action_log_probs(generation_output):
+    if generation_output.logprobs is None:
+        return None
+
+    action_log_probs = []
+    for token_id, logprob_dict in zip(generation_output.token_ids, generation_output.logprobs, strict=False):
+        token_logprob = logprob_dict.get(token_id)
+        action_log_probs.append(token_logprob.logprob if token_logprob is not None else 0.0)
+    return action_log_probs
+
+
+async def _generate_action_with_partial_rollout(
+    *,
+    prompt_token_ids,
+    sampling_params,
+    max_length: int,
+    hf_tokenizer,
+    llm_engine,
+    multi_modal_data=None,
+):
+    """Generate one model action, optionally resuming after aborts."""
+    partial_rollout = getattr(llm_engine, "partial_rollout", False)
+    original_max_tokens = getattr(sampling_params, "max_tokens", None)
+    if original_max_tokens is None:
+        original_max_tokens = max(1, max_length - len(prompt_token_ids))
+
+    action_token_ids = []
+    action_token_weight_versions = []
+    action_log_probs = [] if getattr(sampling_params, "logprobs", None) is not None else None
+    finish_reason = None
+
+    while True:
+        remaining_tokens = original_max_tokens - len(action_token_ids)
+        if remaining_tokens <= 0:
+            finish_reason = "length"
+            break
+
+        next_sampling_params = deepcopy(sampling_params)
+        next_sampling_params.max_tokens = remaining_tokens
+        chunk_weight_version = llm_engine.get_weight_version()
+        request_output = await llm_engine.generate(
+            prompt_token_ids + action_token_ids,
+            next_sampling_params,
+            multi_modal_data=multi_modal_data,
+        )
+
+        generation_output = request_output.outputs[0] if request_output.outputs else None
+        if generation_output is None:
+            finish_reason = None
+            if partial_rollout:
+                continue
+            break
+
+        chunk_token_ids = generation_output.token_ids
+        finish_reason = generation_output.finish_reason
+
+        if chunk_token_ids:
+            action_token_ids.extend(chunk_token_ids)
+            action_token_weight_versions.extend([chunk_weight_version] * len(chunk_token_ids))
+            if action_log_probs is not None:
+                chunk_log_probs = _extract_action_log_probs(generation_output)
+                if chunk_log_probs is None:
+                    chunk_log_probs = [0.0] * len(chunk_token_ids)
+                action_log_probs.extend(chunk_log_probs)
+
+        if finish_reason not in ABORT_FINISH_REASONS or not partial_rollout:
+            break
+
+    return {
+        "token_ids": action_token_ids,
+        "text": hf_tokenizer.decode(action_token_ids, skip_special_tokens=False),
+        "log_probs": action_log_probs,
+        "finish_reason": finish_reason,
+        "token_weight_versions": action_token_weight_versions,
+    }
 
 
 class AgentExecutorBase(ABC):
@@ -64,6 +142,7 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
         total_reward = 0
         final_scores = 0
         extra_logs = {}
+        action_token_weight_versions = []
 
         if sampling_params.logprobs is not None:
             rollout_log_probs = [0.0] * len(current_obs_tokens)
@@ -78,10 +157,18 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             if sampling_params.max_tokens <= 0:
                 break
 
-            # Generate response asynchronously (input and output are token ids)
-            request_output = await llm_engine.generate(current_obs_tokens, deepcopy(sampling_params))
-            action_tokens = request_output.outputs[0].token_ids
-            action_text = request_output.outputs[0].text
+            generation_output = await _generate_action_with_partial_rollout(
+                prompt_token_ids=current_obs_tokens,
+                sampling_params=sampling_params,
+                max_length=max_length,
+                hf_tokenizer=hf_tokenizer,
+                llm_engine=llm_engine,
+            )
+            action_tokens = generation_output["token_ids"]
+            action_text = generation_output["text"]
+            action_token_weight_versions.extend(generation_output["token_weight_versions"])
+            if generation_output["finish_reason"] == "length":
+                extra_logs["truncated"] = True
 
             # Record action range in token space
             action_start = len(current_obs_tokens)
@@ -115,9 +202,7 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
 
             # Calculate rollout log probs
             if sampling_params.logprobs is not None:
-                # action tokens logprobs
-                for i, logprob in enumerate(request_output.outputs[0].logprobs):
-                    rollout_log_probs.append(logprob[action_tokens[i]].logprob)
+                rollout_log_probs.extend(generation_output["log_probs"])
                 # dummy logprobs for the env feedback tokens
                 rollout_log_probs.extend([0.0] * (len(current_obs_tokens) - len(rollout_log_probs)))
 
@@ -128,6 +213,16 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             if done:
                 break
 
+        max_weight_version = (
+            max(action_token_weight_versions) if action_token_weight_versions else llm_engine.get_weight_version()
+        )
+        min_weight_version = min(action_token_weight_versions) if action_token_weight_versions else max_weight_version
+        mask_offpolicy = getattr(llm_engine, "mask_offpolicy_in_partial_rollout", False)
+        action_loss_mask = [
+            0 if mask_offpolicy and version < max_weight_version else 1 for version in action_token_weight_versions
+        ]
+        partial_old_token_count = sum(version < max_weight_version for version in action_token_weight_versions)
+
         # Store the final response when agent execution is complete
         final_response = {
             "prompt": prompt,
@@ -137,6 +232,10 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             "observation_tokens": current_obs_tokens,
             "action_ranges": action_ranges,
             "rollout_log_probs": rollout_log_probs,
+            "action_loss_mask": action_loss_mask,
+            "min_weight_version": min_weight_version,
+            "max_weight_version": max_weight_version,
+            "partial_old_token_count": partial_old_token_count,
             "extra_logs": extra_logs,
         }
         return final_response
@@ -194,18 +293,32 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
             )
             prompt_token_ids = prompt_token_ids[-max_prompt_length:]
 
-        # Reuse already-loaded PIL images for vLLM generation.
+        # Reuse already-loaded PIL images for vLLM generation, including any
+        # resumed partial-rollout chunks for the same prompt.
         mm_data = {"image": pil_images} if pil_images else None
 
-        # Generate one continuation from the engine.
-        request_output = await llm_engine.generate(
-            prompt_token_ids, deepcopy(effective_params), multi_modal_data=mm_data
+        generation_output = await _generate_action_with_partial_rollout(
+            prompt_token_ids=prompt_token_ids,
+            sampling_params=effective_params,
+            max_length=max_length,
+            hf_tokenizer=hf_tokenizer,
+            llm_engine=llm_engine,
+            multi_modal_data=mm_data,
         )
-        generation_output = request_output.outputs[0]
-        action_token_ids = generation_output.token_ids
+        action_token_ids = generation_output["token_ids"]
 
         # Check if response was truncated (hit max_tokens length limit)
-        is_truncated = generation_output.finish_reason == "length"
+        is_truncated = generation_output["finish_reason"] == "length"
+        action_token_weight_versions = generation_output["token_weight_versions"]
+        max_weight_version = (
+            max(action_token_weight_versions) if action_token_weight_versions else llm_engine.get_weight_version()
+        )
+        min_weight_version = min(action_token_weight_versions) if action_token_weight_versions else max_weight_version
+        mask_offpolicy = getattr(llm_engine, "mask_offpolicy_in_partial_rollout", False)
+        action_loss_mask = [
+            0 if mask_offpolicy and version < max_weight_version else 1 for version in action_token_weight_versions
+        ]
+        partial_old_token_count = sum(version < max_weight_version for version in action_token_weight_versions)
 
         # Stitch prompt + action together for downstream consumers.
         observation_token_ids = prompt_token_ids + action_token_ids
@@ -213,11 +326,9 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
 
         # Calculate rollout log probs.
         rollout_log_probs = None
-        if sampling_params.logprobs is not None and generation_output.logprobs is not None:
+        if sampling_params.logprobs is not None and generation_output["log_probs"] is not None:
             rollout_log_probs = [0.0] * len(prompt_token_ids)
-            for token_id, logprob_dict in zip(action_token_ids, generation_output.logprobs):
-                token_logprob = logprob_dict.get(token_id)
-                rollout_log_probs.append(token_logprob.logprob if token_logprob is not None else 0.0)
+            rollout_log_probs.extend(generation_output["log_probs"])
 
         # Store the final response.
         output = {
@@ -230,8 +341,12 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
             "observation_tokens": observation_token_ids,
             "action_ranges": action_ranges,
             "rollout_log_probs": rollout_log_probs,
+            "action_loss_mask": action_loss_mask,
             # Truncation flag (finish_reason == "length")
             "truncated": is_truncated,
+            "min_weight_version": min_weight_version,
+            "max_weight_version": max_weight_version,
+            "partial_old_token_count": partial_old_token_count,
             # Reward-related fields (filled by reward/agent variants).
             "reward": None,
             "scores": None,

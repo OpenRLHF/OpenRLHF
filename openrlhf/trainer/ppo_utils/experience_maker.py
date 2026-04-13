@@ -135,17 +135,24 @@ class RemoteExperienceMaker:
 
         # ── Dispatch all model forward calls ──
 
+        has_mm_inputs = any(s.mm_train_inputs for s in samples_list)
+
         # Reward model
         use_reward_model = samples_list[0].rewards is None
         if use_reward_model:
+            reward_forward_kwargs = dict(
+                sequences=sequences_list,
+                attention_mask=attention_mask_list,
+                pad_sequence=[True] * len(samples_list),
+            )
+            if has_mm_inputs:
+                reward_forward_kwargs["mm_train_inputs_list"] = [s.mm_train_inputs for s in samples_list]
             if self.reward_model_group is None:
                 raise ValueError("reward_model_group is required when rewards are not precomputed")
             r_refs = self._dispatch_forward(
                 self.reward_model_group,
                 args.colocate_all_models,
-                sequences=sequences_list,
-                attention_mask=attention_mask_list,
-                pad_sequence=[True] * len(samples_list),
+                **reward_forward_kwargs,
             )
         else:
             r_refs = None
@@ -159,6 +166,9 @@ class RemoteExperienceMaker:
 
         # Critic model
         if self.critic_model_group is not None:
+            critic_forward_kwargs = dict(forward_kwargs)
+            if has_mm_inputs:
+                critic_forward_kwargs["mm_train_inputs_list"] = [s.mm_train_inputs for s in samples_list]
             if args.colocate_critic_reward and r_refs is not None:
                 ray.get(r_refs)
                 ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
@@ -166,7 +176,7 @@ class RemoteExperienceMaker:
             value_ref = self._dispatch_forward(
                 self.critic_model_group,
                 args.colocate_all_models or args.colocate_critic_reward,
-                **forward_kwargs,
+                **critic_forward_kwargs,
             )
         else:
             value_ref = dummy_ref
