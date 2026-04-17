@@ -5,7 +5,7 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .utils import masked_mean
+from .utils import masked_mean, masked_sum
 
 
 class GPTLMLoss(nn.Module):
@@ -16,7 +16,7 @@ class GPTLMLoss(nn.Module):
     def __init__(self, ring_attn_group=None):
         super().__init__()
         self.IGNORE_INDEX = -100
-        self.loss = nn.CrossEntropyLoss(ignore_index=self.IGNORE_INDEX)
+        self.loss = nn.CrossEntropyLoss(ignore_index=self.IGNORE_INDEX, reduction="sum")
 
         self.ring_attn_group = ring_attn_group
         if self.ring_attn_group:
@@ -38,19 +38,22 @@ class GPTLMLoss(nn.Module):
             # if labels are all IGNORE_INDEX, then nn.CrossEntropyLoss will be nan
             if torch.all(shift_labels == self.IGNORE_INDEX):
                 # Use mean of logits multiplied by 0 to maintain gradient flow
-                loss = shift_logits.mean() * 0
+                loss_sum = shift_logits.mean() * 0
+                num_tokens = torch.zeros(1, device=logits.device)
             else:
-                loss = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+                loss_sum = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+                num_tokens = (shift_labels != self.IGNORE_INDEX).sum().to(loss_sum.dtype)
 
-            dist.all_reduce(loss, op=dist.ReduceOp.SUM, group=self.ring_attn_group)
-            loss = loss / self.ring_attn_world_size
+            dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM, group=self.ring_attn_group)
+            dist.all_reduce(num_tokens, op=dist.ReduceOp.SUM, group=self.ring_attn_group)
         else:
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
 
-            loss = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+            loss_sum = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+            num_tokens = (shift_labels != self.IGNORE_INDEX).sum().to(loss_sum.dtype)
 
-        return loss
+        return loss_sum, num_tokens
 
 
 class SFTLoss(nn.Module):
@@ -63,13 +66,13 @@ class SFTLoss(nn.Module):
         self.token_level_loss = token_level_loss
 
     def forward(self, per_token_logps: torch.Tensor, loss_mask: torch.Tensor) -> torch.Tensor:
-        loss = (
-            masked_mean(-per_token_logps, loss_mask, dim=None)
-            if self.token_level_loss
-            else masked_mean(-per_token_logps, loss_mask, dim=-1).mean()
-        )
-
-        return loss
+        if self.token_level_loss:
+            loss_sum = masked_sum(-per_token_logps, loss_mask, dim=None)
+            num_items = loss_mask.sum()
+        else:
+            loss_sum = masked_mean(-per_token_logps, loss_mask, dim=-1).sum()
+            num_items = (loss_mask.sum(dim=-1) > 0).sum().to(loss_sum.dtype)
+        return loss_sum, num_items
 
 
 class PolicyLoss(nn.Module):
@@ -172,14 +175,17 @@ class PolicyLoss(nn.Module):
                 loss = vllm_is * loss
             vllm_kl = masked_mean(rollout_log_probs - old_log_probs, action_mask, dim=None)
 
-        loss = (
-            masked_mean(loss, action_mask, dim=None)
-            if self.token_level_loss
-            else masked_mean(loss, action_mask, dim=-1).mean()
-        )
+        # Return sum and count for global normalization
+        if self.token_level_loss:
+            loss_sum = masked_sum(loss, action_mask, dim=None)
+            num_items = action_mask.sum()
+        else:
+            # Sequence-level: mean over tokens per sequence, then sum sequences
+            loss_sum = masked_mean(loss, action_mask, dim=-1).sum()
+            num_items = (action_mask.sum(dim=-1) > 0).sum().to(loss_sum.dtype)
         clip_ratio = masked_mean(torch.lt(surr2, surr1).float(), action_mask, dim=None)
         ppo_kl = masked_mean(-log_ratio.detach(), action_mask, dim=None)
-        return loss, clip_ratio, ppo_kl, vllm_kl
+        return loss_sum, num_items, clip_ratio, ppo_kl, vllm_kl
 
 
 class ValueLoss(nn.Module):
@@ -207,12 +213,13 @@ class ValueLoss(nn.Module):
         else:
             loss = (values - returns) ** 2
 
-        loss = (
-            masked_mean(loss, action_mask, dim=None)
-            if self.token_level_loss
-            else masked_mean(loss, action_mask, dim=-1).mean()
-        )
-        return 0.5 * loss
+        if self.token_level_loss:
+            loss_sum = 0.5 * masked_sum(loss, action_mask, dim=None)
+            num_items = action_mask.sum()
+        else:
+            loss_sum = 0.5 * masked_mean(loss, action_mask, dim=-1).sum()
+            num_items = (action_mask.sum(dim=-1) > 0).sum().to(loss_sum.dtype)
+        return loss_sum, num_items
 
 
 class PairWiseLoss(nn.Module):

@@ -2,6 +2,7 @@ import os
 from abc import ABC
 
 import torch
+import torch.distributed as dist
 from torch.optim import Optimizer
 from tqdm import tqdm
 
@@ -128,7 +129,6 @@ class SFTTrainer(ABC):
             desc="Train epoch",
             disable=not self.strategy.is_rank_0(),
         )
-        loss_sum = 0
         for epoch in range(start_epoch, self.epochs):
             if isinstance(self.train_dataloader.sampler, DistributedSampler):
                 self.train_dataloader.sampler.set_epoch(
@@ -143,6 +143,8 @@ class SFTTrainer(ABC):
 
             # train
             self.model.train()
+            accumulated_loss_sum = 0.0
+            accumulated_num_tokens = 0.0
             device = next(self.model.parameters()).device
             for inputs, attention_masks, loss_masks in self.train_dataloader:
                 inputs = inputs.to(device).squeeze(1)
@@ -161,12 +163,21 @@ class SFTTrainer(ABC):
                     aux_loss = output.aux_loss
                 else:
                     aux_loss = 0
-                gpt_loss = self.loss_fn(per_token_log_probs, loss_mask[:, :-1])
+
+                local_loss_sum, local_num_tokens = self.loss_fn(per_token_log_probs, loss_mask[:, :-1])
+
+                global_num_tokens = local_num_tokens.clone()
+                dist.all_reduce(global_num_tokens, op=dist.ReduceOp.SUM, group=self.strategy.dp_group)
+
+                dp_size = self.strategy.dp_size
+                gpt_loss = local_loss_sum / global_num_tokens.clamp(min=1.0) * dp_size
+
                 loss = gpt_loss + aux_loss * self.args.aux_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-                loss_sum += gpt_loss.item()
+                accumulated_loss_sum += local_loss_sum.item()
+                accumulated_num_tokens += local_num_tokens.item()
                 logs_dict = {
                     "gpt_loss": gpt_loss.item(),
                     "lr": self.scheduler.get_last_lr()[0],
@@ -181,8 +192,15 @@ class SFTTrainer(ABC):
 
                 # logs/checkpoints/evaluation
                 if step % self.strategy.accumulated_gradient == 0:
-                    logs_dict["loss_mean"] = loss_sum / self.strategy.accumulated_gradient
-                    loss_sum = 0
+                    global_accumulated_loss = torch.tensor([accumulated_loss_sum], device=device)
+                    global_accumulated_tokens = torch.tensor([accumulated_num_tokens], device=device)
+                    dist.all_reduce(global_accumulated_loss, op=dist.ReduceOp.SUM, group=self.strategy.dp_group)
+                    dist.all_reduce(global_accumulated_tokens, op=dist.ReduceOp.SUM, group=self.strategy.dp_group)
+                    logs_dict["loss_mean"] = (
+                        global_accumulated_loss / global_accumulated_tokens.clamp(min=1.0)
+                    ).item()
+                    accumulated_loss_sum = 0.0
+                    accumulated_num_tokens = 0.0
                     global_step = step // self.strategy.accumulated_gradient
                     client_states = {"consumed_samples": global_step * args.train_batch_size}
                     self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
@@ -229,10 +247,10 @@ class SFTTrainer(ABC):
                 self.strategy.save_model(self.model, self.tokenizer, save_path)
 
     def evaluate(self, eval_dataloader, steps=0):
-        times = 0
         self.model.eval()
         with torch.no_grad():
-            loss_sum = 0
+            total_loss_sum = 0.0
+            total_num_tokens = 0.0
             step_bar = tqdm(
                 range(eval_dataloader.__len__()),
                 desc="Eval stage of steps %d" % steps,
@@ -251,14 +269,20 @@ class SFTTrainer(ABC):
                     ring_attn_group=self.strategy.ring_attn_group,
                 )
 
-                loss = self.loss_fn(per_token_log_probs, loss_mask[:, :-1])
+                local_loss_sum, local_num_tokens = self.loss_fn(per_token_log_probs, loss_mask[:, :-1])
 
-                times += 1
-                loss_sum += loss.item()
-                bar_dict = {"eval gpt_loss": loss_sum / times}
+                total_loss_sum += local_loss_sum.item()
+                total_num_tokens += local_num_tokens.item()
                 step_bar.update()
-                logs = self.strategy.all_reduce(bar_dict)
-                step_bar.set_postfix(logs)
+
+            global_loss_sum = torch.tensor([total_loss_sum], device=device)
+            global_num_tokens = torch.tensor([total_num_tokens], device=device)
+            dist.all_reduce(global_loss_sum, op=dist.ReduceOp.SUM, group=self.strategy.dp_group)
+            dist.all_reduce(global_num_tokens, op=dist.ReduceOp.SUM, group=self.strategy.dp_group)
+            logs = {
+                "eval gpt_loss": (global_loss_sum / global_num_tokens).item() if global_num_tokens.item() > 0 else 0
+            }
+            step_bar.set_postfix(logs)
 
             if self.strategy.is_rank_0():
                 if self._wandb is not None:

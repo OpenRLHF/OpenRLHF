@@ -15,7 +15,7 @@ from tqdm import tqdm
 from transformers.trainer import get_scheduler
 
 from openrlhf.models import Actor, PolicyLoss
-from openrlhf.models.utils import compute_approx_kl, masked_mean
+from openrlhf.models.utils import compute_approx_kl, masked_sum
 from openrlhf.trainer.ppo_utils.experience import Experience
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.deepspeed import DeepspeedStrategy
@@ -278,13 +278,22 @@ class ActorPPOTrainer(ABC):
         )
 
         # loss function
-        actor_loss, clip_ratio, ppo_kl, vllm_kl = self.actor_loss_fn(
+        actor_loss_sum, num_tokens, clip_ratio, ppo_kl, vllm_kl = self.actor_loss_fn(
             action_log_probs,
             old_action_log_probs,
             advantages,
             action_mask=experience.action_mask,
             rollout_log_probs=experience.rollout_log_probs,
         )
+
+        global_num_tokens = num_tokens.clone()
+        torch.distributed.all_reduce(
+            global_num_tokens, op=torch.distributed.ReduceOp.SUM, group=self.strategy.dp_group
+        )
+
+        dp_size = self.strategy.dp_size
+        actor_loss = actor_loss_sum / global_num_tokens.clamp(min=1.0) * dp_size
+
         experience.info["ppo_clip_ratio"] = clip_ratio.detach()
         experience.info["ppo_kl"] = ppo_kl.detach()
         if vllm_kl is not None:
@@ -301,10 +310,15 @@ class ActorPPOTrainer(ABC):
             else:
                 kl = torch.zeros_like(action_log_probs)
                 logprobs_diff = torch.zeros_like(action_log_probs)
-            kl_loss = masked_mean(kl, experience.action_mask)
-            logprobs_diff = masked_mean(logprobs_diff, experience.action_mask)
-            experience.info["kl"] = kl_loss.detach()
-            experience.info["logprobs_diff"] = logprobs_diff.detach()
+
+            kl_loss_sum = masked_sum(kl, experience.action_mask)
+            kl_loss = kl_loss_sum / global_num_tokens.clamp(min=1.0) * dp_size
+
+            logprobs_diff_sum = masked_sum(logprobs_diff, experience.action_mask)
+            logprobs_diff = logprobs_diff_sum / global_num_tokens * dp_size
+
+            experience.info["kl"] = (kl_loss_sum / num_tokens.clamp(min=1.0)).detach()
+            experience.info["logprobs_diff"] = (logprobs_diff_sum / num_tokens.clamp(min=1.0)).detach()
         else:
             kl_loss = 0
 
@@ -314,7 +328,8 @@ class ActorPPOTrainer(ABC):
             loss += output.aux_loss * self.args.aux_loss_coef
         # entropy loss
         if self.args.entropy_loss_coef is not None:
-            entropy_loss = masked_mean(output.entropy[:, -experience.action_mask.shape[1] :], experience.action_mask)
+            entropy_sum = masked_sum(output.entropy[:, -experience.action_mask.shape[1] :], experience.action_mask)
+            entropy_loss = entropy_sum / global_num_tokens * dp_size
             if self.args.entropy_loss_coef != 0:
                 loss -= entropy_loss * self.args.entropy_loss_coef
 
@@ -335,11 +350,14 @@ class ActorPPOTrainer(ABC):
             else:
                 self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
 
-        # Per-token losses (0-D tensors, shape carries weighting info for ppo_train)
-        metrics = {"policy_loss": actor_loss.detach()}
+        # Log local means so the weighted-reduction pipeline in ppo_train produces
+        # correct global averages even when token counts differ across DP ranks.
+        actor_loss_mean = (actor_loss_sum / num_tokens.clamp(min=1.0)).detach()
+        metrics = {"policy_loss": actor_loss_mean}
         weights = {"policy_loss": "token"}
         if self.args.entropy_loss_coef is not None:
-            metrics["entropy_loss"] = entropy_loss.detach()
+            entropy_loss_mean = (entropy_sum / num_tokens).detach()
+            metrics["entropy_loss"] = entropy_loss_mean
             weights["entropy_loss"] = "token"
 
         # Non-reducible meta
