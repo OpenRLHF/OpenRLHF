@@ -199,11 +199,23 @@ if __name__ == "__main__":
     parser.add_argument("--min_lr_ratio", type=float, default=0.1, help="Minimum LR as a ratio of initial LR")
     parser.add_argument("--l2", type=float, default=0, help="weight decay loss")
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
+    parser.add_argument("--adam_eps", type=float, default=1e-8, help="Epsilon for Adam/AdamW optimizer")
 
-    # Muon optimizer (requires deepspeed >= 0.18.2)
+    # Muon optimizer (requires deepspeed >= 0.18.2). Defaults follow DeepSpeed's recommendation.
     parser.add_argument("--optim", type=str, default="adam", choices=["adam", "muon"], help="Optimizer type")
     parser.add_argument("--muon_lr", type=float, default=0.02, help="Learning rate for Muon param group (2D weights)")
     parser.add_argument("--muon_momentum", type=float, default=0.95, help="Momentum for Muon optimizer")
+    parser.add_argument("--muon_ns_steps", type=int, default=5, help="Newton-Schulz iteration steps for Muon")
+    parser.add_argument("--muon_nesterov", action="store_true", default=True, help="Enable Nesterov momentum in Muon")
+    parser.add_argument(
+        "--no_muon_nesterov", dest="muon_nesterov", action="store_false", help="Disable Nesterov momentum"
+    )
+    parser.add_argument(
+        "--muon_adam_lr",
+        type=float,
+        default=None,
+        help="LR for Muon's Adam subgroup (embeddings/head/1D). Defaults to --learning_rate if unset.",
+    )
 
     # ring-attention
     parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")

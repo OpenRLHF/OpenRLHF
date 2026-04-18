@@ -326,8 +326,12 @@ class DeepspeedStrategy(ABC):
                 lr=lr,
                 weight_decay=getattr(self.args, "l2", 0.0),
                 adam_betas=getattr(self.args, "adam_betas", (0.9, 0.95)),
+                adam_eps=getattr(self.args, "adam_eps", 1e-8),
                 muon_lr=getattr(self.args, "muon_lr", 0.02),
                 muon_momentum=getattr(self.args, "muon_momentum", 0.95),
+                muon_ns_steps=getattr(self.args, "muon_ns_steps", 5),
+                muon_nesterov=getattr(self.args, "muon_nesterov", True),
+                muon_adam_lr=getattr(self.args, "muon_adam_lr", None),
             ),
         )
         if self.use_dynamic_batch:
