@@ -26,8 +26,8 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --max_samples 100000 \
    --zero_stage 3 \
    --param_dtype bf16 \
-   --actor_learning_rate 5e-7 \
-   --critic_learning_rate 9e-6 \
+   --actor.adam.lr 5e-7 \
+   --critic.adam.lr 9e-6 \
    --init_kl_coef 0.01 \
    --prompt_data OpenRLHF/prompt-collection-v0.1 \
    --input_key context_messages \

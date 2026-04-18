@@ -84,8 +84,8 @@ ENGINE_ARGS=(
 
 OPTIMIZER_ARGS=(
    --advantage_estimator reinforce_baseline
-   --actor_learning_rate 5e-7
-   # --critic_learning_rate 9e-6
+   --actor.adam.lr 5e-7
+   # --critic.adam.lr 9e-6
    --entropy_loss_coef 0.0
    --init_kl_coef 1e-5
    --use_kl_loss

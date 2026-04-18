@@ -18,7 +18,7 @@ openrlhf.cli.train_sft \
    --max_epochs 1 \
    --param_dtype bf16 \
    --attn_implementation flash_attention_2 \
-   --learning_rate 5e-6 \
+   --adam.lr 5e-6 \
    --load_checkpoint \
    --packing_samples \
    --gradient_checkpointing

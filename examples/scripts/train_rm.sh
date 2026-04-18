@@ -13,7 +13,7 @@ openrlhf.cli.train_rm \
    --max_epochs 1 \
    --max_len 8192 \
    --zero_stage 3 \
-   --learning_rate 9e-6 \
+   --adam.lr 9e-6 \
    --dataset OpenRLHF/preference_dataset_mixture2_and_safe_pku \
    --apply_chat_template \
    --chosen_key chosen \

@@ -75,60 +75,6 @@ def get_train_ds_config(
     return ds_config
 
 
-def build_optim_config(
-    optim,
-    *,
-    lr,
-    weight_decay=0.0,
-    adam_betas=(0.9, 0.95),
-    adam_eps=1e-8,
-    muon_lr=0.02,
-    muon_momentum=0.95,
-    muon_ns_steps=5,
-    muon_nesterov=True,
-    muon_adam_lr=None,
-):
-    """Build DeepSpeed optimizer config dict from resolved optimizer args.
-
-    Defaults match DeepSpeed's recommended Muon settings:
-      momentum=0.95, nesterov=True, ns_steps=5
-      (per DS PR #7509 / #7962 and Keller Jordan's reference Muon).
-
-    The Muon entry uses DS's hybrid `MuonWithAuxAdam` shape: `muon_lr` controls
-    the 2D-hidden-weight group, `adam_lr` controls embeddings/heads/1D params.
-    If `muon_adam_lr` is None we fall back to `lr` for the Adam side so the
-    standard LR scheduler drives it.
-
-    To add a new optimizer, add an elif branch and extend --optim choices in CLI.
-    """
-    if optim == "muon":
-        adam_lr = lr if muon_adam_lr is None else muon_adam_lr
-        return {
-            "type": "Muon",
-            "params": {
-                "muon_lr": muon_lr,
-                "adam_lr": adam_lr,
-                "momentum": muon_momentum,
-                "nesterov": bool(muon_nesterov),
-                "ns_steps": muon_ns_steps,
-                "weight_decay": weight_decay,
-                "adam_betas": list(adam_betas),
-                "adam_eps": adam_eps,
-            },
-        }
-    if optim == "adam":
-        return {
-            "type": "AdamW",
-            "params": {
-                "lr": lr,
-                "betas": list(adam_betas),
-                "eps": adam_eps,
-                "weight_decay": weight_decay,
-            },
-        }
-    raise ValueError(f"Unsupported optimizer: {optim}")
-
-
 def get_eval_ds_config(
     offload,
     stage=0,

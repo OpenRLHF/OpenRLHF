@@ -519,10 +519,17 @@ class PolicyModelActor(BaseModelActor):
                 gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
 
-        # prepare models/optimizers — optimizer & scheduler created by DeepSpeed from config
-        self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare(
-            (actor, args.actor_learning_rate, max_steps),
+        actor_cfg = dict(
+            optim=args.actor.optim,
+            muon=vars(args.actor.muon),
+            adam=vars(args.actor.adam),
+            lr_scheduler=args.actor.lr_scheduler,
+            lr_warmup_ratio=args.actor.lr_warmup_ratio,
+            min_lr_ratio=args.actor.min_lr_ratio,
+            max_norm=args.actor.max_norm,
+            scheduler_steps=max_steps,
         )
+        self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare((actor, actor_cfg))
 
         if ema_model:
             ema_model._offload = True

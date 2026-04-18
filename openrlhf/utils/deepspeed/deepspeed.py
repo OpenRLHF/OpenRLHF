@@ -7,6 +7,7 @@ from abc import ABC
 from collections import defaultdict
 from datetime import timedelta
 from functools import partial
+from typing import Optional
 
 import deepspeed
 import torch
@@ -27,7 +28,6 @@ from openrlhf.utils.distributed_util import torch_dist_barrier_and_cuda_sync
 
 from .deepspeed_utils import (
     _z3_params_to_fetch,
-    build_optim_config,
     get_eval_ds_config,
     get_optimizer_grouped_parameters,
     get_train_ds_config,
@@ -134,9 +134,13 @@ class DeepspeedStrategy(ABC):
     def ring_attn_group(self):
         return get_ring_attn_group()
 
-    def _get_model_parameters(self, model: nn.Module):
+    def _get_model_parameters(self, model: nn.Module, *, optim: Optional[str] = None):
+        # ``optim`` defaults to the strategy-wide setting but can be overridden per-model
+        # so actor/critic can disagree (e.g. actor=muon, critic=adam).
+        if optim is None:
+            optim = self.optim
         raw_model = model.model if isinstance(model, Actor) else model
-        if self.optim == "muon":
+        if optim == "muon":
             from packaging import version
 
             assert version.parse(deepspeed.__version__) >= version.parse(
@@ -238,32 +242,86 @@ class DeepspeedStrategy(ABC):
     def prepare(self, *args):
         """Prepare models for training/evaluation.
 
-        Args:
-            *args: Each arg is either:
-                - a tuple (model, lr, scheduler_steps) for training — optimizer & scheduler created by DS
-                - a bare model for evaluation
+        Each arg is one of:
 
-        Returns:
-            For training tuples: (model, optimizer, scheduler).
-            For eval models: the wrapped model.
+        * ``(model, cfg)`` — training.  ``cfg`` is a dict like::
+
+            {
+              "optim": "muon" | "adam",          # selector
+              "muon":  {lr, momentum, ns_steps, nesterov, adam_lr,
+                        adam_betas, adam_eps, weight_decay},
+              "adam":  {lr, betas, eps, weight_decay},
+              "lr_scheduler": str,
+              "lr_warmup_ratio": float,
+              "min_lr_ratio": float,
+              "max_norm": float,                 # gradient clip
+              "scheduler_steps": int,
+            }
+
+          In practice callers pass ``vars(args.actor)``-style dicts built from
+          nested argparse (see ``openrlhf.utils.config.add_optim_args``).
+        * ``model`` — evaluation only, no optimizer.
+
+        Returns ``(model, optimizer, scheduler)`` for training entries and the
+        wrapped model for eval entries.
         """
         ret = []
         for arg in args:
             if isinstance(arg, tuple):
-                assert len(arg) == 3, f"Expect (model, lr, scheduler_steps) tuple, got size {len(arg)}"
-                model, lr, scheduler_steps = arg
-                if model is not None:
-                    ret.append(self._ds_init_train_model(model, lr, scheduler_steps))
-                else:
+                assert len(arg) == 2, f"prepare() tuple must be (model, cfg); got len={len(arg)}"
+                model, cfg = arg
+                if model is None:
                     ret.append((None, None, None))
+                else:
+                    ret.append(self._ds_init_train_model(model, cfg))
             else:
                 ret.append(self._ds_init_eval_model(arg))
 
         return ret[0] if len(ret) == 1 else ret
 
-    def _ds_init_train_model(self, model, lr, scheduler_steps):
+    def _ds_init_train_model(self, model, cfg: dict):
+        # cfg["optim"] selects the section; muon vs adam sections are self-contained
+        # so callers never share ambiguous flags between modes.
+        kind = cfg["optim"]
+        sec = cfg[kind]
+        if kind == "muon":
+            # muon.adam_lr may be None → fall back to pure adam.lr so the scheduler
+            # drives the aux-Adam subgroup with a sensible base.
+            adam_lr_fallback = cfg["adam"]["lr"] if cfg.get("adam") else sec["lr"]
+            optim_dict = {
+                "type": "Muon",
+                "params": {
+                    "muon_lr": sec["lr"],
+                    "adam_lr": sec["adam_lr"] if sec["adam_lr"] is not None else adam_lr_fallback,
+                    "momentum": sec["momentum"],
+                    "nesterov": bool(sec["nesterov"]),
+                    "ns_steps": sec["ns_steps"],
+                    "weight_decay": sec["weight_decay"],
+                    "adam_betas": list(sec["adam_betas"]),
+                    "adam_eps": sec["adam_eps"],
+                },
+            }
+        else:
+            optim_dict = {
+                "type": "AdamW",
+                "params": {
+                    "lr": sec["lr"],
+                    "betas": list(sec["betas"]),
+                    "eps": sec["eps"],
+                    "weight_decay": sec["weight_decay"],
+                },
+            }
+        scheduler_steps = cfg["scheduler_steps"]
+        sched_factory = partial(
+            get_scheduler,
+            cfg.get("lr_scheduler", "cosine_with_min_lr"),
+            num_warmup_steps=math.ceil(scheduler_steps * cfg.get("lr_warmup_ratio", 0.03)),
+            num_training_steps=scheduler_steps,
+            scheduler_specific_kwargs={"min_lr_rate": cfg.get("min_lr_ratio", 0.1)},
+        )
+
         is_actor = isinstance(model, Actor)
-        ds_config = self.get_ds_train_config(lr)
+        ds_config = self.get_ds_train_config(optim_dict=optim_dict, max_norm=cfg.get("max_norm", 1.0))
 
         if self.ds_tensor_parallel_size > 1:
             tp_model = deepspeed.tp_model_init(
@@ -276,24 +334,15 @@ class DeepspeedStrategy(ABC):
             gc.collect()
             torch.cuda.empty_cache()
 
-        raw_model, model_parameters = self._get_model_parameters(model)
-
-        # Scheduler factory — DS calls it with the optimizer it creates from config.
-        warmup_ratio = getattr(self.args, "lr_warmup_ratio", 0.03)
-        min_lr_ratio = getattr(self.args, "min_lr_ratio", 0.1)
-        scheduler_factory = partial(
-            get_scheduler,
-            getattr(self.args, "lr_scheduler", "cosine_with_min_lr"),
-            num_warmup_steps=math.ceil(scheduler_steps * warmup_ratio),
-            num_training_steps=scheduler_steps,
-            scheduler_specific_kwargs={"min_lr_rate": min_lr_ratio},
-        )
+        # Infer optim kind from the DS type so actor/critic can disagree.
+        optim_kind = "muon" if optim_dict.get("type") == "Muon" else "adam"
+        raw_model, model_parameters = self._get_model_parameters(model, optim=optim_kind)
 
         engine, optim, _, scheduler = deepspeed.initialize(
             model=raw_model,
             optimizer=None,
             model_parameters=model_parameters,
-            lr_scheduler=scheduler_factory,
+            lr_scheduler=sched_factory,
             config=ds_config,
             args={"local_rank": int(os.environ.get("LOCAL_RANK", "-1"))},
             dist_init_required=True,
@@ -308,31 +357,29 @@ class DeepspeedStrategy(ABC):
 
         return model, optim, scheduler
 
-    def get_ds_train_config(self, lr):
+    def get_ds_train_config(
+        self, optim_dict: Optional[dict] = None, *, max_norm: Optional[float] = None, is_actor=None
+    ):
+        # ``optim_dict`` is None when called from HF model-loading paths (e.g.
+        # ``Actor.from_pretrained``) that only need the ZeRO + bf16 parts — the
+        # optimizer section is filled later at ``prepare()`` time.
+        # ``max_norm`` is per-model (set by prepare's cfg); falls back to
+        # ``self.max_norm`` if not provided (for legacy model-loading callers).
+        # ``is_actor`` is accepted for legacy call sites and unused here.
+        del is_actor
         ds_config = get_train_ds_config(
             offload=False,
             adam_offload=self.adam_offload,
             stage=self.stage,
             param_dtype=self.param_dtype,
-            max_norm=self.max_norm,
+            max_norm=max_norm if max_norm is not None else self.max_norm,
             zpg=self.zpg,
             grad_accum_dtype=self.grad_accum_dtype,
             overlap_comm=self.overlap_comm,
             use_ds_universal_ckpt=self.use_ds_universal_ckpt,
             deepcompile=self.deepcompile,
             tensor_parallel_size=self.ds_tensor_parallel_size,
-            optim_config=build_optim_config(
-                self.optim,
-                lr=lr,
-                weight_decay=getattr(self.args, "l2", 0.0),
-                adam_betas=getattr(self.args, "adam_betas", (0.9, 0.95)),
-                adam_eps=getattr(self.args, "adam_eps", 1e-8),
-                muon_lr=getattr(self.args, "muon_lr", 0.02),
-                muon_momentum=getattr(self.args, "muon_momentum", 0.95),
-                muon_ns_steps=getattr(self.args, "muon_ns_steps", 5),
-                muon_nesterov=getattr(self.args, "muon_nesterov", True),
-                muon_adam_lr=getattr(self.args, "muon_adam_lr", None),
-            ),
+            optim_config=optim_dict,
         )
         if self.use_dynamic_batch:
             ds_config["train_micro_batch_size_per_gpu"] = 1

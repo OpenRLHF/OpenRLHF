@@ -65,7 +65,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --max_new_tokens 2048 \
    --zero_stage 3 \
    --param_dtype bf16 \
-   --actor_learning_rate 2e-6 \
+   --actor.adam.lr 2e-6 \
    --prompt_data ${DATASET_PATH} \
    --input_key prompt \
    --label_key label \

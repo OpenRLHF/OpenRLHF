@@ -200,10 +200,19 @@ class CriticModelActor(BaseModelActor):
                 gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
 
-        # prepare models/optimizers — optimizer & scheduler created by DeepSpeed from config
-        self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare(
-            (critic, args.critic_learning_rate, max_steps),
+        # Critic reads its own args.critic.* sub-namespace.  Typical setup: actor may
+        # use Muon but --critic.optim stays adam because value heads are essentially 1D.
+        critic_cfg = dict(
+            optim=args.critic.optim,
+            muon=vars(args.critic.muon),
+            adam=vars(args.critic.adam),
+            lr_scheduler=args.critic.lr_scheduler,
+            lr_warmup_ratio=args.critic.lr_warmup_ratio,
+            min_lr_ratio=args.critic.min_lr_ratio,
+            max_norm=args.critic.max_norm,
+            scheduler_steps=max_steps,
         )
+        self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare((critic, critic_cfg))
 
         # load checkpoint
         ckpt_path = os.path.join(args.ckpt_path, "_critic")

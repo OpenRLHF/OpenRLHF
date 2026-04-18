@@ -114,8 +114,17 @@ def train(args):
     num_update_steps_per_epoch = len(train_dataset) // args.train_batch_size
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
 
-    # strategy prepare — optimizer & scheduler created by DeepSpeed from config
-    (model, optim, scheduler), ref_model = strategy.prepare((model, args.learning_rate, max_steps), ref_model)
+    cfg = dict(
+        optim=args.optim,
+        muon=vars(args.muon),
+        adam=vars(args.adam),
+        lr_scheduler=args.lr_scheduler,
+        lr_warmup_ratio=args.lr_warmup_ratio,
+        min_lr_ratio=args.min_lr_ratio,
+        max_norm=args.max_norm,
+        scheduler_steps=max_steps,
+    )
+    (model, optim, scheduler), ref_model = strategy.prepare((model, cfg), ref_model)
 
     # load checkpoint
     consumed_samples = 0
@@ -169,7 +178,6 @@ if __name__ == "__main__":
     parser.add_argument("--micro_train_batch_size", type=int, default=8, help="batch size per GPU")
     parser.add_argument("--train_batch_size", type=int, default=128, help="Global training batch size")
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
-    parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--deepcompile", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
@@ -191,9 +199,6 @@ if __name__ == "__main__":
         help="Model data type",
     )
     parser.add_argument("--ref_offload", action="store_true", default=False)
-    parser.add_argument("--learning_rate", type=float, default=1e-5)
-    parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
-    parser.add_argument("--lr_scheduler", type=str, default="cosine_with_min_lr")
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument(
@@ -210,13 +215,6 @@ if __name__ == "__main__":
 
     # DPO
     parser.add_argument("--max_epochs", type=int, default=1)
-    parser.add_argument("--l2", type=float, default=0.0, help="weight decay loss")
-    parser.add_argument(
-        "--min_lr_ratio",
-        type=float,
-        default=0.1,
-        help="Ratio of the minimum learning rate to the initial learning rate.",
-    )
     parser.add_argument("--beta", type=float, default=0.1)
     parser.add_argument("--ipo", action="store_true", default=False)  # IPO https://arxiv.org/pdf/2310.12036v2.pdf
     parser.add_argument("--label_smoothing", type=float, default=0.0)  # cDPO https://arxiv.org/pdf/2305.18290.pdf
@@ -224,24 +222,38 @@ if __name__ == "__main__":
     parser.add_argument(
         "--nll_loss_coef", type=float, default=0, help="Regularization with NLL loss, see LLama 3.1 tech report."
     )
-    parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
-    parser.add_argument("--adam_eps", type=float, default=1e-8, help="Epsilon for Adam/AdamW optimizer")
 
-    # Muon optimizer (requires deepspeed >= 0.18.2). Defaults follow DeepSpeed's recommendation.
-    parser.add_argument("--optim", type=str, default="adam", choices=["adam", "muon"], help="Optimizer type")
-    parser.add_argument("--muon_lr", type=float, default=0.02, help="Learning rate for Muon param group (2D weights)")
-    parser.add_argument("--muon_momentum", type=float, default=0.95, help="Momentum for Muon optimizer")
-    parser.add_argument("--muon_ns_steps", type=int, default=5, help="Newton-Schulz iteration steps for Muon")
-    parser.add_argument("--muon_nesterov", action="store_true", default=True, help="Enable Nesterov momentum in Muon")
+    # Optimizer + scheduler + grad clip.  Dotted CLI (--muon.lr, --adam.lr) →
+    # hierarchize() later turns these into args.muon.lr / args.adam.lr / etc.
+    parser.add_argument("--optim", type=str, default="adam", choices=["adam", "muon"])
+    # Muon variant
+    parser.add_argument("--muon.lr", type=float, default=0.02, help="Learning rate for Muon 2D-weight group")
+    parser.add_argument("--muon.momentum", type=float, default=0.95)
+    parser.add_argument("--muon.ns_steps", type=int, default=5, help="Newton-Schulz iterations")
+    parser.add_argument("--muon.nesterov", action="store_true", default=True)
     parser.add_argument(
-        "--no_muon_nesterov", dest="muon_nesterov", action="store_false", help="Disable Nesterov momentum"
+        "--muon.no_nesterov", dest="muon.nesterov", action="store_false", help="Disable Nesterov momentum"
     )
     parser.add_argument(
-        "--muon_adam_lr",
+        "--muon.adam_lr",
         type=float,
         default=None,
-        help="LR for Muon's Adam subgroup (embeddings/head/1D). Defaults to --learning_rate if unset.",
+        help="LR for Muon's aux-Adam subgroup; None → fallback to --adam.lr",
     )
+    parser.add_argument("--muon.adam_betas", type=float, nargs=2, default=(0.9, 0.95))
+    parser.add_argument("--muon.adam_eps", type=float, default=1e-8)
+    parser.add_argument("--muon.weight_decay", type=float, default=0.0)
+    # Pure Adam variant
+    parser.add_argument("--adam.lr", type=float, default=1e-5)
+    parser.add_argument("--adam.betas", type=float, nargs=2, default=(0.9, 0.95))
+    parser.add_argument("--adam.eps", type=float, default=1e-8)
+    parser.add_argument("--adam.weight_decay", type=float, default=0.0)
+    # Scheduler
+    parser.add_argument("--lr_scheduler", type=str, default="cosine_with_min_lr")
+    parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
+    parser.add_argument("--min_lr_ratio", type=float, default=0.1)
+    # Gradient clip
+    parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
 
     # Context Parallel
     parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")
@@ -302,6 +314,9 @@ if __name__ == "__main__":
     parser.add_argument("--use_ms", action="store_true", default=False)
 
     args = parser.parse_args()
+    from openrlhf.utils.config import hierarchize
+
+    args = hierarchize(args)
 
     if args.ref_pretrain is None or args.ref_pretrain == "":
         args.ref_pretrain = args.pretrain

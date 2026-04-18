@@ -104,8 +104,17 @@ def train(args):
             gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
         )
 
-    # strategy prepare — optimizer & scheduler created by DeepSpeed from config
-    model, optim, scheduler = strategy.prepare((model, args.learning_rate, max_steps))
+    cfg = dict(
+        optim=args.optim,
+        muon=vars(args.muon),
+        adam=vars(args.adam),
+        lr_scheduler=args.lr_scheduler,
+        lr_warmup_ratio=args.lr_warmup_ratio,
+        min_lr_ratio=args.min_lr_ratio,
+        max_norm=args.max_norm,
+        scheduler_steps=max_steps,
+    )
+    model, optim, scheduler = strategy.prepare((model, cfg))
 
     # load checkpoint
     consumed_samples = 0
@@ -162,7 +171,6 @@ if __name__ == "__main__":
     parser.add_argument("--use_ds_universal_ckpt", action="store_true", default=False)
 
     # DeepSpeed
-    parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--deepcompile", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
@@ -223,32 +231,41 @@ if __name__ == "__main__":
     parser.add_argument("--aux_loss_coef", type=float, default=0, help="MoE balancing loss")
     parser.add_argument("--compute_fp32_loss", action="store_true", default=False)
     parser.add_argument("--margin_loss", action="store_true", default=False)
-    parser.add_argument("--learning_rate", type=float, default=9e-6)
-    parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
-    parser.add_argument("--lr_scheduler", type=str, default="cosine_with_min_lr")
-    parser.add_argument("--min_lr_ratio", type=float, default=0.1, help="Minimum LR as a ratio of initial LR")
     parser.add_argument("--micro_train_batch_size", type=int, default=1)
     parser.add_argument("--train_batch_size", type=int, default=128, help="Global training batch size")
     parser.add_argument("--loss", type=str, default="sigmoid")
-    parser.add_argument("--l2", type=float, default=0.0, help="weight decay loss")
-    parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
-    parser.add_argument("--adam_eps", type=float, default=1e-8, help="Epsilon for Adam/AdamW optimizer")
 
-    # Muon optimizer (requires deepspeed >= 0.18.2). Defaults follow DeepSpeed's recommendation.
-    parser.add_argument("--optim", type=str, default="adam", choices=["adam", "muon"], help="Optimizer type")
-    parser.add_argument("--muon_lr", type=float, default=0.02, help="Learning rate for Muon param group (2D weights)")
-    parser.add_argument("--muon_momentum", type=float, default=0.95, help="Momentum for Muon optimizer")
-    parser.add_argument("--muon_ns_steps", type=int, default=5, help="Newton-Schulz iteration steps for Muon")
-    parser.add_argument("--muon_nesterov", action="store_true", default=True, help="Enable Nesterov momentum in Muon")
+    # Optimizer + scheduler + grad clip.  Dotted CLI (--muon.lr, --adam.lr) →
+    # hierarchize() later turns these into args.muon.lr / args.adam.lr / etc.
+    parser.add_argument("--optim", type=str, default="adam", choices=["adam", "muon"])
+    # Muon variant
+    parser.add_argument("--muon.lr", type=float, default=0.02, help="Learning rate for Muon 2D-weight group")
+    parser.add_argument("--muon.momentum", type=float, default=0.95)
+    parser.add_argument("--muon.ns_steps", type=int, default=5, help="Newton-Schulz iterations")
+    parser.add_argument("--muon.nesterov", action="store_true", default=True)
     parser.add_argument(
-        "--no_muon_nesterov", dest="muon_nesterov", action="store_false", help="Disable Nesterov momentum"
+        "--muon.no_nesterov", dest="muon.nesterov", action="store_false", help="Disable Nesterov momentum"
     )
     parser.add_argument(
-        "--muon_adam_lr",
+        "--muon.adam_lr",
         type=float,
         default=None,
-        help="LR for Muon's Adam subgroup (embeddings/head/1D). Defaults to --learning_rate if unset.",
+        help="LR for Muon's aux-Adam subgroup; None → fallback to --adam.lr",
     )
+    parser.add_argument("--muon.adam_betas", type=float, nargs=2, default=(0.9, 0.95))
+    parser.add_argument("--muon.adam_eps", type=float, default=1e-8)
+    parser.add_argument("--muon.weight_decay", type=float, default=0.0)
+    # Pure Adam variant
+    parser.add_argument("--adam.lr", type=float, default=9e-6)
+    parser.add_argument("--adam.betas", type=float, nargs=2, default=(0.9, 0.95))
+    parser.add_argument("--adam.eps", type=float, default=1e-8)
+    parser.add_argument("--adam.weight_decay", type=float, default=0.0)
+    # Scheduler
+    parser.add_argument("--lr_scheduler", type=str, default="cosine_with_min_lr")
+    parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
+    parser.add_argument("--min_lr_ratio", type=float, default=0.1)
+    # Gradient clip
+    parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
 
     # packing samples using Flash Attention2
     parser.add_argument("--packing_samples", action="store_true", default=False)
@@ -288,6 +305,9 @@ if __name__ == "__main__":
     parser.add_argument("--use_ms", action="store_true", default=False)
 
     args = parser.parse_args()
+    from openrlhf.utils.config import hierarchize
+
+    args = hierarchize(args)
 
     if args.input_template and "{}" not in args.input_template:
         print("[Warning] '{}' not in args.input_template, set to None")

@@ -376,8 +376,6 @@ if __name__ == "__main__":
         help="Max tokens to generate per sample. If None, dynamically computed as max_len - prompt_len per sample.",
     )
     parser.add_argument("--max_samples", type=int, default=int(1e8), help="Max number of samples")
-    parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
-    parser.add_argument("--l2", type=float, default=0.0, help="weight decay loss")
     parser.add_argument("--ptx_coef", type=float, default=0.05, help="PPO-ptx loss coef")
     parser.add_argument("--eps_clip", type=float, default=0.2, help="PPO clip range")
     parser.add_argument("--eps_clip_low_high", type=float, nargs=2, default=None, help="PPO-clip low and high")
@@ -402,11 +400,6 @@ if __name__ == "__main__":
         "--n_samples_per_prompt", type=int, default=1, help="number of responses for each prompt in generation"
     )
     parser.add_argument("--save_value_network", action="store_true", default=False, help="Save critic model")
-    parser.add_argument("--actor_learning_rate", type=float, default=1e-6)
-    parser.add_argument("--critic_learning_rate", type=float, default=9e-6)
-    parser.add_argument("--lr_warmup_ratio", type=float, default=0.03)
-    parser.add_argument("--lr_scheduler", type=str, default="cosine_with_min_lr")
-    parser.add_argument("--min_lr_ratio", type=float, default=0.1, help="Minimum LR as a ratio of initial LR")
     parser.add_argument("--kl_target", type=float, default=None)
     parser.add_argument("--kl_horizon", type=int, default=10000)
     parser.add_argument("--init_kl_coef", type=float, default=0.01, help="KL penalty in PPO")
@@ -427,25 +420,41 @@ if __name__ == "__main__":
         default=None,
         help="Entropy loss coef, set to 0 means only enable entropy logs",
     )
-    parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
-    parser.add_argument("--adam_eps", type=float, default=1e-8, help="Epsilon for Adam/AdamW optimizer")
     parser.add_argument("--reward_clip_range", type=float, nargs=2, default=(-10, 10), help="Reward clip range")
 
-    # Muon optimizer (requires deepspeed >= 0.18.2). Defaults follow DeepSpeed's recommendation.
-    parser.add_argument("--optim", type=str, default="adam", choices=["adam", "muon"], help="Optimizer type")
-    parser.add_argument("--muon_lr", type=float, default=0.02, help="Learning rate for Muon param group (2D weights)")
-    parser.add_argument("--muon_momentum", type=float, default=0.95, help="Momentum for Muon optimizer")
-    parser.add_argument("--muon_ns_steps", type=int, default=5, help="Newton-Schulz iteration steps for Muon")
-    parser.add_argument("--muon_nesterov", action="store_true", default=True, help="Enable Nesterov momentum in Muon")
-    parser.add_argument(
-        "--no_muon_nesterov", dest="muon_nesterov", action="store_false", help="Disable Nesterov momentum"
-    )
-    parser.add_argument(
-        "--muon_adam_lr",
-        type=float,
-        default=None,
-        help="LR for Muon's Adam subgroup (embeddings/head/1D). Defaults to --actor_learning_rate if unset.",
-    )
+    # Optimizer + scheduler + grad clip, per entity (actor / critic).
+    # Dotted CLI (--actor.muon.lr, --critic.adam.lr) → hierarchize() turns into
+    # args.actor.muon.lr / args.critic.adam.lr / etc.
+    for prefix in ("actor", "critic"):
+        parser.add_argument(f"--{prefix}.optim", type=str, default="adam", choices=["adam", "muon"])
+        # Muon variant
+        parser.add_argument(
+            f"--{prefix}.muon.lr", type=float, default=0.02, help=f"Learning rate for {prefix}'s Muon 2D-weight group"
+        )
+        parser.add_argument(f"--{prefix}.muon.momentum", type=float, default=0.95)
+        parser.add_argument(f"--{prefix}.muon.ns_steps", type=int, default=5)
+        parser.add_argument(f"--{prefix}.muon.nesterov", action="store_true", default=True)
+        parser.add_argument(f"--{prefix}.muon.no_nesterov", dest=f"{prefix}.muon.nesterov", action="store_false")
+        parser.add_argument(
+            f"--{prefix}.muon.adam_lr",
+            type=float,
+            default=None,
+            help=f"LR for {prefix}'s Muon aux-Adam subgroup; None → fallback to --{prefix}.adam.lr",
+        )
+        parser.add_argument(f"--{prefix}.muon.adam_betas", type=float, nargs=2, default=(0.9, 0.95))
+        parser.add_argument(f"--{prefix}.muon.adam_eps", type=float, default=1e-8)
+        parser.add_argument(f"--{prefix}.muon.weight_decay", type=float, default=0.0)
+        # Pure Adam variant
+        parser.add_argument(f"--{prefix}.adam.lr", type=float, default=1e-6 if prefix == "actor" else 9e-6)
+        parser.add_argument(f"--{prefix}.adam.betas", type=float, nargs=2, default=(0.9, 0.95))
+        parser.add_argument(f"--{prefix}.adam.eps", type=float, default=1e-8)
+        parser.add_argument(f"--{prefix}.adam.weight_decay", type=float, default=0.0)
+        # Scheduler
+        parser.add_argument(f"--{prefix}.lr_scheduler", type=str, default="cosine_with_min_lr")
+        parser.add_argument(f"--{prefix}.lr_warmup_ratio", type=float, default=0.03)
+        parser.add_argument(f"--{prefix}.min_lr_ratio", type=float, default=0.1)
+        # Gradient clip
+        parser.add_argument(f"--{prefix}.max_norm", type=float, default=1.0)
 
     # Reinforce/GRPO, etc
     parser.add_argument(
@@ -556,6 +565,9 @@ if __name__ == "__main__":
     parser.add_argument("--use_ms", action="store_true", default=False)
 
     args = parser.parse_args()
+    from openrlhf.utils.config import hierarchize
+
+    args = hierarchize(args)
 
     # Validate arguments
     if args.eps_clip_low_high is None:
