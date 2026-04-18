@@ -115,7 +115,7 @@ def train(args):
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
 
     # strategy prepare — optimizer & scheduler created by DeepSpeed from config
-    ((model, optim, scheduler), ref_model) = strategy.prepare((model, args.learning_rate, max_steps), ref_model)
+    (model, optim, scheduler), ref_model = strategy.prepare((model, args.learning_rate, max_steps), ref_model)
 
     # load checkpoint
     consumed_samples = 0

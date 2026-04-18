@@ -105,7 +105,7 @@ def train(args):
         )
 
     # strategy prepare — optimizer & scheduler created by DeepSpeed from config
-    (model, optim, scheduler) = strategy.prepare((model, args.learning_rate, max_steps))
+    model, optim, scheduler = strategy.prepare((model, args.learning_rate, max_steps))
 
     # load checkpoint
     consumed_samples = 0
