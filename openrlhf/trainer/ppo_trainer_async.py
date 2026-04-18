@@ -233,7 +233,7 @@ class TrainingActor(BasePPOTrainer):
             status["timing/step_total"] = time.time() - step_start_time
             step_start_time = time.time()
 
-            if self.args.dynamic_filtering:
+            if self.args.algo.dynamic_filtering:
                 status["dynamic_filtering_pass_rate"] = filter_pass_rate
 
             log_status = {k: v for k, v in status.items() if k not in ["generated_samples"]}

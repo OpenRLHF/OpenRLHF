@@ -267,7 +267,7 @@ class BasePPOTrainer(ABC):
 
         # Decide whether to train critic/actor this round (actor can be frozen initially).
         run_critic = self.critic_model_group is not None
-        run_actor = global_steps > self.args.freezing_actor_steps and self.actor_model_group is not None
+        run_actor = global_steps > self.args.actor.freezing_steps and self.actor_model_group is not None
 
         def _run_sleep(group, **kwargs):
             # Sleep mode: reload -> fit -> offload (smaller GPU memory).
@@ -535,7 +535,7 @@ class PPOTrainer(BasePPOTrainer):
                 status["timing/step_total"] = sum(v for k, v in status.items() if k.startswith("timing/"))
 
                 # Add generated samples to status dictionary
-                if self.args.dynamic_filtering:
+                if self.args.algo.dynamic_filtering:
                     status["dynamic_filtering_pass_rate"] = filter_pass_rate
                 log_status = {k: v for k, v in status.items() if k not in ["generated_samples"]}
                 logger.info(f"✨ Global step {global_step}: {log_status}")

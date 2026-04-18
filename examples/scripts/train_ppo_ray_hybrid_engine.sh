@@ -1,20 +1,20 @@
 set -x
 
 python3 -m openrlhf.cli.train_ppo_ray \
-   --ref_num_nodes 1 \
-   --ref_num_gpus_per_node 8 \
-   --reward_num_nodes 1 \
-   --reward_num_gpus_per_node 8 \
-   --critic_num_nodes 1 \
-   --critic_num_gpus_per_node 8 \
-   --actor_num_nodes 1 \
-   --actor_num_gpus_per_node 8 \
+   --ref.num_nodes 1 \
+   --ref.num_gpus_per_node 8 \
+   --reward.num_nodes 1 \
+   --reward.num_gpus_per_node 8 \
+   --critic.num_nodes 1 \
+   --critic.num_gpus_per_node 8 \
+   --actor.num_nodes 1 \
+   --actor.num_gpus_per_node 8 \
    --vllm_num_engines 4 \
    --vllm_tensor_parallel_size 2 \
    --colocate_all_models \
    --vllm_gpu_memory_utilization 0.5 \
-   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-   --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \
+   --actor.model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
+   --reward.model_name_or_path OpenRLHF/Llama-3-8b-rm-700k \
    --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
    --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
    --save_hf_ckpt \
@@ -32,8 +32,8 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --prompt_data OpenRLHF/prompt-collection-v0.1 \
    --input_key context_messages \
    --apply_chat_template \
-   --normalize_reward \
-   --gradient_checkpointing \
+   --reward.normalize \
+   --actor.gradient_checkpointing \
    --packing_samples \
    --vllm_sync_backend nccl \
    --enforce_eager \
@@ -47,5 +47,5 @@ python3 -m openrlhf.cli.train_ppo_ray \
 #    --ds_tensor_parallel_size 2 \
 
 # Enable Ring-Attention
-#    --ring_attn_size 4 \
-#    --ring_head_stride 2 \
+#    --actor.ring_attn_size 4 \
+#    --actor.ring_attn_head_stride 2 \

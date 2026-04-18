@@ -73,10 +73,10 @@ class ActorPPOTrainer(ABC):
         self.max_epochs = self.args.max_epochs
 
         self.actor_loss_fn = PolicyLoss(
-            clip_eps_low=self.args.eps_clip_low_high[0],
-            clip_eps_high=self.args.eps_clip_low_high[1],
-            dual_clip=self.args.dual_clip,
-            policy_loss_type=self.args.policy_loss_type,
+            clip_eps_low=self.args.actor.eps_clip_low_high[0],
+            clip_eps_high=self.args.actor.eps_clip_low_high[1],
+            dual_clip=self.args.actor.dual_clip,
+            policy_loss_type=self.args.actor.policy_loss_type,
             enable_vllm_is_correction=self.args.enable_vllm_is_correction,
             vllm_is_truncated_threshold=(
                 self.args.vllm_is_truncated_threshold if self.args.enable_vllm_is_correction else None
@@ -85,7 +85,7 @@ class ActorPPOTrainer(ABC):
         )
 
         # Mixtral 8x7b
-        self.aux_loss = self.args.aux_loss_coef > 1e-8
+        self.aux_loss = self.args.actor.aux_loss_coef > 1e-8
 
         self.replay_buffer = NaiveReplayBuffer(
             micro_train_batch_size,
@@ -274,7 +274,7 @@ class ActorPPOTrainer(ABC):
             return_output=True,
             ring_attn_group=self.strategy.ring_attn_group,
             packed_seq_lens=packed_seq_lens,
-            return_entropy=self.args.entropy_loss_coef is not None,
+            return_entropy=self.args.actor.entropy_coef is not None,
             **mm_inputs,
         )
 
@@ -312,12 +312,12 @@ class ActorPPOTrainer(ABC):
         loss = actor_loss + kl_loss * kl_ctl
         # mixtral
         if self.aux_loss:
-            loss += output.aux_loss * self.args.aux_loss_coef
+            loss += output.aux_loss * self.args.actor.aux_loss_coef
         # entropy loss
-        if self.args.entropy_loss_coef is not None:
+        if self.args.actor.entropy_coef is not None:
             entropy_loss = masked_mean(output.entropy[:, -experience.action_mask.shape[1] :], experience.action_mask)
-            if self.args.entropy_loss_coef != 0:
-                loss -= entropy_loss * self.args.entropy_loss_coef
+            if self.args.actor.entropy_coef != 0:
+                loss -= entropy_loss * self.args.actor.entropy_coef
 
         if self.args.use_dynamic_batch:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
@@ -339,7 +339,7 @@ class ActorPPOTrainer(ABC):
         # Per-token losses (0-D tensors, shape carries weighting info for ppo_train)
         metrics = {"policy_loss": actor_loss.detach()}
         weights = {"policy_loss": "token"}
-        if self.args.entropy_loss_coef is not None:
+        if self.args.actor.entropy_coef is not None:
             metrics["entropy_loss"] = entropy_loss.detach()
             weights["entropy_loss"] = "token"
 
@@ -482,17 +482,17 @@ class PolicyModelActor(BaseModelActor):
 
         actor = Actor(
             pretrain,
-            attn_implementation=strategy.args.attn_implementation,
+            attn_implementation=strategy.args.actor.attn_implementation,
             param_dtype=strategy.args.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.load_in_4bit,
-            lora_rank=strategy.args.lora_rank,
-            lora_alpha=strategy.args.lora_alpha,
-            target_modules=strategy.args.target_modules,
-            lora_dropout=strategy.args.lora_dropout,
+            load_in_4bit=strategy.args.actor.load_in_4bit,
+            lora_rank=strategy.args.actor.lora.rank,
+            lora_alpha=strategy.args.actor.lora.alpha,
+            target_modules=strategy.args.actor.lora.target_modules,
+            lora_dropout=strategy.args.actor.lora.dropout,
             ds_config=strategy.get_ds_train_config(is_actor=True),
             packing_samples=strategy.args.packing_samples,
             temperature=strategy.args.temperature,
-            use_liger_kernel=strategy.args.use_liger_kernel,
+            use_liger_kernel=strategy.args.actor.use_liger_kernel,
             freeze_visual_encoder=getattr(strategy.args, "freeze_visual_encoder", False),
         )
         strategy.print(actor)
@@ -505,18 +505,18 @@ class PolicyModelActor(BaseModelActor):
         if args.enable_ema:
             ema_model = Actor(
                 pretrain,
-                attn_implementation=strategy.args.attn_implementation,
+                attn_implementation=strategy.args.actor.attn_implementation,
                 param_dtype=strategy.args.param_dtype,  # default: bf16
-                load_in_4bit=strategy.args.load_in_4bit,
+                load_in_4bit=strategy.args.actor.load_in_4bit,
                 ds_config=strategy.get_ds_eval_config(offload=True),
                 packing_samples=strategy.args.packing_samples,
             )
         else:
             ema_model = None
 
-        if args.gradient_checkpointing:
+        if args.actor.gradient_checkpointing:
             actor.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
+                gradient_checkpointing_kwargs={"use_reentrant": args.actor.gradient_checkpointing_reentrant}
             )
 
         actor_cfg = dict(
@@ -558,7 +558,7 @@ class PolicyModelActor(BaseModelActor):
             actor_scheduler=self.actor_scheduler,
             micro_train_batch_size=args.micro_train_batch_size,
             tokenizer=self.tokenizer,
-            eps_clip=args.eps_clip,
+            eps_clip=args.actor.eps_clip,
             ema_beta=args.ema_beta,
             vllm_engines=self.vllm_engines,
         )

@@ -110,14 +110,14 @@ class SamplesGenerator:
             experiences, prompts_consumed, dl_exhausted = self._generate_vllm(
                 dataloader_iter=self._dataloader_iter,
                 num_prompts=gen_batch_size,
-                dynamic_filtering=self.args.dynamic_filtering,
+                dynamic_filtering=self.args.algo.dynamic_filtering,
                 **generate_kwargs,
             )
 
             if self.args.vllm_enable_sleep:
                 batch_vllm_engine_call(self.vllm_engines, "sleep")
 
-            if self.args.dynamic_filtering and prompts_consumed:
+            if self.args.algo.dynamic_filtering and prompts_consumed:
                 filter_pass_rate = len(experiences) / prompts_consumed * 100
 
             self._sample_buffer.extend(experiences)
@@ -167,7 +167,7 @@ class SamplesGenerator:
                 if dynamic_filtering and all(e.scores is not None for e in experiences):
                     scores = [e.scores[0].item() for e in experiences]
                     avg_reward = sum(scores) / len(scores)
-                    min_r, max_r = self.args.dynamic_filtering_reward_range
+                    min_r, max_r = self.args.algo.dynamic_filtering_range
                     if not (min_r < avg_reward < max_r):
                         logger.info(
                             f"Filtered out: avg_reward={avg_reward:.2f}, threshold=({min_r:.2f}, {max_r:.2f}), scores={[f'{s:.2f}' for s in scores]}"

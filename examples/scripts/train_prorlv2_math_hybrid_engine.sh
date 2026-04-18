@@ -4,7 +4,7 @@
 #
 # Key techniques:
 # - REINFORCE++-baseline with batch advantage normalization
-# - Clip-Higher (--eps_clip_low_high 0.2 0.27) for exploration
+# - Clip-Higher (--actor.eps_clip_low_high 0.2 0.27) for exploration
 # - Dynamic Sampling (--dynamic_filtering) to reduce noise
 # - KL-regularized trust regions (--use_kl_loss --kl_estimator k2)
 # - TIS/ICEPOP/MIS (--vllm_is_correction_type) for importance sampling correction
@@ -27,10 +27,10 @@ SAVE_PATH="${WORK_DIR}/exp/DeepSeek-R1-Qwen-1.5B-PRORLV2"
 REWARD_FUNC_PATH="${WORK_DIR}/examples/python/math_reward_func.py"
 
 python3 -m openrlhf.cli.train_ppo_ray \
-   --ref_num_nodes 1 \
-   --ref_num_gpus_per_node 8 \
-   --actor_num_nodes 1 \
-   --actor_num_gpus_per_node 8 \
+   --ref.num_nodes 1 \
+   --ref.num_gpus_per_node 8 \
+   --actor.num_nodes 1 \
+   --actor.num_gpus_per_node 8 \
    --vllm_num_engines 8 \
    --vllm_tensor_parallel_size 1 \
    --colocate_all_models \
@@ -40,11 +40,11 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --use_kl_loss \
    --kl_estimator k2 \
    --advantage_estimator reinforce_baseline \
-   --dynamic_filtering \
-   --dynamic_filtering_reward_range 0 1 \
-   --eps_clip_low_high 0.2 0.27 \
-   --pretrain ${MODEL_PATH} \
-   --remote_rm_url ${REWARD_FUNC_PATH} \
+   --algo.dynamic_filtering \
+   --algo.dynamic_filtering_range 0 1 \
+   --actor.eps_clip_low_high 0.2 0.27 \
+   --actor.model_name_or_path ${MODEL_PATH} \
+   --reward.remote_url ${REWARD_FUNC_PATH} \
    --save_path ${SAVE_PATH} \
    --ckpt_path "${SAVE_PATH}/ckpt" \
    --save_steps 5 \
@@ -67,7 +67,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --eval_temperature 1.0 \
    --eval_n_samples_per_prompt 4 \
    --apply_chat_template \
-   --gradient_checkpointing \
+   --actor.gradient_checkpointing \
    --packing_samples \
    --vllm_sync_backend nccl \
    --enforce_eager \
@@ -77,7 +77,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --vllm_is_truncated_threshold 0.5 5.0 \
    --vllm_is_correction_type icepop \
    --train_max_tokens_per_gpu 32768 \
-   --stop_properly_penalty_coef 0.0
+   --reward.stop_properly_penalty_coef 0.0
 
 # ProRL v2 Key Parameters:
 #
@@ -92,12 +92,12 @@ python3 -m openrlhf.cli.train_ppo_ray \
 # Length Penalty (Two options, can be used together):
 #
 # Option 1: Overlong Penalty (Scheduled Cosine Length Penalty based on response length)
-#   --overlong_buffer_len 6144: Buffer length before max, penalty starts when response > (max_new_tokens - overlong_buffer_len)
-#   --overlong_penalty_factor 1.0: Maximum penalty factor for overlong outputs
+#   --reward.overlong_buffer_len 6144: Buffer length before max, penalty starts when response > (max_new_tokens - overlong_buffer_len)
+#   --reward.overlong_penalty_factor 1.0: Maximum penalty factor for overlong outputs
 #   Formula: penalty = -min(exceed_len, buffer_len) / buffer_len * penalty_factor
 #
 # Option 2: Stop Properly Penalty (based on vLLM finish_reason == "length")
-#   --stop_properly_penalty_coef 0.0: Penalty coefficient [0,1] for truncated samples
+#   --reward.stop_properly_penalty_coef 0.0: Penalty coefficient [0,1] for truncated samples
 #   Truncated sample rewards are scaled by this coefficient (0.0 = zero reward for truncated)
 #   This encourages the model to generate complete responses within max_tokens limit
 #

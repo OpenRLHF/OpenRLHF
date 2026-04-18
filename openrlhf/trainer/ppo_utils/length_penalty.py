@@ -123,28 +123,28 @@ def apply_length_penalties(experiences: List, args) -> None:
     total_samples = sum(len(exp.rewards) for exp in experiences)
 
     # DAPO-style overlong penalty based on response length
-    if getattr(args, "overlong_buffer_len", None) is not None:
+    if getattr(args.reward, "overlong_buffer_len", None) is not None:
         max_new_tokens = getattr(args, "max_new_tokens", None) or args.max_len
         num_penalized = apply_overlong_penalty(
             experiences=experiences,
             max_new_tokens=max_new_tokens,
-            overlong_buffer_len=args.overlong_buffer_len,
-            overlong_penalty_factor=getattr(args, "overlong_penalty_factor", 1.0),
+            overlong_buffer_len=args.reward.overlong_buffer_len,
+            overlong_penalty_factor=getattr(args.reward, "overlong_penalty_factor", 1.0),
         )
         logger.info(
             f"[DAPO Overlong Penalty] {num_penalized}/{total_samples} samples penalized, "
-            f"buffer_len={args.overlong_buffer_len}, factor={getattr(args, 'overlong_penalty_factor', 1.0)}"
+            f"buffer_len={args.reward.overlong_buffer_len}, factor={getattr(args, 'overlong_penalty_factor', 1.0)}"
         )
 
     # ProRL-style stop properly penalty based on finish_reason
-    if getattr(args, "stop_properly_penalty_coef", None) is not None:
+    if getattr(args.reward, "stop_properly_penalty_coef", None) is not None:
         num_truncated = apply_stop_properly_penalty(
             experiences=experiences,
-            stop_properly_penalty_coef=args.stop_properly_penalty_coef,
+            stop_properly_penalty_coef=args.reward.stop_properly_penalty_coef,
         )
         logger.info(
             f"[ProRL Stop Properly Penalty] {num_truncated}/{total_samples} samples truncated, "
-            f"coef={args.stop_properly_penalty_coef}"
+            f"coef={args.reward.stop_properly_penalty_coef}"
         )
 
     # Sync info["reward"] with the modified rewards so logged metrics reflect penalties

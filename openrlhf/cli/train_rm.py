@@ -18,23 +18,25 @@ def train(args):
     # configure model
     # load huggingface model/config
     model = get_llm_for_sequence_regression(
-        args.pretrain,
+        args.actor.model_name_or_path,
         "reward",
-        attn_implementation=args.attn_implementation,
+        attn_implementation=args.actor.attn_implementation,
         param_dtype=args.param_dtype,  # default: bf16
-        load_in_4bit=args.load_in_4bit,
-        lora_rank=args.lora_rank,
-        lora_alpha=args.lora_alpha,
-        target_modules=args.target_modules,
-        lora_dropout=args.lora_dropout,
+        load_in_4bit=args.actor.load_in_4bit,
+        lora_rank=args.actor.lora.rank,
+        lora_alpha=args.actor.lora.alpha,
+        target_modules=args.actor.lora.target_modules,
+        lora_dropout=args.actor.lora.dropout,
         ds_config=strategy.get_ds_train_config(is_actor=False),
         init_value_head=True,
-        value_head_prefix=args.value_head_prefix,
+        value_head_prefix=args.actor.value_head_prefix,
         packing_samples=args.packing_samples,
     )
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model, "left", strategy, use_fast=not args.disable_fast_tokenizer)
+    tokenizer = get_tokenizer(
+        args.actor.model_name_or_path, model, "left", strategy, use_fast=not args.disable_fast_tokenizer
+    )
 
     strategy.print(model)
 
@@ -99,9 +101,9 @@ def train(args):
     max_steps = math.ceil(args.max_epochs * num_update_steps_per_epoch)
 
     # gradient_checkpointing
-    if args.gradient_checkpointing:
+    if args.actor.gradient_checkpointing:
         model.gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
+            gradient_checkpointing_kwargs={"use_reentrant": args.actor.gradient_checkpointing_reentrant}
         )
 
     cfg = dict(
@@ -138,7 +140,7 @@ def train(args):
         scheduler=scheduler,
         max_norm=args.max_norm,
         max_epochs=args.max_epochs,
-        loss=args.loss,
+        loss=args.actor.loss_type,
         save_hf_ckpt=args.save_hf_ckpt,
         disable_ds_ckpt=args.disable_ds_ckpt,
     )
@@ -148,7 +150,7 @@ def train(args):
     # Save value_head_prefix
     strategy.print("Save value_head_prefix in config")
     unwrap_model = strategy._unwrap_model(model)
-    unwrap_model.config.value_head_prefix = args.value_head_prefix
+    unwrap_model.config.value_head_prefix = args.actor.value_head_prefix
 
     # save model checkpoint after fitting on only rank0
     strategy.save_model(model, tokenizer, args.save_path)
@@ -171,7 +173,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_ds_universal_ckpt", action="store_true", default=False)
 
     # DeepSpeed
-    parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
+    parser.add_argument("--actor.gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--deepcompile", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -192,26 +194,26 @@ if __name__ == "__main__":
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument(
-        "--attn_implementation",
+        "--actor.attn_implementation",
         type=str,
         default="flash_attention_2",
         help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
     )
     parser.add_argument("--grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
     parser.add_argument("--overlap_comm", action="store_true", default=False)
-    parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
+    parser.add_argument("--actor.gradient_checkpointing_reentrant", action="store_true", default=False)
     parser.add_argument("--disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument("--dataloader_num_workers", type=int, default=0, help="Number of dataloader workers for IO")
     parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed Tensor parallel size")
 
     # Models
-    parser.add_argument("--pretrain", type=str, default=None)
-    parser.add_argument("--value_head_prefix", type=str, default="score")
+    parser.add_argument("--actor.model_name_or_path", type=str, default=None)
+    parser.add_argument("--actor.value_head_prefix", type=str, default="score")
 
     # Context Parallel
-    parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")
+    parser.add_argument("--actor.ring_attn_size", type=int, default=1, help="Ring attention group size")
     parser.add_argument(
-        "--ring_head_stride",
+        "--actor.ring_attn_head_stride",
         type=int,
         default=1,
         help="the number of heads to do ring attention each time. "
@@ -220,20 +222,20 @@ if __name__ == "__main__":
     )
 
     # LoRA
-    parser.add_argument("--load_in_4bit", action="store_true", default=False)
-    parser.add_argument("--lora_rank", type=int, default=0)
-    parser.add_argument("--lora_alpha", type=int, default=16)
-    parser.add_argument("--lora_dropout", type=float, default=0)
-    parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")
+    parser.add_argument("--actor.load_in_4bit", action="store_true", default=False)
+    parser.add_argument("--actor.lora.rank", type=int, default=0)
+    parser.add_argument("--actor.lora.alpha", type=int, default=16)
+    parser.add_argument("--actor.lora.dropout", type=float, default=0)
+    parser.add_argument("--actor.lora.target_modules", type=str, nargs="*", default="all-linear")
 
     # RM training
     parser.add_argument("--max_epochs", type=int, default=1)
-    parser.add_argument("--aux_loss_coef", type=float, default=0, help="MoE balancing loss")
-    parser.add_argument("--compute_fp32_loss", action="store_true", default=False)
-    parser.add_argument("--margin_loss", action="store_true", default=False)
+    parser.add_argument("--actor.aux_loss_coef", type=float, default=0, help="MoE balancing loss")
+    parser.add_argument("--actor.compute_fp32_loss", action="store_true", default=False)
+    parser.add_argument("--actor.margin_loss", action="store_true", default=False)
     parser.add_argument("--micro_train_batch_size", type=int, default=1)
     parser.add_argument("--train_batch_size", type=int, default=128, help="Global training batch size")
-    parser.add_argument("--loss", type=str, default="sigmoid")
+    parser.add_argument("--actor.loss_type", type=str, default="sigmoid")
 
     # Optimizer + scheduler + grad clip.  Dotted CLI (--muon.lr, --adam.lr) →
     # hierarchize() later turns these into args.muon.lr / args.adam.lr / etc.
@@ -319,14 +321,14 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
-    if args.ring_attn_size > 1:
+    if args.actor.ring_attn_size > 1:
         assert args.packing_samples, "packing_samples must be enabled when using ring attention"
 
-    if args.packing_samples and "flash_attention" not in args.attn_implementation:
+    if args.packing_samples and "flash_attention" not in args.actor.attn_implementation:
         print(
             "[Warning] Please use --attn_implementation with flash_attention to accelerate when --packing_samples is enabled."
         )
-        args.attn_implementation = "flash_attention_2"
+        args.actor.attn_implementation = "flash_attention_2"
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub

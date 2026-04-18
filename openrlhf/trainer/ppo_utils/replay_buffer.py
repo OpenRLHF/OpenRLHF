@@ -91,7 +91,7 @@ class NaiveReplayBuffer(ABC):
         sample_lengths = [sample.total_length.item() for sample in self.items]
 
         world_size = dist.get_world_size()
-        dp_size = world_size // args.ring_attn_size // args.ds_tensor_parallel_size
+        dp_size = world_size // args.actor.ring_attn_size // args.ds_tensor_parallel_size
         local_train_batch_size = args.train_batch_size // dp_size
         num_steps = args.rollout_batch_size * args.n_samples_per_prompt // args.train_batch_size
 
@@ -103,7 +103,7 @@ class NaiveReplayBuffer(ABC):
                 get_minimum_num_micro_batch_size(
                     sample_lengths[start:end],
                     args.train_max_tokens_per_gpu,
-                    args.ring_attn_size,
+                    args.actor.ring_attn_size,
                     args.ds_tensor_parallel_size,
                 )
             )

@@ -59,7 +59,7 @@ class CriticPPOTrainer(ABC):
         self.critic_loss_fn = ValueLoss(value_clip)
 
         # Mixtral 8x7b
-        self.aux_loss = self.args.aux_loss_coef > 1e-8
+        self.aux_loss = self.args.actor.aux_loss_coef > 1e-8
 
     def ppo_train(self):
         # replay buffer may be empty at first, we should rebuild at each training
@@ -141,7 +141,7 @@ class CriticPPOTrainer(ABC):
             aux_loss = output.aux_loss
         else:
             aux_loss = 0
-        loss = critic_loss + aux_loss * self.args.aux_loss_coef
+        loss = critic_loss + aux_loss * self.args.actor.aux_loss_coef
         if self.args.use_dynamic_batch:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
 
@@ -172,32 +172,32 @@ class CriticModelActor(BaseModelActor):
         critic = get_llm_for_sequence_regression(
             pretrain,
             "critic",
-            normalize_reward=strategy.args.normalize_reward,
-            attn_implementation=strategy.args.attn_implementation,
+            normalize_reward=strategy.args.reward.normalize,
+            attn_implementation=strategy.args.actor.attn_implementation,
             param_dtype=strategy.args.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.load_in_4bit,
-            lora_rank=strategy.args.lora_rank,
-            lora_alpha=strategy.args.lora_alpha,
-            target_modules=strategy.args.target_modules,
-            lora_dropout=strategy.args.lora_dropout,
+            load_in_4bit=strategy.args.actor.load_in_4bit,
+            lora_rank=strategy.args.actor.lora.rank,
+            lora_alpha=strategy.args.actor.lora.alpha,
+            target_modules=strategy.args.actor.lora.target_modules,
+            lora_dropout=strategy.args.actor.lora.dropout,
             ds_config=strategy.get_ds_train_config(is_actor=False),
-            value_head_prefix=strategy.args.value_head_prefix,
-            init_value_head=strategy.args.pretrain == strategy.args.critic_pretrain,
+            value_head_prefix=strategy.args.reward.value_head_prefix,
+            init_value_head=strategy.args.actor.model_name_or_path == strategy.args.critic.model_name_or_path,
             packing_samples=strategy.args.packing_samples,
         )
         strategy.print(critic)
-        strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
+        strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize))
         strategy.print("mean: {}, std {}".format(critic.mean, critic.std))
 
         # configure tokenizer
-        if strategy.args.save_value_network:
+        if strategy.args.critic.save_value_network:
             self.tokenizer = get_tokenizer(
                 pretrain, critic, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer
             )
 
-        if args.gradient_checkpointing:
+        if args.actor.gradient_checkpointing:
             critic.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
+                gradient_checkpointing_kwargs={"use_reentrant": args.actor.gradient_checkpointing_reentrant}
             )
 
         # Critic reads its own args.critic.* sub-namespace.  Typical setup: actor may
@@ -231,7 +231,7 @@ class CriticModelActor(BaseModelActor):
             critic_optim=self.critic_optim,
             critic_scheduler=self.critic_scheduler,
             micro_train_batch_size=args.micro_train_batch_size,
-            value_clip=args.value_clip,
+            value_clip=args.critic.value_clip,
         )
 
     def forward(

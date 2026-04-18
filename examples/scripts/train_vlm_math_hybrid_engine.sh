@@ -19,7 +19,7 @@
 # VLM-specific parameters:
 #   --image_key images               # Dataset key for image paths/URLs
 #   --max_images_per_prompt 1        # Max images per prompt for vLLM
-#   --freeze_visual_encoder          # Freeze vision encoder (only train language model)
+#   --actor.freeze_visual_encoder          # Freeze vision encoder (only train language model)
 
 set -x
 
@@ -35,10 +35,10 @@ SAVE_PATH="${WORK_DIR}/exp/Qwen3.5-2B-VLM-RLHF"
 REWARD_FUNC_PATH="${WORK_DIR}/examples/python/math_reward_func.py"
 
 python3 -m openrlhf.cli.train_ppo_ray \
-   --ref_num_nodes 1 \
-   --ref_num_gpus_per_node 4 \
-   --actor_num_nodes 1 \
-   --actor_num_gpus_per_node 4 \
+   --ref.num_nodes 1 \
+   --ref.num_gpus_per_node 4 \
+   --actor.num_nodes 1 \
+   --actor.num_gpus_per_node 4 \
    --vllm_num_engines 4 \
    --vllm_tensor_parallel_size 1 \
    --colocate_all_models \
@@ -48,8 +48,8 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --use_kl_loss \
    --kl_estimator k2 \
    --advantage_estimator reinforce_baseline \
-   --pretrain ${MODEL_PATH} \
-   --remote_rm_url ${REWARD_FUNC_PATH} \
+   --actor.model_name_or_path ${MODEL_PATH} \
+   --reward.remote_url ${REWARD_FUNC_PATH} \
    --save_path ${SAVE_PATH} \
    --ckpt_path "${SAVE_PATH}/ckpt" \
    --save_hf_ckpt \
@@ -71,10 +71,10 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --label_key label \
    --image_key images \
    --max_images_per_prompt 1 \
-   --freeze_visual_encoder \
+   --actor.freeze_visual_encoder \
    --apply_chat_template \
-   --gradient_checkpointing \
-   --attn_implementation eager \
+   --actor.gradient_checkpointing \
+   --actor.attn_implementation eager \
    --vllm_sync_backend nccl \
    --enforce_eager \
    --vllm_enable_sleep \
@@ -101,5 +101,5 @@ python3 -m openrlhf.cli.train_ppo_ray \
 #   Images in the dataset should be a list of paths/URLs.
 #
 # Attention implementation:
-#   Use --attn_implementation eager for models with linear attention (Qwen3.5).
+#   Use --actor.attn_implementation eager for models with linear attention (Qwen3.5).
 #   Flash attention may not support packed sequences with linear attention layers.

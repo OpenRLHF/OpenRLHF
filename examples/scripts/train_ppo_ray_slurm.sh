@@ -56,20 +56,20 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
 && /root/.local/bin/ray job submit --address=http://localhost:8265 \
     --runtime-env-json='{\"working_dir\": \"/openrlhf\", \"pip\": \"/openrlhf/requirements.txt\"}' \
     -- python3 -m openrlhf.cli.train_ppo_ray \
-    --ref_num_nodes 1 \
-    --ref_num_gpus_per_node 4 \
-    --reward_num_nodes 1 \
-    --reward_num_gpus_per_node 4 \
-    --critic_num_nodes 1 \
-    --critic_num_gpus_per_node 4 \
-    --actor_num_nodes 1 \
-    --actor_num_gpus_per_node 4 \
+    --ref.num_nodes 1 \
+    --ref.num_gpus_per_node 4 \
+    --reward.num_nodes 1 \
+    --reward.num_gpus_per_node 4 \
+    --critic.num_nodes 1 \
+    --critic.num_gpus_per_node 4 \
+    --actor.num_nodes 1 \
+    --actor.num_gpus_per_node 4 \
     --vllm_num_engines 4 \
     --vllm_tensor_parallel_size 2 \
     --colocate_critic_reward \
     --colocate_actor_ref \
-    --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-    --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
+    --actor.model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
+    --reward.model_name_or_path OpenRLHF/Llama-3-8b-rm-mixture \
     --save_path /openrlhf/examples/checkpoint/llama3-8b-rlhf \
     --micro_train_batch_size 8 \
     --train_batch_size 128 \
@@ -86,11 +86,11 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --prompt_data OpenRLHF/prompt-collection-v0.1 \
     --input_key context_messages \
     --apply_chat_template \
-    --normalize_reward \
+    --reward.normalize \
     --adam_offload \
     --packing_samples \
     --vllm_sync_backend nccl \
-    --gradient_checkpointing \
+    --actor.gradient_checkpointing \
     --use_wandb {wandb_token}" &>> ${JOBLOG}
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') Job ${SLURM_JOB_ID} stopped ..." &>> ${JOBLOG}

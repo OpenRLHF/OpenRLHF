@@ -49,15 +49,15 @@ class RemoteExperienceMaker:
         if self.args.use_dynamic_batch:
             total_lengths = [int(s.total_length.item()) for s in rollout_samples]
             effective_actor_num = (
-                self.args.actor_num_nodes
-                * self.args.actor_num_gpus_per_node
-                // self.args.ring_attn_size
+                self.args.actor.num_nodes
+                * self.args.actor.num_gpus_per_node
+                // self.args.actor.ring_attn_size
                 // self.args.ds_tensor_parallel_size
             )
             minimum_batch_num = get_minimum_num_micro_batch_size(
                 total_lengths,
                 self.args.rollout_max_tokens_per_gpu,
-                self.args.ring_attn_size,
+                self.args.actor.ring_attn_size,
                 self.args.ds_tensor_parallel_size,
             )
             minimum_batch_num = minimum_batch_num // effective_actor_num * effective_actor_num
@@ -117,7 +117,7 @@ class RemoteExperienceMaker:
 
         args = self.strategy.args
         device = "cpu"
-        duplicate_factor = args.ring_attn_size * args.ds_tensor_parallel_size
+        duplicate_factor = args.actor.ring_attn_size * args.ds_tensor_parallel_size
         dummy_ref = ray.put([[None]] * (len(samples_list) * duplicate_factor))
 
         # Extract tensors for batch processing
@@ -275,7 +275,7 @@ class RemoteExperienceMaker:
                 self.kl_ctl.value,
                 experience.kl,
                 action_mask=experience.action_mask,
-                reward_clip_range=args.reward_clip_range,
+                reward_clip_range=args.reward.clip_range,
             )
 
             if self.advantage_estimator == "gae":

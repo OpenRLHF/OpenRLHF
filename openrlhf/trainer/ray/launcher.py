@@ -107,17 +107,17 @@ class ReferenceModelActor(BaseModelActor):
         self._setup_distributed(strategy)
         model = Actor(
             pretrain,
-            attn_implementation=strategy.args.attn_implementation,
+            attn_implementation=strategy.args.actor.attn_implementation,
             param_dtype=strategy.args.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.load_in_4bit,
-            ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
+            load_in_4bit=strategy.args.actor.load_in_4bit,
+            ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref.reward_offload),
             packing_samples=strategy.args.packing_samples,
             temperature=strategy.args.temperature,
-            use_liger_kernel=strategy.args.use_liger_kernel,
+            use_liger_kernel=strategy.args.actor.use_liger_kernel,
         )
         strategy.print(model)
 
-        if strategy.args.ref_reward_offload:
+        if strategy.args.ref.reward_offload:
             model._offload = True
 
         self.model = self.strategy.prepare(model)
@@ -160,19 +160,19 @@ class RewardModelActor(BaseModelActor):
         model = get_llm_for_sequence_regression(
             pretrain,
             "reward",
-            normalize_reward=strategy.args.normalize_reward,
-            attn_implementation=strategy.args.attn_implementation,
+            normalize_reward=strategy.args.reward.normalize,
+            attn_implementation=strategy.args.actor.attn_implementation,
             param_dtype=strategy.args.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.load_in_4bit,
-            ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref_reward_offload),
-            value_head_prefix=strategy.args.value_head_prefix,
+            load_in_4bit=strategy.args.actor.load_in_4bit,
+            ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref.reward_offload),
+            value_head_prefix=strategy.args.reward.value_head_prefix,
             packing_samples=strategy.args.packing_samples,
         )
         strategy.print(model)
-        strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
+        strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize))
         strategy.print("mean: {}, std {}".format(model.mean, model.std))
 
-        if strategy.args.ref_reward_offload:
+        if strategy.args.ref.reward_offload:
             model._offload = True
 
         self.model = self.strategy.prepare(model)

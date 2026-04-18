@@ -1,10 +1,10 @@
 set -x
 
 python3 -m openrlhf.cli.train_ppo_ray \
-   --ref_num_nodes 1 \
-   --ref_num_gpus_per_node 8 \
-   --actor_num_nodes 1 \
-   --actor_num_gpus_per_node 8 \
+   --ref.num_nodes 1 \
+   --ref.num_gpus_per_node 8 \
+   --actor.num_nodes 1 \
+   --actor.num_gpus_per_node 8 \
    --vllm_num_engines 4 \
    --vllm_tensor_parallel_size 2 \
    --colocate_all_models \
@@ -14,11 +14,11 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --use_kl_loss \
    --kl_estimator k3 \
    --advantage_estimator group_norm \
-   --dynamic_filtering \
-   --dynamic_filtering_reward_range 0 1 \
-   --eps_clip_low_high 0.2 0.27 \
-   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-   --remote_rm_url /openrlhf/examples/python/reward_func.py \
+   --algo.dynamic_filtering \
+   --algo.dynamic_filtering_range 0 1 \
+   --actor.eps_clip_low_high 0.2 0.27 \
+   --actor.model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
+   --reward.remote_url /openrlhf/examples/python/reward_func.py \
    --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
    --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
    --save_steps 20 \
@@ -37,7 +37,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --prompt_data OpenRLHF/prompt-collection-v0.1 \
    --input_key context_messages \
    --apply_chat_template \
-   --gradient_checkpointing \
+   --actor.gradient_checkpointing \
    --packing_samples \
    --vllm_sync_backend nccl \
    --enforce_eager \

@@ -15,12 +15,12 @@ logger = init_logger(__name__)
 class RewardModelProxy:
     def __init__(self, args):
         self.reward_model = get_llm_for_sequence_regression(
-            args.reward_pretrain,
+            args.reward.model_name_or_path,
             "reward",
-            normalize_reward=args.normalize_reward,
-            attn_implementation=args.attn_implementation,
+            normalize_reward=args.reward.normalize,
+            attn_implementation=args.actor.attn_implementation,
             param_dtype=args.param_dtype,  # default: bf16
-            load_in_4bit=args.load_in_4bit,
+            load_in_4bit=args.actor.load_in_4bit,
             value_head_prefix=args.value_head_prefix,
             device_map="auto",
             packing_samples=args.packing_samples,
@@ -28,7 +28,7 @@ class RewardModelProxy:
         self.reward_model.eval()
 
         self.tokenizer = get_tokenizer(
-            args.reward_pretrain, self.reward_model, "left", None, use_fast=not args.disable_fast_tokenizer
+            args.reward.model_name_or_path, self.reward_model, "left", None, use_fast=not args.disable_fast_tokenizer
         )
         self.max_length = args.max_len
         self.batch_size = args.batch_size

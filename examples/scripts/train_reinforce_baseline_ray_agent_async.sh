@@ -18,8 +18,8 @@ AGENT_FUNC_PATH="examples/python/agent_func.py"
 # AGENT_FUNC_PATH="{OpenRLHF-Agent/examples/single_turn/agent_func.py}"
 
 CKPT_ARGS=(
-   --pretrain ${MODEL_PATH}
-   # --reward_pretrain ${REWARD_MODEL}
+   --actor.model_name_or_path ${MODEL_PATH}
+   # --reward.model_name_or_path ${REWARD_MODEL}
    --load_checkpoint
 
    --save_path ${SAVE_PATH}
@@ -31,7 +31,7 @@ CKPT_ARGS=(
 
 ROLLOUT_ARGS=(
    --agent_func_path ${AGENT_FUNC_PATH}
-   # --remote_rm_url ${REWARD_FUNC_FILENAME}
+   # --reward.remote_url ${REWARD_FUNC_FILENAME}
 
    --prompt_data ${DATASET_PATH}
    --input_key prompt
@@ -44,8 +44,8 @@ ROLLOUT_ARGS=(
    --rollout_batch_size 128
    --n_samples_per_prompt 8
    --train_batch_size 1024
-   --dynamic_filtering
-   --dynamic_filtering_reward_range 0.0 1.0
+   --algo.dynamic_filtering
+   --algo.dynamic_filtering_range 0.0 1.0
 
    --use_dynamic_batch
    --train_max_tokens_per_gpu 16192
@@ -62,10 +62,10 @@ ENGINE_ARGS=(
    --async_train
    --partial_rollout
 
-   --ref_num_nodes 1
-   --ref_num_gpus_per_node 4
-   --actor_num_nodes 1
-   --actor_num_gpus_per_node 4
+   --ref.num_nodes 1
+   --ref.num_gpus_per_node 4
+   --actor.num_nodes 1
+   --actor.num_gpus_per_node 4
    --vllm_num_engines 2
    --vllm_tensor_parallel_size 2
    --vllm_gpu_memory_utilization 0.95
@@ -75,10 +75,10 @@ ENGINE_ARGS=(
    --enforce_eager
 
    --zero_stage 3
-   --gradient_checkpointing
+   --actor.gradient_checkpointing
    # --adam_offload
-   --ring_attn_size 2
-   --ring_head_stride 2
+   --actor.ring_attn_size 2
+   --actor.ring_attn_head_stride 2
    --param_dtype bf16
 )
 
@@ -86,7 +86,7 @@ OPTIMIZER_ARGS=(
    --advantage_estimator reinforce_baseline
    --actor.adam.lr 5e-7
    # --critic.adam.lr 9e-6
-   --entropy_loss_coef 0.0
+   --actor.entropy_coef 0.0
    --init_kl_coef 1e-5
    --use_kl_loss
    --kl_estimator k2

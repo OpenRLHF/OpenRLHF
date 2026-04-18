@@ -18,40 +18,44 @@ def train(args):
     # configure model
     # load huggingface model
     model = Actor(
-        args.pretrain,
-        attn_implementation=args.attn_implementation,
+        args.actor.model_name_or_path,
+        attn_implementation=args.actor.attn_implementation,
         param_dtype=args.param_dtype,  # default: bf16
-        load_in_4bit=args.load_in_4bit,
-        lora_rank=args.lora_rank,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
-        target_modules=args.target_modules,
+        load_in_4bit=args.actor.load_in_4bit,
+        lora_rank=args.actor.lora.rank,
+        lora_alpha=args.actor.lora.alpha,
+        lora_dropout=args.actor.lora.dropout,
+        target_modules=args.actor.lora.target_modules,
         ds_config=strategy.get_ds_train_config(is_actor=True),
         packing_samples=args.packing_samples,
-        use_liger_kernel=args.use_liger_kernel,
+        use_liger_kernel=args.actor.use_liger_kernel,
     )
 
     # configure tokenizer
-    tokenizer = get_tokenizer(args.pretrain, model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
+    tokenizer = get_tokenizer(
+        args.actor.model_name_or_path, model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer
+    )
     strategy.print(model)
 
     # load weights for ref model
     ref_model = Actor(
-        args.ref_pretrain,
-        attn_implementation=args.attn_implementation,
+        args.ref.model_name_or_path,
+        attn_implementation=args.actor.attn_implementation,
         param_dtype=args.param_dtype,  # default: bf16
-        load_in_4bit=args.load_in_4bit,
-        ds_config=strategy.get_ds_eval_config(offload=args.ref_offload),
+        load_in_4bit=args.actor.load_in_4bit,
+        ds_config=strategy.get_ds_eval_config(offload=args.ref.offload),
         packing_samples=args.packing_samples,
     )
-    if args.ref_offload:
+    if args.ref.offload:
         ref_model._offload = True
-    get_tokenizer(args.pretrain, ref_model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer)
+    get_tokenizer(
+        args.actor.model_name_or_path, ref_model.model, "right", strategy, use_fast=not args.disable_fast_tokenizer
+    )
 
     # gradient_checkpointing
-    if args.gradient_checkpointing:
+    if args.actor.gradient_checkpointing:
         model.gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
+            gradient_checkpointing_kwargs={"use_reentrant": args.actor.gradient_checkpointing_reentrant}
         )
 
     # prepare for data and dataset
@@ -148,7 +152,7 @@ def train(args):
         eval_dataloader=eval_dataloader,
         scheduler=scheduler,
         max_norm=args.max_norm,
-        beta=args.beta,
+        beta=args.actor.beta,
         max_epochs=args.max_epochs,
         save_hf_ckpt=args.save_hf_ckpt,
         disable_ds_ckpt=args.disable_ds_ckpt,
@@ -178,7 +182,7 @@ if __name__ == "__main__":
     parser.add_argument("--micro_train_batch_size", type=int, default=8, help="batch size per GPU")
     parser.add_argument("--train_batch_size", type=int, default=128, help="Global training batch size")
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
-    parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
+    parser.add_argument("--actor.gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--deepcompile", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -198,29 +202,33 @@ if __name__ == "__main__":
         choices=["bf16", "fp16"],
         help="Model data type",
     )
-    parser.add_argument("--ref_offload", action="store_true", default=False)
+    parser.add_argument("--ref.offload", action="store_true", default=False)
     parser.add_argument("--zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument(
-        "--attn_implementation",
+        "--actor.attn_implementation",
         type=str,
         default="flash_attention_2",
         help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
     )
-    parser.add_argument("--use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
+    parser.add_argument("--actor.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
     parser.add_argument("--grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
     parser.add_argument("--overlap_comm", action="store_true", default=False)
-    parser.add_argument("--gradient_checkpointing_use_reentrant", action="store_true", default=False)
+    parser.add_argument("--actor.gradient_checkpointing_reentrant", action="store_true", default=False)
     parser.add_argument("--ds_tensor_parallel_size", type=int, default=1, help="DeepSpeed Tensor parallel size")
 
     # DPO
     parser.add_argument("--max_epochs", type=int, default=1)
-    parser.add_argument("--beta", type=float, default=0.1)
-    parser.add_argument("--ipo", action="store_true", default=False)  # IPO https://arxiv.org/pdf/2310.12036v2.pdf
-    parser.add_argument("--label_smoothing", type=float, default=0.0)  # cDPO https://arxiv.org/pdf/2305.18290.pdf
-    parser.add_argument("--aux_loss_coef", type=float, default=0, help="MoE balancing loss")
+    parser.add_argument("--actor.beta", type=float, default=0.1)
     parser.add_argument(
-        "--nll_loss_coef", type=float, default=0, help="Regularization with NLL loss, see LLama 3.1 tech report."
+        "--actor.ipo", action="store_true", default=False
+    )  # IPO https://arxiv.org/pdf/2310.12036v2.pdf
+    parser.add_argument(
+        "--actor.label_smoothing", type=float, default=0.0
+    )  # cDPO https://arxiv.org/pdf/2305.18290.pdf
+    parser.add_argument("--actor.aux_loss_coef", type=float, default=0, help="MoE balancing loss")
+    parser.add_argument(
+        "--actor.nll_loss_coef", type=float, default=0, help="Regularization with NLL loss, see LLama 3.1 tech report."
     )
 
     # Optimizer + scheduler + grad clip.  Dotted CLI (--muon.lr, --adam.lr) →
@@ -256,9 +264,9 @@ if __name__ == "__main__":
     parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
 
     # Context Parallel
-    parser.add_argument("--ring_attn_size", type=int, default=1, help="Ring attention group size")
+    parser.add_argument("--actor.ring_attn_size", type=int, default=1, help="Ring attention group size")
     parser.add_argument(
-        "--ring_head_stride",
+        "--actor.ring_attn_head_stride",
         type=int,
         default=1,
         help="the number of heads to do ring attention each time. "
@@ -267,18 +275,18 @@ if __name__ == "__main__":
     )
 
     # LoRA
-    parser.add_argument("--load_in_4bit", action="store_true", default=False)
-    parser.add_argument("--lora_rank", type=int, default=0)
-    parser.add_argument("--lora_alpha", type=int, default=16)
-    parser.add_argument("--target_modules", type=str, nargs="*", default="all-linear")
-    parser.add_argument("--lora_dropout", type=float, default=0)
+    parser.add_argument("--actor.load_in_4bit", action="store_true", default=False)
+    parser.add_argument("--actor.lora.rank", type=int, default=0)
+    parser.add_argument("--actor.lora.alpha", type=int, default=16)
+    parser.add_argument("--actor.lora.target_modules", type=str, nargs="*", default="all-linear")
+    parser.add_argument("--actor.lora.dropout", type=float, default=0)
 
     # packing samples using Flash Attention2
     parser.add_argument("--packing_samples", action="store_true", default=False)
 
     # Custom dataset
-    parser.add_argument("--pretrain", type=str, default=None)
-    parser.add_argument("--ref_pretrain", type=str, default=None)
+    parser.add_argument("--actor.model_name_or_path", type=str, default=None)
+    parser.add_argument("--ref.model_name_or_path", type=str, default=None)
     parser.add_argument("--dataset", type=str, default=None, help="Path to the training dataset")
     parser.add_argument("--dataset_probs", type=str, default=None, help="Sampling probabilities for training datasets")
     parser.add_argument("--eval_dataset", type=str, default=None, help="Path to the evaluation dataset")
@@ -318,8 +326,8 @@ if __name__ == "__main__":
 
     args = hierarchize(args)
 
-    if args.ref_pretrain is None or args.ref_pretrain == "":
-        args.ref_pretrain = args.pretrain
+    if args.ref.model_name_or_path is None or args.ref.model_name_or_path == "":
+        args.ref.model_name_or_path = args.actor.model_name_or_path
 
     if args.input_template and "{}" not in args.input_template:
         print("[Warning] '{}' not in args.input_template, set to None")
@@ -331,14 +339,14 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
-    if args.ring_attn_size > 1:
+    if args.actor.ring_attn_size > 1:
         assert args.packing_samples, "packing_samples must be enabled when using ring attention"
 
-    if args.packing_samples and "flash_attention" not in args.attn_implementation:
+    if args.packing_samples and "flash_attention" not in args.actor.attn_implementation:
         print(
             "[Warning] Please use --attn_implementation with flash_attention to accelerate when --packing_samples is enabled."
         )
-        args.attn_implementation = "flash_attention_2"
+        args.actor.attn_implementation = "flash_attention_2"
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub

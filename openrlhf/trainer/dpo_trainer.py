@@ -61,13 +61,13 @@ class DPOTrainer(ABC):
         self.disable_ds_ckpt = disable_ds_ckpt
 
         self.beta = beta
-        self.loss_fn = DPOLoss(self.beta, self.args.label_smoothing, self.args.ipo)
+        self.loss_fn = DPOLoss(self.beta, self.args.actor.label_smoothing, self.args.actor.ipo)
 
         # Mixtral 8*7b
-        self.aux_loss = self.args.aux_loss_coef > 1e-8
+        self.aux_loss = self.args.actor.aux_loss_coef > 1e-8
 
         # NLL loss
-        self.nll_loss = self.args.nll_loss_coef > 1e-8
+        self.nll_loss = self.args.actor.nll_loss_coef > 1e-8
 
         # packing samples
         self.packing_samples = strategy.args.packing_samples
@@ -173,7 +173,11 @@ class DPOTrainer(ABC):
                 if not self.nll_loss:
                     nll_loss = 0
 
-                loss = preference_loss + aux_loss * self.args.aux_loss_coef + nll_loss * self.args.nll_loss_coef
+                loss = (
+                    preference_loss
+                    + aux_loss * self.args.actor.aux_loss_coef
+                    + nll_loss * self.args.actor.nll_loss_coef
+                )
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
