@@ -31,7 +31,7 @@ def _load_agent_executor(agent_func_path: str) -> AgentExecutorBase:
 
 
 @ray.remote
-class LLMRayActor:
+class RolloutRayActor:
     """Async vLLM-backed actor that exposes generation utilities."""
 
     async def __init__(
@@ -298,7 +298,7 @@ def create_vllm_engines(
             ), "vLLM > 0.10.0 is required for logprobs_mode"
 
         vllm_engines.append(
-            LLMRayActor.options(
+            RolloutRayActor.options(
                 num_cpus=num_gpus,
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
