@@ -260,6 +260,10 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 - FlashAttention (`--actor.attn_implementation`)
 - HuggingFace chat templates (`--data.apply_chat_template`)
 
+**Optimizers**
+- AdamW (default): `--{actor,critic}.optim adam --{actor,critic}.adam.lr 2e-6`
+- [Muon](https://kellerjordan.github.io/posts/muon/) (via DeepSpeed ≥ 0.18.2, 2D weights only; embeddings / head / 1-D params use aux-AdamW): `--{actor,critic}.optim muon --{actor,critic}.muon.lr 1e-4 --{actor,critic}.muon.momentum 0.95`. Newton-Schulz produces scale-invariant updates, so disable global grad clipping with `--{actor,critic}.max_norm 0` (the Adam default `1.0` would clip away the Muon update).
+
 **Reward Shaping**
 - DAPO-style overlong penalty for length control (`--reward.overlong_buffer_len`, `--reward.overlong_penalty_factor`) — soft-penalize responses that exceed `max_new_tokens - overlong_buffer_len`
 - ProRL-style truncation penalty (`--reward.stop_properly_penalty_coef`) — for samples with `finish_reason='length'`: `coef ∈ [0, 1]` multiplicatively scales the reward; `coef < 0` sets the reward to that fixed value (e.g. `-0.5`)

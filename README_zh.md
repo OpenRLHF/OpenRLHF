@@ -261,6 +261,10 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 - FlashAttention（`--actor.attn_implementation`）
 - HuggingFace 聊天模板（`--data.apply_chat_template`）
 
+**优化器**
+- AdamW（默认）：`--{actor,critic}.optim adam --{actor,critic}.adam.lr 2e-6`
+- [Muon](https://kellerjordan.github.io/posts/muon/)（需 DeepSpeed ≥ 0.18.2，仅作用于 2D 权重；embedding / head / 1D 参数走辅助 AdamW）：`--{actor,critic}.optim muon --{actor,critic}.muon.lr 1e-4 --{actor,critic}.muon.momentum 0.95`。Newton-Schulz 输出是尺度无关的，因此需通过 `--{actor,critic}.max_norm 0` 关闭全局梯度裁剪（Adam 默认的 `1.0` 会把 Muon 更新裁没）。
+
 **奖励塑形**
 - DAPO 风格超长惩罚（`--reward.overlong_buffer_len`、`--reward.overlong_penalty_factor`）——对超过 `max_new_tokens - overlong_buffer_len` 的响应进行软惩罚
 - ProRL 风格截断惩罚（`--reward.stop_properly_penalty_coef`）——对 `finish_reason='length'` 的样本：`coef ∈ [0, 1]` 表示乘法缩放奖励；`coef < 0` 表示将奖励直接覆盖为该固定值（例如 `-0.5`）
