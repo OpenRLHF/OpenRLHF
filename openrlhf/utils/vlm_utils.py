@@ -168,31 +168,3 @@ def merge_mm_train_inputs(mm_train_inputs_list: list, device) -> Dict[str, torch
                 merged.setdefault(key, []).append(val if isinstance(val, torch.Tensor) else torch.tensor(val))
 
     return {k: torch.cat(v, dim=0).to(device) for k, v in merged.items()} if merged else {}
-
-
-def strip_image_spans(processor, token_ids):
-    """Remove full <vision_start>...<vision_end> spans (incl. image/video pad tokens).
-
-    Used when a training sequence overflows and its images must be dropped.
-    Stripping only pad tokens (legacy behavior) leaves orphan vision_start/end
-    markers that are OOD for the model and break Qwen2-VL get_rope_index
-    3D position indexing. Removing the whole span restores a clean text-only
-    sequence.
-    """
-    start_id = getattr(processor, "vision_start_token_id", None)
-    end_id = getattr(processor, "vision_end_token_id", None)
-    pad_ids = {getattr(processor, a, None) for a in ("image_token_id", "video_token_id")} - {None}
-    if start_id is None or end_id is None:
-        # Models without explicit vision markers (e.g. LLaVA-style): pad-only stripping is safe.
-        return [t for t in token_ids if t not in pad_ids]
-    out, depth = [], 0
-    for t in token_ids:
-        if t == start_id:
-            depth += 1
-            continue
-        if t == end_id:
-            depth = max(depth - 1, 0)
-            continue
-        if depth == 0 and t not in pad_ids:
-            out.append(t)
-    return out

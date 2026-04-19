@@ -125,11 +125,7 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
 
             # Tokenize environment feedback — may contain new images (e.g. screenshots).
             if environment_images and hasattr(hf_tokenizer, "image_processor"):
-                from openrlhf.utils.vlm_utils import (
-                    accumulate_mm_inputs,
-                    process_prompt_with_images,
-                    strip_image_spans,
-                )
+                from openrlhf.utils.vlm_utils import accumulate_mm_inputs, process_prompt_with_images
 
                 feedback_tokens, new_mm, new_pil = process_prompt_with_images(
                     hf_tokenizer, environment_feedback_text, environment_images
@@ -139,11 +135,12 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
                     pil_images.extend(new_pil)
                     mm_train_inputs = accumulate_mm_inputs(mm_train_inputs, new_mm)
                 else:
-                    # Overflow: drop images and strip the full <vision_start>...<vision_end>
-                    # span, not just pad tokens. Leaving orphan start/end markers is OOD
-                    # for the model and breaks Qwen2-VL get_rope_index. If the stripped
-                    # feedback still fits, keep it; otherwise truncate further below.
-                    feedback_tokens = strip_image_spans(hf_tokenizer, feedback_tokens)
+                    # Overflow — drop images and strip their pad tokens so
+                    # vLLM doesn't treat them as image placeholders.
+                    mm_pad_ids = {getattr(hf_tokenizer, a, None) for a in ("image_token_id", "video_token_id")} - {
+                        None
+                    }
+                    feedback_tokens = [t for t in feedback_tokens if t not in mm_pad_ids]
             else:
                 feedback_tokens = hf_tokenizer(
                     text=environment_feedback_text, add_special_tokens=False, return_tensors="pt"
