@@ -134,9 +134,11 @@ class DeepspeedStrategy(ABC):
     def ring_attn_group(self):
         return get_ring_attn_group()
 
-    def _get_model_parameters(self, model: nn.Module, *, optim: Optional[str] = None):
+    def _get_model_parameters(self, model: nn.Module, *, optim: Optional[str] = None, weight_decay: float = 0.0):
         # ``optim`` defaults to the strategy-wide setting but can be overridden per-model
         # so actor/critic can disagree (e.g. actor=muon, critic=adam).
+        # ``weight_decay`` is the user-requested decay for the decaying group;
+        # bias/LayerNorm are always exempted (weight_decay=0.0) for the Adam path.
         if optim is None:
             optim = self.optim
         raw_model = model.model if isinstance(model, Actor) else model
@@ -155,10 +157,15 @@ class DeepspeedStrategy(ABC):
                 top_level_name = name.split(".", 1)[0]
                 is_value_head = value_head_prefix is not None and top_level_name == value_head_prefix
                 param.use_muon = param.ndim >= 2 and not is_value_head and not any(k in name for k in _muon_exclude)
+            # DS Muon (engine.py 1597-1611) partitions a flat Parameter list via p.use_muon
+            # and refuses param-group dicts; it also applies a single scalar weight_decay
+            # to both the Muon and aux-Adam groups. Splitting groups post-init would desync
+            # ZeRO's cached bit16_groups/fp32_groups metadata (new groups never get stepped),
+            # so bias/LayerNorm decay exemption under Muon is NOT applied here -- DS limitation.
             model_parameters = [param for param in raw_model.parameters() if param.requires_grad]
         else:
             # Adam: exempt bias/layernorm from weight decay.
-            model_parameters = get_optimizer_grouped_parameters(raw_model, 0.0)
+            model_parameters = get_optimizer_grouped_parameters(raw_model, weight_decay)
         return raw_model, model_parameters
 
     def backward(self, loss: torch.Tensor, model: nn.Module, _optimizer: optim.Optimizer, **kwargs) -> None:
@@ -335,7 +342,9 @@ class DeepspeedStrategy(ABC):
 
         # Infer optim kind from the DS type so actor/critic can disagree.
         optim_kind = "muon" if optim_dict.get("type") == "Muon" else "adam"
-        raw_model, model_parameters = self._get_model_parameters(model, optim=optim_kind)
+        raw_model, model_parameters = self._get_model_parameters(
+            model, optim=optim_kind, weight_decay=adam["weight_decay"]
+        )
 
         engine, optim, _, scheduler = deepspeed.initialize(
             model=raw_model,
