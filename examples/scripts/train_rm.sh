@@ -8,7 +8,7 @@ openrlhf.cli.train_rm \
    --eval.steps -1 \
    --train.batch_size 256 \
    --train.micro_batch_size 1 \
-   --actor.model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
+   --model.model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
    --ds.param_dtype bf16 \
    --train.max_epochs 1 \
    --data.max_len 8192 \
@@ -18,10 +18,10 @@ openrlhf.cli.train_rm \
    --data.apply_chat_template \
    --data.chosen_key chosen \
    --data.rejected_key rejected \
-   --actor.attn_implementation flash_attention_2 \
+   --model.attn_implementation flash_attention_2 \
    --ckpt.load_enable \
    --data.packing_samples \
-   --actor.gradient_checkpointing_enable
+   --model.gradient_checkpointing_enable
 EOF
      # --logger.wandb.key [WANDB_TOKENS] or True (use wandb login command)
      # --data.packing_samples

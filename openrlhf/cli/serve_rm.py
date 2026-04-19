@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from openrlhf.models import get_llm_for_sequence_regression
 from openrlhf.utils import get_tokenizer
+from openrlhf.utils.config import hierarchize
 from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
@@ -18,9 +19,9 @@ class RewardModelProxy:
             args.reward.model_name_or_path,
             "reward",
             normalize_reward=args.reward.normalize_enable,
-            attn_implementation=args.actor.attn_implementation,
+            attn_implementation=args.model.attn_implementation,
             param_dtype=args.ds.param_dtype,  # default: bf16
-            load_in_4bit=args.actor.load_in_4bit,
+            load_in_4bit=args.model.load_in_4bit,
             value_head_prefix=args.value_head_prefix,
             device_map="auto",
             packing_samples=args.data.packing_samples,
@@ -72,8 +73,10 @@ class RewardModelProxy:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # Reward Model
-    parser.add_argument("--reward_pretrain", type=str, default=None, help="HF model name or path")
-    parser.add_argument("--normalize_reward", action="store_true", default=False, help="Enable Reward Normalization")
+    parser.add_argument("--reward.model_name_or_path", type=str, default=None, help="HF model name or path")
+    parser.add_argument(
+        "--reward.normalize_enable", action="store_true", default=False, help="Enable Reward Normalization"
+    )
     parser.add_argument("--value_head_prefix", type=str, default="score")
     parser.add_argument("--data.max_len", type=int, default=2048)
 
@@ -81,7 +84,7 @@ if __name__ == "__main__":
     parser.add_argument("--host", type=str, default="0.0.0.0", help="IP for the server")
 
     # Performance
-    parser.add_argument("--load_in_4bit", action="store_true", default=False)
+    parser.add_argument("--model.load_in_4bit", action="store_true", default=False)
     parser.add_argument(
         "--ds.param_dtype",
         type=str,
@@ -90,7 +93,7 @@ if __name__ == "__main__":
         help="Model data type",
     )
     parser.add_argument(
-        "--attn_implementation",
+        "--model.attn_implementation",
         type=str,
         default="flash_attention_2",
         help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
@@ -100,11 +103,11 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=None)
 
     # ModelScope parameters
-    parser.add_argument("--data.use_ms", action="store_true", default=False)
+    parser.add_argument("--use_ms", action="store_true", default=False)
 
-    args = parser.parse_args()
+    args = hierarchize(parser.parse_args())
 
-    if args.data.use_ms:
+    if args.use_ms:
         from modelscope.utils.hf_util import patch_hub
 
         # Patch hub to download models from modelscope to speed up.

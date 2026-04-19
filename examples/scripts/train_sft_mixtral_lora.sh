@@ -9,7 +9,7 @@ openrlhf.cli.train_sft \
     --train.batch_size 128 \
     --train.micro_batch_size 4 \
     --data.max_samples 500000 \
-    --actor.model_name_or_path mistralai/Mixtral-8x7B-v0.1 \
+    --model.model_name_or_path mistralai/Mixtral-8x7B-v0.1 \
     --ckpt.output_dir ./checkpoint/mixtral-sft-lora\
     --ckpt.save_steps -1 \
     --logger.logging_steps 1 \
@@ -17,13 +17,13 @@ openrlhf.cli.train_sft \
     --ds.zero_stage 3 \
     --train.max_epochs 1 \
     --ds.param_dtype bf16 \
-    --actor.gradient_checkpointing_enable \
-    --actor.attn_implementation flash_attention_2 \
+    --model.gradient_checkpointing_enable \
+    --model.attn_implementation flash_attention_2 \
     --adam.lr 5e-6 \
-    --actor.lora.rank 64 \
-    --actor.lora.alpha 64 \
+    --model.lora.rank 64 \
+    --model.lora.alpha 64 \
     --data.packing_samples \
-    --actor.aux_loss_coef 0.001
+    --model.aux_loss_coef 0.001
 EOF
 
 if [[ ${1} != "slurm" ]]; then

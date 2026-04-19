@@ -8,7 +8,7 @@ openrlhf.cli.train_dpo \
    --eval.steps -1 \
    --train.batch_size 256 \
    --train.micro_batch_size 1 \
-   --actor.model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
+   --model.model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
    --ds.param_dtype bf16 \
    --train.max_epochs 1 \
    --data.max_len 8192 \
@@ -19,17 +19,17 @@ openrlhf.cli.train_dpo \
    --data.apply_chat_template \
    --data.chosen_key chosen \
    --data.rejected_key rejected \
-   --actor.attn_implementation flash_attention_2 \
+   --model.attn_implementation flash_attention_2 \
    --ckpt.load_enable \
    --data.packing_samples \
-   --actor.gradient_checkpointing_enable
+   --model.gradient_checkpointing_enable
 EOF
     # --logger.wandb.key [WANDB_TOKENS] or True (use wandb login command)
-    # --actor.ipo_enable [for IPO]
-    # --actor.label_smoothing 0.1 [for cDPO]
+    # --model.ipo_enable [for IPO]
+    # --model.label_smoothing 0.1 [for cDPO]
     # --ref.offload
     # --data.packing_samples
-    # --actor.nll_loss_coef (Regularization with NLL loss)
+    # --model.nll_loss_coef (Regularization with NLL loss)
 
 
 if [[ ${1} != "slurm" ]]; then

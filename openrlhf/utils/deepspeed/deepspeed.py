@@ -70,7 +70,9 @@ class DeepspeedStrategy(ABC):
         self.overlap_comm = getattr(args.ds, "overlap_comm", False)
         self.deepcompile = getattr(args.ds, "deepcompile", False)
         self.ds_tensor_parallel_size = getattr(args.ds, "tensor_parallel_size", 1)
-        self.ring_attn_size = getattr(self.args.actor, "ring_attn_size", 1)
+        # PPO uses ``args.actor``; SFT/RM/DPO use ``args.model`` (no RL actor concept).
+        self._entity_ns = getattr(args, "actor", None) or getattr(args, "model", None)
+        self.ring_attn_size = getattr(self._entity_ns, "ring_attn_size", 1)
         self.use_dynamic_batch = getattr(self.args.train, "dynamic_batch_enable", False)
 
         if self.ds_tensor_parallel_size > 1:
@@ -127,7 +129,7 @@ class DeepspeedStrategy(ABC):
 
         from ring_flash_attn import substitute_hf_flash_attn
 
-        self.ring_head_stride = getattr(self.args.actor, "ring_attn_head_stride", 1)
+        self.ring_head_stride = getattr(self._entity_ns, "ring_attn_head_stride", 1)
         substitute_hf_flash_attn(self.ring_attn_group, self.ring_head_stride)
 
     @property
@@ -248,8 +250,7 @@ class DeepspeedStrategy(ABC):
 
             {
               "optim": "muon" | "adam",          # selector
-              "muon":  {lr, momentum, ns_steps, nesterov, adam_lr,
-                        adam_betas, adam_eps, weight_decay},
+              "muon":  {lr, momentum},           # Muon-specific; lr shared w/ aux-Adam
               "adam":  {lr, betas, eps, weight_decay},
               "lr_scheduler": str,
               "lr_warmup_ratio": float,
@@ -258,8 +259,9 @@ class DeepspeedStrategy(ABC):
               "scheduler_steps": int,
             }
 
-          In practice callers pass ``vars(args.actor)``-style dicts built from
-          nested argparse (see ``openrlhf.utils.config.add_optim_args``).
+          When ``optim="muon"``, the Muon group uses ``muon.lr`` / ``muon.momentum``;
+          the aux-Adam subgroup uses ``adam.betas`` / ``adam.eps``; ``adam.weight_decay``
+          is shared (DS v0.18.2 uses one ``weight_decay`` for both groups).
         * ``model`` — evaluation only, no optimizer.
 
         Returns ``(model, optimizer, scheduler)`` for training entries and the
@@ -280,35 +282,34 @@ class DeepspeedStrategy(ABC):
         return ret[0] if len(ret) == 1 else ret
 
     def _ds_init_train_model(self, model, cfg: dict):
-        # cfg["optim"] selects the section; muon vs adam sections are self-contained
-        # so callers never share ambiguous flags between modes.
+        # DS v0.18.2 optimizer-config whitelists (engine.py:1600-1611):
+        #   AdamW:  {lr, betas, eps, weight_decay}
+        #   Muon:   muon group -> {lr, momentum, weight_decay}
+        #           aux-Adam   -> {lr, betas, eps, weight_decay}   (lr/weight_decay shared)
+        # Keys outside these sets are silently dropped.  ns_steps / nesterov are
+        # NOT configurable via DS config in v0.18.2 (hard-coded: ns_steps=5, nesterov=True).
         kind = cfg["optim"]
-        sec = cfg[kind]
+        adam = cfg["adam"]
         if kind == "muon":
-            # muon.adam_lr may be None → fall back to pure adam.lr so the scheduler
-            # drives the aux-Adam subgroup with a sensible base.
-            adam_lr_fallback = cfg["adam"]["lr"] if cfg.get("adam") else sec["lr"]
+            muon = cfg["muon"]
             optim_dict = {
                 "type": "Muon",
                 "params": {
-                    "muon_lr": sec["lr"],
-                    "adam_lr": sec["adam_lr"] if sec["adam_lr"] is not None else adam_lr_fallback,
-                    "momentum": sec["momentum"],
-                    "nesterov": bool(sec["nesterov"]),
-                    "ns_steps": sec["ns_steps"],
-                    "weight_decay": sec["weight_decay"],
-                    "adam_betas": list(sec["adam_betas"]),
-                    "adam_eps": sec["adam_eps"],
+                    "lr": muon["lr"],  # shared with aux-Adam group (DS limitation)
+                    "momentum": muon["momentum"],
+                    "betas": list(adam["betas"]),  # aux-Adam only
+                    "eps": adam["eps"],  # aux-Adam only
+                    "weight_decay": adam["weight_decay"],  # shared
                 },
             }
         else:
             optim_dict = {
                 "type": "AdamW",
                 "params": {
-                    "lr": sec["lr"],
-                    "betas": list(sec["betas"]),
-                    "eps": sec["eps"],
-                    "weight_decay": sec["weight_decay"],
+                    "lr": adam["lr"],
+                    "betas": list(adam["betas"]),
+                    "eps": adam["eps"],
+                    "weight_decay": adam["weight_decay"],
                 },
             }
         scheduler_steps = cfg["scheduler_steps"]

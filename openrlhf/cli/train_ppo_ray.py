@@ -424,29 +424,23 @@ if __name__ == "__main__":
     )
     parser.add_argument("--reward.clip_range", type=float, nargs=2, default=(-10, 10), help="Reward clip range")
 
-    # Optimizer + scheduler + grad clip, per entity (actor / critic).
-    # Dotted CLI (--actor.muon.lr, --critic.adam.lr) → hierarchize() turns into
-    # args.actor.muon.lr / args.critic.adam.lr / etc.
+    # Optimizer + scheduler + grad clip, per entity (actor / critic).  Two sections:
+    #   --{prefix}.muon.*  Muon-specific hypers (only used when --{prefix}.optim=muon)
+    #   --{prefix}.adam.*  AdamW hypers — drives pure AdamW when --{prefix}.optim=adam,
+    #                      and Muon's aux-Adam subgroup when --{prefix}.optim=muon.
+    # Note: DS v0.18.2 Muon ignores ns_steps / nesterov (hard-coded 5 / True) so
+    # they are intentionally not exposed here.
     for prefix in ("actor", "critic"):
         parser.add_argument(f"--{prefix}.optim", type=str, default="adam", choices=["adam", "muon"])
-        # Muon variant
+        # Muon-specific
         parser.add_argument(
-            f"--{prefix}.muon.lr", type=float, default=0.02, help=f"Learning rate for {prefix}'s Muon 2D-weight group"
+            f"--{prefix}.muon.lr",
+            type=float,
+            default=0.02,
+            help=f"LR for {prefix}'s Muon 2D-weight group",
         )
         parser.add_argument(f"--{prefix}.muon.momentum", type=float, default=0.95)
-        parser.add_argument(f"--{prefix}.muon.ns_steps", type=int, default=5)
-        parser.add_argument(f"--{prefix}.muon.nesterov", action="store_true", default=True)
-        parser.add_argument(f"--{prefix}.muon.no_nesterov", dest=f"{prefix}.muon.nesterov", action="store_false")
-        parser.add_argument(
-            f"--{prefix}.muon.adam_lr",
-            type=float,
-            default=None,
-            help=f"LR for {prefix}'s Muon aux-Adam subgroup; None → fallback to --{prefix}.adam.lr",
-        )
-        parser.add_argument(f"--{prefix}.muon.adam_betas", type=float, nargs=2, default=(0.9, 0.95))
-        parser.add_argument(f"--{prefix}.muon.adam_eps", type=float, default=1e-8)
-        parser.add_argument(f"--{prefix}.muon.weight_decay", type=float, default=0.0)
-        # Pure Adam variant
+        # AdamW (shared: pure-AdamW when --{prefix}.optim=adam, Muon's aux-Adam subgroup when =muon)
         parser.add_argument(f"--{prefix}.adam.lr", type=float, default=1e-6 if prefix == "actor" else 9e-6)
         parser.add_argument(f"--{prefix}.adam.betas", type=float, nargs=2, default=(0.9, 0.95))
         parser.add_argument(f"--{prefix}.adam.eps", type=float, default=1e-8)
@@ -504,7 +498,8 @@ if __name__ == "__main__":
     parser.add_argument("--reward.remote_url", type=str, default=None, help="remote RM API (HTTP)")
     parser.add_argument("--critic.model_name_or_path", type=str, default=None, help="HF model name or path")
     parser.add_argument("--reward.value_head_prefix", type=str, default="score")
-    parser.add_argument("--ref.reward_offload", action="store_true", default=False)
+    parser.add_argument("--ref.offload", action="store_true", default=False, help="Offload reference model to CPU")
+    parser.add_argument("--reward.offload", action="store_true", default=False, help="Offload reward model to CPU")
     parser.add_argument("--train.agent_func_path", type=str, default=None, help="Agent script path")
 
     # Custom dataset
@@ -567,7 +562,7 @@ if __name__ == "__main__":
     # performance tuning
 
     # ModelScope parameters
-    parser.add_argument("--data.use_ms", action="store_true", default=False)
+    parser.add_argument("--use_ms", action="store_true", default=False)
 
     args = parser.parse_args()
     from openrlhf.utils.config import hierarchize
@@ -692,7 +687,7 @@ if __name__ == "__main__":
         // args.ds.tensor_parallel_size
     ), "The number of sample batches must be greater than or equal to the effective number of actor processes."
 
-    if args.data.use_ms:
+    if args.use_ms:
         from modelscope.utils.hf_util import patch_hub
 
         # Patch hub to download models from modelscope to speed up.

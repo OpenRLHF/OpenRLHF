@@ -18,28 +18,28 @@ def train(args):
     # configure model
     # load huggingface model
     model = Actor(
-        args.actor.model_name_or_path,
-        attn_implementation=args.actor.attn_implementation,
+        args.model.model_name_or_path,
+        attn_implementation=args.model.attn_implementation,
         param_dtype=args.ds.param_dtype,  # default: bf16
-        load_in_4bit=args.actor.load_in_4bit,
-        lora_rank=args.actor.lora.rank,
-        lora_alpha=args.actor.lora.alpha,
-        target_modules=args.actor.lora.target_modules,
-        lora_dropout=args.actor.lora.dropout,
+        load_in_4bit=args.model.load_in_4bit,
+        lora_rank=args.model.lora.rank,
+        lora_alpha=args.model.lora.alpha,
+        target_modules=args.model.lora.target_modules,
+        lora_dropout=args.model.lora.dropout,
         ds_config=strategy.get_ds_train_config(is_actor=True),
         packing_samples=args.data.packing_samples,
-        use_liger_kernel=args.actor.use_liger_kernel,
+        use_liger_kernel=args.model.use_liger_kernel,
     )
     # configure tokenizer
     tokenizer = get_tokenizer(
-        args.actor.model_name_or_path, model.model, "right", strategy, use_fast=not args.data.disable_fast_tokenizer
+        args.model.model_name_or_path, model.model, "right", strategy, use_fast=not args.data.disable_fast_tokenizer
     )
     strategy.print(model)
 
     # gradient_checkpointing
-    if args.actor.gradient_checkpointing_enable:
+    if args.model.gradient_checkpointing_enable:
         model.gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs={"use_reentrant": args.actor.gradient_checkpointing_reentrant}
+            gradient_checkpointing_kwargs={"use_reentrant": args.model.gradient_checkpointing_reentrant}
         )
 
     # prepare for data and dataset
@@ -57,7 +57,7 @@ def train(args):
         tokenizer,
         args.data.max_len,
         strategy,
-        pretrain_mode=args.actor.pretrain_mode_enable,
+        pretrain_mode=args.model.pretrain_mode_enable,
         input_template=args.data.input_template,
         multiturn=args.data.multiturn,
     )
@@ -84,7 +84,7 @@ def train(args):
             tokenizer,
             args.data.max_len,
             strategy,
-            pretrain_mode=args.actor.pretrain_mode_enable,
+            pretrain_mode=args.model.pretrain_mode_enable,
             input_template=args.data.input_template,
             multiturn=args.data.multiturn,
         )
@@ -132,7 +132,7 @@ def train(args):
         eval_dataloader=eval_dataloader,
         scheduler=scheduler,
         max_norm=args.max_norm,
-        pretrain_mode=args.actor.pretrain_mode_enable,
+        pretrain_mode=args.model.pretrain_mode_enable,
         batch_size=args.train.batch_size,
         max_epochs=args.train.max_epochs,
         tokenizer=tokenizer,
@@ -164,7 +164,7 @@ if __name__ == "__main__":
     # DeepSpeed
     parser.add_argument("--train.micro_batch_size", type=int, default=8, help="batch size per GPU")
     parser.add_argument("--train.batch_size", type=int, default=128, help="Global training batch size")
-    parser.add_argument("--actor.gradient_checkpointing_enable", action="store_true", default=False)
+    parser.add_argument("--model.gradient_checkpointing_enable", action="store_true", default=False)
     parser.add_argument("--ds.deepcompile", action="store_true", default=False)
     parser.add_argument("--train.seed", type=int, default=42)
     parser.add_argument(
@@ -185,15 +185,15 @@ if __name__ == "__main__":
     parser.add_argument("--ds.zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--ds.adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument(
-        "--actor.attn_implementation",
+        "--model.attn_implementation",
         type=str,
         default="flash_attention_2",
         help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
     )
-    parser.add_argument("--actor.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
+    parser.add_argument("--model.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
     parser.add_argument("--ds.grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
     parser.add_argument("--ds.overlap_comm", action="store_true", default=False)
-    parser.add_argument("--actor.gradient_checkpointing_reentrant", action="store_true", default=False)
+    parser.add_argument("--model.gradient_checkpointing_reentrant", action="store_true", default=False)
     parser.add_argument("--data.disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument(
         "--data.dataloader_num_workers", type=int, default=0, help="Number of dataloader workers for IO"
@@ -202,31 +202,21 @@ if __name__ == "__main__":
 
     # SFT
     parser.add_argument("--train.max_epochs", type=int, default=2)
-    parser.add_argument("--actor.aux_loss_coef", type=float, default=0, help="MoE balancing loss")
-    parser.add_argument("--actor.model_name_or_path", type=str, default=None)
-    parser.add_argument("--actor.pretrain_mode_enable", action="store_true", default=False, help="Use pretrain loss")
+    parser.add_argument("--model.aux_loss_coef", type=float, default=0, help="MoE balancing loss")
+    parser.add_argument("--model.model_name_or_path", type=str, default=None)
+    parser.add_argument("--model.pretrain_mode_enable", action="store_true", default=False, help="Use pretrain loss")
 
-    # Optimizer + scheduler + grad clip.  Dotted CLI (--muon.lr, --adam.lr) →
-    # hierarchize() later turns these into args.muon.lr / args.adam.lr / etc.
+    # Optimizer + scheduler + grad clip.  Two sections:
+    #   --muon.*  Muon-specific hypers (only used when --optim=muon)
+    #   --adam.*  AdamW hypers — drives pure AdamW when --optim=adam,
+    #             and Muon's aux-Adam subgroup when --optim=muon.
+    # Note: DS v0.18.2 Muon ignores ns_steps / nesterov (hard-coded 5 / True) so
+    # they are intentionally not exposed here.
     parser.add_argument("--optim", type=str, default="adam", choices=["adam", "muon"])
-    # Muon variant
-    parser.add_argument("--muon.lr", type=float, default=0.02, help="Learning rate for Muon 2D-weight group")
+    # Muon-specific
+    parser.add_argument("--muon.lr", type=float, default=0.02, help="LR for Muon 2D-weight group")
     parser.add_argument("--muon.momentum", type=float, default=0.95)
-    parser.add_argument("--muon.ns_steps", type=int, default=5, help="Newton-Schulz iterations")
-    parser.add_argument("--muon.nesterov", action="store_true", default=True)
-    parser.add_argument(
-        "--muon.no_nesterov", dest="muon.nesterov", action="store_false", help="Disable Nesterov momentum"
-    )
-    parser.add_argument(
-        "--muon.adam_lr",
-        type=float,
-        default=None,
-        help="LR for Muon's aux-Adam subgroup; None → fallback to --adam.lr",
-    )
-    parser.add_argument("--muon.adam_betas", type=float, nargs=2, default=(0.9, 0.95))
-    parser.add_argument("--muon.adam_eps", type=float, default=1e-8)
-    parser.add_argument("--muon.weight_decay", type=float, default=0.0)
-    # Pure Adam variant
+    # AdamW (shared: pure-AdamW when --optim=adam, Muon's aux-Adam subgroup when --optim=muon)
     parser.add_argument("--adam.lr", type=float, default=5e-6)
     parser.add_argument("--adam.betas", type=float, nargs=2, default=(0.9, 0.95))
     parser.add_argument("--adam.eps", type=float, default=1e-8)
@@ -239,9 +229,9 @@ if __name__ == "__main__":
     parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
 
     # ring-attention
-    parser.add_argument("--actor.ring_attn_size", type=int, default=1, help="Ring attention group size")
+    parser.add_argument("--model.ring_attn_size", type=int, default=1, help="Ring attention group size")
     parser.add_argument(
-        "--actor.ring_attn_head_stride",
+        "--model.ring_attn_head_stride",
         type=int,
         default=1,
         help="the number of heads to do ring attention each time. "
@@ -250,11 +240,11 @@ if __name__ == "__main__":
     )
 
     # LoRA
-    parser.add_argument("--actor.load_in_4bit", action="store_true", default=False)
-    parser.add_argument("--actor.lora.rank", type=int, default=0)
-    parser.add_argument("--actor.lora.alpha", type=int, default=16)
-    parser.add_argument("--actor.lora.target_modules", type=str, nargs="*", default="all-linear")
-    parser.add_argument("--actor.lora.dropout", type=float, default=0)
+    parser.add_argument("--model.load_in_4bit", action="store_true", default=False)
+    parser.add_argument("--model.lora.rank", type=int, default=0)
+    parser.add_argument("--model.lora.alpha", type=int, default=16)
+    parser.add_argument("--model.lora.target_modules", type=str, nargs="*", default="all-linear")
+    parser.add_argument("--model.lora.dropout", type=float, default=0)
 
     # packing SFT samples without CrossAttention
     parser.add_argument("--data.packing_samples", action="store_true", default=False)
@@ -294,7 +284,7 @@ if __name__ == "__main__":
     parser.add_argument("--logger.tensorboard_dir", type=str, default=None, help="TensorBoard logging path")
 
     # ModelScope parameters
-    parser.add_argument("--data.use_ms", action="store_true", default=False)
+    parser.add_argument("--use_ms", action="store_true", default=False)
 
     args = parser.parse_args()
     from openrlhf.utils.config import hierarchize
@@ -314,16 +304,16 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
-    if args.actor.ring_attn_size > 1:
+    if args.model.ring_attn_size > 1:
         assert args.data.packing_samples, "packing_samples must be enabled when using ring attention"
 
-    if args.data.packing_samples and "flash_attention" not in args.actor.attn_implementation:
+    if args.data.packing_samples and "flash_attention" not in args.model.attn_implementation:
         print(
             "[Warning] Please use --attn_implementation with flash_attention to accelerate when --packing_samples is enabled."
         )
-        args.actor.attn_implementation = "flash_attention_2"
+        args.model.attn_implementation = "flash_attention_2"
 
-    if args.data.use_ms:
+    if args.use_ms:
         from modelscope.utils.hf_util import patch_hub
 
         # Patch hub to download models from modelscope to speed up.

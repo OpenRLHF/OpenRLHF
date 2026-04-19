@@ -3,6 +3,7 @@ import argparse
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
+from openrlhf.utils.config import hierarchize
 from openrlhf.utils.utils import convert_to_torch_dtype
 
 
@@ -47,5 +48,5 @@ if __name__ == "__main__":
         choices=["bf16", "fp16"],
         help="Model data type: 'bf16' uses bfloat16, 'fp16' uses float16",
     )
-    args = parser.parse_args()
+    args = hierarchize(parser.parse_args())
     apply_lora(args.model_path, args.lora_path, args.output_path, args.is_rm, args.ds.param_dtype)

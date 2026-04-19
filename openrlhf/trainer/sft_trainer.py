@@ -64,7 +64,7 @@ class SFTTrainer(ABC):
         self.loss_fn = SFTLoss()
 
         # Mixtral 8*7b
-        self.aux_loss = self.args.actor.aux_loss_coef > 1e-8
+        self.aux_loss = self.args.model.aux_loss_coef > 1e-8
 
         # packing samples
         self.packing_samples = strategy.args.data.packing_samples
@@ -162,7 +162,7 @@ class SFTTrainer(ABC):
                 else:
                     aux_loss = 0
                 gpt_loss = self.loss_fn(per_token_log_probs, loss_mask[:, :-1])
-                loss = gpt_loss + aux_loss * self.args.actor.aux_loss_coef
+                loss = gpt_loss + aux_loss * self.args.model.aux_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 

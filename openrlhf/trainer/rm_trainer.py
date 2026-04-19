@@ -63,13 +63,13 @@ class RewardModelTrainer(ABC):
             self.strategy.print("LogExp Loss")
 
         # Mixtral 8*7b
-        self.aux_loss = self.args.actor.aux_loss_coef > 1e-8
+        self.aux_loss = self.args.model.aux_loss_coef > 1e-8
 
         # packing samples
         self.packing_samples = strategy.args.data.packing_samples
 
-        self.margin_loss = self.strategy.args.actor.margin_loss_enable
-        self.compute_fp32_loss = self.strategy.args.actor.compute_fp32_loss_enable
+        self.margin_loss = self.strategy.args.model.margin_loss_enable
+        self.compute_fp32_loss = self.strategy.args.model.compute_fp32_loss_enable
 
         # wandb/tensorboard setting
         self._wandb = None
@@ -168,7 +168,7 @@ class RewardModelTrainer(ABC):
                 if not self.aux_loss:
                     aux_loss = 0
 
-                loss = preference_loss + aux_loss * self.args.actor.aux_loss_coef
+                loss = preference_loss + aux_loss * self.args.model.aux_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 

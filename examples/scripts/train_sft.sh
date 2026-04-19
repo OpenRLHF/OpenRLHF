@@ -9,7 +9,7 @@ openrlhf.cli.train_sft \
    --train.batch_size 256 \
    --train.micro_batch_size 2 \
    --data.max_samples 500000 \
-   --actor.model_name_or_path meta-llama/Meta-Llama-3-8B \
+   --model.model_name_or_path meta-llama/Meta-Llama-3-8B \
    --ckpt.output_dir ./checkpoint/llama3-8b-sft \
    --ckpt.save_steps -1 \
    --logger.logging_steps 1 \
@@ -17,11 +17,11 @@ openrlhf.cli.train_sft \
    --ds.zero_stage 2 \
    --train.max_epochs 1 \
    --ds.param_dtype bf16 \
-   --actor.attn_implementation flash_attention_2 \
+   --model.attn_implementation flash_attention_2 \
    --adam.lr 5e-6 \
    --ckpt.load_enable \
    --data.packing_samples \
-   --actor.gradient_checkpointing_enable
+   --model.gradient_checkpointing_enable
 EOF
     # --wandb [WANDB_TOKENS]
     # --data.packing_samples
