@@ -93,7 +93,12 @@ class NaiveReplayBuffer(ABC):
         world_size = dist.get_world_size()
         dp_size = world_size // args.ds.ring_attn_size // args.ds.tensor_parallel_size
         local_train_batch_size = args.train.batch_size // dp_size
-        num_steps = args.rollout.batch_size * args.rollout.n_samples_per_prompt // args.train.batch_size
+        # Expected num_steps assumes a full buffer, but async + partial_rollout
+        # can deliver a short buffer at episode boundaries — clamp to avoid
+        # iterating past the end of sample_lengths (empty slice → crash in
+        # karmarkar_karp with num_mbs=0).
+        expected_num_steps = args.rollout.batch_size * args.rollout.n_samples_per_prompt // args.train.batch_size
+        num_steps = min(expected_num_steps, len(sample_lengths) // local_train_batch_size)
 
         # split by train_batch_size, sync num_microbatches across dp
         num_microbatches = []
