@@ -5,6 +5,6 @@ python -m openrlhf.cli.serve_rm \
     --port 5000 \
     --ds.param_dtype bf16 \
     --actor.attn_implementation flash_attention_2 \
-    --reward.normalize \
+    --reward.normalize_enable \
     --data.max_len 8192 \
     --batch_size 16

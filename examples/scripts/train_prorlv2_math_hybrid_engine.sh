@@ -40,7 +40,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --algo.kl.use_loss \
    --algo.kl.estimator k2 \
    --algo.advantage.estimator reinforce_baseline \
-   --algo.dynamic_filtering \
+   --algo.dynamic_filtering_enable \
    --algo.dynamic_filtering_range 0 1 \
    --actor.eps_clip_low_high 0.2 0.27 \
    --actor.model_name_or_path ${MODEL_PATH} \
@@ -52,14 +52,14 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --train.batch_size 1024 \
    --rollout.batch_size 512 \
    --rollout.n_samples_per_prompt 16 \
-   --train.dynamic_batch \
+   --train.dynamic_batch_enable \
    --train.num_episodes 100 \
    --data.max_len 9216 \
    --rollout.max_new_tokens 8192 \
    --ds.zero_stage 3 \
    --ds.param_dtype bf16 \
    --actor.adam.lr 1e-6 \
-   --data.prompt ${DATASET_PATH} \
+   --data.prompt_dataset ${DATASET_PATH} \
    --data.input_key prompt \
    --data.label_key label \
    --eval.dataset OpenRLHF/aime-2024 \
@@ -67,13 +67,13 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --eval.temperature 1.0 \
    --eval.n_samples_per_prompt 4 \
    --data.apply_chat_template \
-   --actor.gradient_checkpointing \
+   --actor.gradient_checkpointing_enable \
    --data.packing_samples \
    --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
    --ds.enable_sleep \
-   --algo.advantage.is_correction \
+   --algo.advantage.is_correction_enable \
    --algo.advantage.is_correction_threshold 0.5 5.0 \
    --algo.advantage.is_correction_type icepop \
    --train.max_tokens_per_gpu 32768 \
@@ -102,4 +102,4 @@ python3 -m openrlhf.cli.train_ppo_ray \
 #   This encourages the model to generate complete responses within max_tokens limit
 #
 # Additional options you may try:
-#   --train.async_train                    # Enable async training for higher throughput
+#   --train.async_enable                    # Enable async training for higher throughput

@@ -77,9 +77,11 @@ class ActorPPOTrainer(ABC):
             clip_eps_high=self.args.actor.eps_clip_low_high[1],
             dual_clip=self.args.actor.dual_clip,
             policy_loss_type=self.args.actor.policy_loss_type,
-            enable_vllm_is_correction=self.args.algo.advantage.is_correction,
+            enable_vllm_is_correction=self.args.algo.advantage.is_correction_enable,
             vllm_is_truncated_threshold=(
-                self.args.algo.advantage.is_correction_threshold if self.args.algo.advantage.is_correction else None
+                self.args.algo.advantage.is_correction_threshold
+                if self.args.algo.advantage.is_correction_enable
+                else None
             ),
             vllm_is_correction_type=self.args.algo.advantage.is_correction_type,
         )
@@ -92,12 +94,12 @@ class ActorPPOTrainer(ABC):
             buffer_limit,
             buffer_cpu_offload,
             getattr(self.args.data, "packing_samples", False),
-            self.args.train.dynamic_batch,
+            self.args.train.dynamic_batch_enable,
         )
 
         # Init torch group for weights sync
-        backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
-        self.use_cuda_ipc = backend == "nccl" and self.args.train.colocate_all and not self.args.train.async_train
+        backend = getattr(self.strategy.args.vllm, "sync_backend", "nccl")
+        self.use_cuda_ipc = backend == "nccl" and self.args.train.colocate_all and not self.args.train.async_enable
 
         if self.vllm_engines is not None and not self.use_cuda_ipc and torch.distributed.get_rank() == 0:
             self._init_vllm_sync_group(backend)
@@ -123,7 +125,7 @@ class ActorPPOTrainer(ABC):
         vllm_tensor_parallel_size = self.strategy.args.vllm.tensor_parallel_size
         world_size = vllm_num_engines * vllm_tensor_parallel_size + 1
 
-        use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
+        use_ray = getattr(self.strategy.args.vllm, "sync_with_ray", False)
         group_name = "openrlhf"
         refs = [
             engine.init_process_group.remote(
@@ -151,13 +153,13 @@ class ActorPPOTrainer(ABC):
 
     def ppo_train(self, kl_ctl: float):
         # replay buffer may be empty at first, we should rebuild at each training
-        if self.args.train.dynamic_batch:
+        if self.args.train.dynamic_batch_enable:
             self.replay_buffer.setup_dynamic_batch(self.strategy)
 
         should_shuffle = (
             self.strategy.ring_attn_group is None
             and self.args.ds.tensor_parallel_size <= 1
-            and not self.args.train.dynamic_batch
+            and not self.args.train.dynamic_batch_enable
         )
         dataloader = DataLoader(
             self.replay_buffer,
@@ -319,18 +321,18 @@ class ActorPPOTrainer(ABC):
             if self.args.actor.entropy_coef != 0:
                 loss -= entropy_loss * self.args.actor.entropy_coef
 
-        if self.args.train.dynamic_batch:
+        if self.args.train.dynamic_batch_enable:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
 
         self.strategy.backward(loss, self.actor, self.actor_optim)
-        if self.args.train.dynamic_batch:
+        if self.args.train.dynamic_batch_enable:
             if self.replay_buffer.dynamic_optimizer_step[step]:
                 self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
         else:
             self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
 
         if self.ema_model:
-            if self.args.train.dynamic_batch:
+            if self.args.train.dynamic_batch_enable:
                 if self.replay_buffer.dynamic_optimizer_step[step]:
                     self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
             else:
@@ -346,7 +348,7 @@ class ActorPPOTrainer(ABC):
         # Non-reducible meta
         metrics["actor_lr"] = self.actor_scheduler.get_last_lr()[0]
         weights["actor_lr"] = None
-        is_optimizer_step = not self.args.train.dynamic_batch or self.replay_buffer.dynamic_optimizer_step[step]
+        is_optimizer_step = not self.args.train.dynamic_batch_enable or self.replay_buffer.dynamic_optimizer_step[step]
         if is_optimizer_step:
             metrics["actor_grad_norm"] = self.strategy.get_grad_norm(self.actor)
             weights["actor_grad_norm"] = None
@@ -377,7 +379,7 @@ class ActorPPOTrainer(ABC):
         }
 
     def broadcast_to_vllm(self):
-        use_prefix_cache = getattr(self.strategy.args, "enable_prefix_caching", False)
+        use_prefix_cache = getattr(self.strategy.args.vllm, "enable_prefix_caching", False)
         cache_reset_refs = []
         if use_prefix_cache and torch.distributed.get_rank() == 0:
             # clear prefix cache
@@ -389,7 +391,7 @@ class ActorPPOTrainer(ABC):
         count = 0
 
         def _broadcast_param(param, count, num_params):
-            use_ray = getattr(self.strategy.args, "vllm_sync_with_ray", False)
+            use_ray = getattr(self.strategy.args.vllm, "sync_with_ray", False)
             # Fire all vllm engines for broadcast
             if torch.distributed.get_rank() == 0:
                 shape = param.shape if self.strategy.args.ds.zero_stage != 3 else param.ds_shape
@@ -493,7 +495,7 @@ class PolicyModelActor(BaseModelActor):
             packing_samples=strategy.args.data.packing_samples,
             temperature=strategy.args.rollout.temperature,
             use_liger_kernel=strategy.args.actor.use_liger_kernel,
-            freeze_visual_encoder=getattr(strategy.args, "freeze_visual_encoder", False),
+            freeze_visual_encoder=getattr(strategy.args.actor, "freeze_visual_encoder", False),
         )
         strategy.print(actor)
 
@@ -514,7 +516,7 @@ class PolicyModelActor(BaseModelActor):
         else:
             ema_model = None
 
-        if args.actor.gradient_checkpointing:
+        if args.actor.gradient_checkpointing_enable:
             actor.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": args.actor.gradient_checkpointing_reentrant}
             )
@@ -540,7 +542,7 @@ class PolicyModelActor(BaseModelActor):
         # load checkpoint
         self.checkpoint_states = {}
         ckpt_path = os.path.join(args.ckpt.path, "_actor")
-        if args.ckpt.load and os.path.exists(ckpt_path):
+        if args.ckpt.load_enable and os.path.exists(ckpt_path):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
             _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
             self.checkpoint_states = states

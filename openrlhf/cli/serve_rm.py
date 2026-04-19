@@ -17,7 +17,7 @@ class RewardModelProxy:
         self.reward_model = get_llm_for_sequence_regression(
             args.reward.model_name_or_path,
             "reward",
-            normalize_reward=args.reward.normalize,
+            normalize_reward=args.reward.normalize_enable,
             attn_implementation=args.actor.attn_implementation,
             param_dtype=args.ds.param_dtype,  # default: bf16
             load_in_4bit=args.actor.load_in_4bit,

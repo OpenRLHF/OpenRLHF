@@ -83,14 +83,14 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --actor.adam.lr 5e-7 \
     --critic.adam.lr 9e-6 \
     --algo.kl.init_coef 0.01 \
-    --data.prompt OpenRLHF/prompt-collection-v0.1 \
+    --data.prompt_dataset OpenRLHF/prompt-collection-v0.1 \
     --data.input_key context_messages \
     --data.apply_chat_template \
-    --reward.normalize \
+    --reward.normalize_enable \
     --ds.adam_offload \
     --data.packing_samples \
     --vllm.sync_backend nccl \
-    --actor.gradient_checkpointing \
+    --actor.gradient_checkpointing_enable \
     --logger.wandb.key {wandb_token}" &>> ${JOBLOG}
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') Job ${SLURM_JOB_ID} stopped ..." &>> ${JOBLOG}

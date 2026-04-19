@@ -31,7 +31,7 @@ def prepare_datasets(strategy, tokenizer):
 
     # prepare datasets
     train_data = blending_datasets(
-        args.data.prompt,
+        args.data.prompt_dataset,
         args.data.prompt_probs,
         strategy,
         args.train.seed,
@@ -231,7 +231,7 @@ class BasePPOTrainer(ABC):
         rollout_stats = self._compute_rollout_stats(experiences)
 
         # Balance experiences across DP ranks if needed.
-        if self.args.train.dynamic_batch:
+        if self.args.train.dynamic_batch_enable:
             experiences = balance_experiences(experiences, self.args)
 
         # Push experiences to actor (and critic) shards before PPO.
@@ -386,7 +386,7 @@ class BasePPOTrainer(ABC):
 
     def save_logs_and_checkpoints(self, global_step: int, logs_dict=None, client_states=None) -> None:
         logs_dict = logs_dict or {}
-        if global_step % self.args.train.logging_steps == 0:
+        if global_step % self.args.logger.logging_steps == 0:
             if self.wandb_logger:
                 self.wandb_logger.log_train(global_step, logs_dict)
             if self.tensorboard_logger:
@@ -432,7 +432,7 @@ class BasePPOTrainer(ABC):
 
     def init_checkpoint_states(self) -> Dict:
         ckpt_path = os.path.join(self.args.ckpt.path, "_actor")
-        if self.args.ckpt.load and os.path.exists(ckpt_path):
+        if self.args.ckpt.load_enable and os.path.exists(ckpt_path):
             checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
                 0
             ]
@@ -543,7 +543,7 @@ class PPOTrainer(BasePPOTrainer):
                 status["timing/step_total"] = sum(v for k, v in status.items() if k.startswith("timing/"))
 
                 # Add generated samples to status dictionary
-                if self.args.algo.dynamic_filtering:
+                if self.args.algo.dynamic_filtering_enable:
                     status["dynamic_filtering_pass_rate"] = filter_pass_rate
                 log_status = {k: v for k, v in status.items() if k not in ["generated_samples"]}
                 logger.info(f"✨ Global step {global_step}: {log_status}")

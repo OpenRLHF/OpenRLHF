@@ -68,8 +68,8 @@ class RewardModelTrainer(ABC):
         # packing samples
         self.packing_samples = strategy.args.data.packing_samples
 
-        self.margin_loss = self.strategy.args.actor.margin_loss
-        self.compute_fp32_loss = self.strategy.args.actor.compute_fp32_loss
+        self.margin_loss = self.strategy.args.actor.margin_loss_enable
+        self.compute_fp32_loss = self.strategy.args.actor.compute_fp32_loss_enable
 
         # wandb/tensorboard setting
         self._wandb = None
@@ -212,7 +212,7 @@ class RewardModelTrainer(ABC):
 
     # logs/checkpoints/evaluate
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
-        if global_step % args.train.logging_steps == 0:
+        if global_step % args.logger.logging_steps == 0:
             # wandb
             if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {"train/%s" % k: v for k, v in {**logs_dict, "global_step": global_step}.items()}

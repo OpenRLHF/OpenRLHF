@@ -53,7 +53,7 @@ def train(args):
     vllm_engines = None
     if args.vllm.num_engines is not None and args.vllm.num_engines > 0:
         max_len = args.data.max_len
-        if args.train.colocate_all and not args.train.async_train:
+        if args.train.colocate_all and not args.train.async_enable:
             assert (
                 args.actor.num_nodes * args.actor.num_gpus_per_node
                 == args.vllm.num_engines * args.vllm.tensor_parallel_size
@@ -68,14 +68,14 @@ def train(args):
             args.vllm.tensor_parallel_size,
             args.actor.model_name_or_path,
             args.train.seed,
-            args.train.full_determinism,
+            args.train.full_determinism_enable,
             args.vllm.enable_prefix_caching,
             args.vllm.enforce_eager,
             max_len,
-            pg if args.train.colocate_all and not args.train.async_train else None,
+            pg if args.train.colocate_all and not args.train.async_enable else None,
             args.vllm.gpu_memory_utilization,
             args.vllm.enable_sleep,
-            "processed_logprobs" if args.algo.advantage.is_correction else None,
+            "processed_logprobs" if args.algo.advantage.is_correction_enable else None,
             agent_func_path=args.train.agent_func_path,
             remote_rm_url=args.reward.remote_url,
             max_images_per_prompt=getattr(args.data, "max_images_per_prompt", 0),
@@ -142,7 +142,7 @@ def train(args):
         reward_model = None
 
     # Select trainer by mode
-    if args.train.async_train:
+    if args.train.async_enable:
         from openrlhf.trainer.ppo_trainer_async import PPOTrainerAsync as PPOTrainer
     else:
         from openrlhf.trainer.ppo_trainer import PPOTrainer
@@ -254,7 +254,7 @@ if __name__ == "__main__":
         help="vLLM gpu_memory_utilization",
     )
     # Your Efficient RL Framework Secretly Brings You Off-Policy RL Training: https://fengyao.notion.site/off-policy-rl
-    parser.add_argument("--algo.advantage.is_correction", action="store_true", default=False)
+    parser.add_argument("--algo.advantage.is_correction_enable", action="store_true", default=False)
     parser.add_argument(
         "--algo.advantage.is_correction_threshold",
         type=float,
@@ -271,10 +271,10 @@ if __name__ == "__main__":
     )
 
     # Async training using ray
-    parser.add_argument("--train.async_train", action="store_true", default=False, help="Enable async training")
+    parser.add_argument("--train.async_enable", action="store_true", default=False, help="Enable async training")
     parser.add_argument("--train.async_queue_size", type=int, default=1, help="Queue size for async sampler<->trainer")
     parser.add_argument(
-        "--train.partial_rollout",
+        "--train.partial_rollout_enable",
         action="store_true",
         default=False,
         help="Enable partial rollout in async mode. Uses vLLM pause/resume for weight sync "
@@ -285,13 +285,13 @@ if __name__ == "__main__":
     # Checkpoints
     parser.add_argument("--eval.steps", type=int, default=-1)
     parser.add_argument("--ckpt.save_steps", type=int, default=-1)
-    parser.add_argument("--train.logging_steps", type=int, default=1)
+    parser.add_argument("--logger.logging_steps", type=int, default=1)
     parser.add_argument("--ckpt.path", type=str, default="./ckpt/checkpoints_ppo_ray")
     parser.add_argument("--ckpt.save_hf", action="store_true", default=False)
     parser.add_argument("--ckpt.disable_ds", action="store_true", default=False)
     parser.add_argument("--ckpt.max_num", type=int, default=3)
     parser.add_argument("--ckpt.max_mem", type=float, default=float("inf"))
-    parser.add_argument("--ckpt.load", action="store_true", default=False)
+    parser.add_argument("--ckpt.load_enable", action="store_true", default=False)
     parser.add_argument(
         "--ckpt.best_metric_key",
         type=str,
@@ -304,9 +304,9 @@ if __name__ == "__main__":
     )
 
     # DeepSpeed
-    parser.add_argument("--train.local_rank", type=int, default=-1, help="local_rank for deepspeed")
+    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--ds.zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
-    parser.add_argument("--actor.gradient_checkpointing", action="store_true", default=False)
+    parser.add_argument("--actor.gradient_checkpointing_enable", action="store_true", default=False)
     parser.add_argument("--ds.deepcompile", action="store_true", default=False)
     parser.add_argument(
         "--ds.param_dtype",
@@ -320,7 +320,6 @@ if __name__ == "__main__":
     parser.add_argument("--train.ema_beta", type=float, default=0.992, help="EMA beta coefficient")
     parser.add_argument("--ds.zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--ds.adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
-    parser.add_argument("--actor.init_on_gpu", action="store_true", default=False)
     parser.add_argument(
         "--actor.attn_implementation",
         type=str,
@@ -350,7 +349,7 @@ if __name__ == "__main__":
     parser.add_argument("--data.packing_samples", action="store_true", default=False)
 
     # dynamic batch size
-    parser.add_argument("--train.dynamic_batch", action="store_true", default=False)
+    parser.add_argument("--train.dynamic_batch_enable", action="store_true", default=False)
     parser.add_argument("--rollout.max_tokens_per_gpu", type=int, default=None)
     parser.add_argument("--train.max_tokens_per_gpu", type=int, default=16192)
 
@@ -378,7 +377,6 @@ if __name__ == "__main__":
         help="Max tokens to generate per sample. If None, dynamically computed as max_len - prompt_len per sample.",
     )
     parser.add_argument("--data.max_samples", type=int, default=int(1e8), help="Max number of samples")
-    parser.add_argument("--actor.ptx_coef", type=float, default=0.05, help="PPO-ptx loss coef")
     parser.add_argument("--actor.eps_clip", type=float, default=0.2, help="PPO clip range")
     parser.add_argument("--actor.eps_clip_low_high", type=float, nargs=2, default=None, help="PPO-clip low and high")
     parser.add_argument("--actor.dual_clip", type=float, default=None, help="Dual-clip PPO")
@@ -387,12 +385,14 @@ if __name__ == "__main__":
     parser.add_argument("--algo.advantage.gamma", type=float, default=1, help="PPO GAE gamma")
     parser.add_argument("--train.micro_batch_size", type=int, default=1, help="batch size per GPU")
     parser.add_argument("--train.batch_size", type=int, default=128, help="Global training batch size")
-    parser.add_argument("--reward.normalize", action="store_true", default=False, help="Enable Reward Normalization")
+    parser.add_argument(
+        "--reward.normalize_enable", action="store_true", default=False, help="Enable Reward Normalization"
+    )
     parser.add_argument("--rollout.top_p", type=float, default=1.0)
     parser.add_argument("--rollout.temperature", type=float, default=1.0)
     parser.add_argument("--train.seed", type=int, default=42)
     parser.add_argument(
-        "--train.full_determinism",
+        "--train.full_determinism_enable",
         action="store_true",
         default=False,
         help="Enable reproducible behavior during distributed training",
@@ -508,7 +508,7 @@ if __name__ == "__main__":
     parser.add_argument("--train.agent_func_path", type=str, default=None, help="Agent script path")
 
     # Custom dataset
-    parser.add_argument("--data.prompt", type=str, default=None, help="HF dataset name or path")
+    parser.add_argument("--data.prompt_dataset", type=str, default=None, help="HF dataset name or path")
     parser.add_argument(
         "--data.prompt_probs",
         type=str,
@@ -543,7 +543,7 @@ if __name__ == "__main__":
 
     # Dynamic filtering
     parser.add_argument(
-        "--algo.dynamic_filtering", action="store_true", default=False, help="Enable dynamic filtering"
+        "--algo.dynamic_filtering_enable", action="store_true", default=False, help="Enable dynamic filtering"
     )
     parser.add_argument(
         "--algo.dynamic_filtering_range", nargs=2, default=(0, 1), type=float, help="Dynamic filtering rewards range"
@@ -565,7 +565,6 @@ if __name__ == "__main__":
     parser.add_argument("--logger.tensorboard_dir", type=str, default=None, help="TensorBoard logging path")
 
     # performance tuning
-    parser.add_argument("--train.perf", action="store_true", default=False)
 
     # ModelScope parameters
     parser.add_argument("--data.use_ms", action="store_true", default=False)
@@ -625,7 +624,7 @@ if __name__ == "__main__":
             print("[Warning] --ring_attn_size > 1 requires --packing_samples.")
             args.data.packing_samples = True
 
-    if args.train.dynamic_batch:
+    if args.train.dynamic_batch_enable:
         if not args.data.packing_samples:
             print("[Warning] Please --packing_samples to accelerate when --use_dynamic_batch is enabled.")
             args.data.packing_samples = True
@@ -645,14 +644,14 @@ if __name__ == "__main__":
         print("Set args.vllm.enable_sleep to False when args.train.colocate_all is disabled.")
         args.vllm.enable_sleep = False
 
-    if args.train.colocate_all and args.train.async_train:
+    if args.train.colocate_all and args.train.async_enable:
         print("[Warning] Using --colocate_all_models in async RLHF only colocates DeepSpeed models.")
 
-    if args.train.async_train:
+    if args.train.async_enable:
         assert not args.vllm.enable_sleep, "Async RLHF is not supported with --vllm_enable_sleep."
 
-    if args.train.partial_rollout:
-        assert args.train.async_train, "--partial_rollout requires --async_train."
+    if args.train.partial_rollout_enable:
+        assert args.train.async_enable, "--partial_rollout requires --async_train."
 
     if args.eval.dataset:
         assert args.reward.remote_url, "`--eval_dataset` is only supported with `--remote_rm_url`."
@@ -669,12 +668,12 @@ if __name__ == "__main__":
         args.rollout.vllm_generate_batch_size = args.rollout.batch_size
 
     if args.rollout.vllm_generate_batch_size > args.rollout.batch_size:
-        assert args.train.async_train, (
+        assert args.train.async_enable, (
             "--vllm_generate_batch_size > --rollout_batch_size requires --async_train "
             "(over-sampling needs async queue to buffer extra batches)."
         )
 
-    if args.algo.dynamic_filtering:
+    if args.algo.dynamic_filtering_enable:
         assert (
             args.algo.dynamic_filtering_range[0] < args.algo.dynamic_filtering_range[1]
         ), "reward_clip_range[0] must be less than reward_clip_range[1]"

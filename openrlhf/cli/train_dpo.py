@@ -57,7 +57,7 @@ def train(args):
     )
 
     # gradient_checkpointing
-    if args.actor.gradient_checkpointing:
+    if args.actor.gradient_checkpointing_enable:
         model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": args.actor.gradient_checkpointing_reentrant}
         )
@@ -136,7 +136,7 @@ def train(args):
 
     # load checkpoint
     consumed_samples = 0
-    if args.ckpt.load and os.path.exists(args.ckpt.path):
+    if args.ckpt.load_enable and os.path.exists(args.ckpt.path):
         load_path, states = strategy.load_ckpt(model.model, args.ckpt.path)
         if load_path is not None:
             consumed_samples = states["consumed_samples"]
@@ -175,7 +175,7 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt.save_steps", type=int, default=-1)
     parser.add_argument("--ckpt.save_hf", action="store_true", default=False)
     parser.add_argument("--ckpt.disable_ds", action="store_true", default=False)
-    parser.add_argument("--train.logging_steps", type=int, default=1)
+    parser.add_argument("--logger.logging_steps", type=int, default=1)
     parser.add_argument("--eval.steps", type=int, default=-1)
     parser.add_argument("--ckpt.path", type=str, default="./ckpt/checkpoints_dpo")
     parser.add_argument("--ckpt.max_num", type=int, default=3)
@@ -185,12 +185,12 @@ if __name__ == "__main__":
     # DeepSpeed
     parser.add_argument("--train.micro_batch_size", type=int, default=8, help="batch size per GPU")
     parser.add_argument("--train.batch_size", type=int, default=128, help="Global training batch size")
-    parser.add_argument("--ckpt.load", action="store_true", default=False)
-    parser.add_argument("--actor.gradient_checkpointing", action="store_true", default=False)
+    parser.add_argument("--ckpt.load_enable", action="store_true", default=False)
+    parser.add_argument("--actor.gradient_checkpointing_enable", action="store_true", default=False)
     parser.add_argument("--ds.deepcompile", action="store_true", default=False)
     parser.add_argument("--train.seed", type=int, default=42)
     parser.add_argument(
-        "--train.full_determinism",
+        "--train.full_determinism_enable",
         action="store_true",
         default=False,
         help="Enable reproducible behavior during distributed training",
@@ -199,7 +199,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data.dataloader_num_workers", type=int, default=0, help="Number of dataloader workers for IO"
     )
-    parser.add_argument("--train.local_rank", type=int, default=-1, help="local_rank for deepspeed")
+    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--ds.zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
     parser.add_argument(
         "--ds.param_dtype",
@@ -227,7 +227,7 @@ if __name__ == "__main__":
     parser.add_argument("--train.max_epochs", type=int, default=1)
     parser.add_argument("--actor.beta", type=float, default=0.1)
     parser.add_argument(
-        "--actor.ipo", action="store_true", default=False
+        "--actor.ipo_enable", action="store_true", default=False
     )  # IPO https://arxiv.org/pdf/2310.12036v2.pdf
     parser.add_argument(
         "--actor.label_smoothing", type=float, default=0.0
@@ -302,14 +302,14 @@ if __name__ == "__main__":
     parser.add_argument("--eval.split", type=str, default="test")
     parser.add_argument("--data.max_samples", type=int, default=1000000, help="Maximum number of samples to use")
 
-    parser.add_argument("--prompt_key", type=str, default=None)
-    parser.add_argument("--chosen_key", type=str, default="chosen")
-    parser.add_argument("--rejected_key", type=str, default="rejected")
+    parser.add_argument("--data.prompt_key", type=str, default=None)
+    parser.add_argument("--data.chosen_key", type=str, default="chosen")
+    parser.add_argument("--data.rejected_key", type=str, default="rejected")
     parser.add_argument("--data.input_template", type=str, default=None)
     parser.add_argument(
         "--data.apply_chat_template", action="store_true", default=False, help="Use HF tokenizer chat template"
     )
-    parser.add_argument("--tokenizer_chat_template", type=str, default=None)
+    parser.add_argument("--data.tokenizer_chat_template", type=str, default=None)
     parser.add_argument("--data.max_len", type=int, default=512)
 
     # wandb parameters

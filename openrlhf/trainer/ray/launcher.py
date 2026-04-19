@@ -160,7 +160,7 @@ class RewardModelActor(BaseModelActor):
         model = get_llm_for_sequence_regression(
             pretrain,
             "reward",
-            normalize_reward=strategy.args.reward.normalize,
+            normalize_reward=strategy.args.reward.normalize_enable,
             attn_implementation=strategy.args.actor.attn_implementation,
             param_dtype=strategy.args.ds.param_dtype,  # default: bf16
             load_in_4bit=strategy.args.actor.load_in_4bit,
@@ -169,7 +169,7 @@ class RewardModelActor(BaseModelActor):
             packing_samples=strategy.args.data.packing_samples,
         )
         strategy.print(model)
-        strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize))
+        strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize_enable))
         strategy.print("mean: {}, std {}".format(model.mean, model.std))
 
         if strategy.args.ref.reward_offload:

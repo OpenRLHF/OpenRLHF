@@ -14,7 +14,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --algo.kl.use_loss \
    --algo.kl.estimator k3 \
    --algo.advantage.estimator group_norm \
-   --algo.dynamic_filtering \
+   --algo.dynamic_filtering_enable \
    --algo.dynamic_filtering_range 0 1 \
    --actor.eps_clip_low_high 0.2 0.27 \
    --actor.model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
@@ -34,10 +34,10 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --ds.zero_stage 3 \
    --ds.param_dtype bf16 \
    --actor.adam.lr 5e-7 \
-   --data.prompt OpenRLHF/prompt-collection-v0.1 \
+   --data.prompt_dataset OpenRLHF/prompt-collection-v0.1 \
    --data.input_key context_messages \
    --data.apply_chat_template \
-   --actor.gradient_checkpointing \
+   --actor.gradient_checkpointing_enable \
    --data.packing_samples \
    --vllm.sync_backend nccl \
    --vllm.enforce_eager \

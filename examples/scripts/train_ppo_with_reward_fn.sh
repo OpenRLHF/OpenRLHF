@@ -36,13 +36,13 @@ ray job submit --address="http://127.0.0.1:8265" \
    --actor.adam.lr 5e-7 \
    --critic.adam.lr 9e-6 \
    --algo.kl.init_coef 0.01 \
-   --data.prompt OpenRLHF/prompt-collection-v0.1 \
+   --data.prompt_dataset OpenRLHF/prompt-collection-v0.1 \
    --data.input_key context_messages \
    --data.apply_chat_template \
-   --reward.normalize \
+   --reward.normalize_enable \
    --data.packing_samples \
    --ds.adam_offload \
    --actor.attn_implementation flash_attention_2 \
-   --actor.gradient_checkpointing \
+   --actor.gradient_checkpointing_enable \
    --logger.wandb.key {wandb_token}
 

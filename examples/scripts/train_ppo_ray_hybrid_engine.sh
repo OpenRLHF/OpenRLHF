@@ -29,19 +29,19 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --actor.adam.lr 5e-7 \
    --critic.adam.lr 9e-6 \
    --algo.kl.init_coef 0.01 \
-   --data.prompt OpenRLHF/prompt-collection-v0.1 \
+   --data.prompt_dataset OpenRLHF/prompt-collection-v0.1 \
    --data.input_key context_messages \
    --data.apply_chat_template \
-   --reward.normalize \
-   --actor.gradient_checkpointing \
+   --reward.normalize_enable \
+   --actor.gradient_checkpointing_enable \
    --data.packing_samples \
    --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
    --ds.enable_sleep \
-   --train.dynamic_batch \
+   --train.dynamic_batch_enable \
    --train.max_tokens_per_gpu 16384 \
-   --algo.advantage.is_correction
+   --algo.advantage.is_correction_enable
 
 # Enable tensor parallelism for DeepSpeed
 #    --ds.tensor_parallel_size 2 \

@@ -37,7 +37,7 @@ def train(args):
     strategy.print(model)
 
     # gradient_checkpointing
-    if args.actor.gradient_checkpointing:
+    if args.actor.gradient_checkpointing_enable:
         model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": args.actor.gradient_checkpointing_reentrant}
         )
@@ -57,7 +57,7 @@ def train(args):
         tokenizer,
         args.data.max_len,
         strategy,
-        pretrain_mode=args.actor.pretrain_mode,
+        pretrain_mode=args.actor.pretrain_mode_enable,
         input_template=args.data.input_template,
         multiturn=args.data.multiturn,
     )
@@ -84,7 +84,7 @@ def train(args):
             tokenizer,
             args.data.max_len,
             strategy,
-            pretrain_mode=args.actor.pretrain_mode,
+            pretrain_mode=args.actor.pretrain_mode_enable,
             input_template=args.data.input_template,
             multiturn=args.data.multiturn,
         )
@@ -115,7 +115,7 @@ def train(args):
 
     # load checkpoint
     consumed_samples = 0
-    if args.ckpt.load and os.path.exists(args.ckpt.path):
+    if args.ckpt.load_enable and os.path.exists(args.ckpt.path):
         load_path, states = strategy.load_ckpt(model.model, args.ckpt.path)
         if load_path is not None:
             consumed_samples = states["consumed_samples"]
@@ -132,7 +132,7 @@ def train(args):
         eval_dataloader=eval_dataloader,
         scheduler=scheduler,
         max_norm=args.max_norm,
-        pretrain_mode=args.actor.pretrain_mode,
+        pretrain_mode=args.actor.pretrain_mode_enable,
         batch_size=args.train.batch_size,
         max_epochs=args.train.max_epochs,
         tokenizer=tokenizer,
@@ -153,27 +153,27 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt.save_steps", type=int, default=-1)
     parser.add_argument("--ckpt.save_hf", action="store_true", default=False)
     parser.add_argument("--ckpt.disable_ds", action="store_true", default=False)
-    parser.add_argument("--train.logging_steps", type=int, default=1)
+    parser.add_argument("--logger.logging_steps", type=int, default=1)
     parser.add_argument("--eval.steps", type=int, default=-1)
     parser.add_argument("--ckpt.path", type=str, default="./ckpt/checkpoints_sft")
     parser.add_argument("--ckpt.max_num", type=int, default=3)
     parser.add_argument("--ckpt.max_mem", type=int, default=int(1e8))
-    parser.add_argument("--ckpt.load", action="store_true", default=False)
+    parser.add_argument("--ckpt.load_enable", action="store_true", default=False)
     parser.add_argument("--ds.use_universal_ckpt", action="store_true", default=False)
 
     # DeepSpeed
     parser.add_argument("--train.micro_batch_size", type=int, default=8, help="batch size per GPU")
     parser.add_argument("--train.batch_size", type=int, default=128, help="Global training batch size")
-    parser.add_argument("--actor.gradient_checkpointing", action="store_true", default=False)
+    parser.add_argument("--actor.gradient_checkpointing_enable", action="store_true", default=False)
     parser.add_argument("--ds.deepcompile", action="store_true", default=False)
     parser.add_argument("--train.seed", type=int, default=42)
     parser.add_argument(
-        "--train.full_determinism",
+        "--train.full_determinism_enable",
         action="store_true",
         default=False,
         help="Enable reproducible behavior during distributed training",
     )
-    parser.add_argument("--train.local_rank", type=int, default=-1, help="local_rank for deepspeed")
+    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
     parser.add_argument("--ds.zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
     parser.add_argument(
         "--ds.param_dtype",
@@ -204,7 +204,7 @@ if __name__ == "__main__":
     parser.add_argument("--train.max_epochs", type=int, default=2)
     parser.add_argument("--actor.aux_loss_coef", type=float, default=0, help="MoE balancing loss")
     parser.add_argument("--actor.model_name_or_path", type=str, default=None)
-    parser.add_argument("--actor.pretrain_mode", action="store_true", default=False, help="Use pretrain loss")
+    parser.add_argument("--actor.pretrain_mode_enable", action="store_true", default=False, help="Use pretrain loss")
 
     # Optimizer + scheduler + grad clip.  Dotted CLI (--muon.lr, --adam.lr) →
     # hierarchize() later turns these into args.muon.lr / args.adam.lr / etc.
@@ -268,16 +268,15 @@ if __name__ == "__main__":
     parser.add_argument("--data.dataset_split", type=str, default="train")
     parser.add_argument("--eval.split", type=str, default="train")
     parser.add_argument("--data.max_samples", type=int, default=1000000, help="Maximum number of samples to use")
-    parser.add_argument("--train_split", type=str, default="train", help="train split of the HF dataset")
     parser.add_argument("--data.multiturn", action="store_true", default=False, help="Use compacted multiturn dataset")
 
     parser.add_argument("--data.input_key", type=str, default="input", help="JSON dataset key")
-    parser.add_argument("--output_key", type=str, default=None, help="JSON dataset key")
+    parser.add_argument("--data.output_key", type=str, default=None, help="JSON dataset key")
     parser.add_argument("--data.input_template", type=str, default="User: {}\nAssistant: ")
     parser.add_argument(
         "--data.apply_chat_template", action="store_true", default=False, help="Use HF tokenizer chat template"
     )
-    parser.add_argument("--tokenizer_chat_template", type=str, default=None)
+    parser.add_argument("--data.tokenizer_chat_template", type=str, default=None)
     parser.add_argument("--data.max_len", type=int, default=2048, help="Max tokens for the samples")
 
     # wandb parameters

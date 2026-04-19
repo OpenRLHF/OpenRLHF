@@ -56,17 +56,17 @@ OpenRLHF 是**首个**结合 **Ray + vLLM 分布式架构**与**统一 Agent 设
 - [2026/4] OpenRLHF 0.10 新增 **多轮 VLM RL** — 支持 prompt 和环境反馈（如截图）中均包含图像的多步交互。示例：[vlm_multiturn_agent.py](./examples/python/vlm_multiturn_agent.py)
 - [2026/4] OpenRLHF 0.10 新增 **VLM（视觉语言模型）RLHF 支持** — 支持 Qwen3.5 等 VLM 的端到端图像输入训练。训练脚本：[train_vlm_math_hybrid_engine.sh](./examples/scripts/train_vlm_math_hybrid_engine.sh)
 - [2026/2] [ProRL V2](https://developer.nvidia.com/blog/scaling-llm-reinforcement-learning-with-prolonged-training-using-prorl-v2/) 使用 REINFORCE++-baseline 通过长期 RL 训练训练最先进的 1.5B 推理模型。训练脚本：[train_prorlv2_math_hybrid_engine.sh](./examples/scripts/train_prorlv2_math_hybrid_engine.sh)
-- [2025/10] [ScaleRL](https://arxiv.org/abs/2510.13786) 验证了 REINFORCE++-baseline 在大规模训练场景中的有效性。发布 [REINFORCE++ PPT](https://docs.google.com/presentation/d/1stieP_3PM1z4Hq1YWR3GywFkxcHEAlstXMaS23KlGN4)
-- [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) 使用与 REINFORCE++-baseline 非常相似的方法训练推理模型。
-- [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) 作为 OpenRLHF 的分支发布。它旨在通过集成中心化多智能体交互与分布式策略训练来训练基于 LLM 的多智能体系统。
-- [2025/5] OpenRLHF 0.8.0 支持通过 `--async_train` 启用异步 RLHF 训练，并通过 `--agent_func_path` 启用异步 Agent RLHF。可运行示例见 [train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)。
-- [2025/4] 发布博客 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html)
-- [2025/4] Clean OpenRLHF：基于单控制器和统一打包样本重构了源代码
-- [2025/3] CMU [高级自然语言处理 2025 春季](https://cmu-l3.github.io/anlp-spring2025/)课程使用 OpenRLHF 作为 RLHF 框架教学案例。
-- [2025/2] [Logic-RL](https://arxiv.org/abs/2502.14768) 和 [PRIME](https://arxiv.org/abs/2502.01456) 证明 REINFORCE++ 相比 GRPO 更稳定，比 PPO 更快。
-- [2025/2] [LMM-R1](https://github.com/TideDra/lmm-r1) 是 OpenRLHF 的分支，旨在为多模态任务上的 DeepSeek-R1 复现提供高性能 RL 基础设施。
-- [2025/2] MIT 和微软使用 OpenRLHF 提出 [On the Emergence of Thinking in LLMs I: Searching for the Right Intuition](https://arxiv.org/pdf/2502.06773)
-- [2025/1] HKUST 使用 OpenRLHF 复现了[小模型上的 DeepSeek-R1-Zero 和 DeepSeek-R1 训练](https://github.com/hkust-nlp/simpleRL-reason)
+- [2026/10] [ScaleRL](https://arxiv.org/abs/2510.13786) 验证了 REINFORCE++-baseline 在大规模训练场景中的有效性。发布 [REINFORCE++ PPT](https://docs.google.com/presentation/d/1stieP_3PM1z4Hq1YWR3GywFkxcHEAlstXMaS23KlGN4)
+- [2026/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) 使用与 REINFORCE++-baseline 非常相似的方法训练推理模型。
+- [2026/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) 作为 OpenRLHF 的分支发布。它旨在通过集成中心化多智能体交互与分布式策略训练来训练基于 LLM 的多智能体系统。
+- [2026/5] OpenRLHF 0.8.0 支持通过 `--train.async_enable` 启用异步 RLHF 训练，并通过 `--train.agent_func_path` 启用异步 Agent RLHF。可运行示例见 [train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)。
+- [2026/4] 发布博客 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2026/04/23/openrlhf-vllm.html)
+- [2026/4] Clean OpenRLHF：基于单控制器和统一打包样本重构了源代码
+- [2026/3] CMU [高级自然语言处理 2026 春季](https://cmu-l3.github.io/anlp-spring2026/)课程使用 OpenRLHF 作为 RLHF 框架教学案例。
+- [2026/2] [Logic-RL](https://arxiv.org/abs/2502.14768) 和 [PRIME](https://arxiv.org/abs/2502.01456) 证明 REINFORCE++ 相比 GRPO 更稳定，比 PPO 更快。
+- [2026/2] [LMM-R1](https://github.com/TideDra/lmm-r1) 是 OpenRLHF 的分支，旨在为多模态任务上的 DeepSeek-R1 复现提供高性能 RL 基础设施。
+- [2026/2] MIT 和微软使用 OpenRLHF 提出 [On the Emergence of Thinking in LLMs I: Searching for the Right Intuition](https://arxiv.org/pdf/2502.06773)
+- [2026/1] HKUST 使用 OpenRLHF 复现了[小模型上的 DeepSeek-R1-Zero 和 DeepSeek-R1 训练](https://github.com/hkust-nlp/simpleRL-reason)
 - [2024/12] 我们"提出"了😊 [REINFORCE++: A Simple and Efficient Approach for Aligning Large Language Models](https://www.researchgate.net/publication/387487679_REINFORCE_An_Efficient_RLHF_Algorithm_with_Robustnessto_Both_Prompt_and_Reward_Models)。
 - [2024/12] 我们在 [Notion 博文](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05)中分析了 PPO、REINFORCE++、GRPO 和 RLOO。
 - [2023/8] OpenRLHF 开源。
@@ -180,7 +180,7 @@ OpenRLHF 实现了 **PPO、REINFORCE++、REINFORCE++-baseline、GRPO、RLOO**，
 <details>
 <summary>展开算法对比表</summary>
 
-| 算法 | `--advantage_estimator` | 关键特性 | 最佳用例 |
+| 算法 | `--algo.advantage.estimator` | 关键特性 | 最佳用例 |
 |------|-------------------------|---------|---------|
 | **PPO** | (默认) | 完整 critic 网络 | 稳定训练，成熟结果 |
 | **REINFORCE++** | `reinforce` | 无 critic 的 PPO 技巧 | 高效训练，更少内存 |
@@ -209,15 +209,15 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 **单轮模式**（默认 - 99% 的用例）
 - 每个提示单次生成
 - 适用于所有 RL 算法：[PPO](./examples/scripts/train_ppo_ray_hybrid_engine.sh)、[REINFORCE++/baseline/GRPO/RLOO](./examples/scripts/train_reinforce_baseline_hybrid_engine.sh)
-- [自定义奖励函数](./examples/scripts/train_ppo_with_reward_fn.sh)（`--remote_rm_url`）
+- [自定义奖励函数](./examples/scripts/train_ppo_with_reward_fn.sh)（`--reward.remote_url`）
 - [混合引擎](./examples/scripts/train_ppo_ray_hybrid_engine.sh)以最大化 GPU 利用率
 
 **多轮模式**（高级 - 交互式任务）
 - 与环境反馈的多步交互
 - 适用于所有 RL 算法
-- [自定义 Agent 函数](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)（`--agent_func_path`）
+- [自定义 Agent 函数](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)（`--train.agent_func_path`）
 - OpenAI 兼容服务器：参见 `examples/python/agent_func_openai_server_executor.py`（将 vLLM 封装为本地 OpenAI 服务器的 agent executor 示例）
-- 异步流水线（`--async_train`）提高吞吐量：[train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)
+- 异步流水线（`--train.async_enable`）提高吞吐量：[train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)
 
 </details>
 
@@ -240,37 +240,37 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 <summary>展开高级能力</summary>
 
 **效率优化**
-- 所有训练模式的样本打包（`--packing_samples`）
-- 快速生成的 vLLM 加速（`--vllm_num_engines`）
-- DAPO [动态过滤](./examples/scripts/train_dapo_ray_hybrid_engine.sh)（`--dynamic_filtering`）
+- 所有训练模式的样本打包（`--data.packing_samples`）
+- 快速生成的 vLLM 加速（`--vllm.num_engines`）
+- DAPO [动态过滤](./examples/scripts/train_dapo_ray_hybrid_engine.sh)（`--algo.dynamic_filtering_enable`）
   - 🎲 Dynamic Sampling：对每个 prompt 生成多条响应，并根据奖励函数/Agent 返回的 **0–1 `scores`** 信号进行过滤
-    - 开启：`--dynamic_filtering`
-    - 设置分数范围：`--dynamic_filtering_reward_range 0.0 1.0`
-    - 前置条件：`--n_samples_per_prompt > 1`，并提供 `--remote_rm_url`（奖励函数）或 `--agent_func_path`（Agent）
+    - 开启：`--algo.dynamic_filtering_enable`
+    - 设置分数范围：`--algo.dynamic_filtering_range 0.0 1.0`
+    - 前置条件：`--rollout.n_samples_per_prompt > 1`，并提供 `--reward.remote_url`（奖励函数）或 `--train.agent_func_path`（Agent）
     - 示例：`./examples/scripts/train_dapo_ray_hybrid_engine.sh`
 
 **可扩展性**
-- 张量并行的 DeepSpeed AutoTP（参见训练脚本中的 `--ds_tensor_parallel_size`）
-- 长上下文的 [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh)（`--ring_attn_size`）
+- 张量并行的 DeepSpeed AutoTP（参见训练脚本中的 `--ds.tensor_parallel_size`）
+- 长上下文的 [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh)（`--actor.ring_attn_size`）
 - 使用 [SLURM](./examples/scripts/train_ppo_ray_slurm.sh) 的多节点训练
 
 **模型支持**
-- [VLM（视觉语言模型）](./examples/scripts/train_vlm_math_hybrid_engine.sh) — 支持单轮和[含图像反馈的多轮交互](./examples/python/vlm_multiturn_agent.py)（`--image_key`、`--max_images_per_prompt`）
-- [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--lora_rank`、`--load_in_4bit`）
-- [专家混合（MoE）](./examples/test_scripts/train_sft_moe.sh)（`--aux_loss_coef`）
-- FlashAttention（`--attn_implementation`）
-- HuggingFace 聊天模板（`--apply_chat_template`）
+- [VLM（视觉语言模型）](./examples/scripts/train_vlm_math_hybrid_engine.sh) — 支持单轮和[含图像反馈的多轮交互](./examples/python/vlm_multiturn_agent.py)（`--data.image_key`、`--data.max_images_per_prompt`）
+- [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--actor.lora.rank`、`--actor.load_in_4bit`）
+- [专家混合（MoE）](./examples/test_scripts/train_sft_moe.sh)（`--actor.aux_loss_coef`）
+- FlashAttention（`--actor.attn_implementation`）
+- HuggingFace 聊天模板（`--data.apply_chat_template`）
 
 **奖励塑形**
-- DAPO 风格超长惩罚（`--overlong_buffer_len`、`--overlong_penalty_factor`）——对超过 `max_new_tokens - overlong_buffer_len` 的响应进行软惩罚
-- ProRL 风格截断惩罚（`--stop_properly_penalty_coef`）——对 `finish_reason='length'` 的样本：`coef ∈ [0, 1]` 表示乘法缩放奖励；`coef < 0` 表示将奖励直接覆盖为该固定值（例如 `-0.5`）
+- DAPO 风格超长惩罚（`--reward.overlong_buffer_len`、`--reward.overlong_penalty_factor`）——对超过 `max_new_tokens - overlong_buffer_len` 的响应进行软惩罚
+- ProRL 风格截断惩罚（`--reward.stop_properly_penalty_coef`）——对 `finish_reason='length'` 的样本：`coef ∈ [0, 1]` 表示乘法缩放奖励；`coef < 0` 表示将奖励直接覆盖为该固定值（例如 `-0.5`）
 
 **生产特性**
-- Wandb（`--use_wandb`）和 TensorBoard（`--use_tensorboard`）日志
-- 检查点恢复（`--load_checkpoint`、`--save_steps`）
-- 基于评估指标保存最佳检查点（`--best_metric_key`）
-- 评估数据集（`--eval_dataset`、`--eval_temperature`、`--eval_n_samples_per_prompt`）——支持异步训练中的评估
-- 多进程数据加载（`--dataloader_num_workers`，PPO/SFT/RM/DPO 均支持）
+- Wandb（`--logger.wandb.key`）和 TensorBoard（`--logger.tensorboard_dir`）日志
+- 检查点恢复（`--ckpt.load_enable`、`--ckpt.save_steps`）
+- 基于评估指标保存最佳检查点（`--ckpt.best_metric_key`）
+- 评估数据集（`--eval.dataset`、`--eval.temperature`、`--eval.n_samples_per_prompt`）——支持异步训练中的评估
+- 多进程数据加载（`--data.dataloader_num_workers`，PPO/SFT/RM/DPO 均支持）
 - PPO 可观测性：actor/critic grad-norm 以及各阶段耗时细分（`timing/make_experience`、`timing/ppo_train`、`timing/broadcast`、`timing/generation`、`timing/step_total`）
 
 </details>
@@ -315,11 +315,11 @@ pip install -e .
 OpenRLHF 提供灵活的数据处理方法：
 
 **关键参数**：
-- `--input_key`：指定输入数据的 JSON 键名
-- `--apply_chat_template`：使用 HuggingFace tokenizer 的[聊天模板](https://huggingface.co/docs/transformers/main/en/chat_templating)
-- `--input_template`：自定义模板字符串（聊天模板的替代方案）
-- `--prompt_data_probs` / `--dataset_probs`：混合多个数据集（例如 `0.1,0.4,0.5`）
-- `--eval_dataset`：指定评估数据集路径
+- `--data.input_key`：指定输入数据的 JSON 键名
+- `--data.apply_chat_template`：使用 HuggingFace tokenizer 的[聊天模板](https://huggingface.co/docs/transformers/main/en/chat_templating)
+- `--data.input_template`：自定义模板字符串（聊天模板的替代方案）
+- `--data.prompt_probs` / `--data.dataset_probs`：混合多个数据集（例如 `0.1,0.4,0.5`）
+- `--eval.dataset`：指定评估数据集路径
 
 **聊天模板示例**：
 
@@ -340,7 +340,7 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 <a id="监督微调"></a>
 ### 监督微调
 
-OpenRLHF 的模型检查点与 HuggingFace 模型完全兼容。您可以使用 `--pretrain {name or path}`、`--reward_pretrain {name or path}` 和 `--critic_pretrain {name or path}` 指定模型名称或路径。我们在 [HuggingFace OpenRLHF](https://huggingface.co/OpenRLHF) 上提供了一些预训练检查点和数据集。
+OpenRLHF 的模型检查点与 HuggingFace 模型完全兼容。您可以使用 `--actor.model_name_or_path {name or path}`、`--reward.model_name_or_path {name or path}` 和 `--critic.model_name_or_path {name or path}` 指定模型名称或路径。我们在 [HuggingFace OpenRLHF](https://huggingface.co/OpenRLHF) 上提供了一些预训练检查点和数据集。
 
 然后您可以使用我们在 [examples/scripts](./examples/scripts/) 目录中提供的启动脚本，或使用以下命令开始训练。
 
@@ -349,32 +349,32 @@ OpenRLHF 的模型检查点与 HuggingFace 模型完全兼容。您可以使用 
 
 ```bash
 deepspeed --module openrlhf.cli.train_sft \
-   --max_len 4096 \
-   --dataset Open-Orca/OpenOrca \
-   --input_key question \
-   --output_key response \
-   --input_template $'User: {}\nAssistant: ' \
-   --train_batch_size 256 \
-   --micro_train_batch_size 2 \
-   --max_samples 500000 \
-   --pretrain meta-llama/Meta-Llama-3-8B \
-   --save_path ./checkpoint/llama3-8b-sft \
-   --save_steps -1 \
-   --logging_steps 1 \
-   --eval_steps -1 \
-   --zero_stage 2 \
-   --max_epochs 1 \
-   --packing_samples \
-   --param_dtype bf16 \
-   --learning_rate 5e-6 \
-   --gradient_checkpointing \
-   --use_wandb {wandb_token}
+   --data.max_len 4096 \
+   --data.dataset Open-Orca/OpenOrca \
+   --data.input_key question \
+   --data.output_key response \
+   --data.input_template $'User: {}\nAssistant: ' \
+   --train.batch_size 256 \
+   --train.micro_batch_size 2 \
+   --data.max_samples 500000 \
+   --actor.model_name_or_path meta-llama/Meta-Llama-3-8B \
+   --ckpt.output_dir ./checkpoint/llama3-8b-sft \
+   --ckpt.save_steps -1 \
+   --logger.logging_steps 1 \
+   --eval.steps -1 \
+   --ds.zero_stage 2 \
+   --train.max_epochs 1 \
+   --data.packing_samples \
+   --ds.param_dtype bf16 \
+   --adam.lr 5e-6 \
+   --actor.gradient_checkpointing_enable \
+   --logger.wandb.key {wandb_token}
 
 # 附加选项：
-# --apply_chat_template                # 使用 HF tokenizer 聊天模板
-# --ring_attn_size 2                   # 启用 RingAttention（先安装 ring_flash_attn）
-# --multiturn                          # 多轮微调损失
-# --pretrain_mode                      # 继续预训练模式
+# --data.apply_chat_template                # 使用 HF tokenizer 聊天模板
+# --actor.ring_attn_size 2                   # 启用 RingAttention（先安装 ring_flash_attn）
+# --data.multiturn                          # 多轮微调损失
+# --actor.pretrain_mode_enable                      # 继续预训练模式
 ```
 
 </details>
@@ -386,25 +386,25 @@ deepspeed --module openrlhf.cli.train_sft \
 
 ```bash
 deepspeed --module openrlhf.cli.train_rm \
-   --save_path ./checkpoint/llama3-8b-rm \
-   --save_steps -1 \
-   --logging_steps 1 \
-   --eval_steps -1 \
-   --train_batch_size 256 \
-   --micro_train_batch_size 1 \
-   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-   --param_dtype bf16 \
-   --max_epochs 1 \
-   --max_len 8192 \
-   --zero_stage 3 \
-   --learning_rate 9e-6 \
-   --dataset OpenRLHF/preference_dataset_mixture2_and_safe_pku \
-   --apply_chat_template \
+   --ckpt.output_dir ./checkpoint/llama3-8b-rm \
+   --ckpt.save_steps -1 \
+   --logger.logging_steps 1 \
+   --eval.steps -1 \
+   --train.batch_size 256 \
+   --train.micro_batch_size 1 \
+   --actor.model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
+   --ds.param_dtype bf16 \
+   --train.max_epochs 1 \
+   --data.max_len 8192 \
+   --ds.zero_stage 3 \
+   --adam.lr 9e-6 \
+   --data.dataset OpenRLHF/preference_dataset_mixture2_and_safe_pku \
+   --data.apply_chat_template \
    --chosen_key chosen \
    --rejected_key rejected \
-   --packing_samples \
-   --gradient_checkpointing \
-   --use_wandb {wandb_token}
+   --data.packing_samples \
+   --actor.gradient_checkpointing_enable \
+   --logger.wandb.key {wandb_token}
 ```
 
 </details>
@@ -438,69 +438,69 @@ ray start --address {MASTER-NODE-ADDRESS}:6379  --num-gpus 8
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{"working_dir": "/openrlhf"}' \
    -- python3 -m openrlhf.cli.train_ppo_ray \
-   --ref_num_nodes 1 \
-   --ref_num_gpus_per_node 8 \
-   --reward_num_nodes 1 \
-   --reward_num_gpus_per_node 8 \
-   --critic_num_nodes 1 \
-   --critic_num_gpus_per_node 8 \
-   --actor_num_nodes 1 \
-   --actor_num_gpus_per_node 8 \
-   --vllm_num_engines 4 \
-   --vllm_tensor_parallel_size 2 \
-   --colocate_all_models \
-   --vllm_gpu_memory_utilization 0.5 \
-   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
-   --reward_pretrain OpenRLHF/Llama-3-8b-rm-700k \
-   --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
-   --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
-   --save_hf_ckpt \
-   --train_batch_size 128 \
-   --rollout_batch_size 1024 \
-   --use_dynamic_batch \
-   --n_samples_per_prompt 1 \
-   --max_epochs 1 \
+   --ref.num_nodes 1 \
+   --ref.num_gpus_per_node 8 \
+   --reward.num_nodes 1 \
+   --reward.num_gpus_per_node 8 \
+   --critic.num_nodes 1 \
+   --critic.num_gpus_per_node 8 \
+   --actor.num_nodes 1 \
+   --actor.num_gpus_per_node 8 \
+   --vllm.num_engines 4 \
+   --vllm.tensor_parallel_size 2 \
+   --train.colocate_all \
+   --vllm.gpu_memory_utilization 0.5 \
+   --actor.model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
+   --reward.model_name_or_path OpenRLHF/Llama-3-8b-rm-700k \
+   --ckpt.output_dir /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
+   --ckpt.path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
+   --ckpt.save_hf \
+   --train.batch_size 128 \
+   --rollout.batch_size 1024 \
+   --train.dynamic_batch_enable \
+   --rollout.n_samples_per_prompt 1 \
+   --train.max_epochs 1 \
    --prompt_max_len 1024 \
-   --max_samples 100000 \
+   --data.max_samples 100000 \
    --generate_max_len 1024 \
-   --zero_stage 3 \
-   --param_dtype bf16 \
-   --actor_learning_rate 5e-7 \
-   --critic_learning_rate 9e-6 \
-   --init_kl_coef 0.01 \
-   --prompt_data OpenRLHF/prompt-collection-v0.1 \
-   --input_key context_messages \
-   --apply_chat_template \
-   --normalize_reward \
-   --gradient_checkpointing \
-   --packing_samples \
-   --vllm_sync_backend nccl \
-   --enforce_eager \
-   --vllm_enable_sleep \
-   --deepspeed_enable_sleep \
-   --use_wandb {wandb_token}
+   --ds.zero_stage 3 \
+   --ds.param_dtype bf16 \
+   --actor.adam.lr 5e-7 \
+   --critic.adam.lr 9e-6 \
+   --algo.kl.init_coef 0.01 \
+   --data.prompt_dataset OpenRLHF/prompt-collection-v0.1 \
+   --data.input_key context_messages \
+   --data.apply_chat_template \
+   --reward.normalize_enable \
+   --actor.gradient_checkpointing_enable \
+   --data.packing_samples \
+   --vllm.sync_backend nccl \
+   --vllm.enforce_eager \
+   --vllm.enable_sleep \
+   --ds.enable_sleep \
+   --logger.wandb.key {wandb_token}
 
 # 算法变体（所有算法都使用单轮 Agent 执行）：
-# --advantage_estimator reinforce        # REINFORCE++
-# --advantage_estimator rloo             # RLOO
-# --advantage_estimator reinforce_baseline  # REINFORCE++-baseline（RLVR 最佳）
-# --advantage_estimator group_norm       # GRPO
-# --advantage_estimator dr_grpo          # Dr. GRPO
+# --algo.advantage.estimator reinforce        # REINFORCE++
+# --algo.advantage.estimator rloo             # RLOO
+# --algo.advantage.estimator reinforce_baseline  # REINFORCE++-baseline（RLVR 最佳）
+# --algo.advantage.estimator group_norm       # GRPO
+# --algo.advantage.estimator dr_grpo          # Dr. GRPO
 
 # 高级选项：
-# --init_kl_coef 0                                    # 无参考模型
-# --remote_rm_url http://host:5000/get_reward         # HTTP 奖励模型
-# --n_samples_per_prompt 4                            # 每个提示多个样本
-# --vllm_generate_batch_size 2048                     # 生成阶段过采样（> rollout_batch_size）；需要配合 --async_train
-# --enable_vllm_is_correction                         # vLLM 重要性采样修正，用于 off-policy rollout
-# --vllm_is_correction_type tis                       # 修正类型：tis（token clamp）| icepop（token 过滤）| seq-mask-tis（序列级几何平均）
-# --vllm_is_truncated_threshold 0.5 5.0               # IS 截断区间：[low, high]
-# --best_metric_key eval_default_pass1                # 按评估指标保存最佳检查点（留空自动探测首个 pass1，'none' 禁用）
-# --policy_loss_type gspo                             # 使用 GSPO 策略损失变体（默认为 'ppo'）
+# --algo.kl.init_coef 0                                    # 无参考模型
+# --reward.remote_url http://host:5000/get_reward         # HTTP 奖励模型
+# --rollout.n_samples_per_prompt 4                            # 每个提示多个样本
+# --rollout.vllm_generate_batch_size 2048                     # 生成阶段过采样（> rollout_batch_size）；需要配合 --train.async_enable
+# --algo.advantage.is_correction_enable                         # vLLM 重要性采样修正，用于 off-policy rollout
+# --algo.advantage.is_correction_type tis                       # 修正类型：tis（token clamp）| icepop（token 过滤）| seq-mask-tis（序列级几何平均）
+# --algo.advantage.is_correction_threshold 0.5 5.0               # IS 截断区间：[low, high]
+# --ckpt.best_metric_key eval_default_pass1                # 按评估指标保存最佳检查点（留空自动探测首个 pass1，'none' 禁用）
+# --actor.policy_loss_type gspo                             # 使用 GSPO 策略损失变体（默认为 'ppo'）
 ```
 
 > [!TIP]
-> **对于推理任务（RLVR）**：使用 `--advantage_estimator reinforce_baseline` 用于 REINFORCE++-baseline——它对不同的奖励尺度具有鲁棒性。
+> **对于推理任务（RLVR）**：使用 `--algo.advantage.estimator reinforce_baseline` 用于 REINFORCE++-baseline——它对不同的奖励尺度具有鲁棒性。
 
 > [!NOTE]
 > **Ray 环境设置**：让 Ray 使用 `--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'` 自动部署
@@ -564,15 +564,15 @@ def reward_func(queries, prompts, labels):
 ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
-  --pretrain meta-llama/Meta-Llama-3-8B \
-  --use_dynamic_batch \
-  --remote_rm_url /path/to/reward_func.py \
-  --label_key answer \
-  --prompt_data your_prompt_dataset \
+  --actor.model_name_or_path meta-llama/Meta-Llama-3-8B \
+  --train.dynamic_batch_enable \
+  --reward.remote_url /path/to/reward_func.py \
+  --data.label_key answer \
+  --data.prompt_dataset your_prompt_dataset \
   ... # 其他训练参数
 ```
 
-**关键参数**：`--label_key answer` 将数据集中的"answer"字段传递给 `reward_func` 作为 `labels`。
+**关键参数**：`--data.label_key answer` 将数据集中的"answer"字段传递给 `reward_func` 作为 `labels`。
 
 > [!TIP]
 > **使用案例**：代码生成（执行测试）、数学（验证解决方案）、格式化（检查结构）、多目标（组合多个信号）
@@ -650,21 +650,21 @@ ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
   ...
-  --use_dynamic_batch \
-  --agent_func_path /path/to/agent_func.py \
-  --async_train  # 可选：启用异步流水线
+  --train.dynamic_batch_enable \
+  --train.agent_func_path /path/to/agent_func.py \
+  --train.async_enable  # 可选：启用异步流水线
 ```
 
 ### 配置选项
 
 **异步流水线**（提高吞吐量）：
-- 启用：`--async_train`
-- 缓冲区大小：`--async_queue_size 1`（越大 = 越多 off-policy，默认 1）
+- 启用：`--train.async_enable`
+- 缓冲区大小：`--train.async_queue_size 1`（越大 = 越多 off-policy，默认 1）
 
 **训练模式**：
 - **同步**：默认，更好的稳定性
 - **异步**：更高吞吐量，可能影响收敛
-- **混合引擎**：使用 `--colocate_all_models` 实现最佳 GPU 利用率（移除 `--async_train`）
+- **混合引擎**：使用 `--train.colocate_all` 实现最佳 GPU 利用率（移除 `--train.async_enable`）
 
 > [!NOTE]
 > 对于完全自定义的 token 级执行，继承 `AgentExecutorBase` 并实现 `execute()`。此设计强制执行 **token-in-token-out 原则**以保持采样和训练一致。
@@ -694,7 +694,7 @@ python -m openrlhf.cli.lora_combiner \
     --lora_path ./checkpoint/llama3-8b-rm \
     --output_path ./checkpoint/llama-3-8b-rm-combined \
     --is_rm \
-    --param_dtype bf16
+    --ds.param_dtype bf16
 ```
 
 ### 性能调优指南
@@ -707,27 +707,27 @@ python -m openrlhf.cli.lora_combiner \
 
 | 模式 | 相关参数 | 特性 | 适用场景 |
 |------|---------|------|---------|
-| **混合引擎（colocated）** | `--colocate_all_models`<br>`--vllm_enable_sleep`<br>`--deepspeed_enable_sleep` | **最稳定** ——严格 on-policy，每次 rollout 使用最新权重，生成→训练串行执行 | 研究、对 off-policy 敏感的 RL 算法、复现、配方验证 |
-| **异步训练** | `--async_train`<br>`--async_queue_size N` | **最快** ——生成与训练并行执行，通过 `--async_queue_size` 调控异步程度（越大越 off-policy） | 收敛已验证后的生产吞吐场景 |
-| **异步 + 部分 rollout** | `--async_train`<br>`--partial_rollout` | **最大化重叠** ——使用 vLLM pause/resume 替代加锁，in-flight 样本可能混合新旧权重；异步程度最激进 | 进一步压榨异步吞吐；建议搭配 `--enable_vllm_is_correction` |
+| **混合引擎（colocated）** | `--train.colocate_all`<br>`--vllm.enable_sleep`<br>`--ds.enable_sleep` | **最稳定** ——严格 on-policy，每次 rollout 使用最新权重，生成→训练串行执行 | 研究、对 off-policy 敏感的 RL 算法、复现、配方验证 |
+| **异步训练** | `--train.async_enable`<br>`--train.async_queue_size N` | **最快** ——生成与训练并行执行，通过 `--train.async_queue_size` 调控异步程度（越大越 off-policy） | 收敛已验证后的生产吞吐场景 |
+| **异步 + 部分 rollout** | `--train.async_enable`<br>`--train.partial_rollout_enable` | **最大化重叠** ——使用 vLLM pause/resume 替代加锁，in-flight 样本可能混合新旧权重；异步程度最激进 | 进一步压榨异步吞吐；建议搭配 `--algo.advantage.is_correction_enable` |
 
 #### ⚡ 其他速度优化
 
 | 优化 | 标志 | 何时使用 |
 |------|------|---------|
-| **样本打包** | `--packing_samples` | 始终（尤其是训练） |
-| **动态批次** | `--use_dynamic_batch` | 可变序列长度 |
-| **DeepCompile** | `--deepcompile` | PyTorch 2.0+ |
-| **重叠通信** | `--overlap_comm` | GPU 内存充足 |
+| **样本打包** | `--data.packing_samples` | 始终（尤其是训练） |
+| **动态批次** | `--train.dynamic_batch_enable` | 可变序列长度 |
+| **DeepCompile** | `--ds.deepcompile` | PyTorch 2.0+ |
+| **重叠通信** | `--ds.overlap_comm` | GPU 内存充足 |
 | **前缀缓存** | vLLM 配置 | `n_samples_per_prompt` > 1 |
-| **生成过采样** | `--vllm_generate_batch_size > --rollout_batch_size` | 异步模式下摊薄生成开销 / 喂养动态过滤 |
+| **生成过采样** | `--rollout.vllm_generate_batch_size > --rollout.batch_size` | 异步模式下摊薄生成开销 / 喂养动态过滤 |
 
 #### 💾 内存管理
 
 **当您有足够内存时**：
-- ✅ 禁用 `--adam_offload`
-- ✅ 启用 `--overlap_comm`
-- ✅ 使用 `--colocate_critic_reward` 和 `--colocate_actor_ref`
+- ✅ 禁用 `--ds.adam_offload`
+- ✅ 启用 `--ds.overlap_comm`
+- ✅ 使用 `--train.colocate_critic_reward` 和 `--train.colocate_actor_ref`
 
 **遇到 OOM 时**：
 - ❌ 禁用所有 `--colocate_*` 选项
@@ -736,12 +736,12 @@ python -m openrlhf.cli.lora_combiner \
 
 #### 🎮 批次大小调优
 
-1. **生成阶段**：最大化 `--micro_rollout_batch_size`，最小化 vLLM TP 大小
-2. **训练阶段**：最大化 `--micro_train_batch_size`，启用 `--packing_samples`
-3. **vLLM**：始终使用 `--vllm_sync_backend nccl`
+1. **生成阶段**：最大化 `--rollout.micro_batch_size`，最小化 vLLM TP 大小
+2. **训练阶段**：最大化 `--train.micro_batch_size`，启用 `--data.packing_samples`
+3. **vLLM**：始终使用 `--vllm.sync_backend nccl`
 
 > [!TIP]
-> **快速开始模板**：对于 8x A100（80GB），尝试混合引擎 + `--vllm_gpu_memory_utilization 0.5` + `--colocate_all_models`
+> **快速开始模板**：对于 8x A100（80GB），尝试混合引擎 + `--vllm.gpu_memory_utilization 0.5` + `--train.colocate_all`
 
 📖 **更多详情**：[性能调优文档](https://openrlhf.readthedocs.io/en/latest/performance.html)
 
@@ -823,14 +823,14 @@ OpenRLHF
 
 REINFORCE++-baseline
 ```
-@article{hu2025reinforce++,
+@article{hu2026reinforce++,
   title={Reinforce++: A simple and efficient approach for aligning large language models},
   author={Hu, Jian},
   journal={arXiv preprint arXiv:2501.03262},
-  year={2025}
+  year={2026}
 }
 ```
 
 ______________________________________________________________________
 
-*OpenRLHF © 2025 OpenRLHF. All Rights Reserved.*
+*OpenRLHF © 2026 OpenRLHF. All Rights Reserved.*

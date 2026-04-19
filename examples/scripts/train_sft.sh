@@ -5,23 +5,23 @@ openrlhf.cli.train_sft \
    --data.max_len 2048 \
    --data.dataset Open-Orca/OpenOrca \
    --data.input_key question \
-   --output_key response \
+   --data.output_key response \
    --train.batch_size 256 \
    --train.micro_batch_size 2 \
    --data.max_samples 500000 \
    --actor.model_name_or_path meta-llama/Meta-Llama-3-8B \
    --ckpt.output_dir ./checkpoint/llama3-8b-sft \
    --ckpt.save_steps -1 \
-   --train.logging_steps 1 \
+   --logger.logging_steps 1 \
    --eval.steps -1 \
    --ds.zero_stage 2 \
    --train.max_epochs 1 \
    --ds.param_dtype bf16 \
    --actor.attn_implementation flash_attention_2 \
    --adam.lr 5e-6 \
-   --ckpt.load \
+   --ckpt.load_enable \
    --data.packing_samples \
-   --actor.gradient_checkpointing
+   --actor.gradient_checkpointing_enable
 EOF
     # --wandb [WANDB_TOKENS]
     # --data.packing_samples

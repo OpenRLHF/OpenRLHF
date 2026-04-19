@@ -70,8 +70,8 @@ class DeepspeedStrategy(ABC):
         self.overlap_comm = getattr(args.ds, "overlap_comm", False)
         self.deepcompile = getattr(args.ds, "deepcompile", False)
         self.ds_tensor_parallel_size = getattr(args.ds, "tensor_parallel_size", 1)
-        self.ring_attn_size = getattr(self.args, "ring_attn_size", 1)
-        self.use_dynamic_batch = getattr(self.args.train, "dynamic_batch", False)
+        self.ring_attn_size = getattr(self.args.actor, "ring_attn_size", 1)
+        self.use_dynamic_batch = getattr(self.args.train, "dynamic_batch_enable", False)
 
         if self.ds_tensor_parallel_size > 1:
             assert deepspeed.version >= "0.16.4", "DeepSpeed version must be >= 0.16.4 for tensor parallel training"
@@ -89,8 +89,8 @@ class DeepspeedStrategy(ABC):
             transformers.set_seed(self.seed)
 
         # Take the local rank from args as first priority
-        if self.args.train.local_rank != -1:
-            os.environ["LOCAL_RANK"] = str(self.args.train.local_rank)
+        if self.args.local_rank != -1:
+            os.environ["LOCAL_RANK"] = str(self.args.local_rank)
 
         local_rank = int(os.environ.get("LOCAL_RANK", "-1"))
         if local_rank != -1:
@@ -127,7 +127,7 @@ class DeepspeedStrategy(ABC):
 
         from ring_flash_attn import substitute_hf_flash_attn
 
-        self.ring_head_stride = getattr(self.args, "ring_head_stride", 1)
+        self.ring_head_stride = getattr(self.args.actor, "ring_attn_head_stride", 1)
         substitute_hf_flash_attn(self.ring_attn_group, self.ring_head_stride)
 
     @property
@@ -158,7 +158,7 @@ class DeepspeedStrategy(ABC):
             model_parameters = [param for param in raw_model.parameters() if param.requires_grad]
         else:
             # Adam: exempt bias/layernorm from weight decay.
-            model_parameters = get_optimizer_grouped_parameters(raw_model, getattr(self.args, "l2", 0.0))
+            model_parameters = get_optimizer_grouped_parameters(raw_model, 0.0)
         return raw_model, model_parameters
 
     def backward(self, loss: torch.Tensor, model: nn.Module, _optimizer: optim.Optimizer, **kwargs) -> None:

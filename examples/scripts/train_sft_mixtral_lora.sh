@@ -5,19 +5,19 @@ openrlhf.cli.train_sft \
     --data.max_len 2048 \
     --data.dataset Open-Orca/OpenOrca \
     --data.input_key question \
-    --output_key response \
+    --data.output_key response \
     --train.batch_size 128 \
     --train.micro_batch_size 4 \
     --data.max_samples 500000 \
     --actor.model_name_or_path mistralai/Mixtral-8x7B-v0.1 \
     --ckpt.output_dir ./checkpoint/mixtral-sft-lora\
     --ckpt.save_steps -1 \
-    --train.logging_steps 1 \
+    --logger.logging_steps 1 \
     --eval.steps -1 \
     --ds.zero_stage 3 \
     --train.max_epochs 1 \
     --ds.param_dtype bf16 \
-    --actor.gradient_checkpointing \
+    --actor.gradient_checkpointing_enable \
     --actor.attn_implementation flash_attention_2 \
     --adam.lr 5e-6 \
     --actor.lora.rank 64 \

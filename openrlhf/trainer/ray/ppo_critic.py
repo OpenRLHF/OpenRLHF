@@ -53,7 +53,7 @@ class CriticPPOTrainer(ABC):
             buffer_limit,
             buffer_cpu_offload,
             getattr(self.args.data, "packing_samples", False),
-            self.args.train.dynamic_batch,
+            self.args.train.dynamic_batch_enable,
         )
 
         self.critic_loss_fn = ValueLoss(value_clip)
@@ -63,13 +63,13 @@ class CriticPPOTrainer(ABC):
 
     def ppo_train(self):
         # replay buffer may be empty at first, we should rebuild at each training
-        if self.args.train.dynamic_batch:
+        if self.args.train.dynamic_batch_enable:
             self.replay_buffer.setup_dynamic_batch(self.strategy)
 
         should_shuffle = (
             self.strategy.ring_attn_group is None
             and self.args.ds.tensor_parallel_size <= 1
-            and not self.args.train.dynamic_batch
+            and not self.args.train.dynamic_batch_enable
         )
         dataloader = DataLoader(
             self.replay_buffer,
@@ -142,11 +142,11 @@ class CriticPPOTrainer(ABC):
         else:
             aux_loss = 0
         loss = critic_loss + aux_loss * self.args.actor.aux_loss_coef
-        if self.args.train.dynamic_batch:
+        if self.args.train.dynamic_batch_enable:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
 
         self.strategy.backward(loss, self.critic, self.critic_optim)
-        if self.args.train.dynamic_batch:
+        if self.args.train.dynamic_batch_enable:
             if self.replay_buffer.dynamic_optimizer_step[step]:
                 self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
         else:
@@ -172,7 +172,7 @@ class CriticModelActor(BaseModelActor):
         critic = get_llm_for_sequence_regression(
             pretrain,
             "critic",
-            normalize_reward=strategy.args.reward.normalize,
+            normalize_reward=strategy.args.reward.normalize_enable,
             attn_implementation=strategy.args.actor.attn_implementation,
             param_dtype=strategy.args.ds.param_dtype,  # default: bf16
             load_in_4bit=strategy.args.actor.load_in_4bit,
@@ -186,7 +186,7 @@ class CriticModelActor(BaseModelActor):
             packing_samples=strategy.args.data.packing_samples,
         )
         strategy.print(critic)
-        strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize))
+        strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize_enable))
         strategy.print("mean: {}, std {}".format(critic.mean, critic.std))
 
         # configure tokenizer
@@ -195,7 +195,7 @@ class CriticModelActor(BaseModelActor):
                 pretrain, critic, "left", strategy, use_fast=not strategy.args.data.disable_fast_tokenizer
             )
 
-        if args.actor.gradient_checkpointing:
+        if args.actor.gradient_checkpointing_enable:
             critic.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": args.actor.gradient_checkpointing_reentrant}
             )
@@ -216,7 +216,7 @@ class CriticModelActor(BaseModelActor):
 
         # load checkpoint
         ckpt_path = os.path.join(args.ckpt.path, "_critic")
-        if args.ckpt.load and os.path.exists(ckpt_path):
+        if args.ckpt.load_enable and os.path.exists(ckpt_path):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
             strategy.load_ckpt(self.critic, ckpt_path)
 

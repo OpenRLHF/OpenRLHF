@@ -112,14 +112,14 @@ class SamplesGenerator:
             experiences, prompts_consumed, dl_exhausted = self._generate_vllm(
                 dataloader_iter=self._dataloader_iter,
                 num_prompts=gen_batch_size,
-                dynamic_filtering=self.args.algo.dynamic_filtering,
+                dynamic_filtering=self.args.algo.dynamic_filtering_enable,
                 **generate_kwargs,
             )
 
             if self.args.vllm.enable_sleep:
                 batch_vllm_engine_call(self.vllm_engines, "sleep")
 
-            if self.args.algo.dynamic_filtering and prompts_consumed:
+            if self.args.algo.dynamic_filtering_enable and prompts_consumed:
                 filter_pass_rate = len(experiences) / prompts_consumed * 100
 
             self._sample_buffer.extend(experiences)
@@ -207,7 +207,7 @@ class SamplesGenerator:
             max_tokens=generate_kwargs.get("max_new_tokens"),  # None = dynamic per-prompt
             min_tokens=generate_kwargs.get("min_new_tokens", 1),
             skip_special_tokens=generate_kwargs.get("skip_special_tokens", False),
-            logprobs=1 if self.args.algo.advantage.is_correction else None,
+            logprobs=1 if self.args.algo.advantage.is_correction_enable else None,
         )
         truncate_length = generate_kwargs.get("max_len", 2048)
         n_samples = generate_kwargs.get("n_samples_per_prompt", self.args.rollout.n_samples_per_prompt)

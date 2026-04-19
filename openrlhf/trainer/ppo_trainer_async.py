@@ -64,7 +64,7 @@ class GenerateSamplesActor:
         )
 
         self.vllm_lock = vllm_lock
-        self._partial_rollout = getattr(strategy.args.train, "partial_rollout", False)
+        self._partial_rollout = getattr(strategy.args.train, "partial_rollout_enable", False)
         self.rollout_queue = rollout_queue
         self.rollout_slots = rollout_slots
         self._last_eval_step = -1
@@ -195,7 +195,7 @@ class TrainingActor(BasePPOTrainer):
         )
 
         self.vllm_lock = vllm_lock
-        self._partial_rollout = getattr(strategy.args.train, "partial_rollout", False)
+        self._partial_rollout = getattr(strategy.args.train, "partial_rollout_enable", False)
         self.rollout_queue = rollout_queue
         self.rollout_slots = rollout_slots
 
@@ -237,7 +237,7 @@ class TrainingActor(BasePPOTrainer):
             status["timing/step_total"] = time.time() - step_start_time
             step_start_time = time.time()
 
-            if self.args.algo.dynamic_filtering:
+            if self.args.algo.dynamic_filtering_enable:
                 status["dynamic_filtering_pass_rate"] = filter_pass_rate
 
             log_status = {k: v for k, v in status.items() if k not in ["generated_samples"]}

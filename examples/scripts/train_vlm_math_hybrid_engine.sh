@@ -66,14 +66,14 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --ds.zero_stage 3 \
    --ds.param_dtype bf16 \
    --actor.adam.lr 2e-6 \
-   --data.prompt ${DATASET_PATH} \
+   --data.prompt_dataset ${DATASET_PATH} \
    --data.input_key prompt \
    --data.label_key label \
    --data.image_key images \
    --data.max_images_per_prompt 1 \
    --actor.freeze_visual_encoder \
    --data.apply_chat_template \
-   --actor.gradient_checkpointing \
+   --actor.gradient_checkpointing_enable \
    --actor.attn_implementation eager \
    --vllm.sync_backend nccl \
    --vllm.enforce_eager \

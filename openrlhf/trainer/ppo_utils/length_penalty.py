@@ -133,7 +133,7 @@ def apply_length_penalties(experiences: List, args) -> None:
         )
         logger.info(
             f"[DAPO Overlong Penalty] {num_penalized}/{total_samples} samples penalized, "
-            f"buffer_len={args.reward.overlong_buffer_len}, factor={getattr(args, 'overlong_penalty_factor', 1.0)}"
+            f"buffer_len={args.reward.overlong_buffer_len}, factor={args.reward.overlong_penalty_factor}"
         )
 
     # ProRL-style stop properly penalty based on finish_reason

@@ -27,7 +27,7 @@ def get_strategy(args):
 
     strategy = DeepspeedStrategy(
         seed=getattr(args.train, "seed", 42),
-        full_determinism=getattr(args.train, "full_determinism", False),
+        full_determinism=getattr(args.train, "full_determinism_enable", False),
         max_norm=getattr(args, "max_norm", 1.0),
         micro_train_batch_size=getattr(args.train, "micro_batch_size", 1),
         train_batch_size=getattr(args.train, "batch_size", 128),

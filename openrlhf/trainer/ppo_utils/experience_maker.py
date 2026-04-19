@@ -46,7 +46,7 @@ class RemoteExperienceMaker:
             sample.index = [i]
 
         samples_list = []
-        if self.args.train.dynamic_batch:
+        if self.args.train.dynamic_batch_enable:
             total_lengths = [int(s.total_length.item()) for s in rollout_samples]
             effective_actor_num = (
                 self.args.actor.num_nodes

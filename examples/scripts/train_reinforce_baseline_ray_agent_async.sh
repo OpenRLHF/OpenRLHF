@@ -20,7 +20,7 @@ AGENT_FUNC_PATH="examples/python/agent_func.py"
 CKPT_ARGS=(
    --actor.model_name_or_path ${MODEL_PATH}
    # --reward.model_name_or_path ${REWARD_MODEL}
-   --ckpt.load
+   --ckpt.load_enable
 
    --ckpt.output_dir ${SAVE_PATH}
    --ckpt.path "${SAVE_PATH}/ckpt"
@@ -33,7 +33,7 @@ ROLLOUT_ARGS=(
    --train.agent_func_path ${AGENT_FUNC_PATH}
    # --reward.remote_url ${REWARD_FUNC_FILENAME}
 
-   --data.prompt ${DATASET_PATH}
+   --data.prompt_dataset ${DATASET_PATH}
    --data.input_key prompt
    --data.label_key label
    --data.max_len 74240
@@ -44,10 +44,10 @@ ROLLOUT_ARGS=(
    --rollout.batch_size 128
    --rollout.n_samples_per_prompt 8
    --train.batch_size 1024
-   --algo.dynamic_filtering
+   --algo.dynamic_filtering_enable
    --algo.dynamic_filtering_range 0.0 1.0
 
-   --train.dynamic_batch
+   --train.dynamic_batch_enable
    --train.max_tokens_per_gpu 16192
    --rollout.max_tokens_per_gpu 32768
 
@@ -59,8 +59,8 @@ ROLLOUT_ARGS=(
 )
 
 ENGINE_ARGS=(
-   --train.async_train
-   --train.partial_rollout
+   --train.async_enable
+   --train.partial_rollout_enable
 
    --ref.num_nodes 1
    --ref.num_gpus_per_node 4
@@ -75,7 +75,7 @@ ENGINE_ARGS=(
    --vllm.enforce_eager
 
    --ds.zero_stage 3
-   --actor.gradient_checkpointing
+   --actor.gradient_checkpointing_enable
    # --ds.adam_offload
    --actor.ring_attn_size 2
    --actor.ring_attn_head_stride 2
@@ -90,13 +90,13 @@ OPTIMIZER_ARGS=(
    --algo.kl.init_coef 1e-5
    --algo.kl.use_loss
    --algo.kl.estimator k2
-   --algo.advantage.is_correction
+   --algo.advantage.is_correction_enable
    --algo.advantage.is_correction_type icepop
 )
 
 LOG_ARGS=(
    --logger.tensorboard_dir ${SAVE_PATH}/runs
-   --train.logging_steps 1
+   --logger.logging_steps 1
    --eval.steps -1
 )
 
