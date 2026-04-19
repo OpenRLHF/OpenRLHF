@@ -63,7 +63,7 @@ class SamplesGenerator:
         if getattr(self, "_eval_dataloader_iter", None) is None:
             self._eval_dataloader_iter = iter(self.eval_dataloader)
 
-        if self.args.vllm_enable_sleep:
+        if self.args.vllm.enable_sleep:
             batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
         all_experiences: List[Experience] = []
@@ -71,7 +71,7 @@ class SamplesGenerator:
             while True:
                 experiences, _, exhausted = self._generate_vllm(
                     dataloader_iter=self._eval_dataloader_iter,
-                    num_prompts=self.args.rollout_batch_size,
+                    num_prompts=self.args.rollout.batch_size,
                     dynamic_filtering=False,
                     **generate_kwargs,
                 )
@@ -79,7 +79,7 @@ class SamplesGenerator:
                 if exhausted:
                     break
         finally:
-            if self.args.vllm_enable_sleep:
+            if self.args.vllm.enable_sleep:
                 batch_vllm_engine_call(self.vllm_engines, "sleep")
             self._eval_dataloader_iter = None
 
@@ -97,16 +97,18 @@ class SamplesGenerator:
             self._dataloader_iter = iter(self.prompts_dataloader)
             self._sample_buffer: List[Experience] = []
 
-        chunk_size = self.args.rollout_batch_size * self.args.n_samples_per_prompt
+        chunk_size = self.args.rollout.batch_size * self.args.rollout.n_samples_per_prompt
         prompts_consumed = 0
         filter_pass_rate = None
 
         # Fill buffer if it doesn't have enough for one training chunk.
         if len(self._sample_buffer) < chunk_size and self._dataloader_iter is not None:
-            if self.args.vllm_enable_sleep:
+            if self.args.vllm.enable_sleep:
                 batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
-            gen_batch_size = getattr(self.args, "vllm_generate_batch_size", None) or self.args.rollout_batch_size
+            gen_batch_size = (
+                getattr(self.args.rollout, "vllm_generate_batch_size", None) or self.args.rollout.batch_size
+            )
             experiences, prompts_consumed, dl_exhausted = self._generate_vllm(
                 dataloader_iter=self._dataloader_iter,
                 num_prompts=gen_batch_size,
@@ -114,7 +116,7 @@ class SamplesGenerator:
                 **generate_kwargs,
             )
 
-            if self.args.vllm_enable_sleep:
+            if self.args.vllm.enable_sleep:
                 batch_vllm_engine_call(self.vllm_engines, "sleep")
 
             if self.args.algo.dynamic_filtering and prompts_consumed:
@@ -205,10 +207,10 @@ class SamplesGenerator:
             max_tokens=generate_kwargs.get("max_new_tokens"),  # None = dynamic per-prompt
             min_tokens=generate_kwargs.get("min_new_tokens", 1),
             skip_special_tokens=generate_kwargs.get("skip_special_tokens", False),
-            logprobs=1 if self.args.enable_vllm_is_correction else None,
+            logprobs=1 if self.args.algo.advantage.is_correction else None,
         )
         truncate_length = generate_kwargs.get("max_len", 2048)
-        n_samples = generate_kwargs.get("n_samples_per_prompt", self.args.n_samples_per_prompt)
+        n_samples = generate_kwargs.get("n_samples_per_prompt", self.args.rollout.n_samples_per_prompt)
 
         # Snapshot current pending rollout counts to balance upcoming work.
         pending_counts = ray.get([engine.get_num_unfinished_requests.remote() for engine in self.vllm_engines])

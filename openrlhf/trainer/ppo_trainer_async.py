@@ -49,7 +49,9 @@ class GenerateSamplesActor:
     ):
         self.args = strategy.args
 
-        tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
+        tokenizer = get_tokenizer(
+            pretrain, None, "left", strategy, use_fast=not strategy.args.data.disable_fast_tokenizer
+        )
         self.prompts_dataloader, self.eval_dataloader, self.max_steps = prepare_datasets(strategy, tokenizer)
         self.generate_kwargs = generate_kwargs
 
@@ -62,7 +64,7 @@ class GenerateSamplesActor:
         )
 
         self.vllm_lock = vllm_lock
-        self._partial_rollout = getattr(strategy.args, "partial_rollout", False)
+        self._partial_rollout = getattr(strategy.args.train, "partial_rollout", False)
         self.rollout_queue = rollout_queue
         self.rollout_slots = rollout_slots
         self._last_eval_step = -1
@@ -77,9 +79,9 @@ class GenerateSamplesActor:
     def _should_eval(self, global_step):
         return (
             self.eval_dataloader is not None
-            and self.args.eval_steps != float("inf")
+            and self.args.eval.steps != float("inf")
             and global_step > 0
-            and global_step % self.args.eval_steps == 0
+            and global_step % self.args.eval.steps == 0
             and global_step != self._last_eval_step
         )
 
@@ -87,20 +89,20 @@ class GenerateSamplesActor:
         """Run evaluation and return metrics dict."""
         logger.info("Starting async evaluation...")
         eval_kwargs = self.generate_kwargs.copy()
-        eval_kwargs["temperature"] = self.args.eval_temperature
-        eval_kwargs["n_samples_per_prompt"] = self.args.eval_n_samples_per_prompt
+        eval_kwargs["temperature"] = self.args.eval.temperature
+        eval_kwargs["n_samples_per_prompt"] = self.args.eval.n_samples_per_prompt
 
         samples_list = self.samples_generator.generate_eval_samples(**eval_kwargs)
-        logs = compute_eval_metrics(self.eval_dataloader, samples_list, self.args.eval_n_samples_per_prompt)
+        logs = compute_eval_metrics(self.eval_dataloader, samples_list, self.args.eval.n_samples_per_prompt)
         logger.info(f"Async evaluation completed: {logs}")
         return logs
 
     def fit(self, episode: int, total_consumed_prompts: int) -> None:
-        for episode in range(episode, self.args.num_episodes):
+        for episode in range(episode, self.args.train.num_episodes):
             dataset_length = len(self.prompts_dataloader)
             pbar = tqdm(
                 range(dataset_length),
-                desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
+                desc=f"Episode [{episode + 1}/{self.args.train.num_episodes}]",
                 initial=total_consumed_prompts % max(dataset_length, 1),
             )
             while True:
@@ -178,7 +180,9 @@ class TrainingActor(BasePPOTrainer):
         rollout_queue,
         rollout_slots,
     ):
-        tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
+        tokenizer = get_tokenizer(
+            pretrain, None, "left", strategy, use_fast=not strategy.args.data.disable_fast_tokenizer
+        )
 
         super().__init__(
             strategy,
@@ -191,7 +195,7 @@ class TrainingActor(BasePPOTrainer):
         )
 
         self.vllm_lock = vllm_lock
-        self._partial_rollout = getattr(strategy.args, "partial_rollout", False)
+        self._partial_rollout = getattr(strategy.args.train, "partial_rollout", False)
         self.rollout_queue = rollout_queue
         self.rollout_slots = rollout_slots
 
@@ -275,12 +279,12 @@ class PPOTrainerAsync:
         **generate_kwargs,
     ) -> None:
         # get eval and save steps
-        if strategy.args.eval_steps == -1:
-            strategy.args.eval_steps = float("inf")  # do not evaluate
-        if strategy.args.save_steps == -1:
-            strategy.args.save_steps = float("inf")  # do not save ckpt
+        if strategy.args.eval.steps == -1:
+            strategy.args.eval.steps = float("inf")  # do not evaluate
+        if strategy.args.ckpt.save_steps == -1:
+            strategy.args.ckpt.save_steps = float("inf")  # do not save ckpt
 
-        queue_size = getattr(strategy.args, "async_queue_size", 1)
+        queue_size = getattr(strategy.args.train, "async_queue_size", 1)
         if queue_size <= 0:
             raise ValueError(f"async_queue_size must be positive, got {queue_size}")
         logger.info(f"queue_size={queue_size}")

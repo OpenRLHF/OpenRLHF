@@ -3,8 +3,8 @@ set -x
 python -m openrlhf.cli.serve_rm \
     --reward.model_name_or_path OpenRLHF/Llama-3-8b-rm-700k \
     --port 5000 \
-    --param_dtype bf16 \
+    --ds.param_dtype bf16 \
     --actor.attn_implementation flash_attention_2 \
     --reward.normalize \
-    --max_len 8192 \
+    --data.max_len 8192 \
     --batch_size 16

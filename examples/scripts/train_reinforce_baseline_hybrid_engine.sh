@@ -20,42 +20,42 @@ AGENT_FUNC_PATH="examples/python/agent_func.py"
 CKPT_ARGS=(
    --actor.model_name_or_path ${MODEL_PATH}
    # --reward.model_name_or_path ${REWARD_MODEL}
-   --load_checkpoint
+   --ckpt.load
 
-   --save_path ${SAVE_PATH}
-   --ckpt_path "${SAVE_PATH}/ckpt"
-   --save_hf_ckpt
-   --max_ckpt_num 3
-   --save_steps 10
+   --ckpt.output_dir ${SAVE_PATH}
+   --ckpt.path "${SAVE_PATH}/ckpt"
+   --ckpt.save_hf
+   --ckpt.max_num 3
+   --ckpt.save_steps 10
 )
 
 ROLLOUT_ARGS=(
-   --agent_func_path ${AGENT_FUNC_PATH}
+   --train.agent_func_path ${AGENT_FUNC_PATH}
    # --reward.remote_url ${REWARD_FUNC_FILENAME}
 
-   --prompt_data ${DATASET_PATH}
-   --input_key prompt
-   --label_key label
-   --max_len 74240
-   --max_new_tokens 64000
-   --apply_chat_template
-   --packing_samples
+   --data.prompt ${DATASET_PATH}
+   --data.input_key prompt
+   --data.label_key label
+   --data.max_len 74240
+   --rollout.max_new_tokens 64000
+   --data.apply_chat_template
+   --data.packing_samples
 
-   --rollout_batch_size 128
-   --n_samples_per_prompt 8
-   --train_batch_size 1024
+   --rollout.batch_size 128
+   --rollout.n_samples_per_prompt 8
+   --train.batch_size 1024
    --algo.dynamic_filtering
    --algo.dynamic_filtering_range 0.0 1.0
 
-   --use_dynamic_batch
-   --train_max_tokens_per_gpu 16192
-   --rollout_max_tokens_per_gpu 32768
+   --train.dynamic_batch
+   --train.max_tokens_per_gpu 16192
+   --rollout.max_tokens_per_gpu 32768
 
-   --micro_train_batch_size 1
-   --micro_rollout_batch_size 8
-   --max_samples 128000
-   --max_epochs 1
-   --num_episodes 1
+   --train.micro_batch_size 1
+   --rollout.micro_batch_size 8
+   --data.max_samples 128000
+   --train.max_epochs 1
+   --train.num_episodes 1
 )
 
 ENGINE_ARGS=(
@@ -63,38 +63,38 @@ ENGINE_ARGS=(
    --ref.num_gpus_per_node 4
    --actor.num_nodes 1
    --actor.num_gpus_per_node 4
-   --vllm_num_engines 2
-   --vllm_tensor_parallel_size 2
-   --vllm_gpu_memory_utilization 0.7
-   --colocate_all_models
-   --deepspeed_enable_sleep
-   --vllm_sync_backend nccl
-   --enforce_eager
+   --vllm.num_engines 2
+   --vllm.tensor_parallel_size 2
+   --vllm.gpu_memory_utilization 0.7
+   --train.colocate_all
+   --ds.enable_sleep
+   --vllm.sync_backend nccl
+   --vllm.enforce_eager
 
-   --zero_stage 3
+   --ds.zero_stage 3
    --actor.gradient_checkpointing
-   # --adam_offload
+   # --ds.adam_offload
    --actor.ring_attn_size 2
    --actor.ring_attn_head_stride 2
-   --param_dtype bf16
+   --ds.param_dtype bf16
 )
 
 OPTIMIZER_ARGS=(
-   --advantage_estimator reinforce_baseline
+   --algo.advantage.estimator reinforce_baseline
    --actor.adam.lr 5e-7
    # --critic.adam.lr 9e-6
    --actor.entropy_coef 0.0
-   --init_kl_coef 1e-5
-   --use_kl_loss
-   --kl_estimator k2
-   --enable_vllm_is_correction
-   --vllm_is_correction_type icepop
+   --algo.kl.init_coef 1e-5
+   --algo.kl.use_loss
+   --algo.kl.estimator k2
+   --algo.advantage.is_correction
+   --algo.advantage.is_correction_type icepop
 )
 
 LOG_ARGS=(
-   --use_tensorboard ${SAVE_PATH}/runs
-   --logging_steps 1
-   --eval_steps -1
+   --logger.tensorboard_dir ${SAVE_PATH}/runs
+   --train.logging_steps 1
+   --eval.steps -1
 )
 
 ray job submit --address="http://127.0.0.1:8265" \

@@ -66,7 +66,7 @@ class RewardModelTrainer(ABC):
         self.aux_loss = self.args.actor.aux_loss_coef > 1e-8
 
         # packing samples
-        self.packing_samples = strategy.args.packing_samples
+        self.packing_samples = strategy.args.data.packing_samples
 
         self.margin_loss = self.strategy.args.actor.margin_loss
         self.compute_fp32_loss = self.strategy.args.actor.compute_fp32_loss
@@ -74,17 +74,17 @@ class RewardModelTrainer(ABC):
         # wandb/tensorboard setting
         self._wandb = None
         self._tensorboard = None
-        if self.strategy.args.use_wandb and self.strategy.is_rank_0():
+        if self.strategy.args.logger.wandb.key and self.strategy.is_rank_0():
             import wandb
 
             self._wandb = wandb
             if not wandb.api.api_key:
-                wandb.login(key=strategy.args.use_wandb)
+                wandb.login(key=strategy.args.logger.wandb.key)
             wandb.init(
-                entity=strategy.args.wandb_org,
-                project=strategy.args.wandb_project,
-                group=strategy.args.wandb_group,
-                name=strategy.args.wandb_run_name,
+                entity=strategy.args.logger.wandb.org,
+                project=strategy.args.logger.wandb.project,
+                group=strategy.args.logger.wandb.group,
+                name=strategy.args.logger.wandb.run_name,
                 config=strategy.args.__dict__,
                 reinit=True,
             )
@@ -95,11 +95,11 @@ class RewardModelTrainer(ABC):
             wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
 
         # Initialize TensorBoard writer if wandb is not available
-        if self.strategy.args.use_tensorboard and self._wandb is None and self.strategy.is_rank_0():
+        if self.strategy.args.logger.tensorboard_dir and self._wandb is None and self.strategy.is_rank_0():
             from torch.utils.tensorboard import SummaryWriter
 
-            os.makedirs(self.strategy.args.use_tensorboard, exist_ok=True)
-            log_dir = os.path.join(self.strategy.args.use_tensorboard, strategy.args.wandb_run_name)
+            os.makedirs(self.strategy.args.logger.tensorboard_dir, exist_ok=True)
+            log_dir = os.path.join(self.strategy.args.logger.tensorboard_dir, strategy.args.logger.wandb.run_name)
             self._tensorboard = SummaryWriter(log_dir=log_dir)
 
     def fit(self, args, consumed_samples=0, num_update_steps_per_epoch=None):
@@ -113,16 +113,16 @@ class RewardModelTrainer(ABC):
             )
 
         # get eval and save steps
-        if args.eval_steps == -1:
-            args.eval_steps = num_update_steps_per_epoch  # Evaluate once per epoch
-        if args.save_steps == -1:
-            args.save_steps = float("inf")  # do not save ckpt
+        if args.eval.steps == -1:
+            args.eval.steps = num_update_steps_per_epoch  # Evaluate once per epoch
+        if args.ckpt.save_steps == -1:
+            args.ckpt.save_steps = float("inf")  # do not save ckpt
         self.num_update_steps_per_epoch = num_update_steps_per_epoch
 
         # Restore step and start_epoch
-        step = consumed_samples // args.train_batch_size * self.strategy.accumulated_gradient + 1
-        start_epoch = consumed_samples // args.train_batch_size // num_update_steps_per_epoch
-        consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train_batch_size)
+        step = consumed_samples // args.train.batch_size * self.strategy.accumulated_gradient + 1
+        start_epoch = consumed_samples // args.train.batch_size // num_update_steps_per_epoch
+        consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train.batch_size)
 
         epoch_bar = tqdm(range(start_epoch, self.epochs), desc="Train epoch", disable=not self.strategy.is_rank_0())
         acc_sum = 0
@@ -199,7 +199,7 @@ class RewardModelTrainer(ABC):
                     loss_sum = 0
                     acc_sum = 0
                     global_step = step // self.strategy.accumulated_gradient
-                    client_states = {"consumed_samples": global_step * args.train_batch_size}
+                    client_states = {"consumed_samples": global_step * args.train.batch_size}
                     self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
 
                 step += 1
@@ -212,7 +212,7 @@ class RewardModelTrainer(ABC):
 
     # logs/checkpoints/evaluate
     def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
-        if global_step % args.logging_steps == 0:
+        if global_step % args.train.logging_steps == 0:
             # wandb
             if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {"train/%s" % k: v for k, v in {**logs_dict, "global_step": global_step}.items()}
@@ -224,7 +224,7 @@ class RewardModelTrainer(ABC):
 
         # eval
         if (
-            global_step % args.eval_steps == 0 or global_step % self.num_update_steps_per_epoch == 0
+            global_step % args.eval.steps == 0 or global_step % self.num_update_steps_per_epoch == 0
         ) and self.eval_dataloader is not None:
             # do eval when len(dataloader) > 0, avoid zero division in eval.
             if len(self.eval_dataloader) > 0:
@@ -232,14 +232,14 @@ class RewardModelTrainer(ABC):
 
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
-        if global_step % args.save_steps == 0:
+        if global_step % args.ckpt.save_steps == 0:
             tag = f"global_step{global_step}"
             if not self.disable_ds_ckpt:
                 self.strategy.save_ckpt(
-                    self.model, args.ckpt_path, tag, args.max_ckpt_num, args.max_ckpt_mem, client_states
+                    self.model, args.ckpt.path, tag, args.ckpt.max_num, args.ckpt.max_mem, client_states
                 )
             if self.save_hf_ckpt:
-                save_path = os.path.join(args.ckpt_path, f"{tag}_hf")
+                save_path = os.path.join(args.ckpt.path, f"{tag}_hf")
                 self.strategy.save_model(self.model, self.tokenizer, save_path)
 
     def evaluate(self, eval_dataloader, steps=0):

@@ -68,14 +68,14 @@ class PromptDataset(Dataset):
 
         # chat_template
         self.input_template = input_template
-        input_key = getattr(self.strategy.args, "input_key", None)
-        label_key = getattr(self.strategy.args, "label_key", None)
-        apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
+        input_key = getattr(self.strategy.args.data, "input_key", None)
+        label_key = getattr(self.strategy.args.data, "label_key", None)
+        apply_chat_template = getattr(self.strategy.args.data, "apply_chat_template", False)
 
         if apply_chat_template:
             apply_chat_template = self.tokenizer.apply_chat_template
 
-        self.image_key = getattr(self.strategy.args, "image_key", "images")
+        self.image_key = getattr(self.strategy.args.data, "image_key", "images")
 
         self.prompts = []
         self.labels = []

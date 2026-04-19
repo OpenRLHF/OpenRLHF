@@ -32,7 +32,7 @@ class RemoteExperienceMaker:
 
         self.strategy = strategy
         self.args = strategy.args
-        self.advantage_estimator = strategy.args.advantage_estimator
+        self.advantage_estimator = strategy.args.algo.advantage.estimator
 
         self.actor_model_group = actor_model_group
         self.critic_model_group = critic_model_group
@@ -46,19 +46,19 @@ class RemoteExperienceMaker:
             sample.index = [i]
 
         samples_list = []
-        if self.args.use_dynamic_batch:
+        if self.args.train.dynamic_batch:
             total_lengths = [int(s.total_length.item()) for s in rollout_samples]
             effective_actor_num = (
                 self.args.actor.num_nodes
                 * self.args.actor.num_gpus_per_node
                 // self.args.actor.ring_attn_size
-                // self.args.ds_tensor_parallel_size
+                // self.args.ds.tensor_parallel_size
             )
             minimum_batch_num = get_minimum_num_micro_batch_size(
                 total_lengths,
-                self.args.rollout_max_tokens_per_gpu,
+                self.args.rollout.max_tokens_per_gpu,
                 self.args.actor.ring_attn_size,
-                self.args.ds_tensor_parallel_size,
+                self.args.ds.tensor_parallel_size,
             )
             minimum_batch_num = minimum_batch_num // effective_actor_num * effective_actor_num
             num_batch = max(minimum_batch_num, effective_actor_num)
@@ -68,7 +68,7 @@ class RemoteExperienceMaker:
                 concat_samples = Experience.concat_experiences(micro_batch, self.tokenizer.pad_token_id)
                 samples_list.append(concat_samples)
         else:
-            batch_size = self.args.micro_rollout_batch_size
+            batch_size = self.args.rollout.micro_batch_size
             for i in range(0, len(rollout_samples), batch_size):
                 concat_samples = Experience.concat_experiences(
                     rollout_samples[i : i + batch_size], self.tokenizer.pad_token_id
@@ -117,7 +117,7 @@ class RemoteExperienceMaker:
 
         args = self.strategy.args
         device = "cpu"
-        duplicate_factor = args.actor.ring_attn_size * args.ds_tensor_parallel_size
+        duplicate_factor = args.actor.ring_attn_size * args.ds.tensor_parallel_size
         dummy_ref = ray.put([[None]] * (len(samples_list) * duplicate_factor))
 
         # Extract tensors for batch processing
@@ -142,7 +142,7 @@ class RemoteExperienceMaker:
                 raise ValueError("reward_model_group is required when rewards are not precomputed")
             r_refs = self._dispatch_forward(
                 self.reward_model_group,
-                args.colocate_all_models,
+                args.train.colocate_all,
                 sequences=sequences_list,
                 attention_mask=attention_mask_list,
                 pad_sequence=[True] * len(samples_list),
@@ -153,19 +153,19 @@ class RemoteExperienceMaker:
         # Actor model (receives mm_train_inputs_list for VLM)
         action_log_probs_ref = self._dispatch_forward(
             self.actor_model_group,
-            args.colocate_all_models or args.colocate_actor_ref,
+            args.train.colocate_all or args.train.colocate_actor_ref,
             **vlm_forward_kwargs,
         )
 
         # Critic model
         if self.critic_model_group is not None:
-            if args.colocate_critic_reward and r_refs is not None:
+            if args.train.colocate_critic_reward and r_refs is not None:
                 ray.get(r_refs)
                 ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
 
             value_ref = self._dispatch_forward(
                 self.critic_model_group,
-                args.colocate_all_models or args.colocate_critic_reward,
+                args.train.colocate_all or args.train.colocate_critic_reward,
                 **forward_kwargs,
             )
         else:
@@ -175,7 +175,7 @@ class RemoteExperienceMaker:
         if self.initial_model_group is not None:
             base_action_log_probs_ref = self._dispatch_forward(
                 self.initial_model_group,
-                args.colocate_all_models or args.colocate_actor_ref,
+                args.train.colocate_all or args.train.colocate_actor_ref,
                 **vlm_forward_kwargs,
             )
         else:
@@ -202,11 +202,11 @@ class RemoteExperienceMaker:
         for i, (samples, action_log_probs, base_action_log_probs, value) in enumerate(
             zip(samples_list, action_log_probs_list, base_action_log_probs_list, value_list)
         ):
-            if (self.initial_model_group is not None) and (not args.use_kl_loss):
+            if (self.initial_model_group is not None) and (not args.algo.kl.use_loss):
                 kl = compute_approx_kl(
                     action_log_probs,
                     base_action_log_probs,
-                    kl_estimator=self.strategy.args.kl_estimator,
+                    kl_estimator=self.strategy.args.algo.kl.estimator,
                 )
                 logprobs_diff = action_log_probs.float() - base_action_log_probs.float()
             else:
@@ -215,7 +215,7 @@ class RemoteExperienceMaker:
             kl_mean = masked_mean(kl, samples.action_mask, dim=-1)
             logprobs_diff_mean = masked_mean(logprobs_diff, samples.action_mask, dim=-1)
 
-            if not args.use_kl_loss:
+            if not args.algo.kl.use_loss:
                 base_action_log_probs = None
 
             # Update experience with new information
@@ -249,21 +249,24 @@ class RemoteExperienceMaker:
         rewards = torch.empty_like(raw_rewards)
         rewards[indices] = raw_rewards  # sorted by original prompt order
 
-        rewards = rewards.reshape(-1, args.n_samples_per_prompt)
+        rewards = rewards.reshape(-1, args.rollout.n_samples_per_prompt)
 
-        if args.n_samples_per_prompt > 1:
+        if args.rollout.n_samples_per_prompt > 1:
             group_reward_stds = (
-                rewards.std(-1, keepdim=True).repeat(1, args.n_samples_per_prompt).reshape(-1)[indices].split(exp_len)
+                rewards.std(-1, keepdim=True)
+                .repeat(1, args.rollout.n_samples_per_prompt)
+                .reshape(-1)[indices]
+                .split(exp_len)
             )
             for experience, group_reward_std in zip(experiences, group_reward_stds):
                 experience.info["group_reward_std"] = group_reward_std
 
-        if args.advantage_estimator == "rloo":
-            baseline = (rewards.sum(-1, keepdim=True) - rewards) / (args.n_samples_per_prompt - 1)
+        if args.algo.advantage.estimator == "rloo":
+            baseline = (rewards.sum(-1, keepdim=True) - rewards) / (args.rollout.n_samples_per_prompt - 1)
             rewards = rewards - baseline
-        elif args.advantage_estimator in ["reinforce_baseline", "dr_grpo"]:
+        elif args.algo.advantage.estimator in ["reinforce_baseline", "dr_grpo"]:
             rewards = rewards - rewards.mean(-1, keepdim=True)
-        elif args.advantage_estimator == "group_norm":
+        elif args.algo.advantage.estimator == "group_norm":
             rewards = (rewards - rewards.mean(-1, keepdim=True)) / (rewards.std(-1, keepdim=True) + 1e-9)
 
         rewards = rewards.reshape(-1)[indices].split(exp_len)
@@ -283,23 +286,23 @@ class RemoteExperienceMaker:
                     experience.values,
                     reward,
                     experience.action_mask,
-                    args.gamma,
-                    args.lambd,
+                    args.algo.advantage.gamma,
+                    args.algo.advantage.lambd,
                 )
             elif self.advantage_estimator in ["reinforce", "rloo", "reinforce_baseline", "group_norm", "dr_grpo"]:
-                if args.gamma != 1.0 and self.advantage_estimator in [
+                if args.algo.advantage.gamma != 1.0 and self.advantage_estimator in [
                     "rloo",
                     "reinforce_baseline",
                     "group_norm",
                     "dr_grpo",
                 ]:
                     logger.warning("gamma is set to 1.0 for rloo, reinforce_baseline, and group_norm")
-                    args.gamma = 1.0
+                    args.algo.advantage.gamma = 1.0
 
                 experience.returns = self.get_cumulative_returns(
                     reward,
                     experience.action_mask,
-                    args.gamma,
+                    args.algo.advantage.gamma,
                 )
                 experience.advantages = experience.returns.clone()
             else:
@@ -309,13 +312,13 @@ class RemoteExperienceMaker:
             experience.kl = None
 
         # ── Normalize advantages across all experiences ──
-        if args.advantage_estimator in ["gae", "reinforce", "reinforce_baseline"]:
+        if args.algo.advantage.estimator in ["gae", "reinforce", "reinforce_baseline"]:
             all_advantages = torch.cat([exp.advantages.flatten() for exp in experiences], dim=0).float()
             all_action_masks = torch.cat([exp.action_mask.flatten() for exp in experiences], dim=0)
             num_actions = all_action_masks.sum()
 
             mean = (all_advantages * all_action_masks).sum() / num_actions
-            if not args.no_advantage_std_norm:
+            if not args.algo.advantage.no_std_norm:
                 var = ((all_advantages - mean).pow(2) * all_action_masks).sum() / num_actions
                 rstd = var.clamp(min=1e-8).rsqrt()
             else:

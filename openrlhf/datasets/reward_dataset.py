@@ -76,7 +76,7 @@ class RewardDataset(Dataset):
         self.prompt_key = getattr(self.strategy.args, "prompt_key", None)
         self.chosen_key = getattr(self.strategy.args, "chosen_key", None)
         self.rejected_key = getattr(self.strategy.args, "rejected_key", None)
-        self.apply_chat_template = getattr(self.strategy.args, "apply_chat_template", False)
+        self.apply_chat_template = getattr(self.strategy.args.data, "apply_chat_template", False)
 
         if self.apply_chat_template:
             self.apply_chat_template = self.tokenizer.apply_chat_template

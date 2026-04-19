@@ -9,42 +9,42 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --critic.num_gpus_per_node 8 \
    --actor.num_nodes 1 \
    --actor.num_gpus_per_node 8 \
-   --vllm_num_engines 4 \
-   --vllm_tensor_parallel_size 2 \
-   --colocate_all_models \
-   --vllm_gpu_memory_utilization 0.5 \
+   --vllm.num_engines 4 \
+   --vllm.tensor_parallel_size 2 \
+   --train.colocate_all \
+   --vllm.gpu_memory_utilization 0.5 \
    --actor.model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
    --reward.model_name_or_path OpenRLHF/Llama-3-8b-rm-700k \
-   --save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
-   --ckpt_path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
-   --save_hf_ckpt \
-   --train_batch_size 128 \
-   --rollout_batch_size 1024 \
-   --n_samples_per_prompt 1 \
-   --max_epochs 1 \
-   --max_len 2048 \
-   --max_samples 100000 \
-   --zero_stage 3 \
-   --param_dtype bf16 \
+   --ckpt.output_dir /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
+   --ckpt.path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
+   --ckpt.save_hf \
+   --train.batch_size 128 \
+   --rollout.batch_size 1024 \
+   --rollout.n_samples_per_prompt 1 \
+   --train.max_epochs 1 \
+   --data.max_len 2048 \
+   --data.max_samples 100000 \
+   --ds.zero_stage 3 \
+   --ds.param_dtype bf16 \
    --actor.adam.lr 5e-7 \
    --critic.adam.lr 9e-6 \
-   --init_kl_coef 0.01 \
-   --prompt_data OpenRLHF/prompt-collection-v0.1 \
-   --input_key context_messages \
-   --apply_chat_template \
+   --algo.kl.init_coef 0.01 \
+   --data.prompt OpenRLHF/prompt-collection-v0.1 \
+   --data.input_key context_messages \
+   --data.apply_chat_template \
    --reward.normalize \
    --actor.gradient_checkpointing \
-   --packing_samples \
-   --vllm_sync_backend nccl \
-   --enforce_eager \
-   --vllm_enable_sleep \
-   --deepspeed_enable_sleep \
-   --use_dynamic_batch \
-   --train_max_tokens_per_gpu 16384 \
-   --enable_vllm_is_correction
+   --data.packing_samples \
+   --vllm.sync_backend nccl \
+   --vllm.enforce_eager \
+   --vllm.enable_sleep \
+   --ds.enable_sleep \
+   --train.dynamic_batch \
+   --train.max_tokens_per_gpu 16384 \
+   --algo.advantage.is_correction
 
 # Enable tensor parallelism for DeepSpeed
-#    --ds_tensor_parallel_size 2 \
+#    --ds.tensor_parallel_size 2 \
 
 # Enable Ring-Attention
 #    --actor.ring_attn_size 4 \

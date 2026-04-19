@@ -66,12 +66,12 @@ class WandbLogger:
         import wandb
 
         if not wandb.api.api_key:
-            wandb.login(key=args.use_wandb)
+            wandb.login(key=args.logger.wandb.key)
         wandb.init(
-            entity=args.wandb_org,
-            project=args.wandb_project,
-            group=args.wandb_group,
-            name=args.wandb_run_name,
+            entity=args.logger.wandb.org,
+            project=args.logger.wandb.project,
+            group=args.logger.wandb.group,
+            name=args.logger.wandb.run_name,
             config=args.__dict__,
             reinit=True,
         )
@@ -115,8 +115,8 @@ class TensorboardLogger:
     def __init__(self, args) -> None:
         from torch.utils.tensorboard import SummaryWriter
 
-        os.makedirs(args.use_tensorboard, exist_ok=True)
-        log_dir = os.path.join(args.use_tensorboard, args.wandb_run_name)
+        os.makedirs(args.logger.tensorboard_dir, exist_ok=True)
+        log_dir = os.path.join(args.logger.tensorboard_dir, args.logger.wandb.run_name)
         self.writer = SummaryWriter(log_dir=log_dir)
 
     def log_train(self, global_step: int, logs_dict: Dict[str, Any]) -> None:

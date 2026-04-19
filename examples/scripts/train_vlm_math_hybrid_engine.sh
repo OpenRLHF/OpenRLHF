@@ -17,8 +17,8 @@
 #    "label": "3"}
 #
 # VLM-specific parameters:
-#   --image_key images               # Dataset key for image paths/URLs
-#   --max_images_per_prompt 1        # Max images per prompt for vLLM
+#   --data.image_key images               # Dataset key for image paths/URLs
+#   --data.max_images_per_prompt 1        # Max images per prompt for vLLM
 #   --actor.freeze_visual_encoder          # Freeze vision encoder (only train language model)
 
 set -x
@@ -39,46 +39,46 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --ref.num_gpus_per_node 4 \
    --actor.num_nodes 1 \
    --actor.num_gpus_per_node 4 \
-   --vllm_num_engines 4 \
-   --vllm_tensor_parallel_size 1 \
-   --colocate_all_models \
-   --vllm_gpu_memory_utilization 0.7 \
-   --init_kl_coef 0 \
-   --gamma 1.0 \
-   --use_kl_loss \
-   --kl_estimator k2 \
-   --advantage_estimator reinforce_baseline \
+   --vllm.num_engines 4 \
+   --vllm.tensor_parallel_size 1 \
+   --train.colocate_all \
+   --vllm.gpu_memory_utilization 0.7 \
+   --algo.kl.init_coef 0 \
+   --algo.advantage.gamma 1.0 \
+   --algo.kl.use_loss \
+   --algo.kl.estimator k2 \
+   --algo.advantage.estimator reinforce_baseline \
    --actor.model_name_or_path ${MODEL_PATH} \
    --reward.remote_url ${REWARD_FUNC_PATH} \
-   --save_path ${SAVE_PATH} \
-   --ckpt_path "${SAVE_PATH}/ckpt" \
-   --save_hf_ckpt \
-   --save_steps 5 \
-   --eval_steps -1 \
-   --micro_train_batch_size 1 \
-   --micro_rollout_batch_size 1 \
-   --train_batch_size 1024 \
-   --rollout_batch_size 128 \
-   --n_samples_per_prompt 8 \
-   --num_episodes 100 \
-   --max_len 4096 \
-   --max_new_tokens 2048 \
-   --zero_stage 3 \
-   --param_dtype bf16 \
+   --ckpt.output_dir ${SAVE_PATH} \
+   --ckpt.path "${SAVE_PATH}/ckpt" \
+   --ckpt.save_hf \
+   --ckpt.save_steps 5 \
+   --eval.steps -1 \
+   --train.micro_batch_size 1 \
+   --rollout.micro_batch_size 1 \
+   --train.batch_size 1024 \
+   --rollout.batch_size 128 \
+   --rollout.n_samples_per_prompt 8 \
+   --train.num_episodes 100 \
+   --data.max_len 4096 \
+   --rollout.max_new_tokens 2048 \
+   --ds.zero_stage 3 \
+   --ds.param_dtype bf16 \
    --actor.adam.lr 2e-6 \
-   --prompt_data ${DATASET_PATH} \
-   --input_key prompt \
-   --label_key label \
-   --image_key images \
-   --max_images_per_prompt 1 \
+   --data.prompt ${DATASET_PATH} \
+   --data.input_key prompt \
+   --data.label_key label \
+   --data.image_key images \
+   --data.max_images_per_prompt 1 \
    --actor.freeze_visual_encoder \
-   --apply_chat_template \
+   --data.apply_chat_template \
    --actor.gradient_checkpointing \
    --actor.attn_implementation eager \
-   --vllm_sync_backend nccl \
-   --enforce_eager \
-   --vllm_enable_sleep \
-   --deepspeed_enable_sleep
+   --vllm.sync_backend nccl \
+   --vllm.enforce_eager \
+   --vllm.enable_sleep \
+   --ds.enable_sleep
 
 # VLM Notes:
 #
@@ -97,7 +97,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
 #   using {"type": "image"} content items in the chat message format.
 #
 # Multi-image support:
-#   Set --max_images_per_prompt N for prompts with multiple images.
+#   Set --data.max_images_per_prompt N for prompts with multiple images.
 #   Images in the dataset should be a list of paths/URLs.
 #
 # Attention implementation:

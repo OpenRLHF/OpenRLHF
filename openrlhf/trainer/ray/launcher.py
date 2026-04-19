@@ -108,11 +108,11 @@ class ReferenceModelActor(BaseModelActor):
         model = Actor(
             pretrain,
             attn_implementation=strategy.args.actor.attn_implementation,
-            param_dtype=strategy.args.param_dtype,  # default: bf16
+            param_dtype=strategy.args.ds.param_dtype,  # default: bf16
             load_in_4bit=strategy.args.actor.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref.reward_offload),
-            packing_samples=strategy.args.packing_samples,
-            temperature=strategy.args.temperature,
+            packing_samples=strategy.args.data.packing_samples,
+            temperature=strategy.args.rollout.temperature,
             use_liger_kernel=strategy.args.actor.use_liger_kernel,
         )
         strategy.print(model)
@@ -162,11 +162,11 @@ class RewardModelActor(BaseModelActor):
             "reward",
             normalize_reward=strategy.args.reward.normalize,
             attn_implementation=strategy.args.actor.attn_implementation,
-            param_dtype=strategy.args.param_dtype,  # default: bf16
+            param_dtype=strategy.args.ds.param_dtype,  # default: bf16
             load_in_4bit=strategy.args.actor.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref.reward_offload),
             value_head_prefix=strategy.args.reward.value_head_prefix,
-            packing_samples=strategy.args.packing_samples,
+            packing_samples=strategy.args.data.packing_samples,
         )
         strategy.print(model)
         strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize))

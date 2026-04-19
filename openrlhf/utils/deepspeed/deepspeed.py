@@ -57,21 +57,21 @@ class DeepspeedStrategy(ABC):
         self.stage = zero_stage
         self.train_batch_size = train_batch_size
         self.micro_train_batch_size = micro_train_batch_size
-        self.param_dtype = args.param_dtype  # default: bf16
+        self.param_dtype = args.ds.param_dtype  # default: bf16
         self.seed = seed
         self.full_determinism = full_determinism
         self.max_norm = max_norm
 
         self.optim = getattr(args, "optim", "adam")
-        self.adam_offload = getattr(args, "adam_offload", False)
-        self.zpg = getattr(args, "zpg", 1)
-        self.use_ds_universal_ckpt = getattr(args, "use_ds_universal_ckpt", False)
-        self.grad_accum_dtype = getattr(args, "grad_accum_dtype", None)
-        self.overlap_comm = getattr(args, "overlap_comm", False)
-        self.deepcompile = getattr(args, "deepcompile", False)
-        self.ds_tensor_parallel_size = getattr(args, "ds_tensor_parallel_size", 1)
+        self.adam_offload = getattr(args.ds, "adam_offload", False)
+        self.zpg = getattr(args.ds, "zpg", 1)
+        self.use_ds_universal_ckpt = getattr(args.ds, "use_universal_ckpt", False)
+        self.grad_accum_dtype = getattr(args.ds, "grad_accum_dtype", None)
+        self.overlap_comm = getattr(args.ds, "overlap_comm", False)
+        self.deepcompile = getattr(args.ds, "deepcompile", False)
+        self.ds_tensor_parallel_size = getattr(args.ds, "tensor_parallel_size", 1)
         self.ring_attn_size = getattr(self.args, "ring_attn_size", 1)
-        self.use_dynamic_batch = getattr(self.args, "use_dynamic_batch", False)
+        self.use_dynamic_batch = getattr(self.args.train, "dynamic_batch", False)
 
         if self.ds_tensor_parallel_size > 1:
             assert deepspeed.version >= "0.16.4", "DeepSpeed version must be >= 0.16.4 for tensor parallel training"
@@ -89,8 +89,8 @@ class DeepspeedStrategy(ABC):
             transformers.set_seed(self.seed)
 
         # Take the local rank from args as first priority
-        if self.args.local_rank != -1:
-            os.environ["LOCAL_RANK"] = str(self.args.local_rank)
+        if self.args.train.local_rank != -1:
+            os.environ["LOCAL_RANK"] = str(self.args.train.local_rank)
 
         local_rank = int(os.environ.get("LOCAL_RANK", "-1"))
         if local_rank != -1:
@@ -471,7 +471,7 @@ class DeepspeedStrategy(ABC):
         model_to_save = self._unwrap_model(model)
 
         # gather parameters
-        if self.args.zero_stage > 2 or self.args.ds_tensor_parallel_size > 1:
+        if self.args.ds.zero_stage > 2 or self.args.ds.tensor_parallel_size > 1:
             output_state_dict = (
                 model.model._consolidated_16bit_state_dict()
                 if isinstance(model, Actor)

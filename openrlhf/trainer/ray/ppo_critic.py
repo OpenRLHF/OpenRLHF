@@ -46,14 +46,14 @@ class CriticPPOTrainer(ABC):
         self.buffer_cpu_offload = buffer_cpu_offload
         self.value_clip = value_clip
         self.dataloader_pin_memory = dataloader_pin_memory
-        self.max_epochs = self.args.max_epochs
+        self.max_epochs = self.args.train.max_epochs
 
         self.replay_buffer = NaiveReplayBuffer(
             micro_train_batch_size,
             buffer_limit,
             buffer_cpu_offload,
-            getattr(self.args, "packing_samples", False),
-            self.args.use_dynamic_batch,
+            getattr(self.args.data, "packing_samples", False),
+            self.args.train.dynamic_batch,
         )
 
         self.critic_loss_fn = ValueLoss(value_clip)
@@ -63,13 +63,13 @@ class CriticPPOTrainer(ABC):
 
     def ppo_train(self):
         # replay buffer may be empty at first, we should rebuild at each training
-        if self.args.use_dynamic_batch:
+        if self.args.train.dynamic_batch:
             self.replay_buffer.setup_dynamic_batch(self.strategy)
 
         should_shuffle = (
             self.strategy.ring_attn_group is None
-            and self.args.ds_tensor_parallel_size <= 1
-            and not self.args.use_dynamic_batch
+            and self.args.ds.tensor_parallel_size <= 1
+            and not self.args.train.dynamic_batch
         )
         dataloader = DataLoader(
             self.replay_buffer,
@@ -142,11 +142,11 @@ class CriticPPOTrainer(ABC):
         else:
             aux_loss = 0
         loss = critic_loss + aux_loss * self.args.actor.aux_loss_coef
-        if self.args.use_dynamic_batch:
+        if self.args.train.dynamic_batch:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
 
         self.strategy.backward(loss, self.critic, self.critic_optim)
-        if self.args.use_dynamic_batch:
+        if self.args.train.dynamic_batch:
             if self.replay_buffer.dynamic_optimizer_step[step]:
                 self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
         else:
@@ -166,7 +166,7 @@ class CriticPPOTrainer(ABC):
 class CriticModelActor(BaseModelActor):
     def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps):
         args = strategy.args
-        self.disable_ds_ckpt = args.disable_ds_ckpt
+        self.disable_ds_ckpt = args.ckpt.disable_ds
 
         self._setup_distributed(strategy)
         critic = get_llm_for_sequence_regression(
@@ -174,7 +174,7 @@ class CriticModelActor(BaseModelActor):
             "critic",
             normalize_reward=strategy.args.reward.normalize,
             attn_implementation=strategy.args.actor.attn_implementation,
-            param_dtype=strategy.args.param_dtype,  # default: bf16
+            param_dtype=strategy.args.ds.param_dtype,  # default: bf16
             load_in_4bit=strategy.args.actor.load_in_4bit,
             lora_rank=strategy.args.actor.lora.rank,
             lora_alpha=strategy.args.actor.lora.alpha,
@@ -183,7 +183,7 @@ class CriticModelActor(BaseModelActor):
             ds_config=strategy.get_ds_train_config(is_actor=False),
             value_head_prefix=strategy.args.reward.value_head_prefix,
             init_value_head=strategy.args.actor.model_name_or_path == strategy.args.critic.model_name_or_path,
-            packing_samples=strategy.args.packing_samples,
+            packing_samples=strategy.args.data.packing_samples,
         )
         strategy.print(critic)
         strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize))
@@ -192,7 +192,7 @@ class CriticModelActor(BaseModelActor):
         # configure tokenizer
         if strategy.args.critic.save_value_network:
             self.tokenizer = get_tokenizer(
-                pretrain, critic, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer
+                pretrain, critic, "left", strategy, use_fast=not strategy.args.data.disable_fast_tokenizer
             )
 
         if args.actor.gradient_checkpointing:
@@ -215,13 +215,13 @@ class CriticModelActor(BaseModelActor):
         self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare((critic, critic_cfg))
 
         # load checkpoint
-        ckpt_path = os.path.join(args.ckpt_path, "_critic")
-        if args.load_checkpoint and os.path.exists(ckpt_path):
+        ckpt_path = os.path.join(args.ckpt.path, "_critic")
+        if args.ckpt.load and os.path.exists(ckpt_path):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
             strategy.load_ckpt(self.critic, ckpt_path)
 
         # initial offload
-        if strategy.args.deepspeed_enable_sleep:
+        if strategy.args.ds.enable_sleep:
             self.offload_states()
 
         # configure Trainer
@@ -230,7 +230,7 @@ class CriticModelActor(BaseModelActor):
             critic=self.critic,
             critic_optim=self.critic_optim,
             critic_scheduler=self.critic_scheduler,
-            micro_train_batch_size=args.micro_train_batch_size,
+            micro_train_batch_size=args.train.micro_batch_size,
             value_clip=args.critic.value_clip,
         )
 
@@ -276,7 +276,7 @@ class CriticModelActor(BaseModelActor):
         self.strategy.save_model(
             self.critic,
             self.tokenizer,
-            args.save_path + "_critic",
+            args.ckpt.output_dir + "_critic",
         )
 
     def save_checkpoint(self, tag, metric_value=None, metric_key=None):
@@ -284,10 +284,10 @@ class CriticModelActor(BaseModelActor):
         if not self.disable_ds_ckpt:
             self.strategy.save_ckpt(
                 self.critic,
-                os.path.join(args.ckpt_path, "_critic"),
+                os.path.join(args.ckpt.path, "_critic"),
                 tag,
-                args.max_ckpt_num,
-                args.max_ckpt_mem,
+                args.ckpt.max_num,
+                args.ckpt.max_mem,
                 metric_value=metric_value,
                 metric_key=metric_key,
             )

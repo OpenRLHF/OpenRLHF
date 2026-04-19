@@ -124,7 +124,7 @@ def apply_length_penalties(experiences: List, args) -> None:
 
     # DAPO-style overlong penalty based on response length
     if getattr(args.reward, "overlong_buffer_len", None) is not None:
-        max_new_tokens = getattr(args, "max_new_tokens", None) or args.max_len
+        max_new_tokens = getattr(args.rollout, "max_new_tokens", None) or args.data.max_len
         num_penalized = apply_overlong_penalty(
             experiences=experiences,
             max_new_tokens=max_new_tokens,
