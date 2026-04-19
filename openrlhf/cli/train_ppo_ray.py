@@ -433,8 +433,10 @@ if __name__ == "__main__":
     #   --{prefix}.muon.*  Muon-specific hypers (only used when --{prefix}.optim=muon)
     #   --{prefix}.adam.*  AdamW hypers — drives pure AdamW when --{prefix}.optim=adam,
     #                      and Muon's aux-Adam subgroup when --{prefix}.optim=muon.
-    # Note: DS v0.18.2 Muon ignores ns_steps / nesterov (hard-coded 5 / True) so
-    # they are intentionally not exposed here.
+    # Note: DS v0.18.x Muon hard-codes ns_steps=5 / nesterov=True inside
+    # muon_update() and ignores config overrides. We still expose the CLI slots
+    # so training scripts can be ready for future DS versions; the runtime emits
+    # a warning when a non-default value is set on an ignoring DS.
     for prefix in ("actor", "critic"):
         parser.add_argument(f"--{prefix}.optim", type=str, default="adam", choices=["adam", "muon"])
         # Muon-specific
@@ -445,6 +447,13 @@ if __name__ == "__main__":
             help=f"LR for {prefix}'s Muon 2D-weight group",
         )
         parser.add_argument(f"--{prefix}.muon.momentum", type=float, default=0.95)
+        # Placeholder slots: DS v0.18.x ignores these (see note above); retained
+        # so upgrade to a future DS version is a zero-diff change.
+        parser.add_argument(
+            f"--{prefix}.muon.ns_steps", type=int, default=5, help="Newton-Schulz steps (placeholder, DS-ignored)"
+        )
+        parser.add_argument(f"--{prefix}.muon.nesterov", action="store_true", default=True)
+        parser.add_argument(f"--{prefix}.muon.no_nesterov", dest=f"{prefix}.muon.nesterov", action="store_false")
         # AdamW (shared: pure-AdamW when --{prefix}.optim=adam, Muon's aux-Adam subgroup when =muon)
         parser.add_argument(f"--{prefix}.adam.lr", type=float, default=1e-6 if prefix == "actor" else 9e-6)
         parser.add_argument(f"--{prefix}.adam.betas", type=float, nargs=2, default=(0.9, 0.95))

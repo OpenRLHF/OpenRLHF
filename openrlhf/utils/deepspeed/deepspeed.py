@@ -297,14 +297,36 @@ class DeepspeedStrategy(ABC):
         adam = cfg["adam"]
         if kind == "muon":
             muon = cfg["muon"]
+            # DS engine.py:1645,1654 reads `muon_lr` / `adam_lr` from the config
+            # and uses them to OVERRIDE the per-group lr at param-group construction.
+            # Without these keys, both groups silently inherit the same top-level lr —
+            # which meant embeddings/head/value_head were trained at Muon lr (0.02).
+            # Emit both explicitly so the two groups follow their own initial lrs;
+            # the HF scheduler then drives each group independently.
+            #
+            # ns_steps / nesterov: DS v0.18.x Muon hard-codes ns_steps=5, nesterov=True
+            # inside muon_update() and does NOT accept them via config. We expose the
+            # CLI knobs as placeholders; warn when the user sets a non-default value.
+            if muon.get("ns_steps", 5) != 5 or not muon.get("nesterov", True):
+                import warnings as _warnings
+                import deepspeed as _ds
+
+                _warnings.warn(
+                    f"muon.ns_steps / muon.nesterov are placeholders: DeepSpeed "
+                    f"{getattr(_ds, '__version__', '?')} hard-codes ns_steps=5, "
+                    f"nesterov=True inside muon_update() and ignores config overrides.",
+                    stacklevel=2,
+                )
             optim_dict = {
                 "type": "Muon",
                 "params": {
-                    "lr": muon["lr"],  # shared with aux-Adam group (DS limitation)
+                    "lr": muon["lr"],  # fallback for param-groups with no override
+                    "muon_lr": muon["lr"],  # explicit override for the Muon group
+                    "adam_lr": adam["lr"],  # explicit override for the aux-Adam group
                     "momentum": muon["momentum"],
                     "betas": list(adam["betas"]),  # aux-Adam only
                     "eps": adam["eps"],  # aux-Adam only
-                    "weight_decay": adam["weight_decay"],  # shared
+                    "weight_decay": adam["weight_decay"],  # shared by both groups (DS scalar)
                 },
             }
         else:
@@ -346,15 +368,29 @@ class DeepspeedStrategy(ABC):
             model, optim=optim_kind, weight_decay=adam["weight_decay"]
         )
 
-        engine, optim, _, scheduler = deepspeed.initialize(
-            model=raw_model,
-            optimizer=None,
-            model_parameters=model_parameters,
-            lr_scheduler=sched_factory,
-            config=ds_config,
-            args={"local_rank": int(os.environ.get("LOCAL_RANK", "-1"))},
-            dist_init_required=True,
-        )
+        # DS __init__.py:69-75 (set_optimizer_flags) overwrites every param's
+        # use_muon attribute using a substring rule that mis-classifies value_head
+        # (sent to Muon — wrong per Keller Jordan) and GPT-2 wte/wpe (also sent to
+        # Muon because they do not contain the "embed" substring). Our
+        # _get_model_parameters() above already set use_muon correctly with the
+        # project-specific exclusions; no-op DS's override for the duration of
+        # initialize() and restore afterwards.
+        _ds_set_flags_orig = getattr(deepspeed, "set_optimizer_flags", None)
+        if optim_kind == "muon" and _ds_set_flags_orig is not None:
+            deepspeed.set_optimizer_flags = lambda *args, **kwargs: None
+        try:
+            engine, optim, _, scheduler = deepspeed.initialize(
+                model=raw_model,
+                optimizer=None,
+                model_parameters=model_parameters,
+                lr_scheduler=sched_factory,
+                config=ds_config,
+                args={"local_rank": int(os.environ.get("LOCAL_RANK", "-1"))},
+                dist_init_required=True,
+            )
+        finally:
+            if _ds_set_flags_orig is not None:
+                deepspeed.set_optimizer_flags = _ds_set_flags_orig
 
         if self.deepcompile:
             engine.compile()

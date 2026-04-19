@@ -249,6 +249,12 @@ if __name__ == "__main__":
     # Muon-specific
     parser.add_argument("--muon.lr", type=float, default=0.02, help="LR for Muon 2D-weight group")
     parser.add_argument("--muon.momentum", type=float, default=0.95)
+    # Placeholder slots: DS v0.18.x hard-codes ns_steps=5, nesterov=True inside
+    # muon_update() and ignores these via config. Retained for forward-compat;
+    # runtime warns when user sets a non-default value.
+    parser.add_argument("--muon.ns_steps", type=int, default=5)
+    parser.add_argument("--muon.nesterov", action="store_true", default=True)
+    parser.add_argument("--muon.no_nesterov", dest="muon.nesterov", action="store_false")
     # AdamW (shared: pure-AdamW when --optim=adam, Muon's aux-Adam subgroup when --optim=muon)
     parser.add_argument("--adam.lr", type=float, default=9e-6)
     parser.add_argument("--adam.betas", type=float, nargs=2, default=(0.9, 0.95))
