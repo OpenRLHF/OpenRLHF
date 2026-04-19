@@ -19,12 +19,13 @@ class RewardModelProxy:
             args.reward.model_name_or_path,
             "reward",
             normalize_reward=args.reward.normalize_enable,
-            attn_implementation=args.model.attn_implementation,
+            attn_implementation=args.ds.attn_implementation,
+            experts_implementation=args.ds.experts_implementation,
             param_dtype=args.ds.param_dtype,  # default: bf16
-            load_in_4bit=args.model.load_in_4bit,
-            value_head_prefix=args.value_head_prefix,
+            load_in_4bit=args.ds.load_in_4bit,
+            value_head_prefix=args.ds.value_head_prefix,
             device_map="auto",
-            packing_samples=args.data.packing_samples,
+            packing_samples=args.ds.packing_samples,
         )
         self.reward_model.eval()
 
@@ -77,14 +78,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--reward.normalize_enable", action="store_true", default=False, help="Enable Reward Normalization"
     )
-    parser.add_argument("--value_head_prefix", type=str, default="score")
+    parser.add_argument("--ds.value_head_prefix", type=str, default="score")
     parser.add_argument("--data.max_len", type=int, default=2048)
 
     parser.add_argument("--port", type=int, default=5000, help="Port number for the server")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="IP for the server")
 
     # Performance
-    parser.add_argument("--model.load_in_4bit", action="store_true", default=False)
+    parser.add_argument("--ds.load_in_4bit", action="store_true", default=False)
     parser.add_argument(
         "--ds.param_dtype",
         type=str,
@@ -93,13 +94,20 @@ if __name__ == "__main__":
         help="Model data type",
     )
     parser.add_argument(
-        "--model.attn_implementation",
+        "--ds.attn_implementation",
         type=str,
         default="flash_attention_2",
         help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
     )
+    parser.add_argument(
+        "--ds.experts_implementation",
+        type=str,
+        default=None,
+        choices=["eager", "batched_mm", "grouped_mm", "deepgemm"],
+        help="MoE expert computation strategy passed to transformers from_pretrained (default: auto — transformers picks grouped_mm when supported, else eager)",
+    )
     parser.add_argument("--data.disable_fast_tokenizer", action="store_true", default=False)
-    parser.add_argument("--data.packing_samples", action="store_true", default=False)
+    parser.add_argument("--ds.packing_samples", action="store_true", default=False)
     parser.add_argument("--batch_size", type=int, default=None)
 
     # ModelScope parameters

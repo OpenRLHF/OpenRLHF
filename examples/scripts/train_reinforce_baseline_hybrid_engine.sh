@@ -39,7 +39,7 @@ ROLLOUT_ARGS=(
    --data.max_len 74240
    --rollout.max_new_tokens 64000
    --data.apply_chat_template
-   --data.packing_samples
+   --ds.packing_samples
 
    --rollout.batch_size 128
    --rollout.n_samples_per_prompt 8

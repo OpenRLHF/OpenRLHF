@@ -19,16 +19,17 @@ def train(args):
     # load huggingface model
     model = Actor(
         args.model.model_name_or_path,
-        attn_implementation=args.model.attn_implementation,
+        attn_implementation=args.ds.attn_implementation,
+        experts_implementation=args.ds.experts_implementation,
         param_dtype=args.ds.param_dtype,  # default: bf16
-        load_in_4bit=args.model.load_in_4bit,
-        lora_rank=args.model.lora.rank,
-        lora_alpha=args.model.lora.alpha,
-        lora_dropout=args.model.lora.dropout,
-        target_modules=args.model.lora.target_modules,
+        load_in_4bit=args.ds.load_in_4bit,
+        lora_rank=args.ds.lora.rank,
+        lora_alpha=args.ds.lora.alpha,
+        lora_dropout=args.ds.lora.dropout,
+        target_modules=args.ds.lora.target_modules,
         ds_config=strategy.get_ds_train_config(is_actor=True),
-        packing_samples=args.data.packing_samples,
-        use_liger_kernel=args.model.use_liger_kernel,
+        packing_samples=args.ds.packing_samples,
+        use_liger_kernel=args.ds.use_liger_kernel,
     )
 
     # configure tokenizer
@@ -40,11 +41,12 @@ def train(args):
     # load weights for ref model
     ref_model = Actor(
         args.ref.model_name_or_path,
-        attn_implementation=args.model.attn_implementation,
+        attn_implementation=args.ds.attn_implementation,
+        experts_implementation=args.ds.experts_implementation,
         param_dtype=args.ds.param_dtype,  # default: bf16
-        load_in_4bit=args.model.load_in_4bit,
+        load_in_4bit=args.ds.load_in_4bit,
         ds_config=strategy.get_ds_eval_config(offload=args.ref.offload),
-        packing_samples=args.data.packing_samples,
+        packing_samples=args.ds.packing_samples,
     )
     if args.ref.offload:
         ref_model._offload = True
@@ -212,12 +214,19 @@ if __name__ == "__main__":
     parser.add_argument("--ds.zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--ds.adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument(
-        "--model.attn_implementation",
+        "--ds.attn_implementation",
         type=str,
         default="flash_attention_2",
         help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
     )
-    parser.add_argument("--model.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
+    parser.add_argument(
+        "--ds.experts_implementation",
+        type=str,
+        default=None,
+        choices=["eager", "batched_mm", "grouped_mm", "deepgemm"],
+        help="MoE expert computation strategy passed to transformers from_pretrained (default: auto — transformers picks grouped_mm when supported, else eager)",
+    )
+    parser.add_argument("--ds.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
     parser.add_argument("--ds.grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
     parser.add_argument("--ds.overlap_comm", action="store_true", default=False)
     parser.add_argument("--model.gradient_checkpointing_reentrant", action="store_true", default=False)
@@ -277,14 +286,14 @@ if __name__ == "__main__":
     )
 
     # LoRA
-    parser.add_argument("--model.load_in_4bit", action="store_true", default=False)
-    parser.add_argument("--model.lora.rank", type=int, default=0)
-    parser.add_argument("--model.lora.alpha", type=int, default=16)
-    parser.add_argument("--model.lora.target_modules", type=str, nargs="*", default="all-linear")
-    parser.add_argument("--model.lora.dropout", type=float, default=0)
+    parser.add_argument("--ds.load_in_4bit", action="store_true", default=False)
+    parser.add_argument("--ds.lora.rank", type=int, default=0)
+    parser.add_argument("--ds.lora.alpha", type=int, default=16)
+    parser.add_argument("--ds.lora.target_modules", type=str, nargs="*", default="all-linear")
+    parser.add_argument("--ds.lora.dropout", type=float, default=0)
 
     # packing samples using Flash Attention2
-    parser.add_argument("--data.packing_samples", action="store_true", default=False)
+    parser.add_argument("--ds.packing_samples", action="store_true", default=False)
 
     # Custom dataset
     parser.add_argument("--model.model_name_or_path", type=str, default=None)
@@ -344,13 +353,13 @@ if __name__ == "__main__":
         )
 
     if args.ds.ring_attn_size > 1:
-        assert args.data.packing_samples, "packing_samples must be enabled when using ring attention"
+        assert args.ds.packing_samples, "packing_samples must be enabled when using ring attention"
 
-    if args.data.packing_samples and "flash_attention" not in args.model.attn_implementation:
+    if args.ds.packing_samples and "flash_attention" not in args.ds.attn_implementation:
         print(
             "[Warning] Please use --attn_implementation with flash_attention to accelerate when --packing_samples is enabled."
         )
-        args.model.attn_implementation = "flash_attention_2"
+        args.ds.attn_implementation = "flash_attention_2"
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub

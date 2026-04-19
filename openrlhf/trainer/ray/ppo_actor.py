@@ -484,17 +484,18 @@ class PolicyModelActor(BaseModelActor):
 
         actor = Actor(
             pretrain,
-            attn_implementation=strategy.args.actor.attn_implementation,
+            attn_implementation=strategy.args.ds.attn_implementation,
+            experts_implementation=strategy.args.ds.experts_implementation,
             param_dtype=strategy.args.ds.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.actor.load_in_4bit,
-            lora_rank=strategy.args.actor.lora.rank,
-            lora_alpha=strategy.args.actor.lora.alpha,
-            target_modules=strategy.args.actor.lora.target_modules,
-            lora_dropout=strategy.args.actor.lora.dropout,
+            load_in_4bit=strategy.args.ds.load_in_4bit,
+            lora_rank=strategy.args.ds.lora.rank,
+            lora_alpha=strategy.args.ds.lora.alpha,
+            target_modules=strategy.args.ds.lora.target_modules,
+            lora_dropout=strategy.args.ds.lora.dropout,
             ds_config=strategy.get_ds_train_config(is_actor=True),
-            packing_samples=strategy.args.data.packing_samples,
+            packing_samples=strategy.args.ds.packing_samples,
             temperature=strategy.args.rollout.temperature,
-            use_liger_kernel=strategy.args.actor.use_liger_kernel,
+            use_liger_kernel=strategy.args.ds.use_liger_kernel,
             freeze_visual_encoder=getattr(strategy.args.actor, "freeze_visual_encoder", False),
         )
         strategy.print(actor)
@@ -507,11 +508,12 @@ class PolicyModelActor(BaseModelActor):
         if args.train.enable_ema:
             ema_model = Actor(
                 pretrain,
-                attn_implementation=strategy.args.actor.attn_implementation,
+                attn_implementation=strategy.args.ds.attn_implementation,
+                experts_implementation=strategy.args.ds.experts_implementation,
                 param_dtype=strategy.args.ds.param_dtype,  # default: bf16
-                load_in_4bit=strategy.args.actor.load_in_4bit,
+                load_in_4bit=strategy.args.ds.load_in_4bit,
                 ds_config=strategy.get_ds_eval_config(offload=True),
-                packing_samples=strategy.args.data.packing_samples,
+                packing_samples=strategy.args.ds.packing_samples,
             )
         else:
             ema_model = None

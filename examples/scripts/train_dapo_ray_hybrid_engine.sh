@@ -38,7 +38,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --data.input_key context_messages \
    --data.apply_chat_template \
    --actor.gradient_checkpointing_enable \
-   --data.packing_samples \
+   --ds.packing_samples \
    --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \

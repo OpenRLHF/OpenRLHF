@@ -240,7 +240,7 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 <summary>展开高级能力</summary>
 
 **效率优化**
-- 所有训练模式的样本打包（`--data.packing_samples`）
+- 所有训练模式的样本打包（`--ds.packing_samples`）
 - 快速生成的 vLLM 加速（`--vllm.num_engines`）
 - DAPO [动态过滤](./examples/scripts/train_dapo_ray_hybrid_engine.sh)（`--algo.dynamic_filtering_enable`）
   - 🎲 Dynamic Sampling：对每个 prompt 生成多条响应，并根据奖励函数/Agent 返回的 **0–1 `scores`** 信号进行过滤
@@ -256,9 +256,9 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 
 **模型支持**
 - [VLM（视觉语言模型）](./examples/scripts/train_vlm_math_hybrid_engine.sh) — 支持单轮和[含图像反馈的多轮交互](./examples/python/vlm_multiturn_agent.py)（`--data.image_key`、`--data.max_images_per_prompt`）
-- [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--actor.lora.rank`、`--actor.load_in_4bit`）
+- [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--ds.lora.rank`、`--ds.load_in_4bit`）
 - [专家混合（MoE）](./examples/test_scripts/train_sft_moe.sh)（`--actor.aux_loss_coef`）
-- FlashAttention（`--actor.attn_implementation`）
+- FlashAttention（`--ds.attn_implementation`）
 - HuggingFace 聊天模板（`--data.apply_chat_template`）
 
 **优化器**
@@ -368,7 +368,7 @@ deepspeed --module openrlhf.cli.train_sft \
    --eval.steps -1 \
    --ds.zero_stage 2 \
    --train.max_epochs 1 \
-   --data.packing_samples \
+   --ds.packing_samples \
    --ds.param_dtype bf16 \
    --adam.lr 5e-6 \
    --actor.gradient_checkpointing_enable \
@@ -406,7 +406,7 @@ deepspeed --module openrlhf.cli.train_rm \
    --data.apply_chat_template \
    --chosen_key chosen \
    --rejected_key rejected \
-   --data.packing_samples \
+   --ds.packing_samples \
    --actor.gradient_checkpointing_enable \
    --logger.wandb.key {wandb_token}
 ```
@@ -477,7 +477,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --data.apply_chat_template \
    --reward.normalize_enable \
    --actor.gradient_checkpointing_enable \
-   --data.packing_samples \
+   --ds.packing_samples \
    --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
@@ -719,7 +719,7 @@ python -m openrlhf.cli.lora_combiner \
 
 | 优化 | 标志 | 何时使用 |
 |------|------|---------|
-| **样本打包** | `--data.packing_samples` | 始终（尤其是训练） |
+| **样本打包** | `--ds.packing_samples` | 始终（尤其是训练） |
 | **动态批次** | `--train.dynamic_batch_enable` | 可变序列长度 |
 | **DeepCompile** | `--ds.deepcompile` | PyTorch 2.0+ |
 | **重叠通信** | `--ds.overlap_comm` | GPU 内存充足 |
@@ -741,7 +741,7 @@ python -m openrlhf.cli.lora_combiner \
 #### 🎮 批次大小调优
 
 1. **生成阶段**：最大化 `--rollout.micro_batch_size`，最小化 vLLM TP 大小
-2. **训练阶段**：最大化 `--train.micro_batch_size`，启用 `--data.packing_samples`
+2. **训练阶段**：最大化 `--train.micro_batch_size`，启用 `--ds.packing_samples`
 3. **vLLM**：始终使用 `--vllm.sync_backend nccl`
 
 > [!TIP]

@@ -70,7 +70,7 @@ class DPOTrainer(ABC):
         self.nll_loss = self.args.model.nll_loss_coef > 1e-8
 
         # packing samples
-        self.packing_samples = strategy.args.data.packing_samples
+        self.packing_samples = strategy.args.ds.packing_samples
 
         # wandb/tensorboard setting
         self._wandb = None

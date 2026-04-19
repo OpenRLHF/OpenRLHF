@@ -321,12 +321,19 @@ if __name__ == "__main__":
     parser.add_argument("--ds.zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--ds.adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument(
-        "--actor.attn_implementation",
+        "--ds.attn_implementation",
         type=str,
         default="flash_attention_2",
         help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
     )
-    parser.add_argument("--actor.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
+    parser.add_argument(
+        "--ds.experts_implementation",
+        type=str,
+        default=None,
+        choices=["eager", "batched_mm", "grouped_mm", "deepgemm"],
+        help="MoE expert computation strategy passed to transformers from_pretrained (default: auto — transformers picks grouped_mm when supported, else eager)",
+    )
+    parser.add_argument("--ds.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
     parser.add_argument("--ds.grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
     parser.add_argument("--ds.overlap_comm", action="store_true", default=False)
     parser.add_argument("--actor.gradient_checkpointing_reentrant", action="store_true", default=False)
@@ -346,7 +353,7 @@ if __name__ == "__main__":
     parser.add_argument("--ds.tensor_parallel_size", type=int, default=1, help="DeepSpeed tensor parallel size")
 
     # packing samples using Flash Attention2
-    parser.add_argument("--data.packing_samples", action="store_true", default=False)
+    parser.add_argument("--ds.packing_samples", action="store_true", default=False)
 
     # dynamic batch size
     parser.add_argument("--train.dynamic_batch_enable", action="store_true", default=False)
@@ -354,11 +361,11 @@ if __name__ == "__main__":
     parser.add_argument("--train.max_tokens_per_gpu", type=int, default=16192)
 
     # LoRA
-    parser.add_argument("--actor.load_in_4bit", action="store_true", default=False)
-    parser.add_argument("--actor.lora.rank", type=int, default=0)
-    parser.add_argument("--actor.lora.alpha", type=int, default=16)
-    parser.add_argument("--actor.lora.target_modules", type=str, nargs="*", default="all-linear")
-    parser.add_argument("--actor.lora.dropout", type=float, default=0)
+    parser.add_argument("--ds.load_in_4bit", action="store_true", default=False)
+    parser.add_argument("--ds.lora.rank", type=int, default=0)
+    parser.add_argument("--ds.lora.alpha", type=int, default=16)
+    parser.add_argument("--ds.lora.target_modules", type=str, nargs="*", default="all-linear")
+    parser.add_argument("--ds.lora.dropout", type=float, default=0)
 
     # PPO
     parser.add_argument("--ckpt.output_dir", type=str, default="./ckpt")
@@ -511,7 +518,7 @@ if __name__ == "__main__":
     parser.add_argument("--reward.model_name_or_path", type=str, default=None, help="HF model name or path")
     parser.add_argument("--reward.remote_url", type=str, default=None, help="remote RM API (HTTP)")
     parser.add_argument("--critic.model_name_or_path", type=str, default=None, help="HF model name or path")
-    parser.add_argument("--reward.value_head_prefix", type=str, default="score")
+    parser.add_argument("--ds.value_head_prefix", type=str, default="score")
     parser.add_argument("--ref.offload", action="store_true", default=False, help="Offload reference model to CPU")
     parser.add_argument("--reward.offload", action="store_true", default=False, help="Offload reward model to CPU")
     parser.add_argument("--train.agent_func_path", type=str, default=None, help="Agent script path")
@@ -609,7 +616,7 @@ if __name__ == "__main__":
             "VLM training does not support critic model. "
             "Use --advantage_estimator other than 'gae' (e.g., reinforce_baseline, rloo, group_norm)."
         )
-        assert not args.data.packing_samples, (
+        assert not args.ds.packing_samples, (
             "VLM training does not support --packing_samples. "
             "Packing collapses the batch dimension, breaking alignment between image tokens and pixel_values. "
             "VLM models also require model-computed position_ids (e.g., M-RoPE) which is incompatible with packing."
@@ -629,24 +636,24 @@ if __name__ == "__main__":
         )
 
     if args.ds.ring_attn_size > 1:
-        if not args.data.packing_samples:
+        if not args.ds.packing_samples:
             print("[Warning] --ring_attn_size > 1 requires --packing_samples.")
-            args.data.packing_samples = True
+            args.ds.packing_samples = True
 
     if args.train.dynamic_batch_enable:
-        if not args.data.packing_samples:
+        if not args.ds.packing_samples:
             print("[Warning] Please --packing_samples to accelerate when --use_dynamic_batch is enabled.")
-            args.data.packing_samples = True
+            args.ds.packing_samples = True
         if args.rollout.max_tokens_per_gpu is None:
             print("[Warning] Set --rollout_max_tokens_per_gpu to --train_max_tokens_per_gpu.")
             args.rollout.max_tokens_per_gpu = args.train.max_tokens_per_gpu
 
-    if args.data.packing_samples:
-        if "flash_attention" not in args.actor.attn_implementation:
+    if args.ds.packing_samples:
+        if "flash_attention" not in args.ds.attn_implementation:
             print(
                 "[Warning] Please use --attn_implementation with flash_attention to accelerate when --packing_samples is enabled."
             )
-            args.actor.attn_implementation = "flash_attention_2"
+            args.ds.attn_implementation = "flash_attention_2"
         assert args.vllm.num_engines > 0, "Only support `--packing_samples` with vLLM."
 
     if args.vllm.enable_sleep and not args.train.colocate_all:

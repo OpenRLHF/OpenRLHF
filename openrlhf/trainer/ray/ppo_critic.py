@@ -173,17 +173,18 @@ class CriticModelActor(BaseModelActor):
             pretrain,
             "critic",
             normalize_reward=strategy.args.reward.normalize_enable,
-            attn_implementation=strategy.args.actor.attn_implementation,
+            attn_implementation=strategy.args.ds.attn_implementation,
+            experts_implementation=strategy.args.ds.experts_implementation,
             param_dtype=strategy.args.ds.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.actor.load_in_4bit,
-            lora_rank=strategy.args.actor.lora.rank,
-            lora_alpha=strategy.args.actor.lora.alpha,
-            target_modules=strategy.args.actor.lora.target_modules,
-            lora_dropout=strategy.args.actor.lora.dropout,
+            load_in_4bit=strategy.args.ds.load_in_4bit,
+            lora_rank=strategy.args.ds.lora.rank,
+            lora_alpha=strategy.args.ds.lora.alpha,
+            target_modules=strategy.args.ds.lora.target_modules,
+            lora_dropout=strategy.args.ds.lora.dropout,
             ds_config=strategy.get_ds_train_config(is_actor=False),
-            value_head_prefix=strategy.args.reward.value_head_prefix,
+            value_head_prefix=strategy.args.ds.value_head_prefix,
             init_value_head=strategy.args.actor.model_name_or_path == strategy.args.critic.model_name_or_path,
-            packing_samples=strategy.args.data.packing_samples,
+            packing_samples=strategy.args.ds.packing_samples,
         )
         strategy.print(critic)
         strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize_enable))

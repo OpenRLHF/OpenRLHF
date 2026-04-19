@@ -66,7 +66,7 @@ class RewardModelTrainer(ABC):
         self.aux_loss = self.args.model.aux_loss_coef > 1e-8
 
         # packing samples
-        self.packing_samples = strategy.args.data.packing_samples
+        self.packing_samples = strategy.args.ds.packing_samples
 
         self.margin_loss = self.strategy.args.model.margin_loss_enable
         self.compute_fp32_loss = self.strategy.args.model.compute_fp32_loss_enable

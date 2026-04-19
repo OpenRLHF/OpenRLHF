@@ -18,11 +18,11 @@ openrlhf.cli.train_sft \
     --train.max_epochs 1 \
     --ds.param_dtype bf16 \
     --model.gradient_checkpointing_enable \
-    --model.attn_implementation flash_attention_2 \
+    --ds.attn_implementation flash_attention_2 \
     --adam.lr 5e-6 \
-    --model.lora.rank 64 \
-    --model.lora.alpha 64 \
-    --data.packing_samples \
+    --ds.lora.rank 64 \
+    --ds.lora.alpha 64 \
+    --ds.packing_samples \
     --model.aux_loss_coef 0.001
 EOF
 

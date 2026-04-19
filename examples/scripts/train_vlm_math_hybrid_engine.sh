@@ -74,7 +74,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --actor.freeze_visual_encoder \
    --data.apply_chat_template \
    --actor.gradient_checkpointing_enable \
-   --actor.attn_implementation eager \
+   --ds.attn_implementation eager \
    --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
@@ -101,5 +101,5 @@ python3 -m openrlhf.cli.train_ppo_ray \
 #   Images in the dataset should be a list of paths/URLs.
 #
 # Attention implementation:
-#   Use --actor.attn_implementation eager for models with linear attention (Qwen3.5).
+#   Use --ds.attn_implementation eager for models with linear attention (Qwen3.5).
 #   Flash attention may not support packed sequences with linear attention layers.

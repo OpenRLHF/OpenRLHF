@@ -17,14 +17,14 @@ openrlhf.cli.train_sft \
    --ds.zero_stage 2 \
    --train.max_epochs 1 \
    --ds.param_dtype bf16 \
-   --model.attn_implementation flash_attention_2 \
+   --ds.attn_implementation flash_attention_2 \
    --adam.lr 5e-6 \
    --ckpt.load_enable \
-   --data.packing_samples \
+   --ds.packing_samples \
    --model.gradient_checkpointing_enable
 EOF
     # --wandb [WANDB_TOKENS]
-    # --data.packing_samples
+    # --ds.packing_samples
 
 if [[ ${1} != "slurm" ]]; then
     deepspeed --module $training_commands

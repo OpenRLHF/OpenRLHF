@@ -107,13 +107,14 @@ class ReferenceModelActor(BaseModelActor):
         self._setup_distributed(strategy)
         model = Actor(
             pretrain,
-            attn_implementation=strategy.args.actor.attn_implementation,
+            attn_implementation=strategy.args.ds.attn_implementation,
+            experts_implementation=strategy.args.ds.experts_implementation,
             param_dtype=strategy.args.ds.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.actor.load_in_4bit,
+            load_in_4bit=strategy.args.ds.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref.offload),
-            packing_samples=strategy.args.data.packing_samples,
+            packing_samples=strategy.args.ds.packing_samples,
             temperature=strategy.args.rollout.temperature,
-            use_liger_kernel=strategy.args.actor.use_liger_kernel,
+            use_liger_kernel=strategy.args.ds.use_liger_kernel,
         )
         strategy.print(model)
 
@@ -161,12 +162,13 @@ class RewardModelActor(BaseModelActor):
             pretrain,
             "reward",
             normalize_reward=strategy.args.reward.normalize_enable,
-            attn_implementation=strategy.args.actor.attn_implementation,
+            attn_implementation=strategy.args.ds.attn_implementation,
+            experts_implementation=strategy.args.ds.experts_implementation,
             param_dtype=strategy.args.ds.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.actor.load_in_4bit,
+            load_in_4bit=strategy.args.ds.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.reward.offload),
-            value_head_prefix=strategy.args.reward.value_head_prefix,
-            packing_samples=strategy.args.data.packing_samples,
+            value_head_prefix=strategy.args.ds.value_head_prefix,
+            packing_samples=strategy.args.ds.packing_samples,
         )
         strategy.print(model)
         strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize_enable))

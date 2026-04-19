@@ -19,16 +19,16 @@ openrlhf.cli.train_dpo \
    --data.apply_chat_template \
    --data.chosen_key chosen \
    --data.rejected_key rejected \
-   --model.attn_implementation flash_attention_2 \
+   --ds.attn_implementation flash_attention_2 \
    --ckpt.load_enable \
-   --data.packing_samples \
+   --ds.packing_samples \
    --model.gradient_checkpointing_enable
 EOF
     # --logger.wandb.key [WANDB_TOKENS] or True (use wandb login command)
     # --model.ipo_enable [for IPO]
     # --model.label_smoothing 0.1 [for cDPO]
     # --ref.offload
-    # --data.packing_samples
+    # --ds.packing_samples
     # --model.nll_loss_coef (Regularization with NLL loss)
 
 

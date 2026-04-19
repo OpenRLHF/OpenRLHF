@@ -18,13 +18,13 @@ openrlhf.cli.train_rm \
    --data.apply_chat_template \
    --data.chosen_key chosen \
    --data.rejected_key rejected \
-   --model.attn_implementation flash_attention_2 \
+   --ds.attn_implementation flash_attention_2 \
    --ckpt.load_enable \
-   --data.packing_samples \
+   --ds.packing_samples \
    --model.gradient_checkpointing_enable
 EOF
      # --logger.wandb.key [WANDB_TOKENS] or True (use wandb login command)
-     # --data.packing_samples
+     # --ds.packing_samples
 
 
 if [[ ${1} != "slurm" ]]; then

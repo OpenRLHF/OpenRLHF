@@ -239,7 +239,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 <summary>Show advanced capabilities</summary>
 
 **Efficiency Optimizations**
-- Sample packing (`--data.packing_samples`) for all training modes
+- Sample packing (`--ds.packing_samples`) for all training modes
 - vLLM acceleration (`--vllm.num_engines`) for fast generation
 - DAPO [dynamic filtering](./examples/scripts/train_dapo_ray_hybrid_engine.sh) (`--algo.dynamic_filtering_enable`)
   - 🎲 Dynamic Sampling: for each prompt, generate multiple responses and **filter** them by your reward / agent **0–1 `scores`** signal
@@ -255,9 +255,9 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 
 **Model Support**
 - [VLM (Vision-Language Models)](./examples/scripts/train_vlm_math_hybrid_engine.sh) — single-turn and [multi-turn with image feedback](./examples/python/vlm_multiturn_agent.py) (`--data.image_key`, `--data.max_images_per_prompt`)
-- [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh) (`--actor.lora.rank`, `--actor.load_in_4bit`)
+- [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh) (`--ds.lora.rank`, `--ds.load_in_4bit`)
 - [Mixture of Experts (MoE)](./examples/test_scripts/train_sft_moe.sh) (`--actor.aux_loss_coef`)
-- FlashAttention (`--actor.attn_implementation`)
+- FlashAttention (`--ds.attn_implementation`)
 - HuggingFace chat templates (`--data.apply_chat_template`)
 
 **Optimizers**
@@ -367,7 +367,7 @@ deepspeed --module openrlhf.cli.train_sft \
    --eval.steps -1 \
    --ds.zero_stage 2 \
    --train.max_epochs 1 \
-   --data.packing_samples \
+   --ds.packing_samples \
    --ds.param_dtype bf16 \
    --adam.lr 5e-6 \
    --actor.gradient_checkpointing_enable \
@@ -406,7 +406,7 @@ deepspeed --module openrlhf.cli.train_rm \
    --data.apply_chat_template \
    --chosen_key chosen \
    --rejected_key rejected \
-   --data.packing_samples \
+   --ds.packing_samples \
    --actor.gradient_checkpointing_enable \
    --logger.wandb.key {wandb_token}
 
@@ -478,7 +478,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --data.apply_chat_template \
    --reward.normalize_enable \
    --actor.gradient_checkpointing_enable \
-   --data.packing_samples \
+   --ds.packing_samples \
    --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
@@ -735,7 +735,7 @@ Pick the execution mode based on your priority — OpenRLHF gives you a clear tr
 
 | Optimization | Flag | When to Use |
 |--------------|------|-------------|
-| **Sample Packing** | `--data.packing_samples` | Always (especially training) |
+| **Sample Packing** | `--ds.packing_samples` | Always (especially training) |
 | **Dynamic Batch** | `--train.dynamic_batch_enable` | Variable sequence lengths |
 | **DeepCompile** | `--ds.deepcompile` | PyTorch 2.0+ |
 | **Overlap Comm** | `--ds.overlap_comm` | Sufficient GPU memory |
@@ -757,7 +757,7 @@ Pick the execution mode based on your priority — OpenRLHF gives you a clear tr
 #### 🎮 Batch Size Tuning
 
 1. **Generation Phase**: Maximize `--rollout.micro_batch_size`, minimize vLLM TP size
-2. **Training Phase**: Maximize `--train.micro_batch_size`, enable `--data.packing_samples`
+2. **Training Phase**: Maximize `--train.micro_batch_size`, enable `--ds.packing_samples`
 3. **vLLM**: Always use `--vllm.sync_backend nccl`
 
 > [!TIP]
