@@ -70,9 +70,7 @@ class DeepspeedStrategy(ABC):
         self.overlap_comm = getattr(args.ds, "overlap_comm", False)
         self.deepcompile = getattr(args.ds, "deepcompile", False)
         self.ds_tensor_parallel_size = getattr(args.ds, "tensor_parallel_size", 1)
-        # PPO uses ``args.actor``; SFT/RM/DPO use ``args.model`` (no RL actor concept).
-        self._entity_ns = getattr(args, "actor", None) or getattr(args, "model", None)
-        self.ring_attn_size = getattr(self._entity_ns, "ring_attn_size", 1)
+        self.ring_attn_size = getattr(args.ds, "ring_attn_size", 1)
         self.use_dynamic_batch = getattr(self.args.train, "dynamic_batch_enable", False)
 
         if self.ds_tensor_parallel_size > 1:
@@ -129,7 +127,7 @@ class DeepspeedStrategy(ABC):
 
         from ring_flash_attn import substitute_hf_flash_attn
 
-        self.ring_head_stride = getattr(self._entity_ns, "ring_attn_head_stride", 1)
+        self.ring_head_stride = getattr(self.args.ds, "ring_attn_head_stride", 1)
         substitute_hf_flash_attn(self.ring_attn_group, self.ring_head_stride)
 
     @property

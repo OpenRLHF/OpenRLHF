@@ -47,5 +47,5 @@ python3 -m openrlhf.cli.train_ppo_ray \
 #    --ds.tensor_parallel_size 2 \
 
 # Enable Ring-Attention
-#    --actor.ring_attn_size 4 \
-#    --actor.ring_attn_head_stride 2 \
+#    --ds.ring_attn_size 4 \
+#    --ds.ring_attn_head_stride 2 \

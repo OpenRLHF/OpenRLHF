@@ -251,7 +251,7 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 
 **可扩展性**
 - 张量并行的 DeepSpeed AutoTP（参见训练脚本中的 `--ds.tensor_parallel_size`）
-- 长上下文的 [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh)（`--actor.ring_attn_size`）
+- 长上下文的 [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh)（`--ds.ring_attn_size`）
 - 使用 [SLURM](./examples/scripts/train_ppo_ray_slurm.sh) 的多节点训练
 
 **模型支持**
@@ -372,7 +372,7 @@ deepspeed --module openrlhf.cli.train_sft \
 
 # 附加选项：
 # --data.apply_chat_template                # 使用 HF tokenizer 聊天模板
-# --actor.ring_attn_size 2                   # 启用 RingAttention（先安装 ring_flash_attn）
+# --ds.ring_attn_size 2                      # 启用 RingAttention（先安装 ring_flash_attn）
 # --data.multiturn                          # 多轮微调损失
 # --actor.pretrain_mode_enable                      # 继续预训练模式
 ```

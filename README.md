@@ -250,7 +250,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 
 **Scalability**
 - DeepSpeed AutoTP for tensor parallelism (see `--ds.tensor_parallel_size` in training scripts)
-- [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh) for long context (`--actor.ring_attn_size`)
+- [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh) for long context (`--ds.ring_attn_size`)
 - Multi-node training with [SLURM](./examples/scripts/train_ppo_ray_slurm.sh)
 
 **Model Support**
@@ -371,7 +371,7 @@ deepspeed --module openrlhf.cli.train_sft \
 
 # Additional options:
 # --data.apply_chat_template                # Use HF tokenizer chat template
-# --actor.ring_attn_size 2                   # Enable RingAttention (install ring_flash_attn first)
+# --ds.ring_attn_size 2                      # Enable RingAttention (install ring_flash_attn first)
 # --data.multiturn                          # Multi-turn fine-tuning loss
 # --actor.pretrain_mode_enable                      # Continued pre-training mode
 ```

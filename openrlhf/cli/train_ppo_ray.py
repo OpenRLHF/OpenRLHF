@@ -87,7 +87,7 @@ def train(args):
         PolicyModelActor,
         pg=pg,
         num_gpus_per_actor=0.2 if pg else 1,
-        duplicate_actors=args.actor.ring_attn_size * args.ds.tensor_parallel_size,
+        duplicate_actors=args.ds.ring_attn_size * args.ds.tensor_parallel_size,
     )
 
     if args.algo.kl.init_coef > 0:
@@ -97,7 +97,7 @@ def train(args):
             ReferenceModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.actor.ring_attn_size * args.ds.tensor_parallel_size,
+            duplicate_actors=args.ds.ring_attn_size * args.ds.tensor_parallel_size,
         )
     else:
         ref_model = None
@@ -123,7 +123,7 @@ def train(args):
             CriticModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.actor.ring_attn_size * args.ds.tensor_parallel_size,
+            duplicate_actors=args.ds.ring_attn_size * args.ds.tensor_parallel_size,
         )
     else:
         critic_model = None
@@ -136,7 +136,7 @@ def train(args):
             RewardModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.actor.ring_attn_size * args.ds.tensor_parallel_size,
+            duplicate_actors=args.ds.ring_attn_size * args.ds.tensor_parallel_size,
         )
     else:
         reward_model = None
@@ -397,7 +397,12 @@ if __name__ == "__main__":
         default=False,
         help="Enable reproducible behavior during distributed training",
     )
-    parser.add_argument("--actor.freezing_steps", type=int, default=-1, help="Used for critic initialization")
+    parser.add_argument(
+        "--critic.freezing_steps",
+        type=int,
+        default=-1,
+        help="Freeze the actor for the first N steps to let the critic warm up",
+    )
     parser.add_argument(
         "--rollout.n_samples_per_prompt", type=int, default=1, help="number of responses for each prompt in generation"
     )
@@ -482,9 +487,9 @@ if __name__ == "__main__":
     )
 
     # Context Parallel
-    parser.add_argument("--actor.ring_attn_size", type=int, default=1, help="Ring attention group size")
+    parser.add_argument("--ds.ring_attn_size", type=int, default=1, help="Ring attention group size")
     parser.add_argument(
-        "--actor.ring_attn_head_stride",
+        "--ds.ring_attn_head_stride",
         type=int,
         default=1,
         help="the number of heads to do ring attention each time. "
@@ -614,7 +619,7 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
-    if args.actor.ring_attn_size > 1:
+    if args.ds.ring_attn_size > 1:
         if not args.data.packing_samples:
             print("[Warning] --ring_attn_size > 1 requires --packing_samples.")
             args.data.packing_samples = True
@@ -683,7 +688,7 @@ if __name__ == "__main__":
         args.rollout.n_samples_per_prompt * args.rollout.batch_size // args.rollout.micro_batch_size
         >= args.actor.num_nodes
         * args.actor.num_gpus_per_node
-        // args.actor.ring_attn_size
+        // args.ds.ring_attn_size
         // args.ds.tensor_parallel_size
     ), "The number of sample batches must be greater than or equal to the effective number of actor processes."
 

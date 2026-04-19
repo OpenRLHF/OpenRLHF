@@ -273,7 +273,7 @@ class BasePPOTrainer(ABC):
 
         # Decide whether to train critic/actor this round (actor can be frozen initially).
         run_critic = self.critic_model_group is not None
-        run_actor = global_steps > self.args.actor.freezing_steps and self.actor_model_group is not None
+        run_actor = global_steps > self.args.critic.freezing_steps and self.actor_model_group is not None
 
         def _run_sleep(group, **kwargs):
             # Sleep mode: reload -> fit -> offload (smaller GPU memory).

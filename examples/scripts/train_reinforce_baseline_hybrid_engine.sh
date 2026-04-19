@@ -74,8 +74,8 @@ ENGINE_ARGS=(
    --ds.zero_stage 3
    --actor.gradient_checkpointing_enable
    # --ds.adam_offload
-   --actor.ring_attn_size 2
-   --actor.ring_attn_head_stride 2
+   --ds.ring_attn_size 2
+   --ds.ring_attn_head_stride 2
    --ds.param_dtype bf16
 )
 

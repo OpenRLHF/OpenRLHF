@@ -213,9 +213,9 @@ if __name__ == "__main__":
     parser.add_argument("--model.value_head_prefix", type=str, default="score")
 
     # Context Parallel
-    parser.add_argument("--model.ring_attn_size", type=int, default=1, help="Ring attention group size")
+    parser.add_argument("--ds.ring_attn_size", type=int, default=1, help="Ring attention group size")
     parser.add_argument(
-        "--model.ring_attn_head_stride",
+        "--ds.ring_attn_head_stride",
         type=int,
         default=1,
         help="the number of heads to do ring attention each time. "
@@ -315,7 +315,7 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
-    if args.model.ring_attn_size > 1:
+    if args.ds.ring_attn_size > 1:
         assert args.data.packing_samples, "packing_samples must be enabled when using ring attention"
 
     if args.data.packing_samples and "flash_attention" not in args.model.attn_implementation:
