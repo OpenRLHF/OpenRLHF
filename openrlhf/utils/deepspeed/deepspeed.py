@@ -125,6 +125,9 @@ class DeepspeedStrategy(ABC):
         self.ring_attn_rank = dist.get_rank(group=group)
         set_ring_attn_group(group)
 
+        from openrlhf.models.ring_attn_utils import patch_transformers_for_ring_flash_attn
+
+        patch_transformers_for_ring_flash_attn()
         from ring_flash_attn import substitute_hf_flash_attn
 
         self.ring_head_stride = getattr(self.args.ds, "ring_attn_head_stride", 1)
