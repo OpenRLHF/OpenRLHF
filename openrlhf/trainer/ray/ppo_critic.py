@@ -189,7 +189,8 @@ class CriticModelActor(BaseModelActor):
         strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize_enable))
         strategy.print("mean: {}, std {}".format(critic.mean, critic.std))
 
-        # configure tokenizer
+        # configure tokenizer (only when we plan to save the critic weights as HF)
+        self.tokenizer = None
         if strategy.args.critic.save_value_network:
             self.tokenizer = get_tokenizer(
                 pretrain, critic, "left", strategy, use_fast=not strategy.args.data.disable_fast_tokenizer
@@ -271,6 +272,9 @@ class CriticModelActor(BaseModelActor):
 
     def save_model(self):
         args = self.strategy.args
+        if self.tokenizer is None:
+            # critic built without --critic.save_value_network; nothing to persist as HF weights
+            return
 
         # save model checkpoint after fitting on only rank0
         self.strategy.save_model(
