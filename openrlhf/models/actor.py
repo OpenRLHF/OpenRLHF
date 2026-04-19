@@ -50,6 +50,7 @@ class Actor(nn.Module):
         temperature=1.0,
         use_liger_kernel=False,
         freeze_visual_encoder=False,
+        experts_implementation=None,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -101,6 +102,10 @@ class Actor(nn.Module):
             else:
                 model_class = AutoModelForCausalLM
 
+            extra_from_pretrained_kwargs = {}
+            if experts_implementation is not None:
+                extra_from_pretrained_kwargs["experts_implementation"] = experts_implementation
+
             self.model = model_class.from_pretrained(
                 pretrain_or_model,
                 trust_remote_code=True,
@@ -108,7 +113,16 @@ class Actor(nn.Module):
                 quantization_config=nf4_config,
                 torch_dtype=torch_dtype,  # default: bf16
                 device_map=device_map,
+                **extra_from_pretrained_kwargs,
             )
+
+            eff_experts_impl = getattr(
+                self.model.config,
+                "_experts_implementation_internal",
+                getattr(self.model.config, "_experts_implementation", None),
+            )
+            if eff_experts_impl is not None:
+                print(f"[MoE] experts_implementation (resolved): {eff_experts_impl}")
 
             # VLM: optionally freeze the vision encoder so only the language
             # model backbone is trained.  Both Qwen3.5 and Gemma4 place

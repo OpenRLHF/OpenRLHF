@@ -35,6 +35,7 @@ def get_llm_for_sequence_regression(
     value_head_prefix="score",
     device_map=None,
     packing_samples=False,
+    experts_implementation=None,
     **kwargs,
 ) -> nn.Module:
     """Retrieve a transformer model with a sequence regression head on top.
@@ -103,6 +104,9 @@ def get_llm_for_sequence_regression(
     else:
         nf4_config = None
 
+    if experts_implementation is not None:
+        kwargs["experts_implementation"] = experts_implementation
+
     model = cls_class.from_pretrained(
         model_name_or_path,
         config=config,
@@ -112,6 +116,14 @@ def get_llm_for_sequence_regression(
         device_map=device_map,
         **kwargs,
     )
+
+    eff_experts_impl = getattr(
+        model.config,
+        "_experts_implementation_internal",
+        getattr(model.config, "_experts_implementation", None),
+    )
+    if eff_experts_impl is not None:
+        logger.info(f"[MoE] experts_implementation (resolved): {eff_experts_impl}")
 
     # LoRA
     if lora_rank > 0:
