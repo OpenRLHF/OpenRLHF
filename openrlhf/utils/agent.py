@@ -58,7 +58,7 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             ][0].tolist()
 
         # Truncate initial observation if it's too long to leave room for generation
-        min_generation_tokens = sampling_params.max_tokens if hasattr(sampling_params, "max_tokens") else 1
+        min_generation_tokens = getattr(sampling_params, "max_tokens", None) or 1
         max_initial_length = max_length - min_generation_tokens
         if len(current_obs_tokens) > max_initial_length:
             if pil_images:
