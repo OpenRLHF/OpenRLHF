@@ -76,7 +76,10 @@ if __name__ == "__main__":
     # Reward Model
     parser.add_argument("--reward.model_name_or_path", type=str, default=None, help="HF model name or path")
     parser.add_argument(
-        "--reward.normalize_enable", action="store_true", default=False, help="Enable Reward Normalization"
+        "--reward.normalize_enable",
+        action="store_true",
+        default=False,
+        help="Enable normalization for this served reward model's outputs",
     )
     parser.add_argument("--ds.value_head_prefix", type=str, default="score")
     parser.add_argument("--data.max_len", type=int, default=2048)
