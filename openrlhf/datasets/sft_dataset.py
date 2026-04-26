@@ -1,3 +1,6 @@
+import copy
+import warnings
+from collections.abc import Mapping
 from typing import Callable
 
 import torch
@@ -59,6 +62,7 @@ class SFTDataset(Dataset):
         self.pretrain_mode = pretrain_mode
         self.max_length = max_length
         self.multiturn = multiturn
+        self._warned_offset_mapping_unavailable = False
 
         # chat template
         self.input_template = input_template
@@ -86,62 +90,360 @@ class SFTDataset(Dataset):
         self.prompt_ids_lens = processed_dataset["prompt_ids_len"]
         self.response_ranges = processed_dataset["response_ranges"] if self.multiturn else None
 
+    def _normalize_multiturn_messages(self, data):
+        messages = copy.deepcopy(data[self.input_key])
+        if self.output_key and data.get(self.output_key):
+            output_message = copy.deepcopy(data[self.output_key])
+            if isinstance(output_message, list):
+                messages.extend(output_message)
+            else:
+                messages.append(output_message)
+        return messages
+
+    def _render_chat(self, messages, add_generation_prompt=False):
+        return self.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=add_generation_prompt,
+        )
+
+    @staticmethod
+    def _to_flat_list(value):
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+        if isinstance(value, tuple):
+            value = list(value)
+        if isinstance(value, list) and value and isinstance(value[0], (list, tuple)):
+            value = value[0]
+        return list(value)
+
+    @staticmethod
+    def _mask_to_ranges(mask):
+        ranges = []
+        start_idx = None
+        for idx, value in enumerate(mask):
+            if value and start_idx is None:
+                start_idx = idx
+            elif not value and start_idx is not None:
+                ranges.append((start_idx, idx - 1))
+                start_idx = None
+        if start_idx is not None:
+            ranges.append((start_idx, len(mask) - 1))
+        return ranges
+
+    @staticmethod
+    def _merge_char_spans(spans):
+        if not spans:
+            return []
+
+        spans = sorted(spans)
+        merged = [spans[0]]
+        for start, end in spans[1:]:
+            prev_start, prev_end = merged[-1]
+            if start <= prev_end:
+                merged[-1] = (prev_start, max(prev_end, end))
+            else:
+                merged.append((start, end))
+        return merged
+
+    def _tokenize_text(self, text, return_offsets_mapping=False):
+        kwargs = {
+            "max_length": self.max_length,
+            "padding": False,
+            "truncation": True,
+            "return_tensors": None,
+            "add_special_tokens": False,
+        }
+        if return_offsets_mapping:
+            kwargs["return_offsets_mapping"] = True
+        return self.tokenizer(text, **kwargs)
+
+    def _build_multiturn_response_ranges(self, messages, rendered_text):
+        native_ranges = self._try_native_assistant_ranges(messages, rendered_text)
+        if native_ranges is not None:
+            return native_ranges
+        return self._build_marker_assistant_ranges(messages, rendered_text)
+
+    def _try_native_assistant_ranges(self, messages, rendered_text):
+        try:
+            encoded = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                return_dict=True,
+                return_assistant_tokens_mask=True,
+                truncation=True,
+                max_length=self.max_length,
+            )
+        except Exception:
+            return None
+
+        if not isinstance(encoded, Mapping) or "input_ids" not in encoded:
+            return None
+
+        mask = None
+        for key in ("assistant_masks", "assistant_tokens_mask", "assistant_mask"):
+            if key in encoded:
+                mask = encoded[key]
+                break
+        if mask is None:
+            return None
+
+        native_input_ids = self._to_flat_list(encoded["input_ids"])
+        assistant_mask = self._to_flat_list(mask)
+        if len(native_input_ids) != len(assistant_mask) or not any(assistant_mask):
+            return None
+
+        tokenized_render = self._tokenize_text(rendered_text)
+        rendered_input_ids = self._to_flat_list(tokenized_render["input_ids"])
+        if native_input_ids != rendered_input_ids:
+            return None
+
+        return self._mask_to_ranges(assistant_mask)
+
+    def _build_marker_assistant_ranges(self, messages, rendered_text):
+        try:
+            full_rendered_text = self._render_chat(messages).rstrip("\n")
+        except Exception:
+            return []
+
+        if full_rendered_text != rendered_text:
+            warnings.warn(
+                "Skipping multi-turn assistant mask construction because prompt + response does not match the "
+                "full chat-template render.",
+                stacklevel=2,
+            )
+            return []
+
+        char_spans = []
+        for message_idx, message in enumerate(messages):
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue
+
+            marked_messages = copy.deepcopy(messages)
+            marker_pairs = self._mark_assistant_message(marked_messages, message_idx, rendered_text)
+            if not marker_pairs:
+                continue
+
+            try:
+                marked_render = self._render_chat(marked_messages).rstrip("\n")
+            except Exception:
+                continue
+
+            stripped_render, marker_occurrences = self._strip_marker_occurrences(marked_render, marker_pairs)
+            if stripped_render != rendered_text:
+                continue
+
+            visible_spans = []
+            for start_marker, end_marker in marker_pairs:
+                start_marker_pos = marked_render.find(start_marker)
+                if start_marker_pos == -1:
+                    continue
+
+                content_start = start_marker_pos + len(start_marker)
+                end_marker_pos = marked_render.find(end_marker, content_start)
+                if end_marker_pos == -1:
+                    continue
+
+                start_char = self._marked_to_unmarked_pos(content_start, marker_occurrences)
+                end_char = self._marked_to_unmarked_pos(end_marker_pos, marker_occurrences)
+                if start_char < end_char:
+                    visible_spans.append((start_char, end_char))
+
+            if visible_spans:
+                start_char = min(start for start, _ in visible_spans)
+                end_char = max(end for _, end in visible_spans)
+                char_spans.append(self._extend_assistant_span(rendered_text, start_char, end_char))
+
+        return self._char_spans_to_token_ranges(rendered_text, self._merge_char_spans(char_spans))
+
+    def _mark_assistant_message(self, messages, message_idx, rendered_text):
+        message = messages[message_idx]
+        marker_pairs = []
+        marker_index = 0
+
+        def make_marker_pair():
+            nonlocal marker_index
+            while True:
+                start_marker = f"__OPENRLHF_ASSISTANT_SPAN_{message_idx}_{marker_index}_START__"
+                end_marker = f"__OPENRLHF_ASSISTANT_SPAN_{message_idx}_{marker_index}_END__"
+                marker_index += 1
+                if (
+                    start_marker not in rendered_text
+                    and end_marker not in rendered_text
+                    and start_marker not in str(messages)
+                    and end_marker not in str(messages)
+                ):
+                    return start_marker, end_marker
+
+        def wrap_segment(text):
+            start_marker, end_marker = make_marker_pair()
+            marker_pairs.append((start_marker, end_marker))
+            return f"{start_marker}{text}{end_marker}"
+
+        reasoning_content = message.get("reasoning_content")
+        if isinstance(reasoning_content, str) and reasoning_content:
+            message["reasoning_content"] = self._mark_newline_stripped_segment(
+                reasoning_content,
+                wrap_segment,
+                strip_left=True,
+                strip_right=True,
+            )
+
+        content = message.get("content")
+        if isinstance(content, str) and content:
+            message["content"] = self._mark_content_segments(content, wrap_segment)
+
+        return marker_pairs
+
+    @staticmethod
+    def _mark_newline_stripped_segment(text, wrap_segment, strip_left=False, strip_right=False):
+        start = 0
+        end = len(text)
+        if strip_left:
+            while start < end and text[start] == "\n":
+                start += 1
+        if strip_right:
+            while end > start and text[end - 1] == "\n":
+                end -= 1
+        if start >= end:
+            return text
+        return text[:start] + wrap_segment(text[start:end]) + text[end:]
+
+    def _mark_content_segments(self, content, wrap_segment):
+        think_start = "<think>"
+        think_end = "</think>"
+        first_think_start = content.find(think_start)
+        first_think_end = content.find(think_end, first_think_start + len(think_start))
+        if first_think_start == -1 or first_think_end == -1:
+            return self._mark_newline_stripped_segment(content, wrap_segment, strip_left=True)
+
+        reasoning_start = first_think_start + len(think_start)
+        reasoning_text = content[reasoning_start:first_think_end]
+        marked_reasoning = self._mark_newline_stripped_segment(
+            reasoning_text,
+            wrap_segment,
+            strip_left=True,
+            strip_right=True,
+        )
+
+        last_think_end = content.rfind(think_end)
+        answer_start = last_think_end + len(think_end)
+        while answer_start < len(content) and content[answer_start] == "\n":
+            answer_start += 1
+
+        answer_text = content[answer_start:]
+        marked_answer = wrap_segment(answer_text) if answer_text else answer_text
+        return content[:reasoning_start] + marked_reasoning + content[first_think_end:answer_start] + marked_answer
+
+    @staticmethod
+    def _strip_marker_occurrences(marked_render, marker_pairs):
+        markers = {marker for marker_pair in marker_pairs for marker in marker_pair}
+        occurrences = []
+        for marker in markers:
+            search_start = 0
+            while True:
+                marker_pos = marked_render.find(marker, search_start)
+                if marker_pos == -1:
+                    break
+                occurrences.append((marker_pos, marker))
+                search_start = marker_pos + len(marker)
+
+        occurrences.sort(key=lambda item: item[0])
+        stripped_parts = []
+        last_pos = 0
+        for marker_pos, marker in occurrences:
+            stripped_parts.append(marked_render[last_pos:marker_pos])
+            last_pos = marker_pos + len(marker)
+        stripped_parts.append(marked_render[last_pos:])
+        return "".join(stripped_parts), occurrences
+
+    @staticmethod
+    def _marked_to_unmarked_pos(position, marker_occurrences):
+        removed_chars = sum(len(marker) for marker_pos, marker in marker_occurrences if marker_pos < position)
+        return position - removed_chars
+
+    def _extend_assistant_span(self, rendered_text, start_char, end_char):
+        think_prefix = "<think>\n"
+        previous_text = rendered_text[start_char - len(think_prefix) : start_char]
+        if start_char >= len(think_prefix) and previous_text == think_prefix:
+            start_char -= len(think_prefix)
+
+        think_suffix = "\n</think>"
+        if rendered_text.startswith(think_suffix, end_char):
+            end_char += len(think_suffix)
+
+        eos_token = getattr(self.tokenizer, "eos_token", None)
+        if eos_token and rendered_text.startswith(eos_token, end_char):
+            end_char += len(eos_token)
+
+        return start_char, end_char
+
+    def _char_spans_to_token_ranges(self, rendered_text, spans):
+        if not spans:
+            return []
+
+        try:
+            encoded = self._tokenize_text(rendered_text, return_offsets_mapping=True)
+            offsets = encoded["offset_mapping"]
+        except Exception:
+            return self._char_spans_to_token_ranges_without_offsets(rendered_text, spans)
+
+        if hasattr(offsets, "tolist"):
+            offsets = offsets.tolist()
+        if offsets and isinstance(offsets[0], list) and offsets[0] and isinstance(offsets[0][0], (list, tuple)):
+            offsets = offsets[0]
+        ranges = []
+        for start_char, end_char in spans:
+            token_indices = [
+                idx
+                for idx, offset in enumerate(offsets)
+                if len(offset) == 2 and offset[0] != offset[1] and offset[0] < end_char and offset[1] > start_char
+            ]
+            if token_indices:
+                ranges.append((token_indices[0], token_indices[-1]))
+        return self._merge_char_spans(ranges)
+
+    def _char_spans_to_token_ranges_without_offsets(self, rendered_text, spans):
+        if not self._warned_offset_mapping_unavailable:
+            warnings.warn(
+                "Tokenizer does not provide offset mappings; falling back to prefix token counts for multi-turn "
+                "assistant masks.",
+                stacklevel=2,
+            )
+            self._warned_offset_mapping_unavailable = True
+
+        ranges = []
+        for start_char, end_char in spans:
+            start_idx = len(self._to_flat_list(self._tokenize_text(rendered_text[:start_char])["input_ids"]))
+            end_idx = len(self._to_flat_list(self._tokenize_text(rendered_text[:end_char])["input_ids"])) - 1
+            clipped_end_idx = min(end_idx, self.max_length - 1)
+            if start_idx <= clipped_end_idx:
+                ranges.append((start_idx, clipped_end_idx))
+        return self._merge_char_spans(ranges)
+
     def process_data(self, data):
-        if self.multiturn and self.output_key:
-            data[self.input_key].append(data[self.output_key])
-            data[self.output_key] = None
+        response_ranges = []
+        effective_output_key = self.output_key
+        data_for_preprocess = data
 
         if self.multiturn:
-            assert (
-                not self.output_key or not data[self.output_key]
-            ), "You should put the whole trajectory into data[input_key] and do not set output_key"
-            input_key = self.input_key
-            apply_chat_template = self.apply_chat_template
-            response_ranges = []
-            for idx, message in enumerate(data[input_key]):
-                if message["role"] == "assistant":
-                    prompt = apply_chat_template(data[input_key][:idx], tokenize=False, add_generation_prompt=True)
-                    response = apply_chat_template(data[input_key][: idx + 1], tokenize=False)[len(prompt) :]
-
-                    start_idx = (
-                        self.tokenizer(
-                            prompt,
-                            max_length=self.max_length,
-                            padding=False,
-                            truncation=True,
-                            return_tensors="pt",
-                            add_special_tokens=False,
-                        )["attention_mask"]
-                        .int()
-                        .sum()
-                        .item()
-                    )
-
-                    end_idx = (
-                        start_idx
-                        + self.tokenizer(
-                            response,
-                            max_length=self.max_length,
-                            padding=False,
-                            truncation=True,
-                            return_tensors="pt",
-                            add_special_tokens=False,
-                        )["attention_mask"]
-                        .int()
-                        .sum()
-                        .item()
-                        - 1
-                    )
-                    response_ranges.append((start_idx, end_idx))  # left close right close
+            messages = self._normalize_multiturn_messages(data)
+            data_for_preprocess = dict(data)
+            data_for_preprocess[self.input_key] = messages
+            effective_output_key = None
 
         prompt, response = preprocess_data(
-            data,
+            data_for_preprocess,
             None if self.pretrain_mode else self.input_template,
             self.input_key,
-            self.output_key,
+            effective_output_key,
             apply_chat_template=None if self.pretrain_mode else self.apply_chat_template,
             multiturn=self.multiturn,
         )
+
+        if self.multiturn and not self.pretrain_mode:
+            rendered_text = (prompt + response).rstrip("\n")
+            response_ranges = self._build_multiturn_response_ranges(messages, rendered_text)
 
         if not self.pretrain_mode:
             prompt_token = self.tokenizer(
