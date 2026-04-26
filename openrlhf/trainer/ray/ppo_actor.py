@@ -4,7 +4,6 @@ from abc import ABC
 from dataclasses import fields
 from typing import Dict, List, Optional, Union
 
-import deepspeed
 import ray
 import torch
 import torch.distributed
@@ -16,12 +15,8 @@ from openrlhf.models import Actor, PolicyLoss
 from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils.experience import Experience
 from openrlhf.utils import get_tokenizer
-from openrlhf.utils.deepspeed import DeepspeedStrategy
-from openrlhf.utils.deepspeed.deepspeed_utils import (
-    offload_deepspeed_states,
-    reload_deepspeed_states,
-)
 from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
+from openrlhf.utils.fsdp.refit import gather_full_param
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.vlm_utils import merge_mm_train_inputs
 
@@ -93,7 +88,7 @@ class ActorPPOTrainer(ABC):
             micro_train_batch_size,
             buffer_limit,
             buffer_cpu_offload,
-            self.args.ds.packing_samples,
+            self.args.fsdp.packing_samples,
             self.args.train.dynamic_batch_enable,
         )
 
@@ -158,7 +153,7 @@ class ActorPPOTrainer(ABC):
 
         should_shuffle = (
             self.strategy.ring_attn_group is None
-            and self.args.ds.tensor_parallel_size <= 1
+            and self.args.fsdp.tp_size <= 1
             and not self.args.train.dynamic_batch_enable
         )
         dataloader = DataLoader(
@@ -387,33 +382,30 @@ class ActorPPOTrainer(ABC):
                 cache_reset_refs.append(engine.reset_prefix_cache.remote())
 
         torch.cuda.empty_cache()
-        model = self.actor.model.module
+        # Under FSDP/Automodel, `actor.model` is the FSDP2-wrapped HF model directly
+        # (no DS-engine `.module` indirection). Params are DTensors when sharded.
+        model = self.actor.model
         count = 0
 
-        def _broadcast_param(param, count, num_params):
+        def _broadcast_param(name, weight, dtype, shape, count, num_params):
             use_ray = getattr(self.strategy.args.vllm, "sync_with_ray", False)
-            # Fire all vllm engines for broadcast
             if torch.distributed.get_rank() == 0:
-                shape = param.shape if self.strategy.args.ds.zero_stage != 3 else param.ds_shape
                 refs = [
-                    engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
+                    engine.update_weight.remote(name, dtype=dtype, shape=shape, empty_cache=count == num_params)
                     for engine in self.vllm_engines
                 ]
-
                 if use_ray:
                     import ray.util.collective as collective
 
-                    collective.broadcast(param.data, 0, group_name=self._model_update_group)
+                    collective.broadcast(weight, 0, group_name=self._model_update_group)
                 else:
-                    self._model_update_group.broadcast(param.data, src=0, stream=torch.cuda.current_stream())
+                    self._model_update_group.broadcast(weight, src=0, stream=torch.cuda.current_stream())
                 ray.get(refs)
 
-        def _handle_cuda_ipc(param, count, num_params):
+        def _handle_cuda_ipc(name, weight, dtype, shape, count, num_params):
             from torch.multiprocessing.reductions import reduce_tensor
 
-            weight = param.data.clone()
-            ipc_handle = reduce_tensor(weight)
-
+            ipc_handle = reduce_tensor(weight.clone())
             ipc_handle = {get_physical_gpu_id(): ipc_handle}
             ipc_handle_list = [None] * torch.distributed.get_world_size()
             torch.distributed.all_gather_object(ipc_handle_list, ipc_handle)
@@ -422,12 +414,10 @@ class ActorPPOTrainer(ABC):
                 ipc_handles = {}
                 for d in ipc_handle_list:
                     ipc_handles.update(d)
-
-                shape = param.shape if self.strategy.args.ds.zero_stage != 3 else param.ds_shape
                 refs = [
                     engine.update_weight_cuda_ipc.remote(
                         name,
-                        dtype=param.dtype,
+                        dtype=dtype,
                         shape=shape,
                         ipc_handles=ipc_handles,
                         empty_cache=count == num_params,
@@ -436,12 +426,6 @@ class ActorPPOTrainer(ABC):
                 ]
                 ray.get(refs)
             torch_dist_barrier_and_cuda_sync()
-
-        def _gather_params_ctx(param):
-            """Context manager that gathers sharded/TP-split parameters for weight sync."""
-            if self.strategy.args.ds.tensor_parallel_size > 1:
-                return deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True)
-            return deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.ds.zero_stage == 3)
 
         sync_fn = _handle_cuda_ipc if self.use_cuda_ipc else _broadcast_param
 
@@ -453,8 +437,11 @@ class ActorPPOTrainer(ABC):
 
         for name, param in params_to_sync:
             count += 1  # empty_cache at last param
-            with _gather_params_ctx(param):
-                sync_fn(param, count, num_params)
+            # gather_full_param materializes the FSDP+TP-unsharded tensor on each rank
+            # in one call (replaces the DS GatheredParameters + GatherReplacedLayerParams pair).
+            weight, shape = gather_full_param(param)
+            sync_fn(name, weight, param.dtype, shape, count, num_params)
+            del weight  # bound peak memory: release before next iter
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)
@@ -484,18 +471,19 @@ class PolicyModelActor(BaseModelActor):
 
         actor = Actor(
             pretrain,
-            attn_implementation=strategy.args.ds.attn_implementation,
-            experts_implementation=strategy.args.ds.experts_implementation,
-            param_dtype=strategy.args.ds.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.ds.load_in_4bit,
-            lora_rank=strategy.args.ds.lora.rank,
-            lora_alpha=strategy.args.ds.lora.alpha,
-            target_modules=strategy.args.ds.lora.target_modules,
-            lora_dropout=strategy.args.ds.lora.dropout,
-            ds_config=strategy.get_ds_train_config(is_actor=True),
-            packing_samples=strategy.args.ds.packing_samples,
+            attn_implementation=strategy.args.fsdp.attn_implementation,
+            param_dtype=strategy.args.fsdp.param_dtype,
+            load_in_4bit=strategy.args.fsdp.load_in_4bit,
+            lora_rank=strategy.args.fsdp.lora.rank,
+            lora_alpha=strategy.args.fsdp.lora.alpha,
+            target_modules=strategy.args.fsdp.lora.target_modules,
+            lora_dropout=strategy.args.fsdp.lora.dropout,
+            device_mesh=strategy.device_mesh,
+            distributed_config=strategy.distributed_config,
+            activation_checkpointing=args.actor.gradient_checkpointing_enable,
+            packing_samples=strategy.args.fsdp.packing_samples,
             temperature=strategy.args.rollout.temperature,
-            use_liger_kernel=strategy.args.ds.use_liger_kernel,
+            use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
             freeze_visual_encoder=getattr(strategy.args.actor, "freeze_visual_encoder", False),
         )
         strategy.print(actor)
@@ -508,20 +496,16 @@ class PolicyModelActor(BaseModelActor):
         if args.train.enable_ema:
             ema_model = Actor(
                 pretrain,
-                attn_implementation=strategy.args.ds.attn_implementation,
-                experts_implementation=strategy.args.ds.experts_implementation,
-                param_dtype=strategy.args.ds.param_dtype,  # default: bf16
-                load_in_4bit=strategy.args.ds.load_in_4bit,
-                ds_config=strategy.get_ds_eval_config(offload=True),
-                packing_samples=strategy.args.ds.packing_samples,
+                attn_implementation=strategy.args.fsdp.attn_implementation,
+                param_dtype=strategy.args.fsdp.param_dtype,
+                load_in_4bit=strategy.args.fsdp.load_in_4bit,
+                device_mesh=strategy.device_mesh,
+                distributed_config=strategy.distributed_config,
+                activation_checkpointing=False,
+                packing_samples=strategy.args.fsdp.packing_samples,
             )
         else:
             ema_model = None
-
-        if args.actor.gradient_checkpointing_enable:
-            actor.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": args.actor.gradient_checkpointing_reentrant}
-            )
 
         actor_cfg = dict(
             optim=args.actor.optim,
@@ -549,9 +533,8 @@ class PolicyModelActor(BaseModelActor):
             _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
             self.checkpoint_states = states
 
-        # initial offload
-        if strategy.args.ds.enable_sleep:
-            offload_deepspeed_states(self.actor.model)
+        # initial offload — DS engine sleep/wake has no FSDP equivalent; FSDP2
+        # cpu_offload is set at construction time. Skip this step.
 
         # configure Trainer
         self.trainer = ActorPPOTrainer(
@@ -625,10 +608,12 @@ class PolicyModelActor(BaseModelActor):
         self.trainer.replay_buffer.append(experience)
 
     def reload_states(self):
-        reload_deepspeed_states(self.actor.model)
+        # No-op under FSDP2: cpu_offload is configured statically. Phase 5 may
+        # add dynamic offload toggling if needed.
+        pass
 
     def offload_states(self):
-        offload_deepspeed_states(self.actor.model)
+        pass
 
     def save_checkpoint(self, tag, client_states=None, metric_value=None, metric_key=None):
         args = self.strategy.args

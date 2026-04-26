@@ -87,7 +87,7 @@ def train(args):
         PolicyModelActor,
         pg=pg,
         num_gpus_per_actor=0.2 if pg else 1,
-        duplicate_actors=args.ds.ring_attn_size * args.ds.tensor_parallel_size,
+        duplicate_actors=args.fsdp.cp_size * args.fsdp.tp_size,
     )
 
     if args.algo.kl.init_coef > 0:
@@ -97,7 +97,7 @@ def train(args):
             ReferenceModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.ds.ring_attn_size * args.ds.tensor_parallel_size,
+            duplicate_actors=args.fsdp.cp_size * args.fsdp.tp_size,
         )
     else:
         ref_model = None
@@ -123,7 +123,7 @@ def train(args):
             CriticModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.ds.ring_attn_size * args.ds.tensor_parallel_size,
+            duplicate_actors=args.fsdp.cp_size * args.fsdp.tp_size,
         )
     else:
         critic_model = None
@@ -136,7 +136,7 @@ def train(args):
             RewardModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.ds.ring_attn_size * args.ds.tensor_parallel_size,
+            duplicate_actors=args.fsdp.cp_size * args.fsdp.tp_size,
         )
     else:
         reward_model = None
@@ -299,44 +299,47 @@ if __name__ == "__main__":
         help="Eval metric key for best checkpoint saving (e.g., eval_default_pass1). "
         "Empty string auto-detects first pass1 metric. Set to 'none' to disable best checkpoint saving.",
     )
-    parser.add_argument(
-        "--ds.use_universal_ckpt", action="store_true", help="Use deepspeed universal checkpoint", default=False
-    )
-
-    # DeepSpeed
-    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for deepspeed")
-    parser.add_argument("--ds.zero_stage", type=int, default=2, help="DeepSpeed ZeRO stage")
+    # FSDP / Automodel backend
+    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank from torchrun")
     parser.add_argument("--actor.gradient_checkpointing_enable", action="store_true", default=False)
-    parser.add_argument("--ds.deepcompile", action="store_true", default=False)
+    parser.add_argument("--actor.gradient_checkpointing_reentrant", action="store_true", default=False)
+    parser.add_argument("--fsdp.tp_size", type=int, default=1, help="Tensor parallel size")
+    parser.add_argument("--fsdp.cp_size", type=int, default=1, help="Context parallel size (replaces ring-attn)")
+    parser.add_argument("--fsdp.ep_size", type=int, default=1, help="Expert parallel size (MoE)")
+    parser.add_argument("--fsdp.pp_size", type=int, default=1, help="Pipeline parallel size")
     parser.add_argument(
-        "--ds.param_dtype",
-        type=str,
-        default="bf16",
-        choices=["bf16", "fp16"],
-        help="Model data type",
+        "--fsdp.sequence_parallel",
+        action="store_true",
+        default=None,
+        help="Sequence parallel within TP region. Default auto-on when --fsdp.tp_size>1.",
     )
-    ## Make EMA as an optional feature
-    parser.add_argument("--train.enable_ema", action="store_true", help="Enable EMA checkpoint for the model.")
-    parser.add_argument("--train.ema_beta", type=float, default=0.992, help="EMA beta coefficient")
-    parser.add_argument("--ds.zpg", type=int, default=1, help="ZeRO++ max partition size")
-    parser.add_argument("--ds.adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
+    parser.add_argument("--fsdp.no_sequence_parallel", dest="fsdp.sequence_parallel", action="store_false")
+    parser.add_argument("--fsdp.cpu_offload", action="store_true", default=False)
     parser.add_argument(
-        "--ds.attn_implementation",
+        "--fsdp.param_dtype", type=str, default="bf16", choices=["bf16", "fp16"], help="Model data type"
+    )
+    parser.add_argument(
+        "--fsdp.attn_implementation",
         type=str,
         default="flash_attention_2",
-        help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
+        help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, sdpa)",
     )
+    parser.add_argument("--fsdp.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
+    parser.add_argument("--fsdp.packing_samples", action="store_true", default=False)
+    parser.add_argument("--fsdp.load_in_4bit", action="store_true", default=False)
+    parser.add_argument("--fsdp.lora.rank", type=int, default=0)
+    parser.add_argument("--fsdp.lora.alpha", type=int, default=16)
+    parser.add_argument("--fsdp.lora.target_modules", type=str, nargs="*", default="all-linear")
+    parser.add_argument("--fsdp.lora.dropout", type=float, default=0)
+    parser.add_argument("--fsdp.value_head_prefix", type=str, default="score")
     parser.add_argument(
-        "--ds.experts_implementation",
-        type=str,
-        default=None,
-        choices=["eager", "batched_mm", "grouped_mm", "deepgemm"],
-        help="MoE expert computation strategy passed to transformers from_pretrained (default: auto — transformers picks grouped_mm when supported, else eager)",
+        "--fsdp.enable_sleep",
+        action="store_true",
+        default=False,
+        help="Reserved: dynamic offload toggling between rollout/train phases (currently no-op under FSDP2; "
+        "FSDP cpu_offload is configured statically at model construction).",
     )
-    parser.add_argument("--ds.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
-    parser.add_argument("--ds.grad_accum_dtype", type=str, default=None, help="Adam grad accum data type")
-    parser.add_argument("--ds.overlap_comm", action="store_true", default=False)
-    parser.add_argument("--actor.gradient_checkpointing_reentrant", action="store_true", default=False)
+
     parser.add_argument("--data.disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument(
         "--data.dataloader_num_workers",
@@ -344,28 +347,15 @@ if __name__ == "__main__":
         default=0,
         help="Number of dataloader workers for IO (for Ray training, ensure sufficient CPU resources per actor)",
     )
-    parser.add_argument(
-        "--ds.enable_sleep",
-        action="store_true",
-        default=False,
-        help="Enable sleep mode for deepspeed when using --colocate_all_models",
-    )
-    parser.add_argument("--ds.tensor_parallel_size", type=int, default=1, help="DeepSpeed tensor parallel size")
 
-    # packing samples using Flash Attention2
-    parser.add_argument("--ds.packing_samples", action="store_true", default=False)
+    ## Make EMA as an optional feature
+    parser.add_argument("--train.enable_ema", action="store_true", help="Enable EMA checkpoint for the model.")
+    parser.add_argument("--train.ema_beta", type=float, default=0.992, help="EMA beta coefficient")
 
     # dynamic batch size
     parser.add_argument("--train.dynamic_batch_enable", action="store_true", default=False)
     parser.add_argument("--rollout.max_tokens_per_gpu", type=int, default=None)
     parser.add_argument("--train.max_tokens_per_gpu", type=int, default=16192)
-
-    # LoRA
-    parser.add_argument("--ds.load_in_4bit", action="store_true", default=False)
-    parser.add_argument("--ds.lora.rank", type=int, default=0)
-    parser.add_argument("--ds.lora.alpha", type=int, default=16)
-    parser.add_argument("--ds.lora.target_modules", type=str, nargs="*", default="all-linear")
-    parser.add_argument("--ds.lora.dropout", type=float, default=0)
 
     # PPO
     parser.add_argument("--ckpt.output_dir", type=str, default="./ckpt")
@@ -502,23 +492,11 @@ if __name__ == "__main__":
         "If >= 0: multiplicative scaling [0,1]. If < 0: fixed reward override (e.g., -0.5).",
     )
 
-    # Context Parallel
-    parser.add_argument("--ds.ring_attn_size", type=int, default=1, help="Ring attention group size")
-    parser.add_argument(
-        "--ds.ring_attn_head_stride",
-        type=int,
-        default=1,
-        help="the number of heads to do ring attention each time. "
-        "It should be a divisor of the number of heads. "
-        "A larger value may results in faster training but will consume more memory.",
-    )
-
     #  Models
     parser.add_argument("--actor.model_name_or_path", type=str, default=None, help="HF model name or path")
     parser.add_argument("--reward.model_name_or_path", type=str, default=None, help="HF model name or path")
     parser.add_argument("--reward.remote_url", type=str, default=None, help="remote RM API (HTTP)")
     parser.add_argument("--critic.model_name_or_path", type=str, default=None, help="HF model name or path")
-    parser.add_argument("--ds.value_head_prefix", type=str, default="score")
     parser.add_argument("--ref.offload", action="store_true", default=False, help="Offload reference model to CPU")
     parser.add_argument("--reward.offload", action="store_true", default=False, help="Offload reward model to CPU")
     parser.add_argument("--train.agent_func_path", type=str, default=None, help="Agent script path")
@@ -616,7 +594,7 @@ if __name__ == "__main__":
             "VLM training does not support critic model. "
             "Use --advantage_estimator other than 'gae' (e.g., reinforce_baseline, rloo, group_norm)."
         )
-        assert not args.ds.packing_samples, (
+        assert not args.fsdp.packing_samples, (
             "VLM training does not support --packing_samples. "
             "Packing collapses the batch dimension, breaking alignment between image tokens and pixel_values. "
             "VLM models also require model-computed position_ids (e.g., M-RoPE) which is incompatible with packing."
@@ -635,33 +613,30 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
-    if args.ds.ring_attn_size > 1:
-        if not args.ds.packing_samples:
-            print("[Warning] --ring_attn_size > 1 requires --packing_samples.")
-            args.ds.packing_samples = True
+    if args.fsdp.cp_size > 1:
+        if not args.fsdp.packing_samples:
+            print("[Warning] --fsdp.cp_size > 1 requires --fsdp.packing_samples.")
+            args.fsdp.packing_samples = True
 
     if args.train.dynamic_batch_enable:
-        if not args.ds.packing_samples:
-            print("[Warning] Please --packing_samples to accelerate when --use_dynamic_batch is enabled.")
-            args.ds.packing_samples = True
+        if not args.fsdp.packing_samples:
+            print(
+                "[Warning] Please --fsdp.packing_samples to accelerate when --train.dynamic_batch_enable is enabled."
+            )
+            args.fsdp.packing_samples = True
         if args.rollout.max_tokens_per_gpu is None:
-            print("[Warning] Set --rollout_max_tokens_per_gpu to --train_max_tokens_per_gpu.")
+            print("[Warning] Set --rollout.max_tokens_per_gpu to --train.max_tokens_per_gpu.")
             args.rollout.max_tokens_per_gpu = args.train.max_tokens_per_gpu
 
-    if args.ds.packing_samples:
-        if "flash_attention" not in args.ds.attn_implementation:
-            print(
-                "[Warning] Please use --attn_implementation with flash_attention to accelerate when --packing_samples is enabled."
-            )
-            args.ds.attn_implementation = "flash_attention_2"
-        assert args.vllm.num_engines > 0, "Only support `--packing_samples` with vLLM."
+    if args.fsdp.packing_samples:
+        if "flash_attention" not in args.fsdp.attn_implementation:
+            print("[Warning] --fsdp.packing_samples requires flash_attention; forcing flash_attention_2")
+            args.fsdp.attn_implementation = "flash_attention_2"
+        assert args.vllm.num_engines > 0, "Only support `--fsdp.packing_samples` with vLLM."
 
     if args.vllm.enable_sleep and not args.train.colocate_all:
         print("Set args.vllm.enable_sleep to False when args.train.colocate_all is disabled.")
         args.vllm.enable_sleep = False
-
-    if args.train.colocate_all and args.train.async_enable:
-        print("[Warning] Using --colocate_all_models in async RLHF only colocates DeepSpeed models.")
 
     if args.train.async_enable:
         assert not args.vllm.enable_sleep, "Async RLHF is not supported with --vllm_enable_sleep."
@@ -702,10 +677,7 @@ if __name__ == "__main__":
 
     assert (
         args.rollout.n_samples_per_prompt * args.rollout.batch_size // args.rollout.micro_batch_size
-        >= args.actor.num_nodes
-        * args.actor.num_gpus_per_node
-        // args.ds.ring_attn_size
-        // args.ds.tensor_parallel_size
+        >= args.actor.num_nodes * args.actor.num_gpus_per_node // args.fsdp.cp_size // args.fsdp.tp_size
     ), "The number of sample batches must be greater than or equal to the effective number of actor processes."
 
     if args.use_ms:

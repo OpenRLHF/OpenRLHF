@@ -23,18 +23,16 @@ def convert_to_torch_dtype(param_dtype: str) -> torch.dtype:
 
 
 def get_strategy(args):
-    from openrlhf.utils.deepspeed import DeepspeedStrategy
+    from openrlhf.utils.fsdp import FsdpStrategy
 
-    strategy = DeepspeedStrategy(
+    return FsdpStrategy(
         seed=getattr(args.train, "seed", 42),
         full_determinism=getattr(args.train, "full_determinism_enable", False),
         max_norm=getattr(args, "max_norm", 1.0),
         micro_train_batch_size=getattr(args.train, "micro_batch_size", 1),
         train_batch_size=getattr(args.train, "batch_size", 128),
-        zero_stage=args.ds.zero_stage,
         args=args,
     )
-    return strategy
 
 
 def is_vlm_model(pretrain: str) -> bool:

@@ -283,9 +283,7 @@ def balance_experiences(experiences, args):
     items_all.sort(key=lambda x: x.total_length, reverse=True)
 
     # split experience into chunks
-    effective_num = (
-        args.actor.num_nodes * args.actor.num_gpus_per_node // args.ds.ring_attn_size // args.ds.tensor_parallel_size
-    )
+    effective_num = args.actor.num_nodes * args.actor.num_gpus_per_node // args.fsdp.cp_size // args.fsdp.tp_size
     split_items = [items_all[i : i + effective_num] for i in range(0, len(items_all), effective_num)]
     half = len(split_items) // 2
     first_half = split_items[:half]

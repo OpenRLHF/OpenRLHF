@@ -16,7 +16,7 @@ from openrlhf.trainer.ppo_utils.kl_controller import AdaptiveKLController, Fixed
 from openrlhf.trainer.ppo_utils.samples_generator import SamplesGenerator
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
-from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils.fsdp import FsdpStrategy
 from openrlhf.utils.logging_utils import TensorboardLogger, WandbLogger, init_logger
 from openrlhf.utils.utils import get_tokenizer
 
@@ -150,7 +150,7 @@ class BasePPOTrainer(ABC):
 
     def __init__(
         self,
-        strategy: DeepspeedStrategy,
+        strategy: FsdpStrategy,
         actor_model_group: RayActorGroup,
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,
@@ -278,7 +278,7 @@ class BasePPOTrainer(ABC):
             status.update(ray.get(ref)[0])
             ray.get(group.async_run_method(method_name="offload_states"))
 
-        if self.args.ds.enable_sleep:
+        if getattr(self.args.fsdp, "enable_sleep", False):
             # Colocated/sleeping: run critic first, then actor.
             if run_critic:
                 _run_sleep(self.critic_model_group)
@@ -452,7 +452,7 @@ class PPOTrainer(BasePPOTrainer):
     def __init__(
         self,
         pretrain: str,
-        strategy: DeepspeedStrategy,
+        strategy: FsdpStrategy,
         actor_model_group: RayActorGroup,
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,

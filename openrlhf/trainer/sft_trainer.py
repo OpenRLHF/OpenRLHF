@@ -67,7 +67,7 @@ class SFTTrainer(ABC):
         self.aux_loss = self.args.model.aux_loss_coef > 1e-8
 
         # packing samples
-        self.packing_samples = strategy.args.ds.packing_samples
+        self.packing_samples = strategy.args.fsdp.packing_samples
 
         # wandb/tensorboard setting
         self._wandb = None

@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
-from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils.fsdp import FsdpStrategy
 
 
 class BaseDistributedActor:
@@ -52,7 +52,7 @@ class BaseDistributedActor:
 
 
 class BaseModelActor(BaseDistributedActor):
-    def _setup_distributed(self, strategy: DeepspeedStrategy):
+    def _setup_distributed(self, strategy: FsdpStrategy):
         # configure strategy
         self.strategy = strategy
         strategy.setup_distributed()
@@ -103,18 +103,19 @@ class BaseModelActor(BaseDistributedActor):
 
 @ray.remote(num_gpus=1)
 class ReferenceModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+    def init_model_from_pretrained(self, strategy: FsdpStrategy, pretrain):
         self._setup_distributed(strategy)
         model = Actor(
             pretrain,
-            attn_implementation=strategy.args.ds.attn_implementation,
-            experts_implementation=strategy.args.ds.experts_implementation,
-            param_dtype=strategy.args.ds.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.ds.load_in_4bit,
-            ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref.offload),
-            packing_samples=strategy.args.ds.packing_samples,
+            attn_implementation=strategy.args.fsdp.attn_implementation,
+            param_dtype=strategy.args.fsdp.param_dtype,
+            load_in_4bit=strategy.args.fsdp.load_in_4bit,
+            device_mesh=strategy.device_mesh,
+            distributed_config=strategy.distributed_config,
+            activation_checkpointing=False,
+            packing_samples=strategy.args.fsdp.packing_samples,
             temperature=strategy.args.rollout.temperature,
-            use_liger_kernel=strategy.args.ds.use_liger_kernel,
+            use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
         )
         strategy.print(model)
 
@@ -156,19 +157,20 @@ class ReferenceModelActor(BaseModelActor):
 
 @ray.remote(num_gpus=1)
 class RewardModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+    def init_model_from_pretrained(self, strategy: FsdpStrategy, pretrain):
         self._setup_distributed(strategy)
         model = get_llm_for_sequence_regression(
             pretrain,
             "reward",
             normalize_reward=strategy.args.reward.normalize_enable,
-            attn_implementation=strategy.args.ds.attn_implementation,
-            experts_implementation=strategy.args.ds.experts_implementation,
-            param_dtype=strategy.args.ds.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.ds.load_in_4bit,
-            ds_config=strategy.get_ds_eval_config(offload=strategy.args.reward.offload),
-            value_head_prefix=strategy.args.ds.value_head_prefix,
-            packing_samples=strategy.args.ds.packing_samples,
+            attn_implementation=strategy.args.fsdp.attn_implementation,
+            param_dtype=strategy.args.fsdp.param_dtype,
+            load_in_4bit=strategy.args.fsdp.load_in_4bit,
+            device_mesh=strategy.device_mesh,
+            distributed_config=strategy.distributed_config,
+            activation_checkpointing=False,
+            value_head_prefix=strategy.args.fsdp.value_head_prefix,
+            packing_samples=strategy.args.fsdp.packing_samples,
         )
         strategy.print(model)
         strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize_enable))

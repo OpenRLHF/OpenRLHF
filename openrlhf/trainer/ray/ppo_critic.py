@@ -12,11 +12,7 @@ from openrlhf.models import ValueLoss, get_llm_for_sequence_regression
 from openrlhf.models.utils import masked_mean
 from openrlhf.trainer.ppo_utils.experience import Experience
 from openrlhf.utils import get_tokenizer
-from openrlhf.utils.deepspeed import DeepspeedStrategy
-from openrlhf.utils.deepspeed.deepspeed_utils import (
-    offload_deepspeed_states,
-    reload_deepspeed_states,
-)
+from openrlhf.utils.fsdp import FsdpStrategy
 
 from ..ppo_utils import NaiveReplayBuffer
 from .launcher import BaseModelActor
@@ -52,7 +48,7 @@ class CriticPPOTrainer(ABC):
             micro_train_batch_size,
             buffer_limit,
             buffer_cpu_offload,
-            self.args.ds.packing_samples,
+            self.args.fsdp.packing_samples,
             self.args.train.dynamic_batch_enable,
         )
 
@@ -68,7 +64,7 @@ class CriticPPOTrainer(ABC):
 
         should_shuffle = (
             self.strategy.ring_attn_group is None
-            and self.args.ds.tensor_parallel_size <= 1
+            and self.args.fsdp.tp_size <= 1
             and not self.args.train.dynamic_batch_enable
         )
         dataloader = DataLoader(
@@ -164,7 +160,7 @@ class CriticPPOTrainer(ABC):
 
 @ray.remote(num_gpus=1)
 class CriticModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps):
+    def init_model_from_pretrained(self, strategy: FsdpStrategy, pretrain, max_steps):
         args = strategy.args
         self.disable_ds_ckpt = args.ckpt.disable_ds
 
@@ -173,18 +169,19 @@ class CriticModelActor(BaseModelActor):
             pretrain,
             "critic",
             normalize_reward=strategy.args.reward.normalize_enable,
-            attn_implementation=strategy.args.ds.attn_implementation,
-            experts_implementation=strategy.args.ds.experts_implementation,
-            param_dtype=strategy.args.ds.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.ds.load_in_4bit,
-            lora_rank=strategy.args.ds.lora.rank,
-            lora_alpha=strategy.args.ds.lora.alpha,
-            target_modules=strategy.args.ds.lora.target_modules,
-            lora_dropout=strategy.args.ds.lora.dropout,
-            ds_config=strategy.get_ds_train_config(is_actor=False),
-            value_head_prefix=strategy.args.ds.value_head_prefix,
+            attn_implementation=strategy.args.fsdp.attn_implementation,
+            param_dtype=strategy.args.fsdp.param_dtype,
+            load_in_4bit=strategy.args.fsdp.load_in_4bit,
+            lora_rank=strategy.args.fsdp.lora.rank,
+            lora_alpha=strategy.args.fsdp.lora.alpha,
+            target_modules=strategy.args.fsdp.lora.target_modules,
+            lora_dropout=strategy.args.fsdp.lora.dropout,
+            device_mesh=strategy.device_mesh,
+            distributed_config=strategy.distributed_config,
+            activation_checkpointing=args.actor.gradient_checkpointing_enable,
+            value_head_prefix=strategy.args.fsdp.value_head_prefix,
             init_value_head=strategy.args.actor.model_name_or_path == strategy.args.critic.model_name_or_path,
-            packing_samples=strategy.args.ds.packing_samples,
+            packing_samples=strategy.args.fsdp.packing_samples,
         )
         strategy.print(critic)
         strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize_enable))
@@ -195,11 +192,6 @@ class CriticModelActor(BaseModelActor):
         if strategy.args.critic.save_value_network:
             self.tokenizer = get_tokenizer(
                 pretrain, critic, "left", strategy, use_fast=not strategy.args.data.disable_fast_tokenizer
-            )
-
-        if args.actor.gradient_checkpointing_enable:
-            critic.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": args.actor.gradient_checkpointing_reentrant}
             )
 
         # Critic reads its own args.critic.* sub-namespace.  Typical setup: actor may
@@ -222,9 +214,8 @@ class CriticModelActor(BaseModelActor):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
             strategy.load_ckpt(self.critic, ckpt_path)
 
-        # initial offload
-        if strategy.args.ds.enable_sleep:
-            self.offload_states()
+        # initial offload — DS engine sleep/wake has no FSDP equivalent; FSDP2
+        # cpu_offload is set at construction time. Skip this step.
 
         # configure Trainer
         self.trainer = CriticPPOTrainer(
@@ -298,7 +289,9 @@ class CriticModelActor(BaseModelActor):
             )
 
     def reload_states(self):
-        reload_deepspeed_states(self.critic)
+        # No-op under FSDP2: cpu_offload is configured statically at construction.
+        # Phase 5 may add dynamic offload toggling if needed.
+        pass
 
     def offload_states(self):
-        offload_deepspeed_states(self.critic)
+        pass
