@@ -6,10 +6,17 @@ from torch.utils.data import Dataset
 from openrlhf.utils.utils import zero_pad_sequences
 
 
+def _get_chat_template_kwargs(data):
+    if "tools" not in data or data["tools"] is None:
+        return {}
+    return {"tools": data["tools"]}
+
+
 def preprocess_data(
     data, input_template=None, input_key="input", output_key=None, apply_chat_template=None, multiturn=False
 ):
     if apply_chat_template:
+        chat_template_kwargs = _get_chat_template_kwargs(data)
         if output_key:
             prompt_message = data[input_key]
             response_message = data[output_key]
@@ -18,11 +25,17 @@ def preprocess_data(
                 prompt_message = [{"role": "user", "content": prompt_message}]
                 response_message = [{"role": "assistant", "content": response_message}]
 
-            prompt = apply_chat_template(prompt_message, tokenize=False, add_generation_prompt=True)
-            response = apply_chat_template(prompt_message + response_message, tokenize=False)[len(prompt) :]
+            prompt = apply_chat_template(
+                prompt_message, tokenize=False, add_generation_prompt=True, **chat_template_kwargs
+            )
+            response = apply_chat_template(prompt_message + response_message, tokenize=False, **chat_template_kwargs)[
+                len(prompt) :
+            ]
         else:
-            prompt = apply_chat_template(data[input_key][:-1], tokenize=False, add_generation_prompt=True)
-            response = apply_chat_template(data[input_key], tokenize=False)[len(prompt) :]
+            prompt = apply_chat_template(
+                data[input_key][:-1], tokenize=False, add_generation_prompt=True, **chat_template_kwargs
+            )
+            response = apply_chat_template(data[input_key], tokenize=False, **chat_template_kwargs)[len(prompt) :]
     else:
         prompt = data[input_key]
         if input_template:
@@ -97,11 +110,16 @@ class SFTDataset(Dataset):
             ), "You should put the whole trajectory into data[input_key] and do not set output_key"
             input_key = self.input_key
             apply_chat_template = self.apply_chat_template
+            chat_template_kwargs = _get_chat_template_kwargs(data)
             response_ranges = []
             for idx, message in enumerate(data[input_key]):
                 if message["role"] == "assistant":
-                    prompt = apply_chat_template(data[input_key][:idx], tokenize=False, add_generation_prompt=True)
-                    response = apply_chat_template(data[input_key][: idx + 1], tokenize=False)[len(prompt) :]
+                    prompt = apply_chat_template(
+                        data[input_key][:idx], tokenize=False, add_generation_prompt=True, **chat_template_kwargs
+                    )
+                    response = apply_chat_template(data[input_key][: idx + 1], tokenize=False, **chat_template_kwargs)[
+                        len(prompt) :
+                    ]
 
                     start_idx = (
                         self.tokenizer(
