@@ -1,11 +1,11 @@
 from typing import Optional
 
 import torch
-import torch.distributed as dist
 import torch.nn as nn
 from transformers import BitsAndBytesConfig
 
-from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
+from openrlhf.utils.fsdp.packing import pack_padded_batch, unpack_to_padded, unshard_dtensor
+
 from .utils import compute_entropy, log_probs_from_logits
 
 
@@ -133,22 +133,23 @@ class Actor(nn.Module):
         return_output=False,
         allgather_logits=False,
         return_logprobs=False,
-        ring_attn_group: Optional[dist.ProcessGroup] = None,
         packed_seq_lens: Optional[list[int]] = None,
         return_entropy=False,
         **mm_inputs,
     ) -> torch.Tensor:
         """Returns action log probs."""
         batch, seqlen = sequences.size()
+        fa_kwargs: dict = {}
+        indices = None
         if self.packing_samples:
-            sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices = unpad_and_slice_tensor(
-                sequences, attention_mask, ring_attn_group
+            sequences, position_ids, rolled_sequences, indices, fa_kwargs = pack_padded_batch(
+                sequences, attention_mask
             )
-            foward_attention_mask = None
+            forward_attention_mask = None
         else:
             # https://github.com/OpenRLHF/OpenRLHF/issues/217
             rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
-            foward_attention_mask = attention_mask
+            forward_attention_mask = attention_mask
 
             if getattr(self, "is_vlm", False):
                 position_ids = None
@@ -163,7 +164,17 @@ class Actor(nn.Module):
                 position_ids = attention_mask.long().cumsum(-1) - 1
                 position_ids.masked_fill_(attention_mask == 0, 1)
 
-        output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids, **mm_inputs)
+        output = self.model(
+            sequences,
+            attention_mask=forward_attention_mask,
+            position_ids=position_ids,
+            **fa_kwargs,
+            **mm_inputs,
+        )
+        # Under TP, lm_head's `ColwiseParallel(output_layouts=Shard(-1))` returns
+        # a DTensor sharded on the vocab dim. Gather to full vocab on each rank
+        # so downstream entropy / log-prob / loss ops see a plain tensor.
+        output["logits"] = unshard_dtensor(output["logits"])
         # https://github.com/OpenRLHF/OpenRLHF/pull/634
         output["logits"] = output["logits"].to(torch.float32)
 
@@ -171,22 +182,20 @@ class Actor(nn.Module):
             assert return_output
             entropy = compute_entropy(output["logits"])
             if self.packing_samples:
-                entropy = gather_and_pad_tensor(entropy, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
+                entropy = unpack_to_padded(entropy, indices, batch, seqlen)
             setattr(output, "entropy", entropy[:, :-1])
 
         return_action_log_probs = action_mask is not None
         if not return_action_log_probs and not return_logprobs:
             assert return_output
             if allgather_logits and self.packing_samples:
-                output["logits"] = gather_and_pad_tensor(
-                    output["logits"], ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
-                )
+                output["logits"] = unpack_to_padded(output["logits"], indices, batch, seqlen)
             return output
 
         log_probs = log_probs_from_logits(output["logits"], rolled_sequences, temperature=self.temperature)
 
         if self.packing_samples:
-            log_probs = gather_and_pad_tensor(log_probs, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
+            log_probs = unpack_to_padded(log_probs, indices, batch, seqlen)
 
         log_probs = log_probs[:, :-1]
         if not return_action_log_probs and return_logprobs:

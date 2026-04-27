@@ -12,8 +12,14 @@ from torch.distributed.fsdp import CPUOffloadPolicy, MixedPrecisionPolicy
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers.trainer import get_scheduler
 
-from openrlhf.models import Actor
 from openrlhf.utils.distributed_sampler import DistributedSampler
+
+
+def _get_actor_cls():
+    """Lazy import to avoid circular dep: openrlhf.models.actor imports from this package."""
+    from openrlhf.models import Actor
+
+    return Actor
 
 
 class FsdpStrategy:
@@ -52,9 +58,17 @@ class FsdpStrategy:
         self.ep_size = getattr(fsdp, "ep_size", 1)
         self.pp_size = getattr(fsdp, "pp_size", 1)
         self.param_dtype = getattr(fsdp, "param_dtype", "bf16")
-        # Activation checkpointing: keep the DS-era flag name `--model.gradient_checkpointing_enable`
-        # for UX parity. Actor's `from_pretrained(activation_checkpointing=...)` reads the same value.
-        self.activation_checkpointing = getattr(args.model, "gradient_checkpointing_enable", False)
+        # Activation checkpointing — train_sft/rm/dpo expose it as
+        # --model.gradient_checkpointing_enable; train_ppo_ray uses
+        # --actor.gradient_checkpointing_enable (PPO has separate actor/critic).
+        # Read from whichever namespace is present.
+        _model_ns = getattr(args, "model", None)
+        _actor_ns = getattr(args, "actor", None)
+        self.activation_checkpointing = (
+            getattr(_model_ns, "gradient_checkpointing_enable", None)
+            if _model_ns is not None and hasattr(_model_ns, "gradient_checkpointing_enable")
+            else getattr(_actor_ns, "gradient_checkpointing_enable", False)
+        )
         self.cpu_offload = getattr(fsdp, "cpu_offload", False)
         sp = getattr(fsdp, "sequence_parallel", None)
         # SP defaults to ON whenever TP>1 (user-stated default).
@@ -71,6 +85,20 @@ class FsdpStrategy:
         self.accumulated_gradient: int = 1
         self._last_grad_norm: float = 0.0
         self.time_steps = defaultdict(int)
+
+    # ProcessGroup / DeviceMesh aren't picklable. `datasets.map(self.process_data,
+    # num_proc>1)` indirectly pickles the strategy via the dataset's bound method;
+    # drop the distributed handles so the workers spawn cleanly. Workers don't need
+    # them — they only run pure-CPU data preprocessing.
+    _UNPICKLABLE_ATTRS = ("tp_group", "dp_cp_group", "dp_group", "device_mesh", "moe_mesh", "distributed_config")
+
+    def __getstate__(self):
+        return {k: v for k, v in self.__dict__.items() if k not in self._UNPICKLABLE_ATTRS}
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        for k in self._UNPICKLABLE_ATTRS:
+            self.__dict__.setdefault(k, None)
 
     # ---------------------------------------------------------------- bring-up
 
@@ -101,8 +129,14 @@ class FsdpStrategy:
         self.distributed_config = FSDP2Config(
             sequence_parallel=self.sequence_parallel,
             activation_checkpointing=self.activation_checkpointing,
+            # Match Automodel/NeMo-RL default: all bf16, cast forward inputs at FSDP
+            # unit boundaries. Non-bf16 reduce/output dtypes force lm_head input
+            # to float32 while its weight stays bf16 → matmul dtype mismatch.
             mp_policy=MixedPrecisionPolicy(
-                param_dtype=torch_dtype, reduce_dtype=torch.float32, output_dtype=torch.float32
+                param_dtype=torch_dtype,
+                reduce_dtype=torch_dtype,
+                output_dtype=torch_dtype,
+                cast_forward_inputs=True,
             ),
             offload_policy=CPUOffloadPolicy(pin_memory=False) if self.cpu_offload else None,
         )
@@ -159,7 +193,7 @@ class FsdpStrategy:
         # NeMoAutoModelForCausalLM.from_pretrained (Automodel's official entry),
         # which handles FSDP2 wrap + TP plan + CP hooks internally given the
         # device_mesh + distributed_config we expose on this strategy.
-        is_actor = isinstance(model, Actor)
+        is_actor = isinstance(model, _get_actor_cls())
         params = [p for p in (model.model if is_actor else model).parameters() if p.requires_grad]
 
         kind = cfg.get("optim", self.optim)
@@ -216,7 +250,7 @@ class FsdpStrategy:
             get_grad_norm,
         )
 
-        if isinstance(model, Actor):
+        if isinstance(model, _get_actor_cls()):
             model = model.model
         params = [p for p in model.parameters() if p.requires_grad]
         total_norm = get_grad_norm(params, dp_cp_group=self.dp_cp_group, tp_group=self.tp_group)
@@ -304,14 +338,8 @@ class FsdpStrategy:
 
     # ---------------------------------------------------------------- compat shims
 
-    @property
-    def ring_attn_group(self):
-        # Ring-attention is dropped under fsdp; CP supersedes it. Return None so
-        # callers that branch on this fall through to the non-RingAttn path.
-        return None
-
     def _unwrap_model(self, model) -> nn.Module:
-        if isinstance(model, Actor):
+        if isinstance(model, _get_actor_cls()):
             return self._unwrap_model(model.model)
         if hasattr(model, "module"):
             return model.module
@@ -328,25 +356,33 @@ class FsdpStrategy:
     # ---------------------------------------------------------------- I/O (MVP)
 
     def save_model(self, model: nn.Module, tokenizer, output_dir: str, **kwargs) -> None:
-        # MVP: gather full state dict on rank 0 (DTensor.full_tensor) and call HF
-        # save_pretrained. Phase 5 swaps this for Automodel's Checkpointer with
-        # consolidated safetensors + max_num/max_mem rotation.
-        from torch.distributed.tensor import DTensor
+        # Use Automodel's Checkpointer — its custom-model save_pretrained mixin
+        # requires it (raises "No checkpointer provided" otherwise). Outputs
+        # consolidated HF safetensors that vLLM can hot-load.
+        from nemo_automodel.components.checkpoint.checkpointing import Checkpointer, CheckpointingConfig
 
-        if isinstance(model, Actor):
+        if isinstance(model, _get_actor_cls()):
             model = model.model
 
         os.makedirs(output_dir, exist_ok=True)
-        gathered: dict[str, torch.Tensor] = {}
-        for name, p in model.state_dict().items():
-            t = p.full_tensor() if isinstance(p, DTensor) else p
-            if self.is_rank_0():
-                gathered[name] = t.detach().cpu()
-        if self.is_rank_0():
-            unwrapped = self._unwrap_model(model)
-            unwrapped.save_pretrained(output_dir, state_dict=gathered, safe_serialization=True)
-            if tokenizer is not None:
-                tokenizer.save_pretrained(output_dir)
+        config = CheckpointingConfig(
+            enabled=True,
+            checkpoint_dir=output_dir,
+            model_save_format="safetensors",
+            model_cache_dir="",
+            model_repo_id="",
+            save_consolidated=True,
+            is_peft=False,
+            v4_compatible=True,  # produce HF-style config.json that vLLM consumes
+        )
+        ckpt = Checkpointer(
+            config=config,
+            dp_rank=dist.get_rank(group=self.dp_group) if self.dp_group else 0,
+            tp_rank=dist.get_rank(group=self.tp_group) if self.tp_group else 0,
+            pp_rank=0,
+            moe_mesh=self.moe_mesh,
+        )
+        ckpt.save_model(model=model, weights_path=output_dir, tokenizer=tokenizer)
         dist.barrier()
 
     def save_ckpt(self, *args, **kwargs):

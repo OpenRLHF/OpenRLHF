@@ -149,11 +149,7 @@ class SFTTrainer(ABC):
                 attention_mask = attention_masks.to(device).squeeze(1)
                 loss_mask = loss_masks.to(device).squeeze(1)
                 per_token_log_probs, output = self.model(
-                    inputs,
-                    attention_mask=attention_mask,
-                    return_output=True,
-                    return_logprobs=True,
-                    ring_attn_group=self.strategy.ring_attn_group,
+                    inputs, attention_mask=attention_mask, return_output=True, return_logprobs=True
                 )
 
                 # mixtral
@@ -244,12 +240,7 @@ class SFTTrainer(ABC):
                 inputs = inputs.to(device).squeeze(1)
                 attention_mask = attention_masks.to(device).squeeze(1)
                 loss_mask = loss_masks.to(device).squeeze(1)
-                per_token_log_probs = self.model(
-                    inputs,
-                    attention_mask=attention_mask,
-                    return_logprobs=True,
-                    ring_attn_group=self.strategy.ring_attn_group,
-                )
+                per_token_log_probs = self.model(inputs, attention_mask=attention_mask, return_logprobs=True)
 
                 loss = self.loss_fn(per_token_log_probs, loss_mask[:, :-1])
 

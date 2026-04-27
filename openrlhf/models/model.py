@@ -4,10 +4,10 @@ import torch
 import torch.nn as nn
 from transformers import AutoConfig, BitsAndBytesConfig
 
+from openrlhf.utils.fsdp.packing import pack_padded_batch, unpack_to_padded, unshard_dtensor
 from openrlhf.utils.logging_utils import init_logger
 
 from .actor import _build_peft_config_dict
-from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
 
 logger = init_logger(__name__)
 
@@ -126,8 +126,9 @@ class _ValueHeadBase(nn.Module):
         head = nn.Linear(config.hidden_size, 1, bias=False)
         if init_value_head:
             head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
-        # Match dtype of the base for FSDP2 mp_policy compatibility.
-        head = head.to(dtype=next(base.parameters()).dtype)
+        # Match dtype + device of the base for FSDP2 mp_policy compatibility.
+        ref = next(base.parameters())
+        head = head.to(device=ref.device, dtype=ref.dtype)
         setattr(self, value_head_prefix, head)
 
         self.register_buffer("mean", torch.zeros(1), persistent=False)
@@ -136,11 +137,25 @@ class _ValueHeadBase(nn.Module):
             self.mean[0] = config.mean
             self.std[0] = config.std
 
-    @property
-    def base_transformer(self) -> nn.Module:
-        # `LlamaForCausalLM.model` is the underlying `LlamaModel`; analogous for Qwen / Gemma3 / etc.
-        # FSDP2 wraps modules in-place; attribute access still resolves.
-        return getattr(self.base, self.base.base_model_prefix)
+    def _forward_base(self, input_ids, attention_mask, position_ids, **fa_kwargs):
+        """Run the root CausalLM forward (so FSDP2's root unshard hook fires for
+        embed_tokens / final norm) and return hidden states. We discard ``logits``
+        (a wasted lm_head matmul) — Phase 5 may swap to a base-only path.
+        """
+        out = self.base(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            output_hidden_states=True,
+            use_cache=False,
+            **fa_kwargs,
+        )
+        # `out.last_hidden_state` is set when output_hidden_states=True; falls back
+        # to the final hidden_states tuple element for older HF / custom models.
+        last = getattr(out, "last_hidden_state", None)
+        if last is None:
+            last = out.hidden_states[-1]
+        return last, out
 
 
 class RewardModel(_ValueHeadBase):
@@ -149,28 +164,33 @@ class RewardModel(_ValueHeadBase):
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         return_output: bool = False,
-        ring_attn_group=None,
         pad_sequence: bool = False,
         packed_seq_lens=None,
     ) -> torch.Tensor:
         batch, seqlen = input_ids.size()
         eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
         forward_attention_mask = attention_mask
+        fa_kwargs: dict = {}
+        indices = None
         if self.packing_samples:
-            input_ids, position_ids, _, ring_attn_pad_len, indices = unpad_and_slice_tensor(
-                input_ids, attention_mask, ring_attn_group
-            )
+            input_ids, position_ids, _, indices, fa_kwargs = pack_padded_batch(input_ids, attention_mask)
             forward_attention_mask = None
         else:
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
 
-        outputs = self.base_transformer(input_ids, attention_mask=forward_attention_mask, position_ids=position_ids)
-        last_hidden_states = outputs["last_hidden_state"]
+        last_hidden_states, outputs = self._forward_base(
+            input_ids, attention_mask=forward_attention_mask, position_ids=position_ids, **fa_kwargs
+        )
+        # Under SP / TP, `last_hidden_state` may be a DTensor (sequence-sharded
+        # under SP; replicated otherwise). The value head is a plain `nn.Linear`
+        # not registered for TP and downstream `.gather(dim=1, eos_indices)`
+        # doesn't support DTensor — unshard before applying.
+        last_hidden_states = unshard_dtensor(last_hidden_states)
         values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
 
         if self.packing_samples:
-            values = gather_and_pad_tensor(values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
+            values = unpack_to_padded(values, indices, batch, seqlen)
         reward = values.gather(dim=1, index=eos_indices).squeeze(1)
 
         if not self.training and self.normalize_reward:
@@ -186,32 +206,34 @@ class CriticModel(_ValueHeadBase):
         action_mask: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         return_output: bool = False,
-        ring_attn_group=None,
         values_allgather: bool = False,
         packed_seq_lens=None,
     ) -> torch.Tensor:
         batch, seqlen = input_ids.size()
         forward_attention_mask = attention_mask
+        fa_kwargs: dict = {}
+        indices = None
         if self.packing_samples:
-            input_ids, position_ids, _, ring_attn_pad_len, indices = unpad_and_slice_tensor(
-                input_ids, attention_mask, ring_attn_group
-            )
+            input_ids, position_ids, _, indices, fa_kwargs = pack_padded_batch(input_ids, attention_mask)
             forward_attention_mask = None
         else:
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
 
-        outputs = self.base_transformer(input_ids, attention_mask=forward_attention_mask, position_ids=position_ids)
+        last_hidden_states, outputs = self._forward_base(
+            input_ids, attention_mask=forward_attention_mask, position_ids=position_ids, **fa_kwargs
+        )
 
         if action_mask is None:
             assert return_output
             return outputs
 
-        last_hidden_states = outputs["last_hidden_state"]
+        # See RewardModel for SP unshard rationale.
+        last_hidden_states = unshard_dtensor(last_hidden_states)
         values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
 
         if self.packing_samples:
-            values = gather_and_pad_tensor(values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
+            values = unpack_to_padded(values, indices, batch, seqlen)
 
         values = values[:, :-1]
         if self.normalize_reward:

@@ -62,11 +62,7 @@ class CriticPPOTrainer(ABC):
         if self.args.train.dynamic_batch_enable:
             self.replay_buffer.setup_dynamic_batch(self.strategy)
 
-        should_shuffle = (
-            self.strategy.ring_attn_group is None
-            and self.args.fsdp.tp_size <= 1
-            and not self.args.train.dynamic_batch_enable
-        )
+        should_shuffle = self.args.fsdp.tp_size <= 1 and not self.args.train.dynamic_batch_enable
         dataloader = DataLoader(
             self.replay_buffer,
             batch_size=self.replay_buffer.sample_batch_size,
@@ -120,7 +116,6 @@ class CriticPPOTrainer(ABC):
             action_mask=action_mask,
             attention_mask=attention_mask,
             return_output=True,
-            ring_attn_group=self.strategy.ring_attn_group,
             values_allgather=True,
             packed_seq_lens=packed_seq_lens,
         )
@@ -242,7 +237,6 @@ class CriticModelActor(BaseModelActor):
                 sequences.to(device),
                 action_mask.to(device),
                 attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
                 values_allgather=True,
             )
         self.critic.train()  # reset model state

@@ -311,13 +311,7 @@ class DPOTrainer(ABC):
             chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens
         )
 
-        log_probs, output = model(
-            input_ids,
-            attention_mask=att_masks,
-            return_output=True,
-            return_logprobs=True,
-            ring_attn_group=self.strategy.ring_attn_group,
-        )
+        log_probs, output = model(input_ids, attention_mask=att_masks, return_output=True, return_logprobs=True)
 
         all_logps_sum, all_logps_mean = self._get_batch_logps(
             log_probs, att_masks, prompt_id_lens, average_log_prob=False

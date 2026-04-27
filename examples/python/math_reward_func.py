@@ -7,7 +7,7 @@ from typing import List
 
 import torch
 
-from openrlhf.utils import extract_boxed_answer, grade_answer
+from openrlhf.utils.math_utils import extract_boxed_answer, grade_answer
 
 
 def reward_func(queries: List[str], prompts: List[str], labels: List[str], **kwargs) -> dict:

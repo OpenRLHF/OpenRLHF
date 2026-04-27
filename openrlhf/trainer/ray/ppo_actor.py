@@ -16,6 +16,7 @@ from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils.experience import Experience
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
+from openrlhf.utils.fsdp import FsdpStrategy
 from openrlhf.utils.fsdp.refit import gather_full_param
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.vlm_utils import merge_mm_train_inputs
@@ -151,11 +152,7 @@ class ActorPPOTrainer(ABC):
         if self.args.train.dynamic_batch_enable:
             self.replay_buffer.setup_dynamic_batch(self.strategy)
 
-        should_shuffle = (
-            self.strategy.ring_attn_group is None
-            and self.args.fsdp.tp_size <= 1
-            and not self.args.train.dynamic_batch_enable
-        )
+        should_shuffle = self.args.fsdp.tp_size <= 1 and not self.args.train.dynamic_batch_enable
         dataloader = DataLoader(
             self.replay_buffer,
             batch_size=self.replay_buffer.sample_batch_size,
@@ -269,7 +266,6 @@ class ActorPPOTrainer(ABC):
             action_mask,
             attention_mask=attention_mask,
             return_output=True,
-            ring_attn_group=self.strategy.ring_attn_group,
             packed_seq_lens=packed_seq_lens,
             return_entropy=self.args.actor.entropy_coef is not None,
             **mm_inputs,
@@ -451,7 +447,7 @@ class ActorPPOTrainer(ABC):
 
 @ray.remote(num_gpus=1)
 class PolicyModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps=None, vllm_engines=None):
+    def init_model_from_pretrained(self, strategy: FsdpStrategy, pretrain, max_steps=None, vllm_engines=None):
         args = strategy.args
         self.save_hf_ckpt = args.ckpt.save_hf
         self.disable_ds_ckpt = args.ckpt.disable_ds
@@ -592,7 +588,6 @@ class PolicyModelActor(BaseModelActor):
                 sequences.to(device),
                 action_mask.to(device),
                 attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
                 **mm_inputs,
             )
         self.actor.train()  # reset model state

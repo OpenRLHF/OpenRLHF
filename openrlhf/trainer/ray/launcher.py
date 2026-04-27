@@ -148,7 +148,6 @@ class ReferenceModelActor(BaseModelActor):
                 sequences.to(device),
                 action_mask.to(device),
                 attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
                 packed_seq_lens=packed_seq_lens,
                 **mm_inputs,
             )
@@ -194,7 +193,6 @@ class RewardModelActor(BaseModelActor):
             reward = self.model(
                 sequences.to(device),
                 attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
                 pad_sequence=True,
                 packed_seq_lens=packed_seq_lens,
             )
