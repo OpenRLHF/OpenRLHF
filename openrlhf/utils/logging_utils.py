@@ -137,7 +137,11 @@ class TrackioLogger:
         generated_samples = logs_dict.pop("generated_samples", None)
         if generated_samples:
             text, reward = generated_samples
-            self.handle.log({"train/generated_samples": f"{text}\n\nReward: {reward:.4f}"}, step=global_step)
+            trace = self.handle.Trace(
+                messages=[{"role": "assistant", "content": str(text)}],
+                metadata={"reward": float(reward), "global_step": global_step},
+            )
+            self.handle.log({"train/generated_samples": trace}, step=global_step)
 
         metrics = {f"train/{k}": v for k, v in logs_dict.items() if v is not None}
         self.handle.log(metrics, step=global_step)
