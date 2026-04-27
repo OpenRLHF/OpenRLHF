@@ -49,7 +49,9 @@ def get_llm_for_sequence_regression(
 
     from openrlhf.utils.utils import convert_to_torch_dtype
 
-    torch_dtype = convert_to_torch_dtype(param_dtype)
+    # See Actor: load fp32 master weights; FSDP2 mp_policy handles bf16 compute.
+    torch_dtype = torch.float32
+    compute_dtype = convert_to_torch_dtype(param_dtype)
 
     nf4_config = None
     if load_in_4bit:
@@ -58,7 +60,7 @@ def get_llm_for_sequence_regression(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
             bnb_4bit_use_double_quant=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_compute_dtype=compute_dtype,
         )
 
     peft_config = None

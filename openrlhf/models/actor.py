@@ -62,7 +62,12 @@ class Actor(nn.Module):
 
         from openrlhf.utils.utils import convert_to_torch_dtype, is_vlm_model
 
-        torch_dtype = convert_to_torch_dtype(param_dtype)
+        # Mixed-precision recipe (matches NeMo-RL / DS bf16): keep fp32 master
+        # weights for the optimizer, downcast to param_dtype only for fwd/bwd
+        # via FSDP2's MixedPrecisionPolicy. Loading params in their compute
+        # dtype (bf16) makes Adam math itself bf16, losing precision.
+        torch_dtype = torch.float32
+        compute_dtype = convert_to_torch_dtype(param_dtype)
         self.is_vlm = is_vlm_model(pretrain_or_model)
 
         if self.is_vlm and use_liger_kernel:
@@ -78,7 +83,7 @@ class Actor(nn.Module):
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
                 bnb_4bit_use_double_quant=True,
-                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_compute_dtype=compute_dtype,
             )
 
         peft_config = None
@@ -90,6 +95,11 @@ class Actor(nn.Module):
         else:
             from nemo_automodel import NeMoAutoModelForCausalLM as ModelCls
 
+        # force_hf=True under TP because Automodel's custom Qwen2/Llama models
+        # hit a non-contiguous F.linear view error when sequence shape changes
+        # mid-training. HF's transformers reference path is correct for TP and
+        # is what NeMo-RL uses.
+        tp_size = device_mesh["tp"].size() if device_mesh is not None and "tp" in device_mesh.mesh_dim_names else 1
         self.model = ModelCls.from_pretrained(
             pretrain_or_model,
             trust_remote_code=True,
@@ -102,6 +112,7 @@ class Actor(nn.Module):
             peft_config=peft_config,
             use_liger_kernel=use_liger_kernel and not self.is_vlm,
             has_packed_sequence=packing_samples,
+            force_hf=tp_size > 1,
         )
 
         # VLM: optionally freeze the vision encoder so only the language

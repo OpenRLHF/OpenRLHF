@@ -123,6 +123,35 @@ class FsdpStrategy:
         from nemo_automodel.components.distributed.config import FSDP2Config
         from nemo_automodel.components.distributed.mesh_utils import create_device_mesh
 
+        # Monkey-patch Automodel's TPLinear forward: their guard misses some
+        # non-contiguous DTensor inputs and falls through to F.linear, which
+        # then dies on aten.view (RuntimeError: view size is not compatible).
+        # Always contiguify before F.linear; cheap when already contiguous.
+        if self.tp_size > 1:
+            from nemo_automodel.components.distributed import parallel_styles
+
+            _TPLinear = parallel_styles.TPLinear
+            if not getattr(_TPLinear, "_orlhf_patched", False):
+                import torch.nn.functional as F
+                from torch.distributed.tensor import DTensor
+
+                def _safe_forward(self, x):
+                    # Always avoid F.linear for DTensor inputs: F.linear's
+                    # internal view fails on sharded DTensor regardless of
+                    # is_contiguous(). Use mm/bmm directly which dispatch
+                    # through DTensor's matmul strategy.
+                    if isinstance(x, DTensor):
+                        if x.dim() == 3:
+                            b = x.shape[0]
+                            out = torch.bmm(x, self.weight.t().unsqueeze(0).expand(b, -1, -1))
+                        else:
+                            out = torch.mm(x, self.weight.t())
+                        return out + self.bias if self.bias is not None else out
+                    return F.linear(x, self.weight, self.bias)
+
+                _TPLinear.forward = _safe_forward
+                _TPLinear._orlhf_patched = True
+
         torch_dtype = _torch_dtype(self.param_dtype)
         # FSDP2 mixed precision: params/forward in bf16, gradient reduce-scatter
         # in fp32. Reducing in bf16 accumulates rounding error across DP ranks
@@ -239,11 +268,28 @@ class FsdpStrategy:
 
     # ---------------------------------------------------------------- step loop
 
-    def backward(self, loss: torch.Tensor, model: nn.Module, optimizer: optim.Optimizer, **kwargs) -> None:
+    def backward(
+        self,
+        loss: torch.Tensor,
+        model: nn.Module,
+        optimizer: optim.Optimizer,
+        name: str = "model",
+        **kwargs,
+    ) -> None:
         # FSDP2's reduce-scatter averages grads across the DP shard group, so
         # per-token-mean losses reduce to a correct cross-rank mean directly.
         # Do NOT multiply the loss by dp_size — that triple-counts and inflates
         # grad_norm (observed: SFT step1 grad ~69 with DP=3 → ~23 after removal).
+        if self.accumulated_gradient > 1:
+            loss = loss / self.accumulated_gradient
+            # Skip the DP all-reduce on intermediate accum steps (saves bandwidth);
+            # only sync on the final micro-batch where optimizer_step will fire.
+            # The key MUST match optimizer_step's so the counter advances together.
+            unwrapped = self._unwrap_model(model)
+            if hasattr(unwrapped, "set_requires_gradient_sync"):
+                key = f"step_{name}"
+                sync = (self.time_steps[key] + 1) % self.accumulated_gradient == 0
+                unwrapped.set_requires_gradient_sync(sync)
         loss.backward()
 
     def optimizer_step(
@@ -254,6 +300,13 @@ class FsdpStrategy:
         name: str = "model",
         **kwargs,
     ) -> None:
+        # Gradient accumulation: skip the optimizer step until the last micro
+        # batch in the accumulation window has run. Mirrors PR#1176 / NeMo-RL.
+        key = f"step_{name}"
+        self.time_steps[key] += 1
+        if self.time_steps[key] % self.accumulated_gradient != 0:
+            return
+
         # DTensor-aware grad norm + clip via torch.nn.utils. Automodel's
         # get_grad_norm/clip_grad_by_total_norm_ over-counts on FSDP-sharded
         # grads with cp=1: each rank's local shard already represents the
