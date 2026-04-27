@@ -7,9 +7,8 @@ from openrlhf.utils.utils import zero_pad_sequences
 
 
 def _get_chat_template_kwargs(data):
-    if "tools" not in data or data["tools"] is None:
-        return {}
-    return {"tools": data["tools"]}
+    tools = data.get("tools")
+    return {"tools": tools} if tools is not None else {}
 
 
 def preprocess_data(
