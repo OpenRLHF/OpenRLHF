@@ -97,12 +97,26 @@ class RemoteExperienceMaker:
 
     # ── Remote model dispatch helpers ──
 
+    @property
+    def _sleep_enabled(self) -> bool:
+        return bool(getattr(self.args.fsdp, "enable_sleep", False))
+
     def _dispatch_forward(self, group, sync_condition, **kwargs):
-        """Dispatch a batched forward call and optionally sync + empty cache."""
+        """Dispatch a batched forward call and optionally sync + empty cache.
+
+        Under sleep mode (hybrid colocate), the actor groups all share GPUs
+        with vLLM; we MUST serialize each forward and bracket it with
+        prepare_for_lp_inference (model→cuda, eval) and offload_after_refit
+        (model→cpu) so the next step in the chain has the device free.
+        """
+        if self._sleep_enabled:
+            ray.get(group.async_run_method(method_name="prepare_for_lp_inference"))
         ref = group.async_run_method_batch(method_name="forward", **kwargs)
-        if sync_condition:
+        if sync_condition or self._sleep_enabled:
             ray.get(ref)
             ray.get(group.async_run_method(method_name="empty_cache"))
+            if self._sleep_enabled:
+                ray.get(group.async_run_method(method_name="offload_after_refit"))
         return ref
 
     def _flatten_results(self, refs, duplicate_factor):

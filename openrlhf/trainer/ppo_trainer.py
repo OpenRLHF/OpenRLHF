@@ -267,25 +267,25 @@ class BasePPOTrainer(ABC):
         """Run one PPO train step for critic + actor and return merged status dict."""
         status: dict = {}
 
-        # Decide whether to train critic/actor this round (actor can be frozen initially).
         run_critic = self.critic_model_group is not None
         run_actor = global_steps >= self.args.critic.freezing_steps and self.actor_model_group is not None
 
-        def _run_sleep(group, **kwargs):
-            # Sleep mode: reload -> fit -> offload (smaller GPU memory).
-            ray.get(group.async_run_method(method_name="reload_states"))
-            ref = group.async_run_method(method_name="fit", **kwargs)
-            status.update(ray.get(ref)[0])
-            ray.get(group.async_run_method(method_name="offload_states"))
-
         if getattr(self.args.fsdp, "enable_sleep", False):
-            # Colocated/sleeping: run critic first, then actor.
+            # Sleep/colocate: critic gets a full offload at end of fit; actor
+            # only offloads its optimizer (offload_before_refit) so the model
+            # stays GPU-resident for the immediately following broadcast_to_vllm
+            # — saves one cpu↔cuda round-trip on the params (NeMo-RL pattern).
             if run_critic:
-                _run_sleep(self.critic_model_group)
+                ray.get(self.critic_model_group.async_run_method(method_name="reload_states"))
+                ref = self.critic_model_group.async_run_method(method_name="fit")
+                status.update(ray.get(ref)[0])
+                ray.get(self.critic_model_group.async_run_method(method_name="offload_states"))
             if run_actor:
-                _run_sleep(self.actor_model_group, kl_ctl=self.kl_ctl.value)
+                ray.get(self.actor_model_group.async_run_method(method_name="reload_states"))
+                ref = self.actor_model_group.async_run_method(method_name="fit", kl_ctl=self.kl_ctl.value)
+                status.update(ray.get(ref)[0])
+                ray.get(self.actor_model_group.async_run_method(method_name="offload_before_refit"))
         else:
-            # Async: start jobs first, then wait and merge results.
             refs = []
             if run_critic:
                 refs += self.critic_model_group.async_run_method(method_name="fit")

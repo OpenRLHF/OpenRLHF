@@ -1,3 +1,4 @@
+import gc
 import os
 import socket
 from abc import ABC
@@ -254,26 +255,18 @@ class ActorPPOTrainer(ABC):
                     self._record_status(status, status_list, pbar)
                 accum_window = []
 
+            # Trailing partial windows are dropped on purpose: feeding them
+            # through training_step would advance time_steps but never fire
+            # optimizer_step (since len < accum_steps), leaking the local
+            # gradients into the next epoch's first window. The dataloader
+            # already uses drop_last=True, so this only matters when the per-
+            # rank length is not a multiple of accum_steps (rare; misconfig).
             if accum_window:
-                local_num_tokens = torch.zeros((), dtype=torch.float32, device=torch.device("cuda", device))
-                local_batch_size = torch.zeros((), dtype=torch.float32, device=torch.device("cuda", device))
-                for _, window_experience in accum_window:
-                    local_num_tokens += window_experience.action_mask.sum()
-                    local_batch_size += (window_experience.action_mask.sum(dim=-1) > 0).sum()
-                global_num_tokens = self.strategy.global_token_count(local_num_tokens)
-                global_batch_size = self.strategy.global_token_count(local_batch_size)
-                for window_step, window_experience in accum_window:
-                    status = self.training_step(
-                        window_experience,
-                        kl_ctl,
-                        window_step,
-                        global_num_tokens=global_num_tokens,
-                        global_batch_size=global_batch_size,
-                        loss_dp_size=self.strategy.dp_size,
-                        loss_report_scale=1,
-                        scale_loss_by_accumulation=False,
-                    )
-                    self._record_status(status, status_list, pbar)
+                self.strategy.print(
+                    f"[PPO] dropping {len(accum_window)} trailing microbatches "
+                    f"(< accum_steps={accum_steps}); check that train.batch_size, "
+                    f"micro_batch_size, dp_size, and rollout n_samples align."
+                )
 
         if status_list:
             total_tokens = sum(s["_num_action_tokens"] for s in status_list)
@@ -423,14 +416,12 @@ class ActorPPOTrainer(ABC):
                 if (step + 1) % self.strategy.accumulated_gradient == 0:
                     self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
 
-        # Per-token losses (0-D tensors, shape carries weighting info for ppo_train)
         metrics = {"policy_loss": actor_loss.detach() / loss_report_scale}
         weights = {"policy_loss": "token"}
         if self.args.actor.entropy_coef is not None:
             metrics["entropy_loss"] = entropy_loss.detach()
             weights["entropy_loss"] = "token"
 
-        # Non-reducible meta
         metrics["actor_lr"] = self.actor_scheduler.get_last_lr()[0]
         weights["actor_lr"] = None
         is_optimizer_step = (
@@ -442,8 +433,6 @@ class ActorPPOTrainer(ABC):
             metrics["actor_grad_norm"] = self.strategy.get_grad_norm(self.actor)
             weights["actor_grad_norm"] = None
 
-        # Merge all loggable tensors.
-        # `info` keeps algorithm metrics; episode tensor fields are added explicitly below.
         for k, v in experience.info.items():
             if isinstance(v, torch.Tensor):
                 metrics[k] = v
@@ -474,13 +463,12 @@ class ActorPPOTrainer(ABC):
         use_prefix_cache = getattr(self.strategy.args.vllm, "enable_prefix_caching", False)
         cache_reset_refs = []
         if use_prefix_cache and torch.distributed.get_rank() == 0:
-            # clear prefix cache
             for engine in self.vllm_engines:
                 cache_reset_refs.append(engine.reset_prefix_cache.remote())
 
         torch.cuda.empty_cache()
-        # Under FSDP2/AutoModel, `actor.model` is the FSDP2-wrapped HF model directly
-        # (no DS-engine `.module` indirection). Params are DTensors when sharded.
+        # FSDP2/AutoModel: `actor.model` is the FSDP2-wrapped HF model directly
+        # (no DS-engine `.module` indirection); params are DTensors when sharded.
         model = self.actor.model
         count = 0
 
@@ -536,12 +524,10 @@ class ActorPPOTrainer(ABC):
         sync_dtype = convert_to_torch_dtype(self.strategy.args.fsdp.param_dtype)
 
         for name, param in params_to_sync:
-            count += 1  # empty_cache at last param
-            # gather_full_param materializes the FSDP+TP-unsharded tensor on each rank
-            # in one call.
+            count += 1
             weight, shape = gather_full_param(param, dtype=sync_dtype)
             sync_fn(name, weight, sync_dtype, shape, count, num_params)
-            del weight  # bound peak memory: release before next iter
+            del weight
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)
@@ -619,6 +605,7 @@ class PolicyModelActor(BaseModelActor):
                 activation_checkpointing=False,
                 packing_samples=strategy.args.fsdp.packing_samples,
                 force_hf_model=strategy.args.fsdp.force_hf_model,
+                use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
             )
         else:
             ema_model = None
@@ -636,7 +623,6 @@ class PolicyModelActor(BaseModelActor):
         self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare((actor, actor_cfg))
 
         if ema_model:
-            ema_model._offload = True
             self.ema_model = strategy.prepare(ema_model)
         else:
             self.ema_model = None
@@ -650,9 +636,6 @@ class PolicyModelActor(BaseModelActor):
                 self.actor.model, ckpt_path, optimizer=self.actor_optim, scheduler=self.actor_scheduler
             )
             self.checkpoint_states = states
-
-        # Initial engine sleep/wake is not needed here; FSDP2 cpu_offload is set
-        # at construction time.
 
         # configure Trainer
         self.trainer = ActorPPOTrainer(
@@ -716,7 +699,17 @@ class PolicyModelActor(BaseModelActor):
         return action_log_probs.to("cpu")
 
     def broadcast_to_vllm(self):
+        # Refit only needs *model* params on GPU (gather full_tensor + IPC).
+        # The optimizer was already moved off-GPU at the end of fit() via
+        # offload_before_refit, so this is just model→cuda → broadcast →
+        # model→cpu so vLLM can wake_up its KV+weights.
+        if self._sleep_enabled:
+            self.strategy.move_model_to_device(self.actor, "cuda")
+            if self.ema_model is not None:
+                self.strategy.move_model_to_device(self.ema_model, "cuda")
         self.trainer.broadcast_to_vllm()
+        if self._sleep_enabled:
+            self.offload_after_refit()
 
     def get_checkpoint_states(self):
         return self.checkpoint_states
@@ -725,12 +718,55 @@ class PolicyModelActor(BaseModelActor):
         self.trainer.replay_buffer.append(experience)
 
     def reload_states(self):
-        # No-op under FSDP2: cpu_offload is configured statically. Phase 5 may
-        # add dynamic offload toggling if needed.
-        pass
+        """Sleep entry for fit(): full reload of model + optimizer to GPU.
+        Mirrors NeMo-RL's prepare_for_training. No-op when sleep is off."""
+        if not self._sleep_enabled:
+            return
+        self.strategy.move_model_to_device(self.actor, "cuda")
+        self.strategy.move_optimizer_to_device(self.actor_optim, "cuda")
+        if self.ema_model is not None:
+            self.strategy.move_model_to_device(self.ema_model, "cuda")
+        self.actor.train()
 
     def offload_states(self):
-        pass
+        """Sleep exit symmetric to reload_states. Used by code paths that
+        don't need the staged refit dance — i.e. critic-style end-of-fit."""
+        if not self._sleep_enabled:
+            return
+        self.offload_before_refit()
+        self.offload_after_refit()
+
+    def offload_before_refit(self):
+        """End-of-fit hook: optimizer→cpu but keep params on GPU so the
+        immediately following broadcast_to_vllm can gather full_tensor without
+        an extra cpu→cuda round-trip. NeMo-RL pattern."""
+        if not self._sleep_enabled:
+            return
+        self.strategy.move_optimizer_to_device(self.actor_optim, "cpu")
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def offload_after_refit(self):
+        """End-of-broadcast hook: model→cpu. Optimizer is assumed already
+        cpu from offload_before_refit."""
+        if not self._sleep_enabled:
+            return
+        self.strategy.move_model_to_device(self.actor, "cpu")
+        if self.ema_model is not None:
+            self.strategy.move_model_to_device(self.ema_model, "cpu")
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def prepare_for_lp_inference(self):
+        """Used when actor needs to compute logprobs but not train: bring
+        model back to GPU, but keep optimizer on CPU. Pair with
+        offload_after_refit to symmetrically tear down."""
+        if not self._sleep_enabled:
+            return
+        self.strategy.move_model_to_device(self.actor, "cuda")
+        self.actor.eval()
 
     def save_checkpoint(self, tag, client_states=None, metric_value=None, metric_key=None):
         args = self.strategy.args
@@ -755,5 +791,4 @@ class PolicyModelActor(BaseModelActor):
                 self.tokenizer,
                 save_path,
             )
-        # wait
         torch_dist_barrier_and_cuda_sync()

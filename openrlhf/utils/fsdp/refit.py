@@ -38,15 +38,3 @@ def gather_full_param(
     if dtype is not None and full.is_floating_point():
         full = full.to(dtype=dtype)
     return full, full.shape
-
-
-def iter_named_full_params(model: torch.nn.Module, *, only_trainable: bool = False):
-    """Iterate ``(name, full_tensor, full_shape)`` over a model's parameters,
-    materializing DTensor shards on the fly. Caller is responsible for sending /
-    broadcasting / IPC-handling each yielded tensor and releasing references
-    promptly (drop refs before the next iteration to bound peak memory)."""
-    for name, param in model.named_parameters():
-        if only_trainable and not param.requires_grad:
-            continue
-        full, shape = gather_full_param(param)
-        yield name, full, shape

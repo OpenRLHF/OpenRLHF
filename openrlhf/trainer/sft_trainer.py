@@ -67,8 +67,6 @@ class SFTTrainer(ABC):
         # Mixtral 8*7b
         self.aux_loss = self.args.model.aux_loss_coef > 1e-8
 
-        # packing samples
-        self.packing_samples = strategy.args.fsdp.packing_samples
         self.cp_enabled = getattr(strategy, "cp_size", 1) > 1
 
         # wandb/tensorboard setting

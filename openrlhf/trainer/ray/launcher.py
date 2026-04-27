@@ -1,3 +1,4 @@
+import gc
 import logging
 import os
 import socket
@@ -64,6 +65,53 @@ class BaseModelActor(BaseDistributedActor):
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
+    # ---------------------------------------------------------------- sleep / persistent offload
+    #
+    # Hybrid colocate path: trainer + vLLM share the same GPUs and rotate via
+    # explicit phase-boundary moves (NeMo-RL pattern). Methods are no-ops
+    # unless --fsdp.enable_sleep is set, so non-colocate runs pay nothing.
+    #
+    # Phase contract (mirrors NeMo-RL DTensorPolicyWorker):
+    #   reload_states()           full reload (model + optimizer if any) — fit
+    #   offload_states()          full offload (model + optimizer if any) — end of fit
+    #   prepare_for_lp_inference  model-only reload, eval mode             — make_experience
+    #   offload_after_refit       model-only offload                       — symmetric tear-down
+    #   offload_before_refit      optimizer-only offload                   — between fit and refit
+    #
+    # Inference-only actors (ref / reward) have no optimizer; the model-only
+    # default here is used as both the training and the lp-inference path.
+
+    @property
+    def _sleep_enabled(self) -> bool:
+        return bool(getattr(self.strategy.args.fsdp, "enable_sleep", False))
+
+    def reload_states(self):
+        """Default: model→cuda, eval mode. Overridden by PolicyModelActor /
+        CriticModelActor to also reload optimizer state."""
+        if not self._sleep_enabled or not hasattr(self, "model"):
+            return
+        self.strategy.move_model_to_device(self.model, "cuda")
+        self.model.eval()
+
+    def offload_states(self):
+        """Default: model→cpu. Overridden to also offload optimizer."""
+        if not self._sleep_enabled or not hasattr(self, "model"):
+            return
+        self.strategy.move_model_to_device(self.model, "cpu")
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def prepare_for_lp_inference(self):
+        """Bring model to GPU for a logprob/value forward pass. Inference-only
+        actors share this with reload_states; trainer actors override to
+        intentionally skip optimizer."""
+        self.reload_states()
+
+    def offload_after_refit(self):
+        """Symmetric tear-down used after both refit and lp-inference."""
+        self.offload_states()
+
     def execute_batch(self, method_name: str, all_data, start_idx, end_idx):
         """Process input data by calling specified function for each item in the lists.
 
@@ -123,9 +171,6 @@ class ReferenceModelActor(BaseModelActor):
         )
         strategy.print(model)
 
-        if strategy.args.ref.offload:
-            model._offload = True
-
         self.model = self.strategy.prepare(model)
         self.model.eval()
 
@@ -178,6 +223,7 @@ class RewardModelActor(BaseModelActor):
             # Reward inference receives padded rollout batches. AutoModel sequence
             # classification does not support sequence packing for reward models.
             packing_samples=False,
+            use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
             use_fp32_master_weights=False,
         )
         strategy.print(model)
@@ -190,9 +236,6 @@ class RewardModelActor(BaseModelActor):
         from openrlhf.utils.utils import get_tokenizer
 
         get_tokenizer(pretrain, model.model, padding_side="right", strategy=strategy, use_fast=True)
-
-        if strategy.args.reward.offload:
-            model._offload = True
 
         self.model = self.strategy.prepare(model)
         self.model.eval()

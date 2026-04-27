@@ -308,7 +308,7 @@ pip install ".[vllm]"                  # + vLLM 0.20.0; Dion is in requirements.
 ```
 
 > [!TIP]
-> このブランチは **NVIDIA PyTorch 26.03**、**torch 2.11**、**NeMo AutoModel main commit `17ed5796bdc220c314c9fd6bd718a773a3642521`**、**vLLM 0.20.0** を対象にしています。Dion は PyPI ではなく `github.com/microsoft/dion` の main commit `28311d93686275f1baa7f0af57e6c4c61b75440b` からインストールします。Docker image では Dion を vLLM より先にインストールし、最終的な torch stack は vLLM/base PyTorch image に合わせます。
+> このブランチは **NVIDIA PyTorch 26.03**、**torch 2.11**、**NeMo AutoModel main**、**vLLM 0.20.0** を対象にしています。Dion は PyPI ではなく `github.com/microsoft/dion` からインストールします。正確な pin は `requirements.txt` と `dockerfile/Dockerfile` を参照してください。Docker image では Dion を vLLM より先にインストールし、最終的な torch stack は vLLM/base PyTorch image に合わせます。
 
 詳細な使用方法、データセット準備、学習例については、英語版READMEの該当セクションを参照してください。
 

@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from typing import Optional
 
 import torch
@@ -7,7 +8,7 @@ from transformers import AutoConfig, BitsAndBytesConfig
 from openrlhf.utils.fsdp.packing import is_automodel_custom_model, pack_padded_batch, unpack_to_padded, unshard_dtensor
 from openrlhf.utils.logging_utils import init_logger
 
-from .actor import _build_peft_config_dict, _hf_packing_supported, _will_use_hf_model
+from .actor import _build_peft_config_dict, _detect_moe_arch, _hf_packing_supported, _will_use_hf_model
 
 logger = init_logger(__name__)
 
@@ -56,6 +57,16 @@ def get_llm_for_sequence_regression(
     if use_fp32_master_weights is None:
         use_fp32_master_weights = model_type != "reward"
     torch_dtype = compute_dtype if load_in_4bit or not use_fp32_master_weights else torch.float32
+    # HF MoE sequence-classification checkpoints can mix bf16 experts with fp32
+    # router/gate params. FSDP requires uniform original param dtype, so mirror
+    # the actor path and avoid fp32 master weights for this case.
+    if torch_dtype == torch.float32 and _detect_moe_arch(model_name_or_path):
+        torch_dtype = compute_dtype
+    forward_autocast_dtype = (
+        compute_dtype
+        if torch_dtype == torch.float32 and attn_implementation in ("flash_attention_2", "flash_attention_3")
+        else None
+    )
 
     nf4_config = None
     if load_in_4bit:
@@ -72,6 +83,15 @@ def get_llm_for_sequence_regression(
         peft_config = _build_peft_config_dict(lora_rank, lora_alpha, lora_dropout, target_modules)
 
     ensure_torchvision_nms_stub()
+    if use_liger_kernel:
+        mesh_dims = getattr(device_mesh, "mesh_dim_names", ()) or ()
+        tp_size = device_mesh["tp"].size() if "tp" in mesh_dims else 1
+        cp_size = device_mesh["cp"].size() if "cp" in mesh_dims else 1
+        if tp_size > 1 or cp_size > 1:
+            print(
+                f"[Liger] AutoModel disables Liger Kernel when TP>1 ({tp_size}) "
+                f"or CP>1 ({cp_size}); --fsdp.use_liger_kernel will be a no-op."
+            )
     from nemo_automodel import NeMoAutoModelForSequenceClassification
 
     # AutoModel's custom registry is CausalLM-oriented. When a base config says
@@ -126,7 +146,7 @@ def get_llm_for_sequence_regression(
         _init_regression_head(model, value_head_prefix)
 
     wrapper_cls = RewardModel if model_type == "reward" else CriticModel
-    return wrapper_cls(model, value_head_prefix, packing_samples, normalize_reward)
+    return wrapper_cls(model, value_head_prefix, packing_samples, normalize_reward, forward_autocast_dtype)
 
 
 def _init_regression_head(model: nn.Module, value_head_prefix: str) -> None:
@@ -162,6 +182,7 @@ class _SequenceRegressionBase(nn.Module):
         value_head_prefix: str,
         packing_samples: bool,
         normalize_reward: bool,
+        forward_autocast_dtype: Optional[torch.dtype] = None,
     ) -> None:
         super().__init__()
         self.model = model
@@ -169,6 +190,7 @@ class _SequenceRegressionBase(nn.Module):
         self.value_head_prefix = value_head_prefix
         self.packing_samples = packing_samples
         self.normalize_reward = normalize_reward
+        self._forward_autocast_dtype = forward_autocast_dtype
         self._packing_style = "automodel" if is_automodel_custom_model(model) else "hf"
         if self.packing_samples:
             path = "AutoModel THD" if self._packing_style == "automodel" else "HF FlashAttention varlen"
@@ -206,20 +228,27 @@ class _SequenceRegressionBase(nn.Module):
         batch, seqlen, input_ids, forward_attention_mask, position_ids, indices, fa_kwargs = self._prepare_inputs(
             input_ids, attention_mask
         )
-        outputs = self.model(
-            input_ids=input_ids,
-            attention_mask=forward_attention_mask,
-            position_ids=position_ids,
-            output_hidden_states=True,
-            use_cache=False,
-            return_dict=True,
-            **fa_kwargs,
+        autocast_ctx = (
+            torch.autocast(device_type="cuda", dtype=self._forward_autocast_dtype)
+            if self._forward_autocast_dtype is not None and input_ids.is_cuda
+            else nullcontext()
         )
-        hidden_states = getattr(outputs, "hidden_states", None)
-        if hidden_states is None:
-            raise RuntimeError("Sequence regression requires hidden_states; model did not return them.")
-        last_hidden_states = unshard_dtensor(hidden_states[-1])
-        values = _get_regression_head(self.model, self.value_head_prefix)(last_hidden_states).squeeze(-1).float()
+        with autocast_ctx:
+            outputs = self.model(
+                input_ids=input_ids,
+                attention_mask=forward_attention_mask,
+                position_ids=position_ids,
+                output_hidden_states=True,
+                use_cache=False,
+                return_dict=True,
+                **fa_kwargs,
+            )
+            hidden_states = getattr(outputs, "hidden_states", None)
+            if hidden_states is None:
+                raise RuntimeError("Sequence regression requires hidden_states; model did not return them.")
+            last_hidden_states = unshard_dtensor(hidden_states[-1])
+            values = _get_regression_head(self.model, self.value_head_prefix)(last_hidden_states).squeeze(-1)
+        values = values.float()
         if self.packing_samples:
             values = unpack_to_padded(values, indices, batch, seqlen)
         return values, outputs

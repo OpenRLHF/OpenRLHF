@@ -32,6 +32,7 @@ def train(args):
         init_value_head=True,
         value_head_prefix=args.fsdp.value_head_prefix,
         packing_samples=args.fsdp.packing_samples,
+        use_liger_kernel=args.fsdp.use_liger_kernel,
         use_fp32_master_weights=False,
     )
 
@@ -202,7 +203,6 @@ if __name__ == "__main__":
     # Model
     parser.add_argument("--model.model_name_or_path", type=str, default=None)
     parser.add_argument("--model.gradient_checkpointing_enable", action="store_true", default=False)
-    parser.add_argument("--model.gradient_checkpointing_reentrant", action="store_true", default=False)
     parser.add_argument("--model.aux_loss_coef", type=float, default=0, help="MoE balancing loss")
     parser.add_argument("--model.compute_fp32_loss_enable", action="store_true", default=False)
     parser.add_argument("--model.margin_loss_enable", action="store_true", default=False)

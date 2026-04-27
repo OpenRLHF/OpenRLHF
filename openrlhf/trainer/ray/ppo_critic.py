@@ -1,3 +1,4 @@
+import gc
 import os
 from abc import ABC
 from typing import Dict, Optional, Union
@@ -119,27 +120,15 @@ class CriticPPOTrainer(ABC):
                     pbar.set_postfix(status)
                 accum_window = []
 
+            # Trailing partial windows are dropped on purpose — see ppo_actor.py
+            # for the rationale (would advance time_steps but never fire
+            # optimizer_step, leaking grads into the next epoch).
             if accum_window:
-                local_num_tokens = torch.zeros((), dtype=torch.float32, device=torch.device("cuda", device))
-                local_batch_size = torch.zeros((), dtype=torch.float32, device=torch.device("cuda", device))
-                for _, window_experience in accum_window:
-                    local_num_tokens += window_experience.action_mask.sum()
-                    local_batch_size += (window_experience.action_mask.sum(dim=-1) > 0).sum()
-                global_num_tokens = self.strategy.global_token_count(local_num_tokens)
-                global_batch_size = self.strategy.global_token_count(local_batch_size)
-                for window_step, window_experience in accum_window:
-                    status = self.training_step(
-                        window_experience,
-                        window_step,
-                        global_num_tokens=global_num_tokens,
-                        global_batch_size=global_batch_size,
-                        loss_dp_size=self.strategy.dp_size,
-                        loss_report_scale=1,
-                        scale_loss_by_accumulation=False,
-                    )
-                    status = self.strategy.all_reduce(status)
-                    status_list.append(status)
-                    pbar.set_postfix(status)
+                self.strategy.print(
+                    f"[Critic] dropping {len(accum_window)} trailing microbatches "
+                    f"(< accum_steps={accum_steps}); check that train.batch_size, "
+                    f"micro_batch_size, dp_size, and rollout n_samples align."
+                )
 
         if status_list:
             status_mean = status_list[0]
@@ -258,6 +247,7 @@ class CriticModelActor(BaseModelActor):
             value_head_prefix=strategy.args.fsdp.value_head_prefix,
             init_value_head=strategy.args.actor.model_name_or_path == strategy.args.critic.model_name_or_path,
             packing_samples=strategy.args.fsdp.packing_samples,
+            use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
         )
         strategy.print(critic)
         strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize_enable))
@@ -289,9 +279,6 @@ class CriticModelActor(BaseModelActor):
         if args.ckpt.load_enable and os.path.exists(ckpt_path):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
             strategy.load_ckpt(self.critic, ckpt_path, optimizer=self.critic_optim, scheduler=self.critic_scheduler)
-
-        # Initial engine sleep/wake is not needed here; FSDP2 cpu_offload is set
-        # at construction time.
 
         # configure Trainer
         self.trainer = CriticPPOTrainer(
@@ -365,10 +352,41 @@ class CriticModelActor(BaseModelActor):
                 scheduler=self.critic_scheduler,
             )
 
+    @property
+    def _sleep_enabled(self) -> bool:
+        return bool(getattr(self.strategy.args.fsdp, "enable_sleep", False))
+
     def reload_states(self):
-        # No-op under FSDP2: cpu_offload is configured statically at construction.
-        # Phase 5 may add dynamic offload toggling if needed.
-        pass
+        """Hybrid/sleep entry: bring critic + optimizer state back to GPU."""
+        if not self._sleep_enabled:
+            return
+        self.strategy.move_model_to_device(self.critic, "cuda")
+        self.strategy.move_optimizer_to_device(self.critic_optim, "cuda")
+        self.critic.train()
 
     def offload_states(self):
-        pass
+        """Hybrid/sleep exit: ship critic state off-GPU."""
+        if not self._sleep_enabled:
+            return
+        self.strategy.move_optimizer_to_device(self.critic_optim, "cpu")
+        self.strategy.move_model_to_device(self.critic, "cpu")
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def prepare_for_lp_inference(self):
+        """Value forward only needs critic model on GPU; optimizer stays cpu
+        to leave the device free for the inference pass."""
+        if not self._sleep_enabled:
+            return
+        self.strategy.move_model_to_device(self.critic, "cuda")
+        self.critic.eval()
+
+    def offload_after_refit(self):
+        """Tear down after a value-forward (model→cpu only)."""
+        if not self._sleep_enabled:
+            return
+        self.strategy.move_model_to_device(self.critic, "cpu")
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()

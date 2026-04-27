@@ -69,9 +69,6 @@ class DPOTrainer(ABC):
         # NLL loss
         self.nll_loss = self.args.model.nll_loss_coef > 1e-8
 
-        # packing samples
-        self.packing_samples = strategy.args.fsdp.packing_samples
-
         # wandb/tensorboard setting
         self._wandb = None
         self._tensorboard = None
@@ -320,9 +317,7 @@ class DPOTrainer(ABC):
 
         log_probs, output = model(input_ids, attention_mask=att_masks, return_output=True, return_logprobs=True)
 
-        all_logps_sum, all_logps_mean = self._get_batch_logps(
-            log_probs, att_masks, prompt_id_lens, average_log_prob=False
-        )
+        all_logps_sum, all_logps_mean = self._get_batch_logps(log_probs, att_masks, prompt_id_lens)
         chosen_logps = all_logps_sum[: chosen_ids.shape[0]]
         rejected_logps = all_logps_sum[chosen_ids.shape[0] :]
         aux_loss = output.aux_loss if "aux_loss" in output else 0
@@ -365,19 +360,9 @@ class DPOTrainer(ABC):
         per_token_logps: torch.FloatTensor,
         attention_mask,
         prompt_id_lens,
-        average_log_prob: bool = False,
     ) -> torch.FloatTensor:
-        """Compute the log probabilities of the given labels under the given logits.
-
-        Args:
-            per_token_logps: Per token log probabilities. Shape: (batch_size, sequence_length)
-            average_log_prob: If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the log probabilities of the (non-masked) tokens.
-
-        Returns:
-            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the given logits.
-        """
-        assert average_log_prob == False
-
+        """Return per-sample (sum, mean) log-probabilities over the response tokens
+        (everything after each prompt prefix)."""
         loss_masks = attention_mask.clone().bool()
         # mask prompts
         for mask, source_len in zip(loss_masks, prompt_id_lens):

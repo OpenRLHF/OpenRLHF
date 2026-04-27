@@ -140,7 +140,6 @@ class Actor(nn.Module):
         super().__init__()
         self.temperature = temperature
         self.packing_samples = packing_samples
-        self._packing_style = "hf"
         self._forward_autocast_dtype = None
 
         if not isinstance(pretrain_or_model, str):
@@ -169,6 +168,20 @@ class Actor(nn.Module):
                 "use_liger_kernel is not compatible with VLM models. "
                 "Liger kernel only supports CausalLM, not ImageTextToText."
             )
+        # Heads-up before construction: AutoModel disables Liger under TP/CP and
+        # for its own custom (non-HF) model implementations. Without this notice
+        # the user's --fsdp.use_liger_kernel flag silently no-ops. See
+        # nemo_automodel/_transformers/kernel_patches.py:_apply_preload_overrides
+        # and auto_model.py "if use_liger_kernel and not is_custom_model".
+        if use_liger_kernel:
+            mesh_dims = getattr(device_mesh, "mesh_dim_names", ()) or ()
+            tp_size = device_mesh["tp"].size() if "tp" in mesh_dims else 1
+            cp_size = device_mesh["cp"].size() if "cp" in mesh_dims else 1
+            if tp_size > 1 or cp_size > 1:
+                print(
+                    f"[Liger] AutoModel disables Liger Kernel when TP>1 ({tp_size}) "
+                    f"or CP>1 ({cp_size}); --fsdp.use_liger_kernel will be a no-op."
+                )
 
         nf4_config = None
         if load_in_4bit:
@@ -306,8 +319,6 @@ class Actor(nn.Module):
             forward_attention_mask = attention_mask
 
             if getattr(self, "is_vlm", False):
-                if position_ids is None:
-                    position_ids = None
                 if mm_inputs:
                     cfg = self._vlm_config
                     token_type_ids = (sequences == cfg.image_token_id).to(torch.int32)
@@ -315,13 +326,12 @@ class Actor(nn.Module):
                         token_type_ids[sequences == cfg.video_token_id] = 2
                     key = "mm_token_type_ids" if "image_grid_thw" in mm_inputs else "token_type_ids"
                     mm_inputs[key] = token_type_ids
-            else:
-                if position_ids is None:
-                    if attention_mask is None:
-                        position_ids = torch.arange(seqlen, device=sequences.device).unsqueeze(0).expand(batch, -1)
-                    else:
-                        position_ids = attention_mask.long().cumsum(-1) - 1
-                        position_ids.masked_fill_(attention_mask == 0, 1)
+            elif position_ids is None:
+                if attention_mask is None:
+                    position_ids = torch.arange(seqlen, device=sequences.device).unsqueeze(0).expand(batch, -1)
+                else:
+                    position_ids = attention_mask.long().cumsum(-1) - 1
+                    position_ids.masked_fill_(attention_mask == 0, 1)
 
         autocast_ctx = (
             torch.autocast(device_type="cuda", dtype=self._forward_autocast_dtype)
@@ -382,7 +392,7 @@ class Actor(nn.Module):
         action_log_probs = log_probs[:, -action_mask.shape[1] :] * action_mask.float()
         return (action_log_probs, output) if return_output else action_log_probs
 
-    def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs={"use_reentrant": False}):
+    def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
         # No-op under FSDP2/AutoModel: activation checkpointing is configured
         # at construction time via `activation_checkpointing=True` on
         # `NeMoAutoModelForCausalLM.from_pretrained`. Calling HF's late hook

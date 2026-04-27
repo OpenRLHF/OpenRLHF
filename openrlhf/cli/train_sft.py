@@ -205,7 +205,6 @@ if __name__ == "__main__":
     # Model
     parser.add_argument("--model.model_name_or_path", type=str, default=None)
     parser.add_argument("--model.gradient_checkpointing_enable", action="store_true", default=False)
-    parser.add_argument("--model.gradient_checkpointing_reentrant", action="store_true", default=False)
     parser.add_argument("--model.pretrain_mode_enable", action="store_true", default=False, help="Use pretrain loss")
     parser.add_argument("--model.aux_loss_coef", type=float, default=0, help="MoE balancing loss")
 

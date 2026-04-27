@@ -67,7 +67,6 @@ ENGINE_ARGS=(
    --vllm.tensor_parallel_size 2
    --vllm.gpu_memory_utilization 0.95
    --train.colocate_all
-   --fsdp.enable_sleep
    --vllm.sync_backend nccl
    --vllm.enforce_eager
 

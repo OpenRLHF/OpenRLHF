@@ -22,6 +22,7 @@ class RewardModelProxy:
             activation_checkpointing=False,
             value_head_prefix=args.fsdp.value_head_prefix,
             packing_samples=args.fsdp.packing_samples,
+            use_liger_kernel=args.fsdp.use_liger_kernel,
         )
         self.reward_model.eval()
         self.device = next(self.reward_model.parameters()).device
@@ -89,6 +90,7 @@ if __name__ == "__main__":
         default="flash_attention_2",
         help="Attention implementation (e.g., sdpa, eager, flex, te, flash_attention_2)",
     )
+    parser.add_argument("--fsdp.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
     parser.add_argument("--data.disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument("--fsdp.packing_samples", action="store_true", default=False)
     parser.add_argument("--batch_size", type=int, default=None)

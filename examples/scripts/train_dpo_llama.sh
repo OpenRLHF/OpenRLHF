@@ -25,7 +25,6 @@ EOF
     # --logger.wandb.key [WANDB_TOKENS] or True (use wandb login command)
     # --model.ipo_enable [for IPO]
     # --model.label_smoothing 0.1 [for cDPO]
-    # --ref.offload
     # --model.nll_loss_coef (Regularization with NLL loss)
 
 

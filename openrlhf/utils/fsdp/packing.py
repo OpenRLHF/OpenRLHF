@@ -183,11 +183,21 @@ def log_probs_from_vocab_parallel_logits(
     tp_group = device_mesh.get_group("tp")
     tp_rank = dist.get_rank(group=tp_group)
     tp_size = dist.get_world_size(group=tp_group)
-    vocab_per_rank = vocab_parallel_logits.shape[-1] // tp_size
-    vocab_start = vocab_per_rank * tp_rank
-    vocab_end = vocab_start + vocab_per_rank
 
     local_logits = vocab_parallel_logits.to_local()
+    global_vocab_size = vocab_parallel_logits.shape[-1]
+    if global_vocab_size % tp_size == 0:
+        vocab_per_rank = global_vocab_size // tp_size
+        vocab_start = vocab_per_rank * tp_rank
+        vocab_end = vocab_start + vocab_per_rank
+    else:
+        local_vocab_size = torch.tensor(local_logits.shape[-1], device=local_logits.device, dtype=torch.long)
+        shard_sizes = [torch.zeros_like(local_vocab_size) for _ in range(tp_size)]
+        dist.all_gather(shard_sizes, local_vocab_size, group=tp_group)
+        shard_sizes = torch.stack(shard_sizes)
+        vocab_start = int(shard_sizes[:tp_rank].sum().item())
+        vocab_end = vocab_start + int(shard_sizes[tp_rank].item())
+
     if temperature != 1.0:
         local_logits = local_logits / temperature
     if inference_only is None:

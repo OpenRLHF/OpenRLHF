@@ -50,10 +50,9 @@ def train(args):
         activation_checkpointing=False,
         packing_samples=args.fsdp.packing_samples,
         force_hf_model=args.fsdp.force_hf_model,
+        use_liger_kernel=args.fsdp.use_liger_kernel,
         use_fp32_master_weights=False,
     )
-    if args.ref.offload:
-        ref_model._offload = True
     get_tokenizer(
         args.model.model_name_or_path,
         ref_model.model,
@@ -232,12 +231,10 @@ if __name__ == "__main__":
 
     # Reference model
     parser.add_argument("--ref.model_name_or_path", type=str, default=None)
-    parser.add_argument("--ref.offload", action="store_true", default=False)
 
     # Model
     parser.add_argument("--model.model_name_or_path", type=str, default=None)
     parser.add_argument("--model.gradient_checkpointing_enable", action="store_true", default=False)
-    parser.add_argument("--model.gradient_checkpointing_reentrant", action="store_true", default=False)
     parser.add_argument("--model.beta", type=float, default=0.1)
     parser.add_argument("--model.ipo_enable", action="store_true", default=False)
     parser.add_argument("--model.label_smoothing", type=float, default=0.0)

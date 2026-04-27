@@ -2,8 +2,12 @@ import argparse
 import os
 from datetime import datetime
 
+get_strategy = None
+
 
 def train(args):
+    global get_strategy
+
     import ray
     from ray.util.placement_group import placement_group
 
@@ -11,7 +15,11 @@ def train(args):
     from openrlhf.trainer.ray.launcher import RayActorGroup, ReferenceModelActor, RewardModelActor
     from openrlhf.trainer.ray.ppo_actor import PolicyModelActor
     from openrlhf.trainer.ray.ppo_critic import CriticModelActor
-    from openrlhf.utils import get_strategy
+
+    if get_strategy is None:
+        from openrlhf.utils import get_strategy as _get_strategy
+
+        get_strategy = _get_strategy
 
     # initialize ray if not initialized
     if not ray.is_initialized():
@@ -303,7 +311,6 @@ if __name__ == "__main__":
     # FSDP2 / AutoModel backend
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank from torchrun")
     parser.add_argument("--actor.gradient_checkpointing_enable", action="store_true", default=False)
-    parser.add_argument("--actor.gradient_checkpointing_reentrant", action="store_true", default=False)
     parser.add_argument("--fsdp.tp_size", type=int, default=1, help="Tensor parallel size")
     parser.add_argument("--fsdp.cp_size", type=int, default=1, help="Context parallel size (replaces ring-attn)")
     parser.add_argument("--fsdp.ep_size", type=int, default=1, help="Expert parallel size (MoE)")
@@ -315,7 +322,14 @@ if __name__ == "__main__":
         help="Sequence parallel within TP region. Default auto-on when --fsdp.tp_size>1.",
     )
     parser.add_argument("--fsdp.no_sequence_parallel", dest="fsdp.sequence_parallel", action="store_false")
-    parser.add_argument("--fsdp.cpu_offload", action="store_true", default=False)
+    parser.add_argument(
+        "--fsdp.cpu_offload",
+        action="store_true",
+        default=False,
+        help="FSDP2 per-layer streaming offload (CPUOffloadPolicy). Saves *peak* "
+        "memory mid-step at the cost of bandwidth. Orthogonal to --fsdp.enable_sleep "
+        "(which moves the whole model at phase boundaries for hybrid colocate).",
+    )
     parser.add_argument(
         "--fsdp.param_dtype", type=str, default="bf16", choices=["bf16", "fp16"], help="Model data type"
     )
@@ -344,8 +358,11 @@ if __name__ == "__main__":
         "--fsdp.enable_sleep",
         action="store_true",
         default=False,
-        help="Reserved: dynamic offload toggling between rollout/train phases (currently no-op under FSDP2; "
-        "FSDP cpu_offload is configured statically at model construction).",
+        help="Hybrid colocate sleep mode: between phases (rollout / lp-inference / "
+        "fit / refit) the trainer moves its whole model + optimizer state to CPU so "
+        "vLLM can wake_up KV+weights on the same GPUs. Required when "
+        "--train.colocate_all is set with --vllm.enable_sleep. Orthogonal to "
+        "--fsdp.cpu_offload (which is per-layer streaming inside compute).",
     )
 
     parser.add_argument("--data.disable_fast_tokenizer", action="store_true", default=False)
@@ -362,7 +379,12 @@ if __name__ == "__main__":
 
     # Dynamic batch changes microbatch grouping; the packed representation
     # still follows the loaded actor/critic model path.
-    parser.add_argument("--train.dynamic_batch_enable", action="store_true", default=False)
+    parser.add_argument(
+        "--train.dynamic_batch_enable",
+        action="store_true",
+        default=False,
+        help="Group packed samples by token budget; reuses the loaded model's packed forward path.",
+    )
     parser.add_argument("--rollout.max_tokens_per_gpu", type=int, default=None)
     parser.add_argument("--train.max_tokens_per_gpu", type=int, default=16192)
 
@@ -506,8 +528,6 @@ if __name__ == "__main__":
     parser.add_argument("--reward.model_name_or_path", type=str, default=None, help="HF model name or path")
     parser.add_argument("--reward.remote_url", type=str, default=None, help="remote RM API (HTTP)")
     parser.add_argument("--critic.model_name_or_path", type=str, default=None, help="HF model name or path")
-    parser.add_argument("--ref.offload", action="store_true", default=False, help="Offload reference model to CPU")
-    parser.add_argument("--reward.offload", action="store_true", default=False, help="Offload reward model to CPU")
     parser.add_argument("--train.agent_func_path", type=str, default=None, help="Agent script path")
 
     # Custom dataset
@@ -667,6 +687,23 @@ if __name__ == "__main__":
     if args.vllm.enable_sleep and not args.train.colocate_all:
         print("Set args.vllm.enable_sleep to False when args.train.colocate_all is disabled.")
         args.vllm.enable_sleep = False
+
+    if args.fsdp.enable_sleep:
+        if not args.train.colocate_all:
+            raise ValueError(
+                "--fsdp.enable_sleep is hybrid-colocate sleep mode and only applies "
+                "when --train.colocate_all is set."
+            )
+        if not args.vllm.enable_sleep:
+            raise ValueError(
+                "--fsdp.enable_sleep without --vllm.enable_sleep would leave vLLM holding "
+                "GPU weights+KV while trainer reloads — both must be enabled together."
+            )
+        if args.train.async_enable:
+            raise ValueError(
+                "--fsdp.enable_sleep is for synchronous hybrid colocate; async PPO already "
+                "decouples train/rollout GPUs and does not need this hook."
+            )
 
     if args.train.async_enable:
         assert not args.vllm.enable_sleep, "Async RLHF is not supported with --vllm_enable_sleep."

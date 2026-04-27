@@ -1,3 +1,4 @@
+import gc
 import math
 import os
 from collections import defaultdict
@@ -9,6 +10,7 @@ import torch.nn as nn
 import torch.optim as optim
 import transformers
 from torch.distributed.fsdp import CPUOffloadPolicy, MixedPrecisionPolicy
+from torch.distributed.tensor import DTensor
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers.optimization import get_scheduler
 
@@ -58,17 +60,6 @@ class FsdpStrategy:
         self.ep_size = getattr(fsdp, "ep_size", 1)
         self.pp_size = getattr(fsdp, "pp_size", 1)
         self.param_dtype = getattr(fsdp, "param_dtype", "bf16")
-        # Activation checkpointing — train_sft/rm/dpo expose it as
-        # --model.gradient_checkpointing_enable; train_ppo_ray uses
-        # --actor.gradient_checkpointing_enable (PPO has separate actor/critic).
-        # Read from whichever namespace is present.
-        _model_ns = getattr(args, "model", None)
-        _actor_ns = getattr(args, "actor", None)
-        self.activation_checkpointing = (
-            getattr(_model_ns, "gradient_checkpointing_enable", None)
-            if _model_ns is not None and hasattr(_model_ns, "gradient_checkpointing_enable")
-            else getattr(_actor_ns, "gradient_checkpointing_enable", False)
-        )
         self.cpu_offload = getattr(fsdp, "cpu_offload", False)
         sp = getattr(fsdp, "sequence_parallel", None)
         # SP defaults to ON whenever TP>1 (user-stated default).
@@ -79,7 +70,7 @@ class FsdpStrategy:
         # the checkpointer saves the merged base only and the trained adapter
         # is lost. Read the rank from the FSDP namespace if present.
         _lora_ns = getattr(fsdp, "lora", None)
-        self.is_peft = bool(getattr(_lora_ns, "rank", 0) > 0) if _lora_ns is not None else False
+        self.is_peft = getattr(_lora_ns, "rank", 0) > 0 if _lora_ns is not None else False
 
         self.world_size: int = 1
         self.device_mesh = None
@@ -204,27 +195,23 @@ class FsdpStrategy:
         # and inflates grad_norm (observed 60–130 vs. ~1 expected). cast_forward
         # _inputs handles the lm_head dtype mismatch by casting fp32 inputs to
         # bf16 at FSDP unit boundaries. Mirrors NeMo AutoModel's recipe.
-        mp_policy = (
-            None
-            if self.param_dtype == "fp32"
-            else MixedPrecisionPolicy(
-                param_dtype=torch_dtype,
-                reduce_dtype=torch.float32,
-                # output_dtype omitted (defaults to param_dtype=bf16). Setting
-                # it to fp32 makes the inner Qwen2Model FSDP root return fp32
-                # hidden_states; lm_head is a sibling sub-module, not its own
-                # FSDP unit, so it gets fp32 input × bf16 weight → matmul
-                # mismatch ('expected mat1 and mat2 to have the same dtype').
-                # Stable loss is achieved by casting logits to fp32 in
-                # actor.forward right after the model call.
-                cast_forward_inputs=True,
-            )
+        # output_dtype omitted: defaulting to param_dtype=bf16 keeps lm_head
+        # (a sibling sub-module of the FSDP root) fed bf16; setting fp32 caused
+        # 'expected mat1 and mat2 to have the same dtype'. Stable loss comes
+        # from casting logits to fp32 in actor.forward after the model call.
+        mp_policy = MixedPrecisionPolicy(
+            param_dtype=torch_dtype,
+            reduce_dtype=torch.float32,
+            cast_forward_inputs=True,
         )
         # Public attribute — `Actor` reads it as `strategy.distributed_config`
         # and forwards to `NeMoAutoModelForCausalLM.from_pretrained`.
+        # `activation_checkpointing` is intentionally NOT set here — Actor /
+        # get_llm_for_sequence_regression pass it explicitly to from_pretrained
+        # so the CLI flag (--model.gradient_checkpointing_enable /
+        # --actor.gradient_checkpointing_enable) is the single source of truth.
         self.distributed_config = FSDP2Config(
             sequence_parallel=self.sequence_parallel,
-            activation_checkpointing=self.activation_checkpointing,
             mp_policy=mp_policy,
             offload_policy=CPUOffloadPolicy(pin_memory=False) if self.cpu_offload else None,
             # Force grad sync inside backward(): we read p.grad immediately after
@@ -247,20 +234,11 @@ class FsdpStrategy:
             world_size=self.world_size,
         )
 
-        # Process groups are resolved from AutoModel's official mesh on demand.
-        # OpenRLHF only caches scalar sizes derived from that mesh.
-        # AutoModel's FSDP2 mesh has native dims
-        # ("pp","dp_replicate","dp_shard","cp","tp") plus flattened dims
-        # ("dp","dp_shard_cp","dp_cp"). PyTorch exposes both through
-        # ``device_mesh[name]`` after AutoModel creates them.
-
-        # AutoModel uses flattened "dp" for data loading/token denominators and
-        # flattened "dp_cp" when CP ranks participate in FSDP/loss scaling.
-        # Only sizes are cached; ProcessGroups are resolved from the AutoModel
-        # mesh on demand so there is a single source of truth.
+        # AutoModel's FSDP2 mesh exposes flattened "dp" (data loading / token
+        # denominators) and "dp_cp" (FSDP + loss scaling when CP>1). Only sizes
+        # are cached; ProcessGroups stay resolved against the mesh on demand.
         dp_size = self._get_dp_group_size(include_cp=False)
         self.dp_cp_size = self._get_dp_group_size(include_cp=True)
-        # Effective grad-accum = train_batch_size / (micro_bs × DP).
         self.accumulated_gradient = max(self.train_batch_size // (self.micro_train_batch_size * dp_size), 1)
         self.dp_size = dp_size
 
@@ -281,10 +259,6 @@ class FsdpStrategy:
         return ret[0] if len(ret) == 1 else ret
 
     def _init_train_model(self, model, cfg: dict):
-        # Model is already parallelized — Actor builds via
-        # NeMoAutoModelForCausalLM.from_pretrained (AutoModel's official entry),
-        # which handles FSDP2 wrap + TP plan + CP hooks internally given the
-        # device_mesh + distributed_config we expose on this strategy.
         train_model = self._unwrap_model(model)
         params = [p for p in train_model.parameters() if p.requires_grad]
         if not params:
@@ -321,8 +295,6 @@ class FsdpStrategy:
         return model, optimizer, scheduler
 
     def _init_eval_model(self, model):
-        # Eval models are also built+parallelized via AutoModel's official entry
-        # at construction time (Actor or get_llm_for_sequence_regression).
         return model
 
     # ---------------------------------------------------------------- step loop
@@ -336,10 +308,9 @@ class FsdpStrategy:
         accumulate: bool = True,
         **kwargs,
     ) -> None:
-        # Static gradient accumulation mirrors the old trainer contract by
-        # default: each microbatch loss is divided by the accumulation steps.
-        # Callers that already use verl-style global batch denominators can set
-        # ``scale_loss_by_accumulation=False`` and keep the no-sync behavior.
+        # Callers that pre-scale by global token/batch denominators set
+        # ``scale_loss_by_accumulation=False``; otherwise we divide by the accum
+        # window so the static path matches the old trainer contract.
         if accumulate and self.accumulated_gradient > 1:
             if kwargs.get("scale_loss_by_accumulation", True):
                 loss = loss / self.accumulated_gradient
@@ -354,13 +325,14 @@ class FsdpStrategy:
         if self.moe_mesh is not None:
             try:
                 from nemo_automodel.components.moe.megatron.moe_utils import MoEAuxLossAutoScaler
-
+            except ImportError:
+                if self.is_rank_0():
+                    print("[MoE] MoEAuxLossAutoScaler import failed; aux-loss scaling skipped.")
+            else:
                 MoEAuxLossAutoScaler.main_loss_backward_scale = torch.tensor(
                     float(getattr(self, "dp_cp_size", self.dp_size)),
                     device=loss.device,
                 )
-            except Exception:
-                pass
         loss.backward()
 
     def optimizer_step(
@@ -372,8 +344,7 @@ class FsdpStrategy:
         accumulate: bool = True,
         **kwargs,
     ) -> None:
-        # Gradient accumulation: skip the optimizer step until the last micro
-        # batch in the accumulation window has run. Mirrors PR#1176 / NeMo-RL.
+        # Skip the optimizer step until the last micro-batch in the accum window.
         key = f"step_{name}"
         if accumulate:
             self.time_steps[key] += 1
@@ -504,8 +475,6 @@ class FsdpStrategy:
     def get_rank(self) -> int:
         return dist.get_rank() if dist.is_initialized() else 0
 
-    # ---------------------------------------------------------------- compat shims
-
     def _unwrap_model(self, model) -> nn.Module:
         if isinstance(model, _get_actor_cls()):
             return self._unwrap_model(model.model)
@@ -515,15 +484,44 @@ class FsdpStrategy:
             return model.module
         return model
 
-    def get_ds_train_config(self, *args, **kwargs):
-        # Legacy compatibility shim. FSDP2/AutoModel does not need an external
-        # train config object, but trainers still pass this value through.
-        return None
+    # ---------------------------------------------------------------- persistent offload
+    #
+    # Phase-boundary "sleep mode" for hybrid colocate (trainer + vLLM share
+    # GPUs). Orthogonal to FSDP2's CPUOffloadPolicy: that one streams params
+    # per-layer during compute, while these helpers bulk-move the whole model
+    # between phases so vLLM can wake_up its weights+KV.
 
-    def get_ds_eval_config(self, *args, **kwargs):
-        return None
+    @staticmethod
+    def _move_buffers(model: nn.Module, device) -> None:
+        # FSDP2 modules don't auto-move buffers via .to(); swap_tensors is
+        # required so the storage actually moves and the old GPU storage is
+        # released back to the allocator.
+        for buf in model.buffers():
+            torch.utils.swap_tensors(buf, buf.to(device))
 
-    # ---------------------------------------------------------------- I/O (MVP)
+    def move_model_to_device(self, model: nn.Module, device) -> None:
+        """Bulk-move a model's params + buffers to ``device`` (cpu or cuda).
+        Releases freed GPU storage to the caching allocator on exit."""
+        unwrapped = self._unwrap_model(model)
+        self._move_buffers(unwrapped, device)
+        unwrapped.to(device)
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    @staticmethod
+    def move_optimizer_to_device(optimizer: optim.Optimizer | None, device) -> None:
+        """Bulk-move optimizer state tensors (Adam moments, step, etc.) to
+        ``device``. ``model.to()`` does NOT touch these — they live on the
+        optimizer, sharded as DTensors when params are DTensors."""
+        if optimizer is None:
+            return
+        for state in optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, (DTensor, torch.Tensor)):
+                    state[k] = v.to(device)
+
+    # ---------------------------------------------------------------- I/O
 
     @staticmethod
     def _checkpoint_source(model: nn.Module) -> tuple[str | None, str | None]:
@@ -620,6 +618,41 @@ class FsdpStrategy:
             moe_mesh=self.moe_mesh,
         )
 
+    def _get_ckpt_metric_path(self, ckpt_dir: str) -> str:
+        return os.path.join(ckpt_dir, self.CKPT_METRIC_FILENAME)
+
+    def _write_ckpt_metric(self, ckpt_dir: str, metric_value, metric_key=None) -> None:
+        import json
+
+        with open(self._get_ckpt_metric_path(ckpt_dir), "w") as f:
+            json.dump({"metric_key": metric_key, "metric_value": metric_value}, f, indent=2, sort_keys=True)
+
+    def _read_ckpt_metric(self, ckpt_dir: str) -> float | None:
+        import json
+
+        metric_path = self._get_ckpt_metric_path(ckpt_dir)
+        if not os.path.exists(metric_path):
+            return None
+        try:
+            with open(metric_path) as f:
+                payload = json.load(f)
+            value = payload.get("metric_value") if isinstance(payload, dict) else None
+            return None if value is None else float(value)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            self.print(f"Warning: failed to read checkpoint metric from {metric_path}: {exc}")
+            return None
+
+    @staticmethod
+    def _dir_size(path: str) -> int:
+        total = 0
+        for dirpath, _, filenames in os.walk(path):
+            for filename in filenames:
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, filename))
+                except OSError:
+                    pass
+        return total
+
     def save_ckpt(
         self,
         model: nn.Module,
@@ -637,10 +670,55 @@ class FsdpStrategy:
         import shutil
 
         model = self._unwrap_model(model)
+        is_rank0 = (not dist.is_initialized()) or dist.get_rank() == 0
+        is_best = tag.startswith("best")
+
+        if is_rank0:
+            os.makedirs(ckpt_path, exist_ok=True)
+            if is_best:
+                for name in os.listdir(ckpt_path):
+                    path = os.path.join(ckpt_path, name)
+                    if name.startswith("best") and name != tag and os.path.isdir(path):
+                        shutil.rmtree(path, ignore_errors=True)
+
+            max_size_bytes = None
+            if max_mem is not None and max_mem > 0 and not math.isinf(max_mem):
+                max_size_bytes = max_mem * 1024**3
+
+            while True:
+                subdirs = [
+                    (os.path.join(ckpt_path, name), os.path.getmtime(os.path.join(ckpt_path, name)))
+                    for name in os.listdir(ckpt_path)
+                    if os.path.isdir(os.path.join(ckpt_path, name))
+                ]
+                regular_subdirs = [
+                    (path, mtime) for path, mtime in subdirs if not os.path.basename(path).startswith("best")
+                ]
+                overflow_num = (
+                    max(0, len(regular_subdirs) - max_num + 1) if max_num and max_num > 0 and not is_best else 0
+                )
+                overflow_mem = (
+                    max_size_bytes is not None and sum(self._dir_size(path) for path, _ in subdirs) > max_size_bytes
+                )
+                if overflow_num == 0 and not overflow_mem:
+                    break
+                candidates = sorted(
+                    [(path, self._read_ckpt_metric(path), mtime) for path, mtime in regular_subdirs],
+                    key=lambda item: (
+                        item[1] is not None,
+                        item[1] if item[1] is not None else float("-inf"),
+                        item[2],
+                    ),
+                )
+                if not candidates:
+                    break
+                shutil.rmtree(candidates[0][0], ignore_errors=True)
+
+        if dist.is_initialized():
+            dist.barrier()
 
         save_dir = os.path.join(ckpt_path, tag)
         os.makedirs(save_dir, exist_ok=True)
-        is_rank0 = (not dist.is_initialized()) or dist.get_rank() == 0
 
         ckpt = self._build_checkpointer(save_dir, save_consolidated=False, model=model)
         ckpt.save_model(model=model, weights_path=save_dir, tokenizer=None)
@@ -651,8 +729,7 @@ class FsdpStrategy:
 
         if is_rank0:
             extra = {"client_state": dict(client_states or {})}
-            unwrapped = self._unwrap_model(model)
-            cfg = getattr(unwrapped, "config", None)
+            cfg = getattr(model, "config", None)
             if cfg is not None and getattr(cfg, "normalize_reward", False):
                 extra["runtime_state"] = {
                     "normalize_reward": True,
@@ -663,13 +740,7 @@ class FsdpStrategy:
                 json.dump(extra, f)
             with open(os.path.join(ckpt_path, "latest"), "w") as f:
                 f.write(tag)
-            if max_num and max_num > 0:
-                tags = sorted(
-                    (d for d in os.listdir(ckpt_path) if os.path.isdir(os.path.join(ckpt_path, d))),
-                    key=lambda d: os.path.getmtime(os.path.join(ckpt_path, d)),
-                )
-                for old in tags[:-max_num]:
-                    shutil.rmtree(os.path.join(ckpt_path, old), ignore_errors=True)
+            self._write_ckpt_metric(save_dir, kwargs.get("metric_value"), kwargs.get("metric_key"))
         if dist.is_initialized():
             dist.barrier()
 
@@ -698,7 +769,7 @@ class FsdpStrategy:
         # Tied-weight load: AutoModel saves in HF safetensors shards with
         # .hf_metadata sidecar (not DCP .metadata), and tie_word_embeddings=True
         # models (e.g. Qwen2.5-0.5B) deduplicate the tied pair. Use HF storage
-        # reader + allow_partial_load to handle both. Mirrors PR#1176.
+        # reader + allow_partial_load to handle both.
         import torch.distributed.checkpoint as dcp
         from torch.distributed.checkpoint import HuggingFaceStorageReader
         from torch.distributed.checkpoint.default_planner import DefaultLoadPlanner

@@ -240,7 +240,7 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 <summary>展开高级能力</summary>
 
 **效率优化**
-- SFT/DPO/PPO 默认开启兼容 varlen attention 后端下的样本打包（`--fsdp.packing_samples`）
+- SFT/DPO/PPO 默认开启样本打包（`--fsdp.packing_samples`）；packed forward 跟随模型加载路径，dynamic batch 只改变 microbatch 分组
 - 快速生成的 vLLM 加速（`--vllm.num_engines`）
 - DAPO [动态过滤](./examples/scripts/train_dapo_ray_hybrid_engine.sh)（`--algo.dynamic_filtering_enable`）
   - 🎲 Dynamic Sampling：对每个 prompt 生成多条响应，并根据奖励函数/Agent 返回的 **0–1 `scores`** 信号进行过滤
@@ -313,7 +313,7 @@ pip install ".[vllm]"                  # + vLLM 0.20.0；Dion 已在 requirement
 ```
 
 > [!TIP]
-> 当前分支目标环境是 **NVIDIA PyTorch 26.03**、**torch 2.11**、**NeMo AutoModel main commit `17ed5796bdc220c314c9fd6bd718a773a3642521`** 和 **vLLM 0.20.0**。Dion 不在 PyPI 上，会从 `github.com/microsoft/dion` 的 main commit `28311d93686275f1baa7f0af57e6c4c61b75440b` 安装；Docker 会先装 Dion、再装 vLLM，使最终 torch 栈以 vLLM/基础 PyTorch 镜像为准。
+> 当前分支目标环境是 **NVIDIA PyTorch 26.03**、**torch 2.11**、**NeMo AutoModel main** 和 **vLLM 0.20.0**。Dion 不在 PyPI 上，会从 `github.com/microsoft/dion` 安装；精确 pin 以 `requirements.txt` 和 `dockerfile/Dockerfile` 为准。Docker 会先装 Dion、再装 vLLM，使最终 torch 栈以 vLLM/基础 PyTorch 镜像为准。
 
 ### 准备数据集
 

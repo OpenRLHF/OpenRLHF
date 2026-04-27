@@ -239,7 +239,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 <summary>Show advanced capabilities</summary>
 
 **Efficiency Optimizations**
-- Sample packing defaults on for SFT/DPO/PPO (`--fsdp.packing_samples`) with compatible varlen-attention backends
+- Sample packing defaults on for SFT/DPO/PPO (`--fsdp.packing_samples`); packed forward follows the loaded model path, and dynamic batch only changes microbatch grouping
 - vLLM acceleration (`--vllm.num_engines`) for fast generation
 - DAPO [dynamic filtering](./examples/scripts/train_dapo_ray_hybrid_engine.sh) (`--algo.dynamic_filtering_enable`)
   - 🎲 Dynamic Sampling: for each prompt, generate multiple responses and **filter** them by your reward / agent **0–1 `scores`** signal
@@ -312,7 +312,7 @@ pip install ".[vllm]"                  # + vLLM 0.20.0; Dion is in requirements.
 ```
 
 > [!TIP]
-> This branch targets **NVIDIA PyTorch 26.03**, **torch 2.11**, **NeMo AutoModel main commit `17ed5796bdc220c314c9fd6bd718a773a3642521`**, and **vLLM 0.20.0**. Dion is installed from `github.com/microsoft/dion` at main commit `28311d93686275f1baa7f0af57e6c4c61b75440b` because it is not published on PyPI. The Docker image installs Dion before vLLM so the final torch stack is owned by vLLM/the base PyTorch image.
+> This branch targets **NVIDIA PyTorch 26.03**, **torch 2.11**, **NeMo AutoModel main**, and **vLLM 0.20.0**. Dion is installed from `github.com/microsoft/dion` because it is not published on PyPI. Exact pins live in `requirements.txt` and `dockerfile/Dockerfile`; the Docker image installs Dion before vLLM so the final torch stack is owned by vLLM/the base PyTorch image.
 
 ### Prepare Datasets
 
