@@ -9,9 +9,16 @@ AGENT_FUNC = "agent_func"
 def as_reward_url_list(remote_url):
     if remote_url is None:
         return []
-    if isinstance(remote_url, str):
-        return [remote_url]
-    return list(remote_url)
+
+    urls = [remote_url] if isinstance(remote_url, str) else remote_url
+    normalized_urls = []
+    for url in urls:
+        if url is None:
+            continue
+        normalized_url = str(url).strip()
+        if normalized_url:
+            normalized_urls.append(normalized_url)
+    return normalized_urls
 
 
 def classify_reward_source(remote_url=None, agent_func_path=None):

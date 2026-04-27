@@ -5,7 +5,7 @@ from datetime import datetime
 import ray
 from ray.util.placement_group import placement_group
 
-from openrlhf.cli.reward_normalization import classify_reward_source, reward_normalization_warning
+from openrlhf.cli.reward_normalization import as_reward_url_list, classify_reward_source, reward_normalization_warning
 from openrlhf.trainer.ray import create_vllm_engines
 from openrlhf.trainer.ray.launcher import (
     RayActorGroup,
@@ -604,6 +604,12 @@ if __name__ == "__main__":
     if args.train.agent_func_path:
         args.reward.remote_url = "agent"
 
+    if args.reward.remote_url:
+        remote_url = (
+            args.reward.remote_url.split(",") if isinstance(args.reward.remote_url, str) else args.reward.remote_url
+        )
+        args.reward.remote_url = as_reward_url_list(remote_url)
+
     if args.algo.advantage.estimator not in ["gae"]:
         args.critic.model_name_or_path = None
     elif args.critic.model_name_or_path is None:
@@ -628,9 +634,6 @@ if __name__ == "__main__":
             "Packing collapses the batch dimension, breaking alignment between image tokens and pixel_values. "
             "VLM models also require model-computed position_ids (e.g., M-RoPE) which is incompatible with packing."
         )
-
-    if args.reward.remote_url:
-        args.reward.remote_url = args.reward.remote_url.split(",")
 
     warning = reward_normalization_warning(
         args.reward.normalize_enable,

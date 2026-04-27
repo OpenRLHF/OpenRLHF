@@ -12,7 +12,8 @@ from openrlhf.cli.reward_normalization import (
 def test_as_reward_url_list_normalizes_supported_shapes():
     assert as_reward_url_list(None) == []
     assert as_reward_url_list("http://host:5000/get_reward") == ["http://host:5000/get_reward"]
-    assert as_reward_url_list(["a.py", "http://host"]) == ["a.py", "http://host"]
+    assert as_reward_url_list(" http://host:5000/get_reward ") == ["http://host:5000/get_reward"]
+    assert as_reward_url_list([" a.py ", "", "  ", "http://host "]) == ["a.py", "http://host"]
 
 
 def test_classify_reward_source_local_reward_model():
@@ -21,6 +22,11 @@ def test_classify_reward_source_local_reward_model():
 
 def test_classify_reward_source_python_reward_func():
     assert classify_reward_source("/tmp/reward_func.py") == PYTHON_REWARD_FUNC
+    assert classify_reward_source(" /tmp/reward_func.py ") == PYTHON_REWARD_FUNC
+
+
+def test_classify_reward_source_preserves_case_sensitive_python_suffix():
+    assert classify_reward_source("/tmp/reward_func.PY") == HTTP_REWARD_API
 
 
 def test_classify_reward_source_http_reward_api():
