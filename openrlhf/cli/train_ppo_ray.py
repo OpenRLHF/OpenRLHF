@@ -613,12 +613,12 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
-    if args.fsdp.cp_size > 1:
-        if not args.fsdp.packing_samples:
-            print("[Warning] --fsdp.cp_size > 1 requires --fsdp.packing_samples.")
-            args.fsdp.packing_samples = True
+    if args.fsdp.cp_size > 1 and args.fsdp.packing_samples:
+        raise ValueError("--fsdp.cp_size > 1 is not supported together with --fsdp.packing_samples")
 
     if args.train.dynamic_batch_enable:
+        if args.fsdp.cp_size > 1:
+            raise ValueError("--train.dynamic_batch_enable currently requires packing, which is incompatible with CP")
         if not args.fsdp.packing_samples:
             print(
                 "[Warning] Please --fsdp.packing_samples to accelerate when --train.dynamic_batch_enable is enabled."

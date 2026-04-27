@@ -157,7 +157,18 @@ class SFTTrainer(ABC):
                     aux_loss = output.aux_loss
                 else:
                     aux_loss = 0
-                gpt_loss = self.loss_fn(per_token_log_probs, loss_mask[:, :-1])
+                # verl-style token-mean: divide by *global* valid tokens (across
+                # DP+CP) rather than per-rank, then multiply by dp_size to undo
+                # FSDP2's reduce-scatter averaging. Without this, token-mean is
+                # biased whenever ranks have different mask.sum().
+                shifted_loss_mask = loss_mask[:, :-1]
+                global_num_tokens = self.strategy.global_token_count(shifted_loss_mask)
+                gpt_loss = self.loss_fn(
+                    per_token_log_probs,
+                    shifted_loss_mask,
+                    dp_size=self.strategy.dp_size,
+                    global_num_tokens=global_num_tokens,
+                )
                 loss = gpt_loss + aux_loss * self.args.model.aux_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
@@ -218,7 +229,14 @@ class SFTTrainer(ABC):
             tag = f"global_step{global_step}"
             if not self.disable_ds_ckpt:
                 self.strategy.save_ckpt(
-                    self.model.model, args.ckpt.path, tag, args.ckpt.max_num, args.ckpt.max_mem, client_states
+                    self.model.model,
+                    args.ckpt.path,
+                    tag,
+                    args.ckpt.max_num,
+                    args.ckpt.max_mem,
+                    client_states,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
                 )
             if self.save_hf_ckpt:
                 save_path = os.path.join(args.ckpt.path, f"{tag}_hf")

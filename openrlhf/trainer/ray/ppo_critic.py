@@ -120,12 +120,17 @@ class CriticPPOTrainer(ABC):
             packed_seq_lens=packed_seq_lens,
         )
 
+        # verl-style token-mean: see SFTTrainer for rationale.
+        global_num_tokens = self.strategy.global_token_count(experience.action_mask)
+
         # loss function
         critic_loss = self.critic_loss_fn(
             values,
             old_values,
             returns,
             action_mask=experience.action_mask,
+            dp_size=self.strategy.dp_size,
+            global_num_tokens=global_num_tokens,
         )
         # mixtral
         if self.aux_loss:
@@ -136,11 +141,14 @@ class CriticPPOTrainer(ABC):
         if self.args.train.dynamic_batch_enable:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
 
-        self.strategy.backward(loss, self.critic, self.critic_optim)
         if self.args.train.dynamic_batch_enable:
+            self.strategy.backward(loss, self.critic, self.critic_optim, name="critic", accumulate=False)
             if self.replay_buffer.dynamic_optimizer_step[step]:
-                self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
+                self.strategy.optimizer_step(
+                    self.critic_optim, self.critic, self.critic_scheduler, name="critic", accumulate=False
+                )
         else:
+            self.strategy.backward(loss, self.critic, self.critic_optim, name="critic")
             self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
 
         # status
@@ -207,7 +215,7 @@ class CriticModelActor(BaseModelActor):
         ckpt_path = os.path.join(args.ckpt.path, "_critic")
         if args.ckpt.load_enable and os.path.exists(ckpt_path):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            strategy.load_ckpt(self.critic, ckpt_path)
+            strategy.load_ckpt(self.critic, ckpt_path, optimizer=self.critic_optim, scheduler=self.critic_scheduler)
 
         # initial offload — DS engine sleep/wake has no FSDP equivalent; FSDP2
         # cpu_offload is set at construction time. Skip this step.
@@ -280,6 +288,8 @@ class CriticModelActor(BaseModelActor):
                 args.ckpt.max_mem,
                 metric_value=metric_value,
                 metric_key=metric_key,
+                optimizer=self.critic_optim,
+                scheduler=self.critic_scheduler,
             )
 
     def reload_states(self):

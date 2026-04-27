@@ -30,6 +30,7 @@ class RewardModelProxy:
             packing_samples=args.fsdp.packing_samples,
         )
         self.reward_model.eval()
+        self.device = next(self.reward_model.parameters()).device
 
         self.tokenizer = get_tokenizer(
             args.reward.model_name_or_path,
@@ -52,9 +53,7 @@ class RewardModelProxy:
         scores = []
         with torch.no_grad():
             for i in range(0, len(queries), batch_size):
-                inputs = self.tokenize_fn(
-                    queries[i : min(len(queries), i + batch_size)], device=self.reward_model.device
-                )
+                inputs = self.tokenize_fn(queries[i : min(len(queries), i + batch_size)], device=self.device)
                 r = self.reward_model(inputs["input_ids"], inputs["attention_mask"])
                 r = r.tolist()
                 scores.extend(r)

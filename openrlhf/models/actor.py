@@ -44,7 +44,9 @@ class Actor(nn.Module):
         lora_dropout: float = 0,
         target_modules=None,
         device_mesh=None,
+        moe_mesh=None,
         distributed_config=None,
+        moe_config=None,
         activation_checkpointing: bool = False,
         packing_samples: bool = False,
         temperature: float = 1.0,
@@ -60,7 +62,7 @@ class Actor(nn.Module):
             self.model = pretrain_or_model
             return
 
-        from openrlhf.utils.utils import convert_to_torch_dtype, is_vlm_model
+        from openrlhf.utils.utils import convert_to_torch_dtype, ensure_torchvision_nms_stub, is_vlm_model
 
         # Mixed-precision recipe (matches NeMo-RL / DS bf16): keep fp32 master
         # weights for the optimizer, downcast to param_dtype only for fwd/bwd
@@ -90,6 +92,7 @@ class Actor(nn.Module):
         if lora_rank > 0:
             peft_config = _build_peft_config_dict(lora_rank, lora_alpha, lora_dropout, target_modules)
 
+        ensure_torchvision_nms_stub()
         if self.is_vlm:
             from nemo_automodel import NeMoAutoModelForImageTextToText as ModelCls
         else:
@@ -107,7 +110,9 @@ class Actor(nn.Module):
             attn_implementation=attn_implementation,
             quantization_config=nf4_config,
             device_mesh=device_mesh,
+            moe_mesh=moe_mesh,
             distributed_config=distributed_config,
+            moe_config=moe_config,
             activation_checkpointing=activation_checkpointing,
             peft_config=peft_config,
             use_liger_kernel=use_liger_kernel and not self.is_vlm,
@@ -182,6 +187,10 @@ class Actor(nn.Module):
             **fa_kwargs,
             **mm_inputs,
         )
+        # Automodel's custom MoE/LLM models (e.g. Qwen3MoeForCausalLM) return a
+        # raw logits Tensor; HF returns a ModelOutput with `.logits`. Normalize.
+        if isinstance(output, torch.Tensor):
+            output = {"logits": output}
         # Under TP, lm_head's `ColwiseParallel(output_layouts=Shard(-1))` returns
         # a DTensor sharded on the vocab dim. Gather to full vocab on each rank
         # so downstream entropy / log-prob / loss ops see a plain tensor.

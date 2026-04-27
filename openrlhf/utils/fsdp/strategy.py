@@ -10,7 +10,7 @@ import torch.optim as optim
 import transformers
 from torch.distributed.fsdp import CPUOffloadPolicy, MixedPrecisionPolicy
 from torchdata.stateful_dataloader import StatefulDataLoader
-from transformers.trainer import get_scheduler
+from transformers.optimization import get_scheduler
 
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
@@ -75,6 +75,11 @@ class FsdpStrategy:
         self.sequence_parallel = sp if sp is not None else (self.tp_size > 1)
         self.optim = getattr(args, "optim", "adam")
         self.use_dynamic_batch = getattr(args.train, "dynamic_batch_enable", False)
+        # LoRA flag — flows into Automodel Checkpointer's `is_peft`. Without it
+        # the checkpointer saves the merged base only and the trained adapter
+        # is lost. Read the rank from the FSDP namespace if present.
+        _lora_ns = getattr(fsdp, "lora", None)
+        self.is_peft = bool(getattr(_lora_ns, "rank", 0) > 0) if _lora_ns is not None else False
 
         self.world_size: int = 1
         self.device_mesh = None
@@ -85,6 +90,7 @@ class FsdpStrategy:
         self.accumulated_gradient: int = 1
         self._last_grad_norm: float = 0.0
         self.time_steps = defaultdict(int)
+        self._max_norm_by_optimizer = {}
 
     # ProcessGroup / DeviceMesh aren't picklable. `datasets.map(self.process_data,
     # num_proc>1)` indirectly pickles the strategy via the dataset's bound method;
@@ -119,9 +125,23 @@ class FsdpStrategy:
             dist.init_process_group(backend="nccl", timeout=timeout)
 
         self.world_size = dist.get_world_size()
+        if self.pp_size > 1:
+            raise NotImplementedError("OpenRLHF trainers are not pipeline-parallel aware yet; set --fsdp.pp_size 1")
+        if self.cp_size > 1:
+            # CP requires shard-aware token slicing of input/labels and a CP
+            # context manager around the forward (Automodel's
+            # ``make_cp_batch_and_ctx``). Neither is wired into Actor/RewardModel
+            # yet — running with cp_size>1 would silently produce a wrong loss
+            # (every CP rank sees the full sequence with no token-shard).
+            raise NotImplementedError(
+                "Context parallel (--fsdp.cp_size>1) is not yet wired through the forward path. "
+                "Until Automodel's make_cp_batch_and_ctx is integrated into Actor/RewardModel, "
+                "cp_size must be 1."
+            )
 
         from nemo_automodel.components.distributed.config import FSDP2Config
-        from nemo_automodel.components.distributed.mesh_utils import create_device_mesh
+        from nemo_automodel.components.distributed.mesh_utils import create_device_mesh, get_flat_mesh
+        from nemo_automodel.components.moe.config import MoEParallelizerConfig
 
         # Monkey-patch Automodel's TPLinear forward: their guard misses some
         # non-contiguous DTensor inputs and falls through to F.linear, which
@@ -181,6 +201,9 @@ class FsdpStrategy:
             # reference 13 with dp=3, ratio √3 ≈ 1.73).
             defer_fsdp_grad_sync=False,
         )
+        # MoE-specific parallelization config — required by Automodel when
+        # ep_size > 1 (raises 'NoneType has no to_dict' otherwise).
+        self.moe_config = MoEParallelizerConfig(mp_policy=mp_policy) if self.ep_size > 1 else None
 
         self.device_mesh, self.moe_mesh = create_device_mesh(
             self.distributed_config,
@@ -192,25 +215,32 @@ class FsdpStrategy:
         )
 
         # Process groups for grad-norm/clip and data loaders.
-        # Mesh dim names follow Automodel's FSDP2 convention.
-        if self.tp_size > 1 and "tp" in self.device_mesh.mesh_dim_names:
-            self.tp_group = self.device_mesh["tp"].get_group()
+        # Automodel's FSDP2 mesh has *native* dims ("pp","dp_replicate","dp_shard","cp","tp")
+        # plus *flattened* dims ("dp","dp_shard_cp","dp_cp") stored on
+        # ``device_mesh._flatten_mapping``. ``mesh.mesh_dim_names`` lists only the
+        # native dims, so we must use ``get_flat_mesh`` (which checks both) to
+        # resolve "dp"/"dp_shard_cp" — checking ``mesh_dim_names`` directly
+        # always fails and silently leaves dp_group/dp_cp_group as None.
+        def _maybe_group(name: str):
+            try:
+                return get_flat_mesh(self.device_mesh, name).get_group()
+            except KeyError:
+                return None
 
-        # dp_shard_cp = data-parallel shard × context-parallel; this is the group
-        # over which Automodel's grad_utils reduces.
-        if "dp_shard_cp" in self.device_mesh.mesh_dim_names:
-            self.dp_cp_group = self.device_mesh["dp_shard_cp"].get_group()
-        elif "dp" in self.device_mesh.mesh_dim_names:
-            self.dp_cp_group = self.device_mesh["dp"].get_group()
+        if self.tp_size > 1:
+            self.tp_group = _maybe_group("tp")
 
-        if "dp_shard" in self.device_mesh.mesh_dim_names:
-            self.dp_group = self.device_mesh["dp_shard"].get_group()
-        elif "dp" in self.device_mesh.mesh_dim_names:
-            self.dp_group = self.device_mesh["dp"].get_group()
+        # dp_shard_cp = data-parallel shard × context-parallel; this is the
+        # group over which FSDP2 reduce-scatter syncs grads.
+        self.dp_cp_group = _maybe_group("dp_shard_cp") or _maybe_group("dp")
+        # Pure DP group (excluding CP): used for the data sampler — TP/CP ranks
+        # within a DP group must see the *same* sample.
+        self.dp_group = _maybe_group("dp_shard") or _maybe_group("dp")
 
         dp_size = dist.get_world_size(group=self.dp_group) if self.dp_group else self.world_size
         # Effective grad-accum = train_batch_size / (micro_bs × DP).
         self.accumulated_gradient = max(self.train_batch_size // (self.micro_train_batch_size * dp_size), 1)
+        self.dp_size = dp_size
 
     # ---------------------------------------------------------------- prepare
 
@@ -233,8 +263,8 @@ class FsdpStrategy:
         # NeMoAutoModelForCausalLM.from_pretrained (Automodel's official entry),
         # which handles FSDP2 wrap + TP plan + CP hooks internally given the
         # device_mesh + distributed_config we expose on this strategy.
-        is_actor = isinstance(model, _get_actor_cls())
-        params = [p for p in (model.model if is_actor else model).parameters() if p.requires_grad]
+        train_model = self._unwrap_model(model)
+        params = [p for p in train_model.parameters() if p.requires_grad]
 
         kind = cfg.get("optim", self.optim)
         if kind == "muon":
@@ -250,6 +280,7 @@ class FsdpStrategy:
             foreach=False,
             fused=False,
         )
+        self._max_norm_by_optimizer[id(optimizer)] = cfg.get("max_norm", self.max_norm)
 
         scheduler_steps = cfg["scheduler_steps"]
         scheduler = get_scheduler(
@@ -274,13 +305,13 @@ class FsdpStrategy:
         model: nn.Module,
         optimizer: optim.Optimizer,
         name: str = "model",
+        accumulate: bool = True,
         **kwargs,
     ) -> None:
-        # FSDP2's reduce-scatter averages grads across the DP shard group, so
-        # per-token-mean losses reduce to a correct cross-rank mean directly.
-        # Do NOT multiply the loss by dp_size — that triple-counts and inflates
-        # grad_norm (observed: SFT step1 grad ~69 with DP=3 → ~23 after removal).
-        if self.accumulated_gradient > 1:
+        # Static gradient accumulation mirrors the old trainer contract: each
+        # microbatch loss is averaged locally, then divided by the number of
+        # accumulation steps before backward.
+        if accumulate and self.accumulated_gradient > 1:
             loss = loss / self.accumulated_gradient
             # Skip the DP all-reduce on intermediate accum steps (saves bandwidth);
             # only sync on the final micro-batch where optimizer_step will fire.
@@ -298,23 +329,18 @@ class FsdpStrategy:
         model: nn.Module,
         scheduler,
         name: str = "model",
+        accumulate: bool = True,
         **kwargs,
     ) -> None:
         # Gradient accumulation: skip the optimizer step until the last micro
         # batch in the accumulation window has run. Mirrors PR#1176 / NeMo-RL.
         key = f"step_{name}"
-        self.time_steps[key] += 1
-        if self.time_steps[key] % self.accumulated_gradient != 0:
-            return
+        if accumulate:
+            self.time_steps[key] += 1
+            if self.time_steps[key] % self.accumulated_gradient != 0:
+                return
 
-        # DTensor-aware grad norm + clip via torch.nn.utils. Automodel's
-        # get_grad_norm/clip_grad_by_total_norm_ over-counts on FSDP-sharded
-        # grads with cp=1: each rank's local shard already represents the
-        # post-reduce-scatter averaged grad, but the function then all-reduces
-        # SUM across dp_cp_group again — inflating norm by √dp_size (observed:
-        # 23 vs PR#1176 reference 13 with dp=3, ratio √3 ≈ 1.73).
-        if isinstance(model, _get_actor_cls()):
-            model = model.model
+        model = self._unwrap_model(model)
         params = [p for p in model.parameters() if p.grad is not None]
         if not params:
             self._last_grad_norm = 0.0
@@ -323,29 +349,21 @@ class FsdpStrategy:
                 scheduler.step()
             optimizer.zero_grad(set_to_none=True)
             return
-        # Group by (mesh, placements): different DTensor sharding patterns
-        # cannot be flattened into one norm call. PR#1176 / NeMo-RL use the
-        # same grouping idea; mostly one group at TP=1.
-        from torch.distributed.tensor import DTensor
+        max_norm = self._max_norm_by_optimizer.get(id(optimizer), self.max_norm)
+        if max_norm and max_norm > 0:
+            from nemo_automodel.components.training.utils import clip_grad_norm
 
-        groups: dict = {}
-        for p in params:
-            g = p.grad
-            key = (g.device_mesh, g.placements) if isinstance(g, DTensor) else ("plain",)
-            groups.setdefault(key, []).append(p)
-
-        total_norm_sq = torch.zeros((), dtype=torch.float32, device=torch.cuda.current_device())
-        for group in groups.values():
-            grads = [p.grad for p in group]
-            partial = torch.nn.utils.get_total_norm(grads, norm_type=2.0, error_if_nonfinite=False)
-            if isinstance(partial, DTensor):
-                partial = partial.full_tensor()
-            total_norm_sq = total_norm_sq + partial.to(total_norm_sq.dtype) ** 2
-        total_norm = total_norm_sq.sqrt()
-        self._last_grad_norm = float(total_norm.item())
-        if self.max_norm > 0:
-            for group in groups.values():
-                torch.nn.utils.clip_grads_with_norm_(group, max_norm=self.max_norm, total_norm=total_norm)
+            self._last_grad_norm = float(
+                clip_grad_norm(
+                    max_norm,
+                    [model],
+                    pp_enabled=False,
+                    device_mesh=self.device_mesh,
+                    foreach=False,
+                )
+            )
+        else:
+            self._last_grad_norm = 0.0
         optimizer.step()
         if scheduler is not None:
             scheduler.step()
@@ -353,6 +371,20 @@ class FsdpStrategy:
 
     def get_grad_norm(self, model: nn.Module) -> float:
         return self._last_grad_norm
+
+    def global_token_count(self, mask: torch.Tensor) -> torch.Tensor:
+        """All-reduce ``mask.sum()`` across the FSDP grad-sync group.
+
+        Used as the denominator for verl-style ``token-mean`` loss aggregation:
+        ``loss = masked_sum / global_num_tokens * dp_size``. The reduce group
+        must match the one FSDP2 uses for grad reduce-scatter (dp_shard_cp);
+        otherwise the per-token-mean estimate is biased when token counts are
+        unequal across DP ranks.
+        """
+        local = mask.sum().to(dtype=torch.float32, device=torch.cuda.current_device())
+        if dist.is_initialized() and self.dp_cp_group is not None:
+            dist.all_reduce(local, op=dist.ReduceOp.SUM, group=self.dp_cp_group)
+        return local
 
     # ---------------------------------------------------------------- data
 
@@ -430,6 +462,8 @@ class FsdpStrategy:
     def _unwrap_model(self, model) -> nn.Module:
         if isinstance(model, _get_actor_cls()):
             return self._unwrap_model(model.model)
+        if hasattr(model, "get_base_model_for_fsdp"):
+            return model.get_base_model_for_fsdp()
         if hasattr(model, "module"):
             return model.module
         return model
@@ -450,8 +484,7 @@ class FsdpStrategy:
         # consolidated HF safetensors that vLLM can hot-load.
         from nemo_automodel.components.checkpoint.checkpointing import Checkpointer, CheckpointingConfig
 
-        if isinstance(model, _get_actor_cls()):
-            model = model.model
+        model = self._unwrap_model(model)
 
         os.makedirs(output_dir, exist_ok=True)
         config = CheckpointingConfig(
@@ -461,7 +494,7 @@ class FsdpStrategy:
             model_cache_dir="",
             model_repo_id="",
             save_consolidated=True,
-            is_peft=False,
+            is_peft=self.is_peft,
             v4_compatible=True,  # produce HF-style config.json that vLLM consumes
         )
         ckpt = Checkpointer(
@@ -472,7 +505,8 @@ class FsdpStrategy:
             moe_mesh=self.moe_mesh,
         )
         ckpt.save_model(model=model, weights_path=output_dir, tokenizer=tokenizer)
-        dist.barrier()
+        if dist.is_initialized():
+            dist.barrier()
 
     def _build_checkpointer(self, output_dir: str, save_consolidated: bool):
         from nemo_automodel.components.checkpoint.checkpointing import Checkpointer, CheckpointingConfig
@@ -485,7 +519,7 @@ class FsdpStrategy:
             model_cache_dir="",
             model_repo_id="",
             save_consolidated=save_consolidated,
-            is_peft=False,
+            is_peft=self.is_peft,
             v4_compatible=True,
         )
         return Checkpointer(
@@ -512,8 +546,7 @@ class FsdpStrategy:
         import json
         import shutil
 
-        if isinstance(model, _get_actor_cls()):
-            model = model.model
+        model = self._unwrap_model(model)
 
         save_dir = os.path.join(ckpt_path, tag)
         os.makedirs(save_dir, exist_ok=True)
@@ -521,6 +554,10 @@ class FsdpStrategy:
 
         ckpt = self._build_checkpointer(save_dir, save_consolidated=False)
         ckpt.save_model(model=model, weights_path=save_dir, tokenizer=None)
+        optimizer = kwargs.get("optimizer")
+        scheduler = kwargs.get("scheduler")
+        if optimizer is not None:
+            ckpt.save_optimizer(optimizer=optimizer, model=model, weights_path=save_dir, scheduler=scheduler)
 
         if is_rank0:
             extra = {"client_state": dict(client_states or {})}
@@ -546,7 +583,7 @@ class FsdpStrategy:
         if dist.is_initialized():
             dist.barrier()
 
-    def load_ckpt(self, model: nn.Module, ckpt_path: str, **kwargs):
+    def load_ckpt(self, model: nn.Module, ckpt_path: str, optimizer=None, scheduler=None, **kwargs):
         """Load the most recent DCP checkpoint under ``ckpt_path``. Returns
         ``(load_path, states)`` where ``states`` carries ``client_state`` keys
         (e.g. ``consumed_samples``); ``(None, {})`` if no checkpoint is found.
@@ -565,11 +602,14 @@ class FsdpStrategy:
         if not os.path.isdir(load_dir):
             return None, {}
 
-        if isinstance(model, _get_actor_cls()):
-            model = model.model
+        wrapper = model
+        model = self._unwrap_model(model)
 
         ckpt = self._build_checkpointer(load_dir, save_consolidated=False)
         ckpt.load_model(model=model, model_path=load_dir, use_checkpoint_id=False)
+        optim_dir = os.path.join(load_dir, "optim")
+        if optimizer is not None and os.path.isdir(optim_dir):
+            ckpt.load_optimizer(optimizer=optimizer, model=model, weights_path=load_dir, scheduler=scheduler)
 
         states = {}
         extra_path = os.path.join(load_dir, "extra_state.json")
@@ -584,6 +624,12 @@ class FsdpStrategy:
                 for k in ("normalize_reward", "mean", "std"):
                     if k in runtime:
                         setattr(cfg, k, runtime[k])
+                if hasattr(wrapper, "mean") and "mean" in runtime:
+                    wrapper.mean[0] = runtime["mean"]
+                if hasattr(wrapper, "std") and "std" in runtime:
+                    wrapper.std[0] = runtime["std"]
+                if hasattr(wrapper, "normalize_reward") and "normalize_reward" in runtime:
+                    wrapper.normalize_reward = runtime["normalize_reward"]
         if dist.is_initialized():
             dist.barrier()
         return load_dir, states
@@ -593,8 +639,7 @@ class FsdpStrategy:
         Initial weight load is normally handled by ``NeMoAutoModelForCausalLM.
         from_pretrained``; use this only for explicit later reloads.
         """
-        if isinstance(model, _get_actor_cls()):
-            model = model.model
+        model = self._unwrap_model(model)
         ckpt = self._build_checkpointer(model_path, save_consolidated=False)
         ckpt.load_model(model=model, model_path=model_path, use_checkpoint_id=False)
         if dist.is_initialized():

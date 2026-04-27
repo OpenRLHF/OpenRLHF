@@ -33,23 +33,22 @@ def get_llm_for_sequence_regression(
     use_liger_kernel: bool = False,
     **kwargs,
 ) -> nn.Module:
-    """Build a reward / critic model on top of an Automodel-parallelized base.
-
-    Loads the base CausalLM via ``NeMoAutoModelForCausalLM.from_pretrained``
-    (FSDP2 + TP/CP/EP applied per the device_mesh) and composes a per-token
-    value head over it. The CausalLM's lm_head is loaded but not invoked at
-    forward time — wasted memory for MVP; Phase 5 may swap in a base-only path.
-    """
+    """Build a reward or critic model with an Automodel-managed regression head."""
     assert model_type in ("critic", "reward"), f"invalid model_type: {model_type}"
 
+    if packing_samples and model_type == "reward":
+        raise NotImplementedError("Automodel reward models do not support --fsdp.packing_samples")
+
     config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+    config.num_labels = 1
     config.normalize_reward = normalize_reward
+    config._attn_implementation = attn_implementation
     value_head_prefix = getattr(config, "value_head_prefix", value_head_prefix)
+    config.value_head_prefix = value_head_prefix
     logger.info(f"set value_head_prefix to `{value_head_prefix}`")
 
-    from openrlhf.utils.utils import convert_to_torch_dtype
+    from openrlhf.utils.utils import convert_to_torch_dtype, ensure_torchvision_nms_stub
 
-    # See Actor: load fp32 master weights; FSDP2 mp_policy handles bf16 compute.
     torch_dtype = torch.float32
     compute_dtype = convert_to_torch_dtype(param_dtype)
 
@@ -67,10 +66,12 @@ def get_llm_for_sequence_regression(
     if lora_rank > 0:
         peft_config = _build_peft_config_dict(lora_rank, lora_alpha, lora_dropout, target_modules)
 
-    from nemo_automodel import NeMoAutoModelForCausalLM
+    ensure_torchvision_nms_stub()
+    from nemo_automodel import NeMoAutoModelForSequenceClassification
 
-    base = NeMoAutoModelForCausalLM.from_pretrained(
+    model = NeMoAutoModelForSequenceClassification.from_pretrained(
         model_name_or_path,
+        config=config,
         trust_remote_code=True,
         torch_dtype=torch_dtype,
         attn_implementation=attn_implementation,
@@ -81,86 +82,114 @@ def get_llm_for_sequence_regression(
         peft_config=peft_config,
         use_liger_kernel=use_liger_kernel,
         has_packed_sequence=packing_samples,
+        **kwargs,
     )
 
-    if "output_router_logits" in base.config.to_dict():
+    if "output_router_logits" in model.config.to_dict():
         print("[MoE] set output_router_logits as True")
-        base.config.output_router_logits = True
-    base.config.use_cache = False
+        model.config.output_router_logits = True
+    model.config.use_cache = False
+    model.config.normalize_reward = normalize_reward
+    model.config.value_head_prefix = value_head_prefix
 
-    cls = RewardModel if model_type == "reward" else CriticModel
-    wrapped = cls(
-        base=base,
-        config=config,
-        value_head_prefix=value_head_prefix,
-        packing_samples=packing_samples,
-        normalize_reward=normalize_reward,
-        init_value_head=init_value_head,
+    if init_value_head:
+        _init_regression_head(model, value_head_prefix)
+
+    wrapper_cls = RewardModel if model_type == "reward" else CriticModel
+    return wrapper_cls(model, value_head_prefix, packing_samples, normalize_reward)
+
+
+def _init_regression_head(model: nn.Module, value_head_prefix: str) -> None:
+    head = _get_regression_head(model, value_head_prefix)
+    if not hasattr(head, "weight"):
+        raise AttributeError(f"`{value_head_prefix}` does not expose a weight parameter")
+    with torch.no_grad():
+        head.weight.normal_(mean=0.0, std=1 / (model.config.hidden_size + 1))
+
+
+def _get_regression_head(model: nn.Module, value_head_prefix: str) -> nn.Module:
+    if hasattr(model, value_head_prefix):
+        return getattr(model, value_head_prefix)
+    if value_head_prefix != "score" and hasattr(model, "score"):
+        return getattr(model, "score")
+    raise AttributeError(
+        f"Sequence-classification model {type(model).__name__} has no `{value_head_prefix}` head. "
+        "Use --fsdp.value_head_prefix to match the checkpoint head name."
     )
-    return wrapped
 
 
-class _ValueHeadBase(nn.Module):
-    """Common scaffolding for RewardModel and CriticModel.
+class _SequenceRegressionBase(nn.Module):
+    """OpenRLHF reward/critic forward semantics over an Automodel model.
 
-    Composes an Automodel-parallelized CausalLM with a per-token value head.
-    The value head is plain (replicated across DP, not TP-sharded) — tiny
-    relative to the base, so the cost of replication is negligible.
+    The trainable head lives inside ``self.model``. This wrapper owns only
+    non-persistent runtime buffers, so FSDP, checkpointing, and optimizer state
+    should operate on ``self.model``.
     """
 
     def __init__(
         self,
-        base: nn.Module,
-        config,
+        model: nn.Module,
         value_head_prefix: str,
         packing_samples: bool,
         normalize_reward: bool,
-        init_value_head: bool,
     ) -> None:
         super().__init__()
-        self.base = base
-        self.config = config
+        self.model = model
+        self.config = model.config
         self.value_head_prefix = value_head_prefix
         self.packing_samples = packing_samples
         self.normalize_reward = normalize_reward
 
-        # Register the value head under the configured prefix (e.g., "score").
-        head = nn.Linear(config.hidden_size, 1, bias=False)
-        if init_value_head:
-            head.weight.data.normal_(mean=0.0, std=1 / (config.hidden_size + 1))
-        # Match dtype + device of the base for FSDP2 mp_policy compatibility.
-        ref = next(base.parameters())
-        head = head.to(device=ref.device, dtype=ref.dtype)
-        setattr(self, value_head_prefix, head)
-
         self.register_buffer("mean", torch.zeros(1), persistent=False)
         self.register_buffer("std", torch.ones(1), persistent=False)
-        if hasattr(config, "mean"):
-            self.mean[0] = config.mean
-            self.std[0] = config.std
+        if hasattr(self.config, "mean"):
+            self.mean[0] = self.config.mean
+            self.std[0] = self.config.std
 
-    def _forward_base(self, input_ids, attention_mask, position_ids, **fa_kwargs):
-        """Run the root CausalLM forward (so FSDP2's root unshard hook fires for
-        embed_tokens / final norm) and return hidden states. We discard ``logits``
-        (a wasted lm_head matmul) — Phase 5 may swap to a base-only path.
-        """
-        out = self.base(
+    def get_base_model_for_fsdp(self) -> nn.Module:
+        return self.model
+
+    @property
+    def device(self):
+        return next(self.model.parameters()).device
+
+    def _prepare_inputs(self, input_ids: torch.Tensor, attention_mask: torch.Tensor):
+        batch, seqlen = input_ids.size()
+        fa_kwargs: dict = {}
+        indices = None
+        if self.packing_samples:
+            input_ids, position_ids, _, indices, fa_kwargs = pack_padded_batch(input_ids, attention_mask)
+            forward_attention_mask = None
+        else:
+            forward_attention_mask = attention_mask
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+        return batch, seqlen, input_ids, forward_attention_mask, position_ids, indices, fa_kwargs
+
+    def _token_values(self, input_ids, attention_mask):
+        batch, seqlen, input_ids, forward_attention_mask, position_ids, indices, fa_kwargs = self._prepare_inputs(
+            input_ids, attention_mask
+        )
+        outputs = self.model(
             input_ids=input_ids,
-            attention_mask=attention_mask,
+            attention_mask=forward_attention_mask,
             position_ids=position_ids,
             output_hidden_states=True,
             use_cache=False,
+            return_dict=True,
             **fa_kwargs,
         )
-        # `out.last_hidden_state` is set when output_hidden_states=True; falls back
-        # to the final hidden_states tuple element for older HF / custom models.
-        last = getattr(out, "last_hidden_state", None)
-        if last is None:
-            last = out.hidden_states[-1]
-        return last, out
+        hidden_states = getattr(outputs, "hidden_states", None)
+        if hidden_states is None:
+            raise RuntimeError("Sequence regression requires hidden_states; model did not return them.")
+        last_hidden_states = unshard_dtensor(hidden_states[-1])
+        values = _get_regression_head(self.model, self.value_head_prefix)(last_hidden_states).squeeze(-1)
+        if self.packing_samples:
+            values = unpack_to_padded(values, indices, batch, seqlen)
+        return values, outputs
 
 
-class RewardModel(_ValueHeadBase):
+class RewardModel(_SequenceRegressionBase):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -169,30 +198,8 @@ class RewardModel(_ValueHeadBase):
         pad_sequence: bool = False,
         packed_seq_lens=None,
     ) -> torch.Tensor:
-        batch, seqlen = input_ids.size()
         eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
-        forward_attention_mask = attention_mask
-        fa_kwargs: dict = {}
-        indices = None
-        if self.packing_samples:
-            input_ids, position_ids, _, indices, fa_kwargs = pack_padded_batch(input_ids, attention_mask)
-            forward_attention_mask = None
-        else:
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
-
-        last_hidden_states, outputs = self._forward_base(
-            input_ids, attention_mask=forward_attention_mask, position_ids=position_ids, **fa_kwargs
-        )
-        # Under SP / TP, `last_hidden_state` may be a DTensor (sequence-sharded
-        # under SP; replicated otherwise). The value head is a plain `nn.Linear`
-        # not registered for TP and downstream `.gather(dim=1, eos_indices)`
-        # doesn't support DTensor — unshard before applying.
-        last_hidden_states = unshard_dtensor(last_hidden_states)
-        values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
-
-        if self.packing_samples:
-            values = unpack_to_padded(values, indices, batch, seqlen)
+        values, outputs = self._token_values(input_ids, attention_mask)
         reward = values.gather(dim=1, index=eos_indices).squeeze(1)
 
         if not self.training and self.normalize_reward:
@@ -201,7 +208,7 @@ class RewardModel(_ValueHeadBase):
         return (reward, outputs) if return_output else reward
 
 
-class CriticModel(_ValueHeadBase):
+class CriticModel(_SequenceRegressionBase):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -211,31 +218,11 @@ class CriticModel(_ValueHeadBase):
         values_allgather: bool = False,
         packed_seq_lens=None,
     ) -> torch.Tensor:
-        batch, seqlen = input_ids.size()
-        forward_attention_mask = attention_mask
-        fa_kwargs: dict = {}
-        indices = None
-        if self.packing_samples:
-            input_ids, position_ids, _, indices, fa_kwargs = pack_padded_batch(input_ids, attention_mask)
-            forward_attention_mask = None
-        else:
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
-
-        last_hidden_states, outputs = self._forward_base(
-            input_ids, attention_mask=forward_attention_mask, position_ids=position_ids, **fa_kwargs
-        )
+        values, outputs = self._token_values(input_ids, attention_mask)
 
         if action_mask is None:
             assert return_output
             return outputs
-
-        # See RewardModel for SP unshard rationale.
-        last_hidden_states = unshard_dtensor(last_hidden_states)
-        values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
-
-        if self.packing_samples:
-            values = unpack_to_padded(values, indices, batch, seqlen)
 
         values = values[:, :-1]
         if self.normalize_reward:

@@ -10,13 +10,15 @@ CUDA-IPC handle gather, vLLM ``update_weight`` RPC) is unchanged — only the
 *gather* step swaps in.
 """
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 from torch.distributed.tensor import DTensor
 
 
-def gather_full_param(param: torch.nn.Parameter) -> Tuple[torch.Tensor, torch.Size]:
+def gather_full_param(
+    param: torch.nn.Parameter, dtype: Optional[torch.dtype] = None
+) -> Tuple[torch.Tensor, torch.Size]:
     """Materialize the full unsharded tensor for an FSDP/TP-sharded parameter.
 
     Returns ``(full_tensor, full_shape)`` where ``full_tensor`` is on the local
@@ -31,8 +33,11 @@ def gather_full_param(param: torch.nn.Parameter) -> Tuple[torch.Tensor, torch.Si
     """
     if isinstance(param, DTensor):
         full = param.full_tensor()
-        return full, full.shape
-    return param.data, param.shape
+    else:
+        full = param.data
+    if dtype is not None and full.is_floating_point():
+        full = full.to(dtype=dtype)
+    return full, full.shape
 
 
 def iter_named_full_params(model: torch.nn.Module, *, only_trainable: bool = False):

@@ -124,7 +124,7 @@ def train(args):
 
     consumed_samples = 0
     if args.ckpt.load_enable and os.path.exists(args.ckpt.path):
-        load_path, states = strategy.load_ckpt(model.model, args.ckpt.path)
+        load_path, states = strategy.load_ckpt(model.model, args.ckpt.path, optimizer=optim, scheduler=scheduler)
         if load_path is not None:
             consumed_samples = states["consumed_samples"]
             strategy.print(f"Loaded the checkpoint: {args.ckpt.path}, consumed_samples: {consumed_samples}")

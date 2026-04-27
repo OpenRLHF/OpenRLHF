@@ -4,6 +4,23 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer
 
+_TORCHVISION_NMS_STUB = None
+
+
+def ensure_torchvision_nms_stub() -> None:
+    """Allow importing Transformers model classes when torchvision ops are absent."""
+    global _TORCHVISION_NMS_STUB
+    if _TORCHVISION_NMS_STUB is not None:
+        return
+    try:
+        from torch.library import Library
+
+        lib = Library("torchvision", "FRAGMENT")
+        lib.define("nms(Tensor dets, Tensor scores, float iou_threshold) -> Tensor")
+        _TORCHVISION_NMS_STUB = lib
+    except Exception:
+        _TORCHVISION_NMS_STUB = True
+
 
 def convert_to_torch_dtype(param_dtype: str) -> torch.dtype:
     """Convert param_dtype string to torch.dtype.

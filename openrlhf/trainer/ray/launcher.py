@@ -169,7 +169,9 @@ class RewardModelActor(BaseModelActor):
             distributed_config=strategy.distributed_config,
             activation_checkpointing=False,
             value_head_prefix=strategy.args.fsdp.value_head_prefix,
-            packing_samples=strategy.args.fsdp.packing_samples,
+            # Reward inference receives padded rollout batches. Automodel sequence
+            # classification does not support sequence packing for reward models.
+            packing_samples=False,
         )
         strategy.print(model)
         strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize_enable))

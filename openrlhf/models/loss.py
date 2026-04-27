@@ -7,6 +7,31 @@ import torch.nn.functional as F
 from .utils import masked_mean
 
 
+def _agg_token_mean(
+    loss_mat: torch.Tensor,
+    loss_mask: torch.Tensor,
+    dp_size: Optional[int],
+    global_num_tokens: Optional[torch.Tensor],
+) -> torch.Tensor:
+    """Verl-style ``token-mean`` aggregation.
+
+    When ``dp_size`` and ``global_num_tokens`` are provided, computes
+    ``masked_sum(loss * mask) / global_num_tokens * dp_size`` so that after
+    FSDP2's reduce-scatter (which averages grads across the DP group) the
+    gradient lands on the true global per-token mean — not the per-rank mean,
+    which is biased when token counts vary across DP ranks.
+
+    When neither is provided (single-GPU / DS path), falls back to the local
+    per-rank token mean ``masked_mean(loss, mask)``.
+    """
+    if dp_size is None or global_num_tokens is None or dp_size <= 1:
+        return masked_mean(loss_mat, loss_mask, dim=None)
+    if not torch.is_tensor(global_num_tokens):
+        global_num_tokens = torch.as_tensor(global_num_tokens, device=loss_mat.device, dtype=loss_mat.dtype)
+    masked_sum = (loss_mat * loss_mask).sum()
+    return masked_sum / global_num_tokens.clamp_min(1) * dp_size
+
+
 class GPTLMLoss(nn.Module):
     """GPT Language Model Loss."""
 
@@ -30,14 +55,16 @@ class SFTLoss(nn.Module):
         super().__init__()
         self.token_level_loss = token_level_loss
 
-    def forward(self, per_token_logps: torch.Tensor, loss_mask: torch.Tensor) -> torch.Tensor:
-        loss = (
-            masked_mean(-per_token_logps, loss_mask, dim=None)
-            if self.token_level_loss
-            else masked_mean(-per_token_logps, loss_mask, dim=-1).mean()
-        )
-
-        return loss
+    def forward(
+        self,
+        per_token_logps: torch.Tensor,
+        loss_mask: torch.Tensor,
+        dp_size: Optional[int] = None,
+        global_num_tokens: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        if self.token_level_loss:
+            return _agg_token_mean(-per_token_logps, loss_mask, dp_size, global_num_tokens)
+        return masked_mean(-per_token_logps, loss_mask, dim=-1).mean()
 
 
 class PolicyLoss(nn.Module):
@@ -86,6 +113,8 @@ class PolicyLoss(nn.Module):
         advantages: torch.Tensor,
         action_mask: Optional[torch.Tensor] = None,
         rollout_log_probs: Optional[torch.Tensor] = None,
+        dp_size: Optional[int] = None,
+        global_num_tokens: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if self.policy_loss_type == "ppo":
             log_ratio = log_probs - old_log_probs
@@ -140,11 +169,10 @@ class PolicyLoss(nn.Module):
                 loss = vllm_is * loss
             vllm_kl = masked_mean(rollout_log_probs - old_log_probs, action_mask, dim=None)
 
-        loss = (
-            masked_mean(loss, action_mask, dim=None)
-            if self.token_level_loss
-            else masked_mean(loss, action_mask, dim=-1).mean()
-        )
+        if self.token_level_loss:
+            loss = _agg_token_mean(loss, action_mask, dp_size, global_num_tokens)
+        else:
+            loss = masked_mean(loss, action_mask, dim=-1).mean()
         clip_ratio = masked_mean(torch.lt(surr2, surr1).float(), action_mask, dim=None)
         ppo_kl = masked_mean(-log_ratio.detach(), action_mask, dim=None)
         return loss, clip_ratio, ppo_kl, vllm_kl
@@ -166,6 +194,8 @@ class ValueLoss(nn.Module):
         old_values: torch.Tensor,
         returns: torch.Tensor,
         action_mask: Optional[torch.Tensor] = None,
+        dp_size: Optional[int] = None,
+        global_num_tokens: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if self.clip_eps is not None:
             values_clipped = old_values + (values - old_values).clamp(-self.clip_eps, self.clip_eps)
@@ -175,11 +205,10 @@ class ValueLoss(nn.Module):
         else:
             loss = (values - returns) ** 2
 
-        loss = (
-            masked_mean(loss, action_mask, dim=None)
-            if self.token_level_loss
-            else masked_mean(loss, action_mask, dim=-1).mean()
-        )
+        if self.token_level_loss:
+            loss = _agg_token_mean(loss, action_mask, dp_size, global_num_tokens)
+        else:
+            loss = masked_mean(loss, action_mask, dim=-1).mean()
         return 0.5 * loss
 
 

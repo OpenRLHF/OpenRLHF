@@ -271,6 +271,10 @@ class ActorPPOTrainer(ABC):
             **mm_inputs,
         )
 
+        # verl-style token-mean: see SFTTrainer for rationale. The DP-bias on
+        # token-mean is the same regardless of trainer.
+        global_num_tokens = self.strategy.global_token_count(experience.action_mask)
+
         # loss function
         actor_loss, clip_ratio, ppo_kl, vllm_kl = self.actor_loss_fn(
             action_log_probs,
@@ -278,6 +282,8 @@ class ActorPPOTrainer(ABC):
             advantages,
             action_mask=experience.action_mask,
             rollout_log_probs=experience.rollout_log_probs,
+            dp_size=self.strategy.dp_size,
+            global_num_tokens=global_num_tokens,
         )
         experience.info["ppo_clip_ratio"] = clip_ratio.detach()
         experience.info["ppo_kl"] = ppo_kl.detach()
@@ -315,11 +321,14 @@ class ActorPPOTrainer(ABC):
         if self.args.train.dynamic_batch_enable:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
 
-        self.strategy.backward(loss, self.actor, self.actor_optim)
         if self.args.train.dynamic_batch_enable:
+            self.strategy.backward(loss, self.actor, self.actor_optim, name="actor", accumulate=False)
             if self.replay_buffer.dynamic_optimizer_step[step]:
-                self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
+                self.strategy.optimizer_step(
+                    self.actor_optim, self.actor, self.actor_scheduler, name="actor", accumulate=False
+                )
         else:
+            self.strategy.backward(loss, self.actor, self.actor_optim, name="actor")
             self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
 
         if self.ema_model:
@@ -370,6 +379,9 @@ class ActorPPOTrainer(ABC):
         }
 
     def broadcast_to_vllm(self):
+        if getattr(self.strategy.args.fsdp.lora, "rank", 0) > 0:
+            raise NotImplementedError("FSDP Automodel vLLM weight refit does not support LoRA adapters yet.")
+
         use_prefix_cache = getattr(self.strategy.args.vllm, "enable_prefix_caching", False)
         cache_reset_refs = []
         if use_prefix_cache and torch.distributed.get_rank() == 0:
@@ -430,13 +442,16 @@ class ActorPPOTrainer(ABC):
             (n, p) for n, p in model.named_parameters() if p.requires_grad or not getattr(self.actor, "is_vlm", False)
         ]
         num_params = len(params_to_sync)
+        from openrlhf.utils.utils import convert_to_torch_dtype
+
+        sync_dtype = convert_to_torch_dtype(self.strategy.args.fsdp.param_dtype)
 
         for name, param in params_to_sync:
             count += 1  # empty_cache at last param
             # gather_full_param materializes the FSDP+TP-unsharded tensor on each rank
             # in one call (replaces the DS GatheredParameters + GatherReplacedLayerParams pair).
-            weight, shape = gather_full_param(param)
-            sync_fn(name, weight, param.dtype, shape, count, num_params)
+            weight, shape = gather_full_param(param, dtype=sync_dtype)
+            sync_fn(name, weight, sync_dtype, shape, count, num_params)
             del weight  # bound peak memory: release before next iter
 
         if cache_reset_refs:
@@ -490,6 +505,16 @@ class PolicyModelActor(BaseModelActor):
         )
 
         if args.train.enable_ema:
+            # EMA must mirror the actor's parameter graph; under LoRA the actor
+            # has frozen base weights + trainable lora_A/lora_B, while a
+            # LoRA-less EMA has only the (constant) base — so EMA would
+            # silently freeze and miss every adapter update. Forbid the
+            # combination explicitly until we wire LoRA-aware EMA.
+            if strategy.args.fsdp.lora.rank > 0:
+                raise NotImplementedError(
+                    "EMA (--train.enable_ema) with LoRA (--fsdp.lora.rank>0) is not supported: "
+                    "the EMA model would only track frozen base weights and miss adapter updates."
+                )
             ema_model = Actor(
                 pretrain,
                 attn_implementation=strategy.args.fsdp.attn_implementation,
@@ -526,7 +551,9 @@ class PolicyModelActor(BaseModelActor):
         ckpt_path = os.path.join(args.ckpt.path, "_actor")
         if args.ckpt.load_enable and os.path.exists(ckpt_path):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
+            _, states = strategy.load_ckpt(
+                self.actor.model, ckpt_path, optimizer=self.actor_optim, scheduler=self.actor_scheduler
+            )
             self.checkpoint_states = states
 
         # initial offload — DS engine sleep/wake has no FSDP equivalent; FSDP2
@@ -623,6 +650,8 @@ class PolicyModelActor(BaseModelActor):
                 client_states,
                 metric_value=metric_value,
                 metric_key=metric_key,
+                optimizer=self.actor_optim,
+                scheduler=self.actor_scheduler,
             )
         if self.save_hf_ckpt:
             save_path = os.path.join(args.ckpt.path, f"{tag}_hf")

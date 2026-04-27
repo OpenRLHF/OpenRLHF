@@ -105,7 +105,7 @@ def train(args):
 
     consumed_samples = 0
     if args.ckpt.load_enable and os.path.exists(args.ckpt.path):
-        load_path, states = strategy.load_ckpt(model, args.ckpt.path)
+        load_path, states = strategy.load_ckpt(model, args.ckpt.path, optimizer=optim, scheduler=scheduler)
         if load_path is not None:
             consumed_samples = states["consumed_samples"]
             strategy.print(f"Loaded the checkpoint: {args.ckpt.path}, consumed_samples: {consumed_samples}")
@@ -278,9 +278,8 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
-    if args.fsdp.packing_samples and "flash_attention" not in args.fsdp.attn_implementation:
-        print("[Warning] --fsdp.packing_samples requires flash_attention; forcing flash_attention_2")
-        args.fsdp.attn_implementation = "flash_attention_2"
+    if args.fsdp.packing_samples:
+        raise ValueError("Automodel reward-model training does not support --fsdp.packing_samples")
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub

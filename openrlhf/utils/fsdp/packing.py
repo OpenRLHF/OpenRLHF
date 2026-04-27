@@ -11,7 +11,6 @@ both Automodel custom models and HF fallback models accept it via their
 """
 
 import torch
-from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
 from torch.distributed.tensor import DTensor
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 
@@ -41,6 +40,8 @@ def pack_padded_batch(sequences: torch.Tensor, attention_mask: torch.Tensor):
         indices:          flat indices into `(B*S,)` of real tokens (for `unpack_to_padded`)
         flash_attn_kwargs: HF ``FlashAttentionKwargs`` dict; spread into ``model.forward(**kwargs)``
     """
+    from flash_attn.bert_padding import index_first_axis, rearrange, unpad_input
+
     rolled = torch.roll(sequences, shifts=-1, dims=1)
     packed_ids, indices, cu_seq_lens, max_length, _ = unpad_input(sequences.unsqueeze(-1), attention_mask)
     packed_ids = packed_ids.transpose(0, 1)  # (1, total)
@@ -71,4 +72,6 @@ def unpack_to_padded(packed: torch.Tensor, indices: torch.Tensor, batch: int, se
     Takes a `(1, total_real_tokens)` tensor and returns a `(B, S)` padded tensor
     using the `indices` from the original pack.
     """
+    from flash_attn.bert_padding import pad_input
+
     return pad_input(packed.transpose(0, 1), indices, batch, seqlen).squeeze(-1)
