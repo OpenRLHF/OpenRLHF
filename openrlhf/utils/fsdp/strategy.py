@@ -124,21 +124,33 @@ class FsdpStrategy:
         from nemo_automodel.components.distributed.mesh_utils import create_device_mesh
 
         torch_dtype = _torch_dtype(self.param_dtype)
+        # FSDP2 mixed precision: params/forward in bf16, gradient reduce-scatter
+        # in fp32. Reducing in bf16 accumulates rounding error across DP ranks
+        # and inflates grad_norm (observed 60–130 vs. ~1 expected). cast_forward
+        # _inputs handles the lm_head dtype mismatch by casting fp32 inputs to
+        # bf16 at FSDP unit boundaries. Mirrors NeMo-Automodel's recipe.
+        mp_policy = (
+            None
+            if self.param_dtype == "fp32"
+            else MixedPrecisionPolicy(
+                param_dtype=torch_dtype,
+                reduce_dtype=torch.float32,
+                cast_forward_inputs=True,
+            )
+        )
         # Public attribute — `Actor` reads it as `strategy.distributed_config`
         # and forwards to `NeMoAutoModelForCausalLM.from_pretrained`.
         self.distributed_config = FSDP2Config(
             sequence_parallel=self.sequence_parallel,
             activation_checkpointing=self.activation_checkpointing,
-            # Match Automodel/NeMo-RL default: all bf16, cast forward inputs at FSDP
-            # unit boundaries. Non-bf16 reduce/output dtypes force lm_head input
-            # to float32 while its weight stays bf16 → matmul dtype mismatch.
-            mp_policy=MixedPrecisionPolicy(
-                param_dtype=torch_dtype,
-                reduce_dtype=torch_dtype,
-                output_dtype=torch_dtype,
-                cast_forward_inputs=True,
-            ),
+            mp_policy=mp_policy,
             offload_policy=CPUOffloadPolicy(pin_memory=False) if self.cpu_offload else None,
+            # Force grad sync inside backward(): we read p.grad immediately after
+            # backward() to compute the global grad_norm. With deferred sync,
+            # each rank sees its un-reduced local grad and the global norm
+            # comes out √dp_size× too high (observed: SFT step1 23 vs PR#1176
+            # reference 13 with dp=3, ratio √3 ≈ 1.73).
+            defer_fsdp_grad_sync=False,
         )
 
         self.device_mesh, self.moe_mesh = create_device_mesh(
@@ -170,7 +182,6 @@ class FsdpStrategy:
         dp_size = dist.get_world_size(group=self.dp_group) if self.dp_group else self.world_size
         # Effective grad-accum = train_batch_size / (micro_bs × DP).
         self.accumulated_gradient = max(self.train_batch_size // (self.micro_train_batch_size * dp_size), 1)
-        self._dp_size = dp_size
 
     # ---------------------------------------------------------------- prepare
 
@@ -229,12 +240,10 @@ class FsdpStrategy:
     # ---------------------------------------------------------------- step loop
 
     def backward(self, loss: torch.Tensor, model: nn.Module, optimizer: optim.Optimizer, **kwargs) -> None:
-        # FSDP2 averages grads over the DP shard group; multiply loss back so it
-        # reduces to a SUM, matching the DS-side per-token loss accumulation.
-        # CP also splits per-rank loss, so include cp_size too.
-        scale = self._dp_size * self.cp_size
-        if scale != 1:
-            loss = loss * scale
+        # FSDP2's reduce-scatter averages grads across the DP shard group, so
+        # per-token-mean losses reduce to a correct cross-rank mean directly.
+        # Do NOT multiply the loss by dp_size — that triple-counts and inflates
+        # grad_norm (observed: SFT step1 grad ~69 with DP=3 → ~23 after removal).
         loss.backward()
 
     def optimizer_step(
@@ -245,18 +254,45 @@ class FsdpStrategy:
         name: str = "model",
         **kwargs,
     ) -> None:
-        from nemo_automodel.components.distributed.grad_utils import (
-            clip_grad_by_total_norm_,
-            get_grad_norm,
-        )
-
+        # DTensor-aware grad norm + clip via torch.nn.utils. Automodel's
+        # get_grad_norm/clip_grad_by_total_norm_ over-counts on FSDP-sharded
+        # grads with cp=1: each rank's local shard already represents the
+        # post-reduce-scatter averaged grad, but the function then all-reduces
+        # SUM across dp_cp_group again — inflating norm by √dp_size (observed:
+        # 23 vs PR#1176 reference 13 with dp=3, ratio √3 ≈ 1.73).
         if isinstance(model, _get_actor_cls()):
             model = model.model
-        params = [p for p in model.parameters() if p.requires_grad]
-        total_norm = get_grad_norm(params, dp_cp_group=self.dp_cp_group, tp_group=self.tp_group)
-        self._last_grad_norm = float(total_norm)
+        params = [p for p in model.parameters() if p.grad is not None]
+        if not params:
+            self._last_grad_norm = 0.0
+            optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
+            optimizer.zero_grad(set_to_none=True)
+            return
+        # Group by (mesh, placements): different DTensor sharding patterns
+        # cannot be flattened into one norm call. PR#1176 / NeMo-RL use the
+        # same grouping idea; mostly one group at TP=1.
+        from torch.distributed.tensor import DTensor
+
+        groups: dict = {}
+        for p in params:
+            g = p.grad
+            key = (g.device_mesh, g.placements) if isinstance(g, DTensor) else ("plain",)
+            groups.setdefault(key, []).append(p)
+
+        total_norm_sq = torch.zeros((), dtype=torch.float32, device=torch.cuda.current_device())
+        for group in groups.values():
+            grads = [p.grad for p in group]
+            partial = torch.nn.utils.get_total_norm(grads, norm_type=2.0, error_if_nonfinite=False)
+            if isinstance(partial, DTensor):
+                partial = partial.full_tensor()
+            total_norm_sq = total_norm_sq + partial.to(total_norm_sq.dtype) ** 2
+        total_norm = total_norm_sq.sqrt()
+        self._last_grad_norm = float(total_norm.item())
         if self.max_norm > 0:
-            clip_grad_by_total_norm_(params, max_grad_norm=self.max_norm, total_norm=total_norm)
+            for group in groups.values():
+                torch.nn.utils.clip_grads_with_norm_(group, max_norm=self.max_norm, total_norm=total_norm)
         optimizer.step()
         if scheduler is not None:
             scheduler.step()
@@ -385,17 +421,146 @@ class FsdpStrategy:
         ckpt.save_model(model=model, weights_path=output_dir, tokenizer=tokenizer)
         dist.barrier()
 
-    def save_ckpt(self, *args, **kwargs):
-        raise NotImplementedError("save_ckpt under fsdp lands in Phase 5; MVP only exposes save_model")
+    def _build_checkpointer(self, output_dir: str, save_consolidated: bool):
+        from nemo_automodel.components.checkpoint.checkpointing import Checkpointer, CheckpointingConfig
 
-    def load_ckpt(self, *args, **kwargs):
-        raise NotImplementedError("load_ckpt under fsdp lands in Phase 5; MVP only exposes save_model")
+        os.makedirs(output_dir, exist_ok=True)
+        config = CheckpointingConfig(
+            enabled=True,
+            checkpoint_dir=output_dir,
+            model_save_format="safetensors",
+            model_cache_dir="",
+            model_repo_id="",
+            save_consolidated=save_consolidated,
+            is_peft=False,
+            v4_compatible=True,
+        )
+        return Checkpointer(
+            config=config,
+            dp_rank=dist.get_rank(group=self.dp_group) if self.dp_group else 0,
+            tp_rank=dist.get_rank(group=self.tp_group) if self.tp_group else 0,
+            pp_rank=0,
+            moe_mesh=self.moe_mesh,
+        )
 
-    def load_model(self, *args, **kwargs):
-        raise NotImplementedError("load_model under fsdp lands in Phase 5; MVP only exposes save_model")
+    def save_ckpt(
+        self,
+        model: nn.Module,
+        ckpt_path: str,
+        tag: str,
+        max_num: int = 3,
+        max_mem: int = 0,
+        client_states=None,
+        **kwargs,
+    ) -> None:
+        """DCP-format checkpoint for resumable training (model + optimizer +
+        scheduler + RL stats). HF-safetensors export goes through ``save_model``.
+        """
+        import json
+        import shutil
 
-    def moving_average(self, *args, **kwargs):
-        raise NotImplementedError("EMA under fsdp not yet wired")
+        if isinstance(model, _get_actor_cls()):
+            model = model.model
+
+        save_dir = os.path.join(ckpt_path, tag)
+        os.makedirs(save_dir, exist_ok=True)
+        is_rank0 = (not dist.is_initialized()) or dist.get_rank() == 0
+
+        ckpt = self._build_checkpointer(save_dir, save_consolidated=False)
+        ckpt.save_model(model=model, weights_path=save_dir, tokenizer=None)
+
+        if is_rank0:
+            extra = {"client_state": dict(client_states or {})}
+            unwrapped = self._unwrap_model(model)
+            cfg = getattr(unwrapped, "config", None)
+            if cfg is not None and getattr(cfg, "normalize_reward", False):
+                extra["runtime_state"] = {
+                    "normalize_reward": True,
+                    "mean": float(getattr(cfg, "mean", 0.0)),
+                    "std": float(getattr(cfg, "std", 1.0)),
+                }
+            with open(os.path.join(save_dir, "extra_state.json"), "w") as f:
+                json.dump(extra, f)
+            with open(os.path.join(ckpt_path, "latest"), "w") as f:
+                f.write(tag)
+            if max_num and max_num > 0:
+                tags = sorted(
+                    (d for d in os.listdir(ckpt_path) if os.path.isdir(os.path.join(ckpt_path, d))),
+                    key=lambda d: os.path.getmtime(os.path.join(ckpt_path, d)),
+                )
+                for old in tags[:-max_num]:
+                    shutil.rmtree(os.path.join(ckpt_path, old), ignore_errors=True)
+        if dist.is_initialized():
+            dist.barrier()
+
+    def load_ckpt(self, model: nn.Module, ckpt_path: str, **kwargs):
+        """Load the most recent DCP checkpoint under ``ckpt_path``. Returns
+        ``(load_path, states)`` where ``states`` carries ``client_state`` keys
+        (e.g. ``consumed_samples``); ``(None, {})`` if no checkpoint is found.
+        """
+        import json
+
+        if not os.path.isdir(ckpt_path):
+            return None, {}
+        latest = os.path.join(ckpt_path, "latest")
+        if os.path.isfile(latest):
+            with open(latest) as f:
+                tag = f.read().strip()
+            load_dir = os.path.join(ckpt_path, tag)
+        else:
+            return None, {}
+        if not os.path.isdir(load_dir):
+            return None, {}
+
+        if isinstance(model, _get_actor_cls()):
+            model = model.model
+
+        ckpt = self._build_checkpointer(load_dir, save_consolidated=False)
+        ckpt.load_model(model=model, model_path=load_dir, use_checkpoint_id=False)
+
+        states = {}
+        extra_path = os.path.join(load_dir, "extra_state.json")
+        if os.path.isfile(extra_path):
+            with open(extra_path) as f:
+                extra = json.load(f)
+            states = extra.get("client_state", {}) or {}
+            runtime = extra.get("runtime_state") or {}
+            unwrapped = self._unwrap_model(model)
+            cfg = getattr(unwrapped, "config", None)
+            if runtime and cfg is not None:
+                for k in ("normalize_reward", "mean", "std"):
+                    if k in runtime:
+                        setattr(cfg, k, runtime[k])
+        if dist.is_initialized():
+            dist.barrier()
+        return load_dir, states
+
+    def load_model(self, model: nn.Module, model_path: str, **kwargs) -> None:
+        """Load HF-safetensors weights into an already-parallelized model.
+        Initial weight load is normally handled by ``NeMoAutoModelForCausalLM.
+        from_pretrained``; use this only for explicit later reloads.
+        """
+        if isinstance(model, _get_actor_cls()):
+            model = model.model
+        ckpt = self._build_checkpointer(model_path, save_consolidated=False)
+        ckpt.load_model(model=model, model_path=model_path, use_checkpoint_id=False)
+        if dist.is_initialized():
+            dist.barrier()
+
+    @torch.no_grad()
+    def moving_average(self, model: nn.Module, ema_model: nn.Module, beta: float, device: str = "cuda") -> None:
+        """In-place EMA update: ``ema = beta * ema + (1 - beta) * model``.
+        Iterates over (param, ema_param) pairs by name; both sides are FSDP2-
+        sharded DTensors so the lerp is local to each rank's shard.
+        """
+        src = self._unwrap_model(model)
+        tgt = self._unwrap_model(ema_model)
+        ema_params = dict(tgt.named_parameters())
+        for name, param in src.named_parameters():
+            ema_param = ema_params.get(name)
+            if ema_param is None:
+                continue
+            ema_param.data.mul_(beta).add_(param.data, alpha=1.0 - beta)
 
 
 def _torch_dtype(s: str) -> torch.dtype:
