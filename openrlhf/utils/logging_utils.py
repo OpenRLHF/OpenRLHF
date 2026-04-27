@@ -109,6 +109,53 @@ class WandbLogger:
         self.handle.finish()
 
 
+class TrackioLogger:
+    """Handle Trackio setup and training-time logging.
+
+    Trackio (https://github.com/gradio-app/trackio) is a lightweight, local-first
+    experiment tracker with a wandb-compatible API.
+    """
+
+    def __init__(self, args) -> None:
+        import trackio
+
+        init_kwargs = {
+            "project": args.logger.trackio.project,
+            "config": args.__dict__,
+        }
+        if getattr(args.logger.trackio, "name", None):
+            init_kwargs["name"] = args.logger.trackio.name
+        if getattr(args.logger.trackio, "group", None):
+            init_kwargs["group"] = args.logger.trackio.group
+        if getattr(args.logger.trackio, "space_id", None):
+            init_kwargs["space_id"] = args.logger.trackio.space_id
+        trackio.init(**init_kwargs)
+        self.handle = trackio
+
+    def log_train(self, global_step: int, logs_dict: Dict[str, Any]) -> None:
+        logs_dict = dict(logs_dict)
+        generated_samples = logs_dict.pop("generated_samples", None)
+        if generated_samples:
+            text, reward = generated_samples
+            trace = self.handle.Trace(
+                messages=[{"role": "assistant", "content": str(text)}],
+                metadata={"reward": float(reward), "global_step": global_step},
+            )
+            self.handle.log({"train/generated_samples": trace}, step=global_step)
+
+        metrics = {f"train/{k}": v for k, v in logs_dict.items() if v is not None}
+        if metrics:
+            self.handle.log(metrics, step=global_step)
+
+    def log_eval(self, global_step: int, logs_dict: Dict[str, Any]) -> None:
+        metrics = {f"eval/{k}": v for k, v in logs_dict.items() if v is not None}
+        if metrics:
+            self.handle.log(metrics, step=global_step)
+
+    def close(self) -> None:
+        self.handle.finish()
+
+
 class TensorboardLogger:
     """Handle tensorboard setup and training-time logging."""
 

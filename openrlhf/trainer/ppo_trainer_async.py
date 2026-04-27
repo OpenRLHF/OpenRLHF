@@ -214,6 +214,8 @@ class TrainingActor(BasePPOTrainer):
                 logger.info(f"Eval at step {eval_step}: {eval_metrics}")
                 if self.wandb_logger:
                     self.wandb_logger.log_eval(eval_step, eval_metrics)
+                if self.trackio_logger:
+                    self.trackio_logger.log_eval(eval_step, eval_metrics)
                 if self.tensorboard_logger:
                     self.tensorboard_logger.log_eval(eval_step, eval_metrics)
                 # Save best checkpoint if this eval metric is the best so far
@@ -249,6 +251,8 @@ class TrainingActor(BasePPOTrainer):
 
         if self.wandb_logger:
             self.wandb_logger.close()
+        if self.trackio_logger:
+            self.trackio_logger.close()
         if self.tensorboard_logger:
             self.tensorboard_logger.close()
 

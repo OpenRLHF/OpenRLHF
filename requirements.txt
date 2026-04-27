@@ -23,6 +23,7 @@ torch
 torchdata
 torchmetrics
 tqdm
+trackio
 transformers==5.5.4
 transformers_stream_generator
 wandb
