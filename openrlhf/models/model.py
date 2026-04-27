@@ -236,7 +236,12 @@ class RewardModel(_SequenceRegressionBase):
         reward = values.gather(dim=1, index=eos_indices).squeeze(1)
 
         if not self.training and self.normalize_reward:
-            reward = (reward - self.mean) / self.std
+            # Buffers (mean/std) follow the model when offloaded to CPU; the
+            # forward output stays on GPU. Co-locate before the lerp so we
+            # don't hit 'Expected all tensors to be on the same device'.
+            mean = self.mean.to(reward.device)
+            std = self.std.to(reward.device)
+            reward = (reward - mean) / std
 
         return (reward, outputs) if return_output else reward
 
@@ -259,7 +264,9 @@ class CriticModel(_SequenceRegressionBase):
 
         values = values[:, :-1]
         if self.normalize_reward:
-            values = (values - self.mean) / self.std
+            mean = self.mean.to(values.device)
+            std = self.std.to(values.device)
+            values = (values - mean) / std
 
         action_values = values[:, -action_mask.shape[1] :] * action_mask.float()
         return (action_values, outputs) if return_output else action_values
