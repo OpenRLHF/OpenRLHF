@@ -18,7 +18,7 @@ openrlhf.cli.train_dpo \
    --data.apply_chat_template \
    --data.chosen_key chosen \
    --data.rejected_key rejected \
-   --fsdp.attn_implementation sdpa \
+   --fsdp.attn_implementation flash_attention_2 \
    --ckpt.load_enable \
    --model.gradient_checkpointing_enable
 EOF

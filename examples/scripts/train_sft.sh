@@ -16,7 +16,7 @@ openrlhf.cli.train_sft \
    --eval.steps -1 \
    --train.max_epochs 1 \
    --fsdp.param_dtype bf16 \
-   --fsdp.attn_implementation sdpa \
+   --fsdp.attn_implementation flash_attention_2 \
    --adam.lr 5e-6 \
    --ckpt.load_enable \
    --model.gradient_checkpointing_enable

@@ -40,8 +40,9 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --train.max_tokens_per_gpu 16384 \
    --algo.advantage.is_correction_enable
 
-# Enable AutoModel tensor parallelism
+# Enable FSDP2 tensor parallelism
 #    --fsdp.tp_size 2 \
 
-# Enable AutoModel context parallelism.
+# Enable FSDP2 context parallelism.
 #    --fsdp.cp_size 2 \
+#    --fsdp.no_packing_samples \

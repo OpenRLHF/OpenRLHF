@@ -1,4 +1,4 @@
-"""vLLM weight refit helpers for the FSDP/Automodel backend.
+"""vLLM weight refit helpers for the FSDP2/AutoModel backend.
 
 Replaces older gathered-parameter context managers with a single
 ``gather_full_param`` call: under FSDP2, params are
@@ -19,7 +19,7 @@ from torch.distributed.tensor import DTensor
 def gather_full_param(
     param: torch.nn.Parameter, dtype: Optional[torch.dtype] = None
 ) -> Tuple[torch.Tensor, torch.Size]:
-    """Materialize the full unsharded tensor for an FSDP/TP-sharded parameter.
+    """Materialize the full unsharded tensor for an FSDP2/TP-sharded parameter.
 
     Returns ``(full_tensor, full_shape)`` where ``full_tensor`` is on the local
     device with all mesh dims gathered. For non-DTensor params (e.g., the value

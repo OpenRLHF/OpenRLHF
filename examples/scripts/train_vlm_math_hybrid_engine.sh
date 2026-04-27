@@ -101,4 +101,5 @@ python3 -m openrlhf.cli.train_ppo_ray \
 #
 # Attention implementation:
 #   Use --fsdp.attn_implementation eager for models with linear attention (Qwen3.5).
-#   Flash attention may not support packed sequences with linear attention layers.
+#   Sample packing defaults on globally; VLM runs auto-disable text packing because
+#   image/video processor outputs remain per sample.

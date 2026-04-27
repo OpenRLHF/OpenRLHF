@@ -300,7 +300,7 @@ if __name__ == "__main__":
         help="Eval metric key for best checkpoint saving (e.g., eval_default_pass1). "
         "Empty string auto-detects first pass1 metric. Set to 'none' to disable best checkpoint saving.",
     )
-    # FSDP / Automodel backend
+    # FSDP2 / AutoModel backend
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank from torchrun")
     parser.add_argument("--actor.gradient_checkpointing_enable", action="store_true", default=False)
     parser.add_argument("--actor.gradient_checkpointing_reentrant", action="store_true", default=False)
@@ -322,11 +322,18 @@ if __name__ == "__main__":
     parser.add_argument(
         "--fsdp.attn_implementation",
         type=str,
-        default="sdpa",
+        default="flash_attention_2",
         help="Attention implementation (e.g., sdpa, eager, flex, te, flash_attention_2)",
     )
     parser.add_argument("--fsdp.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
-    parser.add_argument("--fsdp.packing_samples", action="store_true", default=False)
+    parser.add_argument("--fsdp.packing_samples", action="store_true", default=True)
+    parser.add_argument("--fsdp.no_packing_samples", dest="fsdp.packing_samples", action="store_false")
+    parser.add_argument(
+        "--fsdp.force_hf_model",
+        action="store_true",
+        default=False,
+        help="Force CausalLM actor/reference loading through AutoModel's HF fallback path.",
+    )
     parser.add_argument("--fsdp.load_in_4bit", action="store_true", default=False)
     parser.add_argument("--fsdp.lora.rank", type=int, default=0)
     parser.add_argument("--fsdp.lora.alpha", type=int, default=16)
@@ -353,7 +360,8 @@ if __name__ == "__main__":
     parser.add_argument("--train.enable_ema", action="store_true", help="Enable EMA checkpoint for the model.")
     parser.add_argument("--train.ema_beta", type=float, default=0.992, help="EMA beta coefficient")
 
-    # dynamic batch size
+    # Dynamic batch changes microbatch grouping; the packed representation
+    # still follows the loaded actor/critic model path.
     parser.add_argument("--train.dynamic_batch_enable", action="store_true", default=False)
     parser.add_argument("--rollout.max_tokens_per_gpu", type=int, default=None)
     parser.add_argument("--train.max_tokens_per_gpu", type=int, default=16192)
@@ -609,17 +617,16 @@ if __name__ == "__main__":
             args.rollout.n_samples_per_prompt > 1
         ), f"{args.algo.advantage.estimator} requires n_samples_per_prompt > 1"
 
-    # VLM constraints: critic and packing_samples are not supported
+    # VLM constraints: critic and packed text sequences are not compatible with
+    # per-sample image/video processor outputs.
     if args.data.max_images_per_prompt > 0:
         assert args.critic.model_name_or_path is None, (
             "VLM training does not support critic model. "
             "Use --advantage_estimator other than 'gae' (e.g., reinforce_baseline, rloo, group_norm)."
         )
-        assert not args.fsdp.packing_samples, (
-            "VLM training does not support --fsdp.packing_samples. "
-            "Packing collapses the batch dimension, breaking alignment between image tokens and pixel_values. "
-            "VLM models also require model-computed position_ids (e.g., M-RoPE) which is incompatible with packing."
-        )
+        if args.fsdp.packing_samples:
+            print("[Warning] VLM training does not support --fsdp.packing_samples; " "disabling packing for this run.")
+            args.fsdp.packing_samples = False
 
     if args.reward.remote_url:
         args.reward.remote_url = args.reward.remote_url.split(",")
@@ -642,8 +649,8 @@ if __name__ == "__main__":
             raise ValueError("--train.dynamic_batch_enable currently requires packing, which is incompatible with CP")
         if not args.fsdp.packing_samples:
             raise ValueError(
-                "--train.dynamic_batch_enable currently requires explicitly enabling --fsdp.packing_samples. "
-                "Packing is no longer enabled implicitly because the default sdpa path does not depend on flash-attn."
+                "--train.dynamic_batch_enable requires packed training batches. "
+                "Remove --fsdp.no_packing_samples or disable dynamic batch."
             )
         if args.rollout.max_tokens_per_gpu is None:
             print("[Warning] Set --rollout.max_tokens_per_gpu to --train.max_tokens_per_gpu.")
@@ -653,7 +660,7 @@ if __name__ == "__main__":
         if args.fsdp.attn_implementation != "flash_attention_2":
             raise ValueError(
                 "--fsdp.packing_samples currently requires --fsdp.attn_implementation flash_attention_2. "
-                "The default sdpa path avoids the flash-attn dependency by keeping packing disabled."
+                "Use --fsdp.no_packing_samples for sdpa/eager/flex runs."
             )
         assert args.vllm.num_engines > 0, "Only support `--fsdp.packing_samples` with vLLM."
 

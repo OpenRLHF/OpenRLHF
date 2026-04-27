@@ -14,7 +14,7 @@
 # project settings
 OPENRLHF_PATH=<OPENRLHF_ROOT_PATH>
 MOUNT="$OPENRLHF_PATH:/openrlhf,$HOME/.cache:/root/.cache"
-IMAGE_NAME="${IMAGE_NAME:-openrlhf-automodel:latest}"
+IMAGE_NAME="${IMAGE_NAME:-openrlhf-fsdp2:latest}"
 RAY_VERSION="${RAY_VERSION:-2.55.0}"
 
 JOBLOG="$(realpath .)/train_ppo_llama_ray-$SLURM_JOB_ID.log"

@@ -1,7 +1,7 @@
 set -x
 
 PROJECT_PATH=$(cd $(dirname $0)/../../; pwd)
-IMAGE_NAME="${IMAGE_NAME:-openrlhf-automodel:latest}"
+IMAGE_NAME="${IMAGE_NAME:-openrlhf-fsdp2:latest}"
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
 	docker build -t "$IMAGE_NAME" -f "$PROJECT_PATH/dockerfile/Dockerfile" "$PROJECT_PATH"

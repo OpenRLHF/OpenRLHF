@@ -28,14 +28,14 @@
 
 <span>[ English | <a href="README_zh.md">中文</a> | <a href="README_ja.md">日本語</a> ]</span>
 
-OpenRLHF is **the first** high-performance, production-ready open-source RLHF framework that combines **Ray + vLLM + NVIDIA NeMo AutoModel/FSDP2** with a **unified agent-based design paradigm** for scalable and extensible reinforcement learning from human feedback.
+OpenRLHF is a high-performance, production-ready open-source RLHF framework that combines **Ray + vLLM + FSDP2(AutoTP/EP/CP)** with a **unified agent-based design paradigm** for scalable and extensible reinforcement learning from human feedback.
 
 📚 **Learn More**: [Documentation](https://openrlhf.readthedocs.io/) | [Slides](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [Technical Report](https://www.researchgate.net/publication/393414548_OpenRLHF_An_Easy-to-use_Scalable_and_High-performance_RLHF_Framework) | [Video](https://www.bilibili.com/video/BV1dv2jBxEQG/)
 
 ## 📖 Table of Contents
 
 - [🗞️ News](#news)
-- [🏗️ Architecture Foundation](#architecture-foundation-ray--vllm--automodelfsdp2-distribution) - Ray + vLLM + AutoModel/FSDP2 distributed infrastructure
+- [🏗️ Architecture Foundation](#architecture-foundation-ray--vllm--fsdp2autotpepcp-distribution) - Ray + vLLM + FSDP2(AutoTP/EP/CP) distributed infrastructure
 - [🎯 Design Paradigm](#design-paradigm-agent-based-execution) - Unified agent-based execution pipeline
 - [🚀 RL Algorithms](#state-of-the-art-rl-algorithms) - PPO, REINFORCE++, GRPO, RLOO
 - [📋 Features Overview](#comprehensive-features) - Complete RLHF pipeline capabilities
@@ -75,10 +75,10 @@ OpenRLHF is **the first** high-performance, production-ready open-source RLHF fr
 
 ---
 
-<a id="architecture-foundation-ray--vllm--automodelfsdp2-distribution"></a>
-## 🏗️ Architecture Foundation: Ray + vLLM + AutoModel/FSDP2 Distribution
+<a id="architecture-foundation-ray--vllm--fsdp2autotpepcp-distribution"></a>
+## 🏗️ Architecture Foundation: Ray + vLLM + FSDP2(AutoTP/EP/CP) Distribution
 
-OpenRLHF is **the first RLHF framework** built on Ray + vLLM + AutoModel/FSDP2 distributed architecture, orchestrating multiple components across GPUs efficiently:
+OpenRLHF uses a Ray + vLLM + FSDP2(AutoTP/EP/CP) distributed architecture to orchestrate training, rollout, reward, reference, and critic components across GPUs efficiently:
 
 <div align="center">
   <img alt="OpenRLHF Architecture (Ray + vLLM)" src="./docs/openrlhf_architecture.svg" style="max-width: 100%; height: auto;" />
@@ -94,8 +94,8 @@ OpenRLHF leverages [Ray](https://github.com/ray-project/ray) for efficient distr
 **vLLM - High-Performance Inference Engine**  
 RLHF training spends **80% of the time on sample generation**. Powered by [vLLM](https://github.com/vllm-project/vllm) with Auto Tensor Parallelism (AutoTP) and Pipeline Parallelism (PP), OpenRLHF delivers high-throughput, memory-efficient generation.
 
-**NeMo AutoModel + PyTorch FSDP2 - Memory-Efficient Training**
-Built on [NVIDIA NeMo AutoModel](https://docs.nvidia.com/nemo/automodel/) and PyTorch FSDP2/DTensor. AutoModel owns model construction, TP/CP/EP mesh setup, activation checkpointing, LoRA/QLoRA wiring, and FSDP2 wrapping; OpenRLHF keeps the RL training loop, Ray orchestration, vLLM refit, and checkpoint flow thin.
+**FSDP2(AutoTP/EP/CP) - Memory-Efficient Training**
+Built on PyTorch FSDP2/DTensor with [NeMo AutoModel](https://docs.nvidia.com/nemo/automodel/) integration for model construction, TP/CP/EP mesh setup, activation checkpointing, LoRA/QLoRA wiring, and FSDP2 wrapping; OpenRLHF keeps the RL training loop, Ray orchestration, vLLM refit, and checkpoint flow thin.
 
 **Transformers + AutoModel - Model Interface**
 Native integration with HuggingFace Transformers through AutoModel entry points such as `NeMoAutoModelForCausalLM.from_pretrained(...)` and `NeMoAutoModelForSequenceClassification.from_pretrained(...)`.
@@ -108,7 +108,7 @@ Efficient inter-GPU communication for distributed training and inference.
 <a id="design-paradigm-agent-based-execution"></a>
 ## 🎯 Design Paradigm: Agent-Based Execution
 
-**On top of the Ray distributed architecture**, OpenRLHF is **the first RLHF framework** to implement a **unified agent-based paradigm**. Every training run—whether standard PPO or complex multi-turn reasoning—follows a consistent agent execution pipeline.
+**On top of the Ray distributed architecture**, OpenRLHF implements a **unified agent-based paradigm**. Every training run—whether standard PPO or complex multi-turn reasoning—follows a consistent agent execution pipeline.
 
 ### Why Agent-Based?
 
@@ -239,7 +239,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 <summary>Show advanced capabilities</summary>
 
 **Efficiency Optimizations**
-- Optional sample packing (`--fsdp.packing_samples`) for compatible varlen-attention backends
+- Sample packing defaults on for SFT/DPO/PPO (`--fsdp.packing_samples`) with compatible varlen-attention backends
 - vLLM acceleration (`--vllm.num_engines`) for fast generation
 - DAPO [dynamic filtering](./examples/scripts/train_dapo_ray_hybrid_engine.sh) (`--algo.dynamic_filtering_enable`)
   - 🎲 Dynamic Sampling: for each prompt, generate multiple responses and **filter** them by your reward / agent **0–1 `scores`** signal
@@ -249,8 +249,8 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
     - Example: `./examples/scripts/train_dapo_ray_hybrid_engine.sh`
 
 **Scalability**
-- AutoModel tensor parallelism (`--fsdp.tp_size`) and sequence parallelism (`--fsdp.sequence_parallel`)
-- AutoModel context parallelism for long context (`--fsdp.cp_size`; currently incompatible with sample packing)
+- FSDP2 tensor parallelism (`--fsdp.tp_size`) and sequence parallelism (`--fsdp.sequence_parallel`)
+- FSDP2 context parallelism for long context (`--fsdp.cp_size`; currently incompatible with sample packing)
 - Expert parallelism for MoE models (`--fsdp.ep_size`)
 - Multi-node training with [SLURM](./examples/scripts/train_ppo_ray_slurm.sh)
 
@@ -263,7 +263,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 
 **Optimizers**
 - AdamW (default): `--{actor,critic}.optim adam --{actor,critic}.adam.lr 2e-6`
-- [Muon](https://kellerjordan.github.io/posts/muon/) through AutoModel's Dion-family optimizer builder: `--{actor,critic}.optim muon --{actor,critic}.muon.lr 1e-4 --{actor,critic}.muon.momentum 0.95`. Scalar AdamW groups reuse the outer `--{actor,critic}.adam.*` settings. Install the optional Dion package with `pip install "openrlhf[dion]"` or use the Docker image.
+- [Muon](https://kellerjordan.github.io/posts/muon/) through AutoModel's Dion-family optimizer builder: `--{actor,critic}.optim muon --{actor,critic}.muon.lr 1e-4 --{actor,critic}.muon.momentum 0.95`. Scalar AdamW groups reuse the outer `--{actor,critic}.adam.*` settings. Dion is installed by the base requirements.
 
 **Reward Shaping**
 - DAPO-style overlong penalty for length control (`--reward.overlong_buffer_len`, `--reward.overlong_penalty_factor`) — soft-penalize responses that exceed `max_new_tokens - overlong_buffer_len`
@@ -289,17 +289,17 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 **Recommended**: Use Docker for hassle-free setup
 
 ```bash
-# 1. Build the AutoModel/FSDP2 image
-docker build -t openrlhf-automodel:latest -f dockerfile/Dockerfile .
+# 1. Build the FSDP2 image
+docker build -t openrlhf-fsdp2:latest -f dockerfile/Dockerfile .
 
 # 2. Launch Docker container
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
-  -v $PWD:/openrlhf -v $HOME/.cache:/root/.cache openrlhf-automodel:latest bash
+  -v $PWD:/openrlhf -v $HOME/.cache:/root/.cache openrlhf-fsdp2:latest bash
 # Or: bash examples/scripts/docker_run.sh
 
 # 3. Install the mounted source tree
 cd /openrlhf
-pip install -e ".[vllm,dion]"
+pip install -e ".[vllm]"
 ```
 
 **Alternative: Install from source**
@@ -308,12 +308,11 @@ pip install -e ".[vllm,dion]"
 git clone https://github.com/OpenRLHF/OpenRLHF.git
 cd OpenRLHF
 pip install -e .
-pip install ".[vllm]"                  # + vLLM 0.20.0
-pip install ".[vllm,dion]"             # + vLLM and AutoModel/Dion Muon support
+pip install ".[vllm]"                  # + vLLM 0.20.0; Dion is in requirements.txt
 ```
 
 > [!TIP]
-> This branch targets **NVIDIA PyTorch 25.11**, **torch 2.11**, **NeMo AutoModel main commit `17ed5796bdc220c314c9fd6bd718a773a3642521`**, and **vLLM 0.20.0**. Dion is installed from `github.com/microsoft/dion` because it is not published on PyPI.
+> This branch targets **NVIDIA PyTorch 26.03**, **torch 2.11**, **NeMo AutoModel main commit `17ed5796bdc220c314c9fd6bd718a773a3642521`**, and **vLLM 0.20.0**. Dion is installed from `github.com/microsoft/dion` at main commit `28311d93686275f1baa7f0af57e6c4c61b75440b` because it is not published on PyPI. The Docker image installs Dion before vLLM so the final torch stack is owned by vLLM/the base PyTorch image.
 
 ### Prepare Datasets
 
@@ -375,8 +374,8 @@ torchrun --standalone --nproc_per_node=8 -m openrlhf.cli.train_sft \
 
 # Additional options:
 # --data.apply_chat_template                # Use HF tokenizer chat template
-# --fsdp.tp_size 2                           # Enable AutoModel tensor parallelism
-# --fsdp.cp_size 2                           # Enable AutoModel context parallelism (disable packing)
+# --fsdp.tp_size 2                           # Enable FSDP2 tensor parallelism
+# --fsdp.cp_size 2                           # Enable FSDP2 context parallelism (disable packing)
 # --data.multiturn                          # Multi-turn fine-tuning loss
 # --model.pretrain_mode_enable              # Continued pre-training mode
 ```
@@ -507,7 +506,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 > **Ray Environment Setup**: In production, build the Docker image once on every node or let Ray install the source tree with `--runtime-env-json='{"working_dir": "/openrlhf", "setup_commands": ["pip install -e \"/openrlhf[vllm]\""]}'`.
 
 > [!NOTE]
-> **Troubleshooting GPU index errors**: Set `export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1` if Ray hides devices unexpectedly from AutoModel/FSDP workers.
+> **Troubleshooting GPU index errors**: Set `export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1` if Ray hides devices unexpectedly from FSDP workers.
 
 📚 **More Examples**: See [examples/scripts](./examples/scripts/) and [Documentation](https://openrlhf.readthedocs.io/en/latest/usage.html)
 
@@ -729,8 +728,8 @@ Pick the execution mode based on your priority — OpenRLHF gives you a clear tr
 
 | Optimization | Flag | When to Use |
 |--------------|------|-------------|
-| **Sample Packing** | `--fsdp.packing_samples` | Optional; currently requires `--fsdp.attn_implementation flash_attention_2` |
-| **Dynamic Batch** | `--train.dynamic_batch_enable` | Requires explicitly enabling compatible sample packing |
+| **Sample Packing** | `--fsdp.packing_samples` | Default for SFT/DPO/PPO; packed representation follows the loaded model path: AutoModel THD for native models, HF FlashAttention varlen for HF fallback |
+| **Dynamic Batch** | `--train.dynamic_batch_enable` | Requires compatible sample packing; it only changes microbatch grouping and reuses the model-selected packing path |
 | **Tensor Parallel** | `--fsdp.tp_size` | Large models or faster matmuls |
 | **Context Parallel** | `--fsdp.cp_size` | Long context; disable sample packing |
 | **CPU Offload** | `--fsdp.cpu_offload` | Memory pressure |

@@ -1,10 +1,12 @@
-"""Padded <-> packed conversion for the FSDP/Automodel backend.
+"""Padded <-> packed conversion for the FSDP2 model backend.
 
 OpenRLHF's datasets emit `(B, S)` padded batches. Packing removes padding and
-creates `(1, total_tokens)` streams plus sequence-boundary metadata. HF fallback
-models consume HF FlashAttention varlen kwargs; Automodel custom models consume
-THD kwargs (``qkv_format=thd`` / ``cu_seqlens`` / ``max_seqlen``) when their
-selected attention backend preserves those boundaries.
+creates `(1, total_tokens)` streams plus sequence-boundary metadata. The exact
+packed representation follows the loaded model implementation: HF fallback
+models consume HF FlashAttention varlen kwargs; AutoModel custom models consume
+THD kwargs (``qkv_format=thd`` / ``cu_seqlens`` / ``max_seqlen``). Dynamic
+batching only changes which samples form a microbatch; it reuses this same
+model-selected packing path.
 """
 
 from typing import Any
@@ -30,7 +32,7 @@ def unshard_dtensor(tensor: torch.Tensor) -> torch.Tensor:
 
 
 def is_automodel_custom_model(model: Any) -> bool:
-    """Best-effort check for Automodel's native implementations.
+    """Best-effort check for AutoModel's native implementations.
 
     ``NeMoAutoModel*`` may return either a HF model (when ``force_hf`` is used or
     no native implementation exists) or a class under
@@ -49,7 +51,7 @@ def pack_padded_batch(sequences: torch.Tensor, attention_mask: torch.Tensor, *, 
         position_ids:     `(1, total_real_tokens)` — resets at sequence boundaries
         rolled_input_ids: `(1, total_real_tokens)` — `torch.roll(input_ids, -1)` then unpadded
         indices:          flat indices into `(B*S,)` of real tokens (for `unpack_to_padded`)
-        attention kwargs:  HF FlashAttention kwargs or Automodel THD kwargs
+        attention kwargs:  HF FlashAttention kwargs or AutoModel THD kwargs
     """
     batch, seqlen = sequences.shape
     mask = attention_mask.bool()

@@ -23,7 +23,7 @@ def get_llm_for_sequence_regression(
     target_modules=None,
     lora_dropout: float = 0,
     normalize_reward: bool = False,
-    attn_implementation: str = "sdpa",
+    attn_implementation: str = "flash_attention_2",
     device_mesh=None,
     moe_mesh=None,
     distributed_config=None,
@@ -36,11 +36,11 @@ def get_llm_for_sequence_regression(
     use_fp32_master_weights: Optional[bool] = None,
     **kwargs,
 ) -> nn.Module:
-    """Build a reward or critic model with an Automodel-managed regression head."""
+    """Build a reward or critic model with an AutoModel-managed regression head."""
     assert model_type in ("critic", "reward"), f"invalid model_type: {model_type}"
 
     if packing_samples and model_type == "reward":
-        raise NotImplementedError("Automodel reward models do not support --fsdp.packing_samples")
+        raise NotImplementedError("AutoModel reward models do not support --fsdp.packing_samples")
 
     config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
     config.num_labels = 1
@@ -74,7 +74,7 @@ def get_llm_for_sequence_regression(
     ensure_torchvision_nms_stub()
     from nemo_automodel import NeMoAutoModelForSequenceClassification
 
-    # Automodel's custom registry is CausalLM-oriented. When a base config says
+    # AutoModel's custom registry is CausalLM-oriented. When a base config says
     # e.g. "LlamaForCausalLM", NeMoAutoModelForSequenceClassification would
     # otherwise instantiate the custom causal model and no regression head would
     # exist. Force the HF SequenceClassification path to preserve OpenRLHF's
@@ -149,7 +149,7 @@ def _get_regression_head(model: nn.Module, value_head_prefix: str) -> nn.Module:
 
 
 class _SequenceRegressionBase(nn.Module):
-    """OpenRLHF reward/critic forward semantics over an Automodel model.
+    """OpenRLHF reward/critic forward semantics over an AutoModel model.
 
     The trainable head lives inside ``self.model``. This wrapper owns only
     non-persistent runtime buffers, so FSDP, checkpointing, and optimizer state
@@ -170,6 +170,9 @@ class _SequenceRegressionBase(nn.Module):
         self.packing_samples = packing_samples
         self.normalize_reward = normalize_reward
         self._packing_style = "automodel" if is_automodel_custom_model(model) else "hf"
+        if self.packing_samples:
+            path = "AutoModel THD" if self._packing_style == "automodel" else "HF FlashAttention varlen"
+            print(f"[Packing] Sequence regression using {path} packed path.")
 
         self.register_buffer("mean", torch.zeros(1), persistent=False)
         self.register_buffer("std", torch.ones(1), persistent=False)

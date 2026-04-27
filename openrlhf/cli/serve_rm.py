@@ -86,7 +86,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--fsdp.attn_implementation",
         type=str,
-        default="sdpa",
+        default="flash_attention_2",
         help="Attention implementation (e.g., sdpa, eager, flex, te, flash_attention_2)",
     )
     parser.add_argument("--data.disable_fast_tokenizer", action="store_true", default=False)

@@ -29,6 +29,7 @@ def train(args):
         moe_config=strategy.moe_config,
         activation_checkpointing=args.model.gradient_checkpointing_enable,
         packing_samples=args.fsdp.packing_samples,
+        force_hf_model=args.fsdp.force_hf_model,
         use_liger_kernel=args.fsdp.use_liger_kernel,
     )
     tokenizer = get_tokenizer(
@@ -164,7 +165,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank from torchrun")
 
-    # FSDP / Automodel backend
+    # FSDP2 / AutoModel backend
     parser.add_argument("--fsdp.tp_size", type=int, default=1, help="Tensor parallel size")
     parser.add_argument("--fsdp.cp_size", type=int, default=1, help="Context parallel size (replaces ring-attn)")
     parser.add_argument("--fsdp.ep_size", type=int, default=1, help="Expert parallel size (MoE)")
@@ -183,11 +184,18 @@ if __name__ == "__main__":
     parser.add_argument(
         "--fsdp.attn_implementation",
         type=str,
-        default="sdpa",
+        default="flash_attention_2",
         help="Attention implementation (e.g., sdpa, eager, flex, te, flash_attention_2)",
     )
     parser.add_argument("--fsdp.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
-    parser.add_argument("--fsdp.packing_samples", action="store_true", default=False)
+    parser.add_argument("--fsdp.packing_samples", action="store_true", default=True)
+    parser.add_argument("--fsdp.no_packing_samples", dest="fsdp.packing_samples", action="store_false")
+    parser.add_argument(
+        "--fsdp.force_hf_model",
+        action="store_true",
+        default=False,
+        help="Force CausalLM actor loading through AutoModel's HF fallback path.",
+    )
     parser.add_argument("--fsdp.load_in_4bit", action="store_true", default=False)
     parser.add_argument("--fsdp.lora.rank", type=int, default=0)
     parser.add_argument("--fsdp.lora.alpha", type=int, default=16)
@@ -297,7 +305,7 @@ if __name__ == "__main__":
     if args.fsdp.packing_samples and args.fsdp.attn_implementation != "flash_attention_2":
         raise ValueError(
             "--fsdp.packing_samples currently requires --fsdp.attn_implementation flash_attention_2. "
-            "The default sdpa path avoids the flash-attn dependency by keeping packing disabled."
+            "Use --fsdp.no_packing_samples for sdpa/eager/flex runs."
         )
 
     if args.use_ms:

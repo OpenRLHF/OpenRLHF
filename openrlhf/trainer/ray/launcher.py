@@ -116,6 +116,7 @@ class ReferenceModelActor(BaseModelActor):
             moe_config=strategy.moe_config,
             activation_checkpointing=False,
             packing_samples=strategy.args.fsdp.packing_samples,
+            force_hf_model=strategy.args.fsdp.force_hf_model,
             temperature=strategy.args.rollout.temperature,
             use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
             use_fp32_master_weights=False,
@@ -174,7 +175,7 @@ class RewardModelActor(BaseModelActor):
             moe_config=strategy.moe_config,
             activation_checkpointing=False,
             value_head_prefix=strategy.args.fsdp.value_head_prefix,
-            # Reward inference receives padded rollout batches. Automodel sequence
+            # Reward inference receives padded rollout batches. AutoModel sequence
             # classification does not support sequence packing for reward models.
             packing_samples=False,
             use_fp32_master_weights=False,

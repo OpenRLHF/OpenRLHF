@@ -469,7 +469,7 @@ class ActorPPOTrainer(ABC):
 
     def broadcast_to_vllm(self):
         if getattr(self.strategy.args.fsdp.lora, "rank", 0) > 0:
-            raise NotImplementedError("FSDP Automodel vLLM weight refit does not support LoRA adapters yet.")
+            raise NotImplementedError("FSDP2/AutoModel vLLM weight refit does not support LoRA adapters yet.")
 
         use_prefix_cache = getattr(self.strategy.args.vllm, "enable_prefix_caching", False)
         cache_reset_refs = []
@@ -479,7 +479,7 @@ class ActorPPOTrainer(ABC):
                 cache_reset_refs.append(engine.reset_prefix_cache.remote())
 
         torch.cuda.empty_cache()
-        # Under FSDP/Automodel, `actor.model` is the FSDP2-wrapped HF model directly
+        # Under FSDP2/AutoModel, `actor.model` is the FSDP2-wrapped HF model directly
         # (no DS-engine `.module` indirection). Params are DTensors when sharded.
         model = self.actor.model
         count = 0
@@ -584,6 +584,7 @@ class PolicyModelActor(BaseModelActor):
             moe_config=strategy.moe_config,
             activation_checkpointing=args.actor.gradient_checkpointing_enable,
             packing_samples=strategy.args.fsdp.packing_samples,
+            force_hf_model=strategy.args.fsdp.force_hf_model,
             temperature=strategy.args.rollout.temperature,
             use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
             freeze_visual_encoder=getattr(strategy.args.actor, "freeze_visual_encoder", False),
@@ -617,6 +618,7 @@ class PolicyModelActor(BaseModelActor):
                 moe_config=strategy.moe_config,
                 activation_checkpointing=False,
                 packing_samples=strategy.args.fsdp.packing_samples,
+                force_hf_model=strategy.args.fsdp.force_hf_model,
             )
         else:
             ema_model = None

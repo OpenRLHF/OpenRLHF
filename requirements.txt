@@ -2,6 +2,7 @@ accelerate
 aiohttp
 bitsandbytes
 datasets
+dion @ git+https://github.com/microsoft/dion.git@28311d93686275f1baa7f0af57e6c4c61b75440b
 einops
 flash-attn==2.8.3
 grpcio>=1.74.0

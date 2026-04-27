@@ -70,12 +70,12 @@ def _hf_packing_supported(attn_implementation: str) -> bool:
 
 
 def _build_peft_config_dict(rank: int, alpha: int, dropout: float, target_modules):
-    """Map OpenRLHF lora.* args onto Automodel's PeftConfig schema.
+    """Map OpenRLHF lora.* args onto AutoModel's PeftConfig schema.
 
-    Field-name gotcha: Automodel renames `r` (LoRA rank) → `dim`.
+    Field-name gotcha: AutoModel renames `r` (LoRA rank) → `dim`.
     """
     base = {"dim": rank, "alpha": alpha, "dropout": dropout}
-    # Map HF-peft sentinel "all-linear" → Automodel's `match_all_linear=True`.
+    # Map HF-peft sentinel "all-linear" → AutoModel's `match_all_linear=True`.
     if not target_modules or target_modules == "all-linear":
         return {**base, "match_all_linear": True}
     if isinstance(target_modules, str):
@@ -107,7 +107,7 @@ def _normalize_output(output):
 class Actor(nn.Module):
     """Actor wrapper for RLHF training.
 
-    Builds the underlying model via Automodel's official entry
+    Builds the underlying model via AutoModel's official entry
     (``NeMoAutoModelForCausalLM.from_pretrained`` / ``NeMoAutoModelForImageTextToText``),
     which in a single call: loads HF weights, applies the per-architecture TP plan,
     wraps with FSDP2 over ``device_mesh``, attaches CP hooks if cp_size>1, and
@@ -117,7 +117,7 @@ class Actor(nn.Module):
     def __init__(
         self,
         pretrain_or_model,
-        attn_implementation: str = "sdpa",
+        attn_implementation: str = "flash_attention_2",
         param_dtype: str = "bf16",
         load_in_4bit: bool = False,
         lora_rank: int = 0,
@@ -130,6 +130,7 @@ class Actor(nn.Module):
         moe_config=None,
         activation_checkpointing: bool = False,
         packing_samples: bool = False,
+        force_hf_model: bool = False,
         temperature: float = 1.0,
         use_liger_kernel: bool = False,
         freeze_visual_encoder: bool = False,
@@ -156,7 +157,7 @@ class Actor(nn.Module):
         # mixed bf16 expert weights + fp32 router gates; loading with
         # torch_dtype=fp32 leaves the expert side as bf16, and FSDP rejects
         # ('expects uniform original parameter dtype'). Drop fp32 master for
-        # MoE on the HF reference path (Automodel custom MoE handles the mix
+        # MoE on the HF reference path (AutoModel custom MoE handles the mix
         # internally and works with fp32 master).
         compute_dtype = convert_to_torch_dtype(param_dtype)
         is_moe = _detect_moe_arch(pretrain_or_model)
@@ -189,18 +190,17 @@ class Actor(nn.Module):
         else:
             from nemo_automodel import NeMoAutoModelForCausalLM as ModelCls
 
-        # force_hf=True selection — Automodel's custom impls have known issues
+        # force_hf=True selection — AutoModel's custom impls have known issues
         # we need to route around:
-        #  - Dense + TP>1 + EP=1: F.linear non-contiguous-DTensor view error.
-        #    Use HF reference TP path.
-        #  - MoE without EP: Automodel's custom MoE requires a non-None
+        #  - User override: keep a manual escape hatch for models whose native
+        #    AutoModel path regresses under a given torch/transformers combo.
+        #  - MoE without EP: AutoModel's custom MoE requires a non-None
         #    moe_mesh with an 'ep' dim ('AssertionError: ep mesh dimension not
         #    found'). Use HF reference path.
-        #  Automodel custom Qwen3 MoE currently does not advertise a TP plan,
-        #  so TP+EP is intentionally left to Automodel validation.
-        tp_size = device_mesh["tp"].size() if device_mesh is not None and "tp" in device_mesh.mesh_dim_names else 1
+        #  AutoModel custom Qwen3 MoE currently does not advertise a TP plan,
+        #  so TP+EP is intentionally left to AutoModel validation.
         ep_active = moe_mesh is not None
-        force_hf = (tp_size > 1 and not ep_active) or (is_moe and not ep_active)
+        force_hf = force_hf_model or (is_moe and not ep_active)
         # MoE on HF path: see comment near torch_dtype — drop fp32 master to
         # avoid the mixed-dtype FSDP assert.
         if is_moe and force_hf and torch_dtype == torch.float32:
@@ -249,6 +249,9 @@ class Actor(nn.Module):
                 "Disabling packing for correctness."
             )
             self.packing_samples = False
+        if self.packing_samples:
+            path = "AutoModel THD" if self._packing_style == "automodel" else "HF FlashAttention varlen"
+            print(f"[Packing] Using {path} packed path; dynamic batch reuses the model-selected path.")
 
         # VLM: optionally freeze the vision encoder so only the language
         # model backbone is trained. Both Qwen3.5 and Gemma4 place language
@@ -333,7 +336,7 @@ class Actor(nn.Module):
                 **fa_kwargs,
                 **mm_inputs,
             )
-        # Automodel's custom MoE/LLM models (e.g. Qwen3MoeForCausalLM) return a
+        # AutoModel's custom MoE/LLM models (e.g. Qwen3MoeForCausalLM) return a
         # raw logits Tensor; HF returns a ModelOutput with `.logits`. Normalize.
         output = _normalize_output(output)
         logits = output["logits"]
@@ -380,7 +383,7 @@ class Actor(nn.Module):
         return (action_log_probs, output) if return_output else action_log_probs
 
     def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs={"use_reentrant": False}):
-        # No-op under FSDP/Automodel: activation checkpointing is configured
+        # No-op under FSDP2/AutoModel: activation checkpointing is configured
         # at construction time via `activation_checkpointing=True` on
         # `NeMoAutoModelForCausalLM.from_pretrained`. Calling HF's late hook
         # would conflict with FSDP2's already-applied wrap.

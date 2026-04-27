@@ -23,10 +23,10 @@ def _get_actor_cls():
 
 
 class FsdpStrategy:
-    """FSDP2 + TP/CP/SP/EP backend, wrapping NVIDIA-NeMo/Automodel.
+    """FSDP2 + TP/CP/SP/EP backend using NeMo AutoModel.
 
     Mirrors DeepspeedStrategy's public surface so trainers are agnostic to the
-    backend. The model is built and parallelized via Automodel's official
+    backend. The model is built and parallelized via AutoModel's official
     entry point ``NeMoAutoModelForCausalLM.from_pretrained`` inside ``Actor``;
     this strategy only handles distributed setup, optimizer/scheduler
     construction, the train-step (loss backward, grad clip, optimizer step),
@@ -75,7 +75,7 @@ class FsdpStrategy:
         self.sequence_parallel = sp if sp is not None else (self.tp_size > 1)
         self.optim = getattr(args, "optim", "adam")
         self.use_dynamic_batch = getattr(args.train, "dynamic_batch_enable", False)
-        # LoRA flag — flows into Automodel Checkpointer's `is_peft`. Without it
+        # LoRA flag — flows into AutoModel Checkpointer's `is_peft`. Without it
         # the checkpointer saves the merged base only and the trained adapter
         # is lost. Read the rank from the FSDP namespace if present.
         _lora_ns = getattr(fsdp, "lora", None)
@@ -169,7 +169,7 @@ class FsdpStrategy:
         from nemo_automodel.components.distributed.mesh_utils import create_device_mesh
         from nemo_automodel.components.moe.config import MoEParallelizerConfig
 
-        # Monkey-patch Automodel's TPLinear forward: their guard misses some
+        # Monkey-patch AutoModel's TPLinear forward: their guard misses some
         # non-contiguous DTensor inputs and falls through to F.linear, which
         # then dies on aten.view (RuntimeError: view size is not compatible).
         # Always contiguify before F.linear; cheap when already contiguous.
@@ -203,7 +203,7 @@ class FsdpStrategy:
         # in fp32. Reducing in bf16 accumulates rounding error across DP ranks
         # and inflates grad_norm (observed 60–130 vs. ~1 expected). cast_forward
         # _inputs handles the lm_head dtype mismatch by casting fp32 inputs to
-        # bf16 at FSDP unit boundaries. Mirrors NeMo-Automodel's recipe.
+        # bf16 at FSDP unit boundaries. Mirrors NeMo AutoModel's recipe.
         mp_policy = (
             None
             if self.param_dtype == "fp32"
@@ -234,7 +234,7 @@ class FsdpStrategy:
             # reference 13 with dp=3, ratio √3 ≈ 1.73).
             defer_fsdp_grad_sync=False,
         )
-        # MoE-specific parallelization config — required by Automodel when
+        # MoE-specific parallelization config — required by AutoModel when
         # ep_size > 1 (raises 'NoneType has no to_dict' otherwise).
         self.moe_config = MoEParallelizerConfig(mp_policy=mp_policy) if self.ep_size > 1 else None
 
@@ -247,16 +247,16 @@ class FsdpStrategy:
             world_size=self.world_size,
         )
 
-        # Process groups are resolved from Automodel's official mesh on demand.
+        # Process groups are resolved from AutoModel's official mesh on demand.
         # OpenRLHF only caches scalar sizes derived from that mesh.
-        # Automodel's FSDP2 mesh has native dims
+        # AutoModel's FSDP2 mesh has native dims
         # ("pp","dp_replicate","dp_shard","cp","tp") plus flattened dims
         # ("dp","dp_shard_cp","dp_cp"). PyTorch exposes both through
-        # ``device_mesh[name]`` after Automodel creates them.
+        # ``device_mesh[name]`` after AutoModel creates them.
 
-        # Automodel uses flattened "dp" for data loading/token denominators and
+        # AutoModel uses flattened "dp" for data loading/token denominators and
         # flattened "dp_cp" when CP ranks participate in FSDP/loss scaling.
-        # Only sizes are cached; ProcessGroups are resolved from the Automodel
+        # Only sizes are cached; ProcessGroups are resolved from the AutoModel
         # mesh on demand so there is a single source of truth.
         dp_size = self._get_dp_group_size(include_cp=False)
         self.dp_cp_size = self._get_dp_group_size(include_cp=True)
@@ -282,7 +282,7 @@ class FsdpStrategy:
 
     def _init_train_model(self, model, cfg: dict):
         # Model is already parallelized — Actor builds via
-        # NeMoAutoModelForCausalLM.from_pretrained (Automodel's official entry),
+        # NeMoAutoModelForCausalLM.from_pretrained (AutoModel's official entry),
         # which handles FSDP2 wrap + TP plan + CP hooks internally given the
         # device_mesh + distributed_config we expose on this strategy.
         train_model = self._unwrap_model(model)
@@ -321,7 +321,7 @@ class FsdpStrategy:
         return model, optimizer, scheduler
 
     def _init_eval_model(self, model):
-        # Eval models are also built+parallelized via Automodel's official entry
+        # Eval models are also built+parallelized via AutoModel's official entry
         # at construction time (Actor or get_llm_for_sequence_regression).
         return model
 
@@ -420,7 +420,7 @@ class FsdpStrategy:
         """All-reduce ``mask.sum()`` across the data-parallel data mesh.
 
         For CP, call this before ``make_cp_batch_and_ctx`` while each CP rank
-        still sees the full local sequence. This mirrors Automodel's recipe:
+        still sees the full local sequence. This mirrors AutoModel's recipe:
         token denominators are reduced over DP only; the backward loss scale
         still uses ``dp_size * cp_size`` to counter FSDP's dp_shard_cp averaging.
         """
@@ -539,7 +539,7 @@ class FsdpStrategy:
         return model_cache_dir, model_repo_id
 
     def save_model(self, model: nn.Module, tokenizer, output_dir: str, **kwargs) -> None:
-        # Use Automodel's Checkpointer — its custom-model save_pretrained mixin
+        # Use AutoModel's Checkpointer — its custom-model save_pretrained mixin
         # requires it (raises "No checkpointer provided" otherwise). Outputs
         # consolidated HF safetensors that vLLM can hot-load.
         from nemo_automodel.components.checkpoint.checkpointing import Checkpointer, CheckpointingConfig
@@ -574,7 +574,7 @@ class FsdpStrategy:
 
     @staticmethod
     def _promote_hf_export(output_dir: str) -> None:
-        """Move Automodel's HF export to ``output_dir`` for OpenRLHF callers."""
+        """Move AutoModel's HF export to ``output_dir`` for OpenRLHF callers."""
         if dist.is_initialized() and dist.get_rank() != 0:
             return
 
@@ -695,7 +695,7 @@ class FsdpStrategy:
         wrapper = model
         model = self._unwrap_model(model)
 
-        # Tied-weight load: Automodel saves in HF safetensors shards with
+        # Tied-weight load: AutoModel saves in HF safetensors shards with
         # .hf_metadata sidecar (not DCP .metadata), and tie_word_embeddings=True
         # models (e.g. Qwen2.5-0.5B) deduplicate the tied pair. Use HF storage
         # reader + allow_partial_load to handle both. Mirrors PR#1176.

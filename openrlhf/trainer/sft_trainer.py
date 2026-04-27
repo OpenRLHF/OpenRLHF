@@ -138,7 +138,7 @@ class SFTTrainer(ABC):
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
 
-            # Automodel's CP recipe computes token denominators before entering
+            # AutoModel's CP recipe computes token denominators before entering
             # the CP context, while every CP rank still has the full local
             # sequence, then all-reduces over DP only.
             local_num_tokens += cp_loss_mask.sum()

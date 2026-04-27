@@ -168,7 +168,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank from torchrun")
 
-    # FSDP / Automodel backend
+    # FSDP2 / AutoModel backend
     parser.add_argument("--fsdp.tp_size", type=int, default=1, help="Tensor parallel size")
     parser.add_argument("--fsdp.cp_size", type=int, default=1, help="Context parallel size")
     parser.add_argument("--fsdp.ep_size", type=int, default=1, help="Expert parallel size (MoE)")
@@ -187,7 +187,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--fsdp.attn_implementation",
         type=str,
-        default="sdpa",
+        default="flash_attention_2",
         help="Attention implementation (e.g., sdpa, eager, flex, te, flash_attention_2)",
     )
     parser.add_argument("--fsdp.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
@@ -303,7 +303,7 @@ if __name__ == "__main__":
         )
 
     if args.fsdp.packing_samples:
-        raise ValueError("Automodel reward-model training does not support --fsdp.packing_samples")
+        raise ValueError("FSDP2 reward-model training does not support --fsdp.packing_samples")
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub

@@ -12,7 +12,7 @@ def ensure_torchvision_nms_stub() -> None:
 
     Only register a stub if torchvision is missing — otherwise pre-registering
     `torchvision::nms` causes a duplicate-registration c10::Error when real
-    torchvision loads later (Automodel/MoE pulls it in indirectly).
+    torchvision loads later (AutoModel/MoE pulls it in indirectly).
     """
     global _TORCHVISION_NMS_STUB
     if _TORCHVISION_NMS_STUB is not None:
