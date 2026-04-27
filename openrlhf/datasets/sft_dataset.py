@@ -201,38 +201,38 @@ class SFTDataset(Dataset):
         return self._mask_to_ranges(assistant_mask)
 
     def _build_marker_assistant_ranges(self, messages, rendered_text):
+        marked_messages = copy.deepcopy(messages)
+        collision_text = rendered_text + "\n" + str(marked_messages)
+        marker_pairs_by_message = []
+        for message_idx, message in enumerate(messages):
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue
+
+            marker_pairs = self._mark_assistant_message(marked_messages, message_idx, collision_text)
+            if not marker_pairs:
+                continue
+            marker_pairs_by_message.append((message_idx, marker_pairs))
+
+        if not marker_pairs_by_message:
+            return []
+
         try:
-            full_rendered_text = self._render_chat(messages).rstrip("\n")
+            marked_render = self._render_chat(marked_messages).rstrip("\n")
         except Exception:
             return []
 
-        if full_rendered_text != rendered_text:
+        all_marker_pairs = [marker_pair for _, marker_pairs in marker_pairs_by_message for marker_pair in marker_pairs]
+        stripped_render, marker_occurrences = self._strip_marker_occurrences(marked_render, all_marker_pairs)
+        if stripped_render != rendered_text:
             warnings.warn(
-                "Skipping multi-turn assistant mask construction because prompt + response does not match the "
-                "full chat-template render.",
+                "Skipping multi-turn assistant mask construction because the marked chat-template render does not "
+                "match the unmarked prompt + response after marker removal.",
                 stacklevel=2,
             )
             return []
 
         char_spans = []
-        for message_idx, message in enumerate(messages):
-            if not isinstance(message, dict) or message.get("role") != "assistant":
-                continue
-
-            marked_messages = copy.deepcopy(messages)
-            marker_pairs = self._mark_assistant_message(marked_messages, message_idx, rendered_text)
-            if not marker_pairs:
-                continue
-
-            try:
-                marked_render = self._render_chat(marked_messages).rstrip("\n")
-            except Exception:
-                continue
-
-            stripped_render, marker_occurrences = self._strip_marker_occurrences(marked_render, marker_pairs)
-            if stripped_render != rendered_text:
-                continue
-
+        for _, marker_pairs in marker_pairs_by_message:
             visible_spans = []
             for start_marker, end_marker in marker_pairs:
                 start_marker_pos = marked_render.find(start_marker)
@@ -256,7 +256,7 @@ class SFTDataset(Dataset):
 
         return self._char_spans_to_token_ranges(rendered_text, self._merge_char_spans(char_spans))
 
-    def _mark_assistant_message(self, messages, message_idx, rendered_text):
+    def _mark_assistant_message(self, messages, message_idx, collision_text):
         message = messages[message_idx]
         marker_pairs = []
         marker_index = 0
@@ -267,12 +267,7 @@ class SFTDataset(Dataset):
                 start_marker = f"__OPENRLHF_ASSISTANT_SPAN_{message_idx}_{marker_index}_START__"
                 end_marker = f"__OPENRLHF_ASSISTANT_SPAN_{message_idx}_{marker_index}_END__"
                 marker_index += 1
-                if (
-                    start_marker not in rendered_text
-                    and end_marker not in rendered_text
-                    and start_marker not in str(messages)
-                    and end_marker not in str(messages)
-                ):
+                if start_marker not in collision_text and end_marker not in collision_text:
                     return start_marker, end_marker
 
         def wrap_segment(text):

@@ -156,6 +156,16 @@ class QwenLikeTokenizer(CharTokenizer):
         return "".join(rendered)
 
 
+class CountingQwenLikeTokenizer(QwenLikeTokenizer):
+    def __init__(self):
+        self.marked_render_calls = 0
+
+    def apply_chat_template(self, messages, *args, **kwargs):
+        if any("__OPENRLHF_ASSISTANT_SPAN_" in str(message) for message in messages):
+            self.marked_render_calls += 1
+        return super().apply_chat_template(messages, *args, **kwargs)
+
+
 class SimpleTemplateTokenizer(CharTokenizer):
     eos_token = "</s>"
     eos_token_id = 0
@@ -415,3 +425,23 @@ def test_marker_fallback_when_native_mask_empty():
     assert tokenizer.native_mask_calls == 1
     assert "answer" in masked_targets
     assert "question" not in masked_targets
+
+
+def test_marker_fallback_marks_all_assistant_turns_in_one_render():
+    tokenizer = CountingQwenLikeTokenizer()
+    dataset = _make_dataset(tokenizer)
+    row = {
+        "input": [
+            {"role": "user", "content": "question one"},
+            {"role": "assistant", "reasoning_content": "hidden first", "content": "answer one"},
+            {"role": "user", "content": "question two"},
+            {"role": "assistant", "reasoning_content": "visible second", "content": "answer two"},
+        ]
+    }
+
+    _, _, masked_targets = _process_and_get_masked_targets(dataset, row)
+
+    assert tokenizer.marked_render_calls == 1
+    assert "answer one" in masked_targets
+    assert "visible second" in masked_targets
+    assert "answer two" in masked_targets
