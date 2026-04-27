@@ -183,6 +183,13 @@ class RewardModelActor(BaseModelActor):
         strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize_enable))
         strategy.print("mean: {}, std {}".format(model.mean, model.std))
 
+        # HF SequenceClassification refuses batch>1 unless pad_token_id is set
+        # on the model config; the driver's get_tokenizer call doesn't propagate
+        # to this Ray actor's process. Sync from the model's tokenizer here.
+        from openrlhf.utils.utils import get_tokenizer
+
+        get_tokenizer(pretrain, model.model, padding_side="right", strategy=strategy, use_fast=True)
+
         if strategy.args.reward.offload:
             model._offload = True
 

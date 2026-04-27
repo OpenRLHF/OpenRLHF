@@ -74,7 +74,12 @@ def get_llm_for_sequence_regression(
     ensure_torchvision_nms_stub()
     from nemo_automodel import NeMoAutoModelForSequenceClassification
 
-    force_hf = False
+    # Automodel's custom registry is CausalLM-oriented. When a base config says
+    # e.g. "LlamaForCausalLM", NeMoAutoModelForSequenceClassification would
+    # otherwise instantiate the custom causal model and no regression head would
+    # exist. Force the HF SequenceClassification path to preserve OpenRLHF's
+    # reward/critic semantics.
+    force_hf = True
     automodel_has_packed_sequence = packing_samples
     if (
         packing_samples
@@ -106,6 +111,7 @@ def get_llm_for_sequence_regression(
         peft_config=peft_config,
         use_liger_kernel=use_liger_kernel,
         has_packed_sequence=automodel_has_packed_sequence,
+        force_hf=force_hf,
         **kwargs,
     )
 

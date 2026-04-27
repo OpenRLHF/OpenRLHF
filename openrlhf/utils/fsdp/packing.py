@@ -54,8 +54,10 @@ def pack_padded_batch(sequences: torch.Tensor, attention_mask: torch.Tensor, *, 
     mask = attention_mask.bool()
     indices = mask.reshape(-1).nonzero(as_tuple=False).flatten()
     seq_lens = mask.sum(dim=-1, dtype=torch.int32)
+    # torch.cumsum on int32 promotes to int64; flash-attn varlen requires int32
+    # (RuntimeError: cu_seqlens_q must have dtype int32). Cast back explicitly.
     cu_seq_lens = torch.cat(
-        [torch.zeros(1, dtype=torch.int32, device=sequences.device), torch.cumsum(seq_lens, dim=0)]
+        [torch.zeros(1, dtype=torch.int32, device=sequences.device), torch.cumsum(seq_lens, dim=0).to(torch.int32)]
     )
     max_length = seq_lens.max().item() if seq_lens.numel() > 0 else 0
 

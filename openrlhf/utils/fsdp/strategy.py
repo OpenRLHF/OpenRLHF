@@ -108,11 +108,10 @@ class FsdpStrategy:
     def _get_automodel_mesh(self, name: str, required: bool = False):
         if self.device_mesh is None:
             return None
-        from nemo_automodel.components.distributed.mesh_utils import get_flat_mesh
 
         try:
-            return get_flat_mesh(self.device_mesh, name)
-        except KeyError:
+            return self.device_mesh[name]
+        except (KeyError, RuntimeError):
             if required:
                 raise
             return None
@@ -250,10 +249,10 @@ class FsdpStrategy:
 
         # Process groups are resolved from Automodel's official mesh on demand.
         # OpenRLHF only caches scalar sizes derived from that mesh.
-        # Automodel's FSDP2 mesh has *native* dims ("pp","dp_replicate","dp_shard","cp","tp")
-        # plus *flattened* dims ("dp","dp_shard_cp","dp_cp") stored on
-        # ``device_mesh._flatten_mapping``. ``mesh.mesh_dim_names`` lists only the
-        # native dims, so all access goes through Automodel's ``get_flat_mesh``.
+        # Automodel's FSDP2 mesh has native dims
+        # ("pp","dp_replicate","dp_shard","cp","tp") plus flattened dims
+        # ("dp","dp_shard_cp","dp_cp"). PyTorch exposes both through
+        # ``device_mesh[name]`` after Automodel creates them.
 
         # Automodel uses flattened "dp" for data loading/token denominators and
         # flattened "dp_cp" when CP ranks participate in FSDP/loss scaling.
@@ -552,7 +551,6 @@ class FsdpStrategy:
             save_consolidated=True,
             is_peft=self.is_peft,
             original_model_root_dir=model_cache_dir,
-            v4_compatible=True,  # produce HF-style config.json that vLLM consumes
         )
         ckpt = Checkpointer(
             config=config,
@@ -564,6 +562,34 @@ class FsdpStrategy:
         ckpt.save_model(model=model, weights_path=output_dir, tokenizer=tokenizer)
         if dist.is_initialized():
             dist.barrier()
+        self._promote_hf_export(output_dir)
+        if dist.is_initialized():
+            dist.barrier()
+
+    @staticmethod
+    def _promote_hf_export(output_dir: str) -> None:
+        """Move Automodel's HF export to ``output_dir`` for OpenRLHF callers."""
+        if dist.is_initialized() and dist.get_rank() != 0:
+            return
+
+        import shutil
+
+        model_dir = os.path.join(output_dir, "model")
+        export_dir = os.path.join(model_dir, "consolidated")
+        if not os.path.isdir(export_dir):
+            export_dir = model_dir
+        if not os.path.isdir(export_dir):
+            return
+
+        for name in os.listdir(export_dir):
+            src = os.path.join(export_dir, name)
+            dst = os.path.join(output_dir, name)
+            if os.path.isdir(dst):
+                shutil.rmtree(dst)
+            elif os.path.exists(dst):
+                os.remove(dst)
+            shutil.move(src, dst)
+        shutil.rmtree(model_dir, ignore_errors=True)
 
     def _build_checkpointer(self, output_dir: str, save_consolidated: bool, model: nn.Module | None = None):
         from nemo_automodel.components.checkpoint.checkpointing import Checkpointer, CheckpointingConfig
@@ -579,7 +605,6 @@ class FsdpStrategy:
             save_consolidated=save_consolidated,
             is_peft=self.is_peft,
             original_model_root_dir=model_cache_dir,
-            v4_compatible=True,
         )
         return Checkpointer(
             config=config,

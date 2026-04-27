@@ -76,7 +76,9 @@ def is_vlm_model(pretrain: str) -> bool:
 
 
 def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=True):
-    is_vlm = getattr(model, "is_vlm", False) if model is not None else is_vlm_model(pretrain)
+    is_vlm = getattr(model, "is_vlm", False) if model is not None else False
+    if not is_vlm:
+        is_vlm = is_vlm_model(pretrain)
 
     if is_vlm:
         from transformers import AutoProcessor

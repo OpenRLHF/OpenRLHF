@@ -220,8 +220,10 @@ class Actor(nn.Module):
                 attn_implementation = "sdpa"
 
         automodel_backend_kwargs = {}
-        if attn_implementation == "te" and not use_hf_model:
-            automodel_backend_kwargs["backend"] = {"attn": "te"}
+        if attn_implementation in {"te", "sdpa", "flex"} and not use_hf_model:
+            from nemo_automodel.components.models.common.utils import BackendConfig
+
+            automodel_backend_kwargs["backend"] = BackendConfig(attn=attn_implementation)
 
         self.model = ModelCls.from_pretrained(
             pretrain_or_model,
