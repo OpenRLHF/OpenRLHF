@@ -27,7 +27,7 @@ class SFTTrainer(ABC):
         max_epochs (int, defaults to 2): The maximum number of training epochs.
         tokenizer (Tokenizer, optional): The tokenizer for processing input data.
         save_hf_ckpt (bool): Whether to save huggingface-format model weight.
-        disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight. (Deepspeed model weight is used for training recovery)
+        disable_ds_ckpt (bool): Legacy flag name; whether to skip resumable FSDP/DCP training checkpoints.
     """
 
     def __init__(

@@ -26,7 +26,7 @@ class DPOTrainer(ABC):
         beta (float, defaults to 0.01): Coefficient for regularizing the preference loss.
         max_epochs (int, defaults to 2): Maximum number of training epochs.
         save_hf_ckpt (bool): Whether to save huggingface-format model weight.
-        disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight. (Deepspeed model weight is used for training recovery)
+        disable_ds_ckpt (bool): Legacy flag name; whether to skip resumable FSDP/DCP training checkpoints.
     """
 
     def __init__(

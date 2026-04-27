@@ -31,8 +31,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --data.max_samples 100000 \
    --train.max_epochs 1 \
    --data.max_len 2048 \
-   --ds.zero_stage 3 \
-   --ds.param_dtype bf16 \
+   --fsdp.param_dtype bf16 \
    --actor.adam.lr 5e-7 \
    --critic.adam.lr 9e-6 \
    --algo.kl.init_coef 0.01 \
@@ -40,9 +39,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --data.input_key context_messages \
    --data.apply_chat_template \
    --reward.normalize_enable \
-   --ds.packing_samples \
-   --ds.adam_offload \
-   --ds.attn_implementation flash_attention_2 \
+   --fsdp.packing_samples \
+   --fsdp.attn_implementation flash_attention_2 \
    --actor.gradient_checkpointing_enable \
    --logger.wandb.key {wandb_token}
 

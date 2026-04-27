@@ -24,8 +24,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --train.max_epochs 1 \
    --data.max_len 2048 \
    --data.max_samples 100000 \
-   --ds.zero_stage 3 \
-   --ds.param_dtype bf16 \
+   --fsdp.param_dtype bf16 \
    --actor.adam.lr 5e-7 \
    --critic.adam.lr 9e-6 \
    --algo.kl.init_coef 0.01 \
@@ -34,18 +33,17 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --data.apply_chat_template \
    --reward.normalize_enable \
    --actor.gradient_checkpointing_enable \
-   --ds.packing_samples \
+   --fsdp.packing_samples \
    --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
-   --ds.enable_sleep \
+   --fsdp.enable_sleep \
    --train.dynamic_batch_enable \
    --train.max_tokens_per_gpu 16384 \
    --algo.advantage.is_correction_enable
 
-# Enable tensor parallelism for DeepSpeed
-#    --ds.tensor_parallel_size 2 \
+# Enable AutoModel tensor parallelism
+#    --fsdp.tp_size 2 \
 
-# Enable Ring-Attention
-#    --ds.ring_attn_size 4 \
-#    --ds.ring_attn_head_stride 2 \
+# Enable AutoModel context parallelism; remove --fsdp.packing_samples when using CP.
+#    --fsdp.cp_size 2 \

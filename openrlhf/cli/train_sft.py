@@ -3,14 +3,14 @@ import math
 import os
 from datetime import datetime
 
-from openrlhf.datasets import SFTDataset
-from openrlhf.datasets.utils import blending_datasets
-from openrlhf.models import Actor
-from openrlhf.trainer.sft_trainer import SFTTrainer
-from openrlhf.utils import get_strategy, get_tokenizer
-
 
 def train(args):
+    from openrlhf.datasets import SFTDataset
+    from openrlhf.datasets.utils import blending_datasets
+    from openrlhf.models import Actor
+    from openrlhf.trainer.sft_trainer import SFTTrainer
+    from openrlhf.utils import get_strategy, get_tokenizer
+
     strategy = get_strategy(args)
     strategy.setup_distributed()
 
@@ -139,7 +139,12 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt.output_dir", type=str, default="./ckpt")
     parser.add_argument("--ckpt.save_steps", type=int, default=-1)
     parser.add_argument("--ckpt.save_hf", action="store_true", default=False)
-    parser.add_argument("--ckpt.disable_ds", action="store_true", default=False)
+    parser.add_argument(
+        "--ckpt.disable_ds",
+        action="store_true",
+        default=False,
+        help="Legacy name: disable resumable FSDP/DCP training checkpoints",
+    )
     parser.add_argument("--logger.logging_steps", type=int, default=1)
     parser.add_argument("--eval.steps", type=int, default=-1)
     parser.add_argument("--ckpt.path", type=str, default="./ckpt/checkpoints_sft")
@@ -209,6 +214,7 @@ if __name__ == "__main__":
     parser.add_argument("--optim", type=str, default="adam", choices=["adam", "muon"])
     parser.add_argument("--muon.lr", type=float, default=0.02, help="LR for Muon 2D-weight group")
     parser.add_argument("--muon.momentum", type=float, default=0.95)
+    parser.add_argument("--muon.weight_decay", type=float, default=None, help="Weight decay for Muon 2D-weight group")
     parser.add_argument("--muon.ns_steps", type=int, default=5)
     parser.add_argument("--muon.nesterov", action="store_true", default=True)
     parser.add_argument("--muon.no_nesterov", dest="muon.nesterov", action="store_false")
@@ -262,6 +268,18 @@ if __name__ == "__main__":
     from openrlhf.utils.config import hierarchize
 
     args = hierarchize(args)
+
+    if not args.model.model_name_or_path:
+        raise ValueError("--model.model_name_or_path is required")
+
+    if not args.data.dataset:
+        raise ValueError("--data.dataset is required")
+
+    if args.fsdp.pp_size > 1:
+        raise NotImplementedError("OpenRLHF trainers are not pipeline-parallel aware yet; set --fsdp.pp_size 1")
+
+    if args.fsdp.cp_size > 1 and args.fsdp.packing_samples:
+        raise ValueError("--fsdp.cp_size > 1 is not supported together with --fsdp.packing_samples")
 
     if args.data.multiturn:
         assert args.data.apply_chat_template, "apply_chat_template must be enabled when using multiturn format"

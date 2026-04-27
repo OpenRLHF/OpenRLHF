@@ -1,20 +1,14 @@
 import argparse
+import logging
 
-import torch
-import uvicorn
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-
-from openrlhf.models import get_llm_for_sequence_regression
-from openrlhf.utils import get_tokenizer
-from openrlhf.utils.config import hierarchize
-from openrlhf.utils.logging_utils import init_logger
-
-logger = init_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class RewardModelProxy:
     def __init__(self, args):
+        from openrlhf.models import get_llm_for_sequence_regression
+        from openrlhf.utils import get_tokenizer
+
         # Single-process inference server — no FSDP/TP/CP needed.
         self.reward_model = get_llm_for_sequence_regression(
             args.reward.model_name_or_path,
@@ -43,6 +37,8 @@ class RewardModelProxy:
         self.batch_size = args.batch_size
 
     def get_reward(self, queries, prompts):
+        import torch
+
         if self.batch_size is None:
             batch_size = len(queries)
         else:
@@ -99,7 +95,18 @@ if __name__ == "__main__":
 
     parser.add_argument("--use_ms", action="store_true", default=False)
 
-    args = hierarchize(parser.parse_args())
+    flat_args = parser.parse_args()
+
+    if not getattr(flat_args, "reward.model_name_or_path"):
+        raise ValueError("--reward.model_name_or_path is required")
+    if getattr(flat_args, "fsdp.packing_samples"):
+        raise ValueError("Remote reward-model serving does not support --fsdp.packing_samples")
+
+    from openrlhf.utils.config import hierarchize
+    from openrlhf.utils.logging_utils import init_logger
+
+    logger = init_logger(__name__)
+    args = hierarchize(flat_args)
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub
@@ -107,6 +114,10 @@ if __name__ == "__main__":
         patch_hub()
 
     reward_model = RewardModelProxy(args)
+    import uvicorn
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse
+
     app = FastAPI()
 
     @app.post("/get_reward")

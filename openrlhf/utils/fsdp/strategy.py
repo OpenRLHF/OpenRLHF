@@ -287,21 +287,27 @@ class FsdpStrategy:
         # device_mesh + distributed_config we expose on this strategy.
         train_model = self._unwrap_model(model)
         params = [p for p in train_model.parameters() if p.requires_grad]
+        if not params:
+            raise ValueError("Cannot build optimizer: model has no trainable parameters")
 
         kind = cfg.get("optim", self.optim)
-        if kind == "muon":
-            raise NotImplementedError("Muon under FSDP2 not yet wired; use --optim adam")
-
         adam = cfg["adam"]
-        optimizer = torch.optim.AdamW(
-            params,
-            lr=adam["lr"],
-            betas=tuple(adam["betas"]),
-            eps=adam["eps"],
-            weight_decay=adam["weight_decay"],
-            foreach=False,
-            fused=False,
-        )
+        if kind == "muon":
+            from openrlhf.utils.fsdp.muon import build_automodel_muon_optimizer
+
+            optimizer = build_automodel_muon_optimizer(train_model, cfg["muon"], adam, self.device_mesh)
+        elif kind == "adam":
+            optimizer = torch.optim.AdamW(
+                params,
+                lr=adam["lr"],
+                betas=tuple(adam["betas"]),
+                eps=adam["eps"],
+                weight_decay=adam["weight_decay"],
+                foreach=False,
+                fused=False,
+            )
+        else:
+            raise ValueError(f"Unsupported optimizer: {kind}")
         self._max_norm_by_optimizer[id(optimizer)] = cfg.get("max_norm", self.max_norm)
 
         scheduler_steps = cfg["scheduler_steps"]
@@ -510,8 +516,8 @@ class FsdpStrategy:
         return model
 
     def get_ds_train_config(self, *args, **kwargs):
-        # Returned dict is consumed by Actor for HfDeepSpeedConfig under the DS
-        # backend; under fsdp it's a no-op. Trainers pass it through unchanged.
+        # Legacy compatibility shim. FSDP2/AutoModel does not need an external
+        # train config object, but trainers still pass this value through.
         return None
 
     def get_ds_eval_config(self, *args, **kwargs):

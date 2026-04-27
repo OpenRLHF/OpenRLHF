@@ -14,8 +14,8 @@
 # project settings
 OPENRLHF_PATH=<OPENRLHF_ROOT_PATH>
 MOUNT="$OPENRLHF_PATH:/openrlhf,$HOME/.cache:/root/.cache"
-IMAGE_NAME="nvcr.io/nvidia/pytorch:25.11-py3"
-RAY_VERSION=2.12.0
+IMAGE_NAME="${IMAGE_NAME:-openrlhf-automodel:latest}"
+RAY_VERSION="${RAY_VERSION:-2.55.0}"
 
 JOBLOG="$(realpath .)/train_ppo_llama_ray-$SLURM_JOB_ID.log"
 echo "$(date '+%Y-%m-%d %H:%M:%S') Job ${SLURM_JOB_ID} started ..." &>> ${JOBLOG}
@@ -54,7 +54,7 @@ sleep 30s
 srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME" --container-mounts="$MOUNT" bash -c \
 "pip install ray[default]==$RAY_VERSION \
 && /root/.local/bin/ray job submit --address=http://localhost:8265 \
-    --runtime-env-json='{\"working_dir\": \"/openrlhf\", \"pip\": \"/openrlhf/requirements.txt\"}' \
+    --runtime-env-json='{\"working_dir\": \"/openrlhf\", \"setup_commands\": [\"pip install -e /openrlhf[vllm]\"]}' \
     -- python3 -m openrlhf.cli.train_ppo_ray \
     --ref.num_nodes 1 \
     --ref.num_gpus_per_node 4 \
@@ -78,8 +78,7 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --data.max_samples 100000 \
     --train.max_epochs 1 \
     --data.max_len 2048 \
-    --ds.zero_stage 3 \
-    --ds.param_dtype bf16 \
+    --fsdp.param_dtype bf16 \
     --actor.adam.lr 5e-7 \
     --critic.adam.lr 9e-6 \
     --algo.kl.init_coef 0.01 \
@@ -87,8 +86,7 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --data.input_key context_messages \
     --data.apply_chat_template \
     --reward.normalize_enable \
-    --ds.adam_offload \
-    --ds.packing_samples \
+    --fsdp.packing_samples \
     --vllm.sync_backend nccl \
     --actor.gradient_checkpointing_enable \
     --logger.wandb.key {wandb_token}" &>> ${JOBLOG}

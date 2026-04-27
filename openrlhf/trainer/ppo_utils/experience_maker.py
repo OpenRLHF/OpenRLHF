@@ -106,7 +106,7 @@ class RemoteExperienceMaker:
         return ref
 
     def _flatten_results(self, refs, duplicate_factor):
-        """Gather ray refs and flatten results, deduplicating ring_attn/tp copies."""
+        """Gather ray refs and flatten results, deduplicating CP/TP copies."""
         return list(itertools.chain.from_iterable(ray.get(refs)[::duplicate_factor]))
 
     @torch.no_grad()

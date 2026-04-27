@@ -103,14 +103,13 @@ class ActorPPOTrainer(ABC):
         torch_dist_barrier_and_cuda_sync()
 
     def _init_vllm_sync_group(self, backend: str):
-        """Create a torch process group between DeepSpeed rank 0 and all vLLM engine ranks.
+        """Create a torch process group between trainer rank 0 and all vLLM engine ranks.
 
         Layout example (3 engines, TP=4):
             [    0,      1, 2, 3, 4,  5, 6, 7, 8,  9, 10, 11, 12]
-            |ds rank 0 |  engine-0  |  engine-1  |   engine-2   |
+            |train rank|  engine-0  |  engine-1  |   engine-2   |
 
-        ZeRO-1/2: broadcast params from rank 0 to all engines.
-        ZeRO-3:   allgather to rank 0 first, then broadcast.
+        FSDP2/TP params are materialized before broadcasting to all engines.
         """
         master_address = ray._private.services.get_node_ip_address()
         with socket.socket() as sock:
@@ -539,7 +538,7 @@ class ActorPPOTrainer(ABC):
         for name, param in params_to_sync:
             count += 1  # empty_cache at last param
             # gather_full_param materializes the FSDP+TP-unsharded tensor on each rank
-            # in one call (replaces the DS GatheredParameters + GatherReplacedLayerParams pair).
+            # in one call.
             weight, shape = gather_full_param(param, dtype=sync_dtype)
             sync_fn(name, weight, sync_dtype, shape, count, num_params)
             del weight  # bound peak memory: release before next iter
@@ -650,8 +649,8 @@ class PolicyModelActor(BaseModelActor):
             )
             self.checkpoint_states = states
 
-        # initial offload — DS engine sleep/wake has no FSDP equivalent; FSDP2
-        # cpu_offload is set at construction time. Skip this step.
+        # Initial engine sleep/wake is not needed here; FSDP2 cpu_offload is set
+        # at construction time.
 
         # configure Trainer
         self.trainer = ActorPPOTrainer(

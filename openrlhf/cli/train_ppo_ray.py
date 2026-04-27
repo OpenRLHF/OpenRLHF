@@ -2,21 +2,17 @@ import argparse
 import os
 from datetime import datetime
 
-import ray
-from ray.util.placement_group import placement_group
-
-from openrlhf.trainer.ray import create_vllm_engines
-from openrlhf.trainer.ray.launcher import (
-    RayActorGroup,
-    ReferenceModelActor,
-    RewardModelActor,
-)
-from openrlhf.trainer.ray.ppo_actor import PolicyModelActor
-from openrlhf.trainer.ray.ppo_critic import CriticModelActor
-from openrlhf.utils import get_strategy
-
 
 def train(args):
+    import ray
+    from ray.util.placement_group import placement_group
+
+    from openrlhf.trainer.ray import create_vllm_engines
+    from openrlhf.trainer.ray.launcher import RayActorGroup, ReferenceModelActor, RewardModelActor
+    from openrlhf.trainer.ray.ppo_actor import PolicyModelActor
+    from openrlhf.trainer.ray.ppo_critic import CriticModelActor
+    from openrlhf.utils import get_strategy
+
     # initialize ray if not initialized
     if not ray.is_initialized():
         # Use os.environ.get() to respect user-set values (e.g. NCCL_DEBUG=INFO via
@@ -237,7 +233,7 @@ if __name__ == "__main__":
         default=1,
         help="tensor parallel size of vLLM Engine for multi-GPU inference",
     )
-    parser.add_argument("--vllm.sync_backend", type=str, default="nccl", help="DeepSpeed -> vLLM weight sync backend")
+    parser.add_argument("--vllm.sync_backend", type=str, default="nccl", help="trainer -> vLLM weight sync backend")
     parser.add_argument("--vllm.sync_with_ray", action="store_true", default=False)
     parser.add_argument("--vllm.enable_prefix_caching", action="store_true", default=False)
     parser.add_argument("--vllm.enforce_eager", action="store_true", default=False, help="Disable CUDA graph in vLLM")
@@ -288,7 +284,12 @@ if __name__ == "__main__":
     parser.add_argument("--logger.logging_steps", type=int, default=1)
     parser.add_argument("--ckpt.path", type=str, default="./ckpt/checkpoints_ppo_ray")
     parser.add_argument("--ckpt.save_hf", action="store_true", default=False)
-    parser.add_argument("--ckpt.disable_ds", action="store_true", default=False)
+    parser.add_argument(
+        "--ckpt.disable_ds",
+        action="store_true",
+        default=False,
+        help="Legacy name: disable resumable FSDP/DCP training checkpoints",
+    )
     parser.add_argument("--ckpt.max_num", type=int, default=3)
     parser.add_argument("--ckpt.max_mem", type=float, default=float("inf"))
     parser.add_argument("--ckpt.load_enable", action="store_true", default=False)
@@ -430,10 +431,6 @@ if __name__ == "__main__":
     #   --{prefix}.muon.*  Muon-specific hypers (only used when --{prefix}.optim=muon)
     #   --{prefix}.adam.*  AdamW hypers — drives pure AdamW when --{prefix}.optim=adam,
     #                      and Muon's aux-Adam subgroup when --{prefix}.optim=muon.
-    # Note: DS v0.18.x Muon hard-codes ns_steps=5 / nesterov=True inside
-    # muon_update() and ignores config overrides. We still expose the CLI slots
-    # so training scripts can be ready for future DS versions; the runtime emits
-    # a warning when a non-default value is set on an ignoring DS.
     for prefix in ("actor", "critic"):
         parser.add_argument(f"--{prefix}.optim", type=str, default="adam", choices=["adam", "muon"])
         # Muon-specific
@@ -444,10 +441,14 @@ if __name__ == "__main__":
             help=f"LR for {prefix}'s Muon 2D-weight group",
         )
         parser.add_argument(f"--{prefix}.muon.momentum", type=float, default=0.95)
-        # Placeholder slots: DS v0.18.x ignores these (see note above); retained
-        # so upgrade to a future DS version is a zero-diff change.
         parser.add_argument(
-            f"--{prefix}.muon.ns_steps", type=int, default=5, help="Newton-Schulz steps (placeholder, DS-ignored)"
+            f"--{prefix}.muon.weight_decay",
+            type=float,
+            default=None,
+            help=f"Weight decay for {prefix}'s Muon 2D-weight group",
+        )
+        parser.add_argument(
+            f"--{prefix}.muon.ns_steps", type=int, default=5, help="Newton-Schulz steps for Muon updates"
         )
         parser.add_argument(f"--{prefix}.muon.nesterov", action="store_true", default=True)
         parser.add_argument(f"--{prefix}.muon.no_nesterov", dest=f"{prefix}.muon.nesterov", action="store_false")
@@ -572,8 +573,28 @@ if __name__ == "__main__":
     if args.actor.eps_clip_low_high is None:
         args.actor.eps_clip_low_high = (args.actor.eps_clip, args.actor.eps_clip)
 
+    if not args.actor.model_name_or_path:
+        raise ValueError("--actor.model_name_or_path is required")
+
+    if not args.vllm.num_engines or args.vllm.num_engines <= 0:
+        raise NotImplementedError(
+            "PPO/RL rollout currently requires vLLM. Set --vllm.num_engines > 0; "
+            "actor-side generation fallback is not wired in this AutoModel path."
+        )
+
     if args.train.agent_func_path:
         args.reward.remote_url = "agent"
+
+    if not args.reward.remote_url and not args.reward.model_name_or_path:
+        raise ValueError(
+            "--reward.model_name_or_path is required unless --reward.remote_url or --train.agent_func_path is set"
+        )
+
+    if args.fsdp.lora.rank > 0:
+        raise NotImplementedError(
+            "RL with --fsdp.lora.rank > 0 is not supported yet: vLLM weight refit for FSDP/AutoModel "
+            "does not know how to sync LoRA adapter updates."
+        )
 
     if args.algo.advantage.estimator not in ["gae"]:
         args.critic.model_name_or_path = None
@@ -583,7 +604,7 @@ if __name__ == "__main__":
         else:
             args.critic.model_name_or_path = args.actor.model_name_or_path
 
-    if args.algo.advantage.estimator in ["rloo", "reinforce_baseline", "group_norm"]:
+    if args.algo.advantage.estimator in ["rloo", "reinforce_baseline", "group_norm", "dr_grpo"]:
         assert (
             args.rollout.n_samples_per_prompt > 1
         ), f"{args.algo.advantage.estimator} requires n_samples_per_prompt > 1"
@@ -595,7 +616,7 @@ if __name__ == "__main__":
             "Use --advantage_estimator other than 'gae' (e.g., reinforce_baseline, rloo, group_norm)."
         )
         assert not args.fsdp.packing_samples, (
-            "VLM training does not support --packing_samples. "
+            "VLM training does not support --fsdp.packing_samples. "
             "Packing collapses the batch dimension, breaking alignment between image tokens and pixel_values. "
             "VLM models also require model-computed position_ids (e.g., M-RoPE) which is incompatible with packing."
         )
@@ -621,7 +642,7 @@ if __name__ == "__main__":
             raise ValueError("--train.dynamic_batch_enable currently requires packing, which is incompatible with CP")
         if not args.fsdp.packing_samples:
             print(
-                "[Warning] Please --fsdp.packing_samples to accelerate when --train.dynamic_batch_enable is enabled."
+                "[Warning] Enable --fsdp.packing_samples to accelerate when --train.dynamic_batch_enable is enabled."
             )
             args.fsdp.packing_samples = True
         if args.rollout.max_tokens_per_gpu is None:

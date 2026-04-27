@@ -290,8 +290,8 @@ class CriticModelActor(BaseModelActor):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
             strategy.load_ckpt(self.critic, ckpt_path, optimizer=self.critic_optim, scheduler=self.critic_scheduler)
 
-        # initial offload — DS engine sleep/wake has no FSDP equivalent; FSDP2
-        # cpu_offload is set at construction time. Skip this step.
+        # Initial engine sleep/wake is not needed here; FSDP2 cpu_offload is set
+        # at construction time.
 
         # configure Trainer
         self.trainer = CriticPPOTrainer(

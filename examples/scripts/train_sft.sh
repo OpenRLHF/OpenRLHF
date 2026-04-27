@@ -14,18 +14,17 @@ openrlhf.cli.train_sft \
    --ckpt.save_steps -1 \
    --logger.logging_steps 1 \
    --eval.steps -1 \
-   --ds.zero_stage 2 \
    --train.max_epochs 1 \
-   --ds.param_dtype bf16 \
-   --ds.attn_implementation flash_attention_2 \
+   --fsdp.param_dtype bf16 \
+   --fsdp.attn_implementation flash_attention_2 \
    --adam.lr 5e-6 \
    --ckpt.load_enable \
-   --ds.packing_samples \
+   --fsdp.packing_samples \
    --model.gradient_checkpointing_enable
 EOF
     # --wandb [WANDB_TOKENS]
-    # --ds.packing_samples
+    # --fsdp.packing_samples
 
 if [[ ${1} != "slurm" ]]; then
-    deepspeed --module $training_commands
+    torchrun --standalone --nproc_per_node ${NPROC_PER_NODE:-8} -m $training_commands
 fi

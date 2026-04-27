@@ -1,7 +1,7 @@
 """vLLM weight refit helpers for the FSDP/Automodel backend.
 
-Replaces the DS-era ``deepspeed.zero.GatheredParameters`` + ``GatherReplacedLayerParams``
-context managers with a single ``gather_full_param`` call: under FSDP2, params are
+Replaces older gathered-parameter context managers with a single
+``gather_full_param`` call: under FSDP2, params are
 ``DTensor`` instances whose ``.full_tensor()`` materializes the unsharded tensor
 across both FSDP shard and TP shard dims in one call.
 

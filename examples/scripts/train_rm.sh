@@ -9,24 +9,21 @@ openrlhf.cli.train_rm \
    --train.batch_size 256 \
    --train.micro_batch_size 1 \
    --model.model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
-   --ds.param_dtype bf16 \
+   --fsdp.param_dtype bf16 \
    --train.max_epochs 1 \
    --data.max_len 8192 \
-   --ds.zero_stage 3 \
    --adam.lr 9e-6 \
    --data.dataset OpenRLHF/preference_dataset_mixture2_and_safe_pku \
    --data.apply_chat_template \
    --data.chosen_key chosen \
    --data.rejected_key rejected \
-   --ds.attn_implementation flash_attention_2 \
+   --fsdp.attn_implementation flash_attention_2 \
    --ckpt.load_enable \
-   --ds.packing_samples \
    --model.gradient_checkpointing_enable
 EOF
      # --logger.wandb.key [WANDB_TOKENS] or True (use wandb login command)
-     # --ds.packing_samples
 
 
 if [[ ${1} != "slurm" ]]; then
-    deepspeed --module $training_commands
+    torchrun --standalone --nproc_per_node ${NPROC_PER_NODE:-8} -m $training_commands
 fi
