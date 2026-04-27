@@ -189,8 +189,7 @@ class BasePPOTrainer(ABC):
         self.wandb_logger = WandbLogger(self.args) if self.args.logger.wandb.key else None
         self.trackio_logger = (
             TrackioLogger(self.args)
-            if getattr(self.args.logger, "trackio", None) is not None
-            and self.args.logger.trackio.project
+            if getattr(self.args.logger, "trackio", None) is not None and self.args.logger.trackio.project
             else None
         )
         self.tensorboard_logger = TensorboardLogger(self.args) if self.args.logger.tensorboard_dir else None
