@@ -240,7 +240,7 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 <summary>展开高级能力</summary>
 
 **效率优化**
-- SFT/DPO/RL 训练的样本打包（`--fsdp.packing_samples`）
+- 兼容 varlen attention 后端下的可选样本打包（`--fsdp.packing_samples`）
 - 快速生成的 vLLM 加速（`--vllm.num_engines`）
 - DAPO [动态过滤](./examples/scripts/train_dapo_ray_hybrid_engine.sh)（`--algo.dynamic_filtering_enable`）
   - 🎲 Dynamic Sampling：对每个 prompt 生成多条响应，并根据奖励函数/Agent 返回的 **0–1 `scores`** 信号进行过滤
@@ -259,7 +259,7 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 - [VLM（视觉语言模型）](./examples/scripts/train_vlm_math_hybrid_engine.sh) — 支持单轮和[含图像反馈的多轮交互](./examples/python/vlm_multiturn_agent.py)（`--data.image_key`、`--data.max_images_per_prompt`）
 - [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--fsdp.lora.rank`、`--fsdp.load_in_4bit`；RL 当前会拒绝 LoRA，因为 vLLM adapter refit 尚未接入）
 - [专家混合（MoE）](./examples/test_scripts/train_sft_moe.sh)（`--actor.aux_loss_coef`）
-- FlashAttention / SDPA / eager 选择（`--fsdp.attn_implementation`）
+- SDPA / eager / 可选 FlashAttention 选择（`--fsdp.attn_implementation`）
 - HuggingFace 聊天模板（`--data.apply_chat_template`）
 
 **优化器**
@@ -309,12 +309,12 @@ pip install -e ".[vllm,dion]"
 git clone https://github.com/OpenRLHF/OpenRLHF.git
 cd OpenRLHF
 pip install -e .
-pip install ".[vllm]"                  # + vLLM 0.19.1
+pip install ".[vllm]"                  # + vLLM 0.20.0
 pip install ".[vllm,dion]"             # + vLLM 和 AutoModel/Dion Muon 支持
 ```
 
 > [!TIP]
-> 当前分支目标环境是 **NVIDIA PyTorch 25.11**、**torch 2.10**、**NeMo AutoModel main commit `17ed5796bdc220c314c9fd6bd718a773a3642521`** 和 **vLLM 0.19.1**。Dion 不在 PyPI 上，Docker 会从 `github.com/microsoft/dion` 安装。
+> 当前分支目标环境是 **NVIDIA PyTorch 25.11**、**torch 2.11**、**NeMo AutoModel main commit `17ed5796bdc220c314c9fd6bd718a773a3642521`** 和 **vLLM 0.20.0**。Dion 不在 PyPI 上，Docker 会从 `github.com/microsoft/dion` 安装。
 
 ### 准备数据集
 
@@ -369,7 +369,6 @@ torchrun --standalone --nproc_per_node=8 -m openrlhf.cli.train_sft \
    --logger.logging_steps 1 \
    --eval.steps -1 \
    --train.max_epochs 1 \
-   --fsdp.packing_samples \
    --fsdp.param_dtype bf16 \
    --adam.lr 5e-6 \
    --model.gradient_checkpointing_enable \
@@ -420,7 +419,7 @@ reward_model = AutoModelForSequenceClassification.from_pretrained(
               reward_model_path,
               num_labels=1,
               torch_dtype=torch.bfloat16,
-              attn_implementation="flash_attention_2",
+              attn_implementation="sdpa",
               use_cache=False,
           )
 inputs = xxxx (左填充输入 Tokens)
@@ -461,7 +460,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --ckpt.save_hf \
    --train.batch_size 128 \
    --rollout.batch_size 1024 \
-   --train.dynamic_batch_enable \
    --rollout.n_samples_per_prompt 1 \
    --train.max_epochs 1 \
    --data.max_len 2048 \
@@ -476,7 +474,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --data.apply_chat_template \
    --reward.normalize_enable \
    --actor.gradient_checkpointing_enable \
-   --fsdp.packing_samples \
    --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
@@ -568,7 +565,6 @@ ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
   --actor.model_name_or_path meta-llama/Meta-Llama-3-8B \
-  --train.dynamic_batch_enable \
   --reward.remote_url /path/to/reward_func.py \
   --data.label_key answer \
   --data.prompt_dataset your_prompt_dataset \
@@ -653,7 +649,6 @@ ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
   ...
-  --train.dynamic_batch_enable \
   --train.agent_func_path /path/to/agent_func.py \
   --train.async_enable  # 可选：启用异步流水线
 ```
@@ -718,8 +713,8 @@ python -m openrlhf.cli.lora_combiner \
 
 | 优化 | 标志 | 何时使用 |
 |------|------|---------|
-| **样本打包** | `--fsdp.packing_samples` | SFT/DPO/RL 且 CP 关闭时 |
-| **动态批次** | `--train.dynamic_batch_enable` | 可变序列长度 |
+| **样本打包** | `--fsdp.packing_samples` | 可选；当前需要 `--fsdp.attn_implementation flash_attention_2` |
+| **动态批次** | `--train.dynamic_batch_enable` | 需要显式启用兼容的样本打包 |
 | **张量并行** | `--fsdp.tp_size` | 大模型或提升矩阵计算吞吐 |
 | **上下文并行** | `--fsdp.cp_size` | 长上下文；需关闭 sample packing |
 | **CPU Offload** | `--fsdp.cpu_offload` | 显存压力较大 |
@@ -741,7 +736,7 @@ python -m openrlhf.cli.lora_combiner \
 #### 🎮 批次大小调优
 
 1. **生成阶段**：最大化 `--rollout.micro_batch_size`，最小化 vLLM TP 大小
-2. **训练阶段**：最大化 `--train.micro_batch_size`，CP 关闭时启用 `--fsdp.packing_samples`
+2. **训练阶段**：最大化 `--train.micro_batch_size`；仅在兼容 varlen attention 后端下启用 packing
 3. **vLLM**：始终使用 `--vllm.sync_backend nccl`
 
 > [!TIP]

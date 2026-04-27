@@ -1,9 +1,10 @@
 """Padded <-> packed conversion for the FSDP/Automodel backend.
 
-OpenRLHF's datasets emit `(B, S)` padded batches; Automodel/HF FlashAttention2
-expects unpadded `(1, total_tokens)` packed input. HF fallback models consume
-HF ``FlashAttentionKwargs``; Automodel custom models consume their THD kwargs
-(``qkv_format=thd`` / ``cu_seqlens`` / ``max_seqlen``).
+OpenRLHF's datasets emit `(B, S)` padded batches. Packing removes padding and
+creates `(1, total_tokens)` streams plus sequence-boundary metadata. HF fallback
+models consume HF FlashAttention varlen kwargs; Automodel custom models consume
+THD kwargs (``qkv_format=thd`` / ``cu_seqlens`` / ``max_seqlen``) when their
+selected attention backend preserves those boundaries.
 """
 
 from typing import Any
@@ -54,8 +55,8 @@ def pack_padded_batch(sequences: torch.Tensor, attention_mask: torch.Tensor, *, 
     mask = attention_mask.bool()
     indices = mask.reshape(-1).nonzero(as_tuple=False).flatten()
     seq_lens = mask.sum(dim=-1, dtype=torch.int32)
-    # torch.cumsum on int32 promotes to int64; flash-attn varlen requires int32
-    # (RuntimeError: cu_seqlens_q must have dtype int32). Cast back explicitly.
+    # torch.cumsum on int32 promotes to int64; varlen attention kernels require
+    # int32 sequence lengths. Cast back explicitly.
     cu_seq_lens = torch.cat(
         [torch.zeros(1, dtype=torch.int32, device=sequences.device), torch.cumsum(seq_lens, dim=0).to(torch.int32)]
     )

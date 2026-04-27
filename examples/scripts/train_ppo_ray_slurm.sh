@@ -86,7 +86,6 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --data.input_key context_messages \
     --data.apply_chat_template \
     --reward.normalize_enable \
-    --fsdp.packing_samples \
     --vllm.sync_backend nccl \
     --actor.gradient_checkpointing_enable \
     --logger.wandb.key {wandb_token}" &>> ${JOBLOG}

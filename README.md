@@ -239,7 +239,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 <summary>Show advanced capabilities</summary>
 
 **Efficiency Optimizations**
-- Sample packing (`--fsdp.packing_samples`) for SFT/DPO/RL training
+- Optional sample packing (`--fsdp.packing_samples`) for compatible varlen-attention backends
 - vLLM acceleration (`--vllm.num_engines`) for fast generation
 - DAPO [dynamic filtering](./examples/scripts/train_dapo_ray_hybrid_engine.sh) (`--algo.dynamic_filtering_enable`)
   - 🎲 Dynamic Sampling: for each prompt, generate multiple responses and **filter** them by your reward / agent **0–1 `scores`** signal
@@ -258,7 +258,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 - [VLM (Vision-Language Models)](./examples/scripts/train_vlm_math_hybrid_engine.sh) — single-turn and [multi-turn with image feedback](./examples/python/vlm_multiturn_agent.py) (`--data.image_key`, `--data.max_images_per_prompt`)
 - [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh) (`--fsdp.lora.rank`, `--fsdp.load_in_4bit`; RL currently rejects LoRA because vLLM adapter refit is not wired yet)
 - [Mixture of Experts (MoE)](./examples/test_scripts/train_sft_moe.sh) (`--actor.aux_loss_coef`)
-- FlashAttention / SDPA / eager attention selection (`--fsdp.attn_implementation`)
+- SDPA / eager / optional FlashAttention attention selection (`--fsdp.attn_implementation`)
 - HuggingFace chat templates (`--data.apply_chat_template`)
 
 **Optimizers**
@@ -308,12 +308,12 @@ pip install -e ".[vllm,dion]"
 git clone https://github.com/OpenRLHF/OpenRLHF.git
 cd OpenRLHF
 pip install -e .
-pip install ".[vllm]"                  # + vLLM 0.19.1
+pip install ".[vllm]"                  # + vLLM 0.20.0
 pip install ".[vllm,dion]"             # + vLLM and AutoModel/Dion Muon support
 ```
 
 > [!TIP]
-> This branch targets **NVIDIA PyTorch 25.11**, **torch 2.10**, **NeMo AutoModel main commit `17ed5796bdc220c314c9fd6bd718a773a3642521`**, and **vLLM 0.19.1**. Dion is installed from `github.com/microsoft/dion` because it is not published on PyPI.
+> This branch targets **NVIDIA PyTorch 25.11**, **torch 2.11**, **NeMo AutoModel main commit `17ed5796bdc220c314c9fd6bd718a773a3642521`**, and **vLLM 0.20.0**. Dion is installed from `github.com/microsoft/dion` because it is not published on PyPI.
 
 ### Prepare Datasets
 
@@ -368,7 +368,6 @@ torchrun --standalone --nproc_per_node=8 -m openrlhf.cli.train_sft \
    --logger.logging_steps 1 \
    --eval.steps -1 \
    --train.max_epochs 1 \
-   --fsdp.packing_samples \
    --fsdp.param_dtype bf16 \
    --adam.lr 5e-6 \
    --model.gradient_checkpointing_enable \
@@ -421,7 +420,7 @@ reward_model = AutoModelForSequenceClassification.from_pretrained(
               reward_model_path,
               num_labels=1,
               torch_dtype=torch.bfloat16,
-              attn_implementation="flash_attention_2",
+              attn_implementation="sdpa",
               use_cache=False,
           )
 inputs = xxxx (Left Padding Input Tokens)
@@ -462,7 +461,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --ckpt.save_hf \
    --train.batch_size 128 \
    --rollout.batch_size 1024 \
-   --train.dynamic_batch_enable \
    --rollout.n_samples_per_prompt 1 \
    --train.max_epochs 1 \
    --data.max_len 2048 \
@@ -477,7 +475,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --data.apply_chat_template \
    --reward.normalize_enable \
    --actor.gradient_checkpointing_enable \
-   --fsdp.packing_samples \
    --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
@@ -569,7 +566,6 @@ ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
   --actor.model_name_or_path meta-llama/Meta-Llama-3-8B \
-  --train.dynamic_batch_enable \
   --reward.remote_url /path/to/reward_func.py \
   --data.label_key answer \
   --data.prompt_dataset your_prompt_dataset \
@@ -654,7 +650,6 @@ ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
   ...
-  --train.dynamic_batch_enable \
   --train.agent_func_path /path/to/agent_func.py \
   --train.async_enable  # Optional: enable async pipeline
 ```
@@ -734,8 +729,8 @@ Pick the execution mode based on your priority — OpenRLHF gives you a clear tr
 
 | Optimization | Flag | When to Use |
 |--------------|------|-------------|
-| **Sample Packing** | `--fsdp.packing_samples` | SFT/DPO/RL when CP is disabled |
-| **Dynamic Batch** | `--train.dynamic_batch_enable` | Variable sequence lengths |
+| **Sample Packing** | `--fsdp.packing_samples` | Optional; currently requires `--fsdp.attn_implementation flash_attention_2` |
+| **Dynamic Batch** | `--train.dynamic_batch_enable` | Requires explicitly enabling compatible sample packing |
 | **Tensor Parallel** | `--fsdp.tp_size` | Large models or faster matmuls |
 | **Context Parallel** | `--fsdp.cp_size` | Long context; disable sample packing |
 | **CPU Offload** | `--fsdp.cpu_offload` | Memory pressure |
@@ -757,7 +752,7 @@ Pick the execution mode based on your priority — OpenRLHF gives you a clear tr
 #### 🎮 Batch Size Tuning
 
 1. **Generation Phase**: Maximize `--rollout.micro_batch_size`, minimize vLLM TP size
-2. **Training Phase**: Maximize `--train.micro_batch_size`, enable `--fsdp.packing_samples` when CP is disabled
+2. **Training Phase**: Maximize `--train.micro_batch_size`; enable packing only with a compatible varlen-attention backend
 3. **vLLM**: Always use `--vllm.sync_backend nccl`
 
 > [!TIP]

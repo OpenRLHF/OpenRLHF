@@ -23,7 +23,7 @@ def get_llm_for_sequence_regression(
     target_modules=None,
     lora_dropout: float = 0,
     normalize_reward: bool = False,
-    attn_implementation: str = "flash_attention_2",
+    attn_implementation: str = "sdpa",
     device_mesh=None,
     moe_mesh=None,
     distributed_config=None,

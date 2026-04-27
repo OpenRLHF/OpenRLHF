@@ -30,11 +30,9 @@ COPY requirements.txt /tmp/openrlhf-requirements.txt
 
 RUN set -eux && \
     python -m pip install --upgrade pip setuptools wheel && \
-    python -m pip uninstall -y xgboost flash_attn pynvml opencv-python-headless || true && \
-    python -m pip install https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3+cu130torch2.10-cp312-cp312-linux_x86_64.whl && \
-    grep -v '^flash-attn==' /tmp/openrlhf-requirements.txt > /tmp/openrlhf-requirements-docker.txt && \
-    python -m pip install -r /tmp/openrlhf-requirements-docker.txt && \
-    python -m pip install vllm==0.19.1 && \
+    python -m pip uninstall -y xgboost pynvml opencv-python-headless || true && \
+    python -m pip install -r /tmp/openrlhf-requirements.txt && \
+    python -m pip install vllm==0.20.0 && \
     python -m pip install "dion @ git+https://github.com/microsoft/dion.git"
 
 COPY dockerfile/docker-entrypoint.sh /app/docker-entrypoint.sh

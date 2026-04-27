@@ -39,8 +39,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --data.input_key context_messages \
    --data.apply_chat_template \
    --reward.normalize_enable \
-   --fsdp.packing_samples \
-   --fsdp.attn_implementation flash_attention_2 \
+   --fsdp.attn_implementation sdpa \
    --actor.gradient_checkpointing_enable \
    --logger.wandb.key {wandb_token}
-

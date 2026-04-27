@@ -39,15 +39,12 @@ ROLLOUT_ARGS=(
    --data.max_len 74240
    --rollout.max_new_tokens 64000
    --data.apply_chat_template
-   --fsdp.packing_samples
 
    --rollout.batch_size 128
    --rollout.n_samples_per_prompt 8
    --train.batch_size 1024
    --algo.dynamic_filtering_enable
    --algo.dynamic_filtering_range 0.0 1.0
-
-   --train.dynamic_batch_enable
    --train.max_tokens_per_gpu 16192
    --rollout.max_tokens_per_gpu 32768
 

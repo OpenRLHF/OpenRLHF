@@ -117,7 +117,7 @@ class Actor(nn.Module):
     def __init__(
         self,
         pretrain_or_model,
-        attn_implementation: str = "flash_attention_2",
+        attn_implementation: str = "sdpa",
         param_dtype: str = "bf16",
         load_in_4bit: bool = False,
         lora_rank: int = 0,

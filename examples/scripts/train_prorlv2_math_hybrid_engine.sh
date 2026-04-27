@@ -52,7 +52,6 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --train.batch_size 1024 \
    --rollout.batch_size 512 \
    --rollout.n_samples_per_prompt 16 \
-   --train.dynamic_batch_enable \
    --train.num_episodes 100 \
    --data.max_len 9216 \
    --rollout.max_new_tokens 8192 \
@@ -67,7 +66,6 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --eval.n_samples_per_prompt 4 \
    --data.apply_chat_template \
    --actor.gradient_checkpointing_enable \
-   --fsdp.packing_samples \
    --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \

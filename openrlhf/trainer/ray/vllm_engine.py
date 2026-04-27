@@ -15,6 +15,13 @@ from openrlhf.utils.agent import AgentExecutorBase, SingleTurnAgentExecutor
 
 from .utils import get_bundle_indices, ray_noset_visible_devices
 
+_MIN_VLLM_VERSION = version.parse("0.20.0")
+
+
+def _assert_supported_vllm():
+    if version.parse(vllm.__version__) < _MIN_VLLM_VERSION:
+        raise RuntimeError(f"vLLM >= 0.20.0 is required, got {vllm.__version__}.")
+
 
 def _load_agent_executor(agent_func_path: str) -> AgentExecutorBase:
     assert agent_func_path.endswith(".py"), "Agent path must be a Python file"
@@ -48,7 +55,7 @@ class RolloutRayActor:
             bundle_indices=bundle_indices,
             num_gpus=kwargs.pop("num_gpus"),
         )
-        self._configure_vllm_env(version, vllm, kwargs.pop("full_determinism", False))
+        self._configure_vllm_env(kwargs.pop("full_determinism", False))
 
         # Execution mode mapping:
         # - custom agent executor: user-provided AgentExecutorBase subclass
@@ -87,13 +94,9 @@ class RolloutRayActor:
             os.environ["VLLM_RAY_BUNDLE_INDICES"] = ",".join(map(str, bundle_indices))
             print(f"creating LLM with bundle_indices={bundle_indices}")
 
-    def _configure_vllm_env(self, version, vllm, full_determinism: bool):
-        assert version.parse(vllm.__version__) > version.parse(
-            "0.8.5"
-        ), "Streaming VLLM version must be greater than 0.8.5"
-
-        if version.parse(vllm.__version__) >= version.parse("0.9.0"):
-            os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
+    def _configure_vllm_env(self, full_determinism: bool):
+        _assert_supported_vllm()
+        os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 
         if full_determinism:
             # https://github.com/vllm-project/vllm/blob/effc5d24fae10b29996256eb7a88668ff7941aed/examples/offline_inference/reproduciblity.py#L11
@@ -103,8 +106,6 @@ class RolloutRayActor:
             from ray._private.worker import global_worker
 
             os.environ["RAY_ADDRESS"] = global_worker.gcs_client.address
-
-        os.environ["VLLM_USE_V1"] = "1"
 
     async def init_process_group(
         self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray
@@ -138,7 +139,7 @@ class RolloutRayActor:
     async def sleep(self, level=1):
         await self.llm.sleep(level=level)
 
-    async def wake_up(self, tags=["weights", "kv_cache"]):
+    async def wake_up(self, tags: Optional[List[str]] = None):
         """Wake up the engine from sleep mode.
 
         Args:
@@ -147,6 +148,7 @@ class RolloutRayActor:
                   Use ["kv_cache"] to wake up only KV cache (after weight sync).
                   Use None to wake up everything.
         """
+        tags = tags or ["weights", "kv_cache"]
         for tag in tags:
             await self.llm.wake_up(tags=[tag])
 
@@ -224,6 +226,8 @@ def create_vllm_engines(
     max_images_per_prompt: int = 0,
 ):
     """Spin up a set of vLLM Ray actors with consistent placement."""
+    _assert_supported_vllm()
+
     # Detect VLM pad token IDs once, shared across all engines.
     mm_pad_token_ids: set = set()
     if max_images_per_prompt > 0:
@@ -293,9 +297,6 @@ def create_vllm_engines(
         if logprobs_mode:
             actor_kwargs["logprobs_mode"] = logprobs_mode
             actor_kwargs["max_logprobs"] = 1
-            assert version.parse(vllm.__version__) > version.parse(
-                "0.10.0"
-            ), "vLLM > 0.10.0 is required for logprobs_mode"
 
         vllm_engines.append(
             RolloutRayActor.options(

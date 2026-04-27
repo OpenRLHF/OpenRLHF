@@ -17,7 +17,7 @@ openrlhf.cli.train_rm \
    --data.apply_chat_template \
    --data.chosen_key chosen \
    --data.rejected_key rejected \
-   --fsdp.attn_implementation flash_attention_2 \
+   --fsdp.attn_implementation sdpa \
    --ckpt.load_enable \
    --model.gradient_checkpointing_enable
 EOF

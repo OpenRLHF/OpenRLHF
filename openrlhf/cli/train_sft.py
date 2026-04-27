@@ -183,8 +183,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--fsdp.attn_implementation",
         type=str,
-        default="flash_attention_2",
-        help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, sdpa)",
+        default="sdpa",
+        help="Attention implementation (e.g., sdpa, eager, flex, te, flash_attention_2)",
     )
     parser.add_argument("--fsdp.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
     parser.add_argument("--fsdp.packing_samples", action="store_true", default=False)
@@ -295,10 +295,9 @@ if __name__ == "__main__":
         )
 
     if args.fsdp.packing_samples and args.fsdp.attn_implementation != "flash_attention_2":
-        print(
-            "[Warning] --fsdp.packing_samples no longer forces flash_attention_2. "
-            "Automodel native models use THD packing with the selected backend; "
-            "HF fallback models will disable packing unless flash_attention_2 + flash_attn is available."
+        raise ValueError(
+            "--fsdp.packing_samples currently requires --fsdp.attn_implementation flash_attention_2. "
+            "The default sdpa path avoids the flash-attn dependency by keeping packing disabled."
         )
 
     if args.use_ms:

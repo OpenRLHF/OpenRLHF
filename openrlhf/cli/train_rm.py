@@ -187,8 +187,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--fsdp.attn_implementation",
         type=str,
-        default="flash_attention_2",
-        help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, sdpa)",
+        default="sdpa",
+        help="Attention implementation (e.g., sdpa, eager, flex, te, flash_attention_2)",
     )
     parser.add_argument("--fsdp.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
     parser.add_argument("--fsdp.packing_samples", action="store_true", default=False)

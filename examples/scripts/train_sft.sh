@@ -16,14 +16,12 @@ openrlhf.cli.train_sft \
    --eval.steps -1 \
    --train.max_epochs 1 \
    --fsdp.param_dtype bf16 \
-   --fsdp.attn_implementation flash_attention_2 \
+   --fsdp.attn_implementation sdpa \
    --adam.lr 5e-6 \
    --ckpt.load_enable \
-   --fsdp.packing_samples \
    --model.gradient_checkpointing_enable
 EOF
     # --wandb [WANDB_TOKENS]
-    # --fsdp.packing_samples
 
 if [[ ${1} != "slurm" ]]; then
     torchrun --standalone --nproc_per_node ${NPROC_PER_NODE:-8} -m $training_commands

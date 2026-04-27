@@ -33,17 +33,15 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --data.apply_chat_template \
    --reward.normalize_enable \
    --actor.gradient_checkpointing_enable \
-   --fsdp.packing_samples \
    --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
    --fsdp.enable_sleep \
-   --train.dynamic_batch_enable \
    --train.max_tokens_per_gpu 16384 \
    --algo.advantage.is_correction_enable
 
 # Enable AutoModel tensor parallelism
 #    --fsdp.tp_size 2 \
 
-# Enable AutoModel context parallelism; remove --fsdp.packing_samples when using CP.
+# Enable AutoModel context parallelism.
 #    --fsdp.cp_size 2 \
