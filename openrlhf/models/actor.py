@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from importlib.util import find_spec
 from typing import Optional
 
@@ -139,6 +140,7 @@ class Actor(nn.Module):
         self.temperature = temperature
         self.packing_samples = packing_samples
         self._packing_style = "hf"
+        self._forward_autocast_dtype = None
 
         if not isinstance(pretrain_or_model, str):
             self.model = pretrain_or_model
@@ -194,9 +196,8 @@ class Actor(nn.Module):
         #  - MoE without EP: Automodel's custom MoE requires a non-None
         #    moe_mesh with an 'ep' dim ('AssertionError: ep mesh dimension not
         #    found'). Use HF reference path.
-        #  TP+EP combo (e.g. tp=2 ep=2): keep custom Automodel impl — it owns
-        #  the EP routing. Our TPLinear bmm monkey-patch handles the F.linear
-        #  contiguity bug that HF doesn't have.
+        #  Automodel custom Qwen3 MoE currently does not advertise a TP plan,
+        #  so TP+EP is intentionally left to Automodel validation.
         tp_size = device_mesh["tp"].size() if device_mesh is not None and "tp" in device_mesh.mesh_dim_names else 1
         ep_active = moe_mesh is not None
         force_hf = (tp_size > 1 and not ep_active) or (is_moe and not ep_active)
@@ -204,12 +205,11 @@ class Actor(nn.Module):
         # avoid the mixed-dtype FSDP assert.
         if is_moe and force_hf and torch_dtype == torch.float32:
             torch_dtype = compute_dtype
+        if torch_dtype == torch.float32 and attn_implementation in ("flash_attention_2", "flash_attention_3"):
+            self._forward_autocast_dtype = compute_dtype
+        use_hf_model = _will_use_hf_model(pretrain_or_model, force_hf)
         automodel_has_packed_sequence = packing_samples
-        if (
-            packing_samples
-            and _will_use_hf_model(pretrain_or_model, force_hf)
-            and not _hf_packing_supported(attn_implementation)
-        ):
+        if packing_samples and use_hf_model and not _hf_packing_supported(attn_implementation):
             print(
                 "[Packing] HF fallback packed sequence requires flash_attention_2 + flash_attn. "
                 "Disabling packing for this model and using padded forward instead."
@@ -218,6 +218,10 @@ class Actor(nn.Module):
             self.packing_samples = False
             if attn_implementation == "flash_attention_2" and not _has_hf_flash_attn_2():
                 attn_implementation = "sdpa"
+
+        automodel_backend_kwargs = {}
+        if attn_implementation == "te" and not use_hf_model:
+            automodel_backend_kwargs["backend"] = {"attn": "te"}
 
         self.model = ModelCls.from_pretrained(
             pretrain_or_model,
@@ -234,6 +238,7 @@ class Actor(nn.Module):
             use_liger_kernel=use_liger_kernel and not self.is_vlm,
             has_packed_sequence=automodel_has_packed_sequence,
             force_hf=force_hf,
+            **automodel_backend_kwargs,
         )
         self._packing_style = "automodel" if is_automodel_custom_model(self.model) else "hf"
         if self.packing_samples and self._packing_style == "hf" and not _hf_packing_supported(attn_implementation):
@@ -269,6 +274,9 @@ class Actor(nn.Module):
         sequences: torch.LongTensor,
         action_mask: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        logprob_labels: Optional[torch.Tensor] = None,
+        truncate_logprobs: bool = True,
         return_output=False,
         allgather_logits=False,
         return_logprobs=False,
@@ -287,11 +295,14 @@ class Actor(nn.Module):
             forward_attention_mask = None
         else:
             # https://github.com/OpenRLHF/OpenRLHF/issues/217
-            rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
+            rolled_sequences = (
+                logprob_labels if logprob_labels is not None else torch.roll(sequences, shifts=-1, dims=1)
+            )
             forward_attention_mask = attention_mask
 
             if getattr(self, "is_vlm", False):
-                position_ids = None
+                if position_ids is None:
+                    position_ids = None
                 if mm_inputs:
                     cfg = self._vlm_config
                     token_type_ids = (sequences == cfg.image_token_id).to(torch.int32)
@@ -300,16 +311,26 @@ class Actor(nn.Module):
                     key = "mm_token_type_ids" if "image_grid_thw" in mm_inputs else "token_type_ids"
                     mm_inputs[key] = token_type_ids
             else:
-                position_ids = attention_mask.long().cumsum(-1) - 1
-                position_ids.masked_fill_(attention_mask == 0, 1)
+                if position_ids is None:
+                    if attention_mask is None:
+                        position_ids = torch.arange(seqlen, device=sequences.device).unsqueeze(0).expand(batch, -1)
+                    else:
+                        position_ids = attention_mask.long().cumsum(-1) - 1
+                        position_ids.masked_fill_(attention_mask == 0, 1)
 
-        output = self.model(
-            sequences,
-            attention_mask=forward_attention_mask,
-            position_ids=position_ids,
-            **fa_kwargs,
-            **mm_inputs,
+        autocast_ctx = (
+            torch.autocast(device_type="cuda", dtype=self._forward_autocast_dtype)
+            if self._forward_autocast_dtype is not None and sequences.is_cuda
+            else nullcontext()
         )
+        with autocast_ctx:
+            output = self.model(
+                sequences,
+                attention_mask=forward_attention_mask,
+                position_ids=position_ids,
+                **fa_kwargs,
+                **mm_inputs,
+            )
         # Automodel's custom MoE/LLM models (e.g. Qwen3MoeForCausalLM) return a
         # raw logits Tensor; HF returns a ModelOutput with `.logits`. Normalize.
         output = _normalize_output(output)
@@ -348,7 +369,8 @@ class Actor(nn.Module):
         if self.packing_samples:
             log_probs = unpack_to_padded(log_probs, indices, batch, seqlen)
 
-        log_probs = log_probs[:, :-1]
+        if truncate_logprobs:
+            log_probs = log_probs[:, :-1]
         if not return_action_log_probs and return_logprobs:
             return (log_probs, output) if return_output else log_probs
 

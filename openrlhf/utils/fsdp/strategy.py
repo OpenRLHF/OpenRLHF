@@ -84,9 +84,8 @@ class FsdpStrategy:
         self.world_size: int = 1
         self.device_mesh = None
         self.moe_mesh = None
-        self.dp_cp_group = None
-        self.tp_group = None
-        self.dp_group = None
+        self.dp_size = 1
+        self.dp_cp_size = 1
         self.accumulated_gradient: int = 1
         self._last_grad_norm: float = 0.0
         self.time_steps = defaultdict(int)
@@ -96,7 +95,7 @@ class FsdpStrategy:
     # num_proc>1)` indirectly pickles the strategy via the dataset's bound method;
     # drop the distributed handles so the workers spawn cleanly. Workers don't need
     # them — they only run pure-CPU data preprocessing.
-    _UNPICKLABLE_ATTRS = ("tp_group", "dp_cp_group", "dp_group", "device_mesh", "moe_mesh", "distributed_config")
+    _UNPICKLABLE_ATTRS = ("device_mesh", "moe_mesh", "distributed_config")
 
     def __getstate__(self):
         return {k: v for k, v in self.__dict__.items() if k not in self._UNPICKLABLE_ATTRS}
@@ -105,6 +104,41 @@ class FsdpStrategy:
         self.__dict__.update(state)
         for k in self._UNPICKLABLE_ATTRS:
             self.__dict__.setdefault(k, None)
+
+    def _get_automodel_mesh(self, name: str, required: bool = False):
+        if self.device_mesh is None:
+            return None
+        from nemo_automodel.components.distributed.mesh_utils import get_flat_mesh
+
+        try:
+            return get_flat_mesh(self.device_mesh, name)
+        except KeyError:
+            if required:
+                raise
+            return None
+
+    def _get_automodel_group(self, name: str):
+        mesh = self._get_automodel_mesh(name, required=self.device_mesh is not None)
+        return mesh.get_group() if mesh is not None else None
+
+    def _get_dp_group(self, include_cp: bool = False):
+        name = "dp_cp" if include_cp and self.cp_size > 1 else "dp"
+        return self._get_automodel_group(name)
+
+    def _get_dp_group_size(self, include_cp: bool = False) -> int:
+        group = self._get_dp_group(include_cp=include_cp)
+        if group is None:
+            return dist.get_world_size() if dist.is_initialized() else 1
+        return dist.get_world_size(group=group)
+
+    def _get_automodel_rank(self, name: str) -> int:
+        mesh = self._get_automodel_mesh(name, required=self.device_mesh is not None)
+        return mesh.get_local_rank() if mesh is not None else 0
+
+    def _get_dp_rank(self, include_cp: bool = False) -> int:
+        if include_cp and self.cp_size > 1:
+            return self._get_automodel_rank("dp_cp")
+        return self._get_automodel_rank("dp")
 
     # ---------------------------------------------------------------- bring-up
 
@@ -127,20 +161,13 @@ class FsdpStrategy:
         self.world_size = dist.get_world_size()
         if self.pp_size > 1:
             raise NotImplementedError("OpenRLHF trainers are not pipeline-parallel aware yet; set --fsdp.pp_size 1")
-        if self.cp_size > 1:
-            # CP requires shard-aware token slicing of input/labels and a CP
-            # context manager around the forward (Automodel's
-            # ``make_cp_batch_and_ctx``). Neither is wired into Actor/RewardModel
-            # yet — running with cp_size>1 would silently produce a wrong loss
-            # (every CP rank sees the full sequence with no token-shard).
-            raise NotImplementedError(
-                "Context parallel (--fsdp.cp_size>1) is not yet wired through the forward path. "
-                "Until Automodel's make_cp_batch_and_ctx is integrated into Actor/RewardModel, "
-                "cp_size must be 1."
+        if self.cp_size > 1 and getattr(self.args.fsdp, "packing_samples", False):
+            raise ValueError(
+                "Context parallel does not support --fsdp.packing_samples yet; disable packing for CP tests."
             )
 
         from nemo_automodel.components.distributed.config import FSDP2Config
-        from nemo_automodel.components.distributed.mesh_utils import create_device_mesh, get_flat_mesh
+        from nemo_automodel.components.distributed.mesh_utils import create_device_mesh
         from nemo_automodel.components.moe.config import MoEParallelizerConfig
 
         # Monkey-patch Automodel's TPLinear forward: their guard misses some
@@ -221,31 +248,19 @@ class FsdpStrategy:
             world_size=self.world_size,
         )
 
-        # Process groups for grad-norm/clip and data loaders.
+        # Process groups are resolved from Automodel's official mesh on demand.
+        # OpenRLHF only caches scalar sizes derived from that mesh.
         # Automodel's FSDP2 mesh has *native* dims ("pp","dp_replicate","dp_shard","cp","tp")
         # plus *flattened* dims ("dp","dp_shard_cp","dp_cp") stored on
         # ``device_mesh._flatten_mapping``. ``mesh.mesh_dim_names`` lists only the
-        # native dims, so we must use ``get_flat_mesh`` (which checks both) to
-        # resolve "dp"/"dp_shard_cp" — checking ``mesh_dim_names`` directly
-        # always fails and silently leaves dp_group/dp_cp_group as None.
-        def _maybe_group(name: str):
-            try:
-                return get_flat_mesh(self.device_mesh, name).get_group()
-            except KeyError:
-                return None
+        # native dims, so all access goes through Automodel's ``get_flat_mesh``.
 
-        if self.tp_size > 1:
-            self.tp_group = _maybe_group("tp")
-
-        # dp_shard_cp = data-parallel shard × context-parallel; this is the
-        # group over which FSDP2 reduce-scatter syncs grads.
-        self.dp_cp_group = _maybe_group("dp_shard_cp") or _maybe_group("dp")
-        # Pure DP group (excluding CP): used for the data sampler — TP/CP ranks
-        # within a DP group must see the *same* sample.
-        self.dp_group = _maybe_group("dp_shard") or _maybe_group("dp")
-
-        dp_size = dist.get_world_size(group=self.dp_group) if self.dp_group else self.world_size
-        self.dp_cp_size = dist.get_world_size(group=self.dp_cp_group) if self.dp_cp_group else dp_size
+        # Automodel uses flattened "dp" for data loading/token denominators and
+        # flattened "dp_cp" when CP ranks participate in FSDP/loss scaling.
+        # Only sizes are cached; ProcessGroups are resolved from the Automodel
+        # mesh on demand so there is a single source of truth.
+        dp_size = self._get_dp_group_size(include_cp=False)
+        self.dp_cp_size = self._get_dp_group_size(include_cp=True)
         # Effective grad-accum = train_batch_size / (micro_bs × DP).
         self.accumulated_gradient = max(self.train_batch_size // (self.micro_train_batch_size * dp_size), 1)
         self.dp_size = dp_size
@@ -397,19 +412,19 @@ class FsdpStrategy:
         return self._last_grad_norm
 
     def global_token_count(self, mask: torch.Tensor) -> torch.Tensor:
-        """All-reduce ``mask.sum()`` across the FSDP grad-sync group.
+        """All-reduce ``mask.sum()`` across the data-parallel data mesh.
 
-        Used as the denominator for verl-style ``token-mean`` loss aggregation:
-        ``loss = masked_sum / global_num_tokens * dp_size``. The reduce group
-        must match the one FSDP2 uses for grad reduce-scatter (dp_shard_cp);
-        otherwise the per-token-mean estimate is biased when token counts are
-        unequal across DP ranks.
+        For CP, call this before ``make_cp_batch_and_ctx`` while each CP rank
+        still sees the full local sequence. This mirrors Automodel's recipe:
+        token denominators are reduced over DP only; the backward loss scale
+        still uses ``dp_size * cp_size`` to counter FSDP's dp_shard_cp averaging.
         """
         local = mask if mask.ndim == 0 else mask.sum()
         device = torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else local.device
         local = local.to(dtype=torch.float32, device=device)
-        if dist.is_initialized() and self.dp_cp_group is not None:
-            dist.all_reduce(local, op=dist.ReduceOp.SUM, group=self.dp_cp_group)
+        dp_group = self._get_dp_group(include_cp=False)
+        if dist.is_initialized() and dp_group is not None:
+            dist.all_reduce(local, op=dist.ReduceOp.SUM, group=dp_group)
         return local
 
     # ---------------------------------------------------------------- data
@@ -426,9 +441,10 @@ class FsdpStrategy:
         consumed_samples: int = 0,
         num_workers: int = 0,
     ):
-        if sampler is None and dist.is_initialized() and self.dp_group is not None:
-            num_replicas = dist.get_world_size(group=self.dp_group)
-            rank = dist.get_rank(group=self.dp_group)
+        dp_group = self._get_dp_group(include_cp=False)
+        if sampler is None and dist.is_initialized() and dp_group is not None:
+            num_replicas = dist.get_world_size(group=dp_group)
+            rank = dist.get_rank(group=dp_group)
             sampler = DistributedSampler(
                 replay_buffer,
                 num_replicas=num_replicas,
@@ -504,6 +520,19 @@ class FsdpStrategy:
 
     # ---------------------------------------------------------------- I/O (MVP)
 
+    @staticmethod
+    def _checkpoint_source(model: nn.Module) -> tuple[str | None, str | None]:
+        config = getattr(model, "config", None)
+        model_repo_id = (
+            getattr(model, "name_or_path", None)
+            or getattr(config, "name_or_path", None)
+            or getattr(config, "_name_or_path", None)
+        )
+        model_cache_dir = os.environ.get("HF_HUB_CACHE")
+        if not model_cache_dir and os.environ.get("HF_HOME"):
+            model_cache_dir = os.path.join(os.environ["HF_HOME"], "hub")
+        return model_cache_dir, model_repo_id
+
     def save_model(self, model: nn.Module, tokenizer, output_dir: str, **kwargs) -> None:
         # Use Automodel's Checkpointer — its custom-model save_pretrained mixin
         # requires it (raises "No checkpointer provided" otherwise). Outputs
@@ -511,22 +540,24 @@ class FsdpStrategy:
         from nemo_automodel.components.checkpoint.checkpointing import Checkpointer, CheckpointingConfig
 
         model = self._unwrap_model(model)
+        model_cache_dir, model_repo_id = self._checkpoint_source(model)
 
         os.makedirs(output_dir, exist_ok=True)
         config = CheckpointingConfig(
             enabled=True,
             checkpoint_dir=output_dir,
             model_save_format="safetensors",
-            model_cache_dir="",
-            model_repo_id="",
+            model_cache_dir=model_cache_dir,
+            model_repo_id=model_repo_id,
             save_consolidated=True,
             is_peft=self.is_peft,
+            original_model_root_dir=model_cache_dir,
             v4_compatible=True,  # produce HF-style config.json that vLLM consumes
         )
         ckpt = Checkpointer(
             config=config,
-            dp_rank=dist.get_rank(group=self.dp_group) if self.dp_group else 0,
-            tp_rank=dist.get_rank(group=self.tp_group) if self.tp_group else 0,
+            dp_rank=self._get_dp_rank(include_cp=True),
+            tp_rank=self._get_automodel_rank("tp"),
             pp_rank=0,
             moe_mesh=self.moe_mesh,
         )
@@ -534,24 +565,26 @@ class FsdpStrategy:
         if dist.is_initialized():
             dist.barrier()
 
-    def _build_checkpointer(self, output_dir: str, save_consolidated: bool):
+    def _build_checkpointer(self, output_dir: str, save_consolidated: bool, model: nn.Module | None = None):
         from nemo_automodel.components.checkpoint.checkpointing import Checkpointer, CheckpointingConfig
 
+        model_cache_dir, model_repo_id = self._checkpoint_source(model) if model is not None else (None, None)
         os.makedirs(output_dir, exist_ok=True)
         config = CheckpointingConfig(
             enabled=True,
             checkpoint_dir=output_dir,
             model_save_format="safetensors",
-            model_cache_dir="",
-            model_repo_id="",
+            model_cache_dir=model_cache_dir,
+            model_repo_id=model_repo_id,
             save_consolidated=save_consolidated,
             is_peft=self.is_peft,
+            original_model_root_dir=model_cache_dir,
             v4_compatible=True,
         )
         return Checkpointer(
             config=config,
-            dp_rank=dist.get_rank(group=self.dp_group) if self.dp_group else 0,
-            tp_rank=dist.get_rank(group=self.tp_group) if self.tp_group else 0,
+            dp_rank=self._get_dp_rank(include_cp=True),
+            tp_rank=self._get_automodel_rank("tp"),
             pp_rank=0,
             moe_mesh=self.moe_mesh,
         )
@@ -578,7 +611,7 @@ class FsdpStrategy:
         os.makedirs(save_dir, exist_ok=True)
         is_rank0 = (not dist.is_initialized()) or dist.get_rank() == 0
 
-        ckpt = self._build_checkpointer(save_dir, save_consolidated=False)
+        ckpt = self._build_checkpointer(save_dir, save_consolidated=False, model=model)
         ckpt.save_model(model=model, weights_path=save_dir, tokenizer=None)
         optimizer = kwargs.get("optimizer")
         scheduler = kwargs.get("scheduler")
@@ -651,10 +684,18 @@ class FsdpStrategy:
             planner=DefaultLoadPlanner(allow_partial_load=True),
         )
         set_model_state_dict(model, model_state, options=StateDictOptions(strict=False))
-        ckpt = self._build_checkpointer(load_dir, save_consolidated=False)
         optim_dir = os.path.join(load_dir, "optim")
         if optimizer is not None and os.path.isdir(optim_dir):
-            ckpt.load_optimizer(optimizer=optimizer, model=model, weights_path=load_dir, scheduler=scheduler)
+            from nemo_automodel.components.checkpoint.stateful_wrappers import OptimizerState
+
+            optimizer_state = OptimizerState(model, optimizer, scheduler, is_peft=self.is_peft)
+            optim_state_dict = optimizer_state.state_dict()
+            dcp.load(
+                optim_state_dict,
+                checkpoint_id=optim_dir,
+                planner=DefaultLoadPlanner(allow_partial_load=True),
+            )
+            optimizer_state.load_state_dict(optim_state_dict)
 
         states = {}
         extra_path = os.path.join(load_dir, "extra_state.json")
