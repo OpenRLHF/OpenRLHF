@@ -144,11 +144,13 @@ class TrackioLogger:
             self.handle.log({"train/generated_samples": trace}, step=global_step)
 
         metrics = {f"train/{k}": v for k, v in logs_dict.items() if v is not None}
-        self.handle.log(metrics, step=global_step)
+        if metrics:
+            self.handle.log(metrics, step=global_step)
 
     def log_eval(self, global_step: int, logs_dict: Dict[str, Any]) -> None:
         metrics = {f"eval/{k}": v for k, v in logs_dict.items() if v is not None}
-        self.handle.log(metrics, step=global_step)
+        if metrics:
+            self.handle.log(metrics, step=global_step)
 
     def close(self) -> None:
         self.handle.finish()

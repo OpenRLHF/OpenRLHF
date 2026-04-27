@@ -578,10 +578,19 @@ if __name__ == "__main__":
     )
 
     # trackio parameters
-    parser.add_argument("--logger.trackio.project", type=str, default=None)
-    parser.add_argument("--logger.trackio.name", type=str, default=None)
-    parser.add_argument("--logger.trackio.group", type=str, default=None)
-    parser.add_argument("--logger.trackio.space_id", type=str, default=None)
+    parser.add_argument(
+        "--logger.trackio.project", type=str, default=None, help="Trackio project name (set to enable Trackio logging)"
+    )
+    parser.add_argument("--logger.trackio.name", type=str, default=None, help="Trackio run name")
+    parser.add_argument(
+        "--logger.trackio.group", type=str, default=None, help="Trackio group name for organizing related runs"
+    )
+    parser.add_argument(
+        "--logger.trackio.space_id",
+        type=str,
+        default=None,
+        help="Optional Hugging Face Space id (username/space) to host the dashboard",
+    )
 
     # TensorBoard parameters
     parser.add_argument("--logger.tensorboard_dir", type=str, default=None, help="TensorBoard logging path")
