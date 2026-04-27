@@ -25,11 +25,14 @@ def train(args):
         target_modules=args.fsdp.lora.target_modules,
         lora_dropout=args.fsdp.lora.dropout,
         device_mesh=strategy.device_mesh,
+        moe_mesh=strategy.moe_mesh,
         distributed_config=strategy.distributed_config,
+        moe_config=strategy.moe_config,
         activation_checkpointing=args.model.gradient_checkpointing_enable,
         init_value_head=True,
         value_head_prefix=args.fsdp.value_head_prefix,
         packing_samples=args.fsdp.packing_samples,
+        use_fp32_master_weights=False,
     )
 
     tokenizer = get_tokenizer(

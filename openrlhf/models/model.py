@@ -4,10 +4,10 @@ import torch
 import torch.nn as nn
 from transformers import AutoConfig, BitsAndBytesConfig
 
-from openrlhf.utils.fsdp.packing import pack_padded_batch, unpack_to_padded, unshard_dtensor
+from openrlhf.utils.fsdp.packing import is_automodel_custom_model, pack_padded_batch, unpack_to_padded, unshard_dtensor
 from openrlhf.utils.logging_utils import init_logger
 
-from .actor import _build_peft_config_dict
+from .actor import _build_peft_config_dict, _hf_packing_supported, _will_use_hf_model
 
 logger = init_logger(__name__)
 
@@ -25,12 +25,15 @@ def get_llm_for_sequence_regression(
     normalize_reward: bool = False,
     attn_implementation: str = "flash_attention_2",
     device_mesh=None,
+    moe_mesh=None,
     distributed_config=None,
+    moe_config=None,
     activation_checkpointing: bool = False,
     init_value_head: bool = False,
     value_head_prefix: str = "score",
     packing_samples: bool = False,
     use_liger_kernel: bool = False,
+    use_fp32_master_weights: Optional[bool] = None,
     **kwargs,
 ) -> nn.Module:
     """Build a reward or critic model with an Automodel-managed regression head."""
@@ -49,8 +52,10 @@ def get_llm_for_sequence_regression(
 
     from openrlhf.utils.utils import convert_to_torch_dtype, ensure_torchvision_nms_stub
 
-    torch_dtype = torch.float32
     compute_dtype = convert_to_torch_dtype(param_dtype)
+    if use_fp32_master_weights is None:
+        use_fp32_master_weights = model_type != "reward"
+    torch_dtype = compute_dtype if load_in_4bit or not use_fp32_master_weights else torch.float32
 
     nf4_config = None
     if load_in_4bit:
@@ -69,6 +74,23 @@ def get_llm_for_sequence_regression(
     ensure_torchvision_nms_stub()
     from nemo_automodel import NeMoAutoModelForSequenceClassification
 
+    force_hf = False
+    automodel_has_packed_sequence = packing_samples
+    if (
+        packing_samples
+        and _will_use_hf_model(model_name_or_path, force_hf)
+        and not _hf_packing_supported(attn_implementation)
+    ):
+        print(
+            "[Packing] HF fallback sequence-regression packing requires flash_attention_2 + flash_attn. "
+            "Disabling packing for this model and using padded forward instead."
+        )
+        automodel_has_packed_sequence = False
+        packing_samples = False
+        if attn_implementation == "flash_attention_2":
+            attn_implementation = "sdpa"
+            config._attn_implementation = attn_implementation
+
     model = NeMoAutoModelForSequenceClassification.from_pretrained(
         model_name_or_path,
         config=config,
@@ -77,11 +99,13 @@ def get_llm_for_sequence_regression(
         attn_implementation=attn_implementation,
         quantization_config=nf4_config,
         device_mesh=device_mesh,
+        moe_mesh=moe_mesh,
         distributed_config=distributed_config,
+        moe_config=moe_config,
         activation_checkpointing=activation_checkpointing,
         peft_config=peft_config,
         use_liger_kernel=use_liger_kernel,
-        has_packed_sequence=packing_samples,
+        has_packed_sequence=automodel_has_packed_sequence,
         **kwargs,
     )
 
@@ -139,6 +163,7 @@ class _SequenceRegressionBase(nn.Module):
         self.value_head_prefix = value_head_prefix
         self.packing_samples = packing_samples
         self.normalize_reward = normalize_reward
+        self._packing_style = "automodel" if is_automodel_custom_model(model) else "hf"
 
         self.register_buffer("mean", torch.zeros(1), persistent=False)
         self.register_buffer("std", torch.ones(1), persistent=False)
@@ -158,7 +183,9 @@ class _SequenceRegressionBase(nn.Module):
         fa_kwargs: dict = {}
         indices = None
         if self.packing_samples:
-            input_ids, position_ids, _, indices, fa_kwargs = pack_padded_batch(input_ids, attention_mask)
+            input_ids, position_ids, _, indices, fa_kwargs = pack_padded_batch(
+                input_ids, attention_mask, style=self._packing_style
+            )
             forward_attention_mask = None
         else:
             forward_attention_mask = attention_mask
@@ -183,7 +210,7 @@ class _SequenceRegressionBase(nn.Module):
         if hidden_states is None:
             raise RuntimeError("Sequence regression requires hidden_states; model did not return them.")
         last_hidden_states = unshard_dtensor(hidden_states[-1])
-        values = _get_regression_head(self.model, self.value_head_prefix)(last_hidden_states).squeeze(-1)
+        values = _get_regression_head(self.model, self.value_head_prefix)(last_hidden_states).squeeze(-1).float()
         if self.packing_samples:
             values = unpack_to_padded(values, indices, batch, seqlen)
         return values, outputs

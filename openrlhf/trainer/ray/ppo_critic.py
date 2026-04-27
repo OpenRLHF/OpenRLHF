@@ -81,15 +81,65 @@ class CriticPPOTrainer(ABC):
                 desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
+            accum_window = []
+            accum_steps = self.strategy.accumulated_gradient
             for step, experience in enumerate(pbar):
                 experience.to_device(device)
-                status = self.training_step(experience, step)
+                if self.args.train.dynamic_batch_enable:
+                    status = self.training_step(experience, step)
+                    status = self.strategy.all_reduce(status)
+                    status_list.append(status)
+                    pbar.set_postfix(status)
+                    continue
 
-                # for DP
-                status = self.strategy.all_reduce(status)
+                accum_window.append((step, experience))
+                if len(accum_window) < accum_steps:
+                    continue
 
-                status_list.append(status)
-                pbar.set_postfix(status)
+                local_num_tokens = torch.zeros((), dtype=torch.float32, device=torch.device("cuda", device))
+                local_batch_size = torch.zeros((), dtype=torch.float32, device=torch.device("cuda", device))
+                for _, window_experience in accum_window:
+                    local_num_tokens += window_experience.action_mask.sum()
+                    local_batch_size += (window_experience.action_mask.sum(dim=-1) > 0).sum()
+                global_num_tokens = self.strategy.global_token_count(local_num_tokens)
+                global_batch_size = self.strategy.global_token_count(local_batch_size)
+
+                for window_step, window_experience in accum_window:
+                    status = self.training_step(
+                        window_experience,
+                        window_step,
+                        global_num_tokens=global_num_tokens,
+                        global_batch_size=global_batch_size,
+                        loss_dp_size=self.strategy.dp_size,
+                        loss_report_scale=1,
+                        scale_loss_by_accumulation=False,
+                    )
+                    status = self.strategy.all_reduce(status)
+                    status_list.append(status)
+                    pbar.set_postfix(status)
+                accum_window = []
+
+            if accum_window:
+                local_num_tokens = torch.zeros((), dtype=torch.float32, device=torch.device("cuda", device))
+                local_batch_size = torch.zeros((), dtype=torch.float32, device=torch.device("cuda", device))
+                for _, window_experience in accum_window:
+                    local_num_tokens += window_experience.action_mask.sum()
+                    local_batch_size += (window_experience.action_mask.sum(dim=-1) > 0).sum()
+                global_num_tokens = self.strategy.global_token_count(local_num_tokens)
+                global_batch_size = self.strategy.global_token_count(local_batch_size)
+                for window_step, window_experience in accum_window:
+                    status = self.training_step(
+                        window_experience,
+                        window_step,
+                        global_num_tokens=global_num_tokens,
+                        global_batch_size=global_batch_size,
+                        loss_dp_size=self.strategy.dp_size,
+                        loss_report_scale=1,
+                        scale_loss_by_accumulation=False,
+                    )
+                    status = self.strategy.all_reduce(status)
+                    status_list.append(status)
+                    pbar.set_postfix(status)
 
         if status_list:
             status_mean = status_list[0]
@@ -100,7 +150,16 @@ class CriticPPOTrainer(ABC):
                 status_mean[k] /= len(status_list)
         return status_mean
 
-    def training_step(self, experience: Experience, step: int) -> Dict[str, float]:
+    def training_step(
+        self,
+        experience: Experience,
+        step: int,
+        global_num_tokens=None,
+        global_batch_size=None,
+        loss_dp_size=None,
+        loss_report_scale: int = 1,
+        scale_loss_by_accumulation: bool = True,
+    ) -> Dict[str, float]:
         self.critic.train()
 
         sequences = experience.sequences
@@ -120,8 +179,12 @@ class CriticPPOTrainer(ABC):
             packed_seq_lens=packed_seq_lens,
         )
 
-        # verl-style token-mean: see SFTTrainer for rationale.
-        global_num_tokens = self.strategy.global_token_count(experience.action_mask)
+        if global_num_tokens is None:
+            global_num_tokens = self.strategy.global_token_count(experience.action_mask)
+        if global_batch_size is None:
+            global_batch_size = self.strategy.global_token_count((experience.action_mask.sum(dim=-1) > 0).sum())
+        if loss_dp_size is None:
+            loss_dp_size = self.strategy.dp_size
 
         # loss function
         critic_loss = self.critic_loss_fn(
@@ -129,15 +192,17 @@ class CriticPPOTrainer(ABC):
             old_values,
             returns,
             action_mask=experience.action_mask,
-            dp_size=self.strategy.dp_size,
-            global_num_tokens=global_num_tokens,
+            dp_size=loss_dp_size,
+            batch_num_tokens=global_num_tokens,
+            global_batch_size=global_batch_size,
         )
         # mixtral
         if self.aux_loss:
-            aux_loss = output.aux_loss
+            aux_loss = getattr(output, "aux_loss", 0)
         else:
             aux_loss = 0
-        loss = critic_loss + aux_loss * self.args.actor.aux_loss_coef
+        aux_scale = 1 if scale_loss_by_accumulation else self.strategy.accumulated_gradient
+        loss = critic_loss + aux_loss * self.args.actor.aux_loss_coef / aux_scale
         if self.args.train.dynamic_batch_enable:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
 
@@ -148,12 +213,18 @@ class CriticPPOTrainer(ABC):
                     self.critic_optim, self.critic, self.critic_scheduler, name="critic", accumulate=False
                 )
         else:
-            self.strategy.backward(loss, self.critic, self.critic_optim, name="critic")
+            self.strategy.backward(
+                loss,
+                self.critic,
+                self.critic_optim,
+                name="critic",
+                scale_loss_by_accumulation=scale_loss_by_accumulation,
+            )
             self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
 
         # status
         status = {
-            "critic_loss": critic_loss.detach().item(),
+            "critic_loss": (critic_loss.detach() / loss_report_scale).item(),
             "values": masked_mean(values, experience.action_mask).detach().item(),
             "critic_lr": self.critic_scheduler.get_last_lr()[0],
             "critic_grad_norm": self.strategy.get_grad_norm(self.critic),
@@ -180,7 +251,9 @@ class CriticModelActor(BaseModelActor):
             target_modules=strategy.args.fsdp.lora.target_modules,
             lora_dropout=strategy.args.fsdp.lora.dropout,
             device_mesh=strategy.device_mesh,
+            moe_mesh=strategy.moe_mesh,
             distributed_config=strategy.distributed_config,
+            moe_config=strategy.moe_config,
             activation_checkpointing=args.actor.gradient_checkpointing_enable,
             value_head_prefix=strategy.args.fsdp.value_head_prefix,
             init_value_head=strategy.args.actor.model_name_or_path == strategy.args.critic.model_name_or_path,

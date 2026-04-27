@@ -8,10 +8,22 @@ _TORCHVISION_NMS_STUB = None
 
 
 def ensure_torchvision_nms_stub() -> None:
-    """Allow importing Transformers model classes when torchvision ops are absent."""
+    """Allow importing Transformers model classes when torchvision ops are absent.
+
+    Only register a stub if torchvision is missing — otherwise pre-registering
+    `torchvision::nms` causes a duplicate-registration c10::Error when real
+    torchvision loads later (Automodel/MoE pulls it in indirectly).
+    """
     global _TORCHVISION_NMS_STUB
     if _TORCHVISION_NMS_STUB is not None:
         return
+    try:
+        import torchvision  # noqa: F401
+
+        _TORCHVISION_NMS_STUB = True
+        return
+    except Exception:
+        pass
     try:
         from torch.library import Library
 

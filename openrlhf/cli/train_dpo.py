@@ -24,7 +24,9 @@ def train(args):
         lora_dropout=args.fsdp.lora.dropout,
         target_modules=args.fsdp.lora.target_modules,
         device_mesh=strategy.device_mesh,
+        moe_mesh=strategy.moe_mesh,
         distributed_config=strategy.distributed_config,
+        moe_config=strategy.moe_config,
         activation_checkpointing=args.model.gradient_checkpointing_enable,
         packing_samples=args.fsdp.packing_samples,
         use_liger_kernel=args.fsdp.use_liger_kernel,
@@ -41,9 +43,12 @@ def train(args):
         param_dtype=args.fsdp.param_dtype,
         load_in_4bit=args.fsdp.load_in_4bit,
         device_mesh=strategy.device_mesh,
+        moe_mesh=strategy.moe_mesh,
         distributed_config=strategy.distributed_config,
+        moe_config=strategy.moe_config,
         activation_checkpointing=False,
         packing_samples=args.fsdp.packing_samples,
+        use_fp32_master_weights=False,
     )
     if args.ref.offload:
         ref_model._offload = True
@@ -294,9 +299,12 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
-    if args.fsdp.packing_samples and "flash_attention" not in args.fsdp.attn_implementation:
-        print("[Warning] --fsdp.packing_samples requires flash_attention; forcing flash_attention_2")
-        args.fsdp.attn_implementation = "flash_attention_2"
+    if args.fsdp.packing_samples and args.fsdp.attn_implementation != "flash_attention_2":
+        print(
+            "[Warning] --fsdp.packing_samples no longer forces flash_attention_2. "
+            "Automodel native models use THD packing with the selected backend; "
+            "HF fallback models will disable packing unless flash_attention_2 + flash_attn is available."
+        )
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub

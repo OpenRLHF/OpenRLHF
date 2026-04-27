@@ -184,6 +184,13 @@ class FsdpStrategy:
             else MixedPrecisionPolicy(
                 param_dtype=torch_dtype,
                 reduce_dtype=torch.float32,
+                # output_dtype omitted (defaults to param_dtype=bf16). Setting
+                # it to fp32 makes the inner Qwen2Model FSDP root return fp32
+                # hidden_states; lm_head is a sibling sub-module, not its own
+                # FSDP unit, so it gets fp32 input × bf16 weight → matmul
+                # mismatch ('expected mat1 and mat2 to have the same dtype').
+                # Stable loss is achieved by casting logits to fp32 in
+                # actor.forward right after the model call.
                 cast_forward_inputs=True,
             )
         )
@@ -238,6 +245,7 @@ class FsdpStrategy:
         self.dp_group = _maybe_group("dp_shard") or _maybe_group("dp")
 
         dp_size = dist.get_world_size(group=self.dp_group) if self.dp_group else self.world_size
+        self.dp_cp_size = dist.get_world_size(group=self.dp_cp_group) if self.dp_cp_group else dp_size
         # Effective grad-accum = train_batch_size / (micro_bs × DP).
         self.accumulated_gradient = max(self.train_batch_size // (self.micro_train_batch_size * dp_size), 1)
         self.dp_size = dp_size
@@ -308,11 +316,13 @@ class FsdpStrategy:
         accumulate: bool = True,
         **kwargs,
     ) -> None:
-        # Static gradient accumulation mirrors the old trainer contract: each
-        # microbatch loss is averaged locally, then divided by the number of
-        # accumulation steps before backward.
+        # Static gradient accumulation mirrors the old trainer contract by
+        # default: each microbatch loss is divided by the accumulation steps.
+        # Callers that already use verl-style global batch denominators can set
+        # ``scale_loss_by_accumulation=False`` and keep the no-sync behavior.
         if accumulate and self.accumulated_gradient > 1:
-            loss = loss / self.accumulated_gradient
+            if kwargs.get("scale_loss_by_accumulation", True):
+                loss = loss / self.accumulated_gradient
             # Skip the DP all-reduce on intermediate accum steps (saves bandwidth);
             # only sync on the final micro-batch where optimizer_step will fire.
             # The key MUST match optimizer_step's so the counter advances together.
@@ -321,6 +331,16 @@ class FsdpStrategy:
                 key = f"step_{name}"
                 sync = (self.time_steps[key] + 1) % self.accumulated_gradient == 0
                 unwrapped.set_requires_gradient_sync(sync)
+        if self.moe_mesh is not None:
+            try:
+                from nemo_automodel.components.moe.megatron.moe_utils import MoEAuxLossAutoScaler
+
+                MoEAuxLossAutoScaler.main_loss_backward_scale = torch.tensor(
+                    float(getattr(self, "dp_cp_size", self.dp_size)),
+                    device=loss.device,
+                )
+            except Exception:
+                pass
         loss.backward()
 
     def optimizer_step(
@@ -351,15 +371,19 @@ class FsdpStrategy:
             return
         max_norm = self._max_norm_by_optimizer.get(id(optimizer), self.max_norm)
         if max_norm and max_norm > 0:
-            from nemo_automodel.components.training.utils import clip_grad_norm
+            from nemo_automodel.components.training.utils import scale_grads_and_clip_grad_norm
 
             self._last_grad_norm = float(
-                clip_grad_norm(
+                scale_grads_and_clip_grad_norm(
                     max_norm,
                     [model],
                     pp_enabled=False,
                     device_mesh=self.device_mesh,
+                    moe_mesh=self.moe_mesh,
+                    ep_axis_name="ep" if self.moe_mesh is not None and "ep" in self.moe_mesh.mesh_dim_names else None,
                     foreach=False,
+                    num_label_tokens=None,
+                    dp_group_size=getattr(self, "dp_cp_size", self.dp_size),
                 )
             )
         else:
@@ -381,7 +405,9 @@ class FsdpStrategy:
         otherwise the per-token-mean estimate is biased when token counts are
         unequal across DP ranks.
         """
-        local = mask.sum().to(dtype=torch.float32, device=torch.cuda.current_device())
+        local = mask if mask.ndim == 0 else mask.sum()
+        device = torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else local.device
+        local = local.to(dtype=torch.float32, device=device)
         if dist.is_initialized() and self.dp_cp_group is not None:
             dist.all_reduce(local, op=dist.ReduceOp.SUM, group=self.dp_cp_group)
         return local
@@ -605,8 +631,27 @@ class FsdpStrategy:
         wrapper = model
         model = self._unwrap_model(model)
 
+        # Tied-weight load: Automodel saves in HF safetensors shards with
+        # .hf_metadata sidecar (not DCP .metadata), and tie_word_embeddings=True
+        # models (e.g. Qwen2.5-0.5B) deduplicate the tied pair. Use HF storage
+        # reader + allow_partial_load to handle both. Mirrors PR#1176.
+        import torch.distributed.checkpoint as dcp
+        from torch.distributed.checkpoint import HuggingFaceStorageReader
+        from torch.distributed.checkpoint.default_planner import DefaultLoadPlanner
+        from torch.distributed.checkpoint.state_dict import (
+            StateDictOptions,
+            get_model_state_dict,
+            set_model_state_dict,
+        )
+
+        model_state = get_model_state_dict(model, options=StateDictOptions(full_state_dict=False, cpu_offload=False))
+        dcp.load(
+            model_state,
+            storage_reader=HuggingFaceStorageReader(path=os.path.join(load_dir, "model")),
+            planner=DefaultLoadPlanner(allow_partial_load=True),
+        )
+        set_model_state_dict(model, model_state, options=StateDictOptions(strict=False))
         ckpt = self._build_checkpointer(load_dir, save_consolidated=False)
-        ckpt.load_model(model=model, model_path=load_dir, use_checkpoint_id=False)
         optim_dir = os.path.join(load_dir, "optim")
         if optimizer is not None and os.path.isdir(optim_dir):
             ckpt.load_optimizer(optimizer=optimizer, model=model, weights_path=load_dir, scheduler=scheduler)

@@ -144,57 +144,126 @@ class SFTTrainer(ABC):
             # train
             self.model.train()
             device = next(self.model.parameters()).device
-            for inputs, attention_masks, loss_masks in self.train_dataloader:
-                inputs = inputs.to(device).squeeze(1)
-                attention_mask = attention_masks.to(device).squeeze(1)
-                loss_mask = loss_masks.to(device).squeeze(1)
-                per_token_log_probs, output = self.model(
-                    inputs, attention_mask=attention_mask, return_output=True, return_logprobs=True
-                )
+            accum_window = []
+            accum_steps = self.strategy.accumulated_gradient
+            for batch in self.train_dataloader:
+                accum_window.append(batch)
+                if len(accum_window) < accum_steps:
+                    continue
 
-                # mixtral
-                if self.aux_loss:
-                    aux_loss = output.aux_loss
-                else:
-                    aux_loss = 0
-                # verl-style token-mean: divide by *global* valid tokens (across
-                # DP+CP) rather than per-rank, then multiply by dp_size to undo
-                # FSDP2's reduce-scatter averaging. Without this, token-mean is
-                # biased whenever ranks have different mask.sum().
-                shifted_loss_mask = loss_mask[:, :-1]
-                global_num_tokens = self.strategy.global_token_count(shifted_loss_mask)
-                gpt_loss = self.loss_fn(
-                    per_token_log_probs,
-                    shifted_loss_mask,
-                    dp_size=self.strategy.dp_size,
-                    global_num_tokens=global_num_tokens,
-                )
-                loss = gpt_loss + aux_loss * self.args.model.aux_loss_coef
-                self.strategy.backward(loss, self.model, self.optimizer)
-                self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
+                prepared = []
+                local_num_tokens = torch.zeros((), dtype=torch.float32, device=device)
+                for inputs, attention_masks, loss_masks in accum_window:
+                    inputs = inputs.to(device).squeeze(1)
+                    attention_mask = attention_masks.to(device).squeeze(1)
+                    loss_mask = loss_masks.to(device).squeeze(1)
+                    shifted_loss_mask = loss_mask[:, :-1]
+                    local_num_tokens += shifted_loss_mask.sum()
+                    prepared.append((inputs, attention_mask, shifted_loss_mask))
+                accum_window = []
 
-                loss_sum += gpt_loss.item()
-                logs_dict = {
-                    "gpt_loss": gpt_loss.item(),
-                    "lr": self.scheduler.get_last_lr()[0],
-                    "grad_norm": self.strategy.get_grad_norm(self.model),
-                }
-                if self.aux_loss:
-                    logs_dict["aux_loss"] = aux_loss.item()
-                # step bar
-                logs_dict = self.strategy.all_reduce(logs_dict)
-                step_bar.set_postfix(logs_dict)
-                step_bar.update()
+                batch_num_tokens = self.strategy.global_token_count(local_num_tokens)
 
-                # logs/checkpoints/evaluation
-                if step % self.strategy.accumulated_gradient == 0:
-                    logs_dict["loss_mean"] = loss_sum / self.strategy.accumulated_gradient
-                    loss_sum = 0
-                    global_step = step // self.strategy.accumulated_gradient
-                    client_states = {"consumed_samples": global_step * args.train.batch_size}
-                    self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
+                for inputs, attention_mask, shifted_loss_mask in prepared:
+                    per_token_log_probs, output = self.model(
+                        inputs, attention_mask=attention_mask, return_output=True, return_logprobs=True
+                    )
 
-                step += 1
+                    aux_loss = getattr(output, "aux_loss", 0) if self.aux_loss else 0
+                    gpt_loss = self.loss_fn(
+                        per_token_log_probs,
+                        shifted_loss_mask,
+                        dp_size=self.strategy.dp_size,
+                        batch_num_tokens=batch_num_tokens,
+                    )
+                    aux_term = aux_loss * self.args.model.aux_loss_coef / accum_steps
+                    loss = gpt_loss + aux_term
+                    self.strategy.backward(
+                        loss,
+                        self.model,
+                        self.optimizer,
+                        scale_loss_by_accumulation=False,
+                    )
+                    self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
+
+                    reported_gpt_loss = gpt_loss.detach()
+                    loss_sum += reported_gpt_loss.item()
+                    logs_dict = {
+                        "gpt_loss": reported_gpt_loss.item(),
+                        "lr": self.scheduler.get_last_lr()[0],
+                        "grad_norm": self.strategy.get_grad_norm(self.model),
+                    }
+                    if self.aux_loss:
+                        logs_dict["aux_loss"] = aux_loss.item() if torch.is_tensor(aux_loss) else float(aux_loss)
+                    # step bar
+                    logs_dict = self.strategy.all_reduce(logs_dict)
+                    step_bar.set_postfix(logs_dict)
+                    step_bar.update()
+
+                    # logs/checkpoints/evaluation
+                    if step % self.strategy.accumulated_gradient == 0:
+                        logs_dict["loss_mean"] = loss_sum / self.strategy.accumulated_gradient
+                        loss_sum = 0
+                        global_step = step // self.strategy.accumulated_gradient
+                        client_states = {"consumed_samples": global_step * args.train.batch_size}
+                        self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
+
+                    step += 1
+
+            if accum_window:
+                prepared = []
+                local_num_tokens = torch.zeros((), dtype=torch.float32, device=device)
+                for inputs, attention_masks, loss_masks in accum_window:
+                    inputs = inputs.to(device).squeeze(1)
+                    attention_mask = attention_masks.to(device).squeeze(1)
+                    loss_mask = loss_masks.to(device).squeeze(1)
+                    shifted_loss_mask = loss_mask[:, :-1]
+                    local_num_tokens += shifted_loss_mask.sum()
+                    prepared.append((inputs, attention_mask, shifted_loss_mask))
+
+                batch_num_tokens = self.strategy.global_token_count(local_num_tokens)
+                for inputs, attention_mask, shifted_loss_mask in prepared:
+                    per_token_log_probs, output = self.model(
+                        inputs, attention_mask=attention_mask, return_output=True, return_logprobs=True
+                    )
+                    aux_loss = getattr(output, "aux_loss", 0) if self.aux_loss else 0
+                    gpt_loss = self.loss_fn(
+                        per_token_log_probs,
+                        shifted_loss_mask,
+                        dp_size=self.strategy.dp_size,
+                        batch_num_tokens=batch_num_tokens,
+                    )
+                    aux_term = aux_loss * self.args.model.aux_loss_coef / accum_steps
+                    loss = gpt_loss + aux_term
+                    self.strategy.backward(
+                        loss,
+                        self.model,
+                        self.optimizer,
+                        scale_loss_by_accumulation=False,
+                    )
+                    self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
+
+                    reported_gpt_loss = gpt_loss.detach()
+                    loss_sum += reported_gpt_loss.item()
+                    logs_dict = {
+                        "gpt_loss": reported_gpt_loss.item(),
+                        "lr": self.scheduler.get_last_lr()[0],
+                        "grad_norm": self.strategy.get_grad_norm(self.model),
+                    }
+                    if self.aux_loss:
+                        logs_dict["aux_loss"] = aux_loss.item() if torch.is_tensor(aux_loss) else float(aux_loss)
+                    logs_dict = self.strategy.all_reduce(logs_dict)
+                    step_bar.set_postfix(logs_dict)
+                    step_bar.update()
+
+                    if step % self.strategy.accumulated_gradient == 0:
+                        logs_dict["loss_mean"] = loss_sum / self.strategy.accumulated_gradient
+                        loss_sum = 0
+                        global_step = step // self.strategy.accumulated_gradient
+                        client_states = {"consumed_samples": global_step * args.train.batch_size}
+                        self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
+
+                    step += 1
 
             epoch_bar.update()
 

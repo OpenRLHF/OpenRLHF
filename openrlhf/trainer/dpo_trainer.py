@@ -325,7 +325,7 @@ class DPOTrainer(ABC):
         )
         chosen_logps = all_logps_sum[: chosen_ids.shape[0]]
         rejected_logps = all_logps_sum[chosen_ids.shape[0] :]
-        aux_loss = output.aux_loss if "aux_loss" in output else []
+        aux_loss = output.aux_loss if "aux_loss" in output else 0
         return chosen_logps, rejected_logps, aux_loss, -all_logps_mean[: chosen_ids.shape[0]].mean()
 
     def concatenated_inputs(self, chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens):

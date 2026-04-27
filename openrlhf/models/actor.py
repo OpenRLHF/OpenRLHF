@@ -1,12 +1,71 @@
+from importlib.util import find_spec
 from typing import Optional
 
 import torch
 import torch.nn as nn
+from torch.distributed.tensor import DTensor
 from transformers import BitsAndBytesConfig
 
-from openrlhf.utils.fsdp.packing import pack_padded_batch, unpack_to_padded, unshard_dtensor
+from openrlhf.utils.fsdp.packing import (
+    is_automodel_custom_model,
+    log_probs_from_vocab_parallel_logits,
+    pack_padded_batch,
+    unpack_to_padded,
+    unshard_dtensor,
+)
 
 from .utils import compute_entropy, log_probs_from_logits
+
+
+def _detect_moe_arch(pretrain_or_model) -> bool:
+    """Lightweight MoE detection from HF config (no model load)."""
+    if not isinstance(pretrain_or_model, str):
+        return False
+    try:
+        from transformers import AutoConfig
+
+        cfg = AutoConfig.from_pretrained(pretrain_or_model, trust_remote_code=True)
+        archs = getattr(cfg, "architectures", None) or []
+        if any("Moe" in a or "MoE" in a for a in archs):
+            return True
+        for k in ("num_experts", "n_routed_experts", "num_local_experts", "moe_num_experts"):
+            n = getattr(cfg, k, None)
+            if isinstance(n, int) and n > 1:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _has_hf_flash_attn_2() -> bool:
+    try:
+        from transformers.utils import is_flash_attn_2_available
+
+        return bool(is_flash_attn_2_available())
+    except Exception:
+        return find_spec("flash_attn") is not None
+
+
+def _will_use_hf_model(pretrain_or_model, force_hf: bool, default: bool = True) -> bool:
+    if force_hf:
+        return True
+    if not isinstance(pretrain_or_model, str):
+        return False
+    try:
+        from nemo_automodel._transformers.model_init import get_is_hf_model
+        from transformers import AutoConfig
+
+        cfg = AutoConfig.from_pretrained(pretrain_or_model, trust_remote_code=True)
+        return get_is_hf_model(cfg, force_hf)
+    except Exception:
+        return default
+
+
+def _hf_packing_supported(attn_implementation: str) -> bool:
+    # HF packed sequence support is the flash-attn2 varlen path. Other
+    # backends would treat the packed stream as one long sequence and leak
+    # attention across sample boundaries.
+    return attn_implementation == "flash_attention_2" and _has_hf_flash_attn_2()
 
 
 def _build_peft_config_dict(rank: int, alpha: int, dropout: float, target_modules):
@@ -21,6 +80,27 @@ def _build_peft_config_dict(rank: int, alpha: int, dropout: float, target_module
     if isinstance(target_modules, str):
         target_modules = [target_modules]
     return {**base, "target_modules": list(target_modules)}
+
+
+class _AttrDict(dict):
+    """Dict output that also supports ``output.foo`` trainer access."""
+
+    def __getattr__(self, name):
+        try:
+            return self[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+    def __setattr__(self, name, value):
+        self[name] = value
+
+
+def _normalize_output(output):
+    if isinstance(output, torch.Tensor):
+        return _AttrDict(logits=output)
+    if isinstance(output, dict) and not isinstance(output, _AttrDict):
+        return _AttrDict(output)
+    return output
 
 
 class Actor(nn.Module):
@@ -52,24 +132,33 @@ class Actor(nn.Module):
         temperature: float = 1.0,
         use_liger_kernel: bool = False,
         freeze_visual_encoder: bool = False,
+        use_fp32_master_weights: bool = True,
         **kwargs,
     ) -> None:
         super().__init__()
         self.temperature = temperature
         self.packing_samples = packing_samples
+        self._packing_style = "hf"
 
         if not isinstance(pretrain_or_model, str):
             self.model = pretrain_or_model
+            self.is_vlm = False
+            self._packing_style = "automodel" if is_automodel_custom_model(self.model) else "hf"
             return
 
         from openrlhf.utils.utils import convert_to_torch_dtype, ensure_torchvision_nms_stub, is_vlm_model
 
-        # Mixed-precision recipe (matches NeMo-RL / DS bf16): keep fp32 master
-        # weights for the optimizer, downcast to param_dtype only for fwd/bwd
-        # via FSDP2's MixedPrecisionPolicy. Loading params in their compute
-        # dtype (bf16) makes Adam math itself bf16, losing precision.
-        torch_dtype = torch.float32
+        # Trainable actor/critic models keep fp32 master weights; ref/reward can
+        # opt into compute dtype to save memory. FSDP2 handles bf16 fwd/bwd via
+        # MixedPrecisionPolicy. MoE checkpoints (Qwen3-MoE, GLM-MoE, ...) carry
+        # mixed bf16 expert weights + fp32 router gates; loading with
+        # torch_dtype=fp32 leaves the expert side as bf16, and FSDP rejects
+        # ('expects uniform original parameter dtype'). Drop fp32 master for
+        # MoE on the HF reference path (Automodel custom MoE handles the mix
+        # internally and works with fp32 master).
         compute_dtype = convert_to_torch_dtype(param_dtype)
+        is_moe = _detect_moe_arch(pretrain_or_model)
+        torch_dtype = compute_dtype if load_in_4bit or not use_fp32_master_weights else torch.float32
         self.is_vlm = is_vlm_model(pretrain_or_model)
 
         if self.is_vlm and use_liger_kernel:
@@ -98,11 +187,38 @@ class Actor(nn.Module):
         else:
             from nemo_automodel import NeMoAutoModelForCausalLM as ModelCls
 
-        # force_hf=True under TP because Automodel's custom Qwen2/Llama models
-        # hit a non-contiguous F.linear view error when sequence shape changes
-        # mid-training. HF's transformers reference path is correct for TP and
-        # is what NeMo-RL uses.
+        # force_hf=True selection — Automodel's custom impls have known issues
+        # we need to route around:
+        #  - Dense + TP>1 + EP=1: F.linear non-contiguous-DTensor view error.
+        #    Use HF reference TP path.
+        #  - MoE without EP: Automodel's custom MoE requires a non-None
+        #    moe_mesh with an 'ep' dim ('AssertionError: ep mesh dimension not
+        #    found'). Use HF reference path.
+        #  TP+EP combo (e.g. tp=2 ep=2): keep custom Automodel impl — it owns
+        #  the EP routing. Our TPLinear bmm monkey-patch handles the F.linear
+        #  contiguity bug that HF doesn't have.
         tp_size = device_mesh["tp"].size() if device_mesh is not None and "tp" in device_mesh.mesh_dim_names else 1
+        ep_active = moe_mesh is not None
+        force_hf = (tp_size > 1 and not ep_active) or (is_moe and not ep_active)
+        # MoE on HF path: see comment near torch_dtype — drop fp32 master to
+        # avoid the mixed-dtype FSDP assert.
+        if is_moe and force_hf and torch_dtype == torch.float32:
+            torch_dtype = compute_dtype
+        automodel_has_packed_sequence = packing_samples
+        if (
+            packing_samples
+            and _will_use_hf_model(pretrain_or_model, force_hf)
+            and not _hf_packing_supported(attn_implementation)
+        ):
+            print(
+                "[Packing] HF fallback packed sequence requires flash_attention_2 + flash_attn. "
+                "Disabling packing for this model and using padded forward instead."
+            )
+            automodel_has_packed_sequence = False
+            self.packing_samples = False
+            if attn_implementation == "flash_attention_2" and not _has_hf_flash_attn_2():
+                attn_implementation = "sdpa"
+
         self.model = ModelCls.from_pretrained(
             pretrain_or_model,
             trust_remote_code=True,
@@ -116,9 +232,16 @@ class Actor(nn.Module):
             activation_checkpointing=activation_checkpointing,
             peft_config=peft_config,
             use_liger_kernel=use_liger_kernel and not self.is_vlm,
-            has_packed_sequence=packing_samples,
-            force_hf=tp_size > 1,
+            has_packed_sequence=automodel_has_packed_sequence,
+            force_hf=force_hf,
         )
+        self._packing_style = "automodel" if is_automodel_custom_model(self.model) else "hf"
+        if self.packing_samples and self._packing_style == "hf" and not _hf_packing_supported(attn_implementation):
+            print(
+                "[Packing] Loaded model is HF fallback without flash_attention_2 packed support. "
+                "Disabling packing for correctness."
+            )
+            self.packing_samples = False
 
         # VLM: optionally freeze the vision encoder so only the language
         # model backbone is trained. Both Qwen3.5 and Gemma4 place language
@@ -159,7 +282,7 @@ class Actor(nn.Module):
         indices = None
         if self.packing_samples:
             sequences, position_ids, rolled_sequences, indices, fa_kwargs = pack_padded_batch(
-                sequences, attention_mask
+                sequences, attention_mask, style=self._packing_style
             )
             forward_attention_mask = None
         else:
@@ -189,30 +312,38 @@ class Actor(nn.Module):
         )
         # Automodel's custom MoE/LLM models (e.g. Qwen3MoeForCausalLM) return a
         # raw logits Tensor; HF returns a ModelOutput with `.logits`. Normalize.
-        if isinstance(output, torch.Tensor):
-            output = {"logits": output}
-        # Under TP, lm_head's `ColwiseParallel(output_layouts=Shard(-1))` returns
-        # a DTensor sharded on the vocab dim. Gather to full vocab on each rank
-        # so downstream entropy / log-prob / loss ops see a plain tensor.
-        output["logits"] = unshard_dtensor(output["logits"])
-        # https://github.com/OpenRLHF/OpenRLHF/pull/634
-        output["logits"] = output["logits"].to(torch.float32)
+        output = _normalize_output(output)
+        logits = output["logits"]
+        full_logits = None
 
         if return_entropy:
             assert return_output
-            entropy = compute_entropy(output["logits"])
+            full_logits = unshard_dtensor(logits).to(torch.float32)
+            output["logits"] = full_logits
+            entropy = compute_entropy(full_logits)
             if self.packing_samples:
                 entropy = unpack_to_padded(entropy, indices, batch, seqlen)
-            setattr(output, "entropy", entropy[:, :-1])
+            output.entropy = entropy[:, :-1]
 
         return_action_log_probs = action_mask is not None
         if not return_action_log_probs and not return_logprobs:
             assert return_output
-            if allgather_logits and self.packing_samples:
-                output["logits"] = unpack_to_padded(output["logits"], indices, batch, seqlen)
+            if allgather_logits:
+                full_logits = full_logits if full_logits is not None else unshard_dtensor(logits).to(torch.float32)
+                output["logits"] = (
+                    unpack_to_padded(full_logits, indices, batch, seqlen) if self.packing_samples else full_logits
+                )
             return output
 
-        log_probs = log_probs_from_logits(output["logits"], rolled_sequences, temperature=self.temperature)
+        if isinstance(logits, DTensor):
+            log_probs = log_probs_from_vocab_parallel_logits(
+                logits,
+                rolled_sequences,
+                temperature=self.temperature,
+            )
+        else:
+            full_logits = full_logits if full_logits is not None else logits.to(torch.float32)
+            log_probs = log_probs_from_logits(full_logits, rolled_sequences, temperature=self.temperature)
 
         if self.packing_samples:
             log_probs = unpack_to_padded(log_probs, indices, batch, seqlen)

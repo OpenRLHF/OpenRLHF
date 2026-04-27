@@ -629,9 +629,12 @@ if __name__ == "__main__":
             args.rollout.max_tokens_per_gpu = args.train.max_tokens_per_gpu
 
     if args.fsdp.packing_samples:
-        if "flash_attention" not in args.fsdp.attn_implementation:
-            print("[Warning] --fsdp.packing_samples requires flash_attention; forcing flash_attention_2")
-            args.fsdp.attn_implementation = "flash_attention_2"
+        if args.fsdp.attn_implementation != "flash_attention_2":
+            print(
+                "[Warning] --fsdp.packing_samples no longer forces flash_attention_2. "
+                "Automodel native models use THD packing with the selected backend; "
+                "HF fallback models will disable packing unless flash_attention_2 + flash_attn is available."
+            )
         assert args.vllm.num_engines > 0, "Only support `--fsdp.packing_samples` with vLLM."
 
     if args.vllm.enable_sleep and not args.train.colocate_all:

@@ -111,11 +111,14 @@ class ReferenceModelActor(BaseModelActor):
             param_dtype=strategy.args.fsdp.param_dtype,
             load_in_4bit=strategy.args.fsdp.load_in_4bit,
             device_mesh=strategy.device_mesh,
+            moe_mesh=strategy.moe_mesh,
             distributed_config=strategy.distributed_config,
+            moe_config=strategy.moe_config,
             activation_checkpointing=False,
             packing_samples=strategy.args.fsdp.packing_samples,
             temperature=strategy.args.rollout.temperature,
             use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
+            use_fp32_master_weights=False,
         )
         strategy.print(model)
 
@@ -166,12 +169,15 @@ class RewardModelActor(BaseModelActor):
             param_dtype=strategy.args.fsdp.param_dtype,
             load_in_4bit=strategy.args.fsdp.load_in_4bit,
             device_mesh=strategy.device_mesh,
+            moe_mesh=strategy.moe_mesh,
             distributed_config=strategy.distributed_config,
+            moe_config=strategy.moe_config,
             activation_checkpointing=False,
             value_head_prefix=strategy.args.fsdp.value_head_prefix,
             # Reward inference receives padded rollout batches. Automodel sequence
             # classification does not support sequence packing for reward models.
             packing_samples=False,
+            use_fp32_master_weights=False,
         )
         strategy.print(model)
         strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize_enable))

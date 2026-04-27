@@ -11,7 +11,7 @@ from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from openrlhf.models import Actor, PolicyLoss
+from openrlhf.models import Actor, PolicyLoss, agg_loss
 from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils.experience import Experience
 from openrlhf.utils import get_tokenizer
@@ -147,6 +147,55 @@ class ActorPPOTrainer(ABC):
 
         ray.get(refs)
 
+    def _record_status(self, status, status_list, pbar):
+        metrics = status["metrics"]
+        weights = status["weights"]
+        n_tokens = status["num_action_tokens"]
+        n_samples = status["num_samples"]
+
+        reduced_status = {"_num_action_tokens": n_tokens, "_num_samples": n_samples}
+        last_metrics = {}
+        for k, value in metrics.items():
+            weight = weights[k]
+            if weight is None:
+                last_metrics[k] = value
+                continue
+            scale = n_tokens if weight == "token" else n_samples
+            reduced_status[k] = (
+                value.float().mean().item() * scale if isinstance(value, torch.Tensor) else value * scale
+            )
+
+        reduced_status = self.strategy.all_reduce(reduced_status)
+
+        n_tokens = reduced_status.pop("_num_action_tokens")
+        n_samples = reduced_status.pop("_num_samples")
+        merged_status = {}
+        for k, value in reduced_status.items():
+            denom = n_tokens if weights[k] == "token" else n_samples
+            merged_status[k] = value / denom
+
+        merged_status.update(last_metrics)
+        merged_status["_num_samples"] = n_samples
+        merged_status["_num_action_tokens"] = n_tokens
+        merged_status["_weights"] = weights
+        actor_lr = merged_status.get("actor_lr", 0)
+
+        short_status = {
+            "act_loss": merged_status["policy_loss"],
+            "reward": merged_status.get("reward", 0),
+            "return": merged_status.get("return", 0),
+            "gen_len": merged_status.get("response_length", 0),
+            "tot_len": merged_status.get("total_length", 0),
+            "kl": merged_status.get("kl", 0),
+            "act_lr": actor_lr,
+            "grad_norm": merged_status.get("actor_grad_norm", 0),
+        }
+        if "entropy_loss" in merged_status:
+            short_status["ent_loss"] = merged_status["entropy_loss"]
+
+        status_list.append(merged_status)
+        pbar.set_postfix(short_status)
+
     def ppo_train(self, kl_ctl: float):
         # replay buffer may be empty at first, we should rebuild at each training
         if self.args.train.dynamic_batch_enable:
@@ -171,58 +220,61 @@ class ActorPPOTrainer(ABC):
                 desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
+            accum_window = []
+            accum_steps = self.strategy.accumulated_gradient
             for step, experience in enumerate(pbar):
-
                 experience.to_device(device)
-                status = self.training_step(experience, kl_ctl, step)
+                if self.args.train.dynamic_batch_enable:
+                    status = self.training_step(experience, kl_ctl, step)
+                    self._record_status(status, status_list, pbar)
+                    continue
 
-                metrics = status["metrics"]
-                weights = status["weights"]
-                n_tokens = status["num_action_tokens"]
-                n_samples = status["num_samples"]
+                accum_window.append((step, experience))
+                if len(accum_window) < accum_steps:
+                    continue
 
-                reduced_status = {"_num_action_tokens": n_tokens, "_num_samples": n_samples}
-                last_metrics = {}
-                for k, value in metrics.items():
-                    weight = weights[k]
-                    if weight is None:
-                        last_metrics[k] = value
-                        continue
-                    scale = n_tokens if weight == "token" else n_samples
-                    reduced_status[k] = (
-                        value.float().mean().item() * scale if isinstance(value, torch.Tensor) else value * scale
+                local_num_tokens = torch.zeros((), dtype=torch.float32, device=torch.device("cuda", device))
+                local_batch_size = torch.zeros((), dtype=torch.float32, device=torch.device("cuda", device))
+                for _, window_experience in accum_window:
+                    local_num_tokens += window_experience.action_mask.sum()
+                    local_batch_size += (window_experience.action_mask.sum(dim=-1) > 0).sum()
+                global_num_tokens = self.strategy.global_token_count(local_num_tokens)
+                global_batch_size = self.strategy.global_token_count(local_batch_size)
+
+                for window_step, window_experience in accum_window:
+                    status = self.training_step(
+                        window_experience,
+                        kl_ctl,
+                        window_step,
+                        global_num_tokens=global_num_tokens,
+                        global_batch_size=global_batch_size,
+                        loss_dp_size=self.strategy.dp_size,
+                        loss_report_scale=1,
+                        scale_loss_by_accumulation=False,
                     )
+                    self._record_status(status, status_list, pbar)
+                accum_window = []
 
-                reduced_status = self.strategy.all_reduce(reduced_status)
-
-                n_tokens = reduced_status.pop("_num_action_tokens")
-                n_samples = reduced_status.pop("_num_samples")
-                merged_status = {}
-                for k, value in reduced_status.items():
-                    denom = n_tokens if weights[k] == "token" else n_samples
-                    merged_status[k] = value / denom
-
-                merged_status.update(last_metrics)
-                merged_status["_num_samples"] = n_samples
-                merged_status["_num_action_tokens"] = n_tokens
-                merged_status["_weights"] = weights
-                actor_lr = merged_status.get("actor_lr", 0)
-
-                short_status = {
-                    "act_loss": merged_status["policy_loss"],
-                    "reward": merged_status.get("reward", 0),
-                    "return": merged_status.get("return", 0),
-                    "gen_len": merged_status.get("response_length", 0),
-                    "tot_len": merged_status.get("total_length", 0),
-                    "kl": merged_status.get("kl", 0),
-                    "act_lr": actor_lr,
-                    "grad_norm": merged_status.get("actor_grad_norm", 0),
-                }
-                if "entropy_loss" in merged_status:
-                    short_status["ent_loss"] = merged_status["entropy_loss"]
-
-                status_list.append(merged_status)
-                pbar.set_postfix(short_status)
+            if accum_window:
+                local_num_tokens = torch.zeros((), dtype=torch.float32, device=torch.device("cuda", device))
+                local_batch_size = torch.zeros((), dtype=torch.float32, device=torch.device("cuda", device))
+                for _, window_experience in accum_window:
+                    local_num_tokens += window_experience.action_mask.sum()
+                    local_batch_size += (window_experience.action_mask.sum(dim=-1) > 0).sum()
+                global_num_tokens = self.strategy.global_token_count(local_num_tokens)
+                global_batch_size = self.strategy.global_token_count(local_batch_size)
+                for window_step, window_experience in accum_window:
+                    status = self.training_step(
+                        window_experience,
+                        kl_ctl,
+                        window_step,
+                        global_num_tokens=global_num_tokens,
+                        global_batch_size=global_batch_size,
+                        loss_dp_size=self.strategy.dp_size,
+                        loss_report_scale=1,
+                        scale_loss_by_accumulation=False,
+                    )
+                    self._record_status(status, status_list, pbar)
 
         if status_list:
             total_tokens = sum(s["_num_action_tokens"] for s in status_list)
@@ -240,7 +292,17 @@ class ActorPPOTrainer(ABC):
                     status_mean[k] = sum(s.get(k, 0) * s["_num_samples"] for s in status_list) / total_samples
         return status_mean
 
-    def training_step(self, experience: Experience, kl_ctl: float, step: int) -> Dict[str, float]:
+    def training_step(
+        self,
+        experience: Experience,
+        kl_ctl: float,
+        step: int,
+        global_num_tokens=None,
+        global_batch_size=None,
+        loss_dp_size=None,
+        loss_report_scale: int = 1,
+        scale_loss_by_accumulation: bool = True,
+    ) -> Dict[str, float]:
         self.actor.train()
 
         sequences = experience.sequences
@@ -271,9 +333,12 @@ class ActorPPOTrainer(ABC):
             **mm_inputs,
         )
 
-        # verl-style token-mean: see SFTTrainer for rationale. The DP-bias on
-        # token-mean is the same regardless of trainer.
-        global_num_tokens = self.strategy.global_token_count(experience.action_mask)
+        if global_num_tokens is None:
+            global_num_tokens = self.strategy.global_token_count(experience.action_mask)
+        if global_batch_size is None:
+            global_batch_size = self.strategy.global_token_count((experience.action_mask.sum(dim=-1) > 0).sum())
+        if loss_dp_size is None:
+            loss_dp_size = self.strategy.dp_size
 
         # loss function
         actor_loss, clip_ratio, ppo_kl, vllm_kl = self.actor_loss_fn(
@@ -282,8 +347,9 @@ class ActorPPOTrainer(ABC):
             advantages,
             action_mask=experience.action_mask,
             rollout_log_probs=experience.rollout_log_probs,
-            dp_size=self.strategy.dp_size,
-            global_num_tokens=global_num_tokens,
+            dp_size=loss_dp_size,
+            batch_num_tokens=global_num_tokens,
+            global_batch_size=global_batch_size,
         )
         experience.info["ppo_clip_ratio"] = clip_ratio.detach()
         experience.info["ppo_kl"] = ppo_kl.detach()
@@ -301,7 +367,13 @@ class ActorPPOTrainer(ABC):
             else:
                 kl = torch.zeros_like(action_log_probs)
                 logprobs_diff = torch.zeros_like(action_log_probs)
-            kl_loss = masked_mean(kl, experience.action_mask)
+            kl_loss = agg_loss(
+                kl,
+                experience.action_mask,
+                "token-mean",
+                dp_size=loss_dp_size,
+                batch_num_tokens=global_num_tokens,
+            )
             logprobs_diff = masked_mean(logprobs_diff, experience.action_mask)
             experience.info["kl"] = kl_loss.detach()
             experience.info["logprobs_diff"] = logprobs_diff.detach()
@@ -311,10 +383,17 @@ class ActorPPOTrainer(ABC):
         loss = actor_loss + kl_loss * kl_ctl
         # mixtral
         if self.aux_loss:
-            loss += output.aux_loss * self.args.actor.aux_loss_coef
+            aux_scale = 1 if scale_loss_by_accumulation else self.strategy.accumulated_gradient
+            loss += getattr(output, "aux_loss", 0) * self.args.actor.aux_loss_coef / aux_scale
         # entropy loss
         if self.args.actor.entropy_coef is not None:
-            entropy_loss = masked_mean(output.entropy[:, -experience.action_mask.shape[1] :], experience.action_mask)
+            entropy_loss = agg_loss(
+                output.entropy[:, -experience.action_mask.shape[1] :],
+                experience.action_mask,
+                "token-mean",
+                dp_size=loss_dp_size,
+                batch_num_tokens=global_num_tokens,
+            )
             if self.args.actor.entropy_coef != 0:
                 loss -= entropy_loss * self.args.actor.entropy_coef
 
@@ -328,7 +407,13 @@ class ActorPPOTrainer(ABC):
                     self.actor_optim, self.actor, self.actor_scheduler, name="actor", accumulate=False
                 )
         else:
-            self.strategy.backward(loss, self.actor, self.actor_optim, name="actor")
+            self.strategy.backward(
+                loss,
+                self.actor,
+                self.actor_optim,
+                name="actor",
+                scale_loss_by_accumulation=scale_loss_by_accumulation,
+            )
             self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
 
         if self.ema_model:
@@ -336,10 +421,11 @@ class ActorPPOTrainer(ABC):
                 if self.replay_buffer.dynamic_optimizer_step[step]:
                     self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
             else:
-                self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
+                if (step + 1) % self.strategy.accumulated_gradient == 0:
+                    self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
 
         # Per-token losses (0-D tensors, shape carries weighting info for ppo_train)
-        metrics = {"policy_loss": actor_loss.detach()}
+        metrics = {"policy_loss": actor_loss.detach() / loss_report_scale}
         weights = {"policy_loss": "token"}
         if self.args.actor.entropy_coef is not None:
             metrics["entropy_loss"] = entropy_loss.detach()
@@ -348,7 +434,11 @@ class ActorPPOTrainer(ABC):
         # Non-reducible meta
         metrics["actor_lr"] = self.actor_scheduler.get_last_lr()[0]
         weights["actor_lr"] = None
-        is_optimizer_step = not self.args.train.dynamic_batch_enable or self.replay_buffer.dynamic_optimizer_step[step]
+        is_optimizer_step = (
+            self.replay_buffer.dynamic_optimizer_step[step]
+            if self.args.train.dynamic_batch_enable
+            else (step + 1) % self.strategy.accumulated_gradient == 0
+        )
         if is_optimizer_step:
             metrics["actor_grad_norm"] = self.strategy.get_grad_norm(self.actor)
             weights["actor_grad_norm"] = None
@@ -490,7 +580,9 @@ class PolicyModelActor(BaseModelActor):
             target_modules=strategy.args.fsdp.lora.target_modules,
             lora_dropout=strategy.args.fsdp.lora.dropout,
             device_mesh=strategy.device_mesh,
+            moe_mesh=strategy.moe_mesh,
             distributed_config=strategy.distributed_config,
+            moe_config=strategy.moe_config,
             activation_checkpointing=args.actor.gradient_checkpointing_enable,
             packing_samples=strategy.args.fsdp.packing_samples,
             temperature=strategy.args.rollout.temperature,
@@ -521,7 +613,9 @@ class PolicyModelActor(BaseModelActor):
                 param_dtype=strategy.args.fsdp.param_dtype,
                 load_in_4bit=strategy.args.fsdp.load_in_4bit,
                 device_mesh=strategy.device_mesh,
+                moe_mesh=strategy.moe_mesh,
                 distributed_config=strategy.distributed_config,
+                moe_config=strategy.moe_config,
                 activation_checkpointing=False,
                 packing_samples=strategy.args.fsdp.packing_samples,
             )
