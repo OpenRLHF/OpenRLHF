@@ -69,8 +69,9 @@ class SFTTrainer(ABC):
         # packing samples
         self.packing_samples = strategy.args.ds.packing_samples
 
-        # wandb/tensorboard setting
+        # wandb/trackio/tensorboard setting
         self._wandb = None
+        self._trackio = None
         self._tensorboard = None
         if self.strategy.args.logger.wandb.key and self.strategy.is_rank_0():
             import wandb
@@ -91,6 +92,16 @@ class SFTTrainer(ABC):
             wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
             wandb.define_metric("eval/global_step")
             wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
+
+        # Initialize Trackio if configured
+        if (
+            getattr(self.strategy.args.logger, "trackio", None) is not None
+            and self.strategy.args.logger.trackio.project
+            and self.strategy.is_rank_0()
+        ):
+            from openrlhf.utils.logging_utils import TrackioLogger
+
+            self._trackio = TrackioLogger(strategy.args)
 
         # Initialize TensorBoard writer if wandb is not available
         if self.strategy.args.logger.tensorboard_dir and self._wandb is None and self.strategy.is_rank_0():
@@ -193,6 +204,8 @@ class SFTTrainer(ABC):
 
         if self._wandb is not None and self.strategy.is_rank_0():
             self._wandb.finish()
+        if self._trackio is not None and self.strategy.is_rank_0():
+            self._trackio.close()
         if self._tensorboard is not None and self.strategy.is_rank_0():
             self._tensorboard.close()
 
@@ -205,8 +218,11 @@ class SFTTrainer(ABC):
             if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {"train/%s" % k: v for k, v in {**logs_dict, "global_step": global_step}.items()}
                 self._wandb.log(logs)
+            # Trackio
+            if self._trackio is not None and self.strategy.is_rank_0():
+                self._trackio.log_train(global_step, logs_dict)
             # TensorBoard
-            elif self._tensorboard is not None and self.strategy.is_rank_0():
+            if self._wandb is None and self._tensorboard is not None and self.strategy.is_rank_0():
                 for k, v in logs_dict.items():
                     self._tensorboard.add_scalar(f"train/{k}", v, global_step)
 
@@ -262,9 +278,11 @@ class SFTTrainer(ABC):
 
             if self.strategy.is_rank_0():
                 if self._wandb is not None:
-                    logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": steps}.items()}
-                    self._wandb.log(logs)
-                elif self._tensorboard is not None:
+                    wandb_logs = {"eval/%s" % k: v for k, v in {**logs, "global_step": steps}.items()}
+                    self._wandb.log(wandb_logs)
+                if self._trackio is not None:
+                    self._trackio.log_eval(steps, logs)
+                if self._wandb is None and self._tensorboard is not None:
                     for k, v in logs.items():
                         self._tensorboard.add_scalar(f"eval/{k}", v, steps)
         self.model.train()  # reset model state

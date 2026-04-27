@@ -17,7 +17,7 @@ from openrlhf.trainer.ppo_utils.samples_generator import SamplesGenerator
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils.deepspeed import DeepspeedStrategy
-from openrlhf.utils.logging_utils import TensorboardLogger, WandbLogger, init_logger
+from openrlhf.utils.logging_utils import TensorboardLogger, TrackioLogger, WandbLogger, init_logger
 from openrlhf.utils.utils import get_tokenizer
 
 logger = init_logger(__name__)
@@ -187,6 +187,12 @@ class BasePPOTrainer(ABC):
 
         # Tracking backends
         self.wandb_logger = WandbLogger(self.args) if self.args.logger.wandb.key else None
+        self.trackio_logger = (
+            TrackioLogger(self.args)
+            if getattr(self.args.logger, "trackio", None) is not None
+            and self.args.logger.trackio.project
+            else None
+        )
         self.tensorboard_logger = TensorboardLogger(self.args) if self.args.logger.tensorboard_dir else None
 
         # Best eval metric tracking
@@ -385,6 +391,8 @@ class BasePPOTrainer(ABC):
         if global_step % self.args.logger.logging_steps == 0:
             if self.wandb_logger:
                 self.wandb_logger.log_train(global_step, logs_dict)
+            if self.trackio_logger:
+                self.trackio_logger.log_train(global_step, logs_dict)
             if self.tensorboard_logger:
                 self.tensorboard_logger.log_train(global_step, logs_dict)
 
@@ -566,6 +574,8 @@ class PPOTrainer(BasePPOTrainer):
         # Close trackers
         if self.wandb_logger:
             self.wandb_logger.close()
+        if self.trackio_logger:
+            self.trackio_logger.close()
         if self.tensorboard_logger:
             self.tensorboard_logger.close()
 
@@ -580,6 +590,8 @@ class PPOTrainer(BasePPOTrainer):
 
         if self.wandb_logger:
             self.wandb_logger.log_eval(global_step, logs)
+        if self.trackio_logger:
+            self.trackio_logger.log_eval(global_step, logs)
         if self.tensorboard_logger:
             self.tensorboard_logger.log_eval(global_step, logs)
 

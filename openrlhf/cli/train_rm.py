@@ -308,6 +308,12 @@ if __name__ == "__main__":
         default="rm_%s" % datetime.now().strftime("%m%dT%H:%M"),
     )
 
+    # trackio parameters
+    parser.add_argument("--logger.trackio.project", type=str, default=None)
+    parser.add_argument("--logger.trackio.name", type=str, default=None)
+    parser.add_argument("--logger.trackio.group", type=str, default=None)
+    parser.add_argument("--logger.trackio.space_id", type=str, default=None)
+
     # TensorBoard parameters
     parser.add_argument("--logger.tensorboard_dir", type=str, default=None, help="TensorBoard logging path")
 

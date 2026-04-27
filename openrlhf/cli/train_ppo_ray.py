@@ -577,6 +577,12 @@ if __name__ == "__main__":
         help="Freeze vision encoder weights (only train language model). Reduces memory and weight sync overhead.",
     )
 
+    # trackio parameters
+    parser.add_argument("--logger.trackio.project", type=str, default=None)
+    parser.add_argument("--logger.trackio.name", type=str, default=None)
+    parser.add_argument("--logger.trackio.group", type=str, default=None)
+    parser.add_argument("--logger.trackio.space_id", type=str, default=None)
+
     # TensorBoard parameters
     parser.add_argument("--logger.tensorboard_dir", type=str, default=None, help="TensorBoard logging path")
 
