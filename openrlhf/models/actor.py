@@ -226,9 +226,15 @@ class Actor(nn.Module):
             self._forward_autocast_dtype = compute_dtype
         use_hf_model = _will_use_hf_model(pretrain_or_model, force_hf)
         if packing_samples and use_hf_model:
+            hint = (
+                " For this MoE model, set --fsdp.ep_size > 1 to route through AutoModel's custom MoE path "
+                "(which supports packing); without EP we fall back to HF reference path."
+                if is_moe and not ep_active
+                else " Disable packing for this model."
+            )
             raise ValueError(
                 f"--fsdp.packing_samples requires an AutoModel custom model, but {pretrain_or_model} "
-                "resolves to the HF fallback path. Disable packing for this model."
+                f"resolves to the HF fallback path.{hint}"
             )
 
         automodel_backend_kwargs = {}

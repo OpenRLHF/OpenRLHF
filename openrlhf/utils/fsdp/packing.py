@@ -36,9 +36,15 @@ def is_automodel_custom_model(model: Any) -> bool:
     no native implementation exists) or a class under
     ``nemo_automodel.components.models``. Only the latter accepts THD packing
     kwargs directly.
+
+    FSDP2's ``fully_shard`` swaps ``model.__class__`` for a dynamic subclass
+    whose ``__module__`` no longer starts with ``nemo_automodel`` — walk the MRO
+    so the check survives that wrap.
     """
-    module = type(model).__module__
-    return module.startswith("nemo_automodel.components.models")
+    for cls in type(model).__mro__:
+        if cls.__module__.startswith("nemo_automodel.components.models"):
+            return True
+    return False
 
 
 def pack_padded_batch(sequences: torch.Tensor, attention_mask: torch.Tensor):

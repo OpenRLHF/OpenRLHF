@@ -150,10 +150,6 @@ class FsdpStrategy:
         self.world_size = dist.get_world_size()
         if self.pp_size > 1:
             raise NotImplementedError("OpenRLHF trainers are not pipeline-parallel aware yet; set --fsdp.pp_size 1")
-        if self.cp_size > 1 and getattr(self.args.fsdp, "packing_samples", False):
-            raise ValueError(
-                "Context parallel does not support --fsdp.packing_samples yet; disable packing for CP tests."
-            )
 
         from nemo_automodel.components.distributed.config import FSDP2Config
         from nemo_automodel.components.distributed.mesh_utils import create_device_mesh
