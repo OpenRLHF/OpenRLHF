@@ -30,6 +30,26 @@ from .launcher import BaseModelActor
 from .utils import get_physical_gpu_id
 
 
+def _maybe_adapt_tensor_to_hf(model: torch.nn.Module, name: str, tensor: torch.Tensor):
+    adapter = getattr(model, "state_dict_adapter", None)
+    if adapter is None:
+        return [(name, tensor)]
+
+    convert_one = getattr(adapter, "convert_single_tensor_to_hf", None)
+    if convert_one is None:
+        raise RuntimeError(
+            f"{type(model).__name__} uses an AutoModel state_dict_adapter without "
+            "`convert_single_tensor_to_hf`; vLLM refit cannot safely map this custom "
+            "weight layout to HuggingFace/vLLM names. Use --fsdp.force_hf_model for RL runs."
+        )
+    return convert_one(
+        name,
+        tensor,
+        exclude_key_regex=r".*_extra_state.*",
+        quantization=False,
+    )
+
+
 class ActorPPOTrainer(ABC):
 
     def __init__(
@@ -90,8 +110,7 @@ class ActorPPOTrainer(ABC):
             micro_train_batch_size,
             buffer_limit,
             buffer_cpu_offload,
-            self.args.fsdp.packing_samples,
-            self.args.train.dynamic_batch_enable,
+            dynamic_batch=self.args.train.dynamic_batch_enable,
         )
 
         # Init torch group for weights sync
@@ -470,13 +489,12 @@ class ActorPPOTrainer(ABC):
         # FSDP2/AutoModel: `actor.model` is the FSDP2-wrapped HF model directly
         # (no DS-engine `.module` indirection); params are DTensors when sharded.
         model = self.actor.model
-        count = 0
 
-        def _broadcast_param(name, weight, dtype, shape, count, num_params):
+        def _broadcast_param(name, weight, dtype, shape):
             use_ray = getattr(self.strategy.args.vllm, "sync_with_ray", False)
             if torch.distributed.get_rank() == 0:
                 refs = [
-                    engine.update_weight.remote(name, dtype=dtype, shape=shape, empty_cache=count == num_params)
+                    engine.update_weight.remote(name, dtype=dtype, shape=shape, empty_cache=False)
                     for engine in self.vllm_engines
                 ]
                 if use_ray:
@@ -487,7 +505,7 @@ class ActorPPOTrainer(ABC):
                     self._model_update_group.broadcast(weight, src=0, stream=torch.cuda.current_stream())
                 ray.get(refs)
 
-        def _handle_cuda_ipc(name, weight, dtype, shape, count, num_params):
+        def _handle_cuda_ipc(name, weight, dtype, shape):
             from torch.multiprocessing.reductions import reduce_tensor
 
             ipc_handle = reduce_tensor(weight.clone())
@@ -505,7 +523,7 @@ class ActorPPOTrainer(ABC):
                         dtype=dtype,
                         shape=shape,
                         ipc_handles=ipc_handles,
-                        empty_cache=count == num_params,
+                        empty_cache=False,
                     )
                     for engine in self.vllm_engines
                 ]
@@ -514,19 +532,33 @@ class ActorPPOTrainer(ABC):
 
         sync_fn = _handle_cuda_ipc if self.use_cuda_ipc else _broadcast_param
 
-        # VLM: only sync trainable (language model) params — vision encoder is frozen.
-        params_to_sync = [
-            (n, p) for n, p in model.named_parameters() if p.requires_grad or not getattr(self.actor, "is_vlm", False)
-        ]
-        num_params = len(params_to_sync)
         from openrlhf.utils.utils import convert_to_torch_dtype
 
         sync_dtype = convert_to_torch_dtype(self.strategy.args.fsdp.param_dtype)
+        param_requires_grad = {name: param.requires_grad for name, param in model.named_parameters()}
 
-        for name, param in params_to_sync:
-            count += 1
-            weight, shape = gather_full_param(param, dtype=sync_dtype)
-            sync_fn(name, weight, sync_dtype, shape, count, num_params)
+        for name, tensor in model.state_dict().items():
+            # Keep the previous VLM behavior: frozen visual params are already
+            # present in vLLM from the base checkpoint, so only language params
+            # that can change during training need to be refit.
+            if name not in param_requires_grad:
+                continue
+            if getattr(self.actor, "is_vlm", False) and not param_requires_grad[name]:
+                continue
+
+            weight, _ = gather_full_param(tensor)
+            for hf_name, hf_weight in _maybe_adapt_tensor_to_hf(model, name, weight):
+                if not torch.is_tensor(hf_weight):
+                    continue
+                if not hf_weight.is_floating_point():
+                    continue
+                hf_weight = hf_weight.to(
+                    device=torch.device("cuda", torch.cuda.current_device()),
+                    dtype=sync_dtype,
+                    non_blocking=True,
+                ).contiguous()
+                sync_fn(hf_name, hf_weight, sync_dtype, hf_weight.shape)
+                del hf_weight
             del weight
 
         if cache_reset_refs:

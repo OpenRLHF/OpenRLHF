@@ -49,8 +49,7 @@ class CriticPPOTrainer(ABC):
             micro_train_batch_size,
             buffer_limit,
             buffer_cpu_offload,
-            self.args.fsdp.packing_samples,
-            self.args.train.dynamic_batch_enable,
+            dynamic_batch=self.args.train.dynamic_batch_enable,
         )
 
         self.critic_loss_fn = ValueLoss(value_clip)

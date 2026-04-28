@@ -188,7 +188,7 @@ if __name__ == "__main__":
         help="Attention implementation (e.g., sdpa, eager, flex, te, flash_attention_2)",
     )
     parser.add_argument("--fsdp.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
-    parser.add_argument("--fsdp.packing_samples", action="store_true", default=True)
+    parser.add_argument("--fsdp.packing_samples", action="store_true", default=False)
     parser.add_argument("--fsdp.no_packing_samples", dest="fsdp.packing_samples", action="store_false")
     parser.add_argument(
         "--fsdp.force_hf_model",
@@ -288,6 +288,12 @@ if __name__ == "__main__":
     if args.fsdp.cp_size > 1 and args.fsdp.packing_samples:
         raise ValueError("--fsdp.cp_size > 1 is not supported together with --fsdp.packing_samples")
 
+    if args.fsdp.packing_samples and args.fsdp.force_hf_model:
+        raise ValueError(
+            "--fsdp.packing_samples requires the AutoModel custom path; "
+            "drop --fsdp.force_hf_model or disable packing."
+        )
+
     if args.data.multiturn:
         assert args.data.apply_chat_template, "apply_chat_template must be enabled when using multiturn format"
 
@@ -299,12 +305,6 @@ if __name__ == "__main__":
         print(
             "[Warning] input_template contains \\n characters instead of newline. "
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
-        )
-
-    if args.fsdp.packing_samples and args.fsdp.attn_implementation != "flash_attention_2":
-        raise ValueError(
-            "--fsdp.packing_samples currently requires --fsdp.attn_implementation flash_attention_2. "
-            "Use --fsdp.no_packing_samples for sdpa/eager/flex runs."
         )
 
     if args.use_ms:

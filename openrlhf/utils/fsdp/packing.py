@@ -1,12 +1,10 @@
 """Padded <-> packed conversion for the FSDP2 model backend.
 
 OpenRLHF's datasets emit `(B, S)` padded batches. Packing removes padding and
-creates `(1, total_tokens)` streams plus sequence-boundary metadata. The exact
-packed representation follows the loaded model implementation: HF fallback
-models consume HF FlashAttention varlen kwargs; AutoModel custom models consume
-THD kwargs (``qkv_format=thd`` / ``cu_seqlens`` / ``max_seqlen``). Dynamic
-batching only changes which samples form a microbatch; it reuses this same
-model-selected packing path.
+creates `(1, total_tokens)` streams plus sequence-boundary metadata. We only
+support AutoModel custom models for packing (THD kwargs:
+``qkv_format=thd`` / ``cu_seqlens`` / ``max_seqlen``). Models that fall back to
+HF must run unpacked.
 """
 
 from typing import Any
@@ -43,7 +41,7 @@ def is_automodel_custom_model(model: Any) -> bool:
     return module.startswith("nemo_automodel.components.models")
 
 
-def pack_padded_batch(sequences: torch.Tensor, attention_mask: torch.Tensor, *, style: str = "hf"):
+def pack_padded_batch(sequences: torch.Tensor, attention_mask: torch.Tensor):
     """Convert a padded `(B, S)` batch to packed `(1, total_real_tokens)` format.
 
     Returns:
@@ -51,7 +49,7 @@ def pack_padded_batch(sequences: torch.Tensor, attention_mask: torch.Tensor, *, 
         position_ids:     `(1, total_real_tokens)` — resets at sequence boundaries
         rolled_input_ids: `(1, total_real_tokens)` — `torch.roll(input_ids, -1)` then unpadded
         indices:          flat indices into `(B*S,)` of real tokens (for `unpack_to_padded`)
-        attention kwargs:  HF FlashAttention kwargs or AutoModel THD kwargs
+        fa_kwargs:        AutoModel THD kwargs (qkv_format/cu_seqlens/max_seqlen)
     """
     batch, seqlen = sequences.shape
     mask = attention_mask.bool()
@@ -72,20 +70,12 @@ def pack_padded_batch(sequences: torch.Tensor, attention_mask: torch.Tensor, *, 
     position_ids_full = torch.clip(torch.cumsum(attention_mask, dim=-1) - 1, min=0)
     position_ids = position_ids_full.reshape(batch * seqlen).index_select(0, indices).unsqueeze(0)
 
-    if style == "automodel":
-        fa_kwargs = {
-            "qkv_format": "thd",
-            "cu_seqlens": cu_seq_lens,
-            "cu_seqlens_padded": cu_seq_lens,
-            "max_seqlen": int(max_length),
-        }
-    else:
-        fa_kwargs = {
-            "cu_seq_lens_q": cu_seq_lens,
-            "cu_seq_lens_k": cu_seq_lens,
-            "max_length_q": int(max_length),
-            "max_length_k": int(max_length),
-        }
+    fa_kwargs = {
+        "qkv_format": "thd",
+        "cu_seqlens": cu_seq_lens,
+        "cu_seqlens_padded": cu_seq_lens,
+        "max_seqlen": int(max_length),
+    }
     return packed_ids, position_ids, rolled_packed, indices, fa_kwargs
 
 

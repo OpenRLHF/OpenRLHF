@@ -16,9 +16,7 @@ import torch
 from torch.distributed.tensor import DTensor
 
 
-def gather_full_param(
-    param: torch.nn.Parameter, dtype: Optional[torch.dtype] = None
-) -> Tuple[torch.Tensor, torch.Size]:
+def gather_full_param(param: torch.Tensor, dtype: Optional[torch.dtype] = None) -> Tuple[torch.Tensor, torch.Size]:
     """Materialize the full unsharded tensor for an FSDP2/TP-sharded parameter.
 
     Returns ``(full_tensor, full_shape)`` where ``full_tensor`` is on the local

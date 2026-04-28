@@ -28,7 +28,6 @@ class NaiveReplayBuffer(ABC):
         sample_batch_size: int,
         limit: int = 0,
         cpu_offload: bool = True,
-        packing_samples: bool = False,
         dynamic_batch: bool = False,
     ) -> None:
         super().__init__()
@@ -36,7 +35,6 @@ class NaiveReplayBuffer(ABC):
         # limit <= 0 means unlimited
         self.limit = limit
         self.cpu_offload = cpu_offload
-        self.packing_samples = packing_samples
         self.target_device = torch.device(f"cuda:{torch.cuda.current_device()}")
         self.items: List[Experience] = []
         self.dynamic_batch = dynamic_batch
@@ -62,7 +60,7 @@ class NaiveReplayBuffer(ABC):
     @torch.no_grad()
     def sample(self) -> Experience:
         items = random.sample(self.items, self.sample_batch_size)
-        experience = make_experience_batch(items, self.packing_samples)
+        experience = make_experience_batch(items)
         if self.cpu_offload:
             experience.to_device(self.target_device)
         return experience
@@ -83,7 +81,7 @@ class NaiveReplayBuffer(ABC):
     def collate_fn(self, batch) -> Experience:
         if self.dynamic_batch:
             batch = batch[0]
-        experience = make_experience_batch(batch, self.packing_samples)
+        experience = make_experience_batch(batch)
         return experience
 
     def setup_dynamic_batch(self, strategy):

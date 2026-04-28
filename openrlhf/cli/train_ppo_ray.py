@@ -340,7 +340,7 @@ if __name__ == "__main__":
         help="Attention implementation (e.g., sdpa, eager, flex, te, flash_attention_2)",
     )
     parser.add_argument("--fsdp.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
-    parser.add_argument("--fsdp.packing_samples", action="store_true", default=True)
+    parser.add_argument("--fsdp.packing_samples", action="store_true", default=False)
     parser.add_argument("--fsdp.no_packing_samples", dest="fsdp.packing_samples", action="store_false")
     parser.add_argument(
         "--fsdp.force_hf_model",
@@ -661,12 +661,13 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
-    if args.fsdp.cp_size > 1 and args.fsdp.packing_samples:
-        raise ValueError("--fsdp.cp_size > 1 is not supported together with --fsdp.packing_samples")
+    if args.fsdp.cp_size > 1:
+        raise ValueError(
+            "PPO with --fsdp.cp_size > 1 is not wired yet. SFT has the AutoModel CP batch/context path, "
+            "but PPO also needs CP-aware logprob/value redistribution like NeMo RL before it is safe."
+        )
 
     if args.train.dynamic_batch_enable:
-        if args.fsdp.cp_size > 1:
-            raise ValueError("--train.dynamic_batch_enable currently requires packing, which is incompatible with CP")
         if not args.fsdp.packing_samples:
             raise ValueError(
                 "--train.dynamic_batch_enable requires packed training batches. "
@@ -677,12 +678,12 @@ if __name__ == "__main__":
             args.rollout.max_tokens_per_gpu = args.train.max_tokens_per_gpu
 
     if args.fsdp.packing_samples:
-        if args.fsdp.attn_implementation != "flash_attention_2":
-            raise ValueError(
-                "--fsdp.packing_samples currently requires --fsdp.attn_implementation flash_attention_2. "
-                "Use --fsdp.no_packing_samples for sdpa/eager/flex runs."
-            )
         assert args.vllm.num_engines > 0, "Only support `--fsdp.packing_samples` with vLLM."
+        if args.fsdp.force_hf_model:
+            raise ValueError(
+                "--fsdp.packing_samples requires the AutoModel custom path; "
+                "drop --fsdp.force_hf_model or disable packing."
+            )
 
     if args.vllm.enable_sleep and not args.train.colocate_all:
         print("Set args.vllm.enable_sleep to False when args.train.colocate_all is disabled.")

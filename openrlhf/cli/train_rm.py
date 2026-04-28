@@ -286,8 +286,11 @@ if __name__ == "__main__":
     if args.fsdp.pp_size > 1:
         raise NotImplementedError("OpenRLHF trainers are not pipeline-parallel aware yet; set --fsdp.pp_size 1")
 
-    if args.fsdp.cp_size > 1 and args.fsdp.packing_samples:
-        raise ValueError("--fsdp.cp_size > 1 is not supported together with --fsdp.packing_samples")
+    if args.fsdp.cp_size > 1:
+        raise ValueError(
+            "Reward-model training with --fsdp.cp_size > 1 is not wired yet. SFT has the AutoModel CP "
+            "batch/context path, but sequence-regression scoring needs CP-aware value extraction before it is safe."
+        )
 
     if args.model.loss_type not in {"sigmoid", "log_exp", "logexp"}:
         raise ValueError("--model.loss_type must be one of: sigmoid, log_exp, logexp")

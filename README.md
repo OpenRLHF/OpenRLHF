@@ -250,7 +250,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 
 **Scalability**
 - FSDP2 tensor parallelism (`--fsdp.tp_size`) and sequence parallelism (`--fsdp.sequence_parallel`)
-- FSDP2 context parallelism for long context (`--fsdp.cp_size`; currently incompatible with sample packing)
+- FSDP2 context parallelism for SFT long context (`--fsdp.cp_size`; currently incompatible with sample packing)
 - Expert parallelism for MoE models (`--fsdp.ep_size`)
 - Multi-node training with [SLURM](./examples/scripts/train_ppo_ray_slurm.sh)
 
@@ -375,7 +375,7 @@ torchrun --standalone --nproc_per_node=8 -m openrlhf.cli.train_sft \
 # Additional options:
 # --data.apply_chat_template                # Use HF tokenizer chat template
 # --fsdp.tp_size 2                           # Enable FSDP2 tensor parallelism
-# --fsdp.cp_size 2                           # Enable FSDP2 context parallelism (disable packing)
+# --fsdp.cp_size 2                           # Enable FSDP2 context parallelism for SFT (disable packing)
 # --data.multiturn                          # Multi-turn fine-tuning loss
 # --model.pretrain_mode_enable              # Continued pre-training mode
 ```
@@ -731,7 +731,7 @@ Pick the execution mode based on your priority — OpenRLHF gives you a clear tr
 | **Sample Packing** | `--fsdp.packing_samples` | Default for SFT/DPO/PPO; packed representation follows the loaded model path: AutoModel THD for native models, HF FlashAttention varlen for HF fallback |
 | **Dynamic Batch** | `--train.dynamic_batch_enable` | Requires compatible sample packing; it only changes microbatch grouping and reuses the model-selected packing path |
 | **Tensor Parallel** | `--fsdp.tp_size` | Large models or faster matmuls |
-| **Context Parallel** | `--fsdp.cp_size` | Long context; disable sample packing |
+| **Context Parallel** | `--fsdp.cp_size` | SFT long context; disable sample packing |
 | **CPU Offload** | `--fsdp.cpu_offload` | Memory pressure |
 | **Prefix Caching** | vLLM config | `n_samples_per_prompt` > 1 |
 | **Oversampling** | `--rollout.vllm_generate_batch_size > --rollout.batch_size` | Async mode, to amortize generation cost / feed dynamic filtering |

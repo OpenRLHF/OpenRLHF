@@ -215,7 +215,7 @@ if __name__ == "__main__":
         help="Attention implementation (e.g., sdpa, eager, flex, te, flash_attention_2)",
     )
     parser.add_argument("--fsdp.use_liger_kernel", action="store_true", default=False)
-    parser.add_argument("--fsdp.packing_samples", action="store_true", default=True)
+    parser.add_argument("--fsdp.packing_samples", action="store_true", default=False)
     parser.add_argument("--fsdp.no_packing_samples", dest="fsdp.packing_samples", action="store_false")
     parser.add_argument(
         "--fsdp.force_hf_model",
@@ -307,8 +307,11 @@ if __name__ == "__main__":
     if args.fsdp.pp_size > 1:
         raise NotImplementedError("OpenRLHF trainers are not pipeline-parallel aware yet; set --fsdp.pp_size 1")
 
-    if args.fsdp.cp_size > 1 and args.fsdp.packing_samples:
-        raise ValueError("--fsdp.cp_size > 1 is not supported together with --fsdp.packing_samples")
+    if args.fsdp.cp_size > 1:
+        raise ValueError(
+            "DPO with --fsdp.cp_size > 1 is not wired yet. SFT has the AutoModel CP batch/context path, "
+            "but DPO also needs CP-aware logprob redistribution like NeMo RL before it is safe."
+        )
 
     if args.ref.model_name_or_path is None or args.ref.model_name_or_path == "":
         args.ref.model_name_or_path = args.model.model_name_or_path
@@ -323,10 +326,10 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
-    if args.fsdp.packing_samples and args.fsdp.attn_implementation != "flash_attention_2":
+    if args.fsdp.packing_samples and args.fsdp.force_hf_model:
         raise ValueError(
-            "--fsdp.packing_samples currently requires --fsdp.attn_implementation flash_attention_2. "
-            "Use --fsdp.no_packing_samples for sdpa/eager/flex runs."
+            "--fsdp.packing_samples requires the AutoModel custom path; "
+            "drop --fsdp.force_hf_model or disable packing."
         )
 
     if args.use_ms:

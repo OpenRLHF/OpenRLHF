@@ -313,23 +313,15 @@ class SFTTrainer(ABC):
 
                     step += 1
 
+            # Drop the trailing partial window: running its microbatches would
+            # accumulate grads without reaching optimizer_step (time_steps never
+            # hits the modulus), then leak those grads into the next epoch's
+            # first window — permanently misaligning the accum counter.
             if accum_window:
-                prepared, batch_num_tokens = self._prepare_accum_window(accum_window, device)
-                for prepared_batch in prepared:
-                    logs_dict, reported_gpt_loss = self._run_microbatch(prepared_batch, batch_num_tokens, accum_steps)
-                    loss_sum += reported_gpt_loss
-                    logs_dict = self.strategy.all_reduce(logs_dict)
-                    step_bar.set_postfix(logs_dict)
-                    step_bar.update()
-
-                    if step % self.strategy.accumulated_gradient == 0:
-                        logs_dict["loss_mean"] = loss_sum / self.strategy.accumulated_gradient
-                        loss_sum = 0
-                        global_step = step // self.strategy.accumulated_gradient
-                        client_states = {"consumed_samples": global_step * args.train.batch_size}
-                        self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
-
-                    step += 1
+                self.strategy.print(
+                    f"[SFT] dropping {len(accum_window)} trailing microbatches "
+                    f"(< accum_steps={accum_steps}) at end of epoch."
+                )
 
             epoch_bar.update()
 

@@ -216,7 +216,7 @@ def split_experience_batch(experience: Experience) -> List[Experience]:
     return items
 
 
-def make_experience_batch(items: List[Experience], packing_samples=False) -> Experience:
+def make_experience_batch(items: List[Experience]) -> Experience:
     """Combine individual single-sample Experiences into a batched Experience."""
     if not items:
         raise ValueError("Empty items list")

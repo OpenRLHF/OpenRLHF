@@ -62,13 +62,6 @@ def _will_use_hf_model(pretrain_or_model, force_hf: bool, default: bool = True) 
         return default
 
 
-def _hf_packing_supported(attn_implementation: str) -> bool:
-    # HF packed sequence support is the flash-attn2 varlen path. Other
-    # backends would treat the packed stream as one long sequence and leak
-    # attention across sample boundaries.
-    return attn_implementation == "flash_attention_2" and _has_hf_flash_attn_2()
-
-
 def _build_peft_config_dict(rank: int, alpha: int, dropout: float, target_modules):
     """Map OpenRLHF lora.* args onto AutoModel's PeftConfig schema.
 
@@ -145,7 +138,11 @@ class Actor(nn.Module):
         if not isinstance(pretrain_or_model, str):
             self.model = pretrain_or_model
             self.is_vlm = False
-            self._packing_style = "automodel" if is_automodel_custom_model(self.model) else "hf"
+            if self.packing_samples and not is_automodel_custom_model(self.model):
+                raise ValueError(
+                    "--fsdp.packing_samples requires an AutoModel custom model; "
+                    "the wrapped model is an HF fallback. Disable packing for this run."
+                )
             return
 
         from openrlhf.utils.utils import convert_to_torch_dtype, ensure_torchvision_nms_stub, is_vlm_model
@@ -218,19 +215,21 @@ class Actor(nn.Module):
         # avoid the mixed-dtype FSDP assert.
         if is_moe and force_hf and torch_dtype == torch.float32:
             torch_dtype = compute_dtype
+        # Downgrade flash_attention_2 → sdpa whenever flash_attn isn't installed.
+        # Must run before the autocast-dtype check below and before passing
+        # attn_implementation to from_pretrained — otherwise non-packing runs
+        # would still receive flash_attention_2 and crash inside HF.
+        if attn_implementation == "flash_attention_2" and not _has_hf_flash_attn_2():
+            print("[Attn] flash_attn not installed; downgrading flash_attention_2 → sdpa.")
+            attn_implementation = "sdpa"
         if torch_dtype == torch.float32 and attn_implementation in ("flash_attention_2", "flash_attention_3"):
             self._forward_autocast_dtype = compute_dtype
         use_hf_model = _will_use_hf_model(pretrain_or_model, force_hf)
-        automodel_has_packed_sequence = packing_samples
-        if packing_samples and use_hf_model and not _hf_packing_supported(attn_implementation):
-            print(
-                "[Packing] HF fallback packed sequence requires flash_attention_2 + flash_attn. "
-                "Disabling packing for this model and using padded forward instead."
+        if packing_samples and use_hf_model:
+            raise ValueError(
+                f"--fsdp.packing_samples requires an AutoModel custom model, but {pretrain_or_model} "
+                "resolves to the HF fallback path. Disable packing for this model."
             )
-            automodel_has_packed_sequence = False
-            self.packing_samples = False
-            if attn_implementation == "flash_attention_2" and not _has_hf_flash_attn_2():
-                attn_implementation = "sdpa"
 
         automodel_backend_kwargs = {}
         if attn_implementation in {"te", "sdpa", "flex"} and not use_hf_model:
@@ -251,20 +250,17 @@ class Actor(nn.Module):
             activation_checkpointing=activation_checkpointing,
             peft_config=peft_config,
             use_liger_kernel=use_liger_kernel and not self.is_vlm,
-            has_packed_sequence=automodel_has_packed_sequence,
+            has_packed_sequence=packing_samples,
             force_hf=force_hf,
             **automodel_backend_kwargs,
         )
-        self._packing_style = "automodel" if is_automodel_custom_model(self.model) else "hf"
-        if self.packing_samples and self._packing_style == "hf" and not _hf_packing_supported(attn_implementation):
-            print(
-                "[Packing] Loaded model is HF fallback without flash_attention_2 packed support. "
-                "Disabling packing for correctness."
+        if self.packing_samples and not is_automodel_custom_model(self.model):
+            raise ValueError(
+                "--fsdp.packing_samples requires an AutoModel custom model, but the loaded model is "
+                "an HF fallback. Disable packing for this model."
             )
-            self.packing_samples = False
         if self.packing_samples:
-            path = "AutoModel THD" if self._packing_style == "automodel" else "HF FlashAttention varlen"
-            print(f"[Packing] Using {path} packed path; dynamic batch reuses the model-selected path.")
+            print("[Packing] Using AutoModel THD packed path.")
 
         # VLM: optionally freeze the vision encoder so only the language
         # model backbone is trained. Both Qwen3.5 and Gemma4 place language
@@ -308,7 +304,7 @@ class Actor(nn.Module):
         indices = None
         if self.packing_samples:
             sequences, position_ids, rolled_sequences, indices, fa_kwargs = pack_padded_batch(
-                sequences, attention_mask, style=self._packing_style
+                sequences, attention_mask
             )
             forward_attention_mask = None
         else:

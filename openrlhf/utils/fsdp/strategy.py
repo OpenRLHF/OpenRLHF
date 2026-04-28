@@ -64,8 +64,6 @@ class FsdpStrategy:
         sp = getattr(fsdp, "sequence_parallel", None)
         # SP defaults to ON whenever TP>1 (user-stated default).
         self.sequence_parallel = sp if sp is not None else (self.tp_size > 1)
-        self.optim = getattr(args, "optim", "adam")
-        self.use_dynamic_batch = getattr(args.train, "dynamic_batch_enable", False)
         # LoRA flag — flows into AutoModel Checkpointer's `is_peft`. Without it
         # the checkpointer saves the merged base only and the trained adapter
         # is lost. Read the rank from the FSDP namespace if present.
@@ -146,7 +144,8 @@ class FsdpStrategy:
             torch.cuda.set_device(local_rank)
 
         if not dist.is_initialized():
-            dist.init_process_group(backend="nccl", timeout=timeout)
+            backend = "cuda:nccl,cpu:gloo" if self.cpu_offload else "nccl"
+            dist.init_process_group(backend=backend, timeout=timeout)
 
         self.world_size = dist.get_world_size()
         if self.pp_size > 1:
@@ -214,11 +213,14 @@ class FsdpStrategy:
             sequence_parallel=self.sequence_parallel,
             mp_policy=mp_policy,
             offload_policy=CPUOffloadPolicy(pin_memory=False) if self.cpu_offload else None,
-            # Force grad sync inside backward(): we read p.grad immediately after
-            # backward() to compute the global grad_norm. With deferred sync,
-            # each rank sees its un-reduced local grad and the global norm
-            # comes out √dp_size× too high (observed: SFT step1 23 vs PR#1176
-            # reference 13 with dp=3, ratio √3 ≈ 1.73).
+            # Force grad sync inside backward(). Per-microbatch we still skip
+            # sync via set_requires_gradient_sync(False) on intermediate
+            # accumulation steps; this flag controls the default for the FINAL
+            # microbatch (where we read p.grad to compute grad_norm). With
+            # defer=True FSDP2 leaves grads as Partial DTensors until the next
+            # forward; the clip helper handles that via full_tensor(), but we
+            # keep defer=False so optimizer state and grad_norm are stable
+            # within the optimizer_step call.
             defer_fsdp_grad_sync=False,
         )
         # MoE-specific parallelization config — required by AutoModel when
@@ -250,10 +252,7 @@ class FsdpStrategy:
             if isinstance(arg, tuple):
                 assert len(arg) == 2, f"prepare() tuple must be (model, cfg); got len={len(arg)}"
                 model, cfg = arg
-                if model is None:
-                    ret.append((None, None, None))
-                else:
-                    ret.append(self._init_train_model(model, cfg))
+                ret.append(self._init_train_model(model, cfg))
             else:
                 ret.append(self._init_eval_model(arg))
         return ret[0] if len(ret) == 1 else ret
@@ -264,7 +263,7 @@ class FsdpStrategy:
         if not params:
             raise ValueError("Cannot build optimizer: model has no trainable parameters")
 
-        kind = cfg.get("optim", self.optim)
+        kind = cfg["optim"]
         adam = cfg["adam"]
         if kind == "muon":
             from openrlhf.utils.fsdp.muon import build_automodel_muon_optimizer
@@ -361,12 +360,13 @@ class FsdpStrategy:
             optimizer.zero_grad(set_to_none=True)
             return
         max_norm = self._max_norm_by_optimizer.get(id(optimizer), self.max_norm)
-        if max_norm and max_norm > 0:
+        clip_norm = max_norm if max_norm and max_norm > 0 else None
+        if clip_norm is not None or self.moe_mesh is not None:
             from nemo_automodel.components.training.utils import scale_grads_and_clip_grad_norm
 
             self._last_grad_norm = float(
                 scale_grads_and_clip_grad_norm(
-                    max_norm,
+                    clip_norm,
                     [model],
                     pp_enabled=False,
                     device_mesh=self.device_mesh,

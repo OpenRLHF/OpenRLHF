@@ -43,6 +43,4 @@ python3 -m openrlhf.cli.train_ppo_ray \
 # Enable FSDP2 tensor parallelism
 #    --fsdp.tp_size 2 \
 
-# Enable FSDP2 context parallelism.
-#    --fsdp.cp_size 2 \
-#    --fsdp.no_packing_samples \
+# FSDP2 context parallelism is currently wired for SFT only.
