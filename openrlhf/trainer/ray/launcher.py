@@ -207,11 +207,14 @@ class ReferenceModelActor(BaseModelActor):
 class RewardModelActor(BaseModelActor):
     def init_model_from_pretrained(self, strategy: FsdpStrategy, pretrain):
         self._setup_distributed(strategy)
+        seq_reg_attn = (
+            "flash_attention_2" if strategy.args.fsdp.packing_samples else strategy.args.fsdp.attn_implementation
+        )
         model = get_llm_for_sequence_regression(
             pretrain,
             "reward",
             normalize_reward=strategy.args.reward.normalize_enable,
-            attn_implementation=strategy.args.fsdp.attn_implementation,
+            attn_implementation=seq_reg_attn,
             param_dtype=strategy.args.fsdp.param_dtype,
             load_in_4bit=strategy.args.fsdp.load_in_4bit,
             device_mesh=strategy.device_mesh,
@@ -220,9 +223,7 @@ class RewardModelActor(BaseModelActor):
             moe_config=strategy.moe_config,
             activation_checkpointing=False,
             value_head_prefix=strategy.args.fsdp.value_head_prefix,
-            # Reward inference receives padded rollout batches. AutoModel sequence
-            # classification does not support sequence packing for reward models.
-            packing_samples=False,
+            packing_samples=strategy.args.fsdp.packing_samples,
             use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
             use_fp32_master_weights=False,
         )

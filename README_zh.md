@@ -228,7 +228,7 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 
 | 方法 | 脚本 | 描述 |
 |------|------|------|
-| **SFT** | [train_sft.sh](./examples/scripts/train_sft.sh) | 带打包的监督微调 |
+| **SFT** | [train_sft.sh](./examples/scripts/train_sft.sh) | 监督微调，可选样本打包 |
 | **DPO/IPO/cDPO** | [train_dpo_llama.sh](./examples/scripts/train_dpo_llama.sh) | 直接偏好优化 |
 | **奖励模型** | [train_rm.sh](./examples/scripts/train_rm.sh) | 训练奖励模型 |
 
@@ -240,7 +240,7 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 <summary>展开高级能力</summary>
 
 **效率优化**
-- SFT/DPO/PPO 默认开启样本打包（`--fsdp.packing_samples`）；packed forward 跟随模型加载路径，dynamic batch 只改变 microbatch 分组
+- SFT/DPO/PPO 可选样本打包（`--fsdp.packing_samples`）；actor/CausalLM packed forward 支持 HF fallback + `flash_attention_2` 或 AutoModel custom + `te`，reward/critic sequence-regression packing 当前使用 HF fallback + `flash_attention_2`
 - 快速生成的 vLLM 加速（`--vllm.num_engines`）
 - DAPO [动态过滤](./examples/scripts/train_dapo_ray_hybrid_engine.sh)（`--algo.dynamic_filtering_enable`）
   - 🎲 Dynamic Sampling：对每个 prompt 生成多条响应，并根据奖励函数/Agent 返回的 **0–1 `scores`** 信号进行过滤
@@ -259,7 +259,7 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 - [VLM（视觉语言模型）](./examples/scripts/train_vlm_math_hybrid_engine.sh) — 支持单轮和[含图像反馈的多轮交互](./examples/python/vlm_multiturn_agent.py)（`--data.image_key`、`--data.max_images_per_prompt`）
 - [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--fsdp.lora.rank`、`--fsdp.load_in_4bit`；RL 当前会拒绝 LoRA，因为 vLLM adapter refit 尚未接入）
 - [专家混合（MoE）](./examples/test_scripts/train_sft_moe.sh)（`--actor.aux_loss_coef`）
-- SDPA / eager / 可选 FlashAttention 选择（`--fsdp.attn_implementation`）
+- SDPA / eager / FlashAttention2 / TE 注意力选择（`--fsdp.attn_implementation`）；HF fallback 的 `flash_attention_2` packing 需要安装 `.[flash-attn-2]`，AutoModel custom 的 `te` packing 需要 Transformer Engine
 - HuggingFace 聊天模板（`--data.apply_chat_template`）
 
 **优化器**
@@ -301,6 +301,7 @@ docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
 # 3. 安装挂载的源码
 cd /openrlhf
 pip install -e ".[vllm]"
+# 可选：HF fallback 的 flash_attention_2 packing 需要额外安装 ".[flash-attn-2]"
 ```
 
 **替代方案：从源码安装**
@@ -310,10 +311,11 @@ git clone https://github.com/OpenRLHF/OpenRLHF.git
 cd OpenRLHF
 pip install -e .
 pip install ".[vllm]"                  # + vLLM 0.20.0；Dion 已在 requirements.txt 中
+pip install -e ".[flash-attn-2]"       # 可选：HF fallback 的 flash_attention_2 packing
 ```
 
 > [!TIP]
-> 当前分支目标环境是 **NVIDIA PyTorch 26.03**、**torch 2.11**、**NeMo AutoModel main** 和 **vLLM 0.20.0**。Dion 不在 PyPI 上，会从 `github.com/microsoft/dion` 安装；精确 pin 以 `requirements.txt` 和 `dockerfile/Dockerfile` 为准。Docker 会先装 Dion、再装 vLLM，使最终 torch 栈以 vLLM/基础 PyTorch 镜像为准。
+> 当前分支目标环境是 **NVIDIA PyTorch 26.03**、**torch 2.11**、`requirements.txt` 中 pin 的 **NeMo AutoModel main** commit 和 **vLLM 0.20.0**。Dion 不在 PyPI 上，会从 `github.com/microsoft/dion` 安装；精确 pin 以 `requirements.txt` 和 `dockerfile/Dockerfile` 为准。Docker 会先装 Dion、再装 vLLM，使最终 torch 栈以 vLLM/基础 PyTorch 镜像为准。
 
 ### 准备数据集
 
@@ -712,8 +714,8 @@ python -m openrlhf.cli.lora_combiner \
 
 | 优化 | 标志 | 何时使用 |
 |------|------|---------|
-| **样本打包** | `--fsdp.packing_samples` | SFT/DPO/PPO 默认开启；packed 表达跟随模型加载路径：原生模型走 AutoModel THD，HF fallback 走 HF FlashAttention varlen |
-| **动态批次** | `--train.dynamic_batch_enable` | 需要兼容的样本打包；它只改变 microbatch 分组，复用模型已选择的 packing 路径 |
+| **样本打包** | `--fsdp.packing_samples` | SFT/DPO/PPO actor/CausalLM 训练可选；HF fallback packing 使用 `flash_attention_2` + `.[flash-attn-2]`，AutoModel custom THD packing 使用 `te` + Transformer Engine。PPO reward/critic sequence-regression packing 使用 HF `flash_attention_2` 路径 |
+| **动态批次** | `--train.dynamic_batch_enable` | PPO dynamic batch 需要兼容的样本打包；使用 GAE critic 时走 HF `flash_attention_2` sequence-regression packing 路径 |
 | **张量并行** | `--fsdp.tp_size` | 大模型或提升矩阵计算吞吐 |
 | **上下文并行** | `--fsdp.cp_size` | 长上下文；需关闭 sample packing |
 | **CPU Offload** | `--fsdp.cpu_offload` | 显存压力较大 |
@@ -735,7 +737,7 @@ python -m openrlhf.cli.lora_combiner \
 #### 🎮 批次大小调优
 
 1. **生成阶段**：最大化 `--rollout.micro_batch_size`，最小化 vLLM TP 大小
-2. **训练阶段**：最大化 `--train.micro_batch_size`；仅在兼容 varlen attention 后端下启用 packing
+2. **训练阶段**：最大化 `--train.micro_batch_size`；仅在 `flash_attention_2` 或 `te` 下启用 packing
 3. **vLLM**：始终使用 `--vllm.sync_backend nccl`
 
 > [!TIP]
@@ -803,7 +805,7 @@ python -m openrlhf.cli.lora_combiner \
 - [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
 - [Ray ↗](https://github.com/ray-project/ray)
 
-我们的项目还要感谢 [ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/ColossalChat) 和 [DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat)。在项目早期，我们参考了他们的代码设计。我们的项目要感谢 [Netmind.AI](https://www.netmind.ai/) 为开发 ring attention 提供的 GPU 支持。
+我们的项目还要感谢 [ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/ColossalChat) 和 [DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat)。在项目早期，我们参考了他们的代码设计。也感谢 [Netmind.AI](https://www.netmind.ai/) 为早期 ring-attention 探索提供的 GPU 支持。
 
 （2024/7）我们的 GitHub 组织已从 OpenLLMAI 更改为 OpenRLHF。
 

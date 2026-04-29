@@ -47,6 +47,37 @@ def _has_hf_flash_attn_2() -> bool:
         return find_spec("flash_attn") is not None
 
 
+_HF_ATTN_IMPLEMENTATIONS = {"eager", "sdpa", "flash_attention_2", "flash_attention_3", "te"}
+_CUSTOM_ATTN_IMPLEMENTATIONS = {"te", "sdpa", "flex"}
+_ALL_ATTN_IMPLEMENTATIONS = _HF_ATTN_IMPLEMENTATIONS | _CUSTOM_ATTN_IMPLEMENTATIONS
+
+
+def _validate_attn_implementation(attn_implementation: str) -> None:
+    if attn_implementation not in _ALL_ATTN_IMPLEMENTATIONS:
+        choices = ", ".join(sorted(_ALL_ATTN_IMPLEMENTATIONS))
+        raise ValueError(f"Unsupported attention implementation {attn_implementation!r}; choose one of: {choices}")
+    if attn_implementation == "te" and find_spec("transformer_engine") is None:
+        raise ValueError("--fsdp.attn_implementation te requires transformer-engine to be installed.")
+
+
+def _resolve_custom_backend_attn(attn_implementation: str, packing_samples: bool) -> str:
+    if packing_samples:
+        if attn_implementation == "te":
+            return "te"
+        if attn_implementation == "flash_attention_2":
+            raise ValueError(
+                "--fsdp.packing_samples with AutoModel custom models requires --fsdp.attn_implementation te. "
+                "To use flash_attention_2 packing, route through the HF fallback with --fsdp.force_hf_model."
+            )
+        raise ValueError("--fsdp.packing_samples supports only --fsdp.attn_implementation te " "or flash_attention_2.")
+
+    if attn_implementation in _CUSTOM_ATTN_IMPLEMENTATIONS:
+        return attn_implementation
+
+    print(f"[Attn] AutoModel custom models do not use {attn_implementation}; using sdpa backend.")
+    return "sdpa"
+
+
 def _will_use_hf_model(pretrain_or_model, force_hf: bool, default: bool = True) -> bool:
     if force_hf:
         return True
@@ -143,26 +174,31 @@ class Actor(nn.Module):
         if not isinstance(pretrain_or_model, str):
             self.model = pretrain_or_model
             self.is_vlm = False
-            if self.packing_samples and not is_automodel_custom_model(self.model):
-                raise ValueError(
-                    "--fsdp.packing_samples requires an AutoModel custom model; "
-                    "the wrapped model is an HF fallback. Disable packing for this run."
-                )
+            self._packing_style = "automodel" if is_automodel_custom_model(self.model) else "hf"
+            if self.packing_samples and self._packing_style == "hf":
+                cfg = getattr(self.model, "config", None)
+                if getattr(cfg, "_attn_implementation", None) != "flash_attention_2" or not _has_hf_flash_attn_2():
+                    raise ValueError(
+                        "HF packed sequence requires flash_attention_2 and flash-attn. "
+                        "Use an AutoModel custom TE model or load the HF model with flash_attention_2."
+                    )
             return
 
         from openrlhf.utils.utils import convert_to_torch_dtype, ensure_torchvision_nms_stub, is_vlm_model
 
         # Trainable actor/critic models keep fp32 master weights; ref/reward can
         # opt into compute dtype to save memory. FSDP2 handles bf16 fwd/bwd via
-        # MixedPrecisionPolicy. MoE checkpoints (Qwen3-MoE, GLM-MoE, ...) carry
-        # mixed bf16 expert weights + fp32 router gates; loading with
-        # torch_dtype=fp32 leaves the expert side as bf16, and FSDP rejects
-        # ('expects uniform original parameter dtype'). Drop fp32 master for
-        # MoE on the HF reference path (AutoModel custom MoE handles the mix
-        # internally and works with fp32 master).
+        # MixedPrecisionPolicy. MoE checkpoints (Qwen3-MoE, GLM-MoE, ...) are a
+        # special case: AutoModel PR #1896 fixes fp32-master handling for custom
+        # MoE, but that PR is not in the pinned main commit yet. Until then keep
+        # MoE params in compute dtype to avoid mixed-dtype FSDP / grouped-GEMM
+        # failures.
         compute_dtype = convert_to_torch_dtype(param_dtype)
+        _validate_attn_implementation(attn_implementation)
         is_moe = _detect_moe_arch(pretrain_or_model)
         torch_dtype = compute_dtype if load_in_4bit or not use_fp32_master_weights else torch.float32
+        if is_moe and torch_dtype == torch.float32:
+            torch_dtype = compute_dtype
         self.is_vlm = is_vlm_model(pretrain_or_model)
 
         if self.is_vlm and use_liger_kernel:
@@ -220,34 +256,49 @@ class Actor(nn.Module):
         #  so TP+EP is intentionally left to AutoModel validation.
         ep_active = moe_mesh is not None
         force_hf = force_hf_model or (is_moe and not ep_active)
-        # MoE on HF path: see comment near torch_dtype — drop fp32 master to
-        # avoid the mixed-dtype FSDP assert.
-        if is_moe and force_hf and torch_dtype == torch.float32:
-            torch_dtype = compute_dtype
-        # Downgrade flash_attention_2 → sdpa whenever flash_attn isn't installed.
-        # Must run before the autocast-dtype check below and before passing
-        # attn_implementation to from_pretrained — otherwise non-packing runs
-        # would still receive flash_attention_2 and crash inside HF.
+        # Downgrade flash_attention_2 → sdpa for non-packing runs when
+        # flash-attn is unavailable. Packing with flash_attention_2 cannot be
+        # downgraded because SDPA would not preserve packed sequence
+        # boundaries.
         if attn_implementation == "flash_attention_2" and not _has_hf_flash_attn_2():
+            if packing_samples:
+                raise ValueError("--fsdp.packing_samples with flash_attention_2 requires flash-attn to be installed.")
             print("[Attn] flash_attn not installed; downgrading flash_attention_2 → sdpa.")
             attn_implementation = "sdpa"
-        if torch_dtype == torch.float32 and attn_implementation in ("flash_attention_2", "flash_attention_3"):
-            self._forward_autocast_dtype = compute_dtype
         use_hf_model = _will_use_hf_model(pretrain_or_model, force_hf)
-        if packing_samples and use_hf_model:
-            hint = (
-                " For this MoE model, set --fsdp.ep_size > 1 to route through AutoModel's custom MoE path "
-                "(which supports packing); without EP we fall back to HF reference path."
-                if is_moe and not ep_active
-                else " Disable packing for this model."
-            )
+        if use_hf_model and attn_implementation == "flex":
             raise ValueError(
-                f"--fsdp.packing_samples requires an AutoModel custom model, but {pretrain_or_model} "
-                f"resolves to the HF fallback path.{hint}"
+                "--fsdp.attn_implementation flex is only supported on AutoModel custom models; "
+                "drop --fsdp.force_hf_model or use sdpa/eager/flash_attention_2."
+            )
+        if (
+            use_hf_model
+            and torch_dtype == torch.float32
+            and attn_implementation
+            in (
+                "flash_attention_2",
+                "flash_attention_3",
+            )
+        ):
+            self._forward_autocast_dtype = compute_dtype
+        if packing_samples and use_hf_model and attn_implementation != "flash_attention_2":
+            raise ValueError(
+                "HF packed sequence requires --fsdp.attn_implementation flash_attention_2. "
+                "Use --fsdp.attn_implementation te for AutoModel custom THD packing."
             )
 
         automodel_backend_kwargs = {}
+        automodel_attn_implementation = attn_implementation
+        automodel_has_packed_sequence = packing_samples
+        self._packing_style = "hf" if use_hf_model else "automodel"
         if not use_hf_model:
+            backend_attn = _resolve_custom_backend_attn(attn_implementation, packing_samples)
+            # For AutoModel custom models, the real attention backend comes
+            # from BackendConfig below. Keep the HF config-side
+            # attn_implementation neutral so custom-only names such as "flex",
+            # and HF-only names such as "flash_attention_2", do not leak into
+            # AutoConfig validation.
+            automodel_attn_implementation = "sdpa"
             # Always pass an explicit BackendConfig on the AutoModel-custom path
             # so we control rope_fusion / linear / rms_norm backends. Default
             # `BackendConfig` auto-enables `rope_fusion=True` when
@@ -260,10 +311,8 @@ class Actor(nn.Module):
             # CUDA-version images.
             from nemo_automodel.components.models.common.utils import BackendConfig
 
-            using_te = attn_implementation == "te"
-            backend_kwargs = {}
-            if attn_implementation in {"te", "sdpa", "flex"}:
-                backend_kwargs["attn"] = attn_implementation
+            using_te = backend_attn == "te"
+            backend_kwargs = {"attn": backend_attn}
             backend_kwargs["rope_fusion"] = using_te
             if not using_te:
                 backend_kwargs["linear"] = "torch"
@@ -274,7 +323,7 @@ class Actor(nn.Module):
             pretrain_or_model,
             trust_remote_code=True,
             torch_dtype=torch_dtype,
-            attn_implementation=attn_implementation,
+            attn_implementation=automodel_attn_implementation,
             quantization_config=nf4_config,
             device_mesh=device_mesh,
             moe_mesh=moe_mesh,
@@ -283,17 +332,16 @@ class Actor(nn.Module):
             activation_checkpointing=activation_checkpointing,
             peft_config=peft_config,
             use_liger_kernel=use_liger_kernel and not self.is_vlm,
-            has_packed_sequence=packing_samples,
+            has_packed_sequence=automodel_has_packed_sequence,
             force_hf=force_hf,
             **automodel_backend_kwargs,
         )
-        if self.packing_samples and not is_automodel_custom_model(self.model):
-            raise ValueError(
-                "--fsdp.packing_samples requires an AutoModel custom model, but the loaded model is "
-                "an HF fallback. Disable packing for this model."
-            )
+        self._packing_style = "automodel" if is_automodel_custom_model(self.model) else "hf"
+        if self.packing_samples and self._packing_style == "hf" and attn_implementation != "flash_attention_2":
+            raise ValueError("HF packed sequence requires flash_attention_2.")
         if self.packing_samples:
-            print("[Packing] Using AutoModel THD packed path.")
+            path = "AutoModel THD/TE" if self._packing_style == "automodel" else "HF FlashAttention2 varlen"
+            print(f"[Packing] Using {path} packed path.")
 
         # VLM: optionally freeze the vision encoder so only the language
         # model backbone is trained. Both Qwen3.5 and Gemma4 place language
@@ -333,11 +381,11 @@ class Actor(nn.Module):
     ) -> torch.Tensor:
         """Returns action log probs."""
         batch, seqlen = sequences.size()
-        fa_kwargs: dict = {}
+        attn_kwargs: dict = {}
         indices = None
         if self.packing_samples:
-            sequences, position_ids, rolled_sequences, indices, fa_kwargs = pack_padded_batch(
-                sequences, attention_mask
+            sequences, position_ids, rolled_sequences, indices, attn_kwargs = pack_padded_batch(
+                sequences, attention_mask, style=self._packing_style
             )
             forward_attention_mask = None
         else:
@@ -372,7 +420,7 @@ class Actor(nn.Module):
                 sequences,
                 attention_mask=forward_attention_mask,
                 position_ids=position_ids,
-                **fa_kwargs,
+                **attn_kwargs,
                 **mm_inputs,
             )
         # AutoModel's custom MoE/LLM models (e.g. Qwen3MoeForCausalLM) return a

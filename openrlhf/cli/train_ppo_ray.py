@@ -679,10 +679,11 @@ if __name__ == "__main__":
 
     if args.fsdp.packing_samples:
         assert args.vllm.num_engines > 0, "Only support `--fsdp.packing_samples` with vLLM."
-        if args.fsdp.force_hf_model:
+        if args.fsdp.attn_implementation not in {"te", "flash_attention_2"}:
+            raise ValueError("--fsdp.packing_samples requires --fsdp.attn_implementation te or flash_attention_2.")
+        if args.fsdp.force_hf_model and args.fsdp.attn_implementation != "flash_attention_2":
             raise ValueError(
-                "--fsdp.packing_samples requires the AutoModel custom path; "
-                "drop --fsdp.force_hf_model or disable packing."
+                "--fsdp.force_hf_model packed sequence requires --fsdp.attn_implementation flash_attention_2."
             )
 
     if args.vllm.enable_sleep and not args.train.colocate_all:

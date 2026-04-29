@@ -76,6 +76,7 @@ setup(
     extras_require={
         "vllm": ["vllm==0.20.0"],
         "vllm_latest": ["vllm>=0.20.0"],
+        "flash-attn-2": ["flash-attn==2.8.3"],
         "ring": ["ring_flash_attn"],
         "liger": ["liger_kernel"],
     },

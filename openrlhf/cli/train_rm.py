@@ -305,9 +305,6 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
-    if args.fsdp.packing_samples:
-        raise ValueError("FSDP2 reward-model training does not support --fsdp.packing_samples")
-
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub
 

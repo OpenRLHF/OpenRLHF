@@ -4,13 +4,12 @@ bitsandbytes
 datasets
 dion @ git+https://github.com/microsoft/dion.git@28311d93686275f1baa7f0af57e6c4c61b75440b
 einops
-flash-attn==2.8.3
 grpcio>=1.74.0
 huggingface_hub>=1.0.0
 isort
 jsonlines
 loralib
-nemo-automodel @ git+https://github.com/NVIDIA/NeMo-Automodel.git@e3a0ffe7b4554e1bf5f2913ac64baafbfa57f247
+nemo-automodel @ git+https://github.com/NVIDIA/NeMo-Automodel.git@93ccdc1f77e84bf6432f6dcefa204c6f76d21412
 optimum
 optree>=0.15.0
 packaging

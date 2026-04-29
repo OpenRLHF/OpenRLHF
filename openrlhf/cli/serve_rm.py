@@ -101,9 +101,6 @@ if __name__ == "__main__":
 
     if not getattr(flat_args, "reward.model_name_or_path"):
         raise ValueError("--reward.model_name_or_path is required")
-    if getattr(flat_args, "fsdp.packing_samples"):
-        raise ValueError("Remote reward-model serving does not support --fsdp.packing_samples")
-
     from openrlhf.utils.config import hierarchize
     from openrlhf.utils.logging_utils import init_logger
 

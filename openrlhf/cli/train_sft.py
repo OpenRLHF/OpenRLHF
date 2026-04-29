@@ -290,10 +290,12 @@ if __name__ == "__main__":
             "--fsdp.cp_size > 1 is incompatible with --fsdp.packing_samples; disable packing for CP runs."
         )
 
-    if args.fsdp.packing_samples and args.fsdp.force_hf_model:
+    if args.fsdp.packing_samples and args.fsdp.attn_implementation not in {"te", "flash_attention_2"}:
+        raise ValueError("--fsdp.packing_samples requires --fsdp.attn_implementation te or flash_attention_2.")
+
+    if args.fsdp.packing_samples and args.fsdp.force_hf_model and args.fsdp.attn_implementation != "flash_attention_2":
         raise ValueError(
-            "--fsdp.packing_samples requires the AutoModel custom path; "
-            "drop --fsdp.force_hf_model or disable packing."
+            "--fsdp.force_hf_model packed sequence requires --fsdp.attn_implementation flash_attention_2."
         )
 
     if args.data.multiturn:

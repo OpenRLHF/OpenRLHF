@@ -227,11 +227,14 @@ class CriticModelActor(BaseModelActor):
         self.disable_ds_ckpt = args.ckpt.disable_ds
 
         self._setup_distributed(strategy)
+        seq_reg_attn = (
+            "flash_attention_2" if strategy.args.fsdp.packing_samples else strategy.args.fsdp.attn_implementation
+        )
         critic = get_llm_for_sequence_regression(
             pretrain,
             "critic",
             normalize_reward=strategy.args.reward.normalize_enable,
-            attn_implementation=strategy.args.fsdp.attn_implementation,
+            attn_implementation=seq_reg_attn,
             param_dtype=strategy.args.fsdp.param_dtype,
             load_in_4bit=strategy.args.fsdp.load_in_4bit,
             lora_rank=strategy.args.fsdp.lora.rank,

@@ -5,13 +5,14 @@ import torch
 import torch.nn as nn
 from transformers import AutoConfig, BitsAndBytesConfig
 
-from openrlhf.utils.fsdp.packing import unshard_dtensor
+from openrlhf.utils.fsdp.packing import pack_padded_batch, unpack_to_padded, unshard_dtensor
 from openrlhf.utils.logging_utils import init_logger
 
 from .actor import (
     _build_peft_config_dict,
     _detect_moe_arch,
     _has_hf_flash_attn_2,
+    _validate_attn_implementation,
 )
 
 logger = init_logger(__name__)
@@ -44,14 +45,31 @@ def get_llm_for_sequence_regression(
     """Build a reward or critic model with an AutoModel-managed regression head."""
     assert model_type in ("critic", "reward"), f"invalid model_type: {model_type}"
 
-    if packing_samples:
-        # Sequence-regression always runs the HF fallback (forced below to keep the
-        # regression head); HF-only packing is no longer supported. Disable packing
-        # for reward/critic.
-        raise NotImplementedError(
-            "--fsdp.packing_samples is not supported for sequence-regression models "
-            "(reward/critic) — only AutoModel custom CausalLM models support packing."
+    _validate_attn_implementation(attn_implementation)
+    if attn_implementation == "flex":
+        raise ValueError(
+            "--fsdp.attn_implementation flex is only supported on AutoModel custom CausalLM models; "
+            "reward/critic sequence-regression models use the HF fallback path."
         )
+    mesh_dims = getattr(device_mesh, "mesh_dim_names", ()) or ()
+    cp_size = device_mesh["cp"].size() if device_mesh is not None and "cp" in mesh_dims else 1
+    if packing_samples:
+        if cp_size > 1:
+            raise NotImplementedError(
+                "--fsdp.packing_samples for reward/critic sequence-regression currently supports CP size 1 only. "
+                "AutoModel custom TE packed value heads need an upstream custom SequenceClassification/value-head path."
+            )
+        if attn_implementation != "flash_attention_2":
+            raise NotImplementedError(
+                "--fsdp.packing_samples for reward/critic sequence-regression currently requires "
+                "--fsdp.attn_implementation flash_attention_2. AutoModel custom TE packing is available for "
+                "CausalLM actor/reference forwards, but not for sequence-regression value heads yet."
+            )
+        if not _has_hf_flash_attn_2():
+            raise ValueError(
+                "--fsdp.packing_samples with reward/critic sequence-regression and flash_attention_2 "
+                "requires flash-attn to be installed."
+            )
 
     config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
     config.num_labels = 1
@@ -72,9 +90,8 @@ def get_llm_for_sequence_regression(
     # the actor path and avoid fp32 master weights for this case.
     if torch_dtype == torch.float32 and _detect_moe_arch(model_name_or_path):
         torch_dtype = compute_dtype
-    # Downgrade flash_attention_2 → sdpa whenever flash_attn isn't installed.
-    # Sequence-regression always runs the HF path (force_hf=True below), so the
-    # packing branch can never reach the downgrade — do it unconditionally here.
+    # Downgrade non-packed flash_attention_2 → sdpa whenever flash_attn isn't
+    # installed. Packed sequence-regression validated availability above.
     if attn_implementation == "flash_attention_2" and not _has_hf_flash_attn_2():
         print("[Attn] flash_attn not installed; downgrading flash_attention_2 → sdpa.")
         attn_implementation = "sdpa"
@@ -111,11 +128,13 @@ def get_llm_for_sequence_regression(
             )
     from nemo_automodel import NeMoAutoModelForSequenceClassification
 
-    # AutoModel's custom registry is CausalLM-oriented. When a base config says
-    # e.g. "LlamaForCausalLM", NeMoAutoModelForSequenceClassification would
-    # otherwise instantiate the custom causal model and no regression head would
-    # exist. Force the HF SequenceClassification path to preserve OpenRLHF's
-    # reward/critic semantics.
+    # AutoModel also handles HF SequenceClassification classes such as
+    # Qwen3ForSequenceClassification (including the replicated `score` TP plan),
+    # but its custom registry is mostly CausalLM-oriented. When a base config
+    # says e.g. "LlamaForCausalLM", NeMoAutoModelForSequenceClassification
+    # would otherwise instantiate the custom causal model and no regression
+    # head would exist. Force the HF SequenceClassification path to preserve
+    # OpenRLHF's reward/critic semantics.
     force_hf = True
 
     model = NeMoAutoModelForSequenceClassification.from_pretrained(
@@ -132,7 +151,7 @@ def get_llm_for_sequence_regression(
         activation_checkpointing=activation_checkpointing,
         peft_config=peft_config,
         use_liger_kernel=use_liger_kernel,
-        has_packed_sequence=False,
+        has_packed_sequence=packing_samples,
         force_hf=force_hf,
         **kwargs,
     )
@@ -148,7 +167,7 @@ def get_llm_for_sequence_regression(
         _init_regression_head(model, value_head_prefix)
 
     wrapper_cls = RewardModel if model_type == "reward" else CriticModel
-    wrapper = wrapper_cls(model, value_head_prefix, normalize_reward, forward_autocast_dtype)
+    wrapper = wrapper_cls(model, value_head_prefix, normalize_reward, forward_autocast_dtype, packing_samples)
     # Mirror iter-32 fix on Actor: stash peft_config on the wrapper so
     # strategy.save_model can forward it to AutoModel's PEFT save addon, which
     # needs it to write adapter_config.json (otherwise AttributeError on dim).
@@ -189,6 +208,7 @@ class _SequenceRegressionBase(nn.Module):
         value_head_prefix: str,
         normalize_reward: bool,
         forward_autocast_dtype: Optional[torch.dtype] = None,
+        packing_samples: bool = False,
     ) -> None:
         super().__init__()
         self.model = model
@@ -196,6 +216,7 @@ class _SequenceRegressionBase(nn.Module):
         self.value_head_prefix = value_head_prefix
         self.normalize_reward = normalize_reward
         self._forward_autocast_dtype = forward_autocast_dtype
+        self.packing_samples = packing_samples
 
         self.register_buffer("mean", torch.zeros(1), persistent=False)
         self.register_buffer("std", torch.ones(1), persistent=False)
@@ -211,8 +232,19 @@ class _SequenceRegressionBase(nn.Module):
         return next(self.model.parameters()).device
 
     def _token_values(self, input_ids, attention_mask):
+        batch, seqlen = input_ids.shape
         position_ids = attention_mask.long().cumsum(-1) - 1
         position_ids.masked_fill_(attention_mask == 0, 1)
+        model_input_ids = input_ids
+        model_attention_mask = attention_mask
+        indices = None
+        attn_kwargs = {}
+        if self.packing_samples:
+            model_input_ids, position_ids, _, indices, attn_kwargs = pack_padded_batch(
+                input_ids, attention_mask, style="hf"
+            )
+            model_attention_mask = torch.ones_like(model_input_ids, dtype=attention_mask.dtype)
+
         autocast_ctx = (
             torch.autocast(device_type="cuda", dtype=self._forward_autocast_dtype)
             if self._forward_autocast_dtype is not None and input_ids.is_cuda
@@ -220,18 +252,21 @@ class _SequenceRegressionBase(nn.Module):
         )
         with autocast_ctx:
             outputs = self.model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
+                input_ids=model_input_ids,
+                attention_mask=model_attention_mask,
                 position_ids=position_ids,
                 output_hidden_states=True,
                 use_cache=False,
                 return_dict=True,
+                **attn_kwargs,
             )
             hidden_states = getattr(outputs, "hidden_states", None)
             if hidden_states is None:
                 raise RuntimeError("Sequence regression requires hidden_states; model did not return them.")
             last_hidden_states = unshard_dtensor(hidden_states[-1])
             values = _get_regression_head(self.model, self.value_head_prefix)(last_hidden_states).squeeze(-1)
+            if self.packing_samples:
+                values = unpack_to_padded(values, indices, batch, seqlen)
         return values.float(), outputs
 
 

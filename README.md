@@ -227,7 +227,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 
 | Method | Script | Description |
 |--------|--------|-------------|
-| **SFT** | [train_sft.sh](./examples/scripts/train_sft.sh) | Supervised fine-tuning with packing |
+| **SFT** | [train_sft.sh](./examples/scripts/train_sft.sh) | Supervised fine-tuning with optional sample packing |
 | **DPO/IPO/cDPO** | [train_dpo_llama.sh](./examples/scripts/train_dpo_llama.sh) | Direct preference optimization |
 | **Reward Model** | [train_rm.sh](./examples/scripts/train_rm.sh) | Train reward models |
 
@@ -239,7 +239,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 <summary>Show advanced capabilities</summary>
 
 **Efficiency Optimizations**
-- Sample packing defaults on for SFT/DPO/PPO (`--fsdp.packing_samples`); packed forward follows the loaded model path, and dynamic batch only changes microbatch grouping
+- Optional sample packing for SFT/DPO/PPO (`--fsdp.packing_samples`); packed actor/CausalLM forward supports HF fallback + `flash_attention_2` or AutoModel custom + `te`, while reward/critic sequence-regression packing currently uses HF fallback + `flash_attention_2`
 - vLLM acceleration (`--vllm.num_engines`) for fast generation
 - DAPO [dynamic filtering](./examples/scripts/train_dapo_ray_hybrid_engine.sh) (`--algo.dynamic_filtering_enable`)
   - 🎲 Dynamic Sampling: for each prompt, generate multiple responses and **filter** them by your reward / agent **0–1 `scores`** signal
@@ -258,7 +258,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 - [VLM (Vision-Language Models)](./examples/scripts/train_vlm_math_hybrid_engine.sh) — single-turn and [multi-turn with image feedback](./examples/python/vlm_multiturn_agent.py) (`--data.image_key`, `--data.max_images_per_prompt`)
 - [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh) (`--fsdp.lora.rank`, `--fsdp.load_in_4bit`; RL currently rejects LoRA because vLLM adapter refit is not wired yet)
 - [Mixture of Experts (MoE)](./examples/test_scripts/train_sft_moe.sh) (`--actor.aux_loss_coef`)
-- SDPA / eager / optional FlashAttention attention selection (`--fsdp.attn_implementation`)
+- SDPA / eager / FlashAttention2 / TE attention selection (`--fsdp.attn_implementation`); install `.[flash-attn-2]` for HF fallback packing with `flash_attention_2`, while AutoModel custom `te` packing requires Transformer Engine
 - HuggingFace chat templates (`--data.apply_chat_template`)
 
 **Optimizers**
@@ -300,6 +300,7 @@ docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
 # 3. Install the mounted source tree
 cd /openrlhf
 pip install -e ".[vllm]"
+# Optional: add ".[flash-attn-2]" for HF fallback packing with flash_attention_2
 ```
 
 **Alternative: Install from source**
@@ -309,10 +310,11 @@ git clone https://github.com/OpenRLHF/OpenRLHF.git
 cd OpenRLHF
 pip install -e .
 pip install ".[vllm]"                  # + vLLM 0.20.0; Dion is in requirements.txt
+pip install -e ".[flash-attn-2]"       # Optional: HF fallback packing with flash_attention_2
 ```
 
 > [!TIP]
-> This branch targets **NVIDIA PyTorch 26.03**, **torch 2.11**, **NeMo AutoModel main**, and **vLLM 0.20.0**. Dion is installed from `github.com/microsoft/dion` because it is not published on PyPI. Exact pins live in `requirements.txt` and `dockerfile/Dockerfile`; the Docker image installs Dion before vLLM so the final torch stack is owned by vLLM/the base PyTorch image.
+> This branch targets **NVIDIA PyTorch 26.03**, **torch 2.11**, the pinned **NeMo AutoModel main** commit in `requirements.txt`, and **vLLM 0.20.0**. Dion is installed from `github.com/microsoft/dion` because it is not published on PyPI. Exact pins live in `requirements.txt` and `dockerfile/Dockerfile`; the Docker image installs Dion before vLLM so the final torch stack is owned by vLLM/the base PyTorch image.
 
 ### Prepare Datasets
 
@@ -728,8 +730,8 @@ Pick the execution mode based on your priority — OpenRLHF gives you a clear tr
 
 | Optimization | Flag | When to Use |
 |--------------|------|-------------|
-| **Sample Packing** | `--fsdp.packing_samples` | Default for SFT/DPO/PPO; packed representation follows the loaded model path: AutoModel THD for native models, HF FlashAttention varlen for HF fallback |
-| **Dynamic Batch** | `--train.dynamic_batch_enable` | Requires compatible sample packing; it only changes microbatch grouping and reuses the model-selected packing path |
+| **Sample Packing** | `--fsdp.packing_samples` | Optional for SFT/DPO/PPO actor/CausalLM training; use `flash_attention_2` plus `.[flash-attn-2]` for HF fallback packing, or `te` plus Transformer Engine for AutoModel custom THD packing. PPO reward/critic sequence-regression packing uses the HF `flash_attention_2` path |
+| **Dynamic Batch** | `--train.dynamic_batch_enable` | PPO dynamic batch requires compatible sample packing; with GAE critic, use the HF `flash_attention_2` sequence-regression packing path |
 | **Tensor Parallel** | `--fsdp.tp_size` | Large models or faster matmuls |
 | **Context Parallel** | `--fsdp.cp_size` | SFT long context; disable sample packing |
 | **CPU Offload** | `--fsdp.cpu_offload` | Memory pressure |
@@ -751,7 +753,7 @@ Pick the execution mode based on your priority — OpenRLHF gives you a clear tr
 #### 🎮 Batch Size Tuning
 
 1. **Generation Phase**: Maximize `--rollout.micro_batch_size`, minimize vLLM TP size
-2. **Training Phase**: Maximize `--train.micro_batch_size`; enable packing only with a compatible varlen-attention backend
+2. **Training Phase**: Maximize `--train.micro_batch_size`; enable packing only with `flash_attention_2` or `te`
 3. **vLLM**: Always use `--vllm.sync_backend nccl`
 
 > [!TIP]
@@ -821,7 +823,7 @@ We would like to express our gratitude to the following projects and organizatio
 - [Ray ↗](https://github.com/ray-project/ray)
 
 Our project would also like to thank [ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/ColossalChat) and [DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat). In the early stages of the project, we referred to their code design. 
-Our project would like to thank [Netmind.AI](https://www.netmind.ai/) for the GPU support of developing ring attention.
+Our project would like to thank [Netmind.AI](https://www.netmind.ai/) for GPU support during earlier ring-attention exploration.
 
 (2024/7) Our GitHub organization has changed from OpenLLMAI to OpenRLHF.
 
