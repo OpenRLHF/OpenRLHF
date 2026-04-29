@@ -236,7 +236,6 @@ class CriticModelActor(BaseModelActor):
             normalize_reward=strategy.args.reward.normalize_enable,
             attn_implementation=seq_reg_attn,
             param_dtype=strategy.args.fsdp.param_dtype,
-            load_in_4bit=strategy.args.fsdp.load_in_4bit,
             lora_rank=strategy.args.fsdp.lora.rank,
             lora_alpha=strategy.args.fsdp.lora.alpha,
             target_modules=strategy.args.fsdp.lora.target_modules,

@@ -9,6 +9,7 @@ These tests mock the ``ray`` module so they run without a Ray installation.
 import importlib
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -83,6 +84,13 @@ def _reload_train_module():
     if mod_name in sys.modules:
         return importlib.reload(sys.modules[mod_name])
     return importlib.import_module(mod_name)
+
+
+def test_fsdp_model_parallel_size_includes_ep():
+    mod = _reload_train_module()
+    args = SimpleNamespace(fsdp=SimpleNamespace(cp_size=2, tp_size=3, ep_size=4))
+
+    assert mod._fsdp_model_parallel_size(args) == 24
 
 
 def _get_ray_init_env_vars(

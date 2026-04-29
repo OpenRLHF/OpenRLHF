@@ -1,11 +1,12 @@
+import inspect
 from contextlib import nullcontext
 from importlib.util import find_spec
+from pathlib import Path
 from typing import Optional
 
 import torch
 import torch.nn as nn
 from torch.distributed.tensor import DTensor
-from transformers import BitsAndBytesConfig
 
 from openrlhf.utils.fsdp.packing import (
     is_automodel_custom_model,
@@ -93,6 +94,44 @@ def _will_use_hf_model(pretrain_or_model, force_hf: bool, default: bool = True) 
         return default
 
 
+def _class_source_supports_thd_packing(model_cls) -> bool:
+    try:
+        source_path = inspect.getsourcefile(model_cls)
+    except (TypeError, OSError):
+        return False
+    if not source_path:
+        return False
+    try:
+        source = Path(source_path).read_text(errors="ignore")
+    except OSError:
+        return False
+    return "qkv_format" in source and "cu_seqlens" in source
+
+
+def _automodel_arch_supports_thd_packing(pretrain_or_model) -> bool:
+    """Return whether AutoModel's custom class consumes THD packing kwargs."""
+    if not isinstance(pretrain_or_model, str):
+        return _automodel_custom_supports_thd_packing(pretrain_or_model)
+    try:
+        from nemo_automodel._transformers.registry import ModelRegistry
+        from transformers import AutoConfig
+
+        cfg = AutoConfig.from_pretrained(pretrain_or_model, trust_remote_code=True)
+        archs = getattr(cfg, "architectures", None) or []
+        if not archs:
+            return False
+        model_cls = ModelRegistry.model_arch_name_to_cls.get(archs[0])
+        return bool(model_cls) and _class_source_supports_thd_packing(model_cls)
+    except Exception:
+        return False
+
+
+def _automodel_custom_supports_thd_packing(model: nn.Module) -> bool:
+    if not is_automodel_custom_model(model):
+        return False
+    return any(_class_source_supports_thd_packing(cls) for cls in type(model).__mro__)
+
+
 def _build_peft_config_dict(rank: int, alpha: int, dropout: float, target_modules):
     """Map OpenRLHF lora.* args onto AutoModel's PeftConfig dataclass.
 
@@ -103,12 +142,12 @@ def _build_peft_config_dict(rank: int, alpha: int, dropout: float, target_module
     """
     from nemo_automodel.components._peft.lora import PeftConfig
 
-    base = {"dim": rank, "alpha": alpha, "dropout": dropout}
-    # Map HF-peft sentinel "all-linear" → AutoModel's `match_all_linear=True`.
-    if not target_modules or target_modules == "all-linear":
-        return PeftConfig.from_dict({**base, "match_all_linear": True})
     if isinstance(target_modules, str):
         target_modules = [target_modules]
+    base = {"dim": rank, "alpha": alpha, "dropout": dropout}
+    # Map HF-peft sentinel "all-linear" → AutoModel's `match_all_linear=True`.
+    if not target_modules or target_modules == ["all-linear"]:
+        return PeftConfig.from_dict({**base, "match_all_linear": True})
     return PeftConfig.from_dict({**base, "target_modules": list(target_modules)})
 
 
@@ -140,7 +179,7 @@ class Actor(nn.Module):
     (``NeMoAutoModelForCausalLM.from_pretrained`` / ``NeMoAutoModelForImageTextToText``),
     which in a single call: loads HF weights, applies the per-architecture TP plan,
     wraps with FSDP2 over ``device_mesh``, attaches CP hooks if cp_size>1, and
-    optionally applies LoRA + quantization + activation checkpointing.
+    optionally applies LoRA + activation checkpointing.
     """
 
     def __init__(
@@ -148,7 +187,6 @@ class Actor(nn.Module):
         pretrain_or_model,
         attn_implementation: str = "flash_attention_2",
         param_dtype: str = "bf16",
-        load_in_4bit: bool = False,
         lora_rank: int = 0,
         lora_alpha: int = 16,
         lora_dropout: float = 0,
@@ -175,6 +213,13 @@ class Actor(nn.Module):
             self.model = pretrain_or_model
             self.is_vlm = False
             self._packing_style = "automodel" if is_automodel_custom_model(self.model) else "hf"
+            if self.packing_samples and self._packing_style == "automodel":
+                if not _automodel_custom_supports_thd_packing(self.model):
+                    raise ValueError(
+                        "This pre-instantiated AutoModel custom model does not consume THD packing kwargs. "
+                        "Load from a checkpoint path so Actor can fall back to HF FlashAttention2 packing, "
+                        "or disable --fsdp.packing_samples."
+                    )
             if self.packing_samples and self._packing_style == "hf":
                 cfg = getattr(self.model, "config", None)
                 if getattr(cfg, "_attn_implementation", None) != "flash_attention_2" or not _has_hf_flash_attn_2():
@@ -186,6 +231,8 @@ class Actor(nn.Module):
 
         from openrlhf.utils.utils import convert_to_torch_dtype, ensure_torchvision_nms_stub, is_vlm_model
 
+        ensure_torchvision_nms_stub()
+
         # Trainable actor/critic models keep fp32 master weights; ref/reward can
         # opt into compute dtype to save memory. FSDP2 handles bf16 fwd/bwd via
         # MixedPrecisionPolicy. MoE checkpoints (Qwen3-MoE, GLM-MoE, ...) are a
@@ -194,9 +241,24 @@ class Actor(nn.Module):
         # MoE params in compute dtype to avoid mixed-dtype FSDP / grouped-GEMM
         # failures.
         compute_dtype = convert_to_torch_dtype(param_dtype)
-        _validate_attn_implementation(attn_implementation)
         is_moe = _detect_moe_arch(pretrain_or_model)
-        torch_dtype = compute_dtype if load_in_4bit or not use_fp32_master_weights else torch.float32
+        ep_active = moe_mesh is not None
+        auto_force_hf = force_hf_model or (is_moe and not ep_active)
+        if (
+            packing_samples
+            and not auto_force_hf
+            and not _will_use_hf_model(pretrain_or_model, False)
+            and not _automodel_arch_supports_thd_packing(pretrain_or_model)
+        ):
+            print(
+                "[Packing] AutoModel custom implementation for this architecture does not consume THD packing "
+                "kwargs; using HF FlashAttention2 varlen packed path."
+            )
+            auto_force_hf = True
+            attn_implementation = "flash_attention_2"
+
+        _validate_attn_implementation(attn_implementation)
+        torch_dtype = compute_dtype if not use_fp32_master_weights else torch.float32
         if is_moe and torch_dtype == torch.float32:
             torch_dtype = compute_dtype
         self.is_vlm = is_vlm_model(pretrain_or_model)
@@ -221,16 +283,6 @@ class Actor(nn.Module):
                     f"or CP>1 ({cp_size}); --fsdp.use_liger_kernel will be a no-op."
                 )
 
-        nf4_config = None
-        if load_in_4bit:
-            assert param_dtype == "bf16", "we only support bnb_4bit_compute_dtype = bf16"
-            nf4_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_compute_dtype=compute_dtype,
-            )
-
         peft_config = None
         if lora_rank > 0:
             peft_config = _build_peft_config_dict(lora_rank, lora_alpha, lora_dropout, target_modules)
@@ -239,7 +291,6 @@ class Actor(nn.Module):
         # to write adapter_config.json.
         self.peft_config = peft_config
 
-        ensure_torchvision_nms_stub()
         if self.is_vlm:
             from nemo_automodel import NeMoAutoModelForImageTextToText as ModelCls
         else:
@@ -254,8 +305,7 @@ class Actor(nn.Module):
         #    found'). Use HF reference path.
         #  AutoModel custom Qwen3 MoE currently does not advertise a TP plan,
         #  so TP+EP is intentionally left to AutoModel validation.
-        ep_active = moe_mesh is not None
-        force_hf = force_hf_model or (is_moe and not ep_active)
+        force_hf = auto_force_hf
         # Downgrade flash_attention_2 → sdpa for non-packing runs when
         # flash-attn is unavailable. Packing with flash_attention_2 cannot be
         # downgraded because SDPA would not preserve packed sequence
@@ -324,7 +374,6 @@ class Actor(nn.Module):
             trust_remote_code=True,
             torch_dtype=torch_dtype,
             attn_implementation=automodel_attn_implementation,
-            quantization_config=nf4_config,
             device_mesh=device_mesh,
             moe_mesh=moe_mesh,
             distributed_config=distributed_config,

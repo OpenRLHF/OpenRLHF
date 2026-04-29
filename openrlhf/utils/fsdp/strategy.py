@@ -691,11 +691,30 @@ class FsdpStrategy:
     def _get_ckpt_metric_path(self, ckpt_dir: str) -> str:
         return os.path.join(ckpt_dir, self.CKPT_METRIC_FILENAME)
 
+    @staticmethod
+    def _atomic_write_text(path: str, text: str) -> None:
+        tmp_path = f"{path}.tmp.{os.getpid()}"
+        with open(tmp_path, "w") as f:
+            f.write(text)
+        os.replace(tmp_path, path)
+
+    @staticmethod
+    def _atomic_write_json(path: str, payload) -> None:
+        import json
+
+        tmp_path = f"{path}.tmp.{os.getpid()}"
+        with open(tmp_path, "w") as f:
+            json.dump(payload, f)
+        os.replace(tmp_path, path)
+
     def _write_ckpt_metric(self, ckpt_dir: str, metric_value, metric_key=None) -> None:
         import json
 
-        with open(self._get_ckpt_metric_path(ckpt_dir), "w") as f:
+        path = self._get_ckpt_metric_path(ckpt_dir)
+        tmp_path = f"{path}.tmp.{os.getpid()}"
+        with open(tmp_path, "w") as f:
             json.dump({"metric_key": metric_key, "metric_value": metric_value}, f, indent=2, sort_keys=True)
+        os.replace(tmp_path, path)
 
     def _read_ckpt_metric(self, ckpt_dir: str) -> float | None:
         import json
@@ -723,6 +742,102 @@ class FsdpStrategy:
                     pass
         return total
 
+    @staticmethod
+    def _is_loadable_ckpt_dir(path: str) -> bool:
+        return os.path.isdir(path) and os.path.isdir(os.path.join(path, "model"))
+
+    def _checkpoint_candidates(self, ckpt_path: str, *, include_best: bool) -> list[tuple[str, float]]:
+        if not os.path.isdir(ckpt_path):
+            return []
+        candidates = []
+        for name in os.listdir(ckpt_path):
+            path = os.path.join(ckpt_path, name)
+            if not os.path.isdir(path):
+                continue
+            if not include_best and name.startswith("best"):
+                continue
+            if self._is_loadable_ckpt_dir(path):
+                candidates.append((path, os.path.getmtime(path)))
+        return candidates
+
+    def _resolve_ckpt_load_dir(self, ckpt_path: str) -> str | None:
+        latest = os.path.join(ckpt_path, "latest")
+        if os.path.isfile(latest):
+            with open(latest) as f:
+                tag = f.read().strip()
+            load_dir = os.path.join(ckpt_path, tag)
+            if self._is_loadable_ckpt_dir(load_dir):
+                if not tag.startswith("best"):
+                    return load_dir
+                regular = self._checkpoint_candidates(ckpt_path, include_best=False)
+                if regular:
+                    fallback = max(regular, key=lambda item: item[1])[0]
+                    self.print(
+                        f"Warning: latest points to best checkpoint {tag}; "
+                        f"resuming from newest regular checkpoint {os.path.basename(fallback)}."
+                    )
+                    return fallback
+                return load_dir
+            self.print(f"Warning: latest checkpoint {load_dir} is missing or incomplete; scanning checkpoints.")
+
+        regular = self._checkpoint_candidates(ckpt_path, include_best=False)
+        if regular:
+            fallback = max(regular, key=lambda item: item[1])[0]
+            self.print(f"Warning: latest file missing/stale; resuming from {os.path.basename(fallback)}.")
+            return fallback
+
+        best = self._checkpoint_candidates(ckpt_path, include_best=True)
+        best = [(path, mtime) for path, mtime in best if os.path.basename(path).startswith("best")]
+        if best:
+            fallback = max(best, key=lambda item: item[1])[0]
+            self.print(f"Warning: only best checkpoints found; resuming from {os.path.basename(fallback)}.")
+            return fallback
+        return None
+
+    def _prune_checkpoints(self, ckpt_path: str, current_tag: str, max_num: int, max_mem: int, is_best: bool) -> None:
+        import shutil
+
+        if is_best:
+            for name in os.listdir(ckpt_path):
+                path = os.path.join(ckpt_path, name)
+                if name.startswith("best") and name != current_tag and os.path.isdir(path):
+                    shutil.rmtree(path, ignore_errors=True)
+            return
+
+        max_size_bytes = None
+        if max_mem is not None and max_mem > 0 and not math.isinf(max_mem):
+            max_size_bytes = max_mem * 1024**3
+
+        while True:
+            subdirs = [
+                (os.path.join(ckpt_path, name), os.path.getmtime(os.path.join(ckpt_path, name)))
+                for name in os.listdir(ckpt_path)
+                if os.path.isdir(os.path.join(ckpt_path, name))
+            ]
+            regular_subdirs = [
+                (path, mtime)
+                for path, mtime in subdirs
+                if not os.path.basename(path).startswith("best") and os.path.basename(path) != current_tag
+            ]
+            current_regular_count = sum(1 for path, _ in subdirs if not os.path.basename(path).startswith("best"))
+            overflow_num = max(0, current_regular_count - max_num) if max_num and max_num > 0 else 0
+            overflow_mem = (
+                max_size_bytes is not None and sum(self._dir_size(path) for path, _ in subdirs) > max_size_bytes
+            )
+            if overflow_num == 0 and not overflow_mem:
+                break
+            candidates = sorted(
+                [(path, self._read_ckpt_metric(path), mtime) for path, mtime in regular_subdirs],
+                key=lambda item: (
+                    item[1] is not None,
+                    item[1] if item[1] is not None else float("-inf"),
+                    item[2],
+                ),
+            )
+            if not candidates:
+                break
+            shutil.rmtree(candidates[0][0], ignore_errors=True)
+
     def save_ckpt(
         self,
         model: nn.Module,
@@ -736,53 +851,13 @@ class FsdpStrategy:
         """DCP-format checkpoint for resumable training (model + optimizer +
         scheduler + RL stats). HF-safetensors export goes through ``save_model``.
         """
-        import json
-        import shutil
-
+        peft_config = getattr(model, "peft_config", None)
         model = self._unwrap_model(model)
         is_rank0 = (not dist.is_initialized()) or dist.get_rank() == 0
         is_best = tag.startswith("best")
 
         if is_rank0:
             os.makedirs(ckpt_path, exist_ok=True)
-            if is_best:
-                for name in os.listdir(ckpt_path):
-                    path = os.path.join(ckpt_path, name)
-                    if name.startswith("best") and name != tag and os.path.isdir(path):
-                        shutil.rmtree(path, ignore_errors=True)
-
-            max_size_bytes = None
-            if max_mem is not None and max_mem > 0 and not math.isinf(max_mem):
-                max_size_bytes = max_mem * 1024**3
-
-            while True:
-                subdirs = [
-                    (os.path.join(ckpt_path, name), os.path.getmtime(os.path.join(ckpt_path, name)))
-                    for name in os.listdir(ckpt_path)
-                    if os.path.isdir(os.path.join(ckpt_path, name))
-                ]
-                regular_subdirs = [
-                    (path, mtime) for path, mtime in subdirs if not os.path.basename(path).startswith("best")
-                ]
-                overflow_num = (
-                    max(0, len(regular_subdirs) - max_num + 1) if max_num and max_num > 0 and not is_best else 0
-                )
-                overflow_mem = (
-                    max_size_bytes is not None and sum(self._dir_size(path) for path, _ in subdirs) > max_size_bytes
-                )
-                if overflow_num == 0 and not overflow_mem:
-                    break
-                candidates = sorted(
-                    [(path, self._read_ckpt_metric(path), mtime) for path, mtime in regular_subdirs],
-                    key=lambda item: (
-                        item[1] is not None,
-                        item[1] if item[1] is not None else float("-inf"),
-                        item[2],
-                    ),
-                )
-                if not candidates:
-                    break
-                shutil.rmtree(candidates[0][0], ignore_errors=True)
 
         if dist.is_initialized():
             dist.barrier()
@@ -791,11 +866,14 @@ class FsdpStrategy:
         os.makedirs(save_dir, exist_ok=True)
 
         ckpt = self._build_checkpointer(save_dir, save_consolidated=False, model=model)
-        ckpt.save_model(model=model, weights_path=save_dir, tokenizer=None)
+        ckpt.save_model(model=model, weights_path=save_dir, tokenizer=None, peft_config=peft_config)
         optimizer = kwargs.get("optimizer")
         scheduler = kwargs.get("scheduler")
         if optimizer is not None:
             ckpt.save_optimizer(optimizer=optimizer, model=model, weights_path=save_dir, scheduler=scheduler)
+
+        if dist.is_initialized():
+            dist.barrier()
 
         if is_rank0:
             extra = {"client_state": dict(client_states or {})}
@@ -806,11 +884,11 @@ class FsdpStrategy:
                     "mean": float(getattr(cfg, "mean", 0.0)),
                     "std": float(getattr(cfg, "std", 1.0)),
                 }
-            with open(os.path.join(save_dir, "extra_state.json"), "w") as f:
-                json.dump(extra, f)
-            with open(os.path.join(ckpt_path, "latest"), "w") as f:
-                f.write(tag)
+            self._atomic_write_json(os.path.join(save_dir, "extra_state.json"), extra)
             self._write_ckpt_metric(save_dir, kwargs.get("metric_value"), kwargs.get("metric_key"))
+            if not is_best:
+                self._atomic_write_text(os.path.join(ckpt_path, "latest"), tag)
+            self._prune_checkpoints(ckpt_path, tag, max_num, max_mem, is_best)
         if dist.is_initialized():
             dist.barrier()
 
@@ -823,14 +901,8 @@ class FsdpStrategy:
 
         if not os.path.isdir(ckpt_path):
             return None, {}
-        latest = os.path.join(ckpt_path, "latest")
-        if os.path.isfile(latest):
-            with open(latest) as f:
-                tag = f.read().strip()
-            load_dir = os.path.join(ckpt_path, tag)
-        else:
-            return None, {}
-        if not os.path.isdir(load_dir):
+        load_dir = self._resolve_ckpt_load_dir(ckpt_path)
+        if load_dir is None:
             return None, {}
 
         wrapper = model

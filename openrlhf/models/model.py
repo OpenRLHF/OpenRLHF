@@ -6,7 +6,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-from transformers import AutoConfig, BitsAndBytesConfig
+from transformers import AutoConfig
 
 from openrlhf.utils.fsdp.packing import (
     is_automodel_custom_model,
@@ -33,7 +33,6 @@ def get_llm_for_sequence_regression(
     model_type: str,
     *,
     param_dtype: str = "bf16",
-    load_in_4bit: bool = False,
     lora_rank: int = 0,
     lora_alpha: int = 16,
     target_modules=None,
@@ -91,22 +90,12 @@ def get_llm_for_sequence_regression(
     compute_dtype = convert_to_torch_dtype(param_dtype)
     if use_fp32_master_weights is None:
         use_fp32_master_weights = model_type != "reward"
-    torch_dtype = compute_dtype if load_in_4bit or not use_fp32_master_weights else torch.float32
+    torch_dtype = compute_dtype if not use_fp32_master_weights else torch.float32
     # HF MoE sequence-classification checkpoints can mix bf16 experts with fp32
     # router/gate params. FSDP requires uniform original param dtype, so mirror
     # the actor path and avoid fp32 master weights for this case.
     if torch_dtype == torch.float32 and _detect_moe_arch(model_name_or_path):
         torch_dtype = compute_dtype
-    nf4_config = None
-    if load_in_4bit:
-        assert param_dtype == "bf16", "we only support bnb_4bit_compute_dtype = bf16"
-        nf4_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_compute_dtype=compute_dtype,
-        )
-
     peft_config = None
     if lora_rank > 0:
         peft_config = _build_peft_config_dict(lora_rank, lora_alpha, lora_dropout, target_modules)
@@ -130,7 +119,6 @@ def get_llm_for_sequence_regression(
     common_model_kwargs = {
         "trust_remote_code": True,
         "torch_dtype": torch_dtype,
-        "quantization_config": nf4_config,
         "device_mesh": device_mesh,
         "moe_mesh": moe_mesh,
         "distributed_config": distributed_config,

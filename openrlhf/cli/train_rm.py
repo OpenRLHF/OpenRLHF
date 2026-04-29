@@ -19,7 +19,6 @@ def train(args):
         "reward",
         attn_implementation=args.fsdp.attn_implementation,
         param_dtype=args.fsdp.param_dtype,
-        load_in_4bit=args.fsdp.load_in_4bit,
         lora_rank=args.fsdp.lora.rank,
         lora_alpha=args.fsdp.lora.alpha,
         target_modules=args.fsdp.lora.target_modules,
@@ -200,7 +199,6 @@ if __name__ == "__main__":
         default=False,
         help="Force HF SequenceClassification instead of trying AutoModel custom reward/critic first.",
     )
-    parser.add_argument("--fsdp.load_in_4bit", action="store_true", default=False)
     parser.add_argument("--fsdp.lora.rank", type=int, default=0)
     parser.add_argument("--fsdp.lora.alpha", type=int, default=16)
     parser.add_argument("--fsdp.lora.target_modules", type=str, nargs="*", default="all-linear")

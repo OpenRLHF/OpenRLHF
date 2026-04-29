@@ -95,7 +95,7 @@ OpenRLHF leverages [Ray](https://github.com/ray-project/ray) for efficient distr
 RLHF training spends **80% of the time on sample generation**. Powered by [vLLM](https://github.com/vllm-project/vllm) with Auto Tensor Parallelism (AutoTP) and Pipeline Parallelism (PP), OpenRLHF delivers high-throughput, memory-efficient generation.
 
 **FSDP2(AutoTP/EP/CP) - Memory-Efficient Training**
-Built on PyTorch FSDP2/DTensor with [NeMo AutoModel](https://docs.nvidia.com/nemo/automodel/) integration for model construction, TP/CP/EP mesh setup, activation checkpointing, LoRA/QLoRA wiring, and FSDP2 wrapping; OpenRLHF keeps the RL training loop, Ray orchestration, vLLM refit, and checkpoint flow thin.
+Built on PyTorch FSDP2/DTensor with [NeMo AutoModel](https://docs.nvidia.com/nemo/automodel/) integration for model construction, TP/CP/EP mesh setup, activation checkpointing, LoRA wiring, and FSDP2 wrapping; OpenRLHF keeps the RL training loop, Ray orchestration, vLLM refit, and checkpoint flow thin.
 
 **Transformers + AutoModel - Model Interface**
 Native integration with HuggingFace Transformers through AutoModel entry points such as `NeMoAutoModelForCausalLM.from_pretrained(...)` and `NeMoAutoModelForSequenceClassification.from_pretrained(...)`.
@@ -256,7 +256,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 
 **Model Support**
 - [VLM (Vision-Language Models)](./examples/scripts/train_vlm_math_hybrid_engine.sh) — single-turn and [multi-turn with image feedback](./examples/python/vlm_multiturn_agent.py) (`--data.image_key`, `--data.max_images_per_prompt`)
-- [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh) (`--fsdp.lora.rank`, `--fsdp.load_in_4bit`; RL currently rejects LoRA because vLLM adapter refit is not wired yet)
+- [LoRA](./examples/scripts/train_sft_mixtral_lora.sh) (`--fsdp.lora.rank`; RL currently rejects LoRA because vLLM adapter refit is not wired yet)
 - [Mixture of Experts (MoE)](./examples/test_scripts/train_sft_moe.sh) (`--actor.aux_loss_coef`)
 - SDPA / eager / FlashAttention2 / TE attention selection (`--fsdp.attn_implementation`); install `.[flash-attn-2]` for HF fallback packing with `flash_attention_2`, while AutoModel custom `te` packing requires Transformer Engine
 - HuggingFace chat templates (`--data.apply_chat_template`)
@@ -701,7 +701,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
 
 ### LoRA: Merging Adapters
 
-When using LoRA/QLoRA, OpenRLHF saves only the adapter weights. To deploy or continue training, merge the adapter with the base model:
+When using LoRA, OpenRLHF saves only the adapter weights. To deploy or continue training, merge the adapter with the base model:
 
 ```bash
 python -m openrlhf.cli.lora_combiner \

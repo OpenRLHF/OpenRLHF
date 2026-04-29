@@ -5,7 +5,12 @@ import pytest
 import torch
 from torch import nn
 
-from openrlhf.models.actor import _resolve_custom_backend_attn, _validate_attn_implementation
+from openrlhf.models.actor import (
+    _automodel_custom_supports_thd_packing,
+    _build_peft_config_dict,
+    _resolve_custom_backend_attn,
+    _validate_attn_implementation,
+)
 from openrlhf.models.model import CriticModel, get_llm_for_sequence_regression
 from openrlhf.utils.fsdp.packing import pack_padded_batch
 
@@ -28,6 +33,20 @@ def test_custom_thd_packing_requires_te_attention(attn_implementation):
 def test_validate_rejects_unknown_attention_backend():
     with pytest.raises(ValueError, match="Unsupported attention implementation"):
         _validate_attn_implementation("not_an_attention_backend")
+
+
+def test_lora_all_linear_list_sentinel_matches_all_linear():
+    cfg = _build_peft_config_dict(4, 8, 0.1, ["all-linear"])
+
+    assert cfg.match_all_linear is True
+    assert cfg.target_modules == []
+
+
+def test_lora_explicit_target_modules_are_preserved():
+    cfg = _build_peft_config_dict(4, 8, 0.1, ["q_proj", "v_proj"])
+
+    assert cfg.match_all_linear is False
+    assert cfg.target_modules == ["q_proj", "v_proj"]
 
 
 def test_pack_padded_batch_hf_flash_attention_kwargs():
@@ -103,6 +122,13 @@ class _FakeCustomNoHead(nn.Module):
 _FakeCustomNoHead.__module__ = "nemo_automodel.components.models.fake"
 
 
+class _FakeCustomThdModel(nn.Module):
+    pass
+
+
+_FakeCustomThdModel.__module__ = "nemo_automodel.components.models.fake"
+
+
 def _install_fake_sequence_classification_automodel(monkeypatch, calls, first_model=None):
     class FakeNeMoAutoModelForSequenceClassification:
         @classmethod
@@ -115,6 +141,19 @@ def _install_fake_sequence_classification_automodel(monkeypatch, calls, first_mo
     fake_nemo = types.ModuleType("nemo_automodel")
     fake_nemo.NeMoAutoModelForSequenceClassification = FakeNeMoAutoModelForSequenceClassification
     monkeypatch.setitem(sys.modules, "nemo_automodel", fake_nemo)
+
+
+def test_custom_model_thd_support_is_capability_checked(monkeypatch):
+    from openrlhf.models import actor as actor_mod
+
+    monkeypatch.setattr(
+        actor_mod,
+        "_class_source_supports_thd_packing",
+        lambda cls: cls is _FakeCustomThdModel,
+    )
+
+    assert _automodel_custom_supports_thd_packing(_FakeCustomThdModel())
+    assert not _automodel_custom_supports_thd_packing(_FakeCustomNoHead())
 
 
 def test_sequence_regression_hf_flash_packing_unpacks_values():

@@ -16,7 +16,6 @@ class RewardModelProxy:
             normalize_reward=args.reward.normalize_enable,
             attn_implementation=args.fsdp.attn_implementation,
             param_dtype=args.fsdp.param_dtype,
-            load_in_4bit=args.fsdp.load_in_4bit,
             device_mesh=None,
             distributed_config=None,
             activation_checkpointing=False,
@@ -81,7 +80,6 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=5000, help="Port number for the server")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="IP for the server")
 
-    parser.add_argument("--fsdp.load_in_4bit", action="store_true", default=False)
     parser.add_argument(
         "--fsdp.param_dtype", type=str, default="bf16", choices=["bf16", "fp16"], help="Model data type"
     )

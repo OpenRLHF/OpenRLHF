@@ -357,7 +357,7 @@ class SFTTrainer(ABC):
             tag = f"global_step{global_step}"
             if not self.disable_ds_ckpt:
                 self.strategy.save_ckpt(
-                    self.model.model,
+                    self.model,
                     args.ckpt.path,
                     tag,
                     args.ckpt.max_num,

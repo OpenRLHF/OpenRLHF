@@ -5,6 +5,11 @@ from datetime import datetime
 get_strategy = None
 
 
+def _fsdp_model_parallel_size(args) -> int:
+    fsdp = args.fsdp
+    return fsdp.cp_size * fsdp.tp_size * fsdp.ep_size
+
+
 def train(args):
     global get_strategy
 
@@ -85,13 +90,15 @@ def train(args):
             max_images_per_prompt=getattr(args.data, "max_images_per_prompt", 0),
         )
 
+    fsdp_mp_size = _fsdp_model_parallel_size(args)
+
     actor_model = RayActorGroup(
         args.actor.num_nodes,
         args.actor.num_gpus_per_node,
         PolicyModelActor,
         pg=pg,
         num_gpus_per_actor=0.2 if pg else 1,
-        duplicate_actors=args.fsdp.cp_size * args.fsdp.tp_size,
+        duplicate_actors=fsdp_mp_size,
     )
 
     if args.algo.kl.init_coef > 0:
@@ -101,7 +108,7 @@ def train(args):
             ReferenceModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.fsdp.cp_size * args.fsdp.tp_size,
+            duplicate_actors=fsdp_mp_size,
         )
     else:
         ref_model = None
@@ -127,7 +134,7 @@ def train(args):
             CriticModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.fsdp.cp_size * args.fsdp.tp_size,
+            duplicate_actors=fsdp_mp_size,
         )
     else:
         critic_model = None
@@ -140,7 +147,7 @@ def train(args):
             RewardModelActor,
             pg=pg,
             num_gpus_per_actor=0.2 if pg else 1,
-            duplicate_actors=args.fsdp.cp_size * args.fsdp.tp_size,
+            duplicate_actors=fsdp_mp_size,
         )
     else:
         reward_model = None
@@ -348,7 +355,6 @@ if __name__ == "__main__":
         default=False,
         help="Force CausalLM actor/reference loading through AutoModel's HF fallback path.",
     )
-    parser.add_argument("--fsdp.load_in_4bit", action="store_true", default=False)
     parser.add_argument("--fsdp.lora.rank", type=int, default=0)
     parser.add_argument("--fsdp.lora.alpha", type=int, default=16)
     parser.add_argument("--fsdp.lora.target_modules", type=str, nargs="*", default="all-linear")
@@ -623,7 +629,6 @@ if __name__ == "__main__":
             "RL with --fsdp.lora.rank > 0 is not supported yet: vLLM weight refit for FSDP/AutoModel "
             "does not know how to sync LoRA adapter updates."
         )
-
     if args.algo.advantage.estimator not in ["gae"]:
         args.critic.model_name_or_path = None
     elif args.critic.model_name_or_path is None:
@@ -746,7 +751,7 @@ if __name__ == "__main__":
 
     assert (
         args.rollout.n_samples_per_prompt * args.rollout.batch_size // args.rollout.micro_batch_size
-        >= args.actor.num_nodes * args.actor.num_gpus_per_node // args.fsdp.cp_size // args.fsdp.tp_size
+        >= args.actor.num_nodes * args.actor.num_gpus_per_node // _fsdp_model_parallel_size(args)
     ), "The number of sample batches must be greater than or equal to the effective number of actor processes."
 
     if args.use_ms:

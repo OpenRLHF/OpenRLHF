@@ -157,7 +157,6 @@ class ReferenceModelActor(BaseModelActor):
             pretrain,
             attn_implementation=strategy.args.fsdp.attn_implementation,
             param_dtype=strategy.args.fsdp.param_dtype,
-            load_in_4bit=strategy.args.fsdp.load_in_4bit,
             device_mesh=strategy.device_mesh,
             moe_mesh=strategy.moe_mesh,
             distributed_config=strategy.distributed_config,
@@ -216,7 +215,6 @@ class RewardModelActor(BaseModelActor):
             normalize_reward=strategy.args.reward.normalize_enable,
             attn_implementation=seq_reg_attn,
             param_dtype=strategy.args.fsdp.param_dtype,
-            load_in_4bit=strategy.args.fsdp.load_in_4bit,
             device_mesh=strategy.device_mesh,
             moe_mesh=strategy.moe_mesh,
             distributed_config=strategy.distributed_config,
@@ -289,7 +287,7 @@ class RayActorGroup:
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
         self.ray_actor_type = ray_actor_type
-        # duplicate actors is cp_size * tp_size
+        # duplicate actors is the model-parallel group size (cp * tp * ep)
         self.duplicate_actors = duplicate_actors
 
         # custom resources, see https://docs.ray.io/en/latest/ray-core/scheduling/resources.html

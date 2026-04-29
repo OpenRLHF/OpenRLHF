@@ -37,17 +37,27 @@ def _maybe_adapt_tensor_to_hf(model: torch.nn.Module, name: str, tensor: torch.T
 
     convert_one = getattr(adapter, "convert_single_tensor_to_hf", None)
     if convert_one is None:
-        raise RuntimeError(
-            f"{type(model).__name__} uses an AutoModel state_dict_adapter without "
-            "`convert_single_tensor_to_hf`; vLLM refit cannot safely map this custom "
-            "weight layout to HuggingFace/vLLM names. Use --fsdp.force_hf_model for RL runs."
-        )
+        raise _vllm_refit_unsupported_error(model)
     return convert_one(
         name,
         tensor,
         exclude_key_regex=r".*_extra_state.*",
         quantization=False,
     )
+
+
+def _vllm_refit_unsupported_error(model: torch.nn.Module) -> RuntimeError:
+    return RuntimeError(
+        f"{type(model).__name__} uses an AutoModel state_dict_adapter without "
+        "`convert_single_tensor_to_hf`; vLLM refit cannot safely map this custom "
+        "weight layout to HuggingFace/vLLM names. Use --fsdp.force_hf_model for RL runs."
+    )
+
+
+def _validate_vllm_refit_supported(model: torch.nn.Module) -> None:
+    adapter = getattr(model, "state_dict_adapter", None)
+    if adapter is not None and getattr(adapter, "convert_single_tensor_to_hf", None) is None:
+        raise _vllm_refit_unsupported_error(model)
 
 
 class ActorPPOTrainer(ABC):
@@ -591,7 +601,6 @@ class PolicyModelActor(BaseModelActor):
             pretrain,
             attn_implementation=strategy.args.fsdp.attn_implementation,
             param_dtype=strategy.args.fsdp.param_dtype,
-            load_in_4bit=strategy.args.fsdp.load_in_4bit,
             lora_rank=strategy.args.fsdp.lora.rank,
             lora_alpha=strategy.args.fsdp.lora.alpha,
             target_modules=strategy.args.fsdp.lora.target_modules,
@@ -607,6 +616,8 @@ class PolicyModelActor(BaseModelActor):
             use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
             freeze_visual_encoder=getattr(strategy.args.actor, "freeze_visual_encoder", False),
         )
+        if vllm_engines is not None:
+            _validate_vllm_refit_supported(actor.model)
         strategy.print(actor)
 
         # configure tokenizer
@@ -629,7 +640,6 @@ class PolicyModelActor(BaseModelActor):
                 pretrain,
                 attn_implementation=strategy.args.fsdp.attn_implementation,
                 param_dtype=strategy.args.fsdp.param_dtype,
-                load_in_4bit=strategy.args.fsdp.load_in_4bit,
                 device_mesh=strategy.device_mesh,
                 moe_mesh=strategy.moe_mesh,
                 distributed_config=strategy.distributed_config,
