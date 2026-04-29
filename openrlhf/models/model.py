@@ -9,8 +9,10 @@ import torch.nn as nn
 from transformers import AutoConfig
 
 from openrlhf.utils.fsdp.packing import (
+    cp_allgather_sequence,
     is_automodel_custom_model,
     pack_padded_batch,
+    pad_to_cp_multiple,
     unpack_to_padded,
     unshard_dtensor,
 )
@@ -20,6 +22,7 @@ from .actor import (
     _build_peft_config_dict,
     _detect_moe_arch,
     _has_hf_flash_attn_2,
+    _move_model_to_cpu_for_offload,
     _resolve_custom_backend_attn,
     _validate_attn_implementation,
     _will_use_hf_model,
@@ -219,8 +222,17 @@ def get_llm_for_sequence_regression(
     if init_value_head:
         _init_regression_head(model, value_head_prefix)
 
+    model = _move_model_to_cpu_for_offload(model, distributed_config)
+
     wrapper_cls = RewardModel if model_type == "reward" else CriticModel
-    wrapper = wrapper_cls(model, value_head_prefix, normalize_reward, forward_autocast_dtype, packing_samples)
+    wrapper = wrapper_cls(
+        model,
+        value_head_prefix,
+        normalize_reward,
+        forward_autocast_dtype,
+        packing_samples,
+        device_mesh=device_mesh,
+    )
     # Mirror iter-32 fix on Actor: stash peft_config on the wrapper so
     # strategy.save_model can forward it to AutoModel's PEFT save addon, which
     # needs it to write adapter_config.json (otherwise AttributeError on dim).
@@ -332,6 +344,7 @@ class _SequenceRegressionBase(nn.Module):
         normalize_reward: bool,
         forward_autocast_dtype: Optional[torch.dtype] = None,
         packing_samples: bool = False,
+        device_mesh=None,
     ) -> None:
         super().__init__()
         self.model = model
@@ -340,6 +353,10 @@ class _SequenceRegressionBase(nn.Module):
         self.normalize_reward = normalize_reward
         self._forward_autocast_dtype = forward_autocast_dtype
         self.packing_samples = packing_samples
+        self.device_mesh = device_mesh
+        mesh_dims = getattr(device_mesh, "mesh_dim_names", ()) or ()
+        self.cp_mesh = device_mesh["cp"] if device_mesh is not None and "cp" in mesh_dims else None
+        self.cp_size = self.cp_mesh.size() if self.cp_mesh is not None else 1
 
         self.register_buffer("mean", torch.zeros(1), persistent=False)
         self.register_buffer("std", torch.ones(1), persistent=False)
@@ -362,34 +379,58 @@ class _SequenceRegressionBase(nn.Module):
         model_attention_mask = attention_mask
         indices = None
         attn_kwargs = {}
+        cp_forward = False
+        cp_ctx_factory = nullcontext
         if self.packing_samples:
             model_input_ids, position_ids, _, indices, attn_kwargs = pack_padded_batch(
                 input_ids, attention_mask, style="hf"
             )
             model_attention_mask = None
+        elif self.cp_size > 1:
+            from nemo_automodel.components.distributed.cp_utils import make_cp_batch_and_ctx
+
+            model_input_ids = pad_to_cp_multiple(input_ids, self.cp_size, seq_dim=1, value=0)
+            model_attention_mask = pad_to_cp_multiple(attention_mask, self.cp_size, seq_dim=1, value=0)
+            position_ids = pad_to_cp_multiple(position_ids, self.cp_size, seq_dim=1, value=0)
+            cp_batch = {
+                "input_ids": model_input_ids,
+                "attention_mask": model_attention_mask,
+                "position_ids": position_ids,
+                "labels": model_input_ids,
+            }
+            cp_ctx_factory, cp_batch = make_cp_batch_and_ctx(self.device_mesh, cp_batch)
+            model_input_ids = cp_batch["input_ids"]
+            position_ids = cp_batch.get("position_ids")
+            model_attention_mask = cp_batch.get("attention_mask")
+            cp_forward = True
 
         autocast_ctx = (
             torch.autocast(device_type="cuda", dtype=self._forward_autocast_dtype)
             if self._forward_autocast_dtype is not None and input_ids.is_cuda
             else nullcontext()
         )
-        with autocast_ctx:
-            outputs = self.model(
-                input_ids=model_input_ids,
-                attention_mask=model_attention_mask,
-                position_ids=position_ids,
-                output_hidden_states=True,
-                use_cache=False,
-                return_dict=True,
-                **attn_kwargs,
-            )
-            hidden_states = getattr(outputs, "hidden_states", None)
-            if hidden_states is None:
-                raise RuntimeError("Sequence regression requires hidden_states; model did not return them.")
-            last_hidden_states = unshard_dtensor(hidden_states[-1])
-            values = _get_regression_head(self.model, self.value_head_prefix)(last_hidden_states).squeeze(-1)
-            if self.packing_samples:
-                values = unpack_to_padded(values, indices, batch, seqlen)
+        with cp_ctx_factory():
+            with autocast_ctx:
+                outputs = self.model(
+                    input_ids=model_input_ids,
+                    attention_mask=model_attention_mask,
+                    position_ids=position_ids,
+                    output_hidden_states=True,
+                    use_cache=False,
+                    return_dict=True,
+                    **attn_kwargs,
+                )
+                hidden_states = getattr(outputs, "hidden_states", None)
+                if hidden_states is None:
+                    raise RuntimeError("Sequence regression requires hidden_states; model did not return them.")
+                last_hidden_states = unshard_dtensor(hidden_states[-1])
+                values = _get_regression_head(self.model, self.value_head_prefix)(last_hidden_states).squeeze(-1)
+                if self.packing_samples:
+                    values = unpack_to_padded(values, indices, batch, seqlen)
+                elif cp_forward and values.shape[1] != seqlen:
+                    values = cp_allgather_sequence(values, self.cp_mesh.get_group(), seq_dim=1)
+                if cp_forward:
+                    values = values[:, :seqlen]
         return values.float(), outputs
 
 

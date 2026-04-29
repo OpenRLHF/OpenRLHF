@@ -31,6 +31,79 @@ def unshard_dtensor(tensor: torch.Tensor) -> torch.Tensor:
     return tensor.full_tensor() if isinstance(tensor, DTensor) else tensor
 
 
+def _cp_chunk_indices(cp_size: int) -> list[int]:
+    chunk_indices = []
+    for cp_rank in range(cp_size):
+        chunk_indices.append(cp_rank)
+        chunk_indices.append(2 * cp_size - cp_rank - 1)
+    return chunk_indices
+
+
+def pad_to_cp_multiple(tensor: torch.Tensor, cp_size: int, seq_dim: int = 1, value: int | float = 0) -> torch.Tensor:
+    """Right-pad a sequence tensor to DTensor CP's ``2 * cp_size`` requirement."""
+    if cp_size <= 1:
+        return tensor
+    multiple = 2 * cp_size
+    pad_len = (-tensor.shape[seq_dim]) % multiple
+    if pad_len == 0:
+        return tensor
+    pad_shape = list(tensor.shape)
+    pad_shape[seq_dim] = pad_len
+    pad = tensor.new_full(pad_shape, value)
+    return torch.cat([tensor, pad], dim=seq_dim)
+
+
+def _restore_cp_chunks(cp_rank_chunks: list[torch.Tensor], cp_size: int, seq_dim: int) -> torch.Tensor:
+    tensor_chunks = []
+    for rank_chunk in cp_rank_chunks:
+        tensor_chunks.extend(torch.chunk(rank_chunk, chunks=2, dim=seq_dim))
+
+    chunks_and_indices = list(zip(tensor_chunks, _cp_chunk_indices(cp_size)))
+    chunks_and_indices = sorted(chunks_and_indices, key=lambda item: item[1])
+    return torch.cat([chunk for chunk, _ in chunks_and_indices], dim=seq_dim)
+
+
+def cp_allgather_sequence(tensor: torch.Tensor, cp_group: dist.ProcessGroup, seq_dim: int = 1) -> torch.Tensor:
+    """Gather a CP-sharded sequence tensor and undo AutoModel's load-balanced chunk order.
+
+    AutoModel/DTensor context parallelism splits the sequence into ``2 * cp``
+    chunks and gives each CP rank a front/back pair. NeMo-RL restores token
+    order by gathering each rank's pair, splitting it back into two chunks, and
+    sorting by the original chunk index. PPO logprobs and reward/critic values
+    need this full-sequence view before applying OpenRLHF masks.
+    """
+    cp_size = dist.get_world_size(group=cp_group)
+    if cp_size <= 1:
+        return tensor
+    return _AllGatherCPSequence.apply(tensor, cp_group, seq_dim)
+
+
+class _AllGatherCPSequence(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, tensor: torch.Tensor, cp_group: dist.ProcessGroup, seq_dim: int):
+        cp_size = dist.get_world_size(group=cp_group)
+        cp_rank_chunks = [torch.empty_like(tensor) for _ in range(cp_size)]
+        dist.all_gather(cp_rank_chunks, tensor, group=cp_group)
+
+        ctx.cp_group = cp_group
+        ctx.seq_dim = seq_dim
+        return _restore_cp_chunks(cp_rank_chunks, cp_size, seq_dim)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        cp_size = dist.get_world_size(group=ctx.cp_group)
+        cp_rank = dist.get_rank(group=ctx.cp_group)
+        seq_dim = ctx.seq_dim
+
+        dist.all_reduce(grad_output, group=ctx.cp_group)
+        chunks = torch.chunk(grad_output, chunks=2 * cp_size, dim=seq_dim)
+        local = torch.cat(
+            [chunks[cp_rank], chunks[2 * cp_size - cp_rank - 1]],
+            dim=seq_dim,
+        )
+        return local, None, None
+
+
 def is_automodel_custom_model(model: Any) -> bool:
     """Best-effort check for AutoModel's native implementations.
 

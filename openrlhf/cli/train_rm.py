@@ -74,7 +74,8 @@ def train(args):
             dataset_split=args.eval.split,
         )
     else:
-        eval_data = train_data.select(range(min(args.data.max_samples, int(len(train_data) * 0.01))))
+        eval_count = min(args.data.max_samples, max(1, int(len(train_data) * 0.01))) if len(train_data) > 0 else 0
+        eval_data = train_data.select(range(eval_count))
 
     eval_dataset = RewardDataset(
         eval_data,
@@ -291,10 +292,11 @@ if __name__ == "__main__":
     if args.fsdp.pp_size > 1:
         raise NotImplementedError("OpenRLHF trainers are not pipeline-parallel aware yet; set --fsdp.pp_size 1")
 
-    if args.fsdp.cp_size > 1:
+    if args.fsdp.cp_size > 1 and args.fsdp.packing_samples:
         raise ValueError(
-            "Reward-model training with --fsdp.cp_size > 1 is not wired yet. SFT has the AutoModel CP "
-            "batch/context path, but sequence-regression scoring needs CP-aware value extraction before it is safe."
+            "Reward-model training with --fsdp.cp_size > 1 currently requires --fsdp.no_packing_samples. "
+            "The CP path is wired for padded sequence-regression batches; packed reward batches still need "
+            "CP-aware varlen value extraction."
         )
 
     if args.model.loss_type not in {"sigmoid", "log_exp", "logexp"}:

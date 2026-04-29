@@ -12,7 +12,7 @@ from openrlhf.models.actor import (
     _validate_attn_implementation,
 )
 from openrlhf.models.model import CriticModel, get_llm_for_sequence_regression
-from openrlhf.utils.fsdp.packing import pack_padded_batch
+from openrlhf.utils.fsdp.packing import _restore_cp_chunks, pack_padded_batch, pad_to_cp_multiple
 
 
 def test_custom_backend_maps_hf_attention_to_sdpa():
@@ -75,6 +75,45 @@ def test_pack_padded_batch_automodel_thd_kwargs():
     assert attn_kwargs["qkv_format"] == "thd"
     torch.testing.assert_close(attn_kwargs["cu_seqlens"], torch.tensor([0, 2, 5], dtype=torch.int32))
     assert attn_kwargs["max_seqlen"] == 3
+
+
+def test_restore_cp_chunks_undoes_automodel_load_balancing():
+    # cp_size=2 rank chunks carry original chunks [0, 3] and [1, 2].
+    rank0 = torch.tensor([[0, 3]])
+    rank1 = torch.tensor([[1, 2]])
+
+    restored = _restore_cp_chunks([rank0, rank1], cp_size=2, seq_dim=1)
+
+    torch.testing.assert_close(restored, torch.tensor([[0, 1, 2, 3]]))
+
+
+def test_pad_to_cp_multiple_right_pads_to_two_cp_chunks():
+    tensor = torch.tensor([[1, 2, 3, 4, 5]])
+
+    padded = pad_to_cp_multiple(tensor, cp_size=2, seq_dim=1, value=0)
+
+    torch.testing.assert_close(padded, torch.tensor([[1, 2, 3, 4, 5, 0, 0, 0]]))
+
+
+def test_vllm_refit_adapter_uses_to_hf_single_tensor_fallback():
+    from openrlhf.trainer.ray.ppo_actor import _maybe_adapt_tensor_to_hf
+
+    class Adapter:
+        def to_hf(self, state_dict, **kwargs):
+            assert kwargs["exclude_key_regex"] == r".*_extra_state.*"
+            return {f"hf.{k}": v + 1 for k, v in state_dict.items()}
+
+    class Model:
+        state_dict_adapter = Adapter()
+
+    tensor = torch.tensor([1.0])
+
+    converted = _maybe_adapt_tensor_to_hf(Model(), "model.weight", tensor)
+
+    assert len(converted) == 1
+    name, value = converted[0]
+    assert name == "hf.model.weight"
+    torch.testing.assert_close(value, torch.tensor([2.0]))
 
 
 class _FakeSequenceRegressionModel(nn.Module):

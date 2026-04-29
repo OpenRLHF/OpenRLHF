@@ -29,13 +29,17 @@ RUN set -eux && \
 COPY requirements.txt /tmp/openrlhf-requirements.txt
 
 RUN set -eux && \
-    python -m pip install --upgrade pip setuptools wheel && \
+    python -m pip install --upgrade pip setuptools && \
+    python -m pip install --ignore-installed --no-deps wheel && \
     (python -m pip uninstall -y xgboost pynvml opencv-python-headless || true) && \
     python -m pip install "dion @ git+https://github.com/microsoft/dion.git@28311d93686275f1baa7f0af57e6c4c61b75440b" && \
     python -m pip install vllm==0.20.0 && \
+    python -m pip install nvidia-cublas==13.4.1.1 && \
     python -m pip install --no-deps https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.4/flash_attn-2.8.3+cu130torch2.11-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl && \
     sed '/^dion @/d' /tmp/openrlhf-requirements.txt > /tmp/openrlhf-requirements-no-dion.txt && \
-    python -m pip install -r /tmp/openrlhf-requirements-no-dion.txt
+    python -m pip install --no-deps -r /tmp/openrlhf-requirements-no-dion.txt
+
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/cu13/lib:${LD_LIBRARY_PATH}
 
 COPY dockerfile/docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod a+x docker-entrypoint.sh

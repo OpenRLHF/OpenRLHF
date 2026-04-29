@@ -37,7 +37,11 @@ def _maybe_adapt_tensor_to_hf(model: torch.nn.Module, name: str, tensor: torch.T
 
     convert_one = getattr(adapter, "convert_single_tensor_to_hf", None)
     if convert_one is None:
-        raise _vllm_refit_unsupported_error(model)
+        convert_state = getattr(adapter, "to_hf", None)
+        if convert_state is None:
+            raise _vllm_refit_unsupported_error(model)
+        converted = convert_state({name: tensor}, exclude_key_regex=r".*_extra_state.*")
+        return list(converted.items())
     return convert_one(
         name,
         tensor,
@@ -56,7 +60,11 @@ def _vllm_refit_unsupported_error(model: torch.nn.Module) -> RuntimeError:
 
 def _validate_vllm_refit_supported(model: torch.nn.Module) -> None:
     adapter = getattr(model, "state_dict_adapter", None)
-    if adapter is not None and getattr(adapter, "convert_single_tensor_to_hf", None) is None:
+    if (
+        adapter is not None
+        and getattr(adapter, "convert_single_tensor_to_hf", None) is None
+        and getattr(adapter, "to_hf", None) is None
+    ):
         raise _vllm_refit_unsupported_error(model)
 
 
@@ -277,7 +285,7 @@ class ActorPPOTrainer(ABC):
                         window_step,
                         global_num_tokens=global_num_tokens,
                         global_batch_size=global_batch_size,
-                        loss_dp_size=self.strategy.dp_size,
+                        loss_dp_size=getattr(self.strategy, "dp_cp_size", self.strategy.dp_size),
                         loss_report_scale=1,
                         scale_loss_by_accumulation=False,
                     )
@@ -359,7 +367,7 @@ class ActorPPOTrainer(ABC):
         if global_batch_size is None:
             global_batch_size = self.strategy.global_token_count((experience.action_mask.sum(dim=-1) > 0).sum())
         if loss_dp_size is None:
-            loss_dp_size = self.strategy.dp_size
+            loss_dp_size = getattr(self.strategy, "dp_cp_size", self.strategy.dp_size)
 
         # loss function
         actor_loss, clip_ratio, ppo_kl, vllm_kl = self.actor_loss_fn(

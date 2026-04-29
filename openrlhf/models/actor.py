@@ -9,9 +9,11 @@ import torch.nn as nn
 from torch.distributed.tensor import DTensor
 
 from openrlhf.utils.fsdp.packing import (
+    cp_allgather_sequence,
     is_automodel_custom_model,
     log_probs_from_vocab_parallel_logits,
     pack_padded_batch,
+    pad_to_cp_multiple,
     unpack_to_padded,
     unshard_dtensor,
 )
@@ -59,6 +61,18 @@ def _validate_attn_implementation(attn_implementation: str) -> None:
         raise ValueError(f"Unsupported attention implementation {attn_implementation!r}; choose one of: {choices}")
     if attn_implementation == "te" and find_spec("transformer_engine") is None:
         raise ValueError("--fsdp.attn_implementation te requires transformer-engine to be installed.")
+
+
+def _uses_cpu_offload(distributed_config) -> bool:
+    return getattr(distributed_config, "offload_policy", None) is not None
+
+
+def _move_model_to_cpu_for_offload(model: nn.Module, distributed_config):
+    if not _uses_cpu_offload(distributed_config):
+        return model
+    for buffer in model.buffers():
+        buffer.data = buffer.data.to("cpu")
+    return model.to("cpu")
 
 
 def _resolve_custom_backend_attn(attn_implementation: str, packing_samples: bool) -> str:
@@ -208,6 +222,10 @@ class Actor(nn.Module):
         self.temperature = temperature
         self.packing_samples = packing_samples
         self._forward_autocast_dtype = None
+        self.device_mesh = device_mesh
+        mesh_dims = getattr(device_mesh, "mesh_dim_names", ()) or ()
+        self.cp_mesh = device_mesh["cp"] if device_mesh is not None and "cp" in mesh_dims else None
+        self.cp_size = self.cp_mesh.size() if self.cp_mesh is not None else 1
 
         if not isinstance(pretrain_or_model, str):
             self.model = pretrain_or_model
@@ -385,6 +403,7 @@ class Actor(nn.Module):
             force_hf=force_hf,
             **automodel_backend_kwargs,
         )
+        self.model = _move_model_to_cpu_for_offload(self.model, distributed_config)
         self._packing_style = "automodel" if is_automodel_custom_model(self.model) else "hf"
         if self.packing_samples and self._packing_style == "hf" and attn_implementation != "flash_attention_2":
             raise ValueError("HF packed sequence requires flash_attention_2.")
@@ -432,6 +451,8 @@ class Actor(nn.Module):
         batch, seqlen = sequences.size()
         attn_kwargs: dict = {}
         indices = None
+        cp_forward = False
+        cp_ctx_factory = nullcontext
         if self.packing_samples:
             sequences, position_ids, rolled_sequences, indices, attn_kwargs = pack_padded_batch(
                 sequences, attention_mask, style=self._packing_style
@@ -459,19 +480,42 @@ class Actor(nn.Module):
                     position_ids = attention_mask.long().cumsum(-1) - 1
                     position_ids.masked_fill_(attention_mask == 0, 1)
 
+            if self.cp_size > 1 and attention_mask is not None:
+                if mm_inputs:
+                    raise NotImplementedError("VLM inputs are not supported with --fsdp.cp_size > 1.")
+                from nemo_automodel.components.distributed.cp_utils import make_cp_batch_and_ctx
+
+                sequences = pad_to_cp_multiple(sequences, self.cp_size, seq_dim=1, value=0)
+                attention_mask = pad_to_cp_multiple(attention_mask, self.cp_size, seq_dim=1, value=0)
+                position_ids = pad_to_cp_multiple(position_ids, self.cp_size, seq_dim=1, value=0)
+                rolled_sequences = pad_to_cp_multiple(rolled_sequences, self.cp_size, seq_dim=1, value=0)
+                cp_batch = {
+                    "input_ids": sequences,
+                    "attention_mask": attention_mask,
+                    "position_ids": position_ids,
+                    "labels": rolled_sequences,
+                }
+                cp_ctx_factory, cp_batch = make_cp_batch_and_ctx(self.device_mesh, cp_batch)
+                sequences = cp_batch["input_ids"]
+                position_ids = cp_batch.get("position_ids")
+                rolled_sequences = cp_batch["labels"]
+                forward_attention_mask = cp_batch.get("attention_mask")
+                cp_forward = True
+
         autocast_ctx = (
             torch.autocast(device_type="cuda", dtype=self._forward_autocast_dtype)
             if self._forward_autocast_dtype is not None and sequences.is_cuda
             else nullcontext()
         )
-        with autocast_ctx:
-            output = self.model(
-                sequences,
-                attention_mask=forward_attention_mask,
-                position_ids=position_ids,
-                **attn_kwargs,
-                **mm_inputs,
-            )
+        with cp_ctx_factory():
+            with autocast_ctx:
+                output = self.model(
+                    sequences,
+                    attention_mask=forward_attention_mask,
+                    position_ids=position_ids,
+                    **attn_kwargs,
+                    **mm_inputs,
+                )
         # AutoModel's custom MoE/LLM models (e.g. Qwen3MoeForCausalLM) return a
         # raw logits Tensor; HF returns a ModelOutput with `.logits`. Normalize.
         output = _normalize_output(output)
@@ -481,6 +525,10 @@ class Actor(nn.Module):
         if return_entropy:
             assert return_output
             full_logits = unshard_dtensor(logits).to(torch.float32)
+            if cp_forward and not isinstance(logits, DTensor):
+                full_logits = cp_allgather_sequence(full_logits, self.cp_mesh.get_group(), seq_dim=1)
+            if cp_forward:
+                full_logits = full_logits[:, :seqlen]
             output["logits"] = full_logits
             entropy = compute_entropy(full_logits)
             if self.packing_samples:
@@ -492,6 +540,10 @@ class Actor(nn.Module):
             assert return_output
             if allgather_logits:
                 full_logits = full_logits if full_logits is not None else unshard_dtensor(logits).to(torch.float32)
+                if cp_forward and not isinstance(logits, DTensor):
+                    full_logits = cp_allgather_sequence(full_logits, self.cp_mesh.get_group(), seq_dim=1)
+                if cp_forward:
+                    full_logits = full_logits[:, :seqlen]
                 output["logits"] = (
                     unpack_to_padded(full_logits, indices, batch, seqlen) if self.packing_samples else full_logits
                 )
@@ -506,6 +558,10 @@ class Actor(nn.Module):
         else:
             full_logits = full_logits if full_logits is not None else logits.to(torch.float32)
             log_probs = log_probs_from_logits(full_logits, rolled_sequences, temperature=self.temperature)
+
+        if cp_forward:
+            log_probs = cp_allgather_sequence(log_probs, self.cp_mesh.get_group(), seq_dim=1)
+            log_probs = log_probs[:, :seqlen]
 
         if self.packing_samples:
             log_probs = unpack_to_padded(log_probs, indices, batch, seqlen)

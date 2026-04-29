@@ -110,7 +110,7 @@ class CriticPPOTrainer(ABC):
                         window_step,
                         global_num_tokens=global_num_tokens,
                         global_batch_size=global_batch_size,
-                        loss_dp_size=self.strategy.dp_size,
+                        loss_dp_size=getattr(self.strategy, "dp_cp_size", self.strategy.dp_size),
                         loss_report_scale=1,
                         scale_loss_by_accumulation=False,
                     )
@@ -172,7 +172,7 @@ class CriticPPOTrainer(ABC):
         if global_batch_size is None:
             global_batch_size = self.strategy.global_token_count((experience.action_mask.sum(dim=-1) > 0).sum())
         if loss_dp_size is None:
-            loss_dp_size = self.strategy.dp_size
+            loss_dp_size = getattr(self.strategy, "dp_cp_size", self.strategy.dp_size)
 
         # loss function
         critic_loss = self.critic_loss_fn(

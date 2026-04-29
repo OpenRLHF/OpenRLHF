@@ -666,10 +666,10 @@ if __name__ == "__main__":
             "You likely want to pass $'\\n' in Bash or \"`n\" in PowerShell."
         )
 
-    if args.fsdp.cp_size > 1:
+    if args.fsdp.cp_size > 1 and args.fsdp.packing_samples:
         raise ValueError(
-            "PPO with --fsdp.cp_size > 1 is not wired yet. SFT has the AutoModel CP batch/context path, "
-            "but PPO also needs CP-aware logprob/value redistribution like NeMo RL before it is safe."
+            "PPO with --fsdp.cp_size > 1 currently requires --fsdp.no_packing_samples. "
+            "The CP path is wired for padded batches; packed PPO still needs CP-aware varlen boundaries."
         )
 
     if args.train.dynamic_batch_enable:
