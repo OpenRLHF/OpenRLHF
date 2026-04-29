@@ -285,6 +285,11 @@ if __name__ == "__main__":
     if args.fsdp.pp_size > 1:
         raise NotImplementedError("OpenRLHF trainers are not pipeline-parallel aware yet; set --fsdp.pp_size 1")
 
+    if args.fsdp.cp_size > 1 and args.fsdp.packing_samples:
+        raise ValueError(
+            "--fsdp.cp_size > 1 is incompatible with --fsdp.packing_samples; disable packing for CP runs."
+        )
+
     if args.fsdp.packing_samples and args.fsdp.force_hf_model:
         raise ValueError(
             "--fsdp.packing_samples requires the AutoModel custom path; "

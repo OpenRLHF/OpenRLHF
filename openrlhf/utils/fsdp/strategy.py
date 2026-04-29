@@ -99,8 +99,15 @@ class FsdpStrategy:
             return None
 
         try:
+            try:
+                from nemo_automodel.components.distributed.mesh_utils import get_flat_mesh
+            except ImportError:
+                get_flat_mesh = None
+
+            if get_flat_mesh is not None:
+                return get_flat_mesh(self.device_mesh, name)
             return self.device_mesh[name]
-        except (KeyError, RuntimeError):
+        except (KeyError, RuntimeError, AttributeError):
             if required:
                 raise
             return None
@@ -148,6 +155,11 @@ class FsdpStrategy:
             dist.init_process_group(backend=backend, timeout=timeout)
 
         self.world_size = dist.get_world_size()
+        if self.world_size == 1 and self.cpu_offload:
+            raise NotImplementedError(
+                "CPU offload is not supported by AutoModel/FSDP2 on a single rank; "
+                "disable --fsdp.cpu_offload or launch with more than one rank."
+            )
         if self.pp_size > 1:
             raise NotImplementedError("OpenRLHF trainers are not pipeline-parallel aware yet; set --fsdp.pp_size 1")
 
@@ -226,6 +238,21 @@ class FsdpStrategy:
 
                 LinearLoRA.forward = _safe_lora_forward
                 LinearLoRA._orlhf_patched = True
+
+        # Allow DPO/actor+ref TP embedding calls to reuse equivalent vocab masks.
+        if self.tp_size > 1:
+            try:
+                from torch.distributed.tensor._ops import _mask_buffer
+            except ImportError:
+                _mask_buffer = None
+            if _mask_buffer is not None and not getattr(_mask_buffer.MaskBuffer, "_orlhf_patched", False):
+
+                def _safe_materialize(self, mask):
+                    self.data = mask
+                    self.refcount += 1
+
+                _mask_buffer.MaskBuffer.materialize_mask = _safe_materialize
+                _mask_buffer.MaskBuffer._orlhf_patched = True
 
         torch_dtype = _torch_dtype(self.param_dtype)
         # FSDP2 mixed precision: params/forward in bf16, gradient reduce-scatter

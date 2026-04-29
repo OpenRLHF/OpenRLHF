@@ -136,9 +136,7 @@ class SFTTrainer(ABC):
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
 
-            # AutoModel's CP recipe computes token denominators before entering
-            # the CP context, while every CP rank still has the full local
-            # sequence, then all-reduces over DP only.
+            # Count tokens before CP shards the local sequence.
             local_num_tokens += cp_loss_mask.sum()
             prepared.append(
                 {
@@ -153,7 +151,7 @@ class SFTTrainer(ABC):
         batch_num_tokens = self.strategy.global_token_count(local_num_tokens)
         return prepared, batch_num_tokens
 
-    def _run_microbatch(self, prepared_batch, batch_num_tokens, accum_steps):
+    def _run_microbatch(self, prepared_batch, batch_num_tokens, accum_steps, backward: bool = True):
         if isinstance(prepared_batch, dict):
             from nemo_automodel.components.distributed.cp_utils import make_cp_batch_and_ctx
 
@@ -190,6 +188,7 @@ class SFTTrainer(ABC):
                     batch_num_tokens,
                     accum_steps,
                     loss_dp_size=getattr(self.strategy, "dp_cp_size", self.strategy.dp_size),
+                    backward=backward,
                 )
 
         inputs, attention_mask, shifted_loss_mask = prepared_batch
@@ -203,6 +202,7 @@ class SFTTrainer(ABC):
             batch_num_tokens,
             accum_steps,
             loss_dp_size=self.strategy.dp_size,
+            backward=backward,
         )
 
     def _loss_backward_and_logs(
@@ -213,6 +213,7 @@ class SFTTrainer(ABC):
         batch_num_tokens,
         accum_steps,
         loss_dp_size,
+        backward: bool = True,
     ):
         aux_loss = getattr(output, "aux_loss", 0) if self.aux_loss else 0
         gpt_loss = self.loss_fn(
@@ -223,20 +224,20 @@ class SFTTrainer(ABC):
         )
         aux_term = aux_loss * self.args.model.aux_loss_coef / accum_steps
         loss = gpt_loss + aux_term
-        self.strategy.backward(
-            loss,
-            self.model,
-            self.optimizer,
-            scale_loss_by_accumulation=False,
-        )
-        self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
+        if backward:
+            self.strategy.backward(
+                loss,
+                self.model,
+                self.optimizer,
+                scale_loss_by_accumulation=False,
+            )
+            self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
         reported_gpt_loss = gpt_loss.detach()
-        logs_dict = {
-            "gpt_loss": reported_gpt_loss.item(),
-            "lr": self.scheduler.get_last_lr()[0],
-            "grad_norm": self.strategy.get_grad_norm(self.model),
-        }
+        logs_dict = {"gpt_loss": reported_gpt_loss.item()}
+        if backward:
+            logs_dict["lr"] = self.scheduler.get_last_lr()[0]
+            logs_dict["grad_norm"] = self.strategy.get_grad_norm(self.model)
         if self.aux_loss:
             logs_dict["aux_loss"] = aux_loss.item() if torch.is_tensor(aux_loss) else float(aux_loss)
         return logs_dict, reported_gpt_loss.item()
@@ -381,7 +382,24 @@ class SFTTrainer(ABC):
             )
 
             device = next(self.model.parameters()).device
-            for inputs, attention_masks, loss_masks in eval_dataloader:
+            for batch in eval_dataloader:
+                if self.cp_enabled:
+                    prepared, batch_num_tokens = self._prepare_accum_window([batch], device)
+                    _, reported_gpt_loss = self._run_microbatch(
+                        prepared[0],
+                        batch_num_tokens,
+                        accum_steps=1,
+                        backward=False,
+                    )
+                    times += 1
+                    loss_sum += reported_gpt_loss
+                    bar_dict = {"eval gpt_loss": loss_sum / times}
+                    step_bar.update()
+                    logs = self.strategy.all_reduce(bar_dict)
+                    step_bar.set_postfix(logs)
+                    continue
+
+                inputs, attention_masks, loss_masks = batch
                 inputs = inputs.to(device).squeeze(1)
                 attention_mask = attention_masks.to(device).squeeze(1)
                 loss_mask = loss_masks.to(device).squeeze(1)

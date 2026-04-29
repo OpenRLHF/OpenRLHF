@@ -247,10 +247,28 @@ class Actor(nn.Module):
             )
 
         automodel_backend_kwargs = {}
-        if attn_implementation in {"te", "sdpa", "flex"} and not use_hf_model:
+        if not use_hf_model:
+            # Always pass an explicit BackendConfig on the AutoModel-custom path
+            # so we control rope_fusion / linear / rms_norm backends. Default
+            # `BackendConfig` auto-enables `rope_fusion=True` when
+            # `transformer_engine` is importable (HAVE_TE) — but on environments
+            # where TE is half-installed (wheel present, .so fails to load due
+            # to cuBLAS ABI mismatch), the runtime call to
+            # `transformer_engine.pytorch.attention.rope` then explodes inside
+            # the forward. Force rope_fusion off whenever the user isn't asking
+            # for TE attention; this keeps non-TE configs working in mixed
+            # CUDA-version images.
             from nemo_automodel.components.models.common.utils import BackendConfig
 
-            automodel_backend_kwargs["backend"] = BackendConfig(attn=attn_implementation)
+            using_te = attn_implementation == "te"
+            backend_kwargs = {}
+            if attn_implementation in {"te", "sdpa", "flex"}:
+                backend_kwargs["attn"] = attn_implementation
+            backend_kwargs["rope_fusion"] = using_te
+            if not using_te:
+                backend_kwargs["linear"] = "torch"
+                backend_kwargs["experts"] = "torch_mm"
+            automodel_backend_kwargs["backend"] = BackendConfig(**backend_kwargs)
 
         self.model = ModelCls.from_pretrained(
             pretrain_or_model,
