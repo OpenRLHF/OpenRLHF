@@ -148,7 +148,12 @@ def get_llm_for_sequence_regression(
         _init_regression_head(model, value_head_prefix)
 
     wrapper_cls = RewardModel if model_type == "reward" else CriticModel
-    return wrapper_cls(model, value_head_prefix, normalize_reward, forward_autocast_dtype)
+    wrapper = wrapper_cls(model, value_head_prefix, normalize_reward, forward_autocast_dtype)
+    # Mirror iter-32 fix on Actor: stash peft_config on the wrapper so
+    # strategy.save_model can forward it to AutoModel's PEFT save addon, which
+    # needs it to write adapter_config.json (otherwise AttributeError on dim).
+    wrapper.peft_config = peft_config
+    return wrapper
 
 
 def _init_regression_head(model: nn.Module, value_head_prefix: str) -> None:

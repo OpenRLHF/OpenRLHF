@@ -184,6 +184,49 @@ class FsdpStrategy:
                 _TPLinear.forward = _safe_forward
                 _TPLinear._orlhf_patched = True
 
+            # Same view-vs-DTensor bug fires inside AutoModel's LinearLoRA.forward
+            # at the `F.linear(x, self.weight, bias)` call when LoRA adapters
+            # wrap TP-sharded linears: the SP-only `_x_needs_bmm` heuristic at
+            # lora.py:258 ignores TP shards (it only catches `_Shard.dim < 2`).
+            # F.linear internally view()s [b,s,h]→[b*s,h] which fails on a
+            # DTensor sharded across the hidden dim. Fix: precompute the base
+            # linear via bmm/mm for any DTensor input, then use upstream's
+            # `super_fwd` hook so the LoRA postlude (lora_A/B, dropout, scale,
+            # DoRA) executes unchanged.
+            try:
+                from nemo_automodel.components._peft.lora import LinearLoRA
+            except ImportError:
+                LinearLoRA = None
+            if LinearLoRA is not None and not getattr(LinearLoRA, "_orlhf_patched", False):
+                from torch.distributed.tensor import DTensor
+
+                _orig_lora_forward = LinearLoRA.forward
+
+                def _safe_lora_forward(self, x):
+                    if isinstance(x, DTensor):
+                        bias = self.bias if (self.bias is not None and self.bias.numel() > 0) else None
+                        if x.dim() == 3:
+                            b = x.shape[0]
+                            res = torch.bmm(x, self.weight.t().unsqueeze(0).expand(b, -1, -1))
+                        else:
+                            res = torch.mm(x, self.weight.t())
+                        if bias is not None:
+                            res = res + bias
+                        prev_super_fwd = getattr(self, "super_fwd", None)
+                        self.super_fwd = lambda _x, _res=res: _res
+                        try:
+                            return _orig_lora_forward(self, x)
+                        finally:
+                            if prev_super_fwd is None:
+                                if hasattr(self, "super_fwd"):
+                                    delattr(self, "super_fwd")
+                            else:
+                                self.super_fwd = prev_super_fwd
+                    return _orig_lora_forward(self, x)
+
+                LinearLoRA.forward = _safe_lora_forward
+                LinearLoRA._orlhf_patched = True
+
         torch_dtype = _torch_dtype(self.param_dtype)
         # FSDP2 mixed precision: params/forward in bf16, gradient reduce-scatter
         # in fp32. Reducing in bf16 accumulates rounding error across DP ranks
@@ -538,6 +581,10 @@ class FsdpStrategy:
         # consolidated HF safetensors that vLLM can hot-load.
         from nemo_automodel.components.checkpoint.checkpointing import Checkpointer, CheckpointingConfig
 
+        # Pull peft_config off the wrapper *before* unwrap (Actor stashes it on
+        # itself, not on .model). AutoModel's PEFT save addon needs the original
+        # config to write adapter_config.json.
+        peft_config = getattr(model, "peft_config", None)
         model = self._unwrap_model(model)
         model_cache_dir, model_repo_id = self._checkpoint_source(model)
 
@@ -559,7 +606,7 @@ class FsdpStrategy:
             pp_rank=0,
             moe_mesh=self.moe_mesh,
         )
-        ckpt.save_model(model=model, weights_path=output_dir, tokenizer=tokenizer)
+        ckpt.save_model(model=model, weights_path=output_dir, tokenizer=tokenizer, peft_config=peft_config)
         if dist.is_initialized():
             dist.barrier()
         self._promote_hf_export(output_dir)

@@ -63,17 +63,22 @@ def _will_use_hf_model(pretrain_or_model, force_hf: bool, default: bool = True) 
 
 
 def _build_peft_config_dict(rank: int, alpha: int, dropout: float, target_modules):
-    """Map OpenRLHF lora.* args onto AutoModel's PeftConfig schema.
+    """Map OpenRLHF lora.* args onto AutoModel's PeftConfig dataclass.
 
     Field-name gotcha: AutoModel renames `r` (LoRA rank) → `dim`.
+    Returns a ``PeftConfig`` instance — Automodel's downstream
+    ``apply_lora_to_linear_modules`` does attribute access on the config, so a
+    plain dict trips ``AttributeError: 'dict' object has no attribute …``.
     """
+    from nemo_automodel.components._peft.lora import PeftConfig
+
     base = {"dim": rank, "alpha": alpha, "dropout": dropout}
     # Map HF-peft sentinel "all-linear" → AutoModel's `match_all_linear=True`.
     if not target_modules or target_modules == "all-linear":
-        return {**base, "match_all_linear": True}
+        return PeftConfig.from_dict({**base, "match_all_linear": True})
     if isinstance(target_modules, str):
         target_modules = [target_modules]
-    return {**base, "target_modules": list(target_modules)}
+    return PeftConfig.from_dict({**base, "target_modules": list(target_modules)})
 
 
 class _AttrDict(dict):
@@ -193,6 +198,10 @@ class Actor(nn.Module):
         peft_config = None
         if lora_rank > 0:
             peft_config = _build_peft_config_dict(lora_rank, lora_alpha, lora_dropout, target_modules)
+        # Stash on the wrapper so the strategy's save_model path can forward it
+        # to AutoModel's Checkpointer; the PEFT addon needs the original config
+        # to write adapter_config.json.
+        self.peft_config = peft_config
 
         ensure_torchvision_nms_stub()
         if self.is_vlm:
