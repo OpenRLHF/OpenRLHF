@@ -22,6 +22,7 @@ class RewardModelProxy:
             activation_checkpointing=False,
             value_head_prefix=args.fsdp.value_head_prefix,
             packing_samples=args.fsdp.packing_samples,
+            force_hf_model=args.fsdp.force_hf_model,
             use_liger_kernel=args.fsdp.use_liger_kernel,
         )
         self.reward_model.eval()
@@ -93,6 +94,12 @@ if __name__ == "__main__":
     parser.add_argument("--fsdp.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
     parser.add_argument("--data.disable_fast_tokenizer", action="store_true", default=False)
     parser.add_argument("--fsdp.packing_samples", action="store_true", default=False)
+    parser.add_argument(
+        "--fsdp.force_hf_model",
+        action="store_true",
+        default=False,
+        help="Force HF SequenceClassification instead of trying AutoModel custom reward/critic first.",
+    )
     parser.add_argument("--batch_size", type=int, default=None)
 
     parser.add_argument("--use_ms", action="store_true", default=False)

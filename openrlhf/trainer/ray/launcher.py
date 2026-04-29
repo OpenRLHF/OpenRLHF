@@ -224,6 +224,7 @@ class RewardModelActor(BaseModelActor):
             activation_checkpointing=False,
             value_head_prefix=strategy.args.fsdp.value_head_prefix,
             packing_samples=strategy.args.fsdp.packing_samples,
+            force_hf_model=strategy.args.fsdp.force_hf_model,
             use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
             use_fp32_master_weights=False,
         )

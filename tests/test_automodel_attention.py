@@ -1,3 +1,6 @@
+import sys
+import types
+
 import pytest
 import torch
 from torch import nn
@@ -66,12 +69,52 @@ class _FakeSequenceRegressionModel(nn.Module):
     def forward(self, input_ids, attention_mask=None, position_ids=None, **kwargs):
         self.forward_kwargs = {
             "input_ids": input_ids.detach().clone(),
-            "attention_mask": attention_mask.detach().clone(),
+            "attention_mask": None if attention_mask is None else attention_mask.detach().clone(),
             "position_ids": position_ids.detach().clone(),
             **kwargs,
         }
         hidden = input_ids.float().unsqueeze(-1)
         return type("Output", (), {"hidden_states": (hidden,)})()
+
+
+class _FakeConfig:
+    hidden_size = 1
+
+    def to_dict(self):
+        return {}
+
+
+class _FakeHFSequenceRegressionModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.config = _FakeConfig()
+        self.score = nn.Linear(1, 1, bias=False)
+
+    def forward(self, *args, **kwargs):
+        raise AssertionError("not used by construction tests")
+
+
+class _FakeCustomNoHead(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.config = _FakeConfig()
+
+
+_FakeCustomNoHead.__module__ = "nemo_automodel.components.models.fake"
+
+
+def _install_fake_sequence_classification_automodel(monkeypatch, calls, first_model=None):
+    class FakeNeMoAutoModelForSequenceClassification:
+        @classmethod
+        def from_pretrained(cls, *args, **kwargs):
+            calls.append(kwargs)
+            if not kwargs["force_hf"] and first_model is not None:
+                return first_model()
+            return _FakeHFSequenceRegressionModel()
+
+    fake_nemo = types.ModuleType("nemo_automodel")
+    fake_nemo.NeMoAutoModelForSequenceClassification = FakeNeMoAutoModelForSequenceClassification
+    monkeypatch.setitem(sys.modules, "nemo_automodel", fake_nemo)
 
 
 def test_sequence_regression_hf_flash_packing_unpacks_values():
@@ -84,8 +127,48 @@ def test_sequence_regression_hf_flash_packing_unpacks_values():
 
     torch.testing.assert_close(values, torch.tensor([[1.0, 2.0, 0.0], [3.0, 4.0, 5.0]]))
     torch.testing.assert_close(model.forward_kwargs["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
+    assert model.forward_kwargs["attention_mask"] is None
     torch.testing.assert_close(model.forward_kwargs["position_ids"], torch.tensor([[0, 1, 0, 1, 2]]))
     torch.testing.assert_close(model.forward_kwargs["cu_seq_lens_q"], torch.tensor([0, 2, 5], dtype=torch.int32))
+
+
+def test_sequence_regression_custom_without_head_falls_back_to_hf(monkeypatch):
+    from openrlhf.models import model as model_mod
+
+    calls = []
+    _install_fake_sequence_classification_automodel(monkeypatch, calls, first_model=_FakeCustomNoHead)
+    monkeypatch.setattr(model_mod.AutoConfig, "from_pretrained", lambda *args, **kwargs: _FakeConfig())
+    monkeypatch.setattr(model_mod, "_will_use_hf_model", lambda *args, **kwargs: False)
+    monkeypatch.setattr(model_mod, "_custom_sequence_regression_backend_kwargs", lambda attn: ({}, "sdpa"))
+
+    wrapper = get_llm_for_sequence_regression("dummy-model", "reward", attn_implementation="sdpa")
+
+    assert isinstance(wrapper.model, _FakeHFSequenceRegressionModel)
+    assert [call["force_hf"] for call in calls] == [False, True]
+    assert [call["has_packed_sequence"] for call in calls] == [False, False]
+
+
+def test_sequence_regression_packing_skips_custom_and_uses_hf_flash(monkeypatch):
+    from openrlhf.models import model as model_mod
+
+    calls = []
+    _install_fake_sequence_classification_automodel(monkeypatch, calls, first_model=_FakeCustomNoHead)
+    monkeypatch.setattr(model_mod.AutoConfig, "from_pretrained", lambda *args, **kwargs: _FakeConfig())
+    monkeypatch.setattr(model_mod, "_will_use_hf_model", lambda *args, **kwargs: False)
+    monkeypatch.setattr(model_mod, "_has_hf_flash_attn_2", lambda: True)
+
+    wrapper = get_llm_for_sequence_regression(
+        "dummy-model",
+        "reward",
+        packing_samples=True,
+        attn_implementation="te",
+    )
+
+    assert isinstance(wrapper.model, _FakeHFSequenceRegressionModel)
+    assert len(calls) == 1
+    assert calls[0]["force_hf"] is True
+    assert calls[0]["has_packed_sequence"] is True
+    assert calls[0]["attn_implementation"] == "flash_attention_2"
 
 
 def test_sequence_regression_packing_requires_flash_attention_2():

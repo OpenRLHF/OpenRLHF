@@ -32,6 +32,7 @@ def train(args):
         init_value_head=True,
         value_head_prefix=args.fsdp.value_head_prefix,
         packing_samples=args.fsdp.packing_samples,
+        force_hf_model=args.fsdp.force_hf_model,
         use_liger_kernel=args.fsdp.use_liger_kernel,
         use_fp32_master_weights=False,
     )
@@ -193,6 +194,12 @@ if __name__ == "__main__":
     )
     parser.add_argument("--fsdp.use_liger_kernel", action="store_true", default=False, help="Enable Liger Kernel")
     parser.add_argument("--fsdp.packing_samples", action="store_true", default=False)
+    parser.add_argument(
+        "--fsdp.force_hf_model",
+        action="store_true",
+        default=False,
+        help="Force HF SequenceClassification instead of trying AutoModel custom reward/critic first.",
+    )
     parser.add_argument("--fsdp.load_in_4bit", action="store_true", default=False)
     parser.add_argument("--fsdp.lora.rank", type=int, default=0)
     parser.add_argument("--fsdp.lora.alpha", type=int, default=16)

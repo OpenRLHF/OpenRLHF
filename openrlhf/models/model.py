@@ -1,3 +1,6 @@
+import copy
+import gc
+import inspect
 from contextlib import nullcontext
 from typing import Optional
 
@@ -5,14 +8,21 @@ import torch
 import torch.nn as nn
 from transformers import AutoConfig, BitsAndBytesConfig
 
-from openrlhf.utils.fsdp.packing import pack_padded_batch, unpack_to_padded, unshard_dtensor
+from openrlhf.utils.fsdp.packing import (
+    is_automodel_custom_model,
+    pack_padded_batch,
+    unpack_to_padded,
+    unshard_dtensor,
+)
 from openrlhf.utils.logging_utils import init_logger
 
 from .actor import (
     _build_peft_config_dict,
     _detect_moe_arch,
     _has_hf_flash_attn_2,
+    _resolve_custom_backend_attn,
     _validate_attn_implementation,
+    _will_use_hf_model,
 )
 
 logger = init_logger(__name__)
@@ -38,6 +48,7 @@ def get_llm_for_sequence_regression(
     init_value_head: bool = False,
     value_head_prefix: str = "score",
     packing_samples: bool = False,
+    force_hf_model: bool = False,
     use_liger_kernel: bool = False,
     use_fp32_master_weights: Optional[bool] = None,
     **kwargs,
@@ -45,12 +56,7 @@ def get_llm_for_sequence_regression(
     """Build a reward or critic model with an AutoModel-managed regression head."""
     assert model_type in ("critic", "reward"), f"invalid model_type: {model_type}"
 
-    _validate_attn_implementation(attn_implementation)
-    if attn_implementation == "flex":
-        raise ValueError(
-            "--fsdp.attn_implementation flex is only supported on AutoModel custom CausalLM models; "
-            "reward/critic sequence-regression models use the HF fallback path."
-        )
+    te_unavailable_reason = _validate_sequence_regression_attn(attn_implementation)
     mesh_dims = getattr(device_mesh, "mesh_dim_names", ()) or ()
     cp_size = device_mesh["cp"].size() if device_mesh is not None and "cp" in mesh_dims else 1
     if packing_samples:
@@ -59,16 +65,17 @@ def get_llm_for_sequence_regression(
                 "--fsdp.packing_samples for reward/critic sequence-regression currently supports CP size 1 only. "
                 "AutoModel custom TE packed value heads need an upstream custom SequenceClassification/value-head path."
             )
-        if attn_implementation != "flash_attention_2":
+        if attn_implementation not in {"te", "flash_attention_2"}:
             raise NotImplementedError(
                 "--fsdp.packing_samples for reward/critic sequence-regression currently requires "
-                "--fsdp.attn_implementation flash_attention_2. AutoModel custom TE packing is available for "
-                "CausalLM actor/reference forwards, but not for sequence-regression value heads yet."
+                "--fsdp.attn_implementation te or flash_attention_2. AutoModel custom TE packing is available "
+                "for CausalLM actor/reference forwards; incompatible reward/critic models fall back to "
+                "HF flash_attention_2 packing."
             )
         if not _has_hf_flash_attn_2():
             raise ValueError(
-                "--fsdp.packing_samples with reward/critic sequence-regression and flash_attention_2 "
-                "requires flash-attn to be installed."
+                "--fsdp.packing_samples with reward/critic sequence-regression falls back to HF "
+                "flash_attention_2 packing and requires flash-attn to be installed."
             )
 
     config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
@@ -90,18 +97,6 @@ def get_llm_for_sequence_regression(
     # the actor path and avoid fp32 master weights for this case.
     if torch_dtype == torch.float32 and _detect_moe_arch(model_name_or_path):
         torch_dtype = compute_dtype
-    # Downgrade non-packed flash_attention_2 → sdpa whenever flash_attn isn't
-    # installed. Packed sequence-regression validated availability above.
-    if attn_implementation == "flash_attention_2" and not _has_hf_flash_attn_2():
-        print("[Attn] flash_attn not installed; downgrading flash_attention_2 → sdpa.")
-        attn_implementation = "sdpa"
-        config._attn_implementation = attn_implementation
-    forward_autocast_dtype = (
-        compute_dtype
-        if torch_dtype == torch.float32 and attn_implementation in ("flash_attention_2", "flash_attention_3")
-        else None
-    )
-
     nf4_config = None
     if load_in_4bit:
         assert param_dtype == "bf16", "we only support bnb_4bit_compute_dtype = bf16"
@@ -128,32 +123,102 @@ def get_llm_for_sequence_regression(
             )
     from nemo_automodel import NeMoAutoModelForSequenceClassification
 
-    # AutoModel also handles HF SequenceClassification classes such as
-    # Qwen3ForSequenceClassification (including the replicated `score` TP plan),
-    # but its custom registry is mostly CausalLM-oriented. When a base config
-    # says e.g. "LlamaForCausalLM", NeMoAutoModelForSequenceClassification
-    # would otherwise instantiate the custom causal model and no regression
-    # head would exist. Force the HF SequenceClassification path to preserve
-    # OpenRLHF's reward/critic semantics.
-    force_hf = True
+    model_extra_kwargs = dict(kwargs)
+    for reserved_kwarg in ("attn_implementation", "config", "force_hf", "has_packed_sequence"):
+        model_extra_kwargs.pop(reserved_kwarg, None)
 
-    model = NeMoAutoModelForSequenceClassification.from_pretrained(
-        model_name_or_path,
-        config=config,
-        trust_remote_code=True,
-        torch_dtype=torch_dtype,
-        attn_implementation=attn_implementation,
-        quantization_config=nf4_config,
-        device_mesh=device_mesh,
-        moe_mesh=moe_mesh,
-        distributed_config=distributed_config,
-        moe_config=moe_config,
-        activation_checkpointing=activation_checkpointing,
-        peft_config=peft_config,
-        use_liger_kernel=use_liger_kernel,
-        has_packed_sequence=packing_samples,
-        force_hf=force_hf,
-        **kwargs,
+    common_model_kwargs = {
+        "trust_remote_code": True,
+        "torch_dtype": torch_dtype,
+        "quantization_config": nf4_config,
+        "device_mesh": device_mesh,
+        "moe_mesh": moe_mesh,
+        "distributed_config": distributed_config,
+        "moe_config": moe_config,
+        "activation_checkpointing": activation_checkpointing,
+        "peft_config": peft_config,
+        "use_liger_kernel": use_liger_kernel,
+        **model_extra_kwargs,
+    }
+
+    def load_model(*, force_hf: bool, attn_impl: str, has_packed_sequence: bool, extra_kwargs=None) -> nn.Module:
+        attempt_config = copy.deepcopy(config)
+        attempt_config._attn_implementation = attn_impl
+        return NeMoAutoModelForSequenceClassification.from_pretrained(
+            model_name_or_path,
+            config=attempt_config,
+            attn_implementation=attn_impl,
+            has_packed_sequence=has_packed_sequence,
+            force_hf=force_hf,
+            **common_model_kwargs,
+            **(extra_kwargs or {}),
+        )
+
+    custom_skip_reason = None
+    fallback_reason = None
+    model = None
+    selected_attn_implementation = None
+
+    use_hf_model = True if force_hf_model else _will_use_hf_model(model_name_or_path, False)
+    try_custom = not force_hf_model and not use_hf_model
+    if packing_samples and try_custom:
+        try_custom = False
+        custom_skip_reason = (
+            "AutoModel custom packed sequence-regression is not wired safely yet; "
+            "reward/critic packed batches use HF FlashAttention2 varlen boundaries"
+        )
+    elif te_unavailable_reason is not None and try_custom:
+        try_custom = False
+        custom_skip_reason = te_unavailable_reason
+
+    if try_custom:
+        try:
+            custom_extra_kwargs, custom_attn_implementation = _custom_sequence_regression_backend_kwargs(
+                attn_implementation
+            )
+            model = load_model(
+                force_hf=False,
+                attn_impl=custom_attn_implementation,
+                has_packed_sequence=False,
+                extra_kwargs=custom_extra_kwargs,
+            )
+            incompatibility = _custom_sequence_regression_incompatibility(
+                model, value_head_prefix=value_head_prefix, packing_samples=False
+            )
+            if incompatibility is not None:
+                raise _SequenceRegressionFallback(incompatibility)
+            selected_attn_implementation = custom_attn_implementation
+            if is_automodel_custom_model(model):
+                print("[SequenceRegression] Using AutoModel custom reward/critic path.")
+        except _SequenceRegressionFallback as exc:
+            fallback_reason = str(exc)
+            del model
+            model = None
+            _release_cuda_cache()
+        except (AttributeError, ImportError, NotImplementedError, TypeError, ValueError) as exc:
+            fallback_reason = f"AutoModel custom reward/critic path failed: {exc}"
+            del model
+            model = None
+            _release_cuda_cache()
+
+    if model is None:
+        hf_attn_implementation = _resolve_hf_sequence_regression_attn(attn_implementation, packing_samples)
+        if hf_attn_implementation == "flash_attention_2" and not _has_hf_flash_attn_2():
+            print("[Attn] flash_attn not installed; downgrading flash_attention_2 → sdpa.")
+            hf_attn_implementation = "sdpa"
+        if custom_skip_reason is not None:
+            print(f"[SequenceRegression] {custom_skip_reason}; using HF fallback.")
+        elif fallback_reason is not None:
+            print(f"[SequenceRegression] {fallback_reason}; using HF fallback.")
+        model = load_model(force_hf=True, attn_impl=hf_attn_implementation, has_packed_sequence=packing_samples)
+        selected_attn_implementation = hf_attn_implementation
+        if packing_samples:
+            print("[Packing] Using HF FlashAttention2 varlen packed path for reward/critic.")
+
+    forward_autocast_dtype = (
+        compute_dtype
+        if torch_dtype == torch.float32 and selected_attn_implementation in ("flash_attention_2", "flash_attention_3")
+        else None
     )
 
     if "output_router_logits" in model.config.to_dict():
@@ -173,6 +238,76 @@ def get_llm_for_sequence_regression(
     # needs it to write adapter_config.json (otherwise AttributeError on dim).
     wrapper.peft_config = peft_config
     return wrapper
+
+
+class _SequenceRegressionFallback(Exception):
+    """Internal signal that the custom AutoModel path is not usable here."""
+
+
+def _release_cuda_cache() -> None:
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def _validate_sequence_regression_attn(attn_implementation: str) -> Optional[str]:
+    try:
+        _validate_attn_implementation(attn_implementation)
+    except ValueError as exc:
+        # Reward/critic can still fall back to HF sdpa/flash_attention_2 when
+        # the requested custom-only TE backend is unavailable.
+        if attn_implementation == "te" and "transformer-engine" in str(exc):
+            return str(exc)
+        raise
+    return None
+
+
+def _custom_sequence_regression_backend_kwargs(attn_implementation: str):
+    backend_attn = _resolve_custom_backend_attn(attn_implementation, packing_samples=False)
+    from nemo_automodel.components.models.common.utils import BackendConfig
+
+    using_te = backend_attn == "te"
+    backend_kwargs = {"attn": backend_attn, "rope_fusion": using_te}
+    if not using_te:
+        backend_kwargs["linear"] = "torch"
+        backend_kwargs["experts"] = "torch_mm"
+    return {"backend": BackendConfig(**backend_kwargs)}, "sdpa"
+
+
+def _resolve_hf_sequence_regression_attn(attn_implementation: str, packing_samples: bool) -> str:
+    if packing_samples:
+        return "flash_attention_2"
+    if attn_implementation in {"flex", "te"}:
+        print(f"[Attn] HF reward/critic fallback does not use {attn_implementation}; using sdpa.")
+        return "sdpa"
+    return attn_implementation
+
+
+def _custom_sequence_regression_incompatibility(
+    model: nn.Module, *, value_head_prefix: str, packing_samples: bool
+) -> Optional[str]:
+    if not is_automodel_custom_model(model):
+        return None
+    if packing_samples:
+        return "AutoModel custom reward/critic packing is not supported"
+    try:
+        _get_regression_head(model, value_head_prefix)
+    except AttributeError as exc:
+        return str(exc)
+    for kwarg in ("output_hidden_states", "return_dict"):
+        if not _forward_accepts_kwarg(model, kwarg):
+            return f"AutoModel custom reward/critic forward does not accept `{kwarg}`"
+    return None
+
+
+def _forward_accepts_kwarg(model: nn.Module, kwarg: str) -> bool:
+    try:
+        signature = inspect.signature(model.forward)
+    except (TypeError, ValueError):
+        return True
+    if kwarg in signature.parameters:
+        return True
+    return any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
 
 
 def _init_regression_head(model: nn.Module, value_head_prefix: str) -> None:
@@ -243,7 +378,7 @@ class _SequenceRegressionBase(nn.Module):
             model_input_ids, position_ids, _, indices, attn_kwargs = pack_padded_batch(
                 input_ids, attention_mask, style="hf"
             )
-            model_attention_mask = torch.ones_like(model_input_ids, dtype=attention_mask.dtype)
+            model_attention_mask = None
 
         autocast_ctx = (
             torch.autocast(device_type="cuda", dtype=self._forward_autocast_dtype)
