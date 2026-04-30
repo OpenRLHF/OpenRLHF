@@ -165,7 +165,7 @@ class PolicyLoss(nn.Module):
         global_batch_size: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if self.policy_loss_type == "ppo":
-            log_ratio = torch.clamp(log_probs - old_log_probs, min=-20.0, max=20.0)
+            log_ratio = log_probs - old_log_probs
             ratio = log_ratio.exp()
         elif self.policy_loss_type == "gspo":
             # GSPO: https://arxiv.org/pdf/2507.18071

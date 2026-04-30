@@ -70,7 +70,7 @@ class FsdpStrategy:
         sp = getattr(fsdp, "sequence_parallel", None)
         # SP defaults to ON whenever TP>1 (user-stated default).
         self.sequence_parallel = sp if sp is not None else (self.tp_size > 1)
-        # LoRA flag — flows into AutoModel Checkpointer's `is_peft`. Without it
+        # LoRA flag: flows into AutoModel Checkpointer's `is_peft`. Without it
         # the checkpointer saves the merged base only and the trained adapter
         # is lost. Read the rank from the FSDP namespace if present.
         _lora_ns = getattr(fsdp, "lora", None)
@@ -89,7 +89,7 @@ class FsdpStrategy:
     # ProcessGroup / DeviceMesh aren't picklable. `datasets.map(self.process_data,
     # num_proc>1)` indirectly pickles the strategy via the dataset's bound method;
     # drop the distributed handles so the workers spawn cleanly. Workers don't need
-    # them — they only run pure-CPU data preprocessing.
+    # them; they only run pure-CPU data preprocessing.
     _UNPICKLABLE_ATTRS = ("device_mesh", "moe_mesh", "distributed_config")
 
     def __getstate__(self):
@@ -173,78 +173,6 @@ class FsdpStrategy:
         from nemo_automodel.components.distributed.mesh_utils import create_device_mesh
         from nemo_automodel.components.moe.config import MoEParallelizerConfig
 
-        # Monkey-patch AutoModel's TPLinear forward: their guard misses some
-        # non-contiguous DTensor inputs and falls through to F.linear, which
-        # then dies on aten.view (RuntimeError: view size is not compatible).
-        # Always contiguify before F.linear; cheap when already contiguous.
-        if self.tp_size > 1:
-            from nemo_automodel.components.distributed import parallel_styles
-
-            _TPLinear = parallel_styles.TPLinear
-            if not getattr(_TPLinear, "_orlhf_patched", False):
-                import torch.nn.functional as F
-                from torch.distributed.tensor import DTensor
-
-                def _safe_forward(self, x):
-                    # Always avoid F.linear for DTensor inputs: F.linear's
-                    # internal view fails on sharded DTensor regardless of
-                    # is_contiguous(). Use mm/bmm directly which dispatch
-                    # through DTensor's matmul strategy.
-                    if isinstance(x, DTensor):
-                        if x.dim() == 3:
-                            b = x.shape[0]
-                            out = torch.bmm(x, self.weight.t().unsqueeze(0).expand(b, -1, -1))
-                        else:
-                            out = torch.mm(x, self.weight.t())
-                        return out + self.bias if self.bias is not None else out
-                    return F.linear(x, self.weight, self.bias)
-
-                _TPLinear.forward = _safe_forward
-                _TPLinear._orlhf_patched = True
-
-            # Same view-vs-DTensor bug fires inside AutoModel's LinearLoRA.forward
-            # at the `F.linear(x, self.weight, bias)` call when LoRA adapters
-            # wrap TP-sharded linears: the SP-only `_x_needs_bmm` heuristic at
-            # lora.py:258 ignores TP shards (it only catches `_Shard.dim < 2`).
-            # F.linear internally view()s [b,s,h]→[b*s,h] which fails on a
-            # DTensor sharded across the hidden dim. Fix: precompute the base
-            # linear via bmm/mm for any DTensor input, then use upstream's
-            # `super_fwd` hook so the LoRA postlude (lora_A/B, dropout, scale,
-            # DoRA) executes unchanged.
-            try:
-                from nemo_automodel.components._peft.lora import LinearLoRA
-            except ImportError:
-                LinearLoRA = None
-            if LinearLoRA is not None and not getattr(LinearLoRA, "_orlhf_patched", False):
-                from torch.distributed.tensor import DTensor
-
-                _orig_lora_forward = LinearLoRA.forward
-
-                def _safe_lora_forward(self, x):
-                    if isinstance(x, DTensor):
-                        bias = self.bias if (self.bias is not None and self.bias.numel() > 0) else None
-                        if x.dim() == 3:
-                            b = x.shape[0]
-                            res = torch.bmm(x, self.weight.t().unsqueeze(0).expand(b, -1, -1))
-                        else:
-                            res = torch.mm(x, self.weight.t())
-                        if bias is not None:
-                            res = res + bias
-                        prev_super_fwd = getattr(self, "super_fwd", None)
-                        self.super_fwd = lambda _x, _res=res: _res
-                        try:
-                            return _orig_lora_forward(self, x)
-                        finally:
-                            if prev_super_fwd is None:
-                                if hasattr(self, "super_fwd"):
-                                    delattr(self, "super_fwd")
-                            else:
-                                self.super_fwd = prev_super_fwd
-                    return _orig_lora_forward(self, x)
-
-                LinearLoRA.forward = _safe_lora_forward
-                LinearLoRA._orlhf_patched = True
-
         # Allow DPO/actor+ref TP embedding calls to reuse equivalent vocab masks.
         if self.tp_size > 1:
             try:
@@ -261,19 +189,22 @@ class FsdpStrategy:
                 _mask_buffer.MaskBuffer._orlhf_patched = True
 
         torch_dtype = _torch_dtype(self.param_dtype)
-        # FSDP2 mixed precision: params/forward in bf16, gradient reduce-scatter
-        # and module outputs in fp32. This mirrors NeMo-RL's AutoModel setup;
-        # wrappers run the forward under autocast when fp32 master weights are
-        # used so sibling heads such as lm_head/score still receive bf16 inputs.
-        mp_policy = MixedPrecisionPolicy(
-            param_dtype=torch_dtype,
-            reduce_dtype=torch.float32,
-            output_dtype=torch.float32,
-            cast_forward_inputs=True,
+        # Match the FSDP2 baseline: params/forward in the requested dtype and
+        # reduce-scatter in fp32. Do not force module outputs to fp32 here,
+        # because policy/value losses should see the same dtype behavior as
+        # the DeepSpeed and PR #1176 paths.
+        mp_policy = (
+            None
+            if torch_dtype == torch.float32
+            else MixedPrecisionPolicy(
+                param_dtype=torch_dtype,
+                reduce_dtype=torch.float32,
+                cast_forward_inputs=True,
+            )
         )
-        # Public attribute — `Actor` reads it as `strategy.distributed_config`
+        # Public attribute: `Actor` reads it as `strategy.distributed_config`
         # and forwards to `NeMoAutoModelForCausalLM.from_pretrained`.
-        # `activation_checkpointing` is intentionally NOT set here — Actor /
+        # `activation_checkpointing` is intentionally NOT set here; Actor /
         # get_llm_for_sequence_regression pass it explicitly to from_pretrained
         # so the CLI flag (--model.gradient_checkpointing_enable /
         # --actor.gradient_checkpointing_enable) is the single source of truth.
@@ -281,17 +212,11 @@ class FsdpStrategy:
             sequence_parallel=self.sequence_parallel,
             mp_policy=mp_policy,
             offload_policy=CPUOffloadPolicy(pin_memory=False) if self.cpu_offload else None,
-            # Force grad sync inside backward(). Per-microbatch we still skip
-            # sync via set_requires_gradient_sync(False) on intermediate
-            # accumulation steps; this flag controls the default for the FINAL
-            # microbatch (where we read p.grad to compute grad_norm). With
-            # defer=True FSDP2 leaves grads as Partial DTensors until the next
-            # forward; the clip helper handles that via full_tensor(), but we
-            # keep defer=False so optimizer state and grad_norm are stable
-            # within the optimizer_step call.
+            # Keep final microbatch grads materialized for clipping and logging.
+            # Intermediate accumulation steps still disable sync in backward().
             defer_fsdp_grad_sync=False,
         )
-        # MoE-specific parallelization config — required by AutoModel when
+        # MoE-specific parallelization config: required by AutoModel when
         # ep_size > 1 (raises 'NoneType has no to_dict' otherwise).
         self.moe_config = MoEParallelizerConfig(mp_policy=mp_policy) if self.ep_size > 1 else None
 
@@ -304,13 +229,29 @@ class FsdpStrategy:
             world_size=self.world_size,
         )
 
-        # AutoModel's FSDP2 mesh exposes flattened "dp" (data loading / token
-        # denominators) and "dp_cp" (FSDP + loss scaling when CP>1). Only sizes
-        # are cached; ProcessGroups stay resolved against the mesh on demand.
+        # AutoModel's FSDP2 mesh exposes flattened "dp" for data loading and
+        # "dp_cp" for FSDP reduce-scatter. Gradient accumulation is based on
+        # DP only; CP ranks share samples and split sequence work.
         dp_size = self._get_dp_group_size(include_cp=False)
         self.dp_cp_size = self._get_dp_group_size(include_cp=True)
-        self.accumulated_gradient = max(self.train_batch_size // (self.micro_train_batch_size * dp_size), 1)
+        if getattr(getattr(self.args, "train", None), "dynamic_batch_enable", False):
+            self.accumulated_gradient = 1
+        else:
+            batch_per_step = self.micro_train_batch_size * dp_size
+            accum_steps, remainder = divmod(self.train_batch_size, batch_per_step)
+            if accum_steps < 1 or remainder != 0:
+                raise ValueError(
+                    "Invalid batch config for AutoModel/FSDP2: require "
+                    "`train.batch_size = train.micro_batch_size * dp_size * grad_accum_steps` "
+                    f"(got train.batch_size={self.train_batch_size}, "
+                    f"train.micro_batch_size={self.micro_train_batch_size}, dp_size={dp_size})."
+                )
+            self.accumulated_gradient = accum_steps
         self.dp_size = dp_size
+        self.print(
+            f"[FSDP] world={self.world_size} dp={self.dp_size} cp={self.cp_size} tp={self.tp_size} "
+            f"ep={self.ep_size} dp_cp={self.dp_cp_size} grad_accum={self.accumulated_gradient}"
+        )
 
     # ---------------------------------------------------------------- prepare
 
@@ -389,18 +330,16 @@ class FsdpStrategy:
         accumulate: bool = True,
         **kwargs,
     ) -> None:
-        # Callers that pre-scale by global token/batch denominators set
-        # ``scale_loss_by_accumulation=False``; otherwise we divide by the accum
-        # window so the static path matches the old trainer contract.
         unwrapped = self._unwrap_model(model)
         if accumulate and self.accumulated_gradient > 1:
             if kwargs.get("scale_loss_by_accumulation", True):
                 loss = loss / self.accumulated_gradient
-        # NeMo-RL's AutoModel path lets each microbatch backward run with normal
-        # FSDP2 sync. Skipping sync for intermediate microbatches can leave CP
-        # grads dependent on which microbatch is final, which shows up as large
-        # actor grad-norm drift.
-        self._set_fsdp_backward_sync(unwrapped, True)
+        sync_gradients = kwargs.get("sync_gradients", None)
+        if sync_gradients is None:
+            sync_gradients = True
+            if accumulate and self.accumulated_gradient > 1:
+                sync_gradients = (self.time_steps[f"step_{name}"] + 1) % self.accumulated_gradient == 0
+        self._set_fsdp_backward_sync(unwrapped, sync_gradients)
         if self.moe_mesh is not None:
             try:
                 from nemo_automodel.components.moe.megatron.moe_utils import MoEAuxLossAutoScaler
@@ -533,9 +472,7 @@ class FsdpStrategy:
 
         For CP, call this before ``make_cp_batch_and_ctx`` while each CP rank
         still sees the full local sequence. Token denominators are reduced over
-        DP only. The NeMo-style CP path restores the full sequence through
-        DTensor autograd on every CP rank, then scales by ``dp_size * cp_size``
-        to cancel FSDP's gradient averaging over the flattened dp_cp mesh.
+        DP only because CP ranks share samples.
         """
         local = mask if mask.ndim == 0 else mask.sum()
         device = torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else local.device
@@ -684,7 +621,7 @@ class FsdpStrategy:
     @staticmethod
     def move_optimizer_to_device(optimizer: optim.Optimizer | None, device) -> None:
         """Bulk-move optimizer state tensors (Adam moments, step, etc.) to
-        ``device``. ``model.to()`` does NOT touch these — they live on the
+        ``device``. ``model.to()`` does NOT touch these; they live on the
         optimizer, sharded as DTensors when params are DTensors."""
         if optimizer is None:
             return
@@ -709,7 +646,7 @@ class FsdpStrategy:
         return model_cache_dir, model_repo_id
 
     def save_model(self, model: nn.Module, tokenizer, output_dir: str, **kwargs) -> None:
-        # Use AutoModel's Checkpointer — its custom-model save_pretrained mixin
+        # Use AutoModel's Checkpointer: its custom-model save_pretrained mixin
         # requires it (raises "No checkpointer provided" otherwise). Outputs
         # consolidated HF safetensors that vLLM can hot-load.
         from nemo_automodel.components.checkpoint.checkpointing import Checkpointer, CheckpointingConfig

@@ -12,7 +12,7 @@ from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from openrlhf.models import Actor, PolicyLoss, agg_loss
+from openrlhf.models import Actor, PolicyLoss
 from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils.experience import Experience
 from openrlhf.utils import get_tokenizer
@@ -287,56 +287,10 @@ class ActorPPOTrainer(ABC):
                 desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
-            accum_window = []
-            accum_steps = self.strategy.accumulated_gradient
             for step, experience in enumerate(pbar):
                 experience.to_device(device)
-                if self.args.train.dynamic_batch_enable:
-                    status = self.training_step(experience, kl_ctl, step)
-                    self._record_status(status, status_list, pbar)
-                    continue
-
-                accum_window.append((step, experience))
-                if len(accum_window) < accum_steps:
-                    continue
-
-                local_num_tokens = torch.zeros((), dtype=torch.float32, device=torch.device("cuda", device))
-                local_batch_size = torch.zeros((), dtype=torch.float32, device=torch.device("cuda", device))
-                for _, window_experience in accum_window:
-                    local_num_tokens += window_experience.action_mask.sum()
-                    local_batch_size += (window_experience.action_mask.sum(dim=-1) > 0).sum()
-                global_num_tokens = self.strategy.global_token_count(local_num_tokens)
-                global_batch_size = self.strategy.global_token_count(local_batch_size)
-
-                for window_step, window_experience in accum_window:
-                    status = self.training_step(
-                        window_experience,
-                        kl_ctl,
-                        window_step,
-                        global_num_tokens=global_num_tokens,
-                        global_batch_size=global_batch_size,
-                        # CP training mirrors NeMo-RL: the full sequence is
-                        # restored through DTensor autograd, then scaled by
-                        # dp*cp to cancel FSDP's gradient averaging.
-                        loss_dp_size=getattr(self.strategy, "dp_cp_size", self.strategy.dp_size),
-                        loss_report_scale=1,
-                        scale_loss_by_accumulation=False,
-                    )
-                    self._record_status(status, status_list, pbar)
-                accum_window = []
-
-            # Trailing partial windows are dropped on purpose: feeding them
-            # through training_step would advance time_steps but never fire
-            # optimizer_step (since len < accum_steps), leaking the local
-            # gradients into the next epoch's first window. The dataloader
-            # already uses drop_last=True, so this only matters when the per-
-            # rank length is not a multiple of accum_steps (rare; misconfig).
-            if accum_window:
-                self.strategy.print(
-                    f"[PPO] dropping {len(accum_window)} trailing microbatches "
-                    f"(< accum_steps={accum_steps}); check that train.batch_size, "
-                    f"micro_batch_size, dp_size, and rollout n_samples align."
-                )
+                status = self.training_step(experience, kl_ctl, step)
+                self._record_status(status, status_list, pbar)
 
         if status_list:
             total_tokens = sum(s["_num_action_tokens"] for s in status_list)
@@ -362,11 +316,6 @@ class ActorPPOTrainer(ABC):
         experience: Experience,
         kl_ctl: float,
         step: int,
-        global_num_tokens=None,
-        global_batch_size=None,
-        loss_dp_size=None,
-        loss_report_scale: int = 1,
-        scale_loss_by_accumulation: bool = True,
     ) -> Dict[str, float]:
         self.actor.train()
 
@@ -471,17 +420,6 @@ class ActorPPOTrainer(ABC):
                 **mm_inputs,
             )
 
-        if global_num_tokens is None:
-            global_num_tokens = self.strategy.global_token_count(experience.action_mask)
-        if global_batch_size is None:
-            global_batch_size = self.strategy.global_token_count((experience.action_mask.sum(dim=-1) > 0).sum())
-        if loss_dp_size is None:
-            loss_dp_size = (
-                getattr(self.strategy, "dp_cp_size", self.strategy.dp_size)
-                if getattr(self.actor, "cp_size", 1) > 1
-                else self.strategy.dp_size
-            )
-
         # loss function
         actor_loss, clip_ratio, ppo_kl, vllm_kl = self.actor_loss_fn(
             action_log_probs,
@@ -489,9 +427,6 @@ class ActorPPOTrainer(ABC):
             advantages,
             action_mask=loss_action_mask,
             rollout_log_probs=rollout_log_probs,
-            dp_size=loss_dp_size,
-            batch_num_tokens=global_num_tokens,
-            global_batch_size=global_batch_size,
         )
         experience.info["ppo_clip_ratio"] = clip_ratio.detach()
         experience.info["ppo_kl"] = ppo_kl.detach()
@@ -509,13 +444,7 @@ class ActorPPOTrainer(ABC):
             else:
                 kl = torch.zeros_like(action_log_probs)
                 logprobs_diff = torch.zeros_like(action_log_probs)
-            kl_loss = agg_loss(
-                kl,
-                loss_action_mask,
-                "token-mean",
-                dp_size=loss_dp_size,
-                batch_num_tokens=global_num_tokens,
-            )
+            kl_loss = masked_mean(kl, loss_action_mask)
             logprobs_diff = masked_mean(logprobs_diff, loss_action_mask)
             experience.info["kl"] = kl_loss.detach()
             experience.info["logprobs_diff"] = logprobs_diff.detach()
@@ -525,17 +454,10 @@ class ActorPPOTrainer(ABC):
         loss = actor_loss + kl_loss * kl_ctl
         # mixtral
         if self.aux_loss:
-            aux_scale = 1 if scale_loss_by_accumulation else self.strategy.accumulated_gradient
-            loss += getattr(output, "aux_loss", 0) * self.args.actor.aux_loss_coef / aux_scale
+            loss += getattr(output, "aux_loss", 0) * self.args.actor.aux_loss_coef
         # entropy loss
         if self.args.actor.entropy_coef is not None:
-            entropy_loss = agg_loss(
-                output.entropy[:, -experience.action_mask.shape[1] :],
-                loss_action_mask,
-                "token-mean",
-                dp_size=loss_dp_size,
-                batch_num_tokens=global_num_tokens,
-            )
+            entropy_loss = masked_mean(output.entropy[:, -experience.action_mask.shape[1] :], loss_action_mask)
             if self.args.actor.entropy_coef != 0:
                 loss -= entropy_loss * self.args.actor.entropy_coef
 
@@ -554,7 +476,6 @@ class ActorPPOTrainer(ABC):
                 self.actor,
                 self.actor_optim,
                 name="actor",
-                scale_loss_by_accumulation=scale_loss_by_accumulation,
             )
             self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
 
@@ -566,7 +487,7 @@ class ActorPPOTrainer(ABC):
                 if (step + 1) % self.strategy.accumulated_gradient == 0:
                     self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
 
-        metrics = {"policy_loss": actor_loss.detach() / loss_report_scale}
+        metrics = {"policy_loss": actor_loss.detach()}
         weights = {"policy_loss": "token"}
         if self.args.actor.entropy_coef is not None:
             metrics["entropy_loss"] = entropy_loss.detach()
@@ -805,7 +726,7 @@ class PolicyModelActor(BaseModelActor):
         if args.train.enable_ema:
             # EMA must mirror the actor's parameter graph; under LoRA the actor
             # has frozen base weights + trainable lora_A/lora_B, while a
-            # LoRA-less EMA has only the (constant) base — so EMA would
+            # LoRA-less EMA has only the constant base, so EMA would
             # silently freeze and miss every adapter update. Forbid the
             # combination explicitly until we wire LoRA-aware EMA.
             if strategy.args.fsdp.lora.rank > 0:
@@ -920,8 +841,8 @@ class PolicyModelActor(BaseModelActor):
     def broadcast_to_vllm(self):
         # Refit only needs *model* params on GPU (gather full_tensor + IPC).
         # The optimizer was already moved off-GPU at the end of fit() via
-        # offload_before_refit, so this is just model→cuda → broadcast →
-        # model→cpu so vLLM can wake_up its KV+weights.
+        # offload_before_refit, so this is just model->cuda -> broadcast ->
+        # model->cpu so vLLM can wake_up its KV+weights.
         if self._sleep_enabled and not getattr(self.strategy, "cpu_offload", False):
             self.strategy.move_model_to_device(self.actor, "cuda")
             if self.ema_model is not None:
@@ -950,16 +871,16 @@ class PolicyModelActor(BaseModelActor):
 
     def offload_states(self):
         """Sleep exit symmetric to reload_states. Used by code paths that
-        don't need the staged refit dance — i.e. critic-style end-of-fit."""
+        don't need the staged refit dance, i.e. critic-style end-of-fit."""
         if not self._sleep_enabled:
             return
         self.offload_before_refit()
         self.offload_after_refit()
 
     def offload_before_refit(self):
-        """End-of-fit hook: optimizer→cpu but keep params on GPU so the
+        """End-of-fit hook: optimizer->cpu but keep params on GPU so the
         immediately following broadcast_to_vllm can gather full_tensor without
-        an extra cpu→cuda round-trip. NeMo-RL pattern."""
+        an extra cpu->cuda round-trip. NeMo-RL pattern."""
         if not self._sleep_enabled:
             return
         self.strategy.move_optimizer_to_device(self.actor_optim, "cpu")
@@ -968,7 +889,7 @@ class PolicyModelActor(BaseModelActor):
             torch.cuda.empty_cache()
 
     def offload_after_refit(self):
-        """End-of-broadcast hook: model→cpu. Optimizer is assumed already
+        """End-of-broadcast hook: model->cpu. Optimizer is assumed already
         cpu from offload_before_refit."""
         if not self._sleep_enabled:
             return

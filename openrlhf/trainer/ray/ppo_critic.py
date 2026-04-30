@@ -106,76 +106,24 @@ class CriticPPOTrainer(ABC):
                 desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
-            accum_window = []
-            accum_steps = self.strategy.accumulated_gradient
             for step, experience in enumerate(pbar):
                 experience.to_device(device)
-                if self.args.train.dynamic_batch_enable:
-                    status = self.training_step(experience, step)
-                    status = self.strategy.all_reduce(status)
-                    status_list.append(status)
-                    pbar.set_postfix(status)
-                    continue
-
-                accum_window.append((step, experience))
-                if len(accum_window) < accum_steps:
-                    continue
-
-                local_num_tokens = torch.zeros((), dtype=torch.float32, device=torch.device("cuda", device))
-                local_batch_size = torch.zeros((), dtype=torch.float32, device=torch.device("cuda", device))
-                for _, window_experience in accum_window:
-                    local_num_tokens += window_experience.action_mask.sum()
-                    local_batch_size += (window_experience.action_mask.sum(dim=-1) > 0).sum()
-                global_num_tokens = self.strategy.global_token_count(local_num_tokens)
-                global_batch_size = self.strategy.global_token_count(local_batch_size)
-
-                for window_step, window_experience in accum_window:
-                    status = self.training_step(
-                        window_experience,
-                        window_step,
-                        global_num_tokens=global_num_tokens,
-                        global_batch_size=global_batch_size,
-                        # CP training mirrors NeMo-RL: the full sequence is
-                        # restored through DTensor autograd, then scaled by
-                        # dp*cp to cancel FSDP's gradient averaging.
-                        loss_dp_size=getattr(self.strategy, "dp_cp_size", self.strategy.dp_size),
-                        loss_report_scale=1,
-                        scale_loss_by_accumulation=False,
-                    )
-                    status = self.strategy.all_reduce(status)
-                    status_list.append(status)
-                    pbar.set_postfix(status)
-                accum_window = []
-
-            # Trailing partial windows are dropped on purpose — see ppo_actor.py
-            # for the rationale (would advance time_steps but never fire
-            # optimizer_step, leaking grads into the next epoch).
-            if accum_window:
-                self.strategy.print(
-                    f"[Critic] dropping {len(accum_window)} trailing microbatches "
-                    f"(< accum_steps={accum_steps}); check that train.batch_size, "
-                    f"micro_batch_size, dp_size, and rollout n_samples align."
-                )
+                status = self.training_step(experience, step)
+                status = self.strategy.all_reduce(status)
+                status_list.append(status)
+                pbar.set_postfix(status)
 
         if status_list:
-            status_mean = status_list[0]
-            for m in status_list[1:]:
-                for k, v in m.items():
-                    status_mean[k] += v
-            for k in status_mean.keys():
-                status_mean[k] /= len(status_list)
+            status_mean = {}
+            for k in set().union(*(m.keys() for m in status_list)):
+                vals = [m[k] for m in status_list if k in m]
+                if k == "critic_lr":
+                    status_mean[k] = vals[-1]
+                else:
+                    status_mean[k] = sum(vals) / len(vals)
         return status_mean
 
-    def training_step(
-        self,
-        experience: Experience,
-        step: int,
-        global_num_tokens=None,
-        global_batch_size=None,
-        loss_dp_size=None,
-        loss_report_scale: int = 1,
-        scale_loss_by_accumulation: bool = True,
-    ) -> Dict[str, float]:
+    def training_step(self, experience: Experience, step: int) -> Dict[str, float]:
         self.critic.train()
 
         sequences = experience.sequences
@@ -227,34 +175,19 @@ class CriticPPOTrainer(ABC):
             packed_seq_lens=packed_seq_lens,
         )
 
-        if global_num_tokens is None:
-            global_num_tokens = self.strategy.global_token_count(experience.action_mask)
-        if global_batch_size is None:
-            global_batch_size = self.strategy.global_token_count((experience.action_mask.sum(dim=-1) > 0).sum())
-        if loss_dp_size is None:
-            loss_dp_size = (
-                getattr(self.strategy, "dp_cp_size", self.strategy.dp_size)
-                if getattr(self.critic, "cp_size", 1) > 1
-                else self.strategy.dp_size
-            )
-
         # loss function
         critic_loss = self.critic_loss_fn(
             values,
             old_values,
             returns,
             action_mask=loss_action_mask,
-            dp_size=loss_dp_size,
-            batch_num_tokens=global_num_tokens,
-            global_batch_size=global_batch_size,
         )
         # mixtral
         if self.aux_loss:
             aux_loss = getattr(output, "aux_loss", 0)
         else:
             aux_loss = 0
-        aux_scale = 1 if scale_loss_by_accumulation else self.strategy.accumulated_gradient
-        loss = critic_loss + aux_loss * self.args.actor.aux_loss_coef / aux_scale
+        loss = critic_loss + aux_loss * self.args.actor.aux_loss_coef
         if self.args.train.dynamic_batch_enable:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
 
@@ -270,17 +203,22 @@ class CriticPPOTrainer(ABC):
                 self.critic,
                 self.critic_optim,
                 name="critic",
-                scale_loss_by_accumulation=scale_loss_by_accumulation,
             )
             self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
 
         # status
         status = {
-            "critic_loss": (critic_loss.detach() / loss_report_scale).item(),
+            "critic_loss": critic_loss.detach().item(),
             "values": masked_mean(values, loss_action_mask).detach().item(),
             "critic_lr": self.critic_scheduler.get_last_lr()[0],
-            "critic_grad_norm": self.strategy.get_grad_norm(self.critic),
         }
+        is_optimizer_step = (
+            self.replay_buffer.dynamic_optimizer_step[step]
+            if self.args.train.dynamic_batch_enable
+            else (step + 1) % self.strategy.accumulated_gradient == 0
+        )
+        if is_optimizer_step:
+            status["critic_grad_norm"] = self.strategy.get_grad_norm(self.critic)
         return status
 
 
@@ -451,7 +389,7 @@ class CriticModelActor(BaseModelActor):
         self.critic.eval()
 
     def offload_after_refit(self):
-        """Tear down after a value-forward (model→cpu only)."""
+        """Tear down after a value-forward (model->cpu only)."""
         if not self._sleep_enabled:
             return
         self.strategy.move_model_to_device(self.critic, "cpu")

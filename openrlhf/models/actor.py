@@ -78,10 +78,8 @@ def _move_model_to_cpu_for_offload(model: nn.Module, distributed_config):
 def _patch_nemo_llama_rope_position_ids() -> None:
     """Make NeMo AutoModel Llama RoPE honor non-trivial position_ids.
 
-    The pinned AutoModel Llama rotary module slices its cache by sequence
-    length and ignores the actual ``position_ids`` values. That only matches
-    HF/vLLM for unpadded arange positions; PPO/RM batches use padding and CP
-    sharding, where shifted RoPE changes logits and rewards.
+    Current AutoModel main still slices RoPE caches by sequence length. PPO/RM
+    batches use padded ``position_ids``, so gather by id to match HF/vLLM.
     """
     try:
         from nemo_automodel.components.models.llama import rope_utils
@@ -115,6 +113,41 @@ def _patch_nemo_llama_rope_position_ids() -> None:
 
     cls.forward = _forward
     cls._openrlhf_position_ids_patch = True
+
+
+def _patch_nemo_float32_rms_norm_compile() -> None:
+    """Run AutoModel fp32 RMSNorm eagerly on dynamic PPO batches.
+
+    AutoModel currently compiles this tiny function with dynamic shapes; TP/FSDP
+    PPO can hit an Inductor assertion. The eager replacement keeps the same math.
+    """
+    try:
+        from nemo_automodel.components.models.common import utils as nemo_utils
+    except Exception:
+        return
+
+    cls = getattr(nemo_utils, "Float32RMSNorm", None)
+    if cls is None or getattr(cls, "_openrlhf_eager_patch", False):
+        return
+
+    def _float32_rms_norm_fwd(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
+        input_dtype = x.dtype
+        x = x.float()
+        x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
+        return (weight * x).to(input_dtype)
+
+    def _forward(self, x: torch.Tensor):
+        return _float32_rms_norm_fwd(x, self.weight, self.eps)
+
+    nemo_utils._float32_rms_norm_fwd = _float32_rms_norm_fwd
+    cls.forward = _forward
+    cls._openrlhf_eager_patch = True
+
+
+def _patch_nemo_automodel_runtime() -> None:
+    """Apply small upstream-compatibility fixes needed by custom AutoModel paths."""
+    _patch_nemo_llama_rope_position_ids()
+    _patch_nemo_float32_rms_norm_compile()
 
 
 def _resolve_custom_backend_attn(attn_implementation: str, packing_samples: bool) -> str:
@@ -191,17 +224,17 @@ def _automodel_custom_supports_thd_packing(model: nn.Module) -> bool:
 def _build_peft_config_dict(rank: int, alpha: int, dropout: float, target_modules):
     """Map OpenRLHF lora.* args onto AutoModel's PeftConfig dataclass.
 
-    Field-name gotcha: AutoModel renames `r` (LoRA rank) → `dim`.
-    Returns a ``PeftConfig`` instance — Automodel's downstream
+    Field-name gotcha: AutoModel renames `r` (LoRA rank) to `dim`.
+    Returns a ``PeftConfig`` instance; Automodel's downstream
     ``apply_lora_to_linear_modules`` does attribute access on the config, so a
-    plain dict trips ``AttributeError: 'dict' object has no attribute …``.
+    plain dict trips ``AttributeError: 'dict' object has no attribute ...``.
     """
     from nemo_automodel.components._peft.lora import PeftConfig
 
     if isinstance(target_modules, str):
         target_modules = [target_modules]
     base = {"dim": rank, "alpha": alpha, "dropout": dropout}
-    # Map HF-peft sentinel "all-linear" → AutoModel's `match_all_linear=True`.
+    # Map HF-peft sentinel "all-linear" to AutoModel's `match_all_linear=True`.
     if not target_modules or target_modules == ["all-linear"]:
         return PeftConfig.from_dict({**base, "match_all_linear": True})
     return PeftConfig.from_dict({**base, "target_modules": list(target_modules)})
@@ -356,7 +389,7 @@ class Actor(nn.Module):
         else:
             from nemo_automodel import NeMoAutoModelForCausalLM as ModelCls
 
-        # force_hf=True selection — AutoModel's custom impls have known issues
+        # force_hf=True selection: AutoModel's custom impls have known issues
         # we need to route around:
         #  - User override: keep a manual escape hatch for models whose native
         #    AutoModel path regresses under a given torch/transformers combo.
@@ -366,14 +399,14 @@ class Actor(nn.Module):
         #  AutoModel custom Qwen3 MoE currently does not advertise a TP plan,
         #  so TP+EP is intentionally left to AutoModel validation.
         force_hf = auto_force_hf
-        # Downgrade flash_attention_2 → sdpa for non-packing runs when
+        # Downgrade flash_attention_2 to sdpa for non-packing runs when
         # flash-attn is unavailable. Packing with flash_attention_2 cannot be
         # downgraded because SDPA would not preserve packed sequence
         # boundaries.
         if attn_implementation == "flash_attention_2" and not _has_hf_flash_attn_2():
             if packing_samples:
                 raise ValueError("--fsdp.packing_samples with flash_attention_2 requires flash-attn to be installed.")
-            print("[Attn] flash_attn not installed; downgrading flash_attention_2 → sdpa.")
+            print("[Attn] flash_attn not installed; downgrading flash_attention_2 to sdpa.")
             attn_implementation = "sdpa"
         use_hf_model = _will_use_hf_model(pretrain_or_model, force_hf)
         if use_hf_model and attn_implementation == "flex":
@@ -381,9 +414,8 @@ class Actor(nn.Module):
                 "--fsdp.attn_implementation flex is only supported on AutoModel custom models; "
                 "drop --fsdp.force_hf_model or use sdpa/eager/flash_attention_2."
             )
-        # NeMo-RL runs AutoModel forwards under compute-dtype autocast. With
-        # FSDP2 output_dtype=float32, this also keeps sibling heads such as
-        # lm_head dtype-compatible when params are bf16.
+        # Keep AutoModel custom forwards in the compute dtype when master
+        # weights are fp32, so lm_head/score inputs match bf16 parameters.
         if compute_dtype != torch.float32 and not (is_moe and not use_hf_model):
             self._forward_autocast_dtype = compute_dtype
         if packing_samples and use_hf_model and attn_implementation != "flash_attention_2":
@@ -397,32 +429,20 @@ class Actor(nn.Module):
         automodel_has_packed_sequence = packing_samples
         self._packing_style = "hf" if use_hf_model else "automodel"
         if not use_hf_model:
-            _patch_nemo_llama_rope_position_ids()
+            _patch_nemo_automodel_runtime()
             backend_attn = _resolve_custom_backend_attn(attn_implementation, packing_samples)
-            # For AutoModel custom models, the real attention backend comes
-            # from BackendConfig below. Keep the HF config-side
-            # attn_implementation neutral so custom-only names such as "flex",
-            # and HF-only names such as "flash_attention_2", do not leak into
-            # AutoConfig validation.
+            # AutoModel still validates the HF config-side attention name.
+            # The real custom backend is supplied through BackendConfig below.
             automodel_attn_implementation = "sdpa"
-            # Always pass an explicit BackendConfig on the AutoModel-custom path
-            # so we control rope_fusion / linear / rms_norm backends. Default
-            # `BackendConfig` auto-enables `rope_fusion=True` when
-            # `transformer_engine` is importable (HAVE_TE) — but on environments
-            # where TE is half-installed (wheel present, .so fails to load due
-            # to cuBLAS ABI mismatch), the runtime call to
-            # `transformer_engine.pytorch.attention.rope` then explodes inside
-            # the forward. Force rope_fusion off whenever the user isn't asking
-            # for TE attention; this keeps non-TE configs working in mixed
-            # CUDA-version images.
             from nemo_automodel.components.models.common.utils import BackendConfig
 
             using_te = backend_attn == "te"
-            backend_kwargs = {"attn": backend_attn}
-            backend_kwargs["rope_fusion"] = using_te
+            backend_kwargs = {"attn": backend_attn, "rope_fusion": using_te}
             if not using_te:
                 backend_kwargs["linear"] = "torch"
                 backend_kwargs["experts"] = "torch_mm"
+            if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                print(f"[Attn] AutoModel custom backend={backend_attn}; config attn_implementation=sdpa.")
             automodel_backend_kwargs["backend"] = BackendConfig(**backend_kwargs)
 
         self.model = ModelCls.from_pretrained(

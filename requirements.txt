@@ -9,7 +9,7 @@ huggingface_hub>=1.0.0
 isort
 jsonlines
 loralib
-nemo-automodel @ git+https://github.com/NVIDIA/NeMo-Automodel.git@93ccdc1f77e84bf6432f6dcefa204c6f76d21412
+nemo-automodel @ git+https://github.com/NVIDIA-NeMo/Automodel.git@8972eeb2fffb7df4b7cc90e3710d87edbebbf15b
 optimum
 optree>=0.15.0
 packaging

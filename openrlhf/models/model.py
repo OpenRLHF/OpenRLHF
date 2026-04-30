@@ -23,7 +23,7 @@ from .actor import (
     _detect_moe_arch,
     _has_hf_flash_attn_2,
     _move_model_to_cpu_for_offload,
-    _patch_nemo_llama_rope_position_ids,
+    _patch_nemo_automodel_runtime,
     _resolve_custom_backend_attn,
     _validate_attn_implementation,
     _will_use_hf_model,
@@ -66,7 +66,8 @@ def get_llm_for_sequence_regression(
         if cp_size > 1:
             raise NotImplementedError(
                 "--fsdp.packing_samples for reward/critic sequence-regression currently supports CP size 1 only. "
-                "AutoModel custom TE packed value heads need an upstream custom SequenceClassification/value-head path."
+                "AutoModel custom TE packed value heads need an upstream custom "
+                "SequenceClassification/value-head path."
             )
         if attn_implementation not in {"te", "flash_attention_2"}:
             raise NotImplementedError(
@@ -172,7 +173,7 @@ def get_llm_for_sequence_regression(
 
     if try_custom:
         try:
-            _patch_nemo_llama_rope_position_ids()
+            _patch_nemo_automodel_runtime()
             custom_extra_kwargs, custom_attn_implementation = _custom_sequence_regression_backend_kwargs(
                 attn_implementation
             )
@@ -204,7 +205,7 @@ def get_llm_for_sequence_regression(
     if model is None:
         hf_attn_implementation = _resolve_hf_sequence_regression_attn(attn_implementation, packing_samples)
         if hf_attn_implementation == "flash_attention_2" and not _has_hf_flash_attn_2():
-            print("[Attn] flash_attn not installed; downgrading flash_attention_2 → sdpa.")
+            print("[Attn] flash_attn not installed; downgrading flash_attention_2 to sdpa.")
             hf_attn_implementation = "sdpa"
         if custom_skip_reason is not None:
             print(f"[SequenceRegression] {custom_skip_reason}; using HF fallback.")
@@ -311,7 +312,8 @@ def _register_openrlhf_llama_sequence_regression(config) -> Optional[str]:
 
             if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0:
                 print(
-                    f"[OpenRLHFLlamaForCausalSequenceRegression] Attention implementation: {self.config._attn_implementation}"
+                    "[OpenRLHFLlamaForCausalSequenceRegression] "
+                    f"Attention implementation: {self.config._attn_implementation}"
                 )
                 print("[OpenRLHFLlamaForCausalSequenceRegression] Custom token regression implementation")
                 print(f"[OpenRLHFLlamaForCausalSequenceRegression] torch_dtype: {self.config.torch_dtype}")
@@ -424,6 +426,8 @@ def _custom_sequence_regression_backend_kwargs(attn_implementation: str):
     if not using_te:
         backend_kwargs["linear"] = "torch"
         backend_kwargs["experts"] = "torch_mm"
+    if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+        print(f"[Attn] AutoModel sequence-regression backend={backend_attn}; config attn_implementation=sdpa.")
     return {"backend": BackendConfig(**backend_kwargs)}, "sdpa"
 
 
@@ -562,32 +566,40 @@ class _SequenceRegressionBase(nn.Module):
             if self._forward_autocast_dtype is not None and input_ids.is_cuda
             else nullcontext()
         )
-        with cp_ctx_factory():
-            with autocast_ctx:
-                outputs = self.model(
-                    input_ids=model_input_ids,
-                    attention_mask=model_attention_mask,
-                    position_ids=position_ids,
-                    output_hidden_states=True,
-                    use_cache=False,
-                    return_dict=True,
-                    **attn_kwargs,
-                )
-                logits = outputs.get("logits") if isinstance(outputs, dict) else getattr(outputs, "logits", None)
-                if logits is not None and logits.ndim >= 3 and logits.shape[-1] == 1:
-                    values = unshard_dtensor(logits).squeeze(-1)
-                else:
-                    hidden_states = getattr(outputs, "hidden_states", None)
-                    if hidden_states is None:
-                        raise RuntimeError("Sequence regression requires hidden_states; model did not return them.")
-                    last_hidden_states = unshard_dtensor(hidden_states[-1])
-                    values = _get_regression_head(self.model, self.value_head_prefix)(last_hidden_states).squeeze(-1)
-                if self.packing_samples:
-                    values = unpack_to_padded(values, indices, batch, seqlen)
-                elif cp_forward and not cp_local_values and values.shape[1] != seqlen:
-                    values = cp_dtensor_full_sequence(values, self.cp_mesh, seq_dim=1)
-                if cp_forward and not cp_local_values:
-                    values = values[:, :seqlen]
+
+        def _model_forward(output_hidden_states: bool):
+            with cp_ctx_factory():
+                with autocast_ctx:
+                    return self.model(
+                        input_ids=model_input_ids,
+                        attention_mask=model_attention_mask,
+                        position_ids=position_ids,
+                        output_hidden_states=output_hidden_states,
+                        use_cache=False,
+                        return_dict=True,
+                        **attn_kwargs,
+                    )
+
+        outputs = _model_forward(output_hidden_states=False)
+        logits = outputs.get("logits") if isinstance(outputs, dict) else getattr(outputs, "logits", None)
+        if logits is not None and logits.ndim >= 3 and logits.shape[-1] == 1:
+            values = unshard_dtensor(logits).squeeze(-1)
+        else:
+            # Most reward/critic paths are real sequence-regression models and
+            # return token logits directly. Only fall back to hidden states for
+            # legacy wrappers that expose the value head outside the base model.
+            outputs = _model_forward(output_hidden_states=True)
+            hidden_states = getattr(outputs, "hidden_states", None)
+            if hidden_states is None:
+                raise RuntimeError("Sequence regression requires logits or hidden_states; model returned neither.")
+            last_hidden_states = unshard_dtensor(hidden_states[-1])
+            values = _get_regression_head(self.model, self.value_head_prefix)(last_hidden_states).squeeze(-1)
+        if self.packing_samples:
+            values = unpack_to_padded(values, indices, batch, seqlen)
+        elif cp_forward and not cp_local_values and values.shape[1] != seqlen:
+            values = cp_dtensor_full_sequence(values, self.cp_mesh, seq_dim=1)
+        if cp_forward and not cp_local_values:
+            values = values[:, :seqlen]
         return values.float(), outputs
 
 
