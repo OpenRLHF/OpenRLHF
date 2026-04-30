@@ -152,6 +152,10 @@ def get_llm_for_sequence_regression(
 
     use_hf_model = True if force_hf_model else _will_use_hf_model(model_name_or_path, False)
     try_custom = not force_hf_model and not use_hf_model
+    if use_hf_model and not force_hf_model:
+        architectures = getattr(config, "architectures", None) or []
+        arch_desc = ", ".join(architectures) if architectures else type(config).__name__
+        custom_skip_reason = f"AutoModel selected the HF sequence-regression implementation for {arch_desc}"
     if packing_samples and try_custom:
         try_custom = False
         custom_skip_reason = (

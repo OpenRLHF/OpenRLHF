@@ -155,3 +155,4 @@ wandb
 
 # Local verification outputs
 .tmp*/
+*tmp*

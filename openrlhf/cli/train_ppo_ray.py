@@ -10,6 +10,30 @@ def _fsdp_model_parallel_size(args) -> int:
     return fsdp.cp_size * fsdp.tp_size * fsdp.ep_size
 
 
+def _ray_runtime_env_vars() -> dict[str, str]:
+    env_vars = {
+        "TOKENIZERS_PARALLELISM": os.environ.get("TOKENIZERS_PARALLELISM", "true"),
+        "NCCL_DEBUG": os.environ.get("NCCL_DEBUG", "WARN"),
+        "RAY_ENABLE_ZERO_COPY_TORCH_TENSORS": os.environ.get("RAY_ENABLE_ZERO_COPY_TORCH_TENSORS", "1"),
+    }
+    # vLLM and HF code runs inside Ray actors, not the driver process. Preserve
+    # cache/workspace overrides that keep those actors off read-only mounts.
+    for name in (
+        "FLASHINFER_WORKSPACE_BASE",
+        "FLASHINFER_WORKSPACE_DIR",
+        "HF_HOME",
+        "HF_HUB_CACHE",
+        "HUGGINGFACE_HUB_CACHE",
+        "TRANSFORMERS_CACHE",
+        "TORCH_COMPILE_DISABLE",
+        "PYTORCH_CUDA_ALLOC_CONF",
+        "VLLM_WORKER_MULTIPROC_METHOD",
+    ):
+        if os.environ.get(name):
+            env_vars[name] = os.environ[name]
+    return env_vars
+
+
 def train(args):
     global get_strategy
 
@@ -30,15 +54,7 @@ def train(args):
     if not ray.is_initialized():
         # Use os.environ.get() to respect user-set values (e.g. NCCL_DEBUG=INFO via
         # ray job submit --runtime-env-json), falling back to sensible defaults.
-        ray.init(
-            runtime_env={
-                "env_vars": {
-                    "TOKENIZERS_PARALLELISM": os.environ.get("TOKENIZERS_PARALLELISM", "true"),
-                    "NCCL_DEBUG": os.environ.get("NCCL_DEBUG", "WARN"),
-                    "RAY_ENABLE_ZERO_COPY_TORCH_TENSORS": os.environ.get("RAY_ENABLE_ZERO_COPY_TORCH_TENSORS", "1"),
-                }
-            }
-        )
+        ray.init(runtime_env={"env_vars": _ray_runtime_env_vars()})
 
     # configure strategy
     strategy = get_strategy(args)
@@ -701,15 +717,10 @@ if __name__ == "__main__":
                 "--fsdp.enable_sleep is hybrid-colocate sleep mode and only applies "
                 "when --train.colocate_all is set."
             )
-        if not args.vllm.enable_sleep:
+        if not args.train.async_enable and not args.vllm.enable_sleep:
             raise ValueError(
                 "--fsdp.enable_sleep without --vllm.enable_sleep would leave vLLM holding "
                 "GPU weights+KV while trainer reloads — both must be enabled together."
-            )
-        if args.train.async_enable:
-            raise ValueError(
-                "--fsdp.enable_sleep is for synchronous hybrid colocate; async PPO already "
-                "decouples train/rollout GPUs and does not need this hook."
             )
 
     if args.train.async_enable:

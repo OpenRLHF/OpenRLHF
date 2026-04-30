@@ -11,7 +11,7 @@ from openrlhf.models.actor import (
     _resolve_custom_backend_attn,
     _validate_attn_implementation,
 )
-from openrlhf.models.model import CriticModel, get_llm_for_sequence_regression
+from openrlhf.models.model import CriticModel, RewardModel, get_llm_for_sequence_regression
 from openrlhf.utils.fsdp.packing import _restore_cp_chunks, pack_padded_batch, pad_to_cp_multiple
 
 
@@ -161,6 +161,29 @@ class _FakeCustomNoHead(nn.Module):
 _FakeCustomNoHead.__module__ = "nemo_automodel.components.models.fake"
 
 
+class _FakeCustomSequenceRegressionModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.config = _FakeConfig()
+        self.score = nn.Linear(1, 1, bias=False)
+
+    def forward(
+        self,
+        input_ids,
+        attention_mask=None,
+        position_ids=None,
+        output_hidden_states=False,
+        use_cache=False,
+        return_dict=True,
+        **kwargs,
+    ):
+        hidden = input_ids.float().unsqueeze(-1)
+        return type("Output", (), {"hidden_states": (hidden,)})()
+
+
+_FakeCustomSequenceRegressionModel.__module__ = "nemo_automodel.components.models.fake"
+
+
 class _FakeCustomThdModel(nn.Module):
     pass
 
@@ -224,6 +247,29 @@ def test_sequence_regression_custom_without_head_falls_back_to_hf(monkeypatch):
     assert isinstance(wrapper.model, _FakeHFSequenceRegressionModel)
     assert [call["force_hf"] for call in calls] == [False, True]
     assert [call["has_packed_sequence"] for call in calls] == [False, False]
+
+
+@pytest.mark.parametrize("model_type,wrapper_cls", [("reward", RewardModel), ("critic", CriticModel)])
+def test_sequence_regression_custom_path_is_used_for_reward_and_critic(monkeypatch, model_type, wrapper_cls):
+    from openrlhf.models import model as model_mod
+
+    calls = []
+    _install_fake_sequence_classification_automodel(
+        monkeypatch,
+        calls,
+        first_model=_FakeCustomSequenceRegressionModel,
+    )
+    monkeypatch.setattr(model_mod.AutoConfig, "from_pretrained", lambda *args, **kwargs: _FakeConfig())
+    monkeypatch.setattr(model_mod, "_will_use_hf_model", lambda *args, **kwargs: False)
+    monkeypatch.setattr(model_mod, "_custom_sequence_regression_backend_kwargs", lambda attn: ({}, "sdpa"))
+
+    wrapper = get_llm_for_sequence_regression("dummy-model", model_type, attn_implementation="sdpa")
+
+    assert isinstance(wrapper, wrapper_cls)
+    assert isinstance(wrapper.model, _FakeCustomSequenceRegressionModel)
+    assert len(calls) == 1
+    assert calls[0]["force_hf"] is False
+    assert calls[0]["has_packed_sequence"] is False
 
 
 def test_sequence_regression_packing_skips_custom_and_uses_hf_flash(monkeypatch):

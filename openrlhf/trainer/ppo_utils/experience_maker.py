@@ -101,21 +101,58 @@ class RemoteExperienceMaker:
     def _sleep_enabled(self) -> bool:
         return bool(getattr(self.args.fsdp, "enable_sleep", False))
 
+    @property
+    def _stage_sleep_enabled(self) -> bool:
+        return self._sleep_enabled and bool(getattr(self.strategy, "cpu_offload", False))
+
+    @staticmethod
+    def _unique_groups(groups):
+        unique = []
+        seen = set()
+        for group in groups:
+            if group is None:
+                continue
+            group_id = id(group)
+            if group_id in seen:
+                continue
+            seen.add(group_id)
+            unique.append(group)
+        return unique
+
+    def _prepare_lp_inference_phase(self, groups) -> None:
+        if not self._stage_sleep_enabled:
+            return
+        refs = []
+        for group in self._unique_groups(groups):
+            refs.extend(group.async_run_method(method_name="prepare_for_lp_inference"))
+        if refs:
+            ray.get(refs)
+
+    def _finish_lp_inference_phase(self, groups) -> None:
+        if not self._stage_sleep_enabled:
+            return
+        refs = []
+        for group in reversed(self._unique_groups(groups)):
+            refs.extend(group.async_run_method(method_name="offload_after_refit"))
+        if refs:
+            ray.get(refs)
+
     def _dispatch_forward(self, group, sync_condition, **kwargs):
         """Dispatch a batched forward call and optionally sync + empty cache.
 
-        Under sleep mode (hybrid colocate), the actor groups all share GPUs
-        with vLLM; we MUST serialize each forward and bracket it with
-        prepare_for_lp_inference (model→cuda, eval) and offload_after_refit
-        (model→cpu) so the next step in the chain has the device free.
+        Non-CPU-offload sleep keeps the old per-group bracketing because full
+        colocated models may not fit together. CPU-offload sleep uses
+        make_experience-level phase bracketing, so this method only dispatches
+        the forward work.
         """
-        if self._sleep_enabled:
+        per_group_sleep = self._sleep_enabled and not self._stage_sleep_enabled
+        if per_group_sleep:
             ray.get(group.async_run_method(method_name="prepare_for_lp_inference"))
         ref = group.async_run_method_batch(method_name="forward", **kwargs)
-        if sync_condition or self._sleep_enabled:
+        if sync_condition or per_group_sleep:
             ray.get(ref)
             ray.get(group.async_run_method(method_name="empty_cache"))
-            if self._sleep_enabled:
+            if per_group_sleep:
                 ray.get(group.async_run_method(method_name="offload_after_refit"))
         return ref
 
@@ -151,61 +188,69 @@ class RemoteExperienceMaker:
 
         # Reward model
         use_reward_model = samples_list[0].rewards is None
+        lp_groups = [self.actor_model_group, self.critic_model_group, self.initial_model_group]
         if use_reward_model:
-            if self.reward_model_group is None:
-                raise ValueError("reward_model_group is required when rewards are not precomputed")
-            r_refs = self._dispatch_forward(
-                self.reward_model_group,
-                args.train.colocate_all,
-                sequences=sequences_list,
-                attention_mask=attention_mask_list,
-                pad_sequence=[True] * len(samples_list),
-            )
-        else:
-            r_refs = None
+            lp_groups.append(self.reward_model_group)
 
-        # Actor model (receives mm_train_inputs_list for VLM)
-        action_log_probs_ref = self._dispatch_forward(
-            self.actor_model_group,
-            args.train.colocate_all or args.train.colocate_actor_ref,
-            **vlm_forward_kwargs,
-        )
+        self._prepare_lp_inference_phase(lp_groups)
+        try:
+            if use_reward_model:
+                if self.reward_model_group is None:
+                    raise ValueError("reward_model_group is required when rewards are not precomputed")
+                r_refs = self._dispatch_forward(
+                    self.reward_model_group,
+                    args.train.colocate_all,
+                    sequences=sequences_list,
+                    attention_mask=attention_mask_list,
+                    pad_sequence=[True] * len(samples_list),
+                )
+            else:
+                r_refs = None
 
-        # Critic model
-        if self.critic_model_group is not None:
-            if args.train.colocate_critic_reward and r_refs is not None:
-                ray.get(r_refs)
-                ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
-
-            value_ref = self._dispatch_forward(
-                self.critic_model_group,
-                args.train.colocate_all or args.train.colocate_critic_reward,
-                **forward_kwargs,
-            )
-        else:
-            value_ref = dummy_ref
-
-        # Reference model (also receives mm_train_inputs_list for VLM)
-        if self.initial_model_group is not None:
-            base_action_log_probs_ref = self._dispatch_forward(
-                self.initial_model_group,
+            # Actor model (receives mm_train_inputs_list for VLM)
+            action_log_probs_ref = self._dispatch_forward(
+                self.actor_model_group,
                 args.train.colocate_all or args.train.colocate_actor_ref,
                 **vlm_forward_kwargs,
             )
-        else:
-            base_action_log_probs_ref = dummy_ref
 
-        # ── Gather and flatten results ──
+            # Critic model
+            if self.critic_model_group is not None:
+                if args.train.colocate_critic_reward and r_refs is not None:
+                    ray.get(r_refs)
+                    ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
 
-        action_log_probs_list = self._flatten_results(action_log_probs_ref, duplicate_factor)
-        base_action_log_probs_list = self._flatten_results(base_action_log_probs_ref, duplicate_factor)
-        value_list = self._flatten_results(value_ref, duplicate_factor)
+                value_ref = self._dispatch_forward(
+                    self.critic_model_group,
+                    args.train.colocate_all or args.train.colocate_critic_reward,
+                    **forward_kwargs,
+                )
+            else:
+                value_ref = dummy_ref
 
-        if use_reward_model:
-            rewards_list = self._flatten_results(r_refs, duplicate_factor)
-            for i, samples in enumerate(samples_list):
-                samples.rewards = rewards_list[i]
-                samples.info["reward"] = rewards_list[i]
+            # Reference model (also receives mm_train_inputs_list for VLM)
+            if self.initial_model_group is not None:
+                base_action_log_probs_ref = self._dispatch_forward(
+                    self.initial_model_group,
+                    args.train.colocate_all or args.train.colocate_actor_ref,
+                    **vlm_forward_kwargs,
+                )
+            else:
+                base_action_log_probs_ref = dummy_ref
+
+            # ── Gather and flatten results ──
+
+            action_log_probs_list = self._flatten_results(action_log_probs_ref, duplicate_factor)
+            base_action_log_probs_list = self._flatten_results(base_action_log_probs_ref, duplicate_factor)
+            value_list = self._flatten_results(value_ref, duplicate_factor)
+
+            if use_reward_model:
+                rewards_list = self._flatten_results(r_refs, duplicate_factor)
+                for i, samples in enumerate(samples_list):
+                    samples.rewards = rewards_list[i]
+                    samples.info["reward"] = rewards_list[i]
+        finally:
+            self._finish_lp_inference_phase(lp_groups)
 
         assert (
             len(samples_list) == len(action_log_probs_list) == len(base_action_log_probs_list) == len(value_list)

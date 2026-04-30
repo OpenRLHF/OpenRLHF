@@ -37,6 +37,7 @@ class FsdpStrategy:
     """
 
     CKPT_METRIC_FILENAME = "metric.json"
+    _JSON_STATE_TYPE_KEY = "__openrlhf_type__"
 
     def __init__(
         self,
@@ -699,12 +700,67 @@ class FsdpStrategy:
         os.replace(tmp_path, path)
 
     @staticmethod
+    def _json_safe(obj):
+        type_key = FsdpStrategy._JSON_STATE_TYPE_KEY
+        if isinstance(obj, torch.Tensor):
+            tensor = obj.detach().cpu()
+            return {
+                type_key: "tensor",
+                "dtype": str(tensor.dtype).replace("torch.", ""),
+                "shape": list(tensor.shape),
+                "data": tensor.tolist(),
+            }
+        if isinstance(obj, torch.dtype):
+            return {type_key: "dtype", "value": str(obj).replace("torch.", "")}
+        if isinstance(obj, os.PathLike):
+            return os.fspath(obj)
+        if isinstance(obj, tuple):
+            return {type_key: "tuple", "items": [FsdpStrategy._json_safe(v) for v in obj]}
+        if isinstance(obj, list):
+            return [FsdpStrategy._json_safe(v) for v in obj]
+        if isinstance(obj, dict):
+            if all(isinstance(k, str) for k in obj):
+                return {k: FsdpStrategy._json_safe(v) for k, v in obj.items()}
+            return {
+                type_key: "dict",
+                "items": [[FsdpStrategy._json_safe(k), FsdpStrategy._json_safe(v)] for k, v in obj.items()],
+            }
+        if isinstance(obj, (str, int, float, bool)) or obj is None:
+            return obj
+        if hasattr(obj, "item"):
+            try:
+                return obj.item()
+            except Exception:
+                pass
+        return repr(obj)
+
+    @staticmethod
+    def _json_restore(obj):
+        type_key = FsdpStrategy._JSON_STATE_TYPE_KEY
+        if isinstance(obj, list):
+            return [FsdpStrategy._json_restore(v) for v in obj]
+        if not isinstance(obj, dict):
+            return obj
+        state_type = obj.get(type_key)
+        if state_type == "tensor":
+            dtype = getattr(torch, obj["dtype"])
+            tensor = torch.tensor(obj["data"], dtype=dtype)
+            return tensor.reshape(obj["shape"])
+        if state_type == "dtype":
+            return getattr(torch, obj["value"])
+        if state_type == "tuple":
+            return tuple(FsdpStrategy._json_restore(v) for v in obj["items"])
+        if state_type == "dict":
+            return {FsdpStrategy._json_restore(k): FsdpStrategy._json_restore(v) for k, v in obj["items"]}
+        return {k: FsdpStrategy._json_restore(v) for k, v in obj.items()}
+
+    @staticmethod
     def _atomic_write_json(path: str, payload) -> None:
         import json
 
         tmp_path = f"{path}.tmp.{os.getpid()}"
         with open(tmp_path, "w") as f:
-            json.dump(payload, f)
+            json.dump(FsdpStrategy._json_safe(payload), f)
         os.replace(tmp_path, path)
 
     def _write_ckpt_metric(self, ckpt_dir: str, metric_value, metric_key=None) -> None:
@@ -945,7 +1001,7 @@ class FsdpStrategy:
         extra_path = os.path.join(load_dir, "extra_state.json")
         if os.path.isfile(extra_path):
             with open(extra_path) as f:
-                extra = json.load(f)
+                extra = self._json_restore(json.load(f))
             states = extra.get("client_state", {}) or {}
             runtime = extra.get("runtime_state") or {}
             unwrapped = self._unwrap_model(model)

@@ -753,7 +753,7 @@ class PolicyModelActor(BaseModelActor):
         # The optimizer was already moved off-GPU at the end of fit() via
         # offload_before_refit, so this is just model→cuda → broadcast →
         # model→cpu so vLLM can wake_up its KV+weights.
-        if self._sleep_enabled:
+        if self._sleep_enabled and not getattr(self.strategy, "cpu_offload", False):
             self.strategy.move_model_to_device(self.actor, "cuda")
             if self.ema_model is not None:
                 self.strategy.move_model_to_device(self.ema_model, "cuda")
@@ -772,10 +772,11 @@ class PolicyModelActor(BaseModelActor):
         Mirrors NeMo-RL's prepare_for_training. No-op when sleep is off."""
         if not self._sleep_enabled:
             return
-        self.strategy.move_model_to_device(self.actor, "cuda")
-        self.strategy.move_optimizer_to_device(self.actor_optim, "cuda")
-        if self.ema_model is not None:
-            self.strategy.move_model_to_device(self.ema_model, "cuda")
+        if not getattr(self.strategy, "cpu_offload", False):
+            self.strategy.move_model_to_device(self.actor, "cuda")
+            self.strategy.move_optimizer_to_device(self.actor_optim, "cuda")
+            if self.ema_model is not None:
+                self.strategy.move_model_to_device(self.ema_model, "cuda")
         self.actor.train()
 
     def offload_states(self):
@@ -802,9 +803,10 @@ class PolicyModelActor(BaseModelActor):
         cpu from offload_before_refit."""
         if not self._sleep_enabled:
             return
-        self.strategy.move_model_to_device(self.actor, "cpu")
-        if self.ema_model is not None:
-            self.strategy.move_model_to_device(self.ema_model, "cpu")
+        if not getattr(self.strategy, "cpu_offload", False):
+            self.strategy.move_model_to_device(self.actor, "cpu")
+            if self.ema_model is not None:
+                self.strategy.move_model_to_device(self.ema_model, "cpu")
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -815,7 +817,8 @@ class PolicyModelActor(BaseModelActor):
         offload_after_refit to symmetrically tear down."""
         if not self._sleep_enabled:
             return
-        self.strategy.move_model_to_device(self.actor, "cuda")
+        if not getattr(self.strategy, "cpu_offload", False):
+            self.strategy.move_model_to_device(self.actor, "cuda")
         self.actor.eval()
 
     def save_checkpoint(self, tag, client_states=None, metric_value=None, metric_key=None):

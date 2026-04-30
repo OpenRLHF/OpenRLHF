@@ -90,14 +90,16 @@ class BaseModelActor(BaseDistributedActor):
         CriticModelActor to also reload optimizer state."""
         if not self._sleep_enabled or not hasattr(self, "model"):
             return
-        self.strategy.move_model_to_device(self.model, "cuda")
+        if not getattr(self.strategy, "cpu_offload", False):
+            self.strategy.move_model_to_device(self.model, "cuda")
         self.model.eval()
 
     def offload_states(self):
         """Default: model→cpu. Overridden to also offload optimizer."""
         if not self._sleep_enabled or not hasattr(self, "model"):
             return
-        self.strategy.move_model_to_device(self.model, "cpu")
+        if not getattr(self.strategy, "cpu_offload", False):
+            self.strategy.move_model_to_device(self.model, "cpu")
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

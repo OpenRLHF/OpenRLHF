@@ -362,8 +362,9 @@ class CriticModelActor(BaseModelActor):
         """Hybrid/sleep entry: bring critic + optimizer state back to GPU."""
         if not self._sleep_enabled:
             return
-        self.strategy.move_model_to_device(self.critic, "cuda")
-        self.strategy.move_optimizer_to_device(self.critic_optim, "cuda")
+        if not getattr(self.strategy, "cpu_offload", False):
+            self.strategy.move_model_to_device(self.critic, "cuda")
+            self.strategy.move_optimizer_to_device(self.critic_optim, "cuda")
         self.critic.train()
 
     def offload_states(self):
@@ -371,7 +372,8 @@ class CriticModelActor(BaseModelActor):
         if not self._sleep_enabled:
             return
         self.strategy.move_optimizer_to_device(self.critic_optim, "cpu")
-        self.strategy.move_model_to_device(self.critic, "cpu")
+        if not getattr(self.strategy, "cpu_offload", False):
+            self.strategy.move_model_to_device(self.critic, "cpu")
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -381,14 +383,16 @@ class CriticModelActor(BaseModelActor):
         to leave the device free for the inference pass."""
         if not self._sleep_enabled:
             return
-        self.strategy.move_model_to_device(self.critic, "cuda")
+        if not getattr(self.strategy, "cpu_offload", False):
+            self.strategy.move_model_to_device(self.critic, "cuda")
         self.critic.eval()
 
     def offload_after_refit(self):
         """Tear down after a value-forward (model→cpu only)."""
         if not self._sleep_enabled:
             return
-        self.strategy.move_model_to_device(self.critic, "cpu")
+        if not getattr(self.strategy, "cpu_offload", False):
+            self.strategy.move_model_to_device(self.critic, "cpu")
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

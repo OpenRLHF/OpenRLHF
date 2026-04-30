@@ -1,3 +1,6 @@
+import json
+
+import torch
 import torch.nn as nn
 
 from openrlhf.utils.fsdp.strategy import FsdpStrategy
@@ -81,3 +84,24 @@ def test_resolve_ckpt_load_dir_falls_back_from_stale_latest(tmp_path):
     load_dir = strategy._resolve_ckpt_load_dir(str(tmp_path))
 
     assert load_dir == str(tmp_path / "global_step3")
+
+
+def test_extra_state_json_roundtrips_tensor_client_state(tmp_path):
+    path = tmp_path / "extra_state.json"
+    payload = {
+        "client_state": {
+            "episode": 1,
+            "data_loader_state_dict": {
+                "cursor": torch.tensor([1, 2], dtype=torch.int64),
+                "nested": (torch.tensor(3), "ok"),
+            },
+        }
+    }
+
+    FsdpStrategy._atomic_write_json(str(path), payload)
+    restored = FsdpStrategy._json_restore(json.loads(path.read_text()))
+
+    state = restored["client_state"]["data_loader_state_dict"]
+    assert torch.equal(state["cursor"], payload["client_state"]["data_loader_state_dict"]["cursor"])
+    assert state["nested"][0].item() == 3
+    assert state["nested"][1] == "ok"
