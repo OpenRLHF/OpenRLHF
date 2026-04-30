@@ -14,9 +14,34 @@ from openrlhf.models.utils import masked_mean
 from openrlhf.trainer.ppo_utils.experience import Experience
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.fsdp import FsdpStrategy
+from openrlhf.utils.fsdp.packing import cp_shard_sequence, pad_to_cp_multiple
 
 from ..ppo_utils import NaiveReplayBuffer
 from .launcher import BaseModelActor
+
+
+def _cp_local_step_tensor(
+    tensor: Optional[torch.Tensor],
+    *,
+    cp_group,
+    cp_size: int,
+    sequence_length: int,
+    value: int | float | bool = 0,
+) -> Optional[torch.Tensor]:
+    if tensor is None:
+        return None
+    if cp_size <= 1:
+        return tensor
+    if tensor.shape[1] == sequence_length - 1:
+        pad_shape = list(tensor.shape)
+        pad_shape[1] = 1
+        tensor = torch.cat([tensor, tensor.new_full(pad_shape, value)], dim=1)
+    elif tensor.shape[1] != sequence_length:
+        raise ValueError(
+            f"CP local step tensor has length {tensor.shape[1]}, expected {sequence_length - 1} or {sequence_length}."
+        )
+    tensor = pad_to_cp_multiple(tensor, cp_size, seq_dim=1, value=value)
+    return cp_shard_sequence(tensor, cp_group, seq_dim=1)
 
 
 class CriticPPOTrainer(ABC):
@@ -110,6 +135,9 @@ class CriticPPOTrainer(ABC):
                         window_step,
                         global_num_tokens=global_num_tokens,
                         global_batch_size=global_batch_size,
+                        # CP training mirrors NeMo-RL: the full sequence is
+                        # restored through DTensor autograd, then scaled by
+                        # dp*cp to cancel FSDP's gradient averaging.
                         loss_dp_size=getattr(self.strategy, "dp_cp_size", self.strategy.dp_size),
                         loss_report_scale=1,
                         scale_loss_by_accumulation=False,
@@ -156,14 +184,46 @@ class CriticPPOTrainer(ABC):
         action_mask = experience.action_mask
         packed_seq_lens = None
         attention_mask = experience.attention_mask
+        loss_action_mask = action_mask
 
         # critic loss
+        cp_local_loss = (
+            getattr(self.critic, "cp_size", 1) > 1
+            and not self.critic.packing_samples
+            and os.environ.get("OPENRLHF_CP_LOCAL_VALUE_LOSS", "0") == "1"
+        )
+        if cp_local_loss:
+            cp_group = self.critic.cp_mesh.get_group()
+            cp_size = self.critic.cp_size
+            sequence_length = sequences.shape[1]
+            loss_action_mask = _cp_local_step_tensor(
+                action_mask,
+                cp_group=cp_group,
+                cp_size=cp_size,
+                sequence_length=sequence_length,
+                value=False,
+            )
+            old_values = _cp_local_step_tensor(
+                old_values,
+                cp_group=cp_group,
+                cp_size=cp_size,
+                sequence_length=sequence_length,
+                value=0.0,
+            )
+            returns = _cp_local_step_tensor(
+                returns,
+                cp_group=cp_group,
+                cp_size=cp_size,
+                sequence_length=sequence_length,
+                value=0.0,
+            )
         values, output = self.critic(
             sequences,
-            action_mask=action_mask,
+            action_mask=loss_action_mask,
             attention_mask=attention_mask,
             return_output=True,
-            values_allgather=True,
+            values_allgather=not cp_local_loss,
+            cp_local_values=cp_local_loss,
             packed_seq_lens=packed_seq_lens,
         )
 
@@ -172,14 +232,18 @@ class CriticPPOTrainer(ABC):
         if global_batch_size is None:
             global_batch_size = self.strategy.global_token_count((experience.action_mask.sum(dim=-1) > 0).sum())
         if loss_dp_size is None:
-            loss_dp_size = getattr(self.strategy, "dp_cp_size", self.strategy.dp_size)
+            loss_dp_size = (
+                getattr(self.strategy, "dp_cp_size", self.strategy.dp_size)
+                if getattr(self.critic, "cp_size", 1) > 1
+                else self.strategy.dp_size
+            )
 
         # loss function
         critic_loss = self.critic_loss_fn(
             values,
             old_values,
             returns,
-            action_mask=experience.action_mask,
+            action_mask=loss_action_mask,
             dp_size=loss_dp_size,
             batch_num_tokens=global_num_tokens,
             global_batch_size=global_batch_size,
@@ -213,7 +277,7 @@ class CriticPPOTrainer(ABC):
         # status
         status = {
             "critic_loss": (critic_loss.detach() / loss_report_scale).item(),
-            "values": masked_mean(values, experience.action_mask).detach().item(),
+            "values": masked_mean(values, loss_action_mask).detach().item(),
             "critic_lr": self.critic_scheduler.get_last_lr()[0],
             "critic_grad_norm": self.strategy.get_grad_norm(self.critic),
         }
@@ -372,8 +436,7 @@ class CriticModelActor(BaseModelActor):
         if not self._sleep_enabled:
             return
         self.strategy.move_optimizer_to_device(self.critic_optim, "cpu")
-        if not getattr(self.strategy, "cpu_offload", False):
-            self.strategy.move_model_to_device(self.critic, "cpu")
+        self.strategy.move_model_to_device(self.critic, "cpu")
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -391,8 +454,7 @@ class CriticModelActor(BaseModelActor):
         """Tear down after a value-forward (model→cpu only)."""
         if not self._sleep_enabled:
             return
-        if not getattr(self.strategy, "cpu_offload", False):
-            self.strategy.move_model_to_device(self.critic, "cpu")
+        self.strategy.move_model_to_device(self.critic, "cpu")
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

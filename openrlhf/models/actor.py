@@ -9,7 +9,7 @@ import torch.nn as nn
 from torch.distributed.tensor import DTensor
 
 from openrlhf.utils.fsdp.packing import (
-    cp_allgather_sequence,
+    cp_dtensor_full_sequence,
     is_automodel_custom_model,
     log_probs_from_vocab_parallel_logits,
     pack_padded_batch,
@@ -339,15 +339,10 @@ class Actor(nn.Module):
                 "--fsdp.attn_implementation flex is only supported on AutoModel custom models; "
                 "drop --fsdp.force_hf_model or use sdpa/eager/flash_attention_2."
             )
-        if (
-            use_hf_model
-            and torch_dtype == torch.float32
-            and attn_implementation
-            in (
-                "flash_attention_2",
-                "flash_attention_3",
-            )
-        ):
+        # NeMo-RL runs AutoModel forwards under compute-dtype autocast. With
+        # FSDP2 output_dtype=float32, this also keeps sibling heads such as
+        # lm_head dtype-compatible when params are bf16.
+        if compute_dtype != torch.float32 and not (is_moe and not use_hf_model):
             self._forward_autocast_dtype = compute_dtype
         if packing_samples and use_hf_model and attn_implementation != "flash_attention_2":
             raise ValueError(
@@ -443,6 +438,7 @@ class Actor(nn.Module):
         return_output=False,
         allgather_logits=False,
         return_logprobs=False,
+        cp_local_log_probs=False,
         packed_seq_lens: Optional[list[int]] = None,
         return_entropy=False,
         **mm_inputs,
@@ -487,8 +483,8 @@ class Actor(nn.Module):
 
                 sequences = pad_to_cp_multiple(sequences, self.cp_size, seq_dim=1, value=0)
                 attention_mask = pad_to_cp_multiple(attention_mask, self.cp_size, seq_dim=1, value=0)
-                position_ids = pad_to_cp_multiple(position_ids, self.cp_size, seq_dim=1, value=0)
                 rolled_sequences = pad_to_cp_multiple(rolled_sequences, self.cp_size, seq_dim=1, value=0)
+                position_ids = torch.arange(sequences.shape[1], device=sequences.device).unsqueeze(0).expand(batch, -1)
                 cp_batch = {
                     "input_ids": sequences,
                     "attention_mask": attention_mask,
@@ -526,7 +522,7 @@ class Actor(nn.Module):
             assert return_output
             full_logits = unshard_dtensor(logits).to(torch.float32)
             if cp_forward and not isinstance(logits, DTensor):
-                full_logits = cp_allgather_sequence(full_logits, self.cp_mesh.get_group(), seq_dim=1)
+                full_logits = cp_dtensor_full_sequence(full_logits, self.cp_mesh, seq_dim=1)
             if cp_forward:
                 full_logits = full_logits[:, :seqlen]
             output["logits"] = full_logits
@@ -536,12 +532,14 @@ class Actor(nn.Module):
             output.entropy = entropy[:, :-1]
 
         return_action_log_probs = action_mask is not None
+        if cp_forward and cp_local_log_probs and return_action_log_probs:
+            raise ValueError("cp_local_log_probs returns local sequence logprobs; pass action_mask=None.")
         if not return_action_log_probs and not return_logprobs:
             assert return_output
             if allgather_logits:
                 full_logits = full_logits if full_logits is not None else unshard_dtensor(logits).to(torch.float32)
                 if cp_forward and not isinstance(logits, DTensor):
-                    full_logits = cp_allgather_sequence(full_logits, self.cp_mesh.get_group(), seq_dim=1)
+                    full_logits = cp_dtensor_full_sequence(full_logits, self.cp_mesh, seq_dim=1)
                 if cp_forward:
                     full_logits = full_logits[:, :seqlen]
                 output["logits"] = (
@@ -559,14 +557,14 @@ class Actor(nn.Module):
             full_logits = full_logits if full_logits is not None else logits.to(torch.float32)
             log_probs = log_probs_from_logits(full_logits, rolled_sequences, temperature=self.temperature)
 
-        if cp_forward:
-            log_probs = cp_allgather_sequence(log_probs, self.cp_mesh.get_group(), seq_dim=1)
+        if cp_forward and not cp_local_log_probs:
+            log_probs = cp_dtensor_full_sequence(log_probs, self.cp_mesh, seq_dim=1)
             log_probs = log_probs[:, :seqlen]
 
         if self.packing_samples:
             log_probs = unpack_to_padded(log_probs, indices, batch, seqlen)
 
-        if truncate_logprobs:
+        if truncate_logprobs and not (cp_forward and cp_local_log_probs):
             log_probs = log_probs[:, :-1]
         if not return_action_log_probs and return_logprobs:
             return (log_probs, output) if return_output else log_probs

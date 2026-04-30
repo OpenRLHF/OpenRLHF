@@ -135,8 +135,23 @@ class _FakeSequenceRegressionModel(nn.Module):
         return type("Output", (), {"hidden_states": (hidden,)})()
 
 
+class _FakeLogitSequenceRegressionModel(_FakeSequenceRegressionModel):
+    def forward(self, input_ids, attention_mask=None, position_ids=None, **kwargs):
+        self.forward_kwargs = {
+            "input_ids": input_ids.detach().clone(),
+            "attention_mask": None if attention_mask is None else attention_mask.detach().clone(),
+            "position_ids": position_ids.detach().clone(),
+            **kwargs,
+        }
+        logits = (input_ids.float() + 10).unsqueeze(-1)
+        hidden = input_ids.float().unsqueeze(-1)
+        return type("Output", (), {"logits": logits, "hidden_states": (hidden,)})()
+
+
 class _FakeConfig:
     hidden_size = 1
+    model_type = "fake"
+    architectures = []
 
     def to_dict(self):
         return {}
@@ -233,6 +248,17 @@ def test_sequence_regression_hf_flash_packing_unpacks_values():
     torch.testing.assert_close(model.forward_kwargs["cu_seq_lens_q"], torch.tensor([0, 2, 5], dtype=torch.int32))
 
 
+def test_sequence_regression_prefers_token_logits_when_available():
+    model = _FakeLogitSequenceRegressionModel()
+    critic = CriticModel(model, "score", normalize_reward=False)
+    input_ids = torch.tensor([[1, 2, 0], [3, 4, 5]])
+    attention_mask = torch.tensor([[1, 1, 0], [1, 1, 1]])
+
+    values, _ = critic._token_values(input_ids, attention_mask)
+
+    torch.testing.assert_close(values, torch.tensor([[11.0, 12.0, 10.0], [13.0, 14.0, 15.0]]))
+
+
 def test_sequence_regression_custom_without_head_falls_back_to_hf(monkeypatch):
     from openrlhf.models import model as model_mod
 
@@ -270,6 +296,7 @@ def test_sequence_regression_custom_path_is_used_for_reward_and_critic(monkeypat
     assert len(calls) == 1
     assert calls[0]["force_hf"] is False
     assert calls[0]["has_packed_sequence"] is False
+    assert wrapper._forward_autocast_dtype is torch.bfloat16
 
 
 def test_sequence_regression_packing_skips_custom_and_uses_hf_flash(monkeypatch):
@@ -293,6 +320,34 @@ def test_sequence_regression_packing_skips_custom_and_uses_hf_flash(monkeypatch)
     assert calls[0]["force_hf"] is True
     assert calls[0]["has_packed_sequence"] is True
     assert calls[0]["attn_implementation"] == "flash_attention_2"
+
+
+def test_sequence_regression_custom_architecture_is_used_for_llama_regression(monkeypatch):
+    from openrlhf.models import model as model_mod
+
+    class _FakeLlamaConfig(_FakeConfig):
+        model_type = "llama"
+        architectures = ["LlamaForCausalLM"]
+
+    calls = []
+    _install_fake_sequence_classification_automodel(
+        monkeypatch,
+        calls,
+        first_model=_FakeCustomSequenceRegressionModel,
+    )
+    monkeypatch.setattr(model_mod.AutoConfig, "from_pretrained", lambda *args, **kwargs: _FakeLlamaConfig())
+    monkeypatch.setattr(model_mod, "_will_use_hf_model", lambda *args, **kwargs: False)
+    monkeypatch.setattr(model_mod, "_custom_sequence_regression_backend_kwargs", lambda attn: ({}, "sdpa"))
+    monkeypatch.setattr(
+        model_mod,
+        "_register_openrlhf_llama_sequence_regression",
+        lambda config: "OpenRLHFLlamaForCausalSequenceRegression",
+    )
+
+    wrapper = get_llm_for_sequence_regression("dummy-model", "critic", attn_implementation="sdpa")
+
+    assert isinstance(wrapper.model, _FakeCustomSequenceRegressionModel)
+    assert calls[0]["config"].architectures == ["OpenRLHFLlamaForCausalSequenceRegression"]
 
 
 def test_sequence_regression_packing_requires_flash_attention_2():

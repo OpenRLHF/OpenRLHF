@@ -18,6 +18,7 @@ from openrlhf.trainer.ppo_utils.experience import Experience
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.fsdp import FsdpStrategy
+from openrlhf.utils.fsdp.packing import cp_shard_sequence, pad_to_cp_multiple
 from openrlhf.utils.fsdp.refit import gather_full_param
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.vlm_utils import merge_mm_train_inputs
@@ -25,6 +26,35 @@ from openrlhf.utils.vlm_utils import merge_mm_train_inputs
 from ..ppo_utils import NaiveReplayBuffer
 
 logger = init_logger(__name__)
+
+
+def _cp_local_step_tensor(
+    tensor: Optional[torch.Tensor],
+    *,
+    cp_group,
+    cp_size: int,
+    sequence_length: int,
+    value: int | float | bool = 0,
+) -> Optional[torch.Tensor]:
+    if tensor is None:
+        return None
+    if cp_size <= 1:
+        return tensor
+
+    # Step tensors are length S - 1. Add the final non-loss position so the
+    # CP shard lines up with model logits before global last-token truncation.
+    if tensor.shape[1] == sequence_length - 1:
+        pad_shape = list(tensor.shape)
+        pad_shape[1] = 1
+        tensor = torch.cat([tensor, tensor.new_full(pad_shape, value)], dim=1)
+    elif tensor.shape[1] != sequence_length:
+        raise ValueError(
+            f"CP local step tensor has length {tensor.shape[1]}, expected {sequence_length - 1} or {sequence_length}."
+        )
+
+    tensor = pad_to_cp_multiple(tensor, cp_size, seq_dim=1, value=value)
+    return cp_shard_sequence(tensor, cp_group, seq_dim=1)
+
 
 from .launcher import BaseModelActor
 from .utils import get_physical_gpu_id
@@ -285,6 +315,9 @@ class ActorPPOTrainer(ABC):
                         window_step,
                         global_num_tokens=global_num_tokens,
                         global_batch_size=global_batch_size,
+                        # CP training mirrors NeMo-RL: the full sequence is
+                        # restored through DTensor autograd, then scaled by
+                        # dp*cp to cancel FSDP's gradient averaging.
                         loss_dp_size=getattr(self.strategy, "dp_cp_size", self.strategy.dp_size),
                         loss_report_scale=1,
                         scale_loss_by_accumulation=False,
@@ -341,6 +374,8 @@ class ActorPPOTrainer(ABC):
         old_action_log_probs = experience.action_log_probs
         advantages = experience.advantages
         base_action_log_probs = experience.base_action_log_probs
+        rollout_log_probs = experience.rollout_log_probs
+        loss_action_mask = action_mask
 
         # VLM: merge pre-processed multimodal inputs for training forward
         mm_inputs = {}
@@ -352,30 +387,105 @@ class ActorPPOTrainer(ABC):
             mm_inputs = merge_mm_train_inputs(experience.mm_train_inputs, sequences.device)
 
         # actor loss
-        action_log_probs, output = self.actor(
-            sequences,
-            action_mask,
-            attention_mask=attention_mask,
-            return_output=True,
-            packed_seq_lens=packed_seq_lens,
-            return_entropy=self.args.actor.entropy_coef is not None,
-            **mm_inputs,
+        cp_local_loss = (
+            getattr(self.actor, "cp_size", 1) > 1
+            and not self.actor.packing_samples
+            and os.environ.get("OPENRLHF_CP_LOCAL_LOSS", "0") == "1"
         )
+        if cp_local_loss:
+            if self.args.actor.entropy_coef is not None:
+                raise NotImplementedError("CP-local PPO loss is not wired for entropy regularization yet.")
+            cp_group = self.actor.cp_mesh.get_group()
+            cp_size = self.actor.cp_size
+            sequence_length = sequences.shape[1]
+            loss_action_mask = _cp_local_step_tensor(
+                action_mask,
+                cp_group=cp_group,
+                cp_size=cp_size,
+                sequence_length=sequence_length,
+                value=False,
+            )
+            old_action_log_probs = _cp_local_step_tensor(
+                old_action_log_probs,
+                cp_group=cp_group,
+                cp_size=cp_size,
+                sequence_length=sequence_length,
+                value=0.0,
+            )
+            advantages = _cp_local_step_tensor(
+                advantages,
+                cp_group=cp_group,
+                cp_size=cp_size,
+                sequence_length=sequence_length,
+                value=0.0,
+            )
+            base_action_log_probs = _cp_local_step_tensor(
+                base_action_log_probs,
+                cp_group=cp_group,
+                cp_size=cp_size,
+                sequence_length=sequence_length,
+                value=0.0,
+            )
+            rollout_log_probs = _cp_local_step_tensor(
+                rollout_log_probs,
+                cp_group=cp_group,
+                cp_size=cp_size,
+                sequence_length=sequence_length,
+                value=0.0,
+            )
+            action_log_probs, output = self.actor(
+                sequences,
+                action_mask=None,
+                attention_mask=attention_mask,
+                truncate_logprobs=False,
+                return_output=True,
+                return_logprobs=True,
+                cp_local_log_probs=True,
+                packed_seq_lens=packed_seq_lens,
+                return_entropy=False,
+                **mm_inputs,
+            )
+            action_log_probs = torch.where(
+                loss_action_mask.bool(),
+                action_log_probs,
+                torch.zeros_like(action_log_probs),
+            )
+            self._debug_cp_actor_step(
+                action_log_probs,
+                old_action_log_probs,
+                base_action_log_probs,
+                advantages,
+                loss_action_mask,
+            )
+        else:
+            action_log_probs, output = self.actor(
+                sequences,
+                action_mask,
+                attention_mask=attention_mask,
+                return_output=True,
+                packed_seq_lens=packed_seq_lens,
+                return_entropy=self.args.actor.entropy_coef is not None,
+                **mm_inputs,
+            )
 
         if global_num_tokens is None:
             global_num_tokens = self.strategy.global_token_count(experience.action_mask)
         if global_batch_size is None:
             global_batch_size = self.strategy.global_token_count((experience.action_mask.sum(dim=-1) > 0).sum())
         if loss_dp_size is None:
-            loss_dp_size = getattr(self.strategy, "dp_cp_size", self.strategy.dp_size)
+            loss_dp_size = (
+                getattr(self.strategy, "dp_cp_size", self.strategy.dp_size)
+                if getattr(self.actor, "cp_size", 1) > 1
+                else self.strategy.dp_size
+            )
 
         # loss function
         actor_loss, clip_ratio, ppo_kl, vllm_kl = self.actor_loss_fn(
             action_log_probs,
             old_action_log_probs,
             advantages,
-            action_mask=experience.action_mask,
-            rollout_log_probs=experience.rollout_log_probs,
+            action_mask=loss_action_mask,
+            rollout_log_probs=rollout_log_probs,
             dp_size=loss_dp_size,
             batch_num_tokens=global_num_tokens,
             global_batch_size=global_batch_size,
@@ -398,12 +508,12 @@ class ActorPPOTrainer(ABC):
                 logprobs_diff = torch.zeros_like(action_log_probs)
             kl_loss = agg_loss(
                 kl,
-                experience.action_mask,
+                loss_action_mask,
                 "token-mean",
                 dp_size=loss_dp_size,
                 batch_num_tokens=global_num_tokens,
             )
-            logprobs_diff = masked_mean(logprobs_diff, experience.action_mask)
+            logprobs_diff = masked_mean(logprobs_diff, loss_action_mask)
             experience.info["kl"] = kl_loss.detach()
             experience.info["logprobs_diff"] = logprobs_diff.detach()
         else:
@@ -418,7 +528,7 @@ class ActorPPOTrainer(ABC):
         if self.args.actor.entropy_coef is not None:
             entropy_loss = agg_loss(
                 output.entropy[:, -experience.action_mask.shape[1] :],
-                experience.action_mask,
+                loss_action_mask,
                 "token-mean",
                 dp_size=loss_dp_size,
                 batch_num_tokens=global_num_tokens,
@@ -492,6 +602,62 @@ class ActorPPOTrainer(ABC):
             "num_samples": float(experience.action_mask.shape[0]),
             "num_action_tokens": float(experience.action_mask.sum().item()),
         }
+
+    def _debug_cp_actor_step(
+        self,
+        action_log_probs: torch.Tensor,
+        old_action_log_probs: torch.Tensor,
+        base_action_log_probs: Optional[torch.Tensor],
+        advantages: torch.Tensor,
+        action_mask: torch.Tensor,
+    ) -> None:
+        if os.environ.get("OPENRLHF_CP_DEBUG") != "1":
+            return
+        rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+        mask = action_mask.bool()
+        count = int(mask.sum().item())
+
+        def _stats(name: str, tensor: Optional[torch.Tensor]) -> list[str]:
+            if tensor is None:
+                return [f"{name}=None"]
+            if count == 0:
+                return [f"{name}.count=0"]
+            values = tensor.float().masked_select(mask)
+            if values.numel() == 0:
+                return [f"{name}.count=0"]
+            return [
+                f"{name}.mean={values.mean().item():.6g}",
+                f"{name}.min={values.min().item():.6g}",
+                f"{name}.max={values.max().item():.6g}",
+                f"{name}.absmax={values.abs().max().item():.6g}",
+            ]
+
+        parts = [
+            f"[CPActorDebug][rank={rank}]",
+            f"shape={tuple(action_log_probs.shape)}",
+            f"tokens={count}",
+        ]
+        parts.extend(_stats("new", action_log_probs))
+        parts.extend(_stats("old", old_action_log_probs))
+        parts.extend(_stats("ref", base_action_log_probs))
+        parts.extend(_stats("adv", advantages))
+        if count > 0:
+            old_diff = (action_log_probs.float() - old_action_log_probs.float()).masked_select(mask)
+            parts.extend(
+                [
+                    f"new_old.mean={old_diff.mean().item():.6g}",
+                    f"new_old.absmax={old_diff.abs().max().item():.6g}",
+                ]
+            )
+            if base_action_log_probs is not None:
+                ref_diff = (action_log_probs.float() - base_action_log_probs.float()).masked_select(mask)
+                parts.extend(
+                    [
+                        f"new_ref.mean={ref_diff.mean().item():.6g}",
+                        f"new_ref.absmax={ref_diff.abs().max().item():.6g}",
+                    ]
+                )
+        print(" ".join(parts), flush=True)
 
     def broadcast_to_vllm(self):
         if getattr(self.strategy.args.fsdp.lora, "rank", 0) > 0:
@@ -803,10 +969,9 @@ class PolicyModelActor(BaseModelActor):
         cpu from offload_before_refit."""
         if not self._sleep_enabled:
             return
-        if not getattr(self.strategy, "cpu_offload", False):
-            self.strategy.move_model_to_device(self.actor, "cpu")
-            if self.ema_model is not None:
-                self.strategy.move_model_to_device(self.ema_model, "cpu")
+        self.strategy.move_model_to_device(self.actor, "cpu")
+        if self.ema_model is not None:
+            self.strategy.move_model_to_device(self.ema_model, "cpu")
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

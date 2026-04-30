@@ -34,6 +34,20 @@ def _ray_runtime_env_vars() -> dict[str, str]:
     return env_vars
 
 
+def _offload_initialized_groups(args, *groups) -> None:
+    if not getattr(args.fsdp, "enable_sleep", False):
+        return
+
+    refs = []
+    for group in groups:
+        if group is not None:
+            refs.extend(group.async_run_method(method_name="offload_states"))
+    if refs:
+        import ray
+
+        ray.get(refs)
+
+
 def train(args):
     global get_strategy
 
@@ -204,12 +218,14 @@ def train(args):
     if reward_model is not None and args.reward.model_name_or_path:
         refs.extend(reward_model.async_init_model_from_pretrained(strategy, args.reward.model_name_or_path))
     ray.get(refs)
+    _offload_initialized_groups(args, actor_model, ref_model, reward_model)
 
     if critic_model is not None and args.critic.model_name_or_path:
         # critic scheduler initialization depends on max_step, so we have to init critic after actor
         # TODO: use first reward model as critic model
         refs = critic_model.async_init_model_from_pretrained(strategy, args.critic.model_name_or_path, max_steps)
         ray.get(refs)
+        _offload_initialized_groups(args, critic_model)
 
     # train actor and critic model
     ray.get(ppo_trainer.fit.remote())

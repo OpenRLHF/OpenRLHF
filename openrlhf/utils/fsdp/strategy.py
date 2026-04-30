@@ -16,6 +16,11 @@ from transformers.optimization import get_scheduler
 
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
+try:
+    from torch.distributed.fsdp._fully_shard import FSDPModule
+except ImportError:  # pragma: no cover - torch version guard
+    FSDPModule = None
+
 
 def _get_actor_cls():
     """Lazy import to avoid circular dep: openrlhf.models.actor imports from this package."""
@@ -257,17 +262,13 @@ class FsdpStrategy:
 
         torch_dtype = _torch_dtype(self.param_dtype)
         # FSDP2 mixed precision: params/forward in bf16, gradient reduce-scatter
-        # in fp32. Reducing in bf16 accumulates rounding error across DP ranks
-        # and inflates grad_norm (observed 60–130 vs. ~1 expected). cast_forward
-        # _inputs handles the lm_head dtype mismatch by casting fp32 inputs to
-        # bf16 at FSDP unit boundaries. Mirrors NeMo AutoModel's recipe.
-        # output_dtype omitted: defaulting to param_dtype=bf16 keeps lm_head
-        # (a sibling sub-module of the FSDP root) fed bf16; setting fp32 caused
-        # 'expected mat1 and mat2 to have the same dtype'. Stable loss comes
-        # from casting logits to fp32 in actor.forward after the model call.
+        # and module outputs in fp32. This mirrors NeMo-RL's AutoModel setup;
+        # wrappers run the forward under autocast when fp32 master weights are
+        # used so sibling heads such as lm_head/score still receive bf16 inputs.
         mp_policy = MixedPrecisionPolicy(
             param_dtype=torch_dtype,
             reduce_dtype=torch.float32,
+            output_dtype=torch.float32,
             cast_forward_inputs=True,
         )
         # Public attribute — `Actor` reads it as `strategy.distributed_config`
@@ -365,6 +366,20 @@ class FsdpStrategy:
 
     # ---------------------------------------------------------------- step loop
 
+    @staticmethod
+    def _set_fsdp_backward_sync(model: nn.Module, sync: bool) -> None:
+        if FSDPModule is None:
+            return
+        fsdp_modules = [module for module in model.modules() if isinstance(module, FSDPModule)]
+        if not fsdp_modules:
+            return
+        # Mirror NeMo AutoModel's gradient-accumulation state: non-final
+        # microbatches skip reduction and keep params unresharded; the final
+        # microbatch restores sync and lets FSDP run final backward callbacks.
+        fsdp_modules[0].set_is_last_backward(sync)
+        fsdp_modules[0].set_reshard_after_backward(sync)
+        fsdp_modules[0].set_requires_gradient_sync(sync)
+
     def backward(
         self,
         loss: torch.Tensor,
@@ -377,17 +392,15 @@ class FsdpStrategy:
         # Callers that pre-scale by global token/batch denominators set
         # ``scale_loss_by_accumulation=False``; otherwise we divide by the accum
         # window so the static path matches the old trainer contract.
+        unwrapped = self._unwrap_model(model)
         if accumulate and self.accumulated_gradient > 1:
             if kwargs.get("scale_loss_by_accumulation", True):
                 loss = loss / self.accumulated_gradient
-            # Skip the DP all-reduce on intermediate accum steps (saves bandwidth);
-            # only sync on the final micro-batch where optimizer_step will fire.
-            # The key MUST match optimizer_step's so the counter advances together.
-            unwrapped = self._unwrap_model(model)
-            if hasattr(unwrapped, "set_requires_gradient_sync"):
-                key = f"step_{name}"
-                sync = (self.time_steps[key] + 1) % self.accumulated_gradient == 0
-                unwrapped.set_requires_gradient_sync(sync)
+        # NeMo-RL's AutoModel path lets each microbatch backward run with normal
+        # FSDP2 sync. Skipping sync for intermediate microbatches can leave CP
+        # grads dependent on which microbatch is final, which shows up as large
+        # actor grad-norm drift.
+        self._set_fsdp_backward_sync(unwrapped, True)
         if self.moe_mesh is not None:
             try:
                 from nemo_automodel.components.moe.megatron.moe_utils import MoEAuxLossAutoScaler
@@ -426,6 +439,7 @@ class FsdpStrategy:
                 scheduler.step()
             optimizer.zero_grad(set_to_none=True)
             return
+        self._maybe_debug_grad_stats(model, name)
         max_norm = self._max_norm_by_optimizer.get(id(optimizer), self.max_norm)
         clip_norm = max_norm if max_norm and max_norm > 0 else None
         if clip_norm is not None or self.moe_mesh is not None:
@@ -454,13 +468,74 @@ class FsdpStrategy:
     def get_grad_norm(self, model: nn.Module) -> float:
         return self._last_grad_norm
 
+    @staticmethod
+    def _local_grad_tensor(grad: torch.Tensor) -> torch.Tensor:
+        return grad.to_local() if isinstance(grad, DTensor) else grad
+
+    def _maybe_debug_grad_stats(self, model: nn.Module, optim_name: str) -> None:
+        debug = os.environ.get("OPENRLHF_FSDP_DEBUG_GRADS", "")
+        if not debug or debug == "0":
+            return
+        enabled = {part.strip() for part in debug.split(",") if part.strip()}
+        if "1" not in enabled and "all" not in enabled and optim_name not in enabled:
+            return
+
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        top_k = int(os.environ.get("OPENRLHF_FSDP_DEBUG_GRADS_TOPK", "8"))
+        pattern_env = os.environ.get("OPENRLHF_FSDP_DEBUG_GRADS_FILTER")
+        patterns = (
+            [part.strip() for part in pattern_env.split(",") if part.strip()]
+            if pattern_env
+            else ["score", "lm_head", "embed_tokens", "layers.0.", "layers.31.", ".norm"]
+        )
+        rows = []
+        nonfinite_tensors = 0
+        total_tensors = 0
+        total_elems = 0
+        nonfinite_elems = 0
+
+        for param_name, param in model.named_parameters():
+            grad = param.grad
+            if grad is None:
+                continue
+            if patterns and not any(pattern in param_name for pattern in patterns):
+                continue
+            total_tensors += 1
+            local_grad = self._local_grad_tensor(grad).detach()
+            total_elems += local_grad.numel()
+            finite = torch.isfinite(local_grad)
+            bad = local_grad.numel() - int(finite.sum().item())
+            nonfinite_elems += bad
+            if bad:
+                nonfinite_tensors += 1
+            finite_grad = torch.where(finite, local_grad, torch.zeros_like(local_grad)).float()
+            local_norm = finite_grad.norm(2).item()
+            local_max = finite_grad.abs().max().item() if finite_grad.numel() else 0.0
+            placement = tuple(str(p) for p in grad.placements) if isinstance(grad, DTensor) else ("local",)
+            rows.append((local_norm, local_max, bad, param_name, placement, tuple(local_grad.shape)))
+
+        rows.sort(key=lambda item: item[0], reverse=True)
+        header = (
+            f"[FSDPGradDebug][rank={rank}][{optim_name}] tensors={total_tensors} "
+            f"nonfinite_tensors={nonfinite_tensors} elems={total_elems} nonfinite_elems={nonfinite_elems}"
+        )
+        print(header, flush=True)
+        for local_norm, local_max, bad, param_name, placement, shape in rows[:top_k]:
+            print(
+                f"[FSDPGradDebug][rank={rank}][{optim_name}] "
+                f"norm={local_norm:.6e} max={local_max:.6e} bad={bad} "
+                f"shape={shape} placement={placement} name={param_name}",
+                flush=True,
+            )
+
     def global_token_count(self, mask: torch.Tensor) -> torch.Tensor:
         """All-reduce ``mask.sum()`` across the data-parallel data mesh.
 
         For CP, call this before ``make_cp_batch_and_ctx`` while each CP rank
-        still sees the full local sequence. This mirrors AutoModel's recipe:
-        token denominators are reduced over DP only; the backward loss scale
-        still uses ``dp_size * cp_size`` to counter FSDP's dp_shard_cp averaging.
+        still sees the full local sequence. Token denominators are reduced over
+        DP only. The NeMo-style CP path restores the full sequence through
+        DTensor autograd on every CP rank, then scales by ``dp_size * cp_size``
+        to cancel FSDP's gradient averaging over the flattened dp_cp mesh.
         """
         local = mask if mask.ndim == 0 else mask.sum()
         device = torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else local.device
@@ -566,10 +641,40 @@ class FsdpStrategy:
         for buf in model.buffers():
             torch.utils.swap_tensors(buf, buf.to(device))
 
+    @staticmethod
+    def _reshard_fsdp_modules(model: nn.Module) -> None:
+        if FSDPModule is None:
+            return
+        for module in reversed(list(model.modules())):
+            if not isinstance(module, FSDPModule):
+                continue
+            state = module._get_fsdp_state()
+            fsdp_param_group = getattr(state, "_fsdp_param_group", None)
+            if fsdp_param_group is None:
+                continue
+            try:
+                module.reshard()
+            except (AssertionError, RuntimeError):
+                pass
+            if not getattr(fsdp_param_group, "is_sharded", True):
+                # If a forward raised before FSDP's post-forward hook, the
+                # param group can still be in FORWARD with reshard_after_forward
+                # disabled. Public reshard() is a no-op in that state, so force
+                # the same sharded registration that reshard() would use from
+                # IDLE before calling Module.to().
+                to_sharded = getattr(fsdp_param_group, "_to_sharded", None)
+                if to_sharded is None:
+                    raise RuntimeError("FSDP param group cannot be resharded before moving devices")
+                to_sharded()
+            if not getattr(fsdp_param_group, "is_sharded", True):
+                raise RuntimeError("FSDP param group stayed unsharded before moving devices")
+
     def move_model_to_device(self, model: nn.Module, device) -> None:
         """Bulk-move a model's params + buffers to ``device`` (cpu or cuda).
         Releases freed GPU storage to the caching allocator on exit."""
         unwrapped = self._unwrap_model(model)
+        if str(device).startswith("cpu"):
+            self._reshard_fsdp_modules(unwrapped)
         self._move_buffers(unwrapped, device)
         unwrapped.to(device)
         gc.collect()

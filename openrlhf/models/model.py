@@ -9,7 +9,7 @@ import torch.nn as nn
 from transformers import AutoConfig
 
 from openrlhf.utils.fsdp.packing import (
-    cp_allgather_sequence,
+    cp_dtensor_full_sequence,
     is_automodel_custom_model,
     pack_padded_batch,
     pad_to_cp_multiple,
@@ -87,6 +87,7 @@ def get_llm_for_sequence_regression(
     value_head_prefix = getattr(config, "value_head_prefix", value_head_prefix)
     config.value_head_prefix = value_head_prefix
     logger.info(f"set value_head_prefix to `{value_head_prefix}`")
+    custom_sequence_regression_arch = _register_openrlhf_llama_sequence_regression(config)
 
     from openrlhf.utils.utils import convert_to_torch_dtype, ensure_torchvision_nms_stub
 
@@ -135,6 +136,8 @@ def get_llm_for_sequence_regression(
     def load_model(*, force_hf: bool, attn_impl: str, has_packed_sequence: bool, extra_kwargs=None) -> nn.Module:
         attempt_config = copy.deepcopy(config)
         attempt_config._attn_implementation = attn_impl
+        if not force_hf and custom_sequence_regression_arch is not None:
+            attempt_config.architectures = [custom_sequence_regression_arch]
         return NeMoAutoModelForSequenceClassification.from_pretrained(
             model_name_or_path,
             config=attempt_config,
@@ -210,11 +213,10 @@ def get_llm_for_sequence_regression(
         if packing_samples:
             print("[Packing] Using HF FlashAttention2 varlen packed path for reward/critic.")
 
-    forward_autocast_dtype = (
-        compute_dtype
-        if torch_dtype == torch.float32 and selected_attn_implementation in ("flash_attention_2", "flash_attention_3")
-        else None
-    )
+    # FSDP2 can return child module outputs in fp32 even when parameters are
+    # bf16. Mirror NeMo-RL by running sequence-regression forwards under the
+    # compute dtype so the score head receives matching activations.
+    forward_autocast_dtype = compute_dtype if compute_dtype != torch.float32 else None
 
     if "output_router_logits" in model.config.to_dict():
         print("[MoE] set output_router_logits as True")
@@ -252,6 +254,151 @@ def _release_cuda_cache() -> None:
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+
+
+def _register_openrlhf_llama_sequence_regression(config) -> Optional[str]:
+    """Register a causal Llama token-regression AutoModel class for RM/value heads."""
+    architectures = getattr(config, "architectures", None) or []
+    if getattr(config, "model_type", None) != "llama":
+        return None
+    if architectures and architectures[0] not in {
+        "RewardModel",
+        "LlamaForCausalLM",
+        "LlamaForSequenceClassification",
+        "OpenRLHFLlamaForCausalSequenceRegression",
+    }:
+        return None
+
+    try:
+        from nemo_automodel._transformers.registry import ModelRegistry
+        from nemo_automodel.components.distributed.optimized_tp_plans import PARALLELIZE_FUNCTIONS, _parallelize_llama
+        from nemo_automodel.components.models.common import BackendConfig
+        from nemo_automodel.components.models.common.hf_checkpointing_mixin import HFCheckpointingMixin
+        from nemo_automodel.components.models.llama.model import LlamaModel, LlamaPreTrainedModel
+        from nemo_automodel.components.models.llama.state_dict_adapter import LlamaStateDictAdapter
+        from transformers import LlamaConfig
+        from transformers.cache_utils import Cache
+        from transformers.modeling_outputs import BaseModelOutputWithPast, SequenceClassifierOutputWithPast
+        from transformers.processing_utils import Unpack
+        from transformers.utils import TransformersKwargs
+    except Exception as exc:
+        logger.warning("Unable to register OpenRLHF Llama sequence-regression AutoModel path: %s", exc)
+        return None
+
+    class OpenRLHFLlamaForCausalSequenceRegression(HFCheckpointingMixin, LlamaPreTrainedModel):
+        config_class = LlamaConfig
+        base_model_prefix = "model"
+        _openrlhf_automodel_custom = True
+
+        @classmethod
+        def from_config(cls, config: LlamaConfig, backend: Optional[BackendConfig] = None, **kwargs):
+            return cls(config, backend, **kwargs)
+
+        def __init__(self, config: LlamaConfig, backend: Optional[BackendConfig] = None):
+            super().__init__(config)
+            self.config = config
+            self.backend = backend or BackendConfig()
+            self.num_labels = getattr(config, "num_labels", 1)
+            self.model = LlamaModel(config=config, backend=self.backend)
+            self.score = nn.Linear(config.hidden_size, self.num_labels, bias=False)
+            self.state_dict_adapter = LlamaStateDictAdapter(config=self.config)
+            self.post_init()
+
+            if hasattr(config, "torch_dtype") and config.torch_dtype is not None:
+                self.to(dtype=config.torch_dtype)
+
+            if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0:
+                print(
+                    f"[OpenRLHFLlamaForCausalSequenceRegression] Attention implementation: {self.config._attn_implementation}"
+                )
+                print("[OpenRLHFLlamaForCausalSequenceRegression] Custom token regression implementation")
+                print(f"[OpenRLHFLlamaForCausalSequenceRegression] torch_dtype: {self.config.torch_dtype}")
+
+        def get_input_embeddings(self):
+            return self.model.embed_tokens
+
+        def set_input_embeddings(self, value):
+            self.model.embed_tokens = value
+
+        def set_decoder(self, decoder):
+            self.model = decoder
+
+        def get_decoder(self):
+            return self.model
+
+        def forward(
+            self,
+            input_ids: Optional[torch.LongTensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            position_ids: Optional[torch.LongTensor] = None,
+            past_key_values: Optional[Cache] = None,
+            inputs_embeds: Optional[torch.FloatTensor] = None,
+            labels: Optional[torch.LongTensor] = None,
+            use_cache: Optional[bool] = None,
+            output_attentions: Optional[bool] = None,
+            output_hidden_states: Optional[bool] = None,
+            return_dict: Optional[bool] = None,
+            cache_position: Optional[torch.LongTensor] = None,
+            **kwargs: Unpack[TransformersKwargs],
+        ) -> SequenceClassifierOutputWithPast:
+            output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+            output_hidden_states = (
+                output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+            )
+            return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+            outputs: BaseModelOutputWithPast = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=True,
+                cache_position=cache_position,
+                **kwargs,
+            )
+            last_hidden_state = outputs.last_hidden_state
+            score_weight = getattr(self.score, "weight", None)
+            score_dtype = getattr(score_weight, "dtype", None)
+            if score_dtype is not None and last_hidden_state.dtype != score_dtype:
+                last_hidden_state = last_hidden_state.to(score_dtype)
+            scores = self.score(last_hidden_state)
+            out = SequenceClassifierOutputWithPast(
+                loss=None,
+                logits=scores,
+                past_key_values=outputs.past_key_values,
+                hidden_states=outputs.hidden_states,
+                attentions=outputs.attentions,
+            )
+            if return_dict:
+                return out
+            return out.to_tuple()
+
+    def _parallelize_openrlhf_llama_sequence_regression(model, sequence_parallel: bool = False):
+        plan = _parallelize_llama(model, sequence_parallel)
+        plan.pop("lm_head", None)
+        return plan
+
+    arch_name = "OpenRLHFLlamaForCausalSequenceRegression"
+    registry = ModelRegistry.model_arch_name_to_cls
+    try:
+        existing = registry[arch_name] if arch_name in registry else None
+    except Exception:
+        existing = None
+    if existing is None:
+        registry[arch_name] = OpenRLHFLlamaForCausalSequenceRegression
+        PARALLELIZE_FUNCTIONS[OpenRLHFLlamaForCausalSequenceRegression] = (
+            _parallelize_openrlhf_llama_sequence_regression
+        )
+    elif getattr(existing, "_openrlhf_automodel_custom", False):
+        OpenRLHFLlamaForCausalSequenceRegression = existing
+
+    if "RewardModel" not in registry:
+        registry["RewardModel"] = OpenRLHFLlamaForCausalSequenceRegression
+    return arch_name
 
 
 def _validate_sequence_regression_attn(attn_implementation: str) -> Optional[str]:
@@ -375,7 +522,7 @@ class _SequenceRegressionBase(nn.Module):
     def device(self):
         return next(self.model.parameters()).device
 
-    def _token_values(self, input_ids, attention_mask):
+    def _token_values(self, input_ids, attention_mask, cp_local_values: bool = False):
         batch, seqlen = input_ids.shape
         position_ids = attention_mask.long().cumsum(-1) - 1
         position_ids.masked_fill_(attention_mask == 0, 1)
@@ -395,7 +542,9 @@ class _SequenceRegressionBase(nn.Module):
 
             model_input_ids = pad_to_cp_multiple(input_ids, self.cp_size, seq_dim=1, value=0)
             model_attention_mask = pad_to_cp_multiple(attention_mask, self.cp_size, seq_dim=1, value=0)
-            position_ids = pad_to_cp_multiple(position_ids, self.cp_size, seq_dim=1, value=0)
+            position_ids = (
+                torch.arange(model_input_ids.shape[1], device=model_input_ids.device).unsqueeze(0).expand(batch, -1)
+            )
             cp_batch = {
                 "input_ids": model_input_ids,
                 "attention_mask": model_attention_mask,
@@ -424,16 +573,20 @@ class _SequenceRegressionBase(nn.Module):
                     return_dict=True,
                     **attn_kwargs,
                 )
-                hidden_states = getattr(outputs, "hidden_states", None)
-                if hidden_states is None:
-                    raise RuntimeError("Sequence regression requires hidden_states; model did not return them.")
-                last_hidden_states = unshard_dtensor(hidden_states[-1])
-                values = _get_regression_head(self.model, self.value_head_prefix)(last_hidden_states).squeeze(-1)
+                logits = outputs.get("logits") if isinstance(outputs, dict) else getattr(outputs, "logits", None)
+                if logits is not None and logits.ndim >= 3 and logits.shape[-1] == 1:
+                    values = unshard_dtensor(logits).squeeze(-1)
+                else:
+                    hidden_states = getattr(outputs, "hidden_states", None)
+                    if hidden_states is None:
+                        raise RuntimeError("Sequence regression requires hidden_states; model did not return them.")
+                    last_hidden_states = unshard_dtensor(hidden_states[-1])
+                    values = _get_regression_head(self.model, self.value_head_prefix)(last_hidden_states).squeeze(-1)
                 if self.packing_samples:
                     values = unpack_to_padded(values, indices, batch, seqlen)
-                elif cp_forward and values.shape[1] != seqlen:
-                    values = cp_allgather_sequence(values, self.cp_mesh.get_group(), seq_dim=1)
-                if cp_forward:
+                elif cp_forward and not cp_local_values and values.shape[1] != seqlen:
+                    values = cp_dtensor_full_sequence(values, self.cp_mesh, seq_dim=1)
+                if cp_forward and not cp_local_values:
                     values = values[:, :seqlen]
         return values.float(), outputs
 
@@ -470,19 +623,22 @@ class CriticModel(_SequenceRegressionBase):
         attention_mask: Optional[torch.Tensor] = None,
         return_output: bool = False,
         values_allgather: bool = False,
+        cp_local_values: bool = False,
         packed_seq_lens=None,
     ) -> torch.Tensor:
-        values, outputs = self._token_values(input_ids, attention_mask)
+        values, outputs = self._token_values(input_ids, attention_mask, cp_local_values=cp_local_values)
 
         if action_mask is None:
             assert return_output
             return outputs
 
-        values = values[:, :-1]
+        if not cp_local_values:
+            values = values[:, :-1]
         if self.normalize_reward:
             mean = self.mean.to(values.device)
             std = self.std.to(values.device)
             values = (values - mean) / std
 
-        action_values = values[:, -action_mask.shape[1] :] * action_mask.float()
+        selected_values = values if cp_local_values else values[:, -action_mask.shape[1] :]
+        action_values = torch.where(action_mask.bool(), selected_values, torch.zeros_like(selected_values))
         return (action_values, outputs) if return_output else action_values

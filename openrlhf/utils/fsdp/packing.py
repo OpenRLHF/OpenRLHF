@@ -13,7 +13,7 @@ from typing import Any
 
 import torch
 import torch.distributed as dist
-from torch.distributed.tensor import DTensor
+from torch.distributed.tensor import DTensor, Shard
 
 
 def unshard_dtensor(tensor: torch.Tensor) -> torch.Tensor:
@@ -78,6 +78,62 @@ def cp_allgather_sequence(tensor: torch.Tensor, cp_group: dist.ProcessGroup, seq
     return _AllGatherCPSequence.apply(tensor, cp_group, seq_dim)
 
 
+def cp_shard_sequence(tensor: torch.Tensor, cp_group: dist.ProcessGroup, seq_dim: int = 1) -> torch.Tensor:
+    """Select the local head/tail CP shard without communication.
+
+    This mirrors the load-balanced sequence order used by
+    ``torch.distributed.tensor.experimental.context_parallel``: CP rank ``r``
+    owns chunks ``r`` and ``2 * cp_size - r - 1``.
+    """
+    cp_size = dist.get_world_size(group=cp_group)
+    if cp_size <= 1:
+        return tensor
+    cp_rank = dist.get_rank(group=cp_group)
+    chunks = torch.chunk(tensor, chunks=2 * cp_size, dim=seq_dim)
+    return torch.cat([chunks[cp_rank], chunks[2 * cp_size - cp_rank - 1]], dim=seq_dim)
+
+
+def cp_dtensor_full_sequence(tensor: torch.Tensor, cp_mesh, seq_dim: int = 1) -> torch.Tensor:
+    """Restore a CP-local load-balanced sequence shard via DTensor autograd.
+
+    PyTorch context parallel stores each rank's local sequence as head/tail
+    chunks. NeMo-RL wraps that local tensor as a CP-sharded DTensor, gathers the
+    logical sequence, and uses the gathered ``seq_index`` to recover original
+    token order. Keeping the gather in DTensor autograd matters for training:
+    every CP rank computes the same full-sequence loss while gradients are routed
+    back to the owning local shard.
+    """
+    if cp_mesh is None or cp_mesh.size() <= 1:
+        return tensor
+
+    local_len = tensor.shape[seq_dim]
+    if local_len % 2 != 0:
+        raise ValueError(f"CP local sequence length must be even, got {local_len}.")
+
+    cp_size = cp_mesh.size()
+    try:
+        cp_rank = cp_mesh.get_local_rank()
+    except AttributeError:
+        cp_rank = dist.get_rank(group=cp_mesh.get_group())
+    chunk = local_len // 2
+    global_len = local_len * cp_size
+    second_chunk_idx = 2 * cp_size - cp_rank - 1
+    local_seq_index = torch.cat(
+        [
+            torch.arange(cp_rank * chunk, (cp_rank + 1) * chunk, device=tensor.device),
+            torch.arange(second_chunk_idx * chunk, (second_chunk_idx + 1) * chunk, device=tensor.device),
+        ],
+        dim=0,
+    )
+    if local_seq_index.numel() != local_len or int(local_seq_index.max().item()) >= global_len:
+        raise RuntimeError("Invalid CP seq_index construction.")
+
+    seq_index = DTensor.from_local(local_seq_index, device_mesh=cp_mesh, placements=[Shard(0)]).full_tensor()
+    restore_index = torch.argsort(seq_index)
+    restored = DTensor.from_local(tensor, device_mesh=cp_mesh, placements=[Shard(seq_dim)]).full_tensor()
+    return restored.index_select(seq_dim, restore_index)
+
+
 class _AllGatherCPSequence(torch.autograd.Function):
     @staticmethod
     def forward(ctx, tensor: torch.Tensor, cp_group: dist.ProcessGroup, seq_dim: int):
@@ -95,7 +151,6 @@ class _AllGatherCPSequence(torch.autograd.Function):
         cp_rank = dist.get_rank(group=ctx.cp_group)
         seq_dim = ctx.seq_dim
 
-        dist.all_reduce(grad_output, group=ctx.cp_group)
         chunks = torch.chunk(grad_output, chunks=2 * cp_size, dim=seq_dim)
         local = torch.cat(
             [chunks[cp_rank], chunks[2 * cp_size - cp_rank - 1]],
@@ -117,6 +172,8 @@ def is_automodel_custom_model(model: Any) -> bool:
     so the check survives that wrap.
     """
     for cls in type(model).__mro__:
+        if getattr(cls, "_openrlhf_automodel_custom", False):
+            return True
         if cls.__module__.startswith("nemo_automodel.components.models"):
             return True
     return False
