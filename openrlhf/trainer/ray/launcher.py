@@ -167,7 +167,10 @@ class ReferenceModelActor(BaseModelActor):
             force_hf_model=strategy.args.fsdp.force_hf_model,
             temperature=strategy.args.rollout.temperature,
             use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
-            use_fp32_master_weights=False,
+            # Keep reference numerics on the same AutoModel path as the
+            # trainable actor. Custom AutoModel Llama is not fp32/bf16 forward
+            # equivalent under autocast, so bf16 ref makes step-0 KL non-zero.
+            use_fp32_master_weights=True,
         )
         strategy.print(model)
 

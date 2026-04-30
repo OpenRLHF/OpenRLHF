@@ -345,7 +345,10 @@ class ActorPPOTrainer(ABC):
             for k in set().union(*(s.keys() for s in status_list)):
                 if k in ("_num_samples", "_num_action_tokens", "_weights"):
                     continue
-                if k in ("actor_grad_norm", "actor_lr"):
+                if k == "actor_grad_norm":
+                    vals = [s[k] for s in status_list if k in s]
+                    status_mean[k] = sum(vals) / len(vals) if vals else 0.0
+                elif k == "actor_lr":
                     vals = [s[k] for s in status_list if k in s]
                     status_mean[k] = vals[-1] if vals else 0.0
                 elif status_list[0].get("_weights", {}).get(k) == "token":

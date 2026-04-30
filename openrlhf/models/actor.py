@@ -75,6 +75,48 @@ def _move_model_to_cpu_for_offload(model: nn.Module, distributed_config):
     return model.to("cpu")
 
 
+def _patch_nemo_llama_rope_position_ids() -> None:
+    """Make NeMo AutoModel Llama RoPE honor non-trivial position_ids.
+
+    The pinned AutoModel Llama rotary module slices its cache by sequence
+    length and ignores the actual ``position_ids`` values. That only matches
+    HF/vLLM for unpadded arange positions; PPO/RM batches use padding and CP
+    sharding, where shifted RoPE changes logits and rewards.
+    """
+    try:
+        from nemo_automodel.components.models.llama import rope_utils
+    except Exception:
+        return
+
+    cls = getattr(rope_utils, "LlamaRotaryEmbedding", None)
+    if cls is None or getattr(cls, "_openrlhf_position_ids_patch", False):
+        return
+
+    @torch.no_grad()
+    def _forward(self, x: torch.Tensor, position_ids: torch.Tensor):
+        position_ids = position_ids.to(device=x.device, dtype=torch.long)
+        cache_len = position_ids.shape[-1]
+        if position_ids.numel() > 0:
+            cache_len = max(cache_len, int(position_ids.max().item()) + 1)
+
+        if self._cos_cache is None or cache_len > self.max_seq_len_cached or self._cos_cache.device != x.device:
+            self._build_cache(cache_len, x.device)
+
+        flat_positions = position_ids.reshape(-1)
+        cos = self._cos_cache.index_select(0, flat_positions).view(*position_ids.shape, -1)
+        sin = self._sin_cache.index_select(0, flat_positions).view(*position_ids.shape, -1)
+
+        if self.rope_fusion:
+            arange_positions = torch.arange(position_ids.shape[-1], device=position_ids.device).unsqueeze(0)
+            if torch.equal(position_ids, arange_positions.expand_as(position_ids)):
+                return cos, sin, self._freqs_cache[: position_ids.shape[-1]]
+
+        return cos, sin
+
+    cls.forward = _forward
+    cls._openrlhf_position_ids_patch = True
+
+
 def _resolve_custom_backend_attn(attn_implementation: str, packing_samples: bool) -> str:
     if packing_samples:
         if attn_implementation == "te":
@@ -355,6 +397,7 @@ class Actor(nn.Module):
         automodel_has_packed_sequence = packing_samples
         self._packing_style = "hf" if use_hf_model else "automodel"
         if not use_hf_model:
+            _patch_nemo_llama_rope_position_ids()
             backend_attn = _resolve_custom_backend_attn(attn_implementation, packing_samples)
             # For AutoModel custom models, the real attention backend comes
             # from BackendConfig below. Keep the HF config-side
@@ -484,7 +527,7 @@ class Actor(nn.Module):
                 sequences = pad_to_cp_multiple(sequences, self.cp_size, seq_dim=1, value=0)
                 attention_mask = pad_to_cp_multiple(attention_mask, self.cp_size, seq_dim=1, value=0)
                 rolled_sequences = pad_to_cp_multiple(rolled_sequences, self.cp_size, seq_dim=1, value=0)
-                position_ids = torch.arange(sequences.shape[1], device=sequences.device).unsqueeze(0).expand(batch, -1)
+                position_ids = pad_to_cp_multiple(position_ids, self.cp_size, seq_dim=1, value=1)
                 cp_batch = {
                     "input_ids": sequences,
                     "attention_mask": attention_mask,

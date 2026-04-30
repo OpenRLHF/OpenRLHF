@@ -222,6 +222,31 @@ class BasePPOTrainer(ABC):
             experiences[0].info["reward"][0].item(),
         ]
         logger.info(f"Sample: {sample0}")
+        if os.environ.get("OPENRLHF_DEBUG_ROLLOUT") == "1":
+            debug_rows = []
+            for exp_idx, exp in enumerate(experiences):
+                batch = exp.sequences.shape[0]
+                rewards = exp.info.get("reward")
+                returns = exp.info.get("return")
+                group_stds = exp.info.get("group_reward_std")
+                for row in range(batch):
+                    index = exp.index[row] if isinstance(exp.index, list) and row < len(exp.index) else row
+                    debug_rows.append(
+                        {
+                            "exp": exp_idx,
+                            "row": row,
+                            "index": int(index),
+                            "reward": rewards[row].item() if isinstance(rewards, torch.Tensor) else None,
+                            "return": returns[row].item() if isinstance(returns, torch.Tensor) else None,
+                            "group_reward_std": (
+                                group_stds[row].item() if isinstance(group_stds, torch.Tensor) else None
+                            ),
+                            "text": self.tokenizer.decode(exp.sequences[row].unsqueeze(0), skip_special_tokens=True)[
+                                0
+                            ],
+                        }
+                    )
+            logger.info(f"RolloutDebug: {debug_rows}")
 
         # Compute ground-truth rollout stats BEFORE dynamic batch splitting
         rollout_stats = self._compute_rollout_stats(experiences)

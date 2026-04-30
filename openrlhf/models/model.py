@@ -23,6 +23,7 @@ from .actor import (
     _detect_moe_arch,
     _has_hf_flash_attn_2,
     _move_model_to_cpu_for_offload,
+    _patch_nemo_llama_rope_position_ids,
     _resolve_custom_backend_attn,
     _validate_attn_implementation,
     _will_use_hf_model,
@@ -171,6 +172,7 @@ def get_llm_for_sequence_regression(
 
     if try_custom:
         try:
+            _patch_nemo_llama_rope_position_ids()
             custom_extra_kwargs, custom_attn_implementation = _custom_sequence_regression_backend_kwargs(
                 attn_implementation
             )
@@ -542,9 +544,7 @@ class _SequenceRegressionBase(nn.Module):
 
             model_input_ids = pad_to_cp_multiple(input_ids, self.cp_size, seq_dim=1, value=0)
             model_attention_mask = pad_to_cp_multiple(attention_mask, self.cp_size, seq_dim=1, value=0)
-            position_ids = (
-                torch.arange(model_input_ids.shape[1], device=model_input_ids.device).unsqueeze(0).expand(batch, -1)
-            )
+            position_ids = pad_to_cp_multiple(position_ids, self.cp_size, seq_dim=1, value=1)
             cp_batch = {
                 "input_ids": model_input_ids,
                 "attention_mask": model_attention_mask,
