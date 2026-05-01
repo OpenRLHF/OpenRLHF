@@ -502,6 +502,7 @@ class Actor(nn.Module):
         allgather_logits=False,
         return_logprobs=False,
         cp_local_log_probs=False,
+        cp_context_stack=None,
         packed_seq_lens: Optional[list[int]] = None,
         return_entropy=False,
         **mm_inputs,
@@ -566,7 +567,15 @@ class Actor(nn.Module):
             if self._forward_autocast_dtype is not None and sequences.is_cuda
             else nullcontext()
         )
-        with cp_ctx_factory():
+
+        forward_ctx = cp_ctx_factory()
+        if cp_context_stack is not None and cp_forward:
+            # AutoModel CP train context installs backward hooks, so training
+            # code keeps it alive until loss.backward() completes.
+            cp_context_stack.enter_context(forward_ctx)
+            forward_ctx = nullcontext()
+
+        with forward_ctx:
             with autocast_ctx:
                 output = self.model(
                     sequences,

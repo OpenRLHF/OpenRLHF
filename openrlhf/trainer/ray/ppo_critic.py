@@ -1,6 +1,7 @@
 import gc
 import os
 from abc import ABC
+from contextlib import ExitStack
 from typing import Dict, Optional, Union
 
 import ray
@@ -11,7 +12,7 @@ from tqdm import tqdm
 
 from openrlhf.models import ValueLoss, get_llm_for_sequence_regression
 from openrlhf.models.utils import masked_mean
-from openrlhf.trainer.ppo_utils.experience import Experience
+from openrlhf.trainer.ppo_utils.experience import Experience, get_model_parallel_size
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.fsdp import FsdpStrategy
 from openrlhf.utils.fsdp.packing import cp_shard_sequence, pad_to_cp_multiple
@@ -87,7 +88,7 @@ class CriticPPOTrainer(ABC):
         if self.args.train.dynamic_batch_enable:
             self.replay_buffer.setup_dynamic_batch(self.strategy)
 
-        should_shuffle = self.args.fsdp.tp_size <= 1 and not self.args.train.dynamic_batch_enable
+        should_shuffle = get_model_parallel_size(self.args) <= 1 and not self.args.train.dynamic_batch_enable
         dataloader = DataLoader(
             self.replay_buffer,
             batch_size=self.replay_buffer.sample_batch_size,
@@ -148,13 +149,20 @@ class CriticPPOTrainer(ABC):
         attention_mask = experience.attention_mask
         loss_action_mask = action_mask
 
+        # AutoModel CP train context must cover both forward and backward.
+        cp_context_stack = ExitStack()
+
         # critic loss
         cp_local_loss = (
             getattr(self.critic, "cp_size", 1) > 1
             and not self.critic.packing_samples
             and os.environ.get("OPENRLHF_CP_LOCAL_VALUE_LOSS", "0") == "1"
         )
+        batch_num_tokens = None
+        loss_dp_size = 1
         if cp_local_loss:
+            batch_num_tokens = self.strategy.global_token_count(action_mask)
+            loss_dp_size = getattr(self.strategy, "dp_cp_size", self.strategy.dp_size)
             cp_group = self.critic.cp_mesh.get_group()
             cp_size = self.critic.cp_size
             sequence_length = sequences.shape[1]
@@ -186,6 +194,7 @@ class CriticPPOTrainer(ABC):
             return_output=True,
             values_allgather=not cp_local_loss,
             cp_local_values=cp_local_loss,
+            cp_context_stack=cp_context_stack,
             packed_seq_lens=packed_seq_lens,
         )
 
@@ -195,6 +204,8 @@ class CriticPPOTrainer(ABC):
             old_values,
             returns,
             action_mask=loss_action_mask,
+            dp_size=loss_dp_size,
+            batch_num_tokens=batch_num_tokens,
         )
         # mixtral
         if self.aux_loss:
@@ -205,19 +216,25 @@ class CriticPPOTrainer(ABC):
         if self.args.train.dynamic_batch_enable:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
 
+        try:
+            if self.args.train.dynamic_batch_enable:
+                self.strategy.backward(loss, self.critic, self.critic_optim, name="critic", accumulate=False)
+            else:
+                self.strategy.backward(
+                    loss,
+                    self.critic,
+                    self.critic_optim,
+                    name="critic",
+                )
+        finally:
+            cp_context_stack.close()
+
         if self.args.train.dynamic_batch_enable:
-            self.strategy.backward(loss, self.critic, self.critic_optim, name="critic", accumulate=False)
             if self.replay_buffer.dynamic_optimizer_step[step]:
                 self.strategy.optimizer_step(
                     self.critic_optim, self.critic, self.critic_scheduler, name="critic", accumulate=False
                 )
         else:
-            self.strategy.backward(
-                loss,
-                self.critic,
-                self.critic_optim,
-                name="critic",
-            )
             self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
 
         # status

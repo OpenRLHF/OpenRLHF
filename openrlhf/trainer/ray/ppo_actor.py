@@ -2,6 +2,7 @@ import gc
 import os
 import socket
 from abc import ABC
+from contextlib import ExitStack
 from dataclasses import fields
 from typing import Dict, List, Optional, Union
 
@@ -14,7 +15,7 @@ from tqdm import tqdm
 
 from openrlhf.models import Actor, PolicyLoss
 from openrlhf.models.utils import compute_approx_kl, masked_mean
-from openrlhf.trainer.ppo_utils.experience import Experience
+from openrlhf.trainer.ppo_utils.experience import Experience, get_model_parallel_size
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.fsdp import FsdpStrategy
@@ -268,7 +269,7 @@ class ActorPPOTrainer(ABC):
         if self.args.train.dynamic_batch_enable:
             self.replay_buffer.setup_dynamic_batch(self.strategy)
 
-        should_shuffle = self.args.fsdp.tp_size <= 1 and not self.args.train.dynamic_batch_enable
+        should_shuffle = get_model_parallel_size(self.args) <= 1 and not self.args.train.dynamic_batch_enable
         dataloader = DataLoader(
             self.replay_buffer,
             batch_size=self.replay_buffer.sample_batch_size,
@@ -352,15 +353,22 @@ class ActorPPOTrainer(ABC):
         ):
             mm_inputs = merge_mm_train_inputs(experience.mm_train_inputs, sequences.device)
 
+        # AutoModel CP train context must cover both forward and backward.
+        cp_context_stack = ExitStack()
+
         # actor loss
         cp_local_loss = (
             getattr(self.actor, "cp_size", 1) > 1
             and not self.actor.packing_samples
             and os.environ.get("OPENRLHF_CP_LOCAL_LOSS", "0") == "1"
         )
+        batch_num_tokens = None
+        loss_dp_size = 1
         if cp_local_loss:
             if self.args.actor.entropy_coef is not None:
                 raise NotImplementedError("CP-local PPO loss is not wired for entropy regularization yet.")
+            batch_num_tokens = self.strategy.global_token_count(action_mask)
+            loss_dp_size = getattr(self.strategy, "dp_cp_size", self.strategy.dp_size)
             cp_group = self.actor.cp_mesh.get_group()
             cp_size = self.actor.cp_size
             sequence_length = sequences.shape[1]
@@ -407,6 +415,7 @@ class ActorPPOTrainer(ABC):
                 return_output=True,
                 return_logprobs=True,
                 cp_local_log_probs=True,
+                cp_context_stack=cp_context_stack,
                 packed_seq_lens=packed_seq_lens,
                 return_entropy=False,
                 **mm_inputs,
@@ -429,19 +438,39 @@ class ActorPPOTrainer(ABC):
                 action_mask,
                 attention_mask=attention_mask,
                 return_output=True,
+                cp_context_stack=cp_context_stack,
                 packed_seq_lens=packed_seq_lens,
                 return_entropy=self.args.actor.entropy_coef is not None,
                 **mm_inputs,
             )
 
         # loss function
-        actor_loss, clip_ratio, ppo_kl, vllm_kl = self.actor_loss_fn(
-            action_log_probs,
-            old_action_log_probs,
-            advantages,
-            action_mask=loss_action_mask,
-            rollout_log_probs=rollout_log_probs,
-        )
+        if cp_local_loss:
+            actor_loss, _, _, _ = self.actor_loss_fn(
+                action_log_probs,
+                old_action_log_probs,
+                advantages,
+                action_mask=loss_action_mask,
+                rollout_log_probs=rollout_log_probs,
+                dp_size=loss_dp_size,
+                batch_num_tokens=batch_num_tokens,
+            )
+            actor_loss_for_log, clip_ratio, ppo_kl, vllm_kl = self.actor_loss_fn(
+                action_log_probs,
+                old_action_log_probs,
+                advantages,
+                action_mask=loss_action_mask,
+                rollout_log_probs=rollout_log_probs,
+            )
+        else:
+            actor_loss, clip_ratio, ppo_kl, vllm_kl = self.actor_loss_fn(
+                action_log_probs,
+                old_action_log_probs,
+                advantages,
+                action_mask=loss_action_mask,
+                rollout_log_probs=rollout_log_probs,
+            )
+            actor_loss_for_log = actor_loss
         experience.info["ppo_clip_ratio"] = clip_ratio.detach()
         experience.info["ppo_kl"] = ppo_kl.detach()
         if vllm_kl is not None:
@@ -458,7 +487,11 @@ class ActorPPOTrainer(ABC):
             else:
                 kl = torch.zeros_like(action_log_probs)
                 logprobs_diff = torch.zeros_like(action_log_probs)
-            kl_loss = masked_mean(kl, loss_action_mask)
+            if cp_local_loss:
+                kl_loss = torch.where(loss_action_mask.bool(), kl, torch.zeros_like(kl)).sum()
+                kl_loss = kl_loss / batch_num_tokens * loss_dp_size
+            else:
+                kl_loss = masked_mean(kl, loss_action_mask)
             logprobs_diff = masked_mean(logprobs_diff, loss_action_mask)
             experience.info["kl"] = kl_loss.detach()
             experience.info["logprobs_diff"] = logprobs_diff.detach()
@@ -478,19 +511,25 @@ class ActorPPOTrainer(ABC):
         if self.args.train.dynamic_batch_enable:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
 
+        try:
+            if self.args.train.dynamic_batch_enable:
+                self.strategy.backward(loss, self.actor, self.actor_optim, name="actor", accumulate=False)
+            else:
+                self.strategy.backward(
+                    loss,
+                    self.actor,
+                    self.actor_optim,
+                    name="actor",
+                )
+        finally:
+            cp_context_stack.close()
+
         if self.args.train.dynamic_batch_enable:
-            self.strategy.backward(loss, self.actor, self.actor_optim, name="actor", accumulate=False)
             if self.replay_buffer.dynamic_optimizer_step[step]:
                 self.strategy.optimizer_step(
                     self.actor_optim, self.actor, self.actor_scheduler, name="actor", accumulate=False
                 )
         else:
-            self.strategy.backward(
-                loss,
-                self.actor,
-                self.actor_optim,
-                name="actor",
-            )
             self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
 
         if self.ema_model:
@@ -501,7 +540,7 @@ class ActorPPOTrainer(ABC):
                 if (step + 1) % self.strategy.accumulated_gradient == 0:
                     self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
 
-        metrics = {"policy_loss": actor_loss.detach()}
+        metrics = {"policy_loss": actor_loss_for_log.detach()}
         weights = {"policy_loss": "token"}
         if self.args.actor.entropy_coef is not None:
             metrics["entropy_loss"] = entropy_loss.detach()

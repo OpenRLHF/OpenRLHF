@@ -314,9 +314,11 @@ class FsdpStrategy:
         fsdp_modules = [module for module in model.modules() if isinstance(module, FSDPModule)]
         if not fsdp_modules:
             return
-        # Mirror NeMo AutoModel's gradient-accumulation state: non-final
-        # microbatches skip reduction and keep params unresharded; the final
-        # microbatch restores sync and lets FSDP run final backward callbacks.
+        # Keep FSDP2 in its normal per-microbatch sync/reshard mode. NeMo-RL's
+        # AutoModel path relies on loss scaling for accumulation instead of
+        # holding unsharded FSDP params across the whole accumulation window;
+        # the latter is especially expensive for CP/EP where weights are not
+        # tensor-parallel sharded.
         fsdp_modules[0].set_is_last_backward(sync)
         fsdp_modules[0].set_reshard_after_backward(sync)
         fsdp_modules[0].set_requires_gradient_sync(sync)
@@ -334,11 +336,7 @@ class FsdpStrategy:
         if accumulate and self.accumulated_gradient > 1:
             if kwargs.get("scale_loss_by_accumulation", True):
                 loss = loss / self.accumulated_gradient
-        sync_gradients = kwargs.get("sync_gradients", None)
-        if sync_gradients is None:
-            sync_gradients = True
-            if accumulate and self.accumulated_gradient > 1:
-                sync_gradients = (self.time_steps[f"step_{name}"] + 1) % self.accumulated_gradient == 0
+        sync_gradients = kwargs.get("sync_gradients", True)
         self._set_fsdp_backward_sync(unwrapped, sync_gradients)
         if self.moe_mesh is not None:
             try:
@@ -432,6 +430,7 @@ class FsdpStrategy:
         total_tensors = 0
         total_elems = 0
         nonfinite_elems = 0
+        total_sum_sq = 0.0
 
         for param_name, param in model.named_parameters():
             grad = param.grad
@@ -447,8 +446,10 @@ class FsdpStrategy:
             nonfinite_elems += bad
             if bad:
                 nonfinite_tensors += 1
-            finite_grad = torch.where(finite, local_grad, torch.zeros_like(local_grad)).float()
-            local_norm = finite_grad.norm(2).item()
+            finite_grad = torch.where(finite, local_grad, torch.zeros_like(local_grad)).double()
+            local_sum_sq = finite_grad.pow(2).sum().item()
+            total_sum_sq += local_sum_sq
+            local_norm = math.sqrt(local_sum_sq)
             local_max = finite_grad.abs().max().item() if finite_grad.numel() else 0.0
             placement = tuple(str(p) for p in grad.placements) if isinstance(grad, DTensor) else ("local",)
             rows.append((local_norm, local_max, bad, param_name, placement, tuple(local_grad.shape)))
@@ -456,7 +457,8 @@ class FsdpStrategy:
         rows.sort(key=lambda item: item[0], reverse=True)
         header = (
             f"[FSDPGradDebug][rank={rank}][{optim_name}] tensors={total_tensors} "
-            f"nonfinite_tensors={nonfinite_tensors} elems={total_elems} nonfinite_elems={nonfinite_elems}"
+            f"nonfinite_tensors={nonfinite_tensors} elems={total_elems} nonfinite_elems={nonfinite_elems} "
+            f"local_norm64={math.sqrt(total_sum_sq):.6e}"
         )
         print(header, flush=True)
         for local_norm, local_max, bad, param_name, placement, shape in rows[:top_k]:

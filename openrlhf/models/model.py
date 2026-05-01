@@ -531,7 +531,7 @@ class _SequenceRegressionBase(nn.Module):
     def device(self):
         return next(self.model.parameters()).device
 
-    def _token_values(self, input_ids, attention_mask, cp_local_values: bool = False):
+    def _token_values(self, input_ids, attention_mask, cp_local_values: bool = False, cp_context_stack=None):
         batch, seqlen = input_ids.shape
         position_ids = attention_mask.long().cumsum(-1) - 1
         position_ids.masked_fill_(attention_mask == 0, 1)
@@ -570,8 +570,22 @@ class _SequenceRegressionBase(nn.Module):
             else nullcontext()
         )
 
+        entered_cp_context = False
+
+        def _forward_context():
+            nonlocal entered_cp_context
+            forward_ctx = cp_ctx_factory()
+            if cp_context_stack is not None and cp_forward:
+                if not entered_cp_context:
+                    # AutoModel CP train context installs backward hooks, so
+                    # training code keeps it alive until loss.backward() ends.
+                    cp_context_stack.enter_context(forward_ctx)
+                    entered_cp_context = True
+                return nullcontext()
+            return forward_ctx
+
         def _model_forward(output_hidden_states: bool):
-            with cp_ctx_factory():
+            with _forward_context():
                 with autocast_ctx:
                     return self.model(
                         input_ids=model_input_ids,
@@ -639,9 +653,15 @@ class CriticModel(_SequenceRegressionBase):
         return_output: bool = False,
         values_allgather: bool = False,
         cp_local_values: bool = False,
+        cp_context_stack=None,
         packed_seq_lens=None,
     ) -> torch.Tensor:
-        values, outputs = self._token_values(input_ids, attention_mask, cp_local_values=cp_local_values)
+        values, outputs = self._token_values(
+            input_ids,
+            attention_mask,
+            cp_local_values=cp_local_values,
+            cp_context_stack=cp_context_stack,
+        )
 
         if action_mask is None:
             assert return_output

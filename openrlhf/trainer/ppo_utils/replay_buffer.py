@@ -7,6 +7,7 @@ from torch import distributed as dist
 
 from openrlhf.trainer.ppo_utils.experience import (
     Experience,
+    get_model_parallel_size,
     make_experience_batch,
     remove_padding_in_sequences,
     split_experience_batch,
@@ -89,7 +90,7 @@ class NaiveReplayBuffer(ABC):
         sample_lengths = [sample.total_length.item() for sample in self.items]
 
         world_size = dist.get_world_size()
-        dp_size = world_size // args.fsdp.cp_size // args.fsdp.tp_size
+        dp_size = world_size // get_model_parallel_size(args)
         local_train_batch_size = args.train.batch_size // dp_size
         # Expected num_steps assumes a full buffer, but async + partial_rollout
         # can deliver a short buffer at episode boundaries — clamp to avoid

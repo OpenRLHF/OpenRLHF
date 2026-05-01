@@ -7,7 +7,7 @@ import ray
 import torch
 
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
-from openrlhf.trainer.ppo_utils.experience import Experience
+from openrlhf.trainer.ppo_utils.experience import Experience, get_model_parallel_size
 from openrlhf.trainer.ppo_utils.length_penalty import apply_length_penalties
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.logging_utils import init_logger
@@ -48,12 +48,8 @@ class RemoteExperienceMaker:
         samples_list = []
         if self.args.train.dynamic_batch_enable:
             total_lengths = [int(s.total_length.item()) for s in rollout_samples]
-            effective_actor_num = (
-                self.args.actor.num_nodes
-                * self.args.actor.num_gpus_per_node
-                // self.args.fsdp.cp_size
-                // self.args.fsdp.tp_size
-            )
+            actor_world_size = self.args.actor.num_nodes * self.args.actor.num_gpus_per_node
+            effective_actor_num = actor_world_size // get_model_parallel_size(self.args)
             minimum_batch_num = get_minimum_num_micro_batch_size(
                 total_lengths,
                 self.args.rollout.max_tokens_per_gpu,
@@ -153,7 +149,7 @@ class RemoteExperienceMaker:
 
         args = self.strategy.args
         device = "cpu"
-        duplicate_factor = args.fsdp.cp_size * args.fsdp.tp_size
+        duplicate_factor = get_model_parallel_size(args)
         dummy_ref = ray.put([[None]] * (len(samples_list) * duplicate_factor))
 
         # Extract tensors for batch processing
