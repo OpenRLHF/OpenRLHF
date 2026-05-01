@@ -101,10 +101,6 @@ class RemoteExperienceMaker:
     def _sleep_enabled(self) -> bool:
         return bool(getattr(self.args.fsdp, "enable_sleep", False))
 
-    @property
-    def _stage_sleep_enabled(self) -> bool:
-        return self._sleep_enabled and bool(getattr(self.strategy, "cpu_offload", False))
-
     @staticmethod
     def _unique_groups(groups):
         unique = []
@@ -120,7 +116,7 @@ class RemoteExperienceMaker:
         return unique
 
     def _prepare_lp_inference_phase(self, groups) -> None:
-        if not self._stage_sleep_enabled:
+        if not self._sleep_enabled:
             return
         refs = []
         for group in self._unique_groups(groups):
@@ -129,7 +125,7 @@ class RemoteExperienceMaker:
             ray.get(refs)
 
     def _finish_lp_inference_phase(self, groups) -> None:
-        if not self._stage_sleep_enabled:
+        if not self._sleep_enabled:
             return
         refs = []
         for group in reversed(self._unique_groups(groups)):
@@ -138,22 +134,11 @@ class RemoteExperienceMaker:
             ray.get(refs)
 
     def _dispatch_forward(self, group, sync_condition, **kwargs):
-        """Dispatch a batched forward call and optionally sync + empty cache.
-
-        Non-CPU-offload sleep keeps the old per-group bracketing because full
-        colocated models may not fit together. CPU-offload sleep uses
-        make_experience-level phase bracketing, so this method only dispatches
-        the forward work.
-        """
-        per_group_sleep = self._sleep_enabled and not self._stage_sleep_enabled
-        if per_group_sleep:
-            ray.get(group.async_run_method(method_name="prepare_for_lp_inference"))
+        """Dispatch a batched forward call and optionally sync + empty cache."""
         ref = group.async_run_method_batch(method_name="forward", **kwargs)
-        if sync_condition or per_group_sleep:
+        if sync_condition:
             ray.get(ref)
             ray.get(group.async_run_method(method_name="empty_cache"))
-            if per_group_sleep:
-                ray.get(group.async_run_method(method_name="offload_after_refit"))
         return ref
 
     def _flatten_results(self, refs, duplicate_factor):
@@ -192,6 +177,8 @@ class RemoteExperienceMaker:
         if use_reward_model:
             lp_groups.append(self.reward_model_group)
 
+        # Sleep is phase-scoped: load the models needed for experience making
+        # once, then offload them together in the finally block.
         self._prepare_lp_inference_phase(lp_groups)
         try:
             if use_reward_model:

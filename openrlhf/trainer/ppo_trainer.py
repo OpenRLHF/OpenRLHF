@@ -296,10 +296,8 @@ class BasePPOTrainer(ABC):
         run_actor = global_steps >= self.args.critic.freezing_steps and self.actor_model_group is not None
 
         if getattr(self.args.fsdp, "enable_sleep", False):
-            # Sleep/colocate: critic gets a full offload at end of fit; actor
-            # only offloads its optimizer (offload_before_refit) so the model
-            # stays GPU-resident for the immediately following broadcast_to_vllm
-            # — saves one cpu↔cuda round-trip on the params (NeMo-RL pattern).
+            # Keep actor weights on GPU between actor fit and vLLM sync. Only
+            # the optimizer is offloaded in between; critic can fully offload.
             if run_critic:
                 ray.get(self.critic_model_group.async_run_method(method_name="reload_states"))
                 ref = self.critic_model_group.async_run_method(method_name="fit")

@@ -28,7 +28,7 @@ def _call_names(group):
     return [name for _, name in group.calls]
 
 
-def test_cpu_offload_sleep_uses_phase_level_lp_inference(monkeypatch):
+def test_sleep_uses_phase_level_lp_inference(monkeypatch):
     monkeypatch.setattr(experience_maker_module.ray, "get", lambda refs: refs)
     maker = _make_maker(cpu_offload=True)
     group = FakeGroup()
@@ -47,16 +47,17 @@ def test_cpu_offload_sleep_uses_phase_level_lp_inference(monkeypatch):
     assert _call_names(other_group) == ["prepare_for_lp_inference", "offload_after_refit"]
 
 
-def test_non_cpu_offload_sleep_keeps_per_group_bracket(monkeypatch):
+def test_non_cpu_offload_sleep_uses_phase_level_lp_inference(monkeypatch):
     monkeypatch.setattr(experience_maker_module.ray, "get", lambda refs: refs)
     maker = _make_maker(cpu_offload=False)
     group = FakeGroup()
 
+    maker._prepare_lp_inference_phase([group])
     maker._dispatch_forward(group, sync_condition=False, sequences=[object()])
+    maker._finish_lp_inference_phase([group])
 
     assert _call_names(group) == [
         "prepare_for_lp_inference",
         "forward",
-        "empty_cache",
         "offload_after_refit",
     ]

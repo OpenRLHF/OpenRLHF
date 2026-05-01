@@ -287,7 +287,21 @@ class ActorPPOTrainer(ABC):
                 desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
+            max_steps = len(dataloader)
+            if not self.args.train.dynamic_batch_enable:
+                # Only run complete accumulation windows; partial windows leave
+                # gradients live because optimizer_step() has not stepped yet.
+                accum_steps = self.strategy.accumulated_gradient
+                remainder = max_steps % accum_steps
+                if remainder:
+                    max_steps -= remainder
+                    self.strategy.print(
+                        f"[PPO] dropping {remainder} trailing actor microbatches "
+                        f"(< grad_accum={accum_steps}) to avoid partial gradients."
+                    )
             for step, experience in enumerate(pbar):
+                if step >= max_steps:
+                    break
                 experience.to_device(device)
                 status = self.training_step(experience, kl_ctl, step)
                 self._record_status(status, status_list, pbar)
@@ -501,7 +515,12 @@ class ActorPPOTrainer(ABC):
             else (step + 1) % self.strategy.accumulated_gradient == 0
         )
         if is_optimizer_step:
-            metrics["actor_grad_norm"] = self.strategy.get_grad_norm(self.actor)
+            grad_norm = self.strategy.get_grad_norm(self.actor)
+            if not self.args.train.dynamic_batch_enable:
+                # Log the DeepSpeed-style batch average. Clipping uses the raw
+                # norm inside optimizer_step().
+                grad_norm /= self.strategy.accumulated_gradient
+            metrics["actor_grad_norm"] = grad_norm
             weights["actor_grad_norm"] = None
 
         for k, v in experience.info.items():
@@ -839,10 +858,7 @@ class PolicyModelActor(BaseModelActor):
         return action_log_probs.to("cpu")
 
     def broadcast_to_vllm(self):
-        # Refit only needs *model* params on GPU (gather full_tensor + IPC).
-        # The optimizer was already moved off-GPU at the end of fit() via
-        # offload_before_refit, so this is just model->cuda -> broadcast ->
-        # model->cpu so vLLM can wake_up its KV+weights.
+        # vLLM sync needs model weights on GPU; the optimizer can stay off GPU.
         if self._sleep_enabled and not getattr(self.strategy, "cpu_offload", False):
             self.strategy.move_model_to_device(self.actor, "cuda")
             if self.ema_model is not None:
@@ -858,8 +874,7 @@ class PolicyModelActor(BaseModelActor):
         self.trainer.replay_buffer.append(experience)
 
     def reload_states(self):
-        """Sleep entry for fit(): full reload of model + optimizer to GPU.
-        Mirrors NeMo-RL's prepare_for_training. No-op when sleep is off."""
+        """Load actor weights and optimizer state for PPO training."""
         if not self._sleep_enabled:
             return
         if not getattr(self.strategy, "cpu_offload", False):
@@ -870,17 +885,14 @@ class PolicyModelActor(BaseModelActor):
         self.actor.train()
 
     def offload_states(self):
-        """Sleep exit symmetric to reload_states. Used by code paths that
-        don't need the staged refit dance, i.e. critic-style end-of-fit."""
+        """Offload actor weights and optimizer state."""
         if not self._sleep_enabled:
             return
         self.offload_before_refit()
         self.offload_after_refit()
 
     def offload_before_refit(self):
-        """End-of-fit hook: optimizer->cpu but keep params on GPU so the
-        immediately following broadcast_to_vllm can gather full_tensor without
-        an extra cpu->cuda round-trip. NeMo-RL pattern."""
+        """Offload optimizer state while keeping weights ready for vLLM sync."""
         if not self._sleep_enabled:
             return
         self.strategy.move_optimizer_to_device(self.actor_optim, "cpu")
@@ -889,8 +901,7 @@ class PolicyModelActor(BaseModelActor):
             torch.cuda.empty_cache()
 
     def offload_after_refit(self):
-        """End-of-broadcast hook: model->cpu. Optimizer is assumed already
-        cpu from offload_before_refit."""
+        """Offload actor weights after vLLM sync or logprob inference."""
         if not self._sleep_enabled:
             return
         self.strategy.move_model_to_device(self.actor, "cpu")
@@ -901,9 +912,7 @@ class PolicyModelActor(BaseModelActor):
             torch.cuda.empty_cache()
 
     def prepare_for_lp_inference(self):
-        """Used when actor needs to compute logprobs but not train: bring
-        model back to GPU, but keep optimizer on CPU. Pair with
-        offload_after_refit to symmetrically tear down."""
+        """Load actor weights for logprob inference without optimizer state."""
         if not self._sleep_enabled:
             return
         if not getattr(self.strategy, "cpu_offload", False):

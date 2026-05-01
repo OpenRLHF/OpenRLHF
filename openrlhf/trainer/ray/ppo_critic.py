@@ -106,7 +106,21 @@ class CriticPPOTrainer(ABC):
                 desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
+            max_steps = len(dataloader)
+            if not self.args.train.dynamic_batch_enable:
+                # Only run complete accumulation windows; partial windows leave
+                # gradients live because optimizer_step() has not stepped yet.
+                accum_steps = self.strategy.accumulated_gradient
+                remainder = max_steps % accum_steps
+                if remainder:
+                    max_steps -= remainder
+                    self.strategy.print(
+                        f"[Critic] dropping {remainder} trailing critic microbatches "
+                        f"(< grad_accum={accum_steps}) to avoid partial gradients."
+                    )
             for step, experience in enumerate(pbar):
+                if step >= max_steps:
+                    break
                 experience.to_device(device)
                 status = self.training_step(experience, step)
                 status = self.strategy.all_reduce(status)
@@ -218,7 +232,12 @@ class CriticPPOTrainer(ABC):
             else (step + 1) % self.strategy.accumulated_gradient == 0
         )
         if is_optimizer_step:
-            status["critic_grad_norm"] = self.strategy.get_grad_norm(self.critic)
+            grad_norm = self.strategy.get_grad_norm(self.critic)
+            if not self.args.train.dynamic_batch_enable:
+                # Log the DeepSpeed-style batch average. Clipping uses the raw
+                # norm inside optimizer_step().
+                grad_norm /= self.strategy.accumulated_gradient
+            status["critic_grad_norm"] = grad_norm
         return status
 
 
@@ -361,7 +380,7 @@ class CriticModelActor(BaseModelActor):
         return bool(getattr(self.strategy.args.fsdp, "enable_sleep", False))
 
     def reload_states(self):
-        """Hybrid/sleep entry: bring critic + optimizer state back to GPU."""
+        """Load critic weights and optimizer state for PPO training."""
         if not self._sleep_enabled:
             return
         if not getattr(self.strategy, "cpu_offload", False):
@@ -370,7 +389,7 @@ class CriticModelActor(BaseModelActor):
         self.critic.train()
 
     def offload_states(self):
-        """Hybrid/sleep exit: ship critic state off-GPU."""
+        """Offload critic weights and optimizer state."""
         if not self._sleep_enabled:
             return
         self.strategy.move_optimizer_to_device(self.critic_optim, "cpu")
@@ -380,8 +399,7 @@ class CriticModelActor(BaseModelActor):
             torch.cuda.empty_cache()
 
     def prepare_for_lp_inference(self):
-        """Value forward only needs critic model on GPU; optimizer stays cpu
-        to leave the device free for the inference pass."""
+        """Load critic weights for value inference without optimizer state."""
         if not self._sleep_enabled:
             return
         if not getattr(self.strategy, "cpu_offload", False):
@@ -389,7 +407,7 @@ class CriticModelActor(BaseModelActor):
         self.critic.eval()
 
     def offload_after_refit(self):
-        """Tear down after a value-forward (model->cpu only)."""
+        """Offload critic weights after value inference."""
         if not self._sleep_enabled:
             return
         self.strategy.move_model_to_device(self.critic, "cpu")

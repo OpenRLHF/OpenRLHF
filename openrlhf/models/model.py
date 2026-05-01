@@ -365,6 +365,9 @@ def _register_openrlhf_llama_sequence_regression(config) -> Optional[str]:
                 **kwargs,
             )
             last_hidden_state = outputs.last_hidden_state
+            # The regression head is replicated under TP. Score full hidden
+            # states so every TP rank computes the same head gradients.
+            last_hidden_state = unshard_dtensor(last_hidden_state)
             score_weight = getattr(self.score, "weight", None)
             score_dtype = getattr(score_weight, "dtype", None)
             if score_dtype is not None and last_hidden_state.dtype != score_dtype:
