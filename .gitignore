@@ -152,3 +152,7 @@ core
 exp
 wandb
 .claude/*
+
+# Local verification outputs
+.tmp*/
+*tmp*

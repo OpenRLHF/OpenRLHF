@@ -1,11 +1,13 @@
 import os
 from abc import ABC
+from contextlib import ExitStack
 
 import torch
 from torch.optim import Optimizer
 from tqdm import tqdm
 
 from openrlhf.models import LogExpLoss, PairWiseLoss
+from openrlhf.models.utils import split_moe_aux_loss
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 
@@ -62,11 +64,8 @@ class RewardModelTrainer(ABC):
             self.loss_fn = LogExpLoss()
             self.strategy.print("LogExp Loss")
 
-        # Mixtral 8*7b
+        # MoE balancing loss.
         self.aux_loss = self.args.model.aux_loss_coef > 1e-8
-
-        # packing samples
-        self.packing_samples = strategy.args.ds.packing_samples
 
         self.margin_loss = self.strategy.args.model.margin_loss_enable
         self.compute_fp32_loss = self.strategy.args.model.compute_fp32_loss_enable
@@ -149,27 +148,27 @@ class RewardModelTrainer(ABC):
                 reject_ids = reject_ids.squeeze(1).to(device)
                 r_mask = r_mask.squeeze(1).to(device)
 
-                chosen_reward, reject_reward, aux_loss = self.concatenated_forward(
-                    self.model, chosen_ids, c_mask, reject_ids, r_mask
-                )
+                cp_context_stack = ExitStack()
+                try:
+                    chosen_reward, reject_reward, aux_loss, aux_loss_log = self.concatenated_forward(
+                        self.model, chosen_ids, c_mask, reject_ids, r_mask, cp_context_stack=cp_context_stack
+                    )
 
-                if self.margin_loss:
-                    margin = torch.tensor(margin).to(device)
-                else:
-                    margin = None
+                    if self.margin_loss:
+                        margin = torch.tensor(margin).to(device)
+                    else:
+                        margin = None
 
-                # loss function
-                if self.compute_fp32_loss:
-                    chosen_reward = chosen_reward.float()
-                    reject_reward = reject_reward.float()
+                    # loss function
+                    if self.compute_fp32_loss:
+                        chosen_reward = chosen_reward.float()
+                        reject_reward = reject_reward.float()
 
-                preference_loss = self.loss_fn(chosen_reward, reject_reward, margin)
-                # mixtral
-                if not self.aux_loss:
-                    aux_loss = 0
-
-                loss = preference_loss + aux_loss * self.args.model.aux_loss_coef
-                self.strategy.backward(loss, self.model, self.optimizer)
+                    preference_loss = self.loss_fn(chosen_reward, reject_reward, margin)
+                    loss = preference_loss + aux_loss * self.args.model.aux_loss_coef
+                    self.strategy.backward(loss, self.model, self.optimizer)
+                finally:
+                    cp_context_stack.close()
                 self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
                 acc = (chosen_reward > reject_reward).float().mean().item()
@@ -185,7 +184,9 @@ class RewardModelTrainer(ABC):
                     "grad_norm": self.strategy.get_grad_norm(self.model),
                 }
                 if self.aux_loss:
-                    logs_dict["aux_loss"] = aux_loss.item()
+                    logs_dict["aux_loss"] = (
+                        aux_loss_log.item() if torch.is_tensor(aux_loss_log) else float(aux_loss_log)
+                    )
 
                 # step bar
                 logs_dict = self.strategy.all_reduce(logs_dict)
@@ -236,7 +237,14 @@ class RewardModelTrainer(ABC):
             tag = f"global_step{global_step}"
             if not self.disable_ds_ckpt:
                 self.strategy.save_ckpt(
-                    self.model, args.ckpt.path, tag, args.ckpt.max_num, args.ckpt.max_mem, client_states
+                    self.model,
+                    args.ckpt.path,
+                    tag,
+                    args.ckpt.max_num,
+                    args.ckpt.max_mem,
+                    client_states,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
                 )
             if self.save_hf_ckpt:
                 save_path = os.path.join(args.ckpt.path, f"{tag}_hf")
@@ -261,7 +269,7 @@ class RewardModelTrainer(ABC):
                 reject_ids = reject_ids.squeeze(1).to(device)
                 r_mask = r_mask.squeeze(1).to(device)
 
-                chosen_reward, reject_reward, _ = self.concatenated_forward(
+                chosen_reward, reject_reward, _, _ = self.concatenated_forward(
                     self.model, chosen_ids, c_mask, reject_ids, r_mask
                 )
 
@@ -313,19 +321,22 @@ class RewardModelTrainer(ABC):
                         self._tensorboard.add_scalar(f"eval/{k}", v, steps)
         self.model.train()  # reset model state
 
-    def concatenated_forward(self, model, chosen_ids, c_mask, reject_ids, r_mask):
+    def concatenated_forward(self, model, chosen_ids, c_mask, reject_ids, r_mask, cp_context_stack=None):
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
         """
         input_ids, att_masks = self.concatenated_inputs(chosen_ids, c_mask, reject_ids, r_mask)
         all_values, output = model(
-            input_ids, attention_mask=att_masks, return_output=True, ring_attn_group=self.strategy.ring_attn_group
+            input_ids,
+            attention_mask=att_masks,
+            return_output=True,
+            cp_context_stack=cp_context_stack,
         )
         chosen_rewards = all_values[: chosen_ids.shape[0]]
         rejected_rewards = all_values[chosen_ids.shape[0] :]
-        aux_loss = output.aux_loss if "aux_loss" in output else []
-        return chosen_rewards, rejected_rewards, aux_loss
+        aux_loss, aux_loss_log = split_moe_aux_loss(output, self.aux_loss)
+        return chosen_rewards, rejected_rewards, aux_loss, aux_loss_log
 
     def concatenated_inputs(self, chosen_ids, c_mask, reject_ids, r_mask):
         """Concatenate the chosen and rejected inputs into a single tensor.

@@ -28,14 +28,14 @@
 
 <span>[ English | <a href="README_zh.md">中文</a> | <a href="README_ja.md">日本語</a> ]</span>
 
-OpenRLHF is **the first** high-performance, production-ready open-source RLHF framework that combines **Ray + vLLM distributed architecture** with a **unified agent-based design paradigm** for scalable and extensible reinforcement learning from human feedback.
+OpenRLHF is a high-performance, production-ready open-source RLHF framework that combines **Ray + vLLM + FSDP2(AutoTP/EP/CP)** with a **unified agent-based design paradigm** for scalable and extensible reinforcement learning from human feedback.
 
 📚 **Learn More**: [Documentation](https://openrlhf.readthedocs.io/) | [Slides](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [Technical Report](https://www.researchgate.net/publication/393414548_OpenRLHF_An_Easy-to-use_Scalable_and_High-performance_RLHF_Framework) | [Video](https://www.bilibili.com/video/BV1dv2jBxEQG/)
 
 ## 📖 Table of Contents
 
 - [🗞️ News](#news)
-- [🏗️ Architecture Foundation](#architecture-foundation-ray--vllm-distribution) - Ray + vLLM + DeepSpeed distributed infrastructure
+- [🏗️ Architecture Foundation](#architecture-foundation-ray--vllm--fsdp2autotpepcp-distribution) - Ray + vLLM + FSDP2(AutoTP/EP/CP) distributed infrastructure
 - [🎯 Design Paradigm](#design-paradigm-agent-based-execution) - Unified agent-based execution pipeline
 - [🚀 RL Algorithms](#state-of-the-art-rl-algorithms) - PPO, REINFORCE++, GRPO, RLOO
 - [📋 Features Overview](#comprehensive-features) - Complete RLHF pipeline capabilities
@@ -75,10 +75,10 @@ OpenRLHF is **the first** high-performance, production-ready open-source RLHF fr
 
 ---
 
-<a id="architecture-foundation-ray--vllm-distribution"></a>
-## 🏗️ Architecture Foundation: Ray + vLLM Distribution
+<a id="architecture-foundation-ray--vllm--fsdp2autotpepcp-distribution"></a>
+## 🏗️ Architecture Foundation: Ray + vLLM + FSDP2(AutoTP/EP/CP) Distribution
 
-OpenRLHF is **the first RLHF framework** built on Ray + vLLM distributed architecture, orchestrating multiple components across GPUs efficiently:
+OpenRLHF uses a Ray + vLLM + FSDP2(AutoTP/EP/CP) distributed architecture to orchestrate training, rollout, reward, reference, and critic components across GPUs efficiently:
 
 <div align="center">
   <img alt="OpenRLHF Architecture (Ray + vLLM)" src="./docs/openrlhf_architecture.svg" style="max-width: 100%; height: auto;" />
@@ -94,11 +94,11 @@ OpenRLHF leverages [Ray](https://github.com/ray-project/ray) for efficient distr
 **vLLM - High-Performance Inference Engine**  
 RLHF training spends **80% of the time on sample generation**. Powered by [vLLM](https://github.com/vllm-project/vllm) with Auto Tensor Parallelism (AutoTP) and Pipeline Parallelism (PP), OpenRLHF delivers high-throughput, memory-efficient generation.
 
-**DeepSpeed - Memory-Efficient Training**  
-Built on [DeepSpeed](https://github.com/deepspeedai/DeepSpeed) ZeRO-3, [deepcompile](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/deepcompile/README.md), [AutoTP](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/huggingface-tp/README.md), and RingAttention. Enables large model training without heavyweight frameworks while working directly with HuggingFace models.
+**FSDP2(AutoTP/EP/CP) - Memory-Efficient Training**
+Built on PyTorch FSDP2/DTensor with [NeMo AutoModel](https://docs.nvidia.com/nemo/automodel/) integration for model construction, TP/CP/EP mesh setup, activation checkpointing, LoRA wiring, and FSDP2 wrapping; OpenRLHF keeps the RL training loop, Ray orchestration, vLLM refit, and checkpoint flow thin.
 
-**Transformers - Model Interface**  
-Native integration with HuggingFace Transformers for seamless model loading, state management, and fine-tuning of pretrained models.
+**Transformers + AutoModel - Model Interface**
+Native integration with HuggingFace Transformers through AutoModel entry points such as `NeMoAutoModelForCausalLM.from_pretrained(...)` and `NeMoAutoModelForSequenceClassification.from_pretrained(...)`.
 
 **NCCL / CUDA IPC - High-Speed Communication**  
 Efficient inter-GPU communication for distributed training and inference.
@@ -108,7 +108,7 @@ Efficient inter-GPU communication for distributed training and inference.
 <a id="design-paradigm-agent-based-execution"></a>
 ## 🎯 Design Paradigm: Agent-Based Execution
 
-**On top of the Ray distributed architecture**, OpenRLHF is **the first RLHF framework** to implement a **unified agent-based paradigm**. Every training run—whether standard PPO or complex multi-turn reasoning—follows a consistent agent execution pipeline.
+**On top of the Ray distributed architecture**, OpenRLHF implements a **unified agent-based paradigm**. Every training run—whether standard PPO or complex multi-turn reasoning—follows a consistent agent execution pipeline.
 
 ### Why Agent-Based?
 
@@ -227,7 +227,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 
 | Method | Script | Description |
 |--------|--------|-------------|
-| **SFT** | [train_sft.sh](./examples/scripts/train_sft.sh) | Supervised fine-tuning with packing |
+| **SFT** | [train_sft.sh](./examples/scripts/train_sft.sh) | Supervised fine-tuning with optional sample packing |
 | **DPO/IPO/cDPO** | [train_dpo_llama.sh](./examples/scripts/train_dpo_llama.sh) | Direct preference optimization |
 | **Reward Model** | [train_rm.sh](./examples/scripts/train_rm.sh) | Train reward models |
 
@@ -239,7 +239,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 <summary>Show advanced capabilities</summary>
 
 **Efficiency Optimizations**
-- Sample packing (`--ds.packing_samples`) for all training modes
+- Optional sample packing for SFT/DPO/PPO (`--fsdp.packing_samples`); packed actor/CausalLM forward supports HF fallback + `flash_attention_2` or AutoModel custom + `te`, while reward/critic sequence-regression packing currently uses HF fallback + `flash_attention_2`
 - vLLM acceleration (`--vllm.num_engines`) for fast generation
 - DAPO [dynamic filtering](./examples/scripts/train_dapo_ray_hybrid_engine.sh) (`--algo.dynamic_filtering_enable`)
   - 🎲 Dynamic Sampling: for each prompt, generate multiple responses and **filter** them by your reward / agent **0–1 `scores`** signal
@@ -249,20 +249,21 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
     - Example: `./examples/scripts/train_dapo_ray_hybrid_engine.sh`
 
 **Scalability**
-- DeepSpeed AutoTP for tensor parallelism (see `--ds.tensor_parallel_size` in training scripts)
-- [RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh) for long context (`--ds.ring_attn_size`)
+- FSDP2 tensor parallelism (`--fsdp.tp_size`) and sequence parallelism (`--fsdp.sequence_parallel`)
+- FSDP2 context parallelism for SFT long context (`--fsdp.cp_size`; currently incompatible with sample packing)
+- Expert parallelism for MoE models (`--fsdp.ep_size`)
 - Multi-node training with [SLURM](./examples/scripts/train_ppo_ray_slurm.sh)
 
 **Model Support**
 - [VLM (Vision-Language Models)](./examples/scripts/train_vlm_math_hybrid_engine.sh) — single-turn and [multi-turn with image feedback](./examples/python/vlm_multiturn_agent.py) (`--data.image_key`, `--data.max_images_per_prompt`)
-- [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh) (`--ds.lora.rank`, `--ds.load_in_4bit`)
+- [LoRA](./examples/scripts/train_sft_mixtral_lora.sh) (`--fsdp.lora.rank`; RL currently rejects LoRA because vLLM adapter refit is not wired yet)
 - [Mixture of Experts (MoE)](./examples/test_scripts/train_sft_moe.sh) (`--actor.aux_loss_coef`)
-- FlashAttention (`--ds.attn_implementation`)
+- SDPA / eager / FlashAttention2 / TE attention selection (`--fsdp.attn_implementation`); install `.[flash-attn-2]` for HF fallback packing with `flash_attention_2`, while AutoModel custom `te` packing requires Transformer Engine
 - HuggingFace chat templates (`--data.apply_chat_template`)
 
 **Optimizers**
 - AdamW (default): `--{actor,critic}.optim adam --{actor,critic}.adam.lr 2e-6`
-- [Muon](https://kellerjordan.github.io/posts/muon/) (via DeepSpeed ≥ 0.18.2, 2D weights only; embeddings / head / 1-D params use aux-AdamW): `--{actor,critic}.optim muon --{actor,critic}.muon.lr 1e-4 --{actor,critic}.muon.momentum 0.95`. Newton-Schulz produces scale-invariant updates, so disable global grad clipping with `--{actor,critic}.max_norm 0` (the Adam default `1.0` would clip away the Muon update).
+- [Muon](https://kellerjordan.github.io/posts/muon/) through AutoModel's Dion-family optimizer builder: `--{actor,critic}.optim muon --{actor,critic}.muon.lr 1e-4 --{actor,critic}.muon.momentum 0.95`. Scalar AdamW groups reuse the outer `--{actor,critic}.adam.*` settings. Dion is installed by the base requirements.
 
 **Reward Shaping**
 - DAPO-style overlong penalty for length control (`--reward.overlong_buffer_len`, `--reward.overlong_penalty_factor`) — soft-penalize responses that exceed `max_new_tokens - overlong_buffer_len`
@@ -288,18 +289,18 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 **Recommended**: Use Docker for hassle-free setup
 
 ```bash
-# 1. Launch Docker container
+# 1. Build the FSDP2 image
+docker build -t openrlhf-fsdp2:latest -f dockerfile/Dockerfile .
+
+# 2. Launch Docker container
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
-  -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:25.11-py3 bash
+  -v $PWD:/openrlhf -v $HOME/.cache:/root/.cache openrlhf-fsdp2:latest bash
+# Or: bash examples/scripts/docker_run.sh
 
-# 2. Clean conflicting packages
-sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
-
-# 3. Install OpenRLHF (choose one)
-pip install openrlhf                    # Basic
-pip install openrlhf[vllm]              # + vLLM 0.19.1 (recommended)
-pip install openrlhf[vllm_latest]       # + Latest vLLM
-pip install openrlhf[vllm,ring,liger]   # + All optimizations
+# 3. Install the mounted source tree
+cd /openrlhf
+pip install -e ".[vllm]"
+# Optional: add ".[flash-attn-2]" for HF fallback packing with flash_attention_2
 ```
 
 **Alternative: Install from source**
@@ -308,10 +309,12 @@ pip install openrlhf[vllm,ring,liger]   # + All optimizations
 git clone https://github.com/OpenRLHF/OpenRLHF.git
 cd OpenRLHF
 pip install -e .
+pip install ".[vllm]"                  # + vLLM 0.20.0; Dion is in requirements.txt
+pip install -e ".[flash-attn-2]"       # Optional: HF fallback packing with flash_attention_2
 ```
 
 > [!TIP]
-> We recommend **vLLM 0.19.1+** for best performance. See [Dockerfiles](./dockerfile/) and [Nvidia-Docker Install Script](./examples/scripts/nvidia_docker_install.sh).
+> This branch targets **NVIDIA PyTorch 26.03**, **torch 2.11**, the pinned **NeMo AutoModel main** commit in `requirements.txt`, and **vLLM 0.20.0**. Dion is installed from `github.com/microsoft/dion` because it is not published on PyPI. Exact pins live in `requirements.txt` and `dockerfile/Dockerfile`; the Docker image installs Dion before vLLM so the final torch stack is owned by vLLM/the base PyTorch image.
 
 ### Prepare Datasets
 
@@ -343,7 +346,7 @@ tokenizer.apply_chat_template(dataset[0]["input_key"], tokenize=False)
 <a id="supervised-fine-tuning"></a>
 ### Supervised Fine-tuning
 
-OpenRLHF's model checkpoint is fully compatible with HuggingFace models. You can specify the model name or path using `--actor.model_name_or_path  {name or path}`, `--reward.model_name_or_path  {name or path}` and `--critic.model_name_or_path  {name or path}`. We have provided some pre-trained checkpoints and datasets on [HuggingFace OpenRLHF](https://huggingface.co/OpenRLHF).
+OpenRLHF checkpoints remain compatible with HuggingFace models. SFT/RM/DPO use `--model.model_name_or_path {name_or_path}`; RL uses `--actor.model_name_or_path`, `--reward.model_name_or_path`, and `--critic.model_name_or_path`. We have provided some pre-trained checkpoints and datasets on [HuggingFace OpenRLHF](https://huggingface.co/OpenRLHF).
 
 Then you can use the startup scripts we provide in the [examples/scripts](./examples/scripts/) directory, or start the training using the following commands.
 
@@ -351,7 +354,7 @@ Then you can use the startup scripts we provide in the [examples/scripts](./exam
 <summary>SFT command</summary>
 
 ```bash
-deepspeed --module openrlhf.cli.train_sft \
+torchrun --standalone --nproc_per_node=8 -m openrlhf.cli.train_sft \
    --data.max_len 4096 \
    --data.dataset Open-Orca/OpenOrca \
    --data.input_key question \
@@ -360,24 +363,23 @@ deepspeed --module openrlhf.cli.train_sft \
    --train.batch_size 256 \
    --train.micro_batch_size 2 \
    --data.max_samples 500000 \
-   --actor.model_name_or_path meta-llama/Meta-Llama-3-8B \
+   --model.model_name_or_path meta-llama/Meta-Llama-3-8B \
    --ckpt.output_dir ./checkpoint/llama3-8b-sft \
    --ckpt.save_steps -1 \
    --logger.logging_steps 1 \
    --eval.steps -1 \
-   --ds.zero_stage 2 \
    --train.max_epochs 1 \
-   --ds.packing_samples \
-   --ds.param_dtype bf16 \
+   --fsdp.param_dtype bf16 \
    --adam.lr 5e-6 \
-   --actor.gradient_checkpointing_enable \
+   --model.gradient_checkpointing_enable \
    --logger.wandb.key {wandb_token}
 
 # Additional options:
 # --data.apply_chat_template                # Use HF tokenizer chat template
-# --ds.ring_attn_size 2                      # Enable RingAttention (install ring_flash_attn first)
+# --fsdp.tp_size 2                           # Enable FSDP2 tensor parallelism
+# --fsdp.cp_size 2                           # Enable FSDP2 context parallelism for SFT (disable packing)
 # --data.multiturn                          # Multi-turn fine-tuning loss
-# --actor.pretrain_mode_enable                      # Continued pre-training mode
+# --model.pretrain_mode_enable              # Continued pre-training mode
 ```
 
 </details>
@@ -389,39 +391,37 @@ deepspeed --module openrlhf.cli.train_sft \
 <summary>Reward model training command</summary>
 
 ```bash
-deepspeed --module openrlhf.cli.train_rm \
+torchrun --standalone --nproc_per_node=8 -m openrlhf.cli.train_rm \
    --ckpt.output_dir ./checkpoint/llama3-8b-rm \
    --ckpt.save_steps -1 \
    --logger.logging_steps 1 \
    --eval.steps -1 \
    --train.batch_size 256 \
    --train.micro_batch_size 1 \
-   --actor.model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
-   --ds.param_dtype bf16 \
+   --model.model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
+   --fsdp.param_dtype bf16 \
    --train.max_epochs 1 \
    --data.max_len 8192 \
-   --ds.zero_stage 3 \
    --adam.lr 9e-6 \
    --data.dataset OpenRLHF/preference_dataset_mixture2_and_safe_pku \
    --data.apply_chat_template \
-   --chosen_key chosen \
-   --rejected_key rejected \
-   --ds.packing_samples \
-   --actor.gradient_checkpointing_enable \
+   --data.chosen_key chosen \
+   --data.rejected_key rejected \
+   --model.gradient_checkpointing_enable \
    --logger.wandb.key {wandb_token}
 
 ```
 
 </details>
 
-It is recommended to set the `--value_prefix_head` option of the Reward Model to `score`, so that we can load the model using `AutoModelForSequenceClassification`:
+Reward and critic models use `--fsdp.value_head_prefix score` by default. The trained checkpoint remains compatible with HuggingFace sequence-classification loading:
 
 ```python
 reward_model = AutoModelForSequenceClassification.from_pretrained(
               reward_model_path,
               num_labels=1,
               torch_dtype=torch.bfloat16,
-              attn_implementation="flash_attention_2",
+              attn_implementation="sdpa",
               use_cache=False,
           )
 inputs = xxxx (Left Padding Input Tokens)
@@ -462,14 +462,12 @@ ray job submit --address="http://127.0.0.1:8265" \
    --ckpt.save_hf \
    --train.batch_size 128 \
    --rollout.batch_size 1024 \
-   --train.dynamic_batch_enable \
    --rollout.n_samples_per_prompt 1 \
    --train.max_epochs 1 \
-   --prompt_max_len 1024 \
+   --data.max_len 2048 \
    --data.max_samples 100000 \
-   --generate_max_len 1024 \
-   --ds.zero_stage 3 \
-   --ds.param_dtype bf16 \
+   --rollout.max_new_tokens 1024 \
+   --fsdp.param_dtype bf16 \
    --actor.adam.lr 5e-7 \
    --critic.adam.lr 9e-6 \
    --algo.kl.init_coef 0.01 \
@@ -478,11 +476,10 @@ ray job submit --address="http://127.0.0.1:8265" \
    --data.apply_chat_template \
    --reward.normalize_enable \
    --actor.gradient_checkpointing_enable \
-   --ds.packing_samples \
    --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
-   --ds.enable_sleep \
+   --fsdp.enable_sleep \
    --logger.wandb.key {wandb_token}
 
 # Algorithm Variants (all use single-turn agent execution):
@@ -508,10 +505,10 @@ ray job submit --address="http://127.0.0.1:8265" \
 > **For reasoning tasks (RLVR)**: Use `--algo.advantage.estimator reinforce_baseline` for REINFORCE++-baseline—it's robust to different reward scales.
 
 > [!NOTE]
-> **Ray Environment Setup**: Let Ray auto-deploy with `--runtime-env-json='{"setup_commands": ["pip install openrlhf[vllm]"]}'`
+> **Ray Environment Setup**: In production, build the Docker image once on every node or let Ray install the source tree with `--runtime-env-json='{"working_dir": "/openrlhf", "setup_commands": ["pip install -e \"/openrlhf[vllm]\""]}'`.
 
 > [!NOTE]
-> **Troubleshooting GPU index errors**: Set `export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1` if you encounter DeepSpeed GPU device setup issues.
+> **Troubleshooting GPU index errors**: Set `export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1` if Ray hides devices unexpectedly from FSDP workers.
 
 📚 **More Examples**: See [examples/scripts](./examples/scripts/) and [Documentation](https://openrlhf.readthedocs.io/en/latest/usage.html)
 
@@ -570,7 +567,6 @@ ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
   --actor.model_name_or_path meta-llama/Meta-Llama-3-8B \
-  --train.dynamic_batch_enable \
   --reward.remote_url /path/to/reward_func.py \
   --data.label_key answer \
   --data.prompt_dataset your_prompt_dataset \
@@ -655,7 +651,6 @@ ray job submit --address="http://127.0.0.1:8265" \
   --runtime-env-json='{"working_dir": "/openrlhf"}' \
   -- python3 -m openrlhf.cli.train_ppo_ray \
   ...
-  --train.dynamic_batch_enable \
   --train.agent_func_path /path/to/agent_func.py \
   --train.async_enable  # Optional: enable async pipeline
 ```
@@ -706,7 +701,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
 
 ### LoRA: Merging Adapters
 
-When using LoRA/QLoRA, OpenRLHF saves only the adapter weights. To deploy or continue training, merge the adapter with the base model:
+When using LoRA, OpenRLHF saves only the adapter weights. To deploy or continue training, merge the adapter with the base model:
 
 ```bash
 python -m openrlhf.cli.lora_combiner \
@@ -714,7 +709,7 @@ python -m openrlhf.cli.lora_combiner \
     --lora_path ./checkpoint/llama3-8b-rm \
     --output_path ./checkpoint/llama-3-8b-rm-combined \
     --is_rm \
-    --ds.param_dtype bf16
+    --fsdp.param_dtype bf16
 ```
 
 ### Performance Tuning Guide
@@ -727,7 +722,7 @@ Pick the execution mode based on your priority — OpenRLHF gives you a clear tr
 
 | Mode | Flags | Characteristics | When to Use |
 |------|-------|-----------------|-------------|
-| **Hybrid Engine (colocated)** | `--train.colocate_all`<br>`--vllm.enable_sleep`<br>`--ds.enable_sleep` | **Most stable** — strictly on-policy, every rollout uses the latest weights. Serial generate→train cycle. | Research, sensitive RL algorithms, reproducibility, recipe validation |
+| **Hybrid Engine (colocated)** | `--train.colocate_all`<br>`--vllm.enable_sleep`<br>`--fsdp.enable_sleep` | **Most stable** — strictly on-policy, every rollout uses the latest weights. Serial generate→train cycle. | Research, sensitive RL algorithms, reproducibility, recipe validation |
 | **Async Training** | `--train.async_enable`<br>`--train.async_queue_size N` | **Highest throughput** — generation and training run in parallel. Tune off-policyness via `--train.async_queue_size` (larger = more off-policy). | Production throughput when convergence is already validated |
 | **Async + Partial Rollout** | `--train.async_enable`<br>`--train.partial_rollout_enable` | **Maximum overlap** — vLLM pause/resume instead of locking, in-flight samples may mix old/new weights. Most aggressive off-policy. | Pushing async throughput further; pair with `--algo.advantage.is_correction_enable` |
 
@@ -735,18 +730,19 @@ Pick the execution mode based on your priority — OpenRLHF gives you a clear tr
 
 | Optimization | Flag | When to Use |
 |--------------|------|-------------|
-| **Sample Packing** | `--ds.packing_samples` | Always (especially training) |
-| **Dynamic Batch** | `--train.dynamic_batch_enable` | Variable sequence lengths |
-| **DeepCompile** | `--ds.deepcompile` | PyTorch 2.0+ |
-| **Overlap Comm** | `--ds.overlap_comm` | Sufficient GPU memory |
+| **Sample Packing** | `--fsdp.packing_samples` | Optional for SFT/DPO/PPO actor/CausalLM training; use `flash_attention_2` plus `.[flash-attn-2]` for HF fallback packing, or `te` plus Transformer Engine for AutoModel custom THD packing. PPO reward/critic sequence-regression packing uses the HF `flash_attention_2` path |
+| **Dynamic Batch** | `--train.dynamic_batch_enable` | PPO dynamic batch requires compatible sample packing; with GAE critic, use the HF `flash_attention_2` sequence-regression packing path |
+| **Tensor Parallel** | `--fsdp.tp_size` | Large models or faster matmuls |
+| **Context Parallel** | `--fsdp.cp_size` | SFT long context; disable sample packing |
+| **CPU Offload** | `--fsdp.cpu_offload` | Memory pressure |
 | **Prefix Caching** | vLLM config | `n_samples_per_prompt` > 1 |
 | **Oversampling** | `--rollout.vllm_generate_batch_size > --rollout.batch_size` | Async mode, to amortize generation cost / feed dynamic filtering |
 
 #### 💾 Memory Management
 
 **When you have enough memory**:
-- ✅ Disable `--ds.adam_offload`
-- ✅ Enable `--ds.overlap_comm`
+- ✅ Keep `--fsdp.cpu_offload` disabled
+- ✅ Prefer colocating actor/ref and critic/reward only after the non-colocated run is stable
 - ✅ Use `--train.colocate_critic_reward` and `--train.colocate_actor_ref`
 
 **When hitting OOM**:
@@ -757,7 +753,7 @@ Pick the execution mode based on your priority — OpenRLHF gives you a clear tr
 #### 🎮 Batch Size Tuning
 
 1. **Generation Phase**: Maximize `--rollout.micro_batch_size`, minimize vLLM TP size
-2. **Training Phase**: Maximize `--train.micro_batch_size`, enable `--ds.packing_samples`
+2. **Training Phase**: Maximize `--train.micro_batch_size`; enable packing only with `flash_attention_2` or `te`
 3. **vLLM**: Always use `--vllm.sync_backend nccl`
 
 > [!TIP]
@@ -827,7 +823,7 @@ We would like to express our gratitude to the following projects and organizatio
 - [Ray ↗](https://github.com/ray-project/ray)
 
 Our project would also like to thank [ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/ColossalChat) and [DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat). In the early stages of the project, we referred to their code design. 
-Our project would like to thank [Netmind.AI](https://www.netmind.ai/) for the GPU support of developing ring attention.
+Our project would like to thank [Netmind.AI](https://www.netmind.ai/) for GPU support during earlier ring-attention exploration.
 
 (2024/7) Our GitHub organization has changed from OpenLLMAI to OpenRLHF.
 

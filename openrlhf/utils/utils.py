@@ -4,6 +4,35 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer
 
+_TORCHVISION_NMS_STUB = None
+
+
+def ensure_torchvision_nms_stub() -> None:
+    """Allow importing Transformers model classes when torchvision ops are absent.
+
+    Only register a stub if torchvision is missing — otherwise pre-registering
+    `torchvision::nms` causes a duplicate-registration c10::Error when real
+    torchvision loads later (AutoModel/MoE pulls it in indirectly).
+    """
+    global _TORCHVISION_NMS_STUB
+    if _TORCHVISION_NMS_STUB is not None:
+        return
+    try:
+        import torchvision  # noqa: F401
+
+        _TORCHVISION_NMS_STUB = True
+        return
+    except Exception:
+        pass
+    try:
+        from torch.library import Library
+
+        lib = Library("torchvision", "FRAGMENT")
+        lib.define("nms(Tensor dets, Tensor scores, float iou_threshold) -> Tensor")
+        _TORCHVISION_NMS_STUB = lib
+    except Exception:
+        _TORCHVISION_NMS_STUB = True
+
 
 def convert_to_torch_dtype(param_dtype: str) -> torch.dtype:
     """Convert param_dtype string to torch.dtype.
@@ -23,18 +52,16 @@ def convert_to_torch_dtype(param_dtype: str) -> torch.dtype:
 
 
 def get_strategy(args):
-    from openrlhf.utils.deepspeed import DeepspeedStrategy
+    from openrlhf.utils.fsdp import FsdpStrategy
 
-    strategy = DeepspeedStrategy(
+    return FsdpStrategy(
         seed=getattr(args.train, "seed", 42),
         full_determinism=getattr(args.train, "full_determinism_enable", False),
         max_norm=getattr(args, "max_norm", 1.0),
         micro_train_batch_size=getattr(args.train, "micro_batch_size", 1),
         train_batch_size=getattr(args.train, "batch_size", 128),
-        zero_stage=args.ds.zero_stage,
         args=args,
     )
-    return strategy
 
 
 def is_vlm_model(pretrain: str) -> bool:
@@ -49,7 +76,9 @@ def is_vlm_model(pretrain: str) -> bool:
 
 
 def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=True):
-    is_vlm = getattr(model, "is_vlm", False) if model is not None else is_vlm_model(pretrain)
+    is_vlm = getattr(model, "is_vlm", False) if model is not None else False
+    if not is_vlm:
+        is_vlm = is_vlm_model(pretrain)
 
     if is_vlm:
         from transformers import AutoProcessor

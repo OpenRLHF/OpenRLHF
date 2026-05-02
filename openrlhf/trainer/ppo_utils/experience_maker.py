@@ -7,7 +7,7 @@ import ray
 import torch
 
 from openrlhf.models.utils import compute_approx_kl, compute_reward, masked_mean
-from openrlhf.trainer.ppo_utils.experience import Experience
+from openrlhf.trainer.ppo_utils.experience import Experience, get_model_parallel_size
 from openrlhf.trainer.ppo_utils.length_penalty import apply_length_penalties
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.logging_utils import init_logger
@@ -48,17 +48,13 @@ class RemoteExperienceMaker:
         samples_list = []
         if self.args.train.dynamic_batch_enable:
             total_lengths = [int(s.total_length.item()) for s in rollout_samples]
-            effective_actor_num = (
-                self.args.actor.num_nodes
-                * self.args.actor.num_gpus_per_node
-                // self.args.ds.ring_attn_size
-                // self.args.ds.tensor_parallel_size
-            )
+            actor_world_size = self.args.actor.num_nodes * self.args.actor.num_gpus_per_node
+            effective_actor_num = actor_world_size // get_model_parallel_size(self.args)
             minimum_batch_num = get_minimum_num_micro_batch_size(
                 total_lengths,
                 self.args.rollout.max_tokens_per_gpu,
-                self.args.ds.ring_attn_size,
-                self.args.ds.tensor_parallel_size,
+                self.args.fsdp.cp_size,
+                self.args.fsdp.tp_size,
             )
             minimum_batch_num = minimum_batch_num // effective_actor_num * effective_actor_num
             num_batch = max(minimum_batch_num, effective_actor_num)
@@ -97,6 +93,42 @@ class RemoteExperienceMaker:
 
     # ── Remote model dispatch helpers ──
 
+    @property
+    def _sleep_enabled(self) -> bool:
+        return bool(getattr(self.args.fsdp, "enable_sleep", False))
+
+    @staticmethod
+    def _unique_groups(groups):
+        unique = []
+        seen = set()
+        for group in groups:
+            if group is None:
+                continue
+            group_id = id(group)
+            if group_id in seen:
+                continue
+            seen.add(group_id)
+            unique.append(group)
+        return unique
+
+    def _prepare_lp_inference_phase(self, groups) -> None:
+        if not self._sleep_enabled:
+            return
+        refs = []
+        for group in self._unique_groups(groups):
+            refs.extend(group.async_run_method(method_name="prepare_for_lp_inference"))
+        if refs:
+            ray.get(refs)
+
+    def _finish_lp_inference_phase(self, groups) -> None:
+        if not self._sleep_enabled:
+            return
+        refs = []
+        for group in reversed(self._unique_groups(groups)):
+            refs.extend(group.async_run_method(method_name="offload_after_refit"))
+        if refs:
+            ray.get(refs)
+
     def _dispatch_forward(self, group, sync_condition, **kwargs):
         """Dispatch a batched forward call and optionally sync + empty cache."""
         ref = group.async_run_method_batch(method_name="forward", **kwargs)
@@ -106,7 +138,7 @@ class RemoteExperienceMaker:
         return ref
 
     def _flatten_results(self, refs, duplicate_factor):
-        """Gather ray refs and flatten results, deduplicating ring_attn/tp copies."""
+        """Gather ray refs and flatten results, deduplicating CP/TP copies."""
         return list(itertools.chain.from_iterable(ray.get(refs)[::duplicate_factor]))
 
     @torch.no_grad()
@@ -117,7 +149,7 @@ class RemoteExperienceMaker:
 
         args = self.strategy.args
         device = "cpu"
-        duplicate_factor = args.ds.ring_attn_size * args.ds.tensor_parallel_size
+        duplicate_factor = get_model_parallel_size(args)
         dummy_ref = ray.put([[None]] * (len(samples_list) * duplicate_factor))
 
         # Extract tensors for batch processing
@@ -137,61 +169,71 @@ class RemoteExperienceMaker:
 
         # Reward model
         use_reward_model = samples_list[0].rewards is None
+        lp_groups = [self.actor_model_group, self.critic_model_group, self.initial_model_group]
         if use_reward_model:
-            if self.reward_model_group is None:
-                raise ValueError("reward_model_group is required when rewards are not precomputed")
-            r_refs = self._dispatch_forward(
-                self.reward_model_group,
-                args.train.colocate_all,
-                sequences=sequences_list,
-                attention_mask=attention_mask_list,
-                pad_sequence=[True] * len(samples_list),
-            )
-        else:
-            r_refs = None
+            lp_groups.append(self.reward_model_group)
 
-        # Actor model (receives mm_train_inputs_list for VLM)
-        action_log_probs_ref = self._dispatch_forward(
-            self.actor_model_group,
-            args.train.colocate_all or args.train.colocate_actor_ref,
-            **vlm_forward_kwargs,
-        )
+        # Sleep is phase-scoped: load the models needed for experience making
+        # once, then offload them together in the finally block.
+        self._prepare_lp_inference_phase(lp_groups)
+        try:
+            if use_reward_model:
+                if self.reward_model_group is None:
+                    raise ValueError("reward_model_group is required when rewards are not precomputed")
+                r_refs = self._dispatch_forward(
+                    self.reward_model_group,
+                    args.train.colocate_all,
+                    sequences=sequences_list,
+                    attention_mask=attention_mask_list,
+                    pad_sequence=[True] * len(samples_list),
+                )
+            else:
+                r_refs = None
 
-        # Critic model
-        if self.critic_model_group is not None:
-            if args.train.colocate_critic_reward and r_refs is not None:
-                ray.get(r_refs)
-                ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
-
-            value_ref = self._dispatch_forward(
-                self.critic_model_group,
-                args.train.colocate_all or args.train.colocate_critic_reward,
-                **forward_kwargs,
-            )
-        else:
-            value_ref = dummy_ref
-
-        # Reference model (also receives mm_train_inputs_list for VLM)
-        if self.initial_model_group is not None:
-            base_action_log_probs_ref = self._dispatch_forward(
-                self.initial_model_group,
+            # Actor model (receives mm_train_inputs_list for VLM)
+            action_log_probs_ref = self._dispatch_forward(
+                self.actor_model_group,
                 args.train.colocate_all or args.train.colocate_actor_ref,
                 **vlm_forward_kwargs,
             )
-        else:
-            base_action_log_probs_ref = dummy_ref
 
-        # ── Gather and flatten results ──
+            # Critic model
+            if self.critic_model_group is not None:
+                if args.train.colocate_critic_reward and r_refs is not None:
+                    ray.get(r_refs)
+                    ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
 
-        action_log_probs_list = self._flatten_results(action_log_probs_ref, duplicate_factor)
-        base_action_log_probs_list = self._flatten_results(base_action_log_probs_ref, duplicate_factor)
-        value_list = self._flatten_results(value_ref, duplicate_factor)
+                value_ref = self._dispatch_forward(
+                    self.critic_model_group,
+                    args.train.colocate_all or args.train.colocate_critic_reward,
+                    **forward_kwargs,
+                )
+            else:
+                value_ref = dummy_ref
 
-        if use_reward_model:
-            rewards_list = self._flatten_results(r_refs, duplicate_factor)
-            for i, samples in enumerate(samples_list):
-                samples.rewards = rewards_list[i]
-                samples.info["reward"] = rewards_list[i]
+            # Reference model (also receives mm_train_inputs_list for VLM)
+            if self.initial_model_group is not None:
+                base_action_log_probs_ref = self._dispatch_forward(
+                    self.initial_model_group,
+                    args.train.colocate_all or args.train.colocate_actor_ref,
+                    **vlm_forward_kwargs,
+                )
+            else:
+                base_action_log_probs_ref = dummy_ref
+
+            # ── Gather and flatten results ──
+
+            action_log_probs_list = self._flatten_results(action_log_probs_ref, duplicate_factor)
+            base_action_log_probs_list = self._flatten_results(base_action_log_probs_ref, duplicate_factor)
+            value_list = self._flatten_results(value_ref, duplicate_factor)
+
+            if use_reward_model:
+                rewards_list = self._flatten_results(r_refs, duplicate_factor)
+                for i, samples in enumerate(samples_list):
+                    samples.rewards = rewards_list[i]
+                    samples.info["reward"] = rewards_list[i]
+        finally:
+            self._finish_lp_inference_phase(lp_groups)
 
         assert (
             len(samples_list) == len(action_log_probs_list) == len(base_action_log_probs_list) == len(value_list)

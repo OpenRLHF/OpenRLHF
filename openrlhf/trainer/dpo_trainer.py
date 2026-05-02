@@ -6,6 +6,7 @@ from torch.optim import Optimizer
 from tqdm import tqdm
 
 from openrlhf.models import DPOLoss
+from openrlhf.models.utils import split_moe_aux_loss
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 
@@ -26,7 +27,7 @@ class DPOTrainer(ABC):
         beta (float, defaults to 0.01): Coefficient for regularizing the preference loss.
         max_epochs (int, defaults to 2): Maximum number of training epochs.
         save_hf_ckpt (bool): Whether to save huggingface-format model weight.
-        disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight. (Deepspeed model weight is used for training recovery)
+        disable_ds_ckpt (bool): Legacy flag name; whether to skip resumable FSDP/DCP training checkpoints.
     """
 
     def __init__(
@@ -63,14 +64,11 @@ class DPOTrainer(ABC):
         self.beta = beta
         self.loss_fn = DPOLoss(self.beta, self.args.model.label_smoothing, self.args.model.ipo_enable)
 
-        # Mixtral 8*7b
+        # MoE balancing loss.
         self.aux_loss = self.args.model.aux_loss_coef > 1e-8
 
         # NLL loss
         self.nll_loss = self.args.model.nll_loss_coef > 1e-8
-
-        # packing samples
-        self.packing_samples = strategy.args.ds.packing_samples
 
         # wandb/tensorboard setting
         self._wandb = None
@@ -166,9 +164,6 @@ class DPOTrainer(ABC):
                 preference_loss, chosen_reward, reject_reward = self.loss_fn(
                     chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
                 )
-                # mixtral
-                if not self.aux_loss:
-                    aux_loss = 0
                 # nll loss
                 if not self.nll_loss:
                     nll_loss = 0
@@ -245,7 +240,14 @@ class DPOTrainer(ABC):
             tag = f"global_step{global_step}"
             if not self.disable_ds_ckpt:
                 self.strategy.save_ckpt(
-                    self.model.model, args.ckpt.path, tag, args.ckpt.max_num, args.ckpt.max_mem, client_states
+                    self.model,
+                    args.ckpt.path,
+                    tag,
+                    args.ckpt.max_num,
+                    args.ckpt.max_mem,
+                    client_states,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
                 )
             if self.save_hf_ckpt:
                 save_path = os.path.join(args.ckpt.path, f"{tag}_hf")
@@ -311,20 +313,12 @@ class DPOTrainer(ABC):
             chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens
         )
 
-        log_probs, output = model(
-            input_ids,
-            attention_mask=att_masks,
-            return_output=True,
-            return_logprobs=True,
-            ring_attn_group=self.strategy.ring_attn_group,
-        )
+        log_probs, output = model(input_ids, attention_mask=att_masks, return_output=True, return_logprobs=True)
 
-        all_logps_sum, all_logps_mean = self._get_batch_logps(
-            log_probs, att_masks, prompt_id_lens, average_log_prob=False
-        )
+        all_logps_sum, all_logps_mean = self._get_batch_logps(log_probs, att_masks, prompt_id_lens)
         chosen_logps = all_logps_sum[: chosen_ids.shape[0]]
         rejected_logps = all_logps_sum[chosen_ids.shape[0] :]
-        aux_loss = output.aux_loss if "aux_loss" in output else []
+        aux_loss, _ = split_moe_aux_loss(output, self.aux_loss)
         return chosen_logps, rejected_logps, aux_loss, -all_logps_mean[: chosen_ids.shape[0]].mean()
 
     def concatenated_inputs(self, chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens):
@@ -364,19 +358,9 @@ class DPOTrainer(ABC):
         per_token_logps: torch.FloatTensor,
         attention_mask,
         prompt_id_lens,
-        average_log_prob: bool = False,
     ) -> torch.FloatTensor:
-        """Compute the log probabilities of the given labels under the given logits.
-
-        Args:
-            per_token_logps: Per token log probabilities. Shape: (batch_size, sequence_length)
-            average_log_prob: If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the log probabilities of the (non-masked) tokens.
-
-        Returns:
-            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the given logits.
-        """
-        assert average_log_prob == False
-
+        """Return per-sample (sum, mean) log-probabilities over the response tokens
+        (everything after each prompt prefix)."""
         loss_masks = attention_mask.clone().bool()
         # mask prompts
         for mask, source_len in zip(loss_masks, prompt_id_lens):

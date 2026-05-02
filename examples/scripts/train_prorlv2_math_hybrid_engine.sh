@@ -5,10 +5,10 @@
 # Key techniques:
 # - REINFORCE++-baseline with batch advantage normalization
 # - Clip-Higher (--actor.eps_clip_low_high 0.2 0.27) for exploration
-# - Dynamic Sampling (--dynamic_filtering) to reduce noise
+# - Dynamic Sampling (--algo.dynamic_filtering_enable) to reduce noise
 # - KL-regularized trust regions (--algo.kl.use_loss --algo.kl.estimator k2)
 # - TIS/ICEPOP/MIS (--algo.advantage.is_correction_type) for importance sampling correction
-# - Stop Properly Penalty (--stop_properly_penalty_coef) for truncated samples
+# - Stop Properly Penalty (--reward.stop_properly_penalty_coef) for truncated samples
 #
 # ProRL v2 achieves state-of-the-art performance among 1.5B reasoning models
 # with sustained improvements across math, code, and reasoning tasks.
@@ -52,12 +52,10 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --train.batch_size 1024 \
    --rollout.batch_size 512 \
    --rollout.n_samples_per_prompt 16 \
-   --train.dynamic_batch_enable \
    --train.num_episodes 100 \
    --data.max_len 9216 \
    --rollout.max_new_tokens 8192 \
-   --ds.zero_stage 3 \
-   --ds.param_dtype bf16 \
+   --fsdp.param_dtype bf16 \
    --actor.adam.lr 1e-6 \
    --data.prompt_dataset ${DATASET_PATH} \
    --data.input_key prompt \
@@ -68,11 +66,10 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --eval.n_samples_per_prompt 4 \
    --data.apply_chat_template \
    --actor.gradient_checkpointing_enable \
-   --ds.packing_samples \
    --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
-   --ds.enable_sleep \
+   --fsdp.enable_sleep \
    --algo.advantage.is_correction_enable \
    --algo.advantage.is_correction_threshold 0.5 5.0 \
    --algo.advantage.is_correction_type icepop \

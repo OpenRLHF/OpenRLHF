@@ -16,7 +16,7 @@ from openrlhf.trainer.ppo_utils.kl_controller import AdaptiveKLController, Fixed
 from openrlhf.trainer.ppo_utils.samples_generator import SamplesGenerator
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
-from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils.fsdp import FsdpStrategy
 from openrlhf.utils.logging_utils import TensorboardLogger, WandbLogger, init_logger
 from openrlhf.utils.utils import get_tokenizer
 
@@ -150,7 +150,7 @@ class BasePPOTrainer(ABC):
 
     def __init__(
         self,
-        strategy: DeepspeedStrategy,
+        strategy: FsdpStrategy,
         actor_model_group: RayActorGroup,
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,
@@ -222,6 +222,31 @@ class BasePPOTrainer(ABC):
             experiences[0].info["reward"][0].item(),
         ]
         logger.info(f"Sample: {sample0}")
+        if os.environ.get("OPENRLHF_DEBUG_ROLLOUT") == "1":
+            debug_rows = []
+            for exp_idx, exp in enumerate(experiences):
+                batch = exp.sequences.shape[0]
+                rewards = exp.info.get("reward")
+                returns = exp.info.get("return")
+                group_stds = exp.info.get("group_reward_std")
+                for row in range(batch):
+                    index = exp.index[row] if isinstance(exp.index, list) and row < len(exp.index) else row
+                    debug_rows.append(
+                        {
+                            "exp": exp_idx,
+                            "row": row,
+                            "index": int(index),
+                            "reward": rewards[row].item() if isinstance(rewards, torch.Tensor) else None,
+                            "return": returns[row].item() if isinstance(returns, torch.Tensor) else None,
+                            "group_reward_std": (
+                                group_stds[row].item() if isinstance(group_stds, torch.Tensor) else None
+                            ),
+                            "text": self.tokenizer.decode(exp.sequences[row].unsqueeze(0), skip_special_tokens=True)[
+                                0
+                            ],
+                        }
+                    )
+            logger.info(f"RolloutDebug: {debug_rows}")
 
         # Compute ground-truth rollout stats BEFORE dynamic batch splitting
         rollout_stats = self._compute_rollout_stats(experiences)
@@ -267,25 +292,23 @@ class BasePPOTrainer(ABC):
         """Run one PPO train step for critic + actor and return merged status dict."""
         status: dict = {}
 
-        # Decide whether to train critic/actor this round (actor can be frozen initially).
         run_critic = self.critic_model_group is not None
-        run_actor = global_steps > self.args.critic.freezing_steps and self.actor_model_group is not None
+        run_actor = global_steps >= self.args.critic.freezing_steps and self.actor_model_group is not None
 
-        def _run_sleep(group, **kwargs):
-            # Sleep mode: reload -> fit -> offload (smaller GPU memory).
-            ray.get(group.async_run_method(method_name="reload_states"))
-            ref = group.async_run_method(method_name="fit", **kwargs)
-            status.update(ray.get(ref)[0])
-            ray.get(group.async_run_method(method_name="offload_states"))
-
-        if self.args.ds.enable_sleep:
-            # Colocated/sleeping: run critic first, then actor.
+        if getattr(self.args.fsdp, "enable_sleep", False):
+            # Keep actor weights on GPU between actor fit and vLLM sync. Only
+            # the optimizer is offloaded in between; critic can fully offload.
             if run_critic:
-                _run_sleep(self.critic_model_group)
+                ray.get(self.critic_model_group.async_run_method(method_name="reload_states"))
+                ref = self.critic_model_group.async_run_method(method_name="fit")
+                status.update(ray.get(ref)[0])
+                ray.get(self.critic_model_group.async_run_method(method_name="offload_states"))
             if run_actor:
-                _run_sleep(self.actor_model_group, kl_ctl=self.kl_ctl.value)
+                ray.get(self.actor_model_group.async_run_method(method_name="reload_states"))
+                ref = self.actor_model_group.async_run_method(method_name="fit", kl_ctl=self.kl_ctl.value)
+                status.update(ray.get(ref)[0])
+                ray.get(self.actor_model_group.async_run_method(method_name="offload_before_refit"))
         else:
-            # Async: start jobs first, then wait and merge results.
             refs = []
             if run_critic:
                 refs += self.critic_model_group.async_run_method(method_name="fit")
@@ -452,7 +475,7 @@ class PPOTrainer(BasePPOTrainer):
     def __init__(
         self,
         pretrain: str,
-        strategy: DeepspeedStrategy,
+        strategy: FsdpStrategy,
         actor_model_group: RayActorGroup,
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,

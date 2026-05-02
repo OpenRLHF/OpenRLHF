@@ -69,13 +69,14 @@ setup(
             "examples",
         )
     ),
-    description="A Ray-based High-performance RLHF framework.",
+    description="A Ray + vLLM + FSDP2(AutoTP/EP/CP) high-performance RLHF framework.",
     long_description=_fetch_readme(),
     long_description_content_type="text/markdown",
     install_requires=_fetch_requirements("requirements.txt"),
     extras_require={
-        "vllm": ["vllm==0.19.1"],
-        "vllm_latest": ["vllm>0.19.1"],
+        "vllm": ["vllm==0.20.0"],
+        "vllm_latest": ["vllm>=0.20.0"],
+        "flash-attn-2": ["flash-attn==2.8.3"],
         "ring": ["ring_flash_attn"],
         "liger": ["liger_kernel"],
     },

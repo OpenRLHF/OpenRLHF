@@ -7,6 +7,7 @@ from torch import distributed as dist
 
 from openrlhf.trainer.ppo_utils.experience import (
     Experience,
+    get_model_parallel_size,
     make_experience_batch,
     remove_padding_in_sequences,
     split_experience_batch,
@@ -28,7 +29,6 @@ class NaiveReplayBuffer(ABC):
         sample_batch_size: int,
         limit: int = 0,
         cpu_offload: bool = True,
-        packing_samples: bool = False,
         dynamic_batch: bool = False,
     ) -> None:
         super().__init__()
@@ -36,7 +36,6 @@ class NaiveReplayBuffer(ABC):
         # limit <= 0 means unlimited
         self.limit = limit
         self.cpu_offload = cpu_offload
-        self.packing_samples = packing_samples
         self.target_device = torch.device(f"cuda:{torch.cuda.current_device()}")
         self.items: List[Experience] = []
         self.dynamic_batch = dynamic_batch
@@ -62,7 +61,7 @@ class NaiveReplayBuffer(ABC):
     @torch.no_grad()
     def sample(self) -> Experience:
         items = random.sample(self.items, self.sample_batch_size)
-        experience = make_experience_batch(items, self.packing_samples)
+        experience = make_experience_batch(items)
         if self.cpu_offload:
             experience.to_device(self.target_device)
         return experience
@@ -83,7 +82,7 @@ class NaiveReplayBuffer(ABC):
     def collate_fn(self, batch) -> Experience:
         if self.dynamic_batch:
             batch = batch[0]
-        experience = make_experience_batch(batch, self.packing_samples)
+        experience = make_experience_batch(batch)
         return experience
 
     def setup_dynamic_batch(self, strategy):
@@ -91,7 +90,7 @@ class NaiveReplayBuffer(ABC):
         sample_lengths = [sample.total_length.item() for sample in self.items]
 
         world_size = dist.get_world_size()
-        dp_size = world_size // args.ds.ring_attn_size // args.ds.tensor_parallel_size
+        dp_size = world_size // get_model_parallel_size(args)
         local_train_batch_size = args.train.batch_size // dp_size
         # Expected num_steps assumes a full buffer, but async + partial_rollout
         # can deliver a short buffer at episode boundaries — clamp to avoid
@@ -108,8 +107,8 @@ class NaiveReplayBuffer(ABC):
                 get_minimum_num_micro_batch_size(
                     sample_lengths[start:end],
                     args.train.max_tokens_per_gpu,
-                    args.ds.ring_attn_size,
-                    args.ds.tensor_parallel_size,
+                    args.fsdp.cp_size,
+                    args.fsdp.tp_size,
                 )
             )
 

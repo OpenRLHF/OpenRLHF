@@ -1,48 +1,7 @@
 from typing import Optional, Tuple, Union
 
-import deepspeed
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-
-
-def set_z3_leaf_modules(model: nn.Module) -> None:
-    """Auto-detect and set DeepSpeed ZeRO3 leaf modules.
-
-    ZeRO3 prefetches submodule parameters assuming a fixed module traversal order.
-    This breaks for:
-      - MoE: dynamic expert routing makes prefetch unpredictable.
-        (https://github.com/microsoft/DeepSpeed/pull/4966)
-      - Hybrid architectures (e.g., Qwen3.5): same decoder layer class but different
-        child submodules per instance (self_attn vs linear_attn).
-
-    Marking these as z3 leaves forces whole-module allgather instead of per-submodule
-    prefetch, fixing the issue at the cost of slightly higher peak memory.
-    """
-    z3_leaf_classes = set()
-    child_sigs: dict[type, frozenset[str]] = {}
-
-    for m in model.modules():
-        # MoE: dynamic expert routing
-        if "SparseMoeBlock" in m.__class__.__name__:
-            z3_leaf_classes.add(m.__class__)
-            continue
-
-        # Hybrid: same class, different child submodules across instances
-        cls = m.__class__
-        children = frozenset(name for name, _ in m.named_children())
-        if not children:
-            continue
-        if cls in child_sigs:
-            if child_sigs[cls] != children:
-                z3_leaf_classes.add(cls)
-        else:
-            child_sigs[cls] = children
-
-    if z3_leaf_classes:
-        deepspeed.utils.set_z3_leaf_modules(model, list(z3_leaf_classes))
-        for cls in z3_leaf_classes:
-            print(f"Setting zero3 leaf: {cls.__name__}")
 
 
 def compute_approx_kl(
@@ -150,7 +109,9 @@ def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor, temperatur
 def masked_mean(tensor: torch.Tensor, mask: Optional[torch.Tensor], dim: int = None) -> torch.Tensor:
     if mask is None:
         return tensor.mean(dim=dim)
-    return (tensor * mask).sum(dim=dim) / mask.sum(dim=dim)
+    valid = torch.where(mask.bool(), tensor, torch.zeros_like(tensor))
+    denom = mask.sum(dim=dim).clamp_min(1)
+    return valid.sum(dim=dim) / denom
 
 
 def masked_normalize(tensor: torch.Tensor, mask: torch.Tensor, dim: int = 1, eps: float = 1e-8) -> torch.Tensor:
@@ -166,3 +127,26 @@ def compute_entropy(logits: torch.Tensor):
     pd = torch.nn.functional.softmax(logits, dim=-1)
     entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)
     return entropy
+
+
+def split_moe_aux_loss(output, enabled: bool):
+    """Return the aux loss tensor for optimization and for logging.
+
+    HF MoE models return an unscaled ``output.aux_loss`` that OpenRLHF adds to
+    the trainer loss. NeMo AutoModel custom MoE injects aux-loss gradients via
+    ``MoEAuxLossAutoScaler`` during backward, so those outputs are marked and
+    must only use ``aux_loss`` for logging.
+    """
+    if not enabled:
+        return 0, 0
+
+    if isinstance(output, dict):
+        aux_loss = output.get("aux_loss", 0)
+        in_backward = bool(output.get("_openrlhf_aux_loss_in_backward", False))
+    else:
+        aux_loss = getattr(output, "aux_loss", 0)
+        in_backward = bool(getattr(output, "_openrlhf_aux_loss_in_backward", False))
+
+    if aux_loss is None:
+        aux_loss = 0
+    return (0 if in_backward else aux_loss), aux_loss

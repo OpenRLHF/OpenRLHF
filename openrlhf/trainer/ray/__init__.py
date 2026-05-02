@@ -1,4 +1,4 @@
-# No implicit imports of deepspeed here to avoid vllm environment gets comtaminated
+# Keep this package lightweight so vLLM/Ray workers do not import training backends implicitly.
 from .vllm_engine import batch_vllm_engine_call, create_vllm_engines
 
 __all__ = [

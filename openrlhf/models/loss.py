@@ -1,56 +1,81 @@
 from typing import Optional, Tuple
 
 import torch
-import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
 from .utils import masked_mean
 
 
-class GPTLMLoss(nn.Module):
-    """
-    GPT Language Model Loss
-    """
+def masked_sum(values: torch.Tensor, mask: torch.Tensor, dim: int | tuple[int, ...] | None = None) -> torch.Tensor:
+    """verl-compatible masked sum.
 
-    def __init__(self, ring_attn_group=None):
+    NaNs outside the mask are zeroed before summation so padding-only garbage
+    cannot contaminate the result.
+    """
+    valid_values = torch.where(mask.bool(), values, 0.0)
+    return (valid_values * mask).sum(dim=dim)
+
+
+def agg_loss(
+    loss_mat: torch.Tensor,
+    loss_mask: torch.Tensor,
+    loss_agg_mode: str,
+    dp_size: int = 1,
+    batch_num_tokens: Optional[torch.Tensor | int] = None,
+    global_batch_size: Optional[torch.Tensor | int] = None,
+    loss_scale_factor: Optional[int] = None,
+) -> torch.Tensor:
+    """Aggregate token/sequence losses following verl's ``agg_loss`` contract.
+
+    The returned scalar is invariant to DP/FSDP averaging when callers provide
+    global batch metadata. For ``token-mean`` this is exactly:
+    ``masked_sum(loss_mat, loss_mask) / batch_num_tokens * dp_size``.
+    """
+    if loss_agg_mode == "token-mean":
+        if batch_num_tokens is None:
+            if dp_size > 1:
+                raise ValueError("(global) batch_num_tokens is required when dp_size > 1")
+            batch_num_tokens = loss_mask.sum()
+        return masked_sum(loss_mat, loss_mask) / batch_num_tokens * dp_size
+
+    if loss_agg_mode in {"seq-mean-token-sum", "seq-mean-token-sum-norm"}:
+        seq_losses = torch.sum(loss_mat * loss_mask, dim=-1)
+        seq_mask = (torch.sum(loss_mask, dim=-1) > 0).float()
+        if global_batch_size is None:
+            if dp_size > 1:
+                raise ValueError("global_batch_size is required when dp_size > 1")
+            global_batch_size = seq_mask.sum()
+        loss = masked_sum(seq_losses, seq_mask) / global_batch_size * dp_size
+        if loss_agg_mode == "seq-mean-token-sum-norm":
+            loss /= loss_scale_factor if loss_scale_factor is not None else loss_mask.shape[-1]
+        return loss
+
+    if loss_agg_mode == "seq-mean-token-mean":
+        seq_token_counts = torch.sum(loss_mask, dim=-1)
+        seq_losses = torch.sum(loss_mat * loss_mask, dim=-1) / (seq_token_counts + 1e-8)
+        seq_mask = (seq_token_counts > 0).float()
+        if global_batch_size is None:
+            if dp_size > 1:
+                raise ValueError("global_batch_size is required when dp_size > 1")
+            global_batch_size = seq_mask.sum()
+        return masked_sum(seq_losses, seq_mask) / global_batch_size * dp_size
+
+    raise ValueError(f"Invalid loss_agg_mode: {loss_agg_mode}")
+
+
+class GPTLMLoss(nn.Module):
+    """GPT Language Model Loss."""
+
+    def __init__(self):
         super().__init__()
         self.IGNORE_INDEX = -100
         self.loss = nn.CrossEntropyLoss(ignore_index=self.IGNORE_INDEX)
 
-        self.ring_attn_group = ring_attn_group
-        if self.ring_attn_group:
-            self.ring_attn_rank = dist.get_rank(self.ring_attn_group)
-            self.ring_attn_world_size = dist.get_world_size(self.ring_attn_group)
-
     def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        # RingAttention
-        if self.ring_attn_group is not None:
-            total_seq_len = labels.size(-1)
-            seq_len_per_process = total_seq_len // self.ring_attn_world_size
-            start_idx = self.ring_attn_rank * seq_len_per_process
-            end_idx = min(start_idx + seq_len_per_process, total_seq_len)
-            labels = labels[..., start_idx:end_idx]
-
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-
-            # if labels are all IGNORE_INDEX, then nn.CrossEntropyLoss will be nan
-            if torch.all(shift_labels == self.IGNORE_INDEX):
-                # Use mean of logits multiplied by 0 to maintain gradient flow
-                loss = shift_logits.mean() * 0
-            else:
-                loss = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-
-            dist.all_reduce(loss, op=dist.ReduceOp.SUM, group=self.ring_attn_group)
-            loss = loss / self.ring_attn_world_size
-        else:
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-
-            loss = self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-
-        return loss
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
+        return self.loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
 
 
 class SFTLoss(nn.Module):
@@ -58,18 +83,32 @@ class SFTLoss(nn.Module):
     SFT Loss
     """
 
-    def __init__(self, token_level_loss: bool = True):
+    def __init__(self, token_level_loss: bool = True, loss_agg_mode: str = "token-mean"):
         super().__init__()
         self.token_level_loss = token_level_loss
+        self.loss_agg_mode = loss_agg_mode
 
-    def forward(self, per_token_logps: torch.Tensor, loss_mask: torch.Tensor) -> torch.Tensor:
-        loss = (
-            masked_mean(-per_token_logps, loss_mask, dim=None)
-            if self.token_level_loss
-            else masked_mean(-per_token_logps, loss_mask, dim=-1).mean()
-        )
-
-        return loss
+    def forward(
+        self,
+        per_token_logps: torch.Tensor,
+        loss_mask: torch.Tensor,
+        dp_size: int = 1,
+        batch_num_tokens: Optional[torch.Tensor] = None,
+        global_num_tokens: Optional[torch.Tensor] = None,
+        global_batch_size: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        if self.token_level_loss:
+            if batch_num_tokens is None:
+                batch_num_tokens = global_num_tokens
+            return agg_loss(
+                -per_token_logps,
+                loss_mask,
+                self.loss_agg_mode,
+                dp_size=dp_size,
+                batch_num_tokens=batch_num_tokens,
+                global_batch_size=global_batch_size,
+            )
+        return masked_mean(-per_token_logps, loss_mask, dim=-1).mean()
 
 
 class PolicyLoss(nn.Module):
@@ -87,6 +126,7 @@ class PolicyLoss(nn.Module):
         enable_vllm_is_correction: bool = False,
         vllm_is_truncated_threshold: list = None,
         vllm_is_correction_type: str = "tis",
+        loss_agg_mode: str = "token-mean",
     ) -> None:
         super().__init__()
         self.clip_eps_low = clip_eps_low
@@ -97,6 +137,7 @@ class PolicyLoss(nn.Module):
         self.enable_vllm_is_correction = enable_vllm_is_correction
         self.vllm_is_truncated_threshold = vllm_is_truncated_threshold
         self.vllm_is_correction_type = vllm_is_correction_type
+        self.loss_agg_mode = loss_agg_mode
 
         # GSPO requires sequence-level loss
         if policy_loss_type == "gspo":
@@ -118,6 +159,10 @@ class PolicyLoss(nn.Module):
         advantages: torch.Tensor,
         action_mask: Optional[torch.Tensor] = None,
         rollout_log_probs: Optional[torch.Tensor] = None,
+        dp_size: int = 1,
+        batch_num_tokens: Optional[torch.Tensor] = None,
+        global_num_tokens: Optional[torch.Tensor] = None,
+        global_batch_size: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if self.policy_loss_type == "ppo":
             log_ratio = log_probs - old_log_probs
@@ -172,11 +217,25 @@ class PolicyLoss(nn.Module):
                 loss = vllm_is * loss
             vllm_kl = masked_mean(rollout_log_probs - old_log_probs, action_mask, dim=None)
 
-        loss = (
-            masked_mean(loss, action_mask, dim=None)
-            if self.token_level_loss
-            else masked_mean(loss, action_mask, dim=-1).mean()
-        )
+        if self.token_level_loss:
+            if batch_num_tokens is None:
+                batch_num_tokens = global_num_tokens
+            loss = agg_loss(
+                loss,
+                action_mask,
+                self.loss_agg_mode,
+                dp_size=dp_size,
+                batch_num_tokens=batch_num_tokens,
+                global_batch_size=global_batch_size,
+            )
+        else:
+            loss = agg_loss(
+                loss,
+                action_mask,
+                "seq-mean-token-mean",
+                dp_size=dp_size,
+                global_batch_size=global_batch_size,
+            )
         clip_ratio = masked_mean(torch.lt(surr2, surr1).float(), action_mask, dim=None)
         ppo_kl = masked_mean(-log_ratio.detach(), action_mask, dim=None)
         return loss, clip_ratio, ppo_kl, vllm_kl
@@ -198,6 +257,10 @@ class ValueLoss(nn.Module):
         old_values: torch.Tensor,
         returns: torch.Tensor,
         action_mask: Optional[torch.Tensor] = None,
+        dp_size: int = 1,
+        batch_num_tokens: Optional[torch.Tensor] = None,
+        global_num_tokens: Optional[torch.Tensor] = None,
+        global_batch_size: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if self.clip_eps is not None:
             values_clipped = old_values + (values - old_values).clamp(-self.clip_eps, self.clip_eps)
@@ -207,11 +270,25 @@ class ValueLoss(nn.Module):
         else:
             loss = (values - returns) ** 2
 
-        loss = (
-            masked_mean(loss, action_mask, dim=None)
-            if self.token_level_loss
-            else masked_mean(loss, action_mask, dim=-1).mean()
-        )
+        if self.token_level_loss:
+            if batch_num_tokens is None:
+                batch_num_tokens = global_num_tokens
+            loss = agg_loss(
+                loss,
+                action_mask,
+                "token-mean",
+                dp_size=dp_size,
+                batch_num_tokens=batch_num_tokens,
+                global_batch_size=global_batch_size,
+            )
+        else:
+            loss = agg_loss(
+                loss,
+                action_mask,
+                "seq-mean-token-mean",
+                dp_size=dp_size,
+                global_batch_size=global_batch_size,
+            )
         return 0.5 * loss
 
 

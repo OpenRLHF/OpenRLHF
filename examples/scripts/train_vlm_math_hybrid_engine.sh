@@ -9,7 +9,7 @@
 # - Loads full VLM (AutoModelForImageTextToText)
 # - Uses AutoProcessor for correct image token insertion
 # - Passes images to vLLM for multimodal generation
-# - --freeze_visual_encoder: freeze vision encoder, only sync language model weights to vLLM
+# - --actor.freeze_visual_encoder: freeze vision encoder, only sync language model weights to vLLM
 #
 # Dataset format (JSONL):
 #   {"prompt": [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Find x."}]}],
@@ -63,8 +63,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --train.num_episodes 100 \
    --data.max_len 4096 \
    --rollout.max_new_tokens 2048 \
-   --ds.zero_stage 3 \
-   --ds.param_dtype bf16 \
+   --fsdp.param_dtype bf16 \
    --actor.adam.lr 2e-6 \
    --data.prompt_dataset ${DATASET_PATH} \
    --data.input_key prompt \
@@ -74,11 +73,11 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --actor.freeze_visual_encoder \
    --data.apply_chat_template \
    --actor.gradient_checkpointing_enable \
-   --ds.attn_implementation eager \
+   --fsdp.attn_implementation eager \
    --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
-   --ds.enable_sleep
+   --fsdp.enable_sleep
 
 # VLM Notes:
 #
@@ -88,11 +87,11 @@ python3 -m openrlhf.cli.train_ppo_ray \
 # Other VLMs with ForConditionalGeneration architecture (e.g. Gemma4,
 # LLaVA, InternVL) are auto-detected via vision_config but not yet tested.
 #
-# With --freeze_visual_encoder, only language model is trained.
+# With --actor.freeze_visual_encoder, only language model is trained.
 # Weight sync to vLLM only transfers trainable parameters.
 #
 # Dataset format:
-#   The dataset should have an image field (configurable via --image_key)
+#   The dataset should have an image field (configurable via --data.image_key)
 #   containing paths or URLs to images. Each prompt can reference images
 #   using {"type": "image"} content items in the chat message format.
 #
@@ -101,5 +100,6 @@ python3 -m openrlhf.cli.train_ppo_ray \
 #   Images in the dataset should be a list of paths/URLs.
 #
 # Attention implementation:
-#   Use --ds.attn_implementation eager for models with linear attention (Qwen3.5).
-#   Flash attention may not support packed sequences with linear attention layers.
+#   Use --fsdp.attn_implementation eager for models with linear attention (Qwen3.5).
+#   Sample packing defaults on globally; VLM runs auto-disable text packing because
+#   image/video processor outputs remain per sample.

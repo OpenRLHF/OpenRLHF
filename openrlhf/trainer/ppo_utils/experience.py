@@ -25,6 +25,11 @@ def pin_memory(tensor: Union[torch.Tensor, list[torch.Tensor]]):
     return tensor.pin_memory() if isinstance(tensor, torch.Tensor) else tensor
 
 
+def get_model_parallel_size(args) -> int:
+    fsdp = args.fsdp
+    return int(fsdp.cp_size) * int(fsdp.tp_size) * int(getattr(fsdp, "ep_size", 1))
+
+
 @dataclass
 class Experience:
     """A batch of RL experience for policy optimization.
@@ -216,7 +221,7 @@ def split_experience_batch(experience: Experience) -> List[Experience]:
     return items
 
 
-def make_experience_batch(items: List[Experience], packing_samples=False) -> Experience:
+def make_experience_batch(items: List[Experience]) -> Experience:
     """Combine individual single-sample Experiences into a batched Experience."""
     if not items:
         raise ValueError("Empty items list")
@@ -283,9 +288,8 @@ def balance_experiences(experiences, args):
     items_all.sort(key=lambda x: x.total_length, reverse=True)
 
     # split experience into chunks
-    effective_num = (
-        args.actor.num_nodes * args.actor.num_gpus_per_node // args.ds.ring_attn_size // args.ds.tensor_parallel_size
-    )
+    actor_world_size = args.actor.num_nodes * args.actor.num_gpus_per_node
+    effective_num = actor_world_size // get_model_parallel_size(args)
     split_items = [items_all[i : i + effective_num] for i in range(0, len(items_all), effective_num)]
     half = len(split_items) // 2
     first_half = split_items[:half]

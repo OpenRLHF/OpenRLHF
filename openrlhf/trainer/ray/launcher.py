@@ -1,3 +1,4 @@
+import gc
 import logging
 import os
 import socket
@@ -11,7 +12,7 @@ from tqdm import tqdm
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
-from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils.fsdp import FsdpStrategy
 
 
 class BaseDistributedActor:
@@ -52,7 +53,7 @@ class BaseDistributedActor:
 
 
 class BaseModelActor(BaseDistributedActor):
-    def _setup_distributed(self, strategy: DeepspeedStrategy):
+    def _setup_distributed(self, strategy: FsdpStrategy):
         # configure strategy
         self.strategy = strategy
         strategy.setup_distributed()
@@ -63,6 +64,41 @@ class BaseModelActor(BaseDistributedActor):
     def empty_cache(self) -> None:
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
+
+    # ---------------------------------------------------------------- sleep / persistent offload
+    #
+    # Sleep mode moves colocated models at phase boundaries. Inference actors
+    # only move model weights; trainer actors override these hooks when an
+    # optimizer also has to move.
+
+    @property
+    def _sleep_enabled(self) -> bool:
+        return bool(getattr(self.strategy.args.fsdp, "enable_sleep", False))
+
+    def reload_states(self):
+        """Load model weights for inference-only actors."""
+        if not self._sleep_enabled or not hasattr(self, "model"):
+            return
+        if not getattr(self.strategy, "cpu_offload", False):
+            self.strategy.move_model_to_device(self.model, "cuda")
+        self.model.eval()
+
+    def offload_states(self):
+        """Offload model weights for inference-only actors."""
+        if not self._sleep_enabled or not hasattr(self, "model"):
+            return
+        self.strategy.move_model_to_device(self.model, "cpu")
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def prepare_for_lp_inference(self):
+        """Load model weights for a logprob/value/reward forward pass."""
+        self.reload_states()
+
+    def offload_after_refit(self):
+        """Offload model weights after an inference or refit phase."""
+        self.offload_states()
 
     def execute_batch(self, method_name: str, all_data, start_idx, end_idx):
         """Process input data by calling specified function for each item in the lists.
@@ -103,23 +139,27 @@ class BaseModelActor(BaseDistributedActor):
 
 @ray.remote(num_gpus=1)
 class ReferenceModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+    def init_model_from_pretrained(self, strategy: FsdpStrategy, pretrain):
         self._setup_distributed(strategy)
         model = Actor(
             pretrain,
-            attn_implementation=strategy.args.ds.attn_implementation,
-            experts_implementation=strategy.args.ds.experts_implementation,
-            param_dtype=strategy.args.ds.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.ds.load_in_4bit,
-            ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref.offload),
-            packing_samples=strategy.args.ds.packing_samples,
+            attn_implementation=strategy.args.fsdp.attn_implementation,
+            param_dtype=strategy.args.fsdp.param_dtype,
+            device_mesh=strategy.device_mesh,
+            moe_mesh=strategy.moe_mesh,
+            distributed_config=strategy.distributed_config,
+            moe_config=strategy.moe_config,
+            activation_checkpointing=False,
+            packing_samples=strategy.args.fsdp.packing_samples,
+            force_hf_model=strategy.args.fsdp.force_hf_model,
             temperature=strategy.args.rollout.temperature,
-            use_liger_kernel=strategy.args.ds.use_liger_kernel,
+            use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
+            # Keep reference numerics on the same AutoModel path as the
+            # trainable actor. Custom AutoModel Llama is not fp32/bf16 forward
+            # equivalent under autocast, so bf16 ref makes step-0 KL non-zero.
+            use_fp32_master_weights=True,
         )
         strategy.print(model)
-
-        if strategy.args.ref.offload:
-            model._offload = True
 
         self.model = self.strategy.prepare(model)
         self.model.eval()
@@ -147,7 +187,6 @@ class ReferenceModelActor(BaseModelActor):
                 sequences.to(device),
                 action_mask.to(device),
                 attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
                 packed_seq_lens=packed_seq_lens,
                 **mm_inputs,
             )
@@ -156,26 +195,38 @@ class ReferenceModelActor(BaseModelActor):
 
 @ray.remote(num_gpus=1)
 class RewardModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+    def init_model_from_pretrained(self, strategy: FsdpStrategy, pretrain):
         self._setup_distributed(strategy)
+        seq_reg_attn = (
+            "flash_attention_2" if strategy.args.fsdp.packing_samples else strategy.args.fsdp.attn_implementation
+        )
         model = get_llm_for_sequence_regression(
             pretrain,
             "reward",
             normalize_reward=strategy.args.reward.normalize_enable,
-            attn_implementation=strategy.args.ds.attn_implementation,
-            experts_implementation=strategy.args.ds.experts_implementation,
-            param_dtype=strategy.args.ds.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.ds.load_in_4bit,
-            ds_config=strategy.get_ds_eval_config(offload=strategy.args.reward.offload),
-            value_head_prefix=strategy.args.ds.value_head_prefix,
-            packing_samples=strategy.args.ds.packing_samples,
+            attn_implementation=seq_reg_attn,
+            param_dtype=strategy.args.fsdp.param_dtype,
+            device_mesh=strategy.device_mesh,
+            moe_mesh=strategy.moe_mesh,
+            distributed_config=strategy.distributed_config,
+            moe_config=strategy.moe_config,
+            activation_checkpointing=False,
+            value_head_prefix=strategy.args.fsdp.value_head_prefix,
+            packing_samples=strategy.args.fsdp.packing_samples,
+            force_hf_model=strategy.args.fsdp.force_hf_model,
+            use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
+            use_fp32_master_weights=False,
         )
         strategy.print(model)
         strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize_enable))
         strategy.print("mean: {}, std {}".format(model.mean, model.std))
 
-        if strategy.args.reward.offload:
-            model._offload = True
+        # HF SequenceClassification refuses batch>1 unless pad_token_id is set
+        # on the model config; the driver's get_tokenizer call doesn't propagate
+        # to this Ray actor's process. Sync from the model's tokenizer here.
+        from openrlhf.utils.utils import get_tokenizer
+
+        get_tokenizer(pretrain, model.model, padding_side="right", strategy=strategy, use_fast=True)
 
         self.model = self.strategy.prepare(model)
         self.model.eval()
@@ -192,7 +243,6 @@ class RewardModelActor(BaseModelActor):
             reward = self.model(
                 sequences.to(device),
                 attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
                 pad_sequence=True,
                 packed_seq_lens=packed_seq_lens,
             )
@@ -228,7 +278,7 @@ class RayActorGroup:
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
         self.ray_actor_type = ray_actor_type
-        # duplicate actors is ring_attn_size * tensor_parallel_size
+        # duplicate actors is the model-parallel group size (cp * tp * ep)
         self.duplicate_actors = duplicate_actors
 
         # custom resources, see https://docs.ray.io/en/latest/ray-core/scheduling/resources.html

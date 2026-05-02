@@ -1,10 +1,11 @@
+import gc
 import os
 import socket
 from abc import ABC
+from contextlib import ExitStack
 from dataclasses import fields
 from typing import Dict, List, Optional, Union
 
-import deepspeed
 import ray
 import torch
 import torch.distributed
@@ -13,15 +14,13 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from openrlhf.models import Actor, PolicyLoss
-from openrlhf.models.utils import compute_approx_kl, masked_mean
-from openrlhf.trainer.ppo_utils.experience import Experience
+from openrlhf.models.utils import compute_approx_kl, masked_mean, split_moe_aux_loss
+from openrlhf.trainer.ppo_utils.experience import Experience, get_model_parallel_size
 from openrlhf.utils import get_tokenizer
-from openrlhf.utils.deepspeed import DeepspeedStrategy
-from openrlhf.utils.deepspeed.deepspeed_utils import (
-    offload_deepspeed_states,
-    reload_deepspeed_states,
-)
 from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
+from openrlhf.utils.fsdp import FsdpStrategy
+from openrlhf.utils.fsdp.packing import cp_shard_sequence, pad_to_cp_multiple
+from openrlhf.utils.fsdp.refit import gather_full_param
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.vlm_utils import merge_mm_train_inputs
 
@@ -29,8 +28,75 @@ from ..ppo_utils import NaiveReplayBuffer
 
 logger = init_logger(__name__)
 
+
+def _cp_local_step_tensor(
+    tensor: Optional[torch.Tensor],
+    *,
+    cp_group,
+    cp_size: int,
+    sequence_length: int,
+    value: int | float | bool = 0,
+) -> Optional[torch.Tensor]:
+    if tensor is None:
+        return None
+    if cp_size <= 1:
+        return tensor
+
+    # Step tensors are length S - 1. Add the final non-loss position so the
+    # CP shard lines up with model logits before global last-token truncation.
+    if tensor.shape[1] == sequence_length - 1:
+        pad_shape = list(tensor.shape)
+        pad_shape[1] = 1
+        tensor = torch.cat([tensor, tensor.new_full(pad_shape, value)], dim=1)
+    elif tensor.shape[1] != sequence_length:
+        raise ValueError(
+            f"CP local step tensor has length {tensor.shape[1]}, expected {sequence_length - 1} or {sequence_length}."
+        )
+
+    tensor = pad_to_cp_multiple(tensor, cp_size, seq_dim=1, value=value)
+    return cp_shard_sequence(tensor, cp_group, seq_dim=1)
+
+
 from .launcher import BaseModelActor
 from .utils import get_physical_gpu_id
+
+
+def _maybe_adapt_tensor_to_hf(model: torch.nn.Module, name: str, tensor: torch.Tensor):
+    adapter = getattr(model, "state_dict_adapter", None)
+    if adapter is None:
+        return [(name, tensor)]
+
+    convert_one = getattr(adapter, "convert_single_tensor_to_hf", None)
+    if convert_one is None:
+        convert_state = getattr(adapter, "to_hf", None)
+        if convert_state is None:
+            raise _vllm_refit_unsupported_error(model)
+        converted = convert_state({name: tensor}, exclude_key_regex=r".*_extra_state.*")
+        return list(converted.items())
+    return convert_one(
+        name,
+        tensor,
+        exclude_key_regex=r".*_extra_state.*",
+        quantization=False,
+    )
+
+
+def _vllm_refit_unsupported_error(model: torch.nn.Module) -> RuntimeError:
+    return RuntimeError(
+        f"{type(model).__name__} uses an AutoModel state_dict_adapter without "
+        "`convert_single_tensor_to_hf`; vLLM refit cannot safely map this custom "
+        "weight layout to HuggingFace/vLLM names. Use --fsdp.force_hf_model for RL runs."
+    )
+
+
+def _validate_vllm_refit_supported(model: torch.nn.Module) -> None:
+    adapter = getattr(model, "state_dict_adapter", None)
+    if (
+        adapter is not None
+        and getattr(adapter, "convert_single_tensor_to_hf", None) is None
+        and getattr(adapter, "to_hf", None) is None
+    ):
+        raise _vllm_refit_unsupported_error(model)
 
 
 class ActorPPOTrainer(ABC):
@@ -93,8 +159,7 @@ class ActorPPOTrainer(ABC):
             micro_train_batch_size,
             buffer_limit,
             buffer_cpu_offload,
-            self.args.ds.packing_samples,
-            self.args.train.dynamic_batch_enable,
+            dynamic_batch=self.args.train.dynamic_batch_enable,
         )
 
         # Init torch group for weights sync
@@ -107,14 +172,13 @@ class ActorPPOTrainer(ABC):
         torch_dist_barrier_and_cuda_sync()
 
     def _init_vllm_sync_group(self, backend: str):
-        """Create a torch process group between DeepSpeed rank 0 and all vLLM engine ranks.
+        """Create a torch process group between trainer rank 0 and all vLLM engine ranks.
 
         Layout example (3 engines, TP=4):
             [    0,      1, 2, 3, 4,  5, 6, 7, 8,  9, 10, 11, 12]
-            |ds rank 0 |  engine-0  |  engine-1  |   engine-2   |
+            |train rank|  engine-0  |  engine-1  |   engine-2   |
 
-        ZeRO-1/2: broadcast params from rank 0 to all engines.
-        ZeRO-3:   allgather to rank 0 first, then broadcast.
+        FSDP2/TP params are materialized before broadcasting to all engines.
         """
         master_address = ray._private.services.get_node_ip_address()
         with socket.socket() as sock:
@@ -151,16 +215,61 @@ class ActorPPOTrainer(ABC):
 
         ray.get(refs)
 
+    def _record_status(self, status, status_list, pbar):
+        metrics = status["metrics"]
+        weights = status["weights"]
+        n_tokens = status["num_action_tokens"]
+        n_samples = status["num_samples"]
+
+        reduced_status = {"_num_action_tokens": n_tokens, "_num_samples": n_samples}
+        last_metrics = {}
+        for k, value in metrics.items():
+            weight = weights[k]
+            if weight is None:
+                last_metrics[k] = value
+                continue
+            scale = n_tokens if weight == "token" else n_samples
+            reduced_status[k] = (
+                value.float().mean().item() * scale if isinstance(value, torch.Tensor) else value * scale
+            )
+
+        reduced_status = self.strategy.all_reduce(reduced_status)
+
+        n_tokens = reduced_status.pop("_num_action_tokens")
+        n_samples = reduced_status.pop("_num_samples")
+        merged_status = {}
+        for k, value in reduced_status.items():
+            denom = n_tokens if weights[k] == "token" else n_samples
+            merged_status[k] = value / denom
+
+        merged_status.update(last_metrics)
+        merged_status["_num_samples"] = n_samples
+        merged_status["_num_action_tokens"] = n_tokens
+        merged_status["_weights"] = weights
+        actor_lr = merged_status.get("actor_lr", 0)
+
+        short_status = {
+            "act_loss": merged_status["policy_loss"],
+            "reward": merged_status.get("reward", 0),
+            "return": merged_status.get("return", 0),
+            "gen_len": merged_status.get("response_length", 0),
+            "tot_len": merged_status.get("total_length", 0),
+            "kl": merged_status.get("kl", 0),
+            "act_lr": actor_lr,
+            "grad_norm": merged_status.get("actor_grad_norm", 0),
+        }
+        if "entropy_loss" in merged_status:
+            short_status["ent_loss"] = merged_status["entropy_loss"]
+
+        status_list.append(merged_status)
+        pbar.set_postfix(short_status)
+
     def ppo_train(self, kl_ctl: float):
         # replay buffer may be empty at first, we should rebuild at each training
         if self.args.train.dynamic_batch_enable:
             self.replay_buffer.setup_dynamic_batch(self.strategy)
 
-        should_shuffle = (
-            self.strategy.ring_attn_group is None
-            and self.args.ds.tensor_parallel_size <= 1
-            and not self.args.train.dynamic_batch_enable
-        )
+        should_shuffle = get_model_parallel_size(self.args) <= 1 and not self.args.train.dynamic_batch_enable
         dataloader = DataLoader(
             self.replay_buffer,
             batch_size=self.replay_buffer.sample_batch_size,
@@ -179,58 +288,24 @@ class ActorPPOTrainer(ABC):
                 desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
+            max_steps = len(dataloader)
+            if not self.args.train.dynamic_batch_enable:
+                # Only run complete accumulation windows; partial windows leave
+                # gradients live because optimizer_step() has not stepped yet.
+                accum_steps = self.strategy.accumulated_gradient
+                remainder = max_steps % accum_steps
+                if remainder:
+                    max_steps -= remainder
+                    self.strategy.print(
+                        f"[PPO] dropping {remainder} trailing actor microbatches "
+                        f"(< grad_accum={accum_steps}) to avoid partial gradients."
+                    )
             for step, experience in enumerate(pbar):
-
+                if step >= max_steps:
+                    break
                 experience.to_device(device)
                 status = self.training_step(experience, kl_ctl, step)
-
-                metrics = status["metrics"]
-                weights = status["weights"]
-                n_tokens = status["num_action_tokens"]
-                n_samples = status["num_samples"]
-
-                reduced_status = {"_num_action_tokens": n_tokens, "_num_samples": n_samples}
-                last_metrics = {}
-                for k, value in metrics.items():
-                    weight = weights[k]
-                    if weight is None:
-                        last_metrics[k] = value
-                        continue
-                    scale = n_tokens if weight == "token" else n_samples
-                    reduced_status[k] = (
-                        value.float().mean().item() * scale if isinstance(value, torch.Tensor) else value * scale
-                    )
-
-                reduced_status = self.strategy.all_reduce(reduced_status)
-
-                n_tokens = reduced_status.pop("_num_action_tokens")
-                n_samples = reduced_status.pop("_num_samples")
-                merged_status = {}
-                for k, value in reduced_status.items():
-                    denom = n_tokens if weights[k] == "token" else n_samples
-                    merged_status[k] = value / denom
-
-                merged_status.update(last_metrics)
-                merged_status["_num_samples"] = n_samples
-                merged_status["_num_action_tokens"] = n_tokens
-                merged_status["_weights"] = weights
-                actor_lr = merged_status.get("actor_lr", 0)
-
-                short_status = {
-                    "act_loss": merged_status["policy_loss"],
-                    "reward": merged_status.get("reward", 0),
-                    "return": merged_status.get("return", 0),
-                    "gen_len": merged_status.get("response_length", 0),
-                    "tot_len": merged_status.get("total_length", 0),
-                    "kl": merged_status.get("kl", 0),
-                    "act_lr": actor_lr,
-                    "grad_norm": merged_status.get("actor_grad_norm", 0),
-                }
-                if "entropy_loss" in merged_status:
-                    short_status["ent_loss"] = merged_status["entropy_loss"]
-
-                status_list.append(merged_status)
-                pbar.set_postfix(short_status)
+                self._record_status(status, status_list, pbar)
 
         if status_list:
             total_tokens = sum(s["_num_action_tokens"] for s in status_list)
@@ -239,7 +314,10 @@ class ActorPPOTrainer(ABC):
             for k in set().union(*(s.keys() for s in status_list)):
                 if k in ("_num_samples", "_num_action_tokens", "_weights"):
                     continue
-                if k in ("actor_grad_norm", "actor_lr"):
+                if k == "actor_grad_norm":
+                    vals = [s[k] for s in status_list if k in s]
+                    status_mean[k] = sum(vals) / len(vals) if vals else 0.0
+                elif k == "actor_lr":
                     vals = [s[k] for s in status_list if k in s]
                     status_mean[k] = vals[-1] if vals else 0.0
                 elif status_list[0].get("_weights", {}).get(k) == "token":
@@ -248,7 +326,12 @@ class ActorPPOTrainer(ABC):
                     status_mean[k] = sum(s.get(k, 0) * s["_num_samples"] for s in status_list) / total_samples
         return status_mean
 
-    def training_step(self, experience: Experience, kl_ctl: float, step: int) -> Dict[str, float]:
+    def training_step(
+        self,
+        experience: Experience,
+        kl_ctl: float,
+        step: int,
+    ) -> Dict[str, float]:
         self.actor.train()
 
         sequences = experience.sequences
@@ -258,6 +341,8 @@ class ActorPPOTrainer(ABC):
         old_action_log_probs = experience.action_log_probs
         advantages = experience.advantages
         base_action_log_probs = experience.base_action_log_probs
+        rollout_log_probs = experience.rollout_log_probs
+        loss_action_mask = action_mask
 
         # VLM: merge pre-processed multimodal inputs for training forward
         mm_inputs = {}
@@ -268,26 +353,124 @@ class ActorPPOTrainer(ABC):
         ):
             mm_inputs = merge_mm_train_inputs(experience.mm_train_inputs, sequences.device)
 
+        # AutoModel CP train context must cover both forward and backward.
+        cp_context_stack = ExitStack()
+
         # actor loss
-        action_log_probs, output = self.actor(
-            sequences,
-            action_mask,
-            attention_mask=attention_mask,
-            return_output=True,
-            ring_attn_group=self.strategy.ring_attn_group,
-            packed_seq_lens=packed_seq_lens,
-            return_entropy=self.args.actor.entropy_coef is not None,
-            **mm_inputs,
+        cp_local_loss = (
+            getattr(self.actor, "cp_size", 1) > 1
+            and not self.actor.packing_samples
+            and os.environ.get("OPENRLHF_CP_LOCAL_LOSS", "0") == "1"
         )
+        batch_num_tokens = None
+        loss_dp_size = 1
+        if cp_local_loss:
+            if self.args.actor.entropy_coef is not None:
+                raise NotImplementedError("CP-local PPO loss is not wired for entropy regularization yet.")
+            batch_num_tokens = self.strategy.global_token_count(action_mask)
+            loss_dp_size = getattr(self.strategy, "dp_cp_size", self.strategy.dp_size)
+            cp_group = self.actor.cp_mesh.get_group()
+            cp_size = self.actor.cp_size
+            sequence_length = sequences.shape[1]
+            loss_action_mask = _cp_local_step_tensor(
+                action_mask,
+                cp_group=cp_group,
+                cp_size=cp_size,
+                sequence_length=sequence_length,
+                value=False,
+            )
+            old_action_log_probs = _cp_local_step_tensor(
+                old_action_log_probs,
+                cp_group=cp_group,
+                cp_size=cp_size,
+                sequence_length=sequence_length,
+                value=0.0,
+            )
+            advantages = _cp_local_step_tensor(
+                advantages,
+                cp_group=cp_group,
+                cp_size=cp_size,
+                sequence_length=sequence_length,
+                value=0.0,
+            )
+            base_action_log_probs = _cp_local_step_tensor(
+                base_action_log_probs,
+                cp_group=cp_group,
+                cp_size=cp_size,
+                sequence_length=sequence_length,
+                value=0.0,
+            )
+            rollout_log_probs = _cp_local_step_tensor(
+                rollout_log_probs,
+                cp_group=cp_group,
+                cp_size=cp_size,
+                sequence_length=sequence_length,
+                value=0.0,
+            )
+            action_log_probs, output = self.actor(
+                sequences,
+                action_mask=None,
+                attention_mask=attention_mask,
+                truncate_logprobs=False,
+                return_output=True,
+                return_logprobs=True,
+                cp_local_log_probs=True,
+                cp_context_stack=cp_context_stack,
+                packed_seq_lens=packed_seq_lens,
+                return_entropy=False,
+                **mm_inputs,
+            )
+            action_log_probs = torch.where(
+                loss_action_mask.bool(),
+                action_log_probs,
+                torch.zeros_like(action_log_probs),
+            )
+            self._debug_cp_actor_step(
+                action_log_probs,
+                old_action_log_probs,
+                base_action_log_probs,
+                advantages,
+                loss_action_mask,
+            )
+        else:
+            action_log_probs, output = self.actor(
+                sequences,
+                action_mask,
+                attention_mask=attention_mask,
+                return_output=True,
+                cp_context_stack=cp_context_stack,
+                packed_seq_lens=packed_seq_lens,
+                return_entropy=self.args.actor.entropy_coef is not None,
+                **mm_inputs,
+            )
 
         # loss function
-        actor_loss, clip_ratio, ppo_kl, vllm_kl = self.actor_loss_fn(
-            action_log_probs,
-            old_action_log_probs,
-            advantages,
-            action_mask=experience.action_mask,
-            rollout_log_probs=experience.rollout_log_probs,
-        )
+        if cp_local_loss:
+            actor_loss, _, _, _ = self.actor_loss_fn(
+                action_log_probs,
+                old_action_log_probs,
+                advantages,
+                action_mask=loss_action_mask,
+                rollout_log_probs=rollout_log_probs,
+                dp_size=loss_dp_size,
+                batch_num_tokens=batch_num_tokens,
+            )
+            actor_loss_for_log, clip_ratio, ppo_kl, vllm_kl = self.actor_loss_fn(
+                action_log_probs,
+                old_action_log_probs,
+                advantages,
+                action_mask=loss_action_mask,
+                rollout_log_probs=rollout_log_probs,
+            )
+        else:
+            actor_loss, clip_ratio, ppo_kl, vllm_kl = self.actor_loss_fn(
+                action_log_probs,
+                old_action_log_probs,
+                advantages,
+                action_mask=loss_action_mask,
+                rollout_log_probs=rollout_log_probs,
+            )
+            actor_loss_for_log = actor_loss
         experience.info["ppo_clip_ratio"] = clip_ratio.detach()
         experience.info["ppo_kl"] = ppo_kl.detach()
         if vllm_kl is not None:
@@ -304,30 +487,49 @@ class ActorPPOTrainer(ABC):
             else:
                 kl = torch.zeros_like(action_log_probs)
                 logprobs_diff = torch.zeros_like(action_log_probs)
-            kl_loss = masked_mean(kl, experience.action_mask)
-            logprobs_diff = masked_mean(logprobs_diff, experience.action_mask)
+            if cp_local_loss:
+                kl_loss = torch.where(loss_action_mask.bool(), kl, torch.zeros_like(kl)).sum()
+                kl_loss = kl_loss / batch_num_tokens * loss_dp_size
+            else:
+                kl_loss = masked_mean(kl, loss_action_mask)
+            logprobs_diff = masked_mean(logprobs_diff, loss_action_mask)
             experience.info["kl"] = kl_loss.detach()
             experience.info["logprobs_diff"] = logprobs_diff.detach()
         else:
             kl_loss = 0
 
         loss = actor_loss + kl_loss * kl_ctl
-        # mixtral
+        # MoE balancing loss.
         if self.aux_loss:
-            loss += output.aux_loss * self.args.actor.aux_loss_coef
+            aux_loss, _ = split_moe_aux_loss(output, self.aux_loss)
+            loss += aux_loss * self.args.actor.aux_loss_coef
         # entropy loss
         if self.args.actor.entropy_coef is not None:
-            entropy_loss = masked_mean(output.entropy[:, -experience.action_mask.shape[1] :], experience.action_mask)
+            entropy_loss = masked_mean(output.entropy[:, -experience.action_mask.shape[1] :], loss_action_mask)
             if self.args.actor.entropy_coef != 0:
                 loss -= entropy_loss * self.args.actor.entropy_coef
 
         if self.args.train.dynamic_batch_enable:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
 
-        self.strategy.backward(loss, self.actor, self.actor_optim)
+        try:
+            if self.args.train.dynamic_batch_enable:
+                self.strategy.backward(loss, self.actor, self.actor_optim, name="actor", accumulate=False)
+            else:
+                self.strategy.backward(
+                    loss,
+                    self.actor,
+                    self.actor_optim,
+                    name="actor",
+                )
+        finally:
+            cp_context_stack.close()
+
         if self.args.train.dynamic_batch_enable:
             if self.replay_buffer.dynamic_optimizer_step[step]:
-                self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
+                self.strategy.optimizer_step(
+                    self.actor_optim, self.actor, self.actor_scheduler, name="actor", accumulate=False
+                )
         else:
             self.strategy.optimizer_step(self.actor_optim, self.actor, self.actor_scheduler, name="actor")
 
@@ -336,25 +538,31 @@ class ActorPPOTrainer(ABC):
                 if self.replay_buffer.dynamic_optimizer_step[step]:
                     self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
             else:
-                self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
+                if (step + 1) % self.strategy.accumulated_gradient == 0:
+                    self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
 
-        # Per-token losses (0-D tensors, shape carries weighting info for ppo_train)
-        metrics = {"policy_loss": actor_loss.detach()}
+        metrics = {"policy_loss": actor_loss_for_log.detach()}
         weights = {"policy_loss": "token"}
         if self.args.actor.entropy_coef is not None:
             metrics["entropy_loss"] = entropy_loss.detach()
             weights["entropy_loss"] = "token"
 
-        # Non-reducible meta
         metrics["actor_lr"] = self.actor_scheduler.get_last_lr()[0]
         weights["actor_lr"] = None
-        is_optimizer_step = not self.args.train.dynamic_batch_enable or self.replay_buffer.dynamic_optimizer_step[step]
+        is_optimizer_step = (
+            self.replay_buffer.dynamic_optimizer_step[step]
+            if self.args.train.dynamic_batch_enable
+            else (step + 1) % self.strategy.accumulated_gradient == 0
+        )
         if is_optimizer_step:
-            metrics["actor_grad_norm"] = self.strategy.get_grad_norm(self.actor)
+            grad_norm = self.strategy.get_grad_norm(self.actor)
+            if not self.args.train.dynamic_batch_enable:
+                # Log the DeepSpeed-style batch average. Clipping uses the raw
+                # norm inside optimizer_step().
+                grad_norm /= self.strategy.accumulated_gradient
+            metrics["actor_grad_norm"] = grad_norm
             weights["actor_grad_norm"] = None
 
-        # Merge all loggable tensors.
-        # `info` keeps algorithm metrics; episode tensor fields are added explicitly below.
         for k, v in experience.info.items():
             if isinstance(v, torch.Tensor):
                 metrics[k] = v
@@ -378,42 +586,96 @@ class ActorPPOTrainer(ABC):
             "num_action_tokens": float(experience.action_mask.sum().item()),
         }
 
+    def _debug_cp_actor_step(
+        self,
+        action_log_probs: torch.Tensor,
+        old_action_log_probs: torch.Tensor,
+        base_action_log_probs: Optional[torch.Tensor],
+        advantages: torch.Tensor,
+        action_mask: torch.Tensor,
+    ) -> None:
+        if os.environ.get("OPENRLHF_CP_DEBUG") != "1":
+            return
+        rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+        mask = action_mask.bool()
+        count = int(mask.sum().item())
+
+        def _stats(name: str, tensor: Optional[torch.Tensor]) -> list[str]:
+            if tensor is None:
+                return [f"{name}=None"]
+            if count == 0:
+                return [f"{name}.count=0"]
+            values = tensor.float().masked_select(mask)
+            if values.numel() == 0:
+                return [f"{name}.count=0"]
+            return [
+                f"{name}.mean={values.mean().item():.6g}",
+                f"{name}.min={values.min().item():.6g}",
+                f"{name}.max={values.max().item():.6g}",
+                f"{name}.absmax={values.abs().max().item():.6g}",
+            ]
+
+        parts = [
+            f"[CPActorDebug][rank={rank}]",
+            f"shape={tuple(action_log_probs.shape)}",
+            f"tokens={count}",
+        ]
+        parts.extend(_stats("new", action_log_probs))
+        parts.extend(_stats("old", old_action_log_probs))
+        parts.extend(_stats("ref", base_action_log_probs))
+        parts.extend(_stats("adv", advantages))
+        if count > 0:
+            old_diff = (action_log_probs.float() - old_action_log_probs.float()).masked_select(mask)
+            parts.extend(
+                [
+                    f"new_old.mean={old_diff.mean().item():.6g}",
+                    f"new_old.absmax={old_diff.abs().max().item():.6g}",
+                ]
+            )
+            if base_action_log_probs is not None:
+                ref_diff = (action_log_probs.float() - base_action_log_probs.float()).masked_select(mask)
+                parts.extend(
+                    [
+                        f"new_ref.mean={ref_diff.mean().item():.6g}",
+                        f"new_ref.absmax={ref_diff.abs().max().item():.6g}",
+                    ]
+                )
+        print(" ".join(parts), flush=True)
+
     def broadcast_to_vllm(self):
+        if getattr(self.strategy.args.fsdp.lora, "rank", 0) > 0:
+            raise NotImplementedError("FSDP2/AutoModel vLLM weight refit does not support LoRA adapters yet.")
+
         use_prefix_cache = getattr(self.strategy.args.vllm, "enable_prefix_caching", False)
         cache_reset_refs = []
         if use_prefix_cache and torch.distributed.get_rank() == 0:
-            # clear prefix cache
             for engine in self.vllm_engines:
                 cache_reset_refs.append(engine.reset_prefix_cache.remote())
 
         torch.cuda.empty_cache()
-        model = self.actor.model.module
-        count = 0
+        # FSDP2/AutoModel: `actor.model` is the FSDP2-wrapped HF model directly
+        # (no DS-engine `.module` indirection); params are DTensors when sharded.
+        model = self.actor.model
 
-        def _broadcast_param(param, count, num_params):
+        def _broadcast_param(name, weight, dtype, shape):
             use_ray = getattr(self.strategy.args.vllm, "sync_with_ray", False)
-            # Fire all vllm engines for broadcast
             if torch.distributed.get_rank() == 0:
-                shape = param.shape if self.strategy.args.ds.zero_stage != 3 else param.ds_shape
                 refs = [
-                    engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
+                    engine.update_weight.remote(name, dtype=dtype, shape=shape, empty_cache=False)
                     for engine in self.vllm_engines
                 ]
-
                 if use_ray:
                     import ray.util.collective as collective
 
-                    collective.broadcast(param.data, 0, group_name=self._model_update_group)
+                    collective.broadcast(weight, 0, group_name=self._model_update_group)
                 else:
-                    self._model_update_group.broadcast(param.data, src=0, stream=torch.cuda.current_stream())
+                    self._model_update_group.broadcast(weight, src=0, stream=torch.cuda.current_stream())
                 ray.get(refs)
 
-        def _handle_cuda_ipc(param, count, num_params):
+        def _handle_cuda_ipc(name, weight, dtype, shape):
             from torch.multiprocessing.reductions import reduce_tensor
 
-            weight = param.data.clone()
-            ipc_handle = reduce_tensor(weight)
-
+            ipc_handle = reduce_tensor(weight.clone())
             ipc_handle = {get_physical_gpu_id(): ipc_handle}
             ipc_handle_list = [None] * torch.distributed.get_world_size()
             torch.distributed.all_gather_object(ipc_handle_list, ipc_handle)
@@ -422,39 +684,49 @@ class ActorPPOTrainer(ABC):
                 ipc_handles = {}
                 for d in ipc_handle_list:
                     ipc_handles.update(d)
-
-                shape = param.shape if self.strategy.args.ds.zero_stage != 3 else param.ds_shape
                 refs = [
                     engine.update_weight_cuda_ipc.remote(
                         name,
-                        dtype=param.dtype,
+                        dtype=dtype,
                         shape=shape,
                         ipc_handles=ipc_handles,
-                        empty_cache=count == num_params,
+                        empty_cache=False,
                     )
                     for engine in self.vllm_engines
                 ]
                 ray.get(refs)
             torch_dist_barrier_and_cuda_sync()
 
-        def _gather_params_ctx(param):
-            """Context manager that gathers sharded/TP-split parameters for weight sync."""
-            if self.strategy.args.ds.tensor_parallel_size > 1:
-                return deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True)
-            return deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.ds.zero_stage == 3)
-
         sync_fn = _handle_cuda_ipc if self.use_cuda_ipc else _broadcast_param
 
-        # VLM: only sync trainable (language model) params — vision encoder is frozen.
-        params_to_sync = [
-            (n, p) for n, p in model.named_parameters() if p.requires_grad or not getattr(self.actor, "is_vlm", False)
-        ]
-        num_params = len(params_to_sync)
+        from openrlhf.utils.utils import convert_to_torch_dtype
 
-        for name, param in params_to_sync:
-            count += 1  # empty_cache at last param
-            with _gather_params_ctx(param):
-                sync_fn(param, count, num_params)
+        sync_dtype = convert_to_torch_dtype(self.strategy.args.fsdp.param_dtype)
+        param_requires_grad = {name: param.requires_grad for name, param in model.named_parameters()}
+
+        for name, tensor in model.state_dict().items():
+            # Keep the previous VLM behavior: frozen visual params are already
+            # present in vLLM from the base checkpoint, so only language params
+            # that can change during training need to be refit.
+            if name not in param_requires_grad:
+                continue
+            if getattr(self.actor, "is_vlm", False) and not param_requires_grad[name]:
+                continue
+
+            weight, _ = gather_full_param(tensor)
+            for hf_name, hf_weight in _maybe_adapt_tensor_to_hf(model, name, weight):
+                if not torch.is_tensor(hf_weight):
+                    continue
+                if not hf_weight.is_floating_point():
+                    continue
+                hf_weight = hf_weight.to(
+                    device=torch.device("cuda", torch.cuda.current_device()),
+                    dtype=sync_dtype,
+                    non_blocking=True,
+                ).contiguous()
+                sync_fn(hf_name, hf_weight, sync_dtype, hf_weight.shape)
+                del hf_weight
+            del weight
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)
@@ -464,7 +736,7 @@ class ActorPPOTrainer(ABC):
 
 @ray.remote(num_gpus=1)
 class PolicyModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps=None, vllm_engines=None):
+    def init_model_from_pretrained(self, strategy: FsdpStrategy, pretrain, max_steps=None, vllm_engines=None):
         args = strategy.args
         self.save_hf_ckpt = args.ckpt.save_hf
         self.disable_ds_ckpt = args.ckpt.disable_ds
@@ -484,20 +756,26 @@ class PolicyModelActor(BaseModelActor):
 
         actor = Actor(
             pretrain,
-            attn_implementation=strategy.args.ds.attn_implementation,
-            experts_implementation=strategy.args.ds.experts_implementation,
-            param_dtype=strategy.args.ds.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.ds.load_in_4bit,
-            lora_rank=strategy.args.ds.lora.rank,
-            lora_alpha=strategy.args.ds.lora.alpha,
-            target_modules=strategy.args.ds.lora.target_modules,
-            lora_dropout=strategy.args.ds.lora.dropout,
-            ds_config=strategy.get_ds_train_config(is_actor=True),
-            packing_samples=strategy.args.ds.packing_samples,
+            attn_implementation=strategy.args.fsdp.attn_implementation,
+            param_dtype=strategy.args.fsdp.param_dtype,
+            lora_rank=strategy.args.fsdp.lora.rank,
+            lora_alpha=strategy.args.fsdp.lora.alpha,
+            target_modules=strategy.args.fsdp.lora.target_modules,
+            lora_dropout=strategy.args.fsdp.lora.dropout,
+            device_mesh=strategy.device_mesh,
+            moe_mesh=strategy.moe_mesh,
+            distributed_config=strategy.distributed_config,
+            moe_config=strategy.moe_config,
+            activation_checkpointing=args.actor.gradient_checkpointing_enable,
+            packing_samples=strategy.args.fsdp.packing_samples,
+            force_hf_model=strategy.args.fsdp.force_hf_model,
             temperature=strategy.args.rollout.temperature,
-            use_liger_kernel=strategy.args.ds.use_liger_kernel,
+            use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
             freeze_visual_encoder=getattr(strategy.args.actor, "freeze_visual_encoder", False),
+            moe_aux_loss_coef=args.actor.aux_loss_coef,
         )
+        if vllm_engines is not None:
+            _validate_vllm_refit_supported(actor.model)
         strategy.print(actor)
 
         # configure tokenizer
@@ -506,22 +784,31 @@ class PolicyModelActor(BaseModelActor):
         )
 
         if args.train.enable_ema:
+            # EMA must mirror the actor's parameter graph; under LoRA the actor
+            # has frozen base weights + trainable lora_A/lora_B, while a
+            # LoRA-less EMA has only the constant base, so EMA would
+            # silently freeze and miss every adapter update. Forbid the
+            # combination explicitly until we wire LoRA-aware EMA.
+            if strategy.args.fsdp.lora.rank > 0:
+                raise NotImplementedError(
+                    "EMA (--train.enable_ema) with LoRA (--fsdp.lora.rank>0) is not supported: "
+                    "the EMA model would only track frozen base weights and miss adapter updates."
+                )
             ema_model = Actor(
                 pretrain,
-                attn_implementation=strategy.args.ds.attn_implementation,
-                experts_implementation=strategy.args.ds.experts_implementation,
-                param_dtype=strategy.args.ds.param_dtype,  # default: bf16
-                load_in_4bit=strategy.args.ds.load_in_4bit,
-                ds_config=strategy.get_ds_eval_config(offload=True),
-                packing_samples=strategy.args.ds.packing_samples,
+                attn_implementation=strategy.args.fsdp.attn_implementation,
+                param_dtype=strategy.args.fsdp.param_dtype,
+                device_mesh=strategy.device_mesh,
+                moe_mesh=strategy.moe_mesh,
+                distributed_config=strategy.distributed_config,
+                moe_config=strategy.moe_config,
+                activation_checkpointing=False,
+                packing_samples=strategy.args.fsdp.packing_samples,
+                force_hf_model=strategy.args.fsdp.force_hf_model,
+                use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
             )
         else:
             ema_model = None
-
-        if args.actor.gradient_checkpointing_enable:
-            actor.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": args.actor.gradient_checkpointing_reentrant}
-            )
 
         actor_cfg = dict(
             optim=args.actor.optim,
@@ -536,7 +823,6 @@ class PolicyModelActor(BaseModelActor):
         self.actor, self.actor_optim, self.actor_scheduler = strategy.prepare((actor, actor_cfg))
 
         if ema_model:
-            ema_model._offload = True
             self.ema_model = strategy.prepare(ema_model)
         else:
             self.ema_model = None
@@ -546,12 +832,10 @@ class PolicyModelActor(BaseModelActor):
         ckpt_path = os.path.join(args.ckpt.path, "_actor")
         if args.ckpt.load_enable and os.path.exists(ckpt_path):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
+            _, states = strategy.load_ckpt(
+                self.actor.model, ckpt_path, optimizer=self.actor_optim, scheduler=self.actor_scheduler
+            )
             self.checkpoint_states = states
-
-        # initial offload
-        if strategy.args.ds.enable_sleep:
-            offload_deepspeed_states(self.actor.model)
 
         # configure Trainer
         self.trainer = ActorPPOTrainer(
@@ -609,14 +893,20 @@ class PolicyModelActor(BaseModelActor):
                 sequences.to(device),
                 action_mask.to(device),
                 attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
                 **mm_inputs,
             )
         self.actor.train()  # reset model state
         return action_log_probs.to("cpu")
 
     def broadcast_to_vllm(self):
+        # vLLM sync needs model weights on GPU; the optimizer can stay off GPU.
+        if self._sleep_enabled and not getattr(self.strategy, "cpu_offload", False):
+            self.strategy.move_model_to_device(self.actor, "cuda")
+            if self.ema_model is not None:
+                self.strategy.move_model_to_device(self.ema_model, "cuda")
         self.trainer.broadcast_to_vllm()
+        if self._sleep_enabled:
+            self.offload_after_refit()
 
     def get_checkpoint_states(self):
         return self.checkpoint_states
@@ -625,10 +915,50 @@ class PolicyModelActor(BaseModelActor):
         self.trainer.replay_buffer.append(experience)
 
     def reload_states(self):
-        reload_deepspeed_states(self.actor.model)
+        """Load actor weights and optimizer state for PPO training."""
+        if not self._sleep_enabled:
+            return
+        if not getattr(self.strategy, "cpu_offload", False):
+            self.strategy.move_model_to_device(self.actor, "cuda")
+            self.strategy.move_optimizer_to_device(self.actor_optim, "cuda")
+            if self.ema_model is not None:
+                self.strategy.move_model_to_device(self.ema_model, "cuda")
+        self.actor.train()
 
     def offload_states(self):
-        offload_deepspeed_states(self.actor.model)
+        """Offload actor weights and optimizer state."""
+        if not self._sleep_enabled:
+            return
+        self.offload_before_refit()
+        self.offload_after_refit()
+
+    def offload_before_refit(self):
+        """Offload optimizer state while keeping weights ready for vLLM sync."""
+        if not self._sleep_enabled:
+            return
+        self.strategy.move_optimizer_to_device(self.actor_optim, "cpu")
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def offload_after_refit(self):
+        """Offload actor weights after vLLM sync or logprob inference."""
+        if not self._sleep_enabled:
+            return
+        self.strategy.move_model_to_device(self.actor, "cpu")
+        if self.ema_model is not None:
+            self.strategy.move_model_to_device(self.ema_model, "cpu")
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def prepare_for_lp_inference(self):
+        """Load actor weights for logprob inference without optimizer state."""
+        if not self._sleep_enabled:
+            return
+        if not getattr(self.strategy, "cpu_offload", False):
+            self.strategy.move_model_to_device(self.actor, "cuda")
+        self.actor.eval()
 
     def save_checkpoint(self, tag, client_states=None, metric_value=None, metric_key=None):
         args = self.strategy.args
@@ -643,6 +973,8 @@ class PolicyModelActor(BaseModelActor):
                 client_states,
                 metric_value=metric_value,
                 metric_key=metric_key,
+                optimizer=self.actor_optim,
+                scheduler=self.actor_scheduler,
             )
         if self.save_hf_ckpt:
             save_path = os.path.join(args.ckpt.path, f"{tag}_hf")
@@ -651,5 +983,4 @@ class PolicyModelActor(BaseModelActor):
                 self.tokenizer,
                 save_path,
             )
-        # wait
         torch_dist_barrier_and_cuda_sync()

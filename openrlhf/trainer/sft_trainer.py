@@ -2,10 +2,12 @@ import os
 from abc import ABC
 
 import torch
+import torch.nn.functional as F
 from torch.optim import Optimizer
 from tqdm import tqdm
 
 from openrlhf.models import SFTLoss
+from openrlhf.models.utils import split_moe_aux_loss
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 
@@ -26,7 +28,7 @@ class SFTTrainer(ABC):
         max_epochs (int, defaults to 2): The maximum number of training epochs.
         tokenizer (Tokenizer, optional): The tokenizer for processing input data.
         save_hf_ckpt (bool): Whether to save huggingface-format model weight.
-        disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight. (Deepspeed model weight is used for training recovery)
+        disable_ds_ckpt (bool): Legacy flag name; whether to skip resumable FSDP/DCP training checkpoints.
     """
 
     def __init__(
@@ -63,11 +65,10 @@ class SFTTrainer(ABC):
 
         self.loss_fn = SFTLoss()
 
-        # Mixtral 8*7b
+        # MoE balancing loss.
         self.aux_loss = self.args.model.aux_loss_coef > 1e-8
 
-        # packing samples
-        self.packing_samples = strategy.args.ds.packing_samples
+        self.cp_enabled = getattr(strategy, "cp_size", 1) > 1
 
         # wandb/tensorboard setting
         self._wandb = None
@@ -99,6 +100,148 @@ class SFTTrainer(ABC):
             os.makedirs(self.strategy.args.logger.tensorboard_dir, exist_ok=True)
             log_dir = os.path.join(self.strategy.args.logger.tensorboard_dir, strategy.args.logger.wandb.run_name)
             self._tensorboard = SummaryWriter(log_dir=log_dir)
+
+    def _pad_for_cp(self, inputs, attention_mask, loss_mask):
+        multiple = 2 * self.strategy.cp_size
+        pad_len = (-inputs.shape[1]) % multiple
+        if pad_len == 0:
+            return inputs, attention_mask, loss_mask
+
+        pad_token_id = self.tokenizer.pad_token_id if self.tokenizer and self.tokenizer.pad_token_id is not None else 0
+        inputs = F.pad(inputs, (0, pad_len), value=pad_token_id)
+        attention_mask = F.pad(attention_mask, (0, pad_len), value=0)
+        loss_mask = F.pad(loss_mask, (0, pad_len), value=0)
+        return inputs, attention_mask, loss_mask
+
+    def _prepare_accum_window(self, accum_window, device):
+        prepared = []
+        local_num_tokens = torch.zeros((), dtype=torch.float32, device=device)
+
+        for inputs, attention_masks, loss_masks in accum_window:
+            inputs = inputs.to(device).squeeze(1)
+            attention_mask = attention_masks.to(device).squeeze(1)
+            loss_mask = loss_masks.to(device).squeeze(1)
+
+            if not self.cp_enabled:
+                shifted_loss_mask = loss_mask[:, :-1]
+                local_num_tokens += shifted_loss_mask.sum()
+                prepared.append((inputs, attention_mask, shifted_loss_mask))
+                continue
+
+            inputs, attention_mask, loss_mask = self._pad_for_cp(inputs, attention_mask, loss_mask)
+            # CP computes a log-prob for every local token position. Match the
+            # old non-CP contract by zeroing the final next-token position.
+            cp_loss_mask = loss_mask.clone()
+            cp_loss_mask[:, -1] = 0
+            labels = torch.roll(inputs, shifts=-1, dims=1)
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+
+            # Count tokens before CP shards the local sequence.
+            local_num_tokens += cp_loss_mask.sum()
+            prepared.append(
+                {
+                    "input_ids": inputs,
+                    "attention_mask": attention_mask,
+                    "position_ids": position_ids,
+                    "labels": labels,
+                    "loss_mask": cp_loss_mask,
+                }
+            )
+
+        batch_num_tokens = self.strategy.global_token_count(local_num_tokens)
+        return prepared, batch_num_tokens
+
+    def _run_microbatch(self, prepared_batch, batch_num_tokens, accum_steps, backward: bool = True):
+        if isinstance(prepared_batch, dict):
+            from nemo_automodel.components.distributed.cp_utils import make_cp_batch_and_ctx
+
+            cp_loss_mask = prepared_batch["loss_mask"]
+            batch = {
+                "input_ids": prepared_batch["input_ids"],
+                "attention_mask": prepared_batch["attention_mask"],
+                "position_ids": prepared_batch["position_ids"],
+                "labels": prepared_batch["labels"],
+            }
+            pad_token_id = (
+                self.tokenizer.pad_token_id if self.tokenizer and self.tokenizer.pad_token_id is not None else 0
+            )
+            train_ctx, batch = make_cp_batch_and_ctx(
+                self.strategy.device_mesh,
+                batch,
+                loss_mask=cp_loss_mask,
+                padding_token_id=pad_token_id,
+            )
+            with train_ctx():
+                per_token_log_probs, output = self.model(
+                    batch["input_ids"],
+                    attention_mask=batch.get("attention_mask"),
+                    position_ids=batch.get("position_ids"),
+                    logprob_labels=batch["labels"],
+                    truncate_logprobs=False,
+                    return_output=True,
+                    return_logprobs=True,
+                )
+                return self._loss_backward_and_logs(
+                    per_token_log_probs,
+                    output,
+                    cp_loss_mask,
+                    batch_num_tokens,
+                    accum_steps,
+                    loss_dp_size=getattr(self.strategy, "dp_cp_size", self.strategy.dp_size),
+                    backward=backward,
+                )
+
+        inputs, attention_mask, shifted_loss_mask = prepared_batch
+        per_token_log_probs, output = self.model(
+            inputs, attention_mask=attention_mask, return_output=True, return_logprobs=True
+        )
+        return self._loss_backward_and_logs(
+            per_token_log_probs,
+            output,
+            shifted_loss_mask,
+            batch_num_tokens,
+            accum_steps,
+            loss_dp_size=self.strategy.dp_size,
+            backward=backward,
+        )
+
+    def _loss_backward_and_logs(
+        self,
+        per_token_log_probs,
+        output,
+        loss_mask,
+        batch_num_tokens,
+        accum_steps,
+        loss_dp_size,
+        backward: bool = True,
+    ):
+        aux_loss, aux_loss_log = split_moe_aux_loss(output, self.aux_loss)
+        gpt_loss = self.loss_fn(
+            per_token_log_probs,
+            loss_mask,
+            dp_size=loss_dp_size,
+            batch_num_tokens=batch_num_tokens,
+        )
+        aux_term = aux_loss * self.args.model.aux_loss_coef / accum_steps
+        loss = gpt_loss + aux_term
+        if backward:
+            self.strategy.backward(
+                loss,
+                self.model,
+                self.optimizer,
+                scale_loss_by_accumulation=False,
+            )
+            self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
+
+        reported_gpt_loss = gpt_loss.detach()
+        logs_dict = {"gpt_loss": reported_gpt_loss.item()}
+        if backward:
+            logs_dict["lr"] = self.scheduler.get_last_lr()[0]
+            logs_dict["grad_norm"] = self.strategy.get_grad_norm(self.model)
+        if self.aux_loss:
+            logs_dict["aux_loss"] = aux_loss_log.item() if torch.is_tensor(aux_loss_log) else float(aux_loss_log)
+        return logs_dict, reported_gpt_loss.item()
 
     def fit(self, args, consumed_samples=0, num_update_steps_per_epoch=None):
         # Infer num_update_steps_per_epoch from dataloader if not provided
@@ -144,50 +287,43 @@ class SFTTrainer(ABC):
             # train
             self.model.train()
             device = next(self.model.parameters()).device
-            for inputs, attention_masks, loss_masks in self.train_dataloader:
-                inputs = inputs.to(device).squeeze(1)
-                attention_mask = attention_masks.to(device).squeeze(1)
-                loss_mask = loss_masks.to(device).squeeze(1)
-                per_token_log_probs, output = self.model(
-                    inputs,
-                    attention_mask=attention_mask,
-                    return_output=True,
-                    return_logprobs=True,
-                    ring_attn_group=self.strategy.ring_attn_group,
+            accum_window = []
+            accum_steps = self.strategy.accumulated_gradient
+            for batch in self.train_dataloader:
+                accum_window.append(batch)
+                if len(accum_window) < accum_steps:
+                    continue
+
+                prepared, batch_num_tokens = self._prepare_accum_window(accum_window, device)
+                accum_window = []
+
+                for prepared_batch in prepared:
+                    logs_dict, reported_gpt_loss = self._run_microbatch(prepared_batch, batch_num_tokens, accum_steps)
+                    loss_sum += reported_gpt_loss
+                    # step bar
+                    logs_dict = self.strategy.all_reduce(logs_dict)
+                    step_bar.set_postfix(logs_dict)
+                    step_bar.update()
+
+                    # logs/checkpoints/evaluation
+                    if step % self.strategy.accumulated_gradient == 0:
+                        logs_dict["loss_mean"] = loss_sum / self.strategy.accumulated_gradient
+                        loss_sum = 0
+                        global_step = step // self.strategy.accumulated_gradient
+                        client_states = {"consumed_samples": global_step * args.train.batch_size}
+                        self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
+
+                    step += 1
+
+            # Drop the trailing partial window: running its microbatches would
+            # accumulate grads without reaching optimizer_step (time_steps never
+            # hits the modulus), then leak those grads into the next epoch's
+            # first window — permanently misaligning the accum counter.
+            if accum_window:
+                self.strategy.print(
+                    f"[SFT] dropping {len(accum_window)} trailing microbatches "
+                    f"(< accum_steps={accum_steps}) at end of epoch."
                 )
-
-                # mixtral
-                if self.aux_loss:
-                    aux_loss = output.aux_loss
-                else:
-                    aux_loss = 0
-                gpt_loss = self.loss_fn(per_token_log_probs, loss_mask[:, :-1])
-                loss = gpt_loss + aux_loss * self.args.model.aux_loss_coef
-                self.strategy.backward(loss, self.model, self.optimizer)
-                self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
-
-                loss_sum += gpt_loss.item()
-                logs_dict = {
-                    "gpt_loss": gpt_loss.item(),
-                    "lr": self.scheduler.get_last_lr()[0],
-                    "grad_norm": self.strategy.get_grad_norm(self.model),
-                }
-                if self.aux_loss:
-                    logs_dict["aux_loss"] = aux_loss.item()
-                # step bar
-                logs_dict = self.strategy.all_reduce(logs_dict)
-                step_bar.set_postfix(logs_dict)
-                step_bar.update()
-
-                # logs/checkpoints/evaluation
-                if step % self.strategy.accumulated_gradient == 0:
-                    logs_dict["loss_mean"] = loss_sum / self.strategy.accumulated_gradient
-                    loss_sum = 0
-                    global_step = step // self.strategy.accumulated_gradient
-                    client_states = {"consumed_samples": global_step * args.train.batch_size}
-                    self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
-
-                step += 1
 
             epoch_bar.update()
 
@@ -222,7 +358,14 @@ class SFTTrainer(ABC):
             tag = f"global_step{global_step}"
             if not self.disable_ds_ckpt:
                 self.strategy.save_ckpt(
-                    self.model.model, args.ckpt.path, tag, args.ckpt.max_num, args.ckpt.max_mem, client_states
+                    self.model,
+                    args.ckpt.path,
+                    tag,
+                    args.ckpt.max_num,
+                    args.ckpt.max_mem,
+                    client_states,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
                 )
             if self.save_hf_ckpt:
                 save_path = os.path.join(args.ckpt.path, f"{tag}_hf")
@@ -240,16 +383,28 @@ class SFTTrainer(ABC):
             )
 
             device = next(self.model.parameters()).device
-            for inputs, attention_masks, loss_masks in eval_dataloader:
+            for batch in eval_dataloader:
+                if self.cp_enabled:
+                    prepared, batch_num_tokens = self._prepare_accum_window([batch], device)
+                    _, reported_gpt_loss = self._run_microbatch(
+                        prepared[0],
+                        batch_num_tokens,
+                        accum_steps=1,
+                        backward=False,
+                    )
+                    times += 1
+                    loss_sum += reported_gpt_loss
+                    bar_dict = {"eval gpt_loss": loss_sum / times}
+                    step_bar.update()
+                    logs = self.strategy.all_reduce(bar_dict)
+                    step_bar.set_postfix(logs)
+                    continue
+
+                inputs, attention_masks, loss_masks = batch
                 inputs = inputs.to(device).squeeze(1)
                 attention_mask = attention_masks.to(device).squeeze(1)
                 loss_mask = loss_masks.to(device).squeeze(1)
-                per_token_log_probs = self.model(
-                    inputs,
-                    attention_mask=attention_mask,
-                    return_logprobs=True,
-                    ring_attn_group=self.strategy.ring_attn_group,
-                )
+                per_token_log_probs = self.model(inputs, attention_mask=attention_mask, return_logprobs=True)
 
                 loss = self.loss_fn(per_token_log_probs, loss_mask[:, :-1])
 

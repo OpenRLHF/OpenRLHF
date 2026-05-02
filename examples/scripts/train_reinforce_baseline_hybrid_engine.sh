@@ -39,15 +39,12 @@ ROLLOUT_ARGS=(
    --data.max_len 74240
    --rollout.max_new_tokens 64000
    --data.apply_chat_template
-   --ds.packing_samples
 
    --rollout.batch_size 128
    --rollout.n_samples_per_prompt 8
    --train.batch_size 1024
    --algo.dynamic_filtering_enable
    --algo.dynamic_filtering_range 0.0 1.0
-
-   --train.dynamic_batch_enable
    --train.max_tokens_per_gpu 16192
    --rollout.max_tokens_per_gpu 32768
 
@@ -67,16 +64,12 @@ ENGINE_ARGS=(
    --vllm.tensor_parallel_size 2
    --vllm.gpu_memory_utilization 0.7
    --train.colocate_all
-   --ds.enable_sleep
+   --fsdp.enable_sleep
    --vllm.sync_backend nccl
    --vllm.enforce_eager
 
-   --ds.zero_stage 3
    --actor.gradient_checkpointing_enable
-   # --ds.adam_offload
-   --ds.ring_attn_size 2
-   --ds.ring_attn_head_stride 2
-   --ds.param_dtype bf16
+   --fsdp.param_dtype bf16
 )
 
 OPTIMIZER_ARGS=(
