@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from openrlhf.models import Actor, PolicyLoss
-from openrlhf.models.utils import compute_approx_kl, masked_mean
+from openrlhf.models.utils import compute_approx_kl, masked_mean, split_moe_aux_loss
 from openrlhf.trainer.ppo_utils.experience import Experience, get_model_parallel_size
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
@@ -499,9 +499,10 @@ class ActorPPOTrainer(ABC):
             kl_loss = 0
 
         loss = actor_loss + kl_loss * kl_ctl
-        # mixtral
+        # MoE balancing loss.
         if self.aux_loss:
-            loss += getattr(output, "aux_loss", 0) * self.args.actor.aux_loss_coef
+            aux_loss, _ = split_moe_aux_loss(output, self.aux_loss)
+            loss += aux_loss * self.args.actor.aux_loss_coef
         # entropy loss
         if self.args.actor.entropy_coef is not None:
             entropy_loss = masked_mean(output.entropy[:, -experience.action_mask.shape[1] :], loss_action_mask)
@@ -771,6 +772,7 @@ class PolicyModelActor(BaseModelActor):
             temperature=strategy.args.rollout.temperature,
             use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
             freeze_visual_encoder=getattr(strategy.args.actor, "freeze_visual_encoder", False),
+            moe_aux_loss_coef=args.actor.aux_loss_coef,
         )
         if vllm_engines is not None:
             _validate_vllm_refit_supported(actor.model)

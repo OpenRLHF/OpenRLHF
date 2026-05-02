@@ -6,6 +6,7 @@ from torch.optim import Optimizer
 from tqdm import tqdm
 
 from openrlhf.models import DPOLoss
+from openrlhf.models.utils import split_moe_aux_loss
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 
@@ -63,7 +64,7 @@ class DPOTrainer(ABC):
         self.beta = beta
         self.loss_fn = DPOLoss(self.beta, self.args.model.label_smoothing, self.args.model.ipo_enable)
 
-        # Mixtral 8*7b
+        # MoE balancing loss.
         self.aux_loss = self.args.model.aux_loss_coef > 1e-8
 
         # NLL loss
@@ -163,9 +164,6 @@ class DPOTrainer(ABC):
                 preference_loss, chosen_reward, reject_reward = self.loss_fn(
                     chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
                 )
-                # mixtral
-                if not self.aux_loss:
-                    aux_loss = 0
                 # nll loss
                 if not self.nll_loss:
                     nll_loss = 0
@@ -320,7 +318,7 @@ class DPOTrainer(ABC):
         all_logps_sum, all_logps_mean = self._get_batch_logps(log_probs, att_masks, prompt_id_lens)
         chosen_logps = all_logps_sum[: chosen_ids.shape[0]]
         rejected_logps = all_logps_sum[chosen_ids.shape[0] :]
-        aux_loss = output.aux_loss if "aux_loss" in output else 0
+        aux_loss, _ = split_moe_aux_loss(output, self.aux_loss)
         return chosen_logps, rejected_logps, aux_loss, -all_logps_mean[: chosen_ids.shape[0]].mean()
 
     def concatenated_inputs(self, chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens):

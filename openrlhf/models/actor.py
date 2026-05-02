@@ -144,10 +144,57 @@ def _patch_nemo_float32_rms_norm_compile() -> None:
     cls._openrlhf_eager_patch = True
 
 
+def _patch_nemo_base_load_task_heads() -> None:
+    """Let custom value-head models initialize heads absent from base checkpoints."""
+    try:
+        from nemo_automodel.components.checkpoint.checkpointing import Checkpointer
+    except Exception:
+        return
+
+    if getattr(Checkpointer.load_model, "_openrlhf_task_head_patch", False):
+        return
+
+    original_load_model = Checkpointer.load_model
+
+    def _load_model(self, model, model_path, is_init_step=False, use_checkpoint_id=True, key_mapping=None):
+        skip_prefixes = getattr(model, "_openrlhf_skip_base_load_prefixes", None)
+        if not (is_init_step and skip_prefixes):
+            return original_load_model(
+                self,
+                model,
+                model_path,
+                is_init_step=is_init_step,
+                use_checkpoint_id=use_checkpoint_id,
+                key_mapping=key_mapping,
+            )
+
+        old_prefixes = getattr(self.config, "skip_task_head_prefixes_for_base_model", None)
+        merged = list(old_prefixes or [])
+        for prefix in skip_prefixes:
+            if prefix not in merged:
+                merged.append(prefix)
+        self.config.skip_task_head_prefixes_for_base_model = merged
+        try:
+            return original_load_model(
+                self,
+                model,
+                model_path,
+                is_init_step=is_init_step,
+                use_checkpoint_id=use_checkpoint_id,
+                key_mapping=key_mapping,
+            )
+        finally:
+            self.config.skip_task_head_prefixes_for_base_model = old_prefixes
+
+    _load_model._openrlhf_task_head_patch = True
+    Checkpointer.load_model = _load_model
+
+
 def _patch_nemo_automodel_runtime() -> None:
     """Apply small upstream-compatibility fixes needed by custom AutoModel paths."""
     _patch_nemo_llama_rope_position_ids()
     _patch_nemo_float32_rms_norm_compile()
+    _patch_nemo_base_load_task_heads()
 
 
 def _resolve_custom_backend_attn(attn_implementation: str, packing_samples: bool) -> str:
@@ -261,6 +308,67 @@ def _normalize_output(output):
     return output
 
 
+def _iter_nemo_moe_gates(model: nn.Module):
+    for module in model.modules():
+        cls = type(module)
+        if (
+            cls.__name__ == "Gate"
+            and cls.__module__.startswith("nemo_automodel.components.moe")
+            and hasattr(module, "aux_loss_coeff")
+        ):
+            yield module
+
+
+def _configure_nemo_moe_aux_loss(model: nn.Module, aux_loss_coef: float) -> bool:
+    """Use NeMo's MoE aux-loss autograd path with OpenRLHF's CLI coefficient."""
+    coef = float(aux_loss_coef or 0.0)
+    gates = list(_iter_nemo_moe_gates(model))
+    if not gates:
+        return False
+
+    for gate in gates:
+        gate.aux_loss_coeff = coef
+        if coef > 0:
+            gate._track_load_balance = True
+
+    config = getattr(model, "config", None)
+    if config is not None and hasattr(config, "router_aux_loss_coef"):
+        config.router_aux_loss_coef = coef
+    for module in model.modules():
+        moe_config = getattr(module, "moe_config", None)
+        if moe_config is not None and hasattr(moe_config, "aux_loss_coeff"):
+            moe_config.aux_loss_coeff = coef
+
+    active = coef > 0
+    model._openrlhf_aux_loss_in_backward = active
+    return active
+
+
+def _attach_nemo_moe_aux_loss(output, model: nn.Module):
+    if not model.training or not getattr(model, "_openrlhf_aux_loss_in_backward", False):
+        return output
+
+    aux_losses = []
+    for gate in _iter_nemo_moe_gates(model):
+        aux_loss = getattr(gate, "_last_aux_loss", None)
+        if aux_loss is None:
+            continue
+        if isinstance(aux_loss, DTensor):
+            aux_loss = aux_loss.to_local()
+        aux_losses.append(aux_loss.detach().float())
+    if not aux_losses:
+        return output
+
+    aux_loss = torch.stack(aux_losses).sum()
+    if isinstance(output, dict):
+        output["aux_loss"] = aux_loss
+        output["_openrlhf_aux_loss_in_backward"] = True
+    else:
+        setattr(output, "aux_loss", aux_loss)
+        setattr(output, "_openrlhf_aux_loss_in_backward", True)
+    return output
+
+
 class Actor(nn.Module):
     """Actor wrapper for RLHF training.
 
@@ -291,6 +399,7 @@ class Actor(nn.Module):
         use_liger_kernel: bool = False,
         freeze_visual_encoder: bool = False,
         use_fp32_master_weights: bool = True,
+        moe_aux_loss_coef: float = 0.0,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -306,6 +415,7 @@ class Actor(nn.Module):
             self.model = pretrain_or_model
             self.is_vlm = False
             self._packing_style = "automodel" if is_automodel_custom_model(self.model) else "hf"
+            _configure_nemo_moe_aux_loss(self.model, moe_aux_loss_coef)
             if self.packing_samples and self._packing_style == "automodel":
                 if not _automodel_custom_supports_thd_packing(self.model):
                     raise ValueError(
@@ -463,6 +573,7 @@ class Actor(nn.Module):
         )
         self.model = _move_model_to_cpu_for_offload(self.model, distributed_config)
         self._packing_style = "automodel" if is_automodel_custom_model(self.model) else "hf"
+        _configure_nemo_moe_aux_loss(self.model, moe_aux_loss_coef)
         if self.packing_samples and self._packing_style == "hf" and attn_implementation != "flash_attention_2":
             raise ValueError("HF packed sequence requires flash_attention_2.")
         if self.packing_samples:
@@ -587,6 +698,7 @@ class Actor(nn.Module):
         # AutoModel's custom MoE/LLM models (e.g. Qwen3MoeForCausalLM) return a
         # raw logits Tensor; HF returns a ModelOutput with `.logits`. Normalize.
         output = _normalize_output(output)
+        output = _attach_nemo_moe_aux_loss(output, self.model)
         logits = output["logits"]
         full_logits = None
 

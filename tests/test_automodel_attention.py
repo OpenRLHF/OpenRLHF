@@ -6,12 +6,15 @@ import torch
 from torch import nn
 
 from openrlhf.models.actor import (
+    _attach_nemo_moe_aux_loss,
     _automodel_custom_supports_thd_packing,
     _build_peft_config_dict,
+    _configure_nemo_moe_aux_loss,
     _resolve_custom_backend_attn,
     _validate_attn_implementation,
 )
 from openrlhf.models.model import CriticModel, RewardModel, get_llm_for_sequence_regression
+from openrlhf.models.utils import split_moe_aux_loss
 from openrlhf.utils.fsdp.packing import _restore_cp_chunks, pack_padded_batch, pad_to_cp_multiple
 
 
@@ -85,6 +88,50 @@ def test_restore_cp_chunks_undoes_automodel_load_balancing():
     restored = _restore_cp_chunks([rank0, rank1], cp_size=2, seq_dim=1)
 
     torch.testing.assert_close(restored, torch.tensor([[0, 1, 2, 3]]))
+
+
+def test_nemo_moe_aux_loss_uses_internal_backward_path():
+    class Gate(nn.Module):
+        def __init__(self, aux_loss):
+            super().__init__()
+            self.aux_loss_coeff = 0.0
+            self._track_load_balance = False
+            self._last_aux_loss = torch.tensor(aux_loss)
+
+    Gate.__module__ = "nemo_automodel.components.moe.layers"
+
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.config = type("Config", (), {"router_aux_loss_coef": 0.0})()
+            self.moe_config = type("MoEConfig", (), {"aux_loss_coeff": 0.0})()
+            self.gate0 = Gate(1.25)
+            self.gate1 = Gate(2.0)
+
+    model = Model()
+
+    assert _configure_nemo_moe_aux_loss(model, 0.01)
+    assert model._openrlhf_aux_loss_in_backward is True
+    assert model.config.router_aux_loss_coef == 0.01
+    assert model.moe_config.aux_loss_coeff == 0.01
+    assert model.gate0.aux_loss_coeff == 0.01
+    assert model.gate0._track_load_balance is True
+
+    output = _attach_nemo_moe_aux_loss({"logits": torch.zeros(1)}, model)
+    loss_aux, logged_aux = split_moe_aux_loss(output, enabled=True)
+
+    assert loss_aux == 0
+    assert output["_openrlhf_aux_loss_in_backward"] is True
+    torch.testing.assert_close(logged_aux, torch.tensor(3.25))
+
+
+def test_regular_moe_aux_loss_still_added_by_trainer():
+    output = {"aux_loss": torch.tensor(1.5)}
+
+    loss_aux, logged_aux = split_moe_aux_loss(output, enabled=True)
+
+    torch.testing.assert_close(loss_aux, torch.tensor(1.5))
+    torch.testing.assert_close(logged_aux, torch.tensor(1.5))
 
 
 def test_pad_to_cp_multiple_right_pads_to_two_cp_chunks():

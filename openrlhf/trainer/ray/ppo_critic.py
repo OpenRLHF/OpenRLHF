@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from openrlhf.models import ValueLoss, get_llm_for_sequence_regression
-from openrlhf.models.utils import masked_mean
+from openrlhf.models.utils import masked_mean, split_moe_aux_loss
 from openrlhf.trainer.ppo_utils.experience import Experience, get_model_parallel_size
 from openrlhf.utils import get_tokenizer
 from openrlhf.utils.fsdp import FsdpStrategy
@@ -80,7 +80,7 @@ class CriticPPOTrainer(ABC):
 
         self.critic_loss_fn = ValueLoss(value_clip)
 
-        # Mixtral 8x7b
+        # MoE balancing loss.
         self.aux_loss = self.args.actor.aux_loss_coef > 1e-8
 
     def ppo_train(self):
@@ -208,10 +208,7 @@ class CriticPPOTrainer(ABC):
             batch_num_tokens=batch_num_tokens,
         )
         # mixtral
-        if self.aux_loss:
-            aux_loss = getattr(output, "aux_loss", 0)
-        else:
-            aux_loss = 0
+        aux_loss, _ = split_moe_aux_loss(output, self.aux_loss)
         loss = critic_loss + aux_loss * self.args.actor.aux_loss_coef
         if self.args.train.dynamic_batch_enable:
             loss = loss * self.replay_buffer.dynamic_loss_scale[step]
@@ -288,6 +285,7 @@ class CriticModelActor(BaseModelActor):
             packing_samples=strategy.args.fsdp.packing_samples,
             force_hf_model=strategy.args.fsdp.force_hf_model,
             use_liger_kernel=strategy.args.fsdp.use_liger_kernel,
+            moe_aux_loss_coef=args.actor.aux_loss_coef,
         )
         strategy.print(critic)
         strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize_enable))

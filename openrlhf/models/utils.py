@@ -127,3 +127,26 @@ def compute_entropy(logits: torch.Tensor):
     pd = torch.nn.functional.softmax(logits, dim=-1)
     entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)
     return entropy
+
+
+def split_moe_aux_loss(output, enabled: bool):
+    """Return the aux loss tensor for optimization and for logging.
+
+    HF MoE models return an unscaled ``output.aux_loss`` that OpenRLHF adds to
+    the trainer loss. NeMo AutoModel custom MoE injects aux-loss gradients via
+    ``MoEAuxLossAutoScaler`` during backward, so those outputs are marked and
+    must only use ``aux_loss`` for logging.
+    """
+    if not enabled:
+        return 0, 0
+
+    if isinstance(output, dict):
+        aux_loss = output.get("aux_loss", 0)
+        in_backward = bool(output.get("_openrlhf_aux_loss_in_backward", False))
+    else:
+        aux_loss = getattr(output, "aux_loss", 0)
+        in_backward = bool(getattr(output, "_openrlhf_aux_loss_in_backward", False))
+
+    if aux_loss is None:
+        aux_loss = 0
+    return (0 if in_backward else aux_loss), aux_loss

@@ -19,7 +19,9 @@ from openrlhf.utils.fsdp.packing import (
 from openrlhf.utils.logging_utils import init_logger
 
 from .actor import (
+    _attach_nemo_moe_aux_loss,
     _build_peft_config_dict,
+    _configure_nemo_moe_aux_loss,
     _detect_moe_arch,
     _has_hf_flash_attn_2,
     _move_model_to_cpu_for_offload,
@@ -54,6 +56,7 @@ def get_llm_for_sequence_regression(
     force_hf_model: bool = False,
     use_liger_kernel: bool = False,
     use_fp32_master_weights: Optional[bool] = None,
+    moe_aux_loss_coef: float = 0.0,
     **kwargs,
 ) -> nn.Module:
     """Build a reward or critic model with an AutoModel-managed regression head."""
@@ -85,11 +88,15 @@ def get_llm_for_sequence_regression(
     config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
     config.num_labels = 1
     config.normalize_reward = normalize_reward
+    if hasattr(config, "router_aux_loss_coef"):
+        config.router_aux_loss_coef = float(moe_aux_loss_coef or 0.0)
     config._attn_implementation = attn_implementation
     value_head_prefix = getattr(config, "value_head_prefix", value_head_prefix)
     config.value_head_prefix = value_head_prefix
     logger.info(f"set value_head_prefix to `{value_head_prefix}`")
     custom_sequence_regression_arch = _register_openrlhf_llama_sequence_regression(config)
+    if custom_sequence_regression_arch is None:
+        custom_sequence_regression_arch = _register_openrlhf_qwen3_moe_sequence_regression(config)
 
     from openrlhf.utils.utils import convert_to_torch_dtype, ensure_torchvision_nms_stub
 
@@ -227,6 +234,7 @@ def get_llm_for_sequence_regression(
     model.config.use_cache = False
     model.config.normalize_reward = normalize_reward
     model.config.value_head_prefix = value_head_prefix
+    _configure_nemo_moe_aux_loss(model, moe_aux_loss_coef)
 
     if init_value_head:
         _init_regression_head(model, value_head_prefix)
@@ -292,6 +300,7 @@ def _register_openrlhf_llama_sequence_regression(config) -> Optional[str]:
         config_class = LlamaConfig
         base_model_prefix = "model"
         _openrlhf_automodel_custom = True
+        _openrlhf_skip_base_load_prefixes = ("score.",)
 
         @classmethod
         def from_config(cls, config: LlamaConfig, backend: Optional[BackendConfig] = None, **kwargs):
@@ -405,6 +414,105 @@ def _register_openrlhf_llama_sequence_regression(config) -> Optional[str]:
 
     if "RewardModel" not in registry:
         registry["RewardModel"] = OpenRLHFLlamaForCausalSequenceRegression
+    return arch_name
+
+
+def _register_openrlhf_qwen3_moe_sequence_regression(config) -> Optional[str]:
+    """Register a Qwen3-MoE token-regression AutoModel class for RM/value heads."""
+    architectures = getattr(config, "architectures", None) or []
+    if getattr(config, "model_type", None) != "qwen3_moe":
+        return None
+    if architectures and architectures[0] not in {
+        "RewardModel",
+        "Qwen3MoeForCausalLM",
+        "Qwen3MoeForSequenceClassification",
+        "OpenRLHFQwen3MoeForCausalSequenceRegression",
+    }:
+        return None
+
+    try:
+        from nemo_automodel._transformers.registry import ModelRegistry
+        from nemo_automodel.components.models.common import initialize_linear_module
+        from nemo_automodel.components.models.qwen3_moe.model import Qwen3MoeForCausalLM
+        from nemo_automodel.shared.utils import dtype_from_str as get_dtype
+        from transformers.modeling_outputs import SequenceClassifierOutputWithPast
+    except Exception as exc:
+        logger.warning("Unable to register OpenRLHF Qwen3-MoE sequence-regression AutoModel path: %s", exc)
+        return None
+
+    class OpenRLHFQwen3MoeForCausalSequenceRegression(Qwen3MoeForCausalLM):
+        _openrlhf_automodel_custom = True
+        _openrlhf_skip_base_load_prefixes = ("score.",)
+
+        @classmethod
+        def from_config(cls, config, backend=None, moe_config=None, **kwargs):
+            return cls(config, moe_config=moe_config, backend=backend, **kwargs)
+
+        def __init__(self, config, moe_config=None, backend=None, moe_overrides=None):
+            super().__init__(config, moe_config=moe_config, backend=backend, moe_overrides=moe_overrides)
+            self.num_labels = getattr(config, "num_labels", 1)
+            self.lm_head = None
+            self.score = initialize_linear_module(
+                self.backend.linear,
+                config.hidden_size,
+                self.num_labels,
+                bias=False,
+                dtype=get_dtype(config.torch_dtype, torch.bfloat16),
+            )
+
+            if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0:
+                print(
+                    "[OpenRLHFQwen3MoeForCausalSequenceRegression] "
+                    f"Attention implementation: {self.config._attn_implementation}"
+                )
+                print("[OpenRLHFQwen3MoeForCausalSequenceRegression] Custom token regression implementation")
+                print(f"[OpenRLHFQwen3MoeForCausalSequenceRegression] torch_dtype: {self.config.torch_dtype}")
+
+        def forward(
+            self,
+            input_ids: Optional[torch.LongTensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            position_ids: Optional[torch.LongTensor] = None,
+            use_cache: Optional[bool] = None,
+            output_hidden_states: Optional[bool] = None,
+            return_dict: Optional[bool] = None,
+            padding_mask: Optional[torch.Tensor] = None,
+            **attn_kwargs,
+        ) -> SequenceClassifierOutputWithPast:
+            del use_cache
+            return_dict = return_dict if return_dict is not None else True
+            hidden = self.model(
+                input_ids,
+                position_ids=position_ids,
+                attention_mask=attention_mask,
+                padding_mask=padding_mask,
+                **attn_kwargs,
+            )
+            hidden = unshard_dtensor(hidden)
+            score_weight = getattr(self.score, "weight", None)
+            score_dtype = getattr(score_weight, "dtype", None)
+            if score_dtype is not None and hidden.dtype != score_dtype:
+                hidden = hidden.to(score_dtype)
+            scores = self.score(hidden)
+            hidden_states = (hidden,) if output_hidden_states else None
+            out = SequenceClassifierOutputWithPast(loss=None, logits=scores, hidden_states=hidden_states)
+            if return_dict:
+                return out
+            return out.to_tuple()
+
+    arch_name = "OpenRLHFQwen3MoeForCausalSequenceRegression"
+    registry = ModelRegistry.model_arch_name_to_cls
+    try:
+        existing = registry[arch_name] if arch_name in registry else None
+    except Exception:
+        existing = None
+    if existing is None:
+        registry[arch_name] = OpenRLHFQwen3MoeForCausalSequenceRegression
+    elif getattr(existing, "_openrlhf_automodel_custom", False):
+        OpenRLHFQwen3MoeForCausalSequenceRegression = existing
+
+    if "RewardModel" not in registry:
+        registry["RewardModel"] = OpenRLHFQwen3MoeForCausalSequenceRegression
     return arch_name
 
 
@@ -598,6 +706,7 @@ class _SequenceRegressionBase(nn.Module):
                     )
 
         outputs = _model_forward(output_hidden_states=False)
+        outputs = _attach_nemo_moe_aux_loss(outputs, self.model)
         logits = outputs.get("logits") if isinstance(outputs, dict) else getattr(outputs, "logits", None)
         if logits is not None and logits.ndim >= 3 and logits.shape[-1] == 1:
             values = unshard_dtensor(logits).squeeze(-1)
@@ -606,6 +715,7 @@ class _SequenceRegressionBase(nn.Module):
             # return token logits directly. Only fall back to hidden states for
             # legacy wrappers that expose the value head outside the base model.
             outputs = _model_forward(output_hidden_states=True)
+            outputs = _attach_nemo_moe_aux_loss(outputs, self.model)
             hidden_states = getattr(outputs, "hidden_states", None)
             if hidden_states is None:
                 raise RuntimeError("Sequence regression requires logits or hidden_states; model returned neither.")
@@ -627,10 +737,11 @@ class RewardModel(_SequenceRegressionBase):
         attention_mask: Optional[torch.Tensor] = None,
         return_output: bool = False,
         pad_sequence: bool = False,
+        cp_context_stack=None,
         packed_seq_lens=None,
     ) -> torch.Tensor:
         eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
-        values, outputs = self._token_values(input_ids, attention_mask)
+        values, outputs = self._token_values(input_ids, attention_mask, cp_context_stack=cp_context_stack)
         reward = values.gather(dim=1, index=eos_indices).squeeze(1)
 
         if not self.training and self.normalize_reward:

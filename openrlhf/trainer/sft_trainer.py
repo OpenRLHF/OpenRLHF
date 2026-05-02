@@ -7,6 +7,7 @@ from torch.optim import Optimizer
 from tqdm import tqdm
 
 from openrlhf.models import SFTLoss
+from openrlhf.models.utils import split_moe_aux_loss
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 
@@ -64,7 +65,7 @@ class SFTTrainer(ABC):
 
         self.loss_fn = SFTLoss()
 
-        # Mixtral 8*7b
+        # MoE balancing loss.
         self.aux_loss = self.args.model.aux_loss_coef > 1e-8
 
         self.cp_enabled = getattr(strategy, "cp_size", 1) > 1
@@ -215,7 +216,7 @@ class SFTTrainer(ABC):
         loss_dp_size,
         backward: bool = True,
     ):
-        aux_loss = getattr(output, "aux_loss", 0) if self.aux_loss else 0
+        aux_loss, aux_loss_log = split_moe_aux_loss(output, self.aux_loss)
         gpt_loss = self.loss_fn(
             per_token_log_probs,
             loss_mask,
@@ -239,7 +240,7 @@ class SFTTrainer(ABC):
             logs_dict["lr"] = self.scheduler.get_last_lr()[0]
             logs_dict["grad_norm"] = self.strategy.get_grad_norm(self.model)
         if self.aux_loss:
-            logs_dict["aux_loss"] = aux_loss.item() if torch.is_tensor(aux_loss) else float(aux_loss)
+            logs_dict["aux_loss"] = aux_loss_log.item() if torch.is_tensor(aux_loss_log) else float(aux_loss_log)
         return logs_dict, reported_gpt_loss.item()
 
     def fit(self, args, consumed_samples=0, num_update_steps_per_epoch=None):

@@ -34,6 +34,7 @@ def train(args):
         force_hf_model=args.fsdp.force_hf_model,
         use_liger_kernel=args.fsdp.use_liger_kernel,
         use_fp32_master_weights=False,
+        moe_aux_loss_coef=args.model.aux_loss_coef,
     )
 
     tokenizer = get_tokenizer(

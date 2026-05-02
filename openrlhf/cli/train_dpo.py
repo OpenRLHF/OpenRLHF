@@ -30,6 +30,7 @@ def train(args):
         packing_samples=args.fsdp.packing_samples,
         force_hf_model=args.fsdp.force_hf_model,
         use_liger_kernel=args.fsdp.use_liger_kernel,
+        moe_aux_loss_coef=args.model.aux_loss_coef,
     )
 
     tokenizer = get_tokenizer(
