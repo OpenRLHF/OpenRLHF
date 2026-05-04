@@ -109,24 +109,27 @@ def get_optimizer_grouped_parameters(
     weight_decay,
     no_decay_name_list=["bias", "layer_norm.weight", "layernorm.weight", "norm.weight", "ln_f.weight"],
 ):
-    optimizer_grouped_parameters = [
-        {
-            "params": [
-                p
-                for n, p in model.named_parameters()
-                if (not any(nd in n for nd in no_decay_name_list) and p.requires_grad)
-            ],
-            "weight_decay": weight_decay,
-        },
-        {
-            "params": [
-                p
-                for n, p in model.named_parameters()
-                if (any(nd in n for nd in no_decay_name_list) and p.requires_grad)
-            ],
-            "weight_decay": 0.0,
-        },
+    decay_params = [
+        p
+        for n, p in model.named_parameters()
+        if (not any(nd in n for nd in no_decay_name_list) and p.requires_grad)
     ]
+    no_decay_params = [
+        p
+        for n, p in model.named_parameters()
+        if (any(nd in n for nd in no_decay_name_list) and p.requires_grad)
+    ]
+    # Drop empty groups so the LR scheduler's base_lrs matches the optimizer's
+    # param_groups after deepspeed.initialize, which strips empty groups (see
+    # DeepSpeed engine.py: `basic_optimizer.param_groups[:] = [pg for pg in
+    # basic_optimizer.param_groups if len(pg["params"]) != 0]`). Without this,
+    # LoRA runs hit `_update_lr` with strict=True zip mismatch — none of the
+    # LoRA adapter names match the no_decay list, leaving that group empty.
+    optimizer_grouped_parameters = []
+    if decay_params:
+        optimizer_grouped_parameters.append({"params": decay_params, "weight_decay": weight_decay})
+    if no_decay_params:
+        optimizer_grouped_parameters.append({"params": no_decay_params, "weight_decay": 0.0})
     return optimizer_grouped_parameters
 
 
