@@ -324,6 +324,8 @@ OpenRLHF provides flexible data processing methods:
 - `--data.prompt_probs` / `--data.dataset_probs`: Mix multiple datasets (e.g., `0.1,0.4,0.5`)
 - `--eval.dataset`: Specify evaluation dataset path
 
+For SFT datasets with `--data.apply_chat_template`, each row may also include a `tools` field (a list of dictionaries following the HuggingFace tool-use format). OpenRLHF forwards it to HuggingFace chat templates so tool-calling templates can render the available tool schemas.
+
 **Chat Template Example**:
 
 ```python
