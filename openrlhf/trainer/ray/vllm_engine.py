@@ -275,7 +275,7 @@ def create_vllm_engines(
             "full_determinism": full_determinism,
             "gpu_memory_utilization": gpu_memory_utilization,
             "bundle_indices": bundle_indices,
-            "num_gpus": 0.2 if (use_hybrid_engine and tensor_parallel_size == 1) else 1,
+            "num_gpus": num_gpus if tensor_parallel_size == 1 else 1,
             "enable_sleep_mode": vllm_enable_sleep,
         }
 
