@@ -67,6 +67,17 @@ def _load_tokenspeed_engine_module():
 tokenspeed_engine = _load_tokenspeed_engine_module()
 
 
+def test_select_ipc_handle_returns_matching_handle():
+    handle = object()
+
+    assert tokenspeed_engine._select_ipc_handle({2: handle}, 2) is handle
+
+
+def test_select_ipc_handle_fails_when_gpu_id_is_missing():
+    with pytest.raises(RuntimeError, match="GPU ID 3 not found"):
+        tokenspeed_engine._select_ipc_handle({0: object(), 1: object()}, 3)
+
+
 def test_adapt_tokenspeed_output_matches_vllm_shape():
     output = tokenspeed_engine._adapt_tokenspeed_output(
         {

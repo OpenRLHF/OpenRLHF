@@ -65,6 +65,14 @@ def _torch_dtype_name(dtype) -> str:
     return str(dtype).removeprefix("torch.")
 
 
+def _select_ipc_handle(ipc_handles: dict[int, Any], gpu_id: int):
+    if gpu_id not in ipc_handles:
+        raise RuntimeError(
+            f"GPU ID {gpu_id} not found in ipc_handles; available GPU IDs: {sorted(ipc_handles)}"
+        )
+    return ipc_handles[gpu_id]
+
+
 def _tokenspeed_sampling_params(sampling_params) -> dict[str, Any]:
     max_tokens = getattr(sampling_params, "max_tokens", None)
     if max_tokens is None:
@@ -260,7 +268,7 @@ class TokenSpeedRolloutActor:
         import torch
         from openrlhf.trainer.ray.utils import get_physical_gpu_id
 
-        handle = ipc_handles[get_physical_gpu_id()]
+        handle = _select_ipc_handle(ipc_handles, get_physical_gpu_id())
         func, handle_args = handle
         args_list = list(handle_args)
         args_list[6] = torch.cuda.current_device()
