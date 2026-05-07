@@ -119,9 +119,7 @@ def _tokenspeed_logprobs(meta_info: dict[str, Any], token_ids: list[int]):
     if raw_logprobs is None:
         raise RuntimeError("TokenSpeed did not return output token logprobs")
     if len(raw_logprobs) != len(token_ids):
-        raise RuntimeError(
-            f"TokenSpeed returned {len(raw_logprobs)} logprobs for {len(token_ids)} generated tokens"
-        )
+        raise RuntimeError(f"TokenSpeed returned {len(raw_logprobs)} logprobs for {len(token_ids)} generated tokens")
 
     converted = []
     for token_id, raw in zip(token_ids, raw_logprobs):

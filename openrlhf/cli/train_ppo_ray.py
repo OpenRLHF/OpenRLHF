@@ -6,7 +6,6 @@ import ray
 from ray.util.placement_group import placement_group
 
 from openrlhf.trainer.ray import create_vllm_engines
-from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.trainer.ray.launcher import (
     RayActorGroup,
     ReferenceModelActor,
