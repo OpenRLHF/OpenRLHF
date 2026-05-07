@@ -67,9 +67,7 @@ def _torch_dtype_name(dtype) -> str:
 
 def _select_ipc_handle(ipc_handles: dict[int, Any], gpu_id: int):
     if gpu_id not in ipc_handles:
-        raise RuntimeError(
-            f"GPU ID {gpu_id} not found in ipc_handles; available GPU IDs: {sorted(ipc_handles)}"
-        )
+        raise RuntimeError(f"GPU ID {gpu_id} not found in ipc_handles; available GPU IDs: {sorted(ipc_handles)}")
     return ipc_handles[gpu_id]
 
 
