@@ -17,7 +17,7 @@ one-to-one to the vLLM APIs OpenRLHF already depends on:
 
 import asyncio
 import os
-from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any, List, Optional
 
 import ray
@@ -26,7 +26,25 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from openrlhf.utils.agent import AgentExecutorBase, SingleTurnAgentExecutor
 
-from .utils import get_bundle_indices, ray_noset_visible_devices
+from .utils import ray_noset_visible_devices
+
+
+@dataclass
+class _TokenSpeedLogprob:
+    logprob: float
+
+
+@dataclass
+class _TokenSpeedCompletionOutput:
+    token_ids: list[int]
+    text: str
+    finish_reason: Optional[str]
+    logprobs: Optional[list[dict[int, _TokenSpeedLogprob]]] = None
+
+
+@dataclass
+class _TokenSpeedRequestOutput:
+    outputs: list[_TokenSpeedCompletionOutput]
 
 
 def _load_agent_executor(agent_func_path: str) -> AgentExecutorBase:
@@ -43,6 +61,115 @@ def _load_agent_executor(agent_func_path: str) -> AgentExecutorBase:
     return agent_executor_cls()
 
 
+def _torch_dtype_name(dtype) -> str:
+    return str(dtype).removeprefix("torch.")
+
+
+def _tokenspeed_sampling_params(sampling_params) -> dict[str, Any]:
+    max_tokens = getattr(sampling_params, "max_tokens", None)
+    if max_tokens is None:
+        raise ValueError("TokenSpeed rollout requires sampling_params.max_tokens to be set")
+
+    params = {"max_new_tokens": max_tokens}
+    attr_map = {
+        "temperature": "temperature",
+        "top_p": "top_p",
+        "top_k": "top_k",
+        "min_p": "min_p",
+        "min_tokens": "min_new_tokens",
+        "presence_penalty": "presence_penalty",
+        "frequency_penalty": "frequency_penalty",
+        "repetition_penalty": "repetition_penalty",
+        "skip_special_tokens": "skip_special_tokens",
+        "spaces_between_special_tokens": "spaces_between_special_tokens",
+        "stop": "stop",
+        "stop_token_ids": "stop_token_ids",
+        "ignore_eos": "ignore_eos",
+        "seed": "seed",
+    }
+    for source, target in attr_map.items():
+        value = getattr(sampling_params, source, None)
+        if value is not None:
+            params[target] = value
+
+    return params
+
+
+def _tokenspeed_image_data(multi_modal_data):
+    if multi_modal_data is None:
+        return None
+
+    unsupported = set(multi_modal_data) - {"image"}
+    if unsupported:
+        raise NotImplementedError(f"TokenSpeed rollout does not support multimodal keys: {sorted(unsupported)}")
+
+    return multi_modal_data.get("image")
+
+
+def _finish_reason_from_tokenspeed(reason) -> Optional[str]:
+    if reason is None:
+        return None
+    if isinstance(reason, dict):
+        return reason.get("type")
+    return str(reason)
+
+
+def _tokenspeed_logprobs(meta_info: dict[str, Any], token_ids: list[int]):
+    raw_logprobs = meta_info.get("output_token_logprobs")
+    if raw_logprobs is None:
+        raise RuntimeError("TokenSpeed did not return output token logprobs")
+    if len(raw_logprobs) != len(token_ids):
+        raise RuntimeError(
+            f"TokenSpeed returned {len(raw_logprobs)} logprobs for {len(token_ids)} generated tokens"
+        )
+
+    converted = []
+    for token_id, raw in zip(token_ids, raw_logprobs):
+        if isinstance(raw, dict):
+            logged_token_id = raw.get("token_id", token_id)
+            logprob = raw.get("logprob")
+        elif isinstance(raw, (list, tuple)) and len(raw) >= 2:
+            logprob, logged_token_id = raw[0], raw[1]
+        else:
+            raise TypeError(f"Unsupported TokenSpeed logprob entry: {raw!r}")
+
+        if int(logged_token_id) != int(token_id):
+            raise RuntimeError(
+                f"TokenSpeed logprob token id {logged_token_id} does not match output token id {token_id}"
+            )
+        converted.append({int(token_id): _TokenSpeedLogprob(float(logprob))})
+
+    return converted
+
+
+def _adapt_tokenspeed_output(output: dict[str, Any] | list[dict[str, Any]], require_logprobs: bool):
+    if isinstance(output, list):
+        if len(output) != 1:
+            raise ValueError(f"Expected one TokenSpeed generation output, got {len(output)}")
+        output = output[0]
+    if not isinstance(output, dict):
+        raise TypeError(f"Expected TokenSpeed generation output to be a dict, got {type(output)!r}")
+    if "text" not in output:
+        raise ValueError("TokenSpeed generation output is missing text")
+    if "output_ids" not in output:
+        raise ValueError("TokenSpeed generation output is missing output_ids")
+
+    token_ids = list(output["output_ids"])
+    meta_info = output.get("meta_info") or {}
+    logprobs = _tokenspeed_logprobs(meta_info, token_ids) if require_logprobs else None
+
+    return _TokenSpeedRequestOutput(
+        outputs=[
+            _TokenSpeedCompletionOutput(
+                token_ids=token_ids,
+                text=output["text"],
+                finish_reason=_finish_reason_from_tokenspeed(meta_info.get("finish_reason")),
+                logprobs=logprobs,
+            )
+        ]
+    )
+
+
 @ray.remote
 class TokenSpeedRolloutActor:
     """Async TokenSpeed-backed actor that mirrors ``RolloutRayActor``."""
@@ -57,8 +184,9 @@ class TokenSpeedRolloutActor:
         **kwargs,
     ):
         num_gpus = kwargs.pop("num_gpus")
+        distributed_executor_backend = kwargs.pop("distributed_executor_backend", None)
         self._configure_device_env(
-            backend=kwargs.get("distributed_executor_backend"),
+            backend=distributed_executor_backend,
             bundle_indices=bundle_indices,
             num_gpus=num_gpus,
         )
@@ -69,24 +197,27 @@ class TokenSpeedRolloutActor:
             self.executor = SingleTurnAgentExecutor(remote_rm_url)
 
         self._mm_pad_token_ids = mm_pad_token_ids
+        self._num_unfinished_requests = 0
+        self._generation_resumed = asyncio.Event()
+        self._generation_resumed.set()
 
         # Import tokenspeed lazily so it doesn't pollute other Ray actors.
         from tokenspeed.runtime.entrypoints.engine import Engine
 
         self.engine = Engine(*args, **kwargs)
-        self.tokenizer = self.engine.get_tokenizer()
 
     def _configure_device_env(self, backend, bundle_indices, num_gpus):
-        if backend == "ray":
-            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-            os.environ.pop("ROCR_VISIBLE_DEVICES", None)
-            os.environ.pop("HIP_VISIBLE_DEVICES", None)
-        elif ray_noset_visible_devices():
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(ray.get_gpu_ids()[0])
+        if ray_noset_visible_devices():
+            gpu_ids = ray.get_gpu_ids()
+            if gpu_ids:
+                os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, gpu_ids))
 
         if bundle_indices is not None:
             os.environ["TOKENSPEED_RAY_BUNDLE_INDICES"] = ",".join(map(str, bundle_indices))
             print(f"creating TokenSpeed engine with bundle_indices={bundle_indices}")
+
+    def _run_tokenizer_manager(self, coroutine):
+        return self.engine.llm.run(coroutine)
 
     # ------------------------------------------------------------------
     # Weight synchronisation — maps to TokenSpeed's distributed API
@@ -96,7 +227,12 @@ class TokenSpeedRolloutActor:
         self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray
     ):
         """Initialise NCCL process group for DeepSpeed -> TokenSpeed weight sync."""
-        success, msg = self.engine.init_weights_update_group(
+        if use_ray:
+            raise NotImplementedError("TokenSpeed rollout weight sync does not support Ray collective mode")
+
+        from tokenspeed.runtime.engine.io_struct import InitWeightsUpdateGroupReqInput
+
+        obj = InitWeightsUpdateGroupReqInput(
             master_address=master_address,
             master_port=master_port,
             rank_offset=rank_offset,
@@ -104,16 +240,20 @@ class TokenSpeedRolloutActor:
             group_name=group_name,
             backend=backend,
         )
+        success, msg = self._run_tokenizer_manager(self.engine.tokenizer_manager.init_weights_update_group(obj))
         if not success:
             raise RuntimeError(f"TokenSpeed init_weights_update_group failed: {msg}")
 
     async def update_weight(self, name, dtype, shape, empty_cache=False):
         """Receive a single weight tensor via the NCCL group."""
-        success, msg = self.engine.update_weights_from_distributed(
+        from tokenspeed.runtime.engine.io_struct import UpdateWeightsFromDistributedReqInput
+
+        obj = UpdateWeightsFromDistributedReqInput(
             name=name,
-            dtype=str(dtype),
+            dtype=_torch_dtype_name(dtype),
             shape=list(shape),
         )
+        success, msg = self._run_tokenizer_manager(self.engine.tokenizer_manager.update_weights_from_distributed(obj))
         if not success:
             raise RuntimeError(f"TokenSpeed update_weight failed for {name}: {msg}")
 
@@ -128,11 +268,8 @@ class TokenSpeedRolloutActor:
         args_list[6] = torch.cuda.current_device()
         weight = func(*args_list)
 
-        import pickle
-
-        serialized = pickle.dumps({name: weight})
         success, msg = self.engine.update_weights_from_tensor(
-            serialized_named_tensors=serialized,
+            named_tensors=[(name, weight)],
             load_format=None,
             flush_cache=empty_cache,
         )
@@ -146,27 +283,31 @@ class TokenSpeedRolloutActor:
 
     async def sleep(self, level=1):
         """Release GPU memory (KV cache, optionally weights)."""
-        self.engine.release_memory_occupation()
+        from tokenspeed.runtime.engine.io_struct import ReleaseMemoryOccupationReqInput
+
+        obj = ReleaseMemoryOccupationReqInput()
+        self._run_tokenizer_manager(self.engine.tokenizer_manager.release_memory_occupation(obj))
 
     async def wake_up(self, tags=None):
         """Resume GPU memory occupation."""
-        if tags is None:
-            tags = ["weights", "kv_cache"]
-        self.engine.resume_memory_occupation()
+        from tokenspeed.runtime.engine.io_struct import ResumeMemoryOccupationReqInput
+
+        obj = ResumeMemoryOccupationReqInput()
+        self._run_tokenizer_manager(self.engine.tokenizer_manager.resume_memory_occupation(obj))
 
     async def reset_prefix_cache(self):
         """Flush the prefix / KV cache."""
-        # TokenSpeed scheduler manages KV cache via its C++ FSM.
-        # A full flush is equivalent to aborting all cached state.
-        pass
+        result = self.engine.flush_cache()
+        if not getattr(result, "success", False):
+            raise RuntimeError("TokenSpeed flush_cache failed")
 
     async def pause_generation(self):
         """Pause in-flight generation (for partial rollout weight sync)."""
-        pass
+        self._generation_resumed.clear()
 
     async def resume_generation(self):
         """Resume generation after pause."""
-        pass
+        self._generation_resumed.set()
 
     # ------------------------------------------------------------------
     # Generation — mirrors the vLLM actor interface
@@ -174,32 +315,31 @@ class TokenSpeedRolloutActor:
 
     async def generate(self, prompt_token_ids, sampling_params, multi_modal_data=None):
         """Token-level generation compatible with ``SamplesGenerator``."""
+        await self._generation_resumed.wait()
         if multi_modal_data and self._mm_pad_token_ids:
             from openrlhf.utils.vlm_utils import dedup_media_tokens
 
             prompt_token_ids = dedup_media_tokens(prompt_token_ids, self._mm_pad_token_ids)
 
-        # Convert vLLM SamplingParams to a plain dict that TokenSpeed accepts.
-        gen_kwargs = {
-            "temperature": getattr(sampling_params, "temperature", 1.0),
-            "top_p": getattr(sampling_params, "top_p", 1.0),
-            "top_k": getattr(sampling_params, "top_k", -1),
-            "max_new_tokens": getattr(sampling_params, "max_tokens", 512),
-            "min_new_tokens": getattr(sampling_params, "min_tokens", 1),
-            "skip_special_tokens": getattr(sampling_params, "skip_special_tokens", False),
-        }
+        require_logprobs = getattr(sampling_params, "logprobs", None) is not None
+        self._num_unfinished_requests += 1
+        try:
+            output = await asyncio.to_thread(
+                self.engine.generate,
+                input_ids=list(prompt_token_ids),
+                image_data=_tokenspeed_image_data(multi_modal_data),
+                sampling_params=_tokenspeed_sampling_params(sampling_params),
+                return_logprob=require_logprobs,
+                logprob_start_len=-1 if require_logprobs else None,
+                top_logprobs_num=0,
+            )
+        finally:
+            self._num_unfinished_requests -= 1
 
-        logprobs_k = getattr(sampling_params, "logprobs", None)
-
-        output = self.engine.generate(
-            prompt_token_ids=prompt_token_ids,
-            sampling_params=gen_kwargs,
-            logprobs=logprobs_k,
-        )
-        return output
+        return _adapt_tokenspeed_output(output, require_logprobs=require_logprobs)
 
     def get_num_unfinished_requests(self) -> int:
-        return 0
+        return self._num_unfinished_requests
 
     async def generate_responses(
         self,
@@ -250,6 +390,10 @@ def create_tokenspeed_engines(
     max_images_per_prompt: int = 0,
 ):
     """Spin up TokenSpeed Ray actors with the same placement logic as vLLM."""
+    use_hybrid_engine = shared_pg is not None
+    if use_hybrid_engine and tensor_parallel_size > 1:
+        raise ValueError("TokenSpeed rollout does not support colocated tensor_parallel_size > 1")
+
     mm_pad_token_ids: set = set()
     if max_images_per_prompt > 0:
         from transformers import AutoProcessor
@@ -262,53 +406,44 @@ def create_tokenspeed_engines(
         del processor
 
     engines = []
-    distributed_executor_backend = "uni" if tensor_parallel_size == 1 else "ray"
-    use_hybrid_engine = shared_pg is not None
-    num_gpus = int(tensor_parallel_size == 1)
-    if use_hybrid_engine and tensor_parallel_size == 1:
-        num_gpus = 0.2
+    actor_num_gpus = 0.2 if use_hybrid_engine else tensor_parallel_size
+    actor_num_cpus = actor_num_gpus
 
     if not use_hybrid_engine:
-        bundles = [{"GPU": 1, "CPU": 1} for _ in range(num_engines * tensor_parallel_size)]
+        bundles = [{"GPU": tensor_parallel_size, "CPU": max(1, tensor_parallel_size)} for _ in range(num_engines)]
         shared_pg = placement_group(bundles, strategy="PACK")
         ray.get(shared_pg.ready())
 
     for i in range(num_engines):
-        bundle_indices = None
-        if tensor_parallel_size > 1:
-            bundle_indices = get_bundle_indices(shared_pg, i, tensor_parallel_size)
-
         scheduling_strategy = PlacementGroupSchedulingStrategy(
             placement_group=shared_pg,
             placement_group_capture_child_tasks=True,
-            placement_group_bundle_index=bundle_indices[0] if bundle_indices else i,
+            placement_group_bundle_index=i,
         )
 
         actor_kwargs = {
             "model": pretrain,
             "enforce_eager": enforce_eager,
-            "tensor_parallel_size": tensor_parallel_size,
             "seed": seed + i,
-            "distributed_executor_backend": distributed_executor_backend,
             "max_model_len": max_model_len,
             "enable_prefix_caching": enable_prefix_caching,
             "dtype": "bfloat16",
             "trust_remote_code": True,
             "gpu_memory_utilization": gpu_memory_utilization,
-            "bundle_indices": bundle_indices,
-            "num_gpus": 0.2 if use_hybrid_engine else 1,
+            "world_size": tensor_parallel_size,
+            "nprocs_per_node": tensor_parallel_size,
+            "attn_tp_size": tensor_parallel_size,
+            "enable_output_logprobs": bool(logprobs_mode),
+            "num_gpus": actor_num_gpus,
             "agent_func_path": agent_func_path,
             "remote_rm_url": remote_rm_url,
             "mm_pad_token_ids": mm_pad_token_ids,
         }
 
-        if max_images_per_prompt > 0:
-            actor_kwargs["limit_mm_per_prompt"] = {"image": max_images_per_prompt}
-
         engines.append(
             TokenSpeedRolloutActor.options(
-                num_cpus=num_gpus,
-                num_gpus=num_gpus,
+                num_cpus=actor_num_cpus,
+                num_gpus=actor_num_gpus,
                 scheduling_strategy=scheduling_strategy,
             ).remote(**actor_kwargs)
         )

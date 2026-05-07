@@ -498,6 +498,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 # --rollout.n_samples_per_prompt 4                            # Multiple samples per prompt
 # --rollout.vllm_generate_batch_size 2048                     # Oversample at generation (> rollout_batch_size); requires --train.async_enable
 # --algo.advantage.is_correction_enable                         # vLLM importance sampling correction for off-policy rollouts
+# --vllm.rollout_backend tokenspeed                              # Use TokenSpeed rollout backend
 # --algo.advantage.is_correction_type tis                       # Correction type: tis (token clamp) | icepop (token filter) | seq-mask-tis (seq-level geom mean)
 # --algo.advantage.is_correction_threshold 0.5 5.0               # IS truncation interval: [low, high]
 # --ckpt.best_metric_key eval_default_pass1                # Save best checkpoint by eval metric (empty = auto-detect first pass1, 'none' = disable)
