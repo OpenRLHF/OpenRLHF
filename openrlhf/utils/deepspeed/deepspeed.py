@@ -365,12 +365,22 @@ class DeepspeedStrategy(ABC):
                 },
             }
         scheduler_steps = cfg["scheduler_steps"]
+        scheduler_name = cfg.get("lr_scheduler", "cosine_with_min_lr")
+        # `min_lr_rate` is only a valid kwarg for the two cosine-with-min-lr
+        # schedulers in transformers; passing it to e.g. linear / cosine /
+        # constant / polynomial / inverse_sqrt raises TypeError inside
+        # `get_scheduler`'s downstream call.
+        scheduler_kwargs = (
+            {"min_lr_rate": cfg.get("min_lr_ratio", 0.1)}
+            if scheduler_name in {"cosine_with_min_lr", "cosine_warmup_with_min_lr"}
+            else {}
+        )
         sched_factory = partial(
             get_scheduler,
-            cfg.get("lr_scheduler", "cosine_with_min_lr"),
+            scheduler_name,
             num_warmup_steps=math.ceil(scheduler_steps * cfg.get("lr_warmup_ratio", 0.03)),
             num_training_steps=scheduler_steps,
-            scheduler_specific_kwargs={"min_lr_rate": cfg.get("min_lr_ratio", 0.1)},
+            scheduler_specific_kwargs=scheduler_kwargs,
         )
 
         is_actor = isinstance(model, Actor)
