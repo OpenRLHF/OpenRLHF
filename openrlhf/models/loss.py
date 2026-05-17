@@ -8,6 +8,12 @@ import torch.nn.functional as F
 from .utils import masked_mean
 
 
+def _zero_masked_values(tensor: Optional[torch.Tensor], mask: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+    if tensor is None or mask is None:
+        return tensor
+    return tensor.masked_fill(~mask.bool(), 0.0)
+
+
 def aggregate_loss(
     loss: torch.Tensor,
     loss_mask: torch.Tensor,
@@ -17,6 +23,8 @@ def aggregate_loss(
     global_batch_size: Optional[float] = None,
 ) -> torch.Tensor:
     """Aggregate token losses using verl-compatible normalization."""
+    loss = _zero_masked_values(loss, loss_mask)
+
     if token_level_loss:
         if batch_num_tokens is None:
             return masked_mean(loss, loss_mask, dim=None)
@@ -154,6 +162,14 @@ class PolicyLoss(nn.Module):
         batch_num_tokens: Optional[float] = None,
         global_batch_size: Optional[float] = None,
     ) -> torch.Tensor:
+        if action_mask is None:
+            action_mask = torch.ones_like(log_probs)
+
+        log_probs = _zero_masked_values(log_probs, action_mask)
+        old_log_probs = _zero_masked_values(old_log_probs, action_mask)
+        advantages = _zero_masked_values(advantages, action_mask)
+        rollout_log_probs = _zero_masked_values(rollout_log_probs, action_mask)
+
         raw_policy_log_ratio = log_probs - old_log_probs
         if self.policy_loss_type == "ppo":
             policy_log_ratio = raw_policy_log_ratio.clamp(min=-20.0, max=20.0)
