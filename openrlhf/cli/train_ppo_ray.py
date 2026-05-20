@@ -168,6 +168,7 @@ def train(args):
     max_steps = ray.get(ppo_trainer.get_max_steps.remote())
 
     # init actor/reference/reward model
+    print("inference model init form pretrained...")
     refs = []
     refs.extend(
         actor_model.async_init_model_from_pretrained(strategy, args.actor.model_name_or_path, max_steps, vllm_engines)
@@ -176,23 +177,18 @@ def train(args):
         refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.actor.model_name_or_path))
     if reward_model is not None and args.reward.model_name_or_path:
         refs.extend(reward_model.async_init_model_from_pretrained(strategy, args.reward.model_name_or_path))
+    
+    print("actor_ref_reward init before")
     ray.get(refs)
+    print("actor_ref_reward init success")
 
     if critic_model is not None and args.critic.model_name_or_path:
         # critic scheduler initialization depends on max_step, so we have to init critic after actor
         # TODO: use first reward model as critic model
         refs = critic_model.async_init_model_from_pretrained(strategy, args.critic.model_name_or_path, max_steps)
         ray.get(refs)
-
-    # train actor and critic model
-    ray.get(ppo_trainer.fit.remote())
-
-    # save model
-    ray.get(actor_model.async_save_model())
-
-    if args.critic.model_name_or_path and args.critic.save_value_network and critic_model is not None:
-        ray.get(critic_model.async_save_model())
-
+    
+    print("init all model success.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

@@ -4,7 +4,7 @@ bitsandbytes
 datasets
 deepspeed==0.18.9
 einops
-flash-attn==2.8.3
+#flash-attn==2.8.3
 grpcio>=1.74.0
 huggingface_hub>=1.0.0
 isort
