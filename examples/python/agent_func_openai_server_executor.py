@@ -10,7 +10,7 @@ a session. Prefix stability is assumed (i.e. no BPE boundary merges).
 
 Usage:
     python -m openrlhf.cli.train_ppo \
-        --agent_func_path examples/python/agent_func_openai_server_executor.py ...
+        --train.agent_func_path examples/python/agent_func_openai_server_executor.py ...
 """
 
 from __future__ import annotations

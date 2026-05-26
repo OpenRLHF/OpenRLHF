@@ -56,17 +56,17 @@ OpenRLHF is **the first** high-performance, production-ready open-source RLHF fr
 - [2026/4] OpenRLHF 0.10 adds **Multi-Turn VLM RL** — multi-step interactions with images in both prompts and environment feedback (e.g. screenshots). Example: [vlm_multiturn_agent.py](./examples/python/vlm_multiturn_agent.py)
 - [2026/4] OpenRLHF 0.10 adds **VLM (Vision-Language Model) RLHF support** — train VLMs like Qwen3.5 with image inputs end-to-end. Training script: [train_vlm_math_hybrid_engine.sh](./examples/scripts/train_vlm_math_hybrid_engine.sh)
 - [2026/2] [ProRL V2](https://developer.nvidia.com/blog/scaling-llm-reinforcement-learning-with-prolonged-training-using-prorl-v2/) uses REINFORCE++-baseline to train a state-of-the-art 1.5B reasoning model with prolonged RL training. Training script: [train_prorlv2_math_hybrid_engine.sh](./examples/scripts/train_prorlv2_math_hybrid_engine.sh)
-- [2026/10] [ScaleRL](https://arxiv.org/abs/2510.13786) validates the effectiveness of REINFORCE++-baseline in large-scale training scenarios. Releases [REINFORCE++ slides](https://docs.google.com/presentation/d/1stieP_3PM1z4Hq1YWR3GywFkxcHEAlstXMaS23KlGN4)
-- [2026/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) uses the method quite similar to REINFORCE++-baseline to train the reasoning models.
-- [2026/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) has been released as a fork of OpenRLHF. It is designed to train LLM-based multi-agent systems using RL, by integrating centralized multi-agent interactions with distributed policy training.
-- [2026/5] OpenRLHF 0.8.0 supports async RLHF training via `--train.async_enable` and async agent RLHF via `--train.agent_func_path`. See [train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh) for a runnable example.
-- [2026/4] Post the blog [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2026/04/23/openrlhf-vllm.html)
-- [2026/4] Clean OpenRLHF: Refactored the source code based on Single Controller and Unified Packing Samples
-- [2026/3] The CMU [Advanced Natural Language Processing Spring 2026](https://cmu-l3.github.io/anlp-spring2026/) course uses OpenRLHF as the RLHF framework teaching case.
-- [2026/2] [Logic-RL](https://arxiv.org/abs/2502.14768) and [PRIME](https://arxiv.org/abs/2502.01456) demonstrate that REINFORCE++ is more stable in training compared to GRPO and faster than PPO.
-- [2026/2] [LMM-R1](https://github.com/TideDra/lmm-r1) is a fork of OpenRLHF, aimed at providing high-performance RL infrastructure for reproduction of DeepSeek-R1 on multimodal tasks.
-- [2026/2] MIT & Microsoft proposed the [On the Emergence of Thinking in LLMs I: Searching for the Right Intuition](https://arxiv.org/pdf/2502.06773) using OpenRLHF
-- [2026/1] HKUST reproduced the [DeepSeek-R1-Zero and DeepSeek-R1 training on small models using OpenRLHF](https://github.com/hkust-nlp/simpleRL-reason)
+- [2025/10] [ScaleRL](https://arxiv.org/abs/2510.13786) validates the effectiveness of REINFORCE++-baseline in large-scale training scenarios. Releases [REINFORCE++ slides](https://docs.google.com/presentation/d/1stieP_3PM1z4Hq1YWR3GywFkxcHEAlstXMaS23KlGN4)
+- [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) uses the method quite similar to REINFORCE++-baseline to train the reasoning models.
+- [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) has been released as a fork of OpenRLHF. It is designed to train LLM-based multi-agent systems using RL, by integrating centralized multi-agent interactions with distributed policy training.
+- [2025/5] OpenRLHF 0.8.0 supports async RLHF training via `--train.async_enable` and async agent RLHF via `--train.agent_func_path`. See [train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh) for a runnable example.
+- [2025/4] Post the blog [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html)
+- [2025/4] Clean OpenRLHF: Refactored the source code based on Single Controller and Unified Packing Samples
+- [2025/3] The CMU [Advanced Natural Language Processing Spring 2025](https://cmu-l3.github.io/anlp-spring2025/) course uses OpenRLHF as the RLHF framework teaching case.
+- [2025/2] [Logic-RL](https://arxiv.org/abs/2502.14768) and [PRIME](https://arxiv.org/abs/2502.01456) demonstrate that REINFORCE++ is more stable in training compared to GRPO and faster than PPO.
+- [2025/2] [LMM-R1](https://github.com/TideDra/lmm-r1) is a fork of OpenRLHF, aimed at providing high-performance RL infrastructure for reproduction of DeepSeek-R1 on multimodal tasks.
+- [2025/2] MIT & Microsoft proposed the [On the Emergence of Thinking in LLMs I: Searching for the Right Intuition](https://arxiv.org/pdf/2502.06773) using OpenRLHF
+- [2025/1] HKUST reproduced the [DeepSeek-R1-Zero and DeepSeek-R1 training on small models using OpenRLHF](https://github.com/hkust-nlp/simpleRL-reason)
 - [2024/12] We "proposed" 😊 the [REINFORCE++: A Simple and Efficient Approach for Aligning Large Language Models](https://www.researchgate.net/publication/387487679_REINFORCE_An_Efficient_RLHF_Algorithm_with_Robustnessto_Both_Prompt_and_Reward_Models).
 - [2024/12] We analyzed the PPO, REINFORCE++, GRPO and RLOO in the [Notion Blogpost](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05).
 - [2023/8] OpenRLHF was open-sourced.

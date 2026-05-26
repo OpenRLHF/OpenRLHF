@@ -56,17 +56,17 @@ OpenRLHF 是**首个**结合 **Ray + vLLM 分布式架构**与**统一 Agent 设
 - [2026/4] OpenRLHF 0.10 新增 **多轮 VLM RL** — 支持 prompt 和环境反馈（如截图）中均包含图像的多步交互。示例：[vlm_multiturn_agent.py](./examples/python/vlm_multiturn_agent.py)
 - [2026/4] OpenRLHF 0.10 新增 **VLM（视觉语言模型）RLHF 支持** — 支持 Qwen3.5 等 VLM 的端到端图像输入训练。训练脚本：[train_vlm_math_hybrid_engine.sh](./examples/scripts/train_vlm_math_hybrid_engine.sh)
 - [2026/2] [ProRL V2](https://developer.nvidia.com/blog/scaling-llm-reinforcement-learning-with-prolonged-training-using-prorl-v2/) 使用 REINFORCE++-baseline 通过长期 RL 训练训练最先进的 1.5B 推理模型。训练脚本：[train_prorlv2_math_hybrid_engine.sh](./examples/scripts/train_prorlv2_math_hybrid_engine.sh)
-- [2026/10] [ScaleRL](https://arxiv.org/abs/2510.13786) 验证了 REINFORCE++-baseline 在大规模训练场景中的有效性。发布 [REINFORCE++ PPT](https://docs.google.com/presentation/d/1stieP_3PM1z4Hq1YWR3GywFkxcHEAlstXMaS23KlGN4)
-- [2026/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) 使用与 REINFORCE++-baseline 非常相似的方法训练推理模型。
-- [2026/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) 作为 OpenRLHF 的分支发布。它旨在通过集成中心化多智能体交互与分布式策略训练来训练基于 LLM 的多智能体系统。
-- [2026/5] OpenRLHF 0.8.0 支持通过 `--train.async_enable` 启用异步 RLHF 训练，并通过 `--train.agent_func_path` 启用异步 Agent RLHF。可运行示例见 [train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)。
-- [2026/4] 发布博客 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2026/04/23/openrlhf-vllm.html)
-- [2026/4] Clean OpenRLHF：基于单控制器和统一打包样本重构了源代码
-- [2026/3] CMU [高级自然语言处理 2026 春季](https://cmu-l3.github.io/anlp-spring2026/)课程使用 OpenRLHF 作为 RLHF 框架教学案例。
-- [2026/2] [Logic-RL](https://arxiv.org/abs/2502.14768) 和 [PRIME](https://arxiv.org/abs/2502.01456) 证明 REINFORCE++ 相比 GRPO 更稳定，比 PPO 更快。
-- [2026/2] [LMM-R1](https://github.com/TideDra/lmm-r1) 是 OpenRLHF 的分支，旨在为多模态任务上的 DeepSeek-R1 复现提供高性能 RL 基础设施。
-- [2026/2] MIT 和微软使用 OpenRLHF 提出 [On the Emergence of Thinking in LLMs I: Searching for the Right Intuition](https://arxiv.org/pdf/2502.06773)
-- [2026/1] HKUST 使用 OpenRLHF 复现了[小模型上的 DeepSeek-R1-Zero 和 DeepSeek-R1 训练](https://github.com/hkust-nlp/simpleRL-reason)
+- [2025/10] [ScaleRL](https://arxiv.org/abs/2510.13786) 验证了 REINFORCE++-baseline 在大规模训练场景中的有效性。发布 [REINFORCE++ PPT](https://docs.google.com/presentation/d/1stieP_3PM1z4Hq1YWR3GywFkxcHEAlstXMaS23KlGN4)
+- [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) 使用与 REINFORCE++-baseline 非常相似的方法训练推理模型。
+- [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) 作为 OpenRLHF 的分支发布。它旨在通过集成中心化多智能体交互与分布式策略训练来训练基于 LLM 的多智能体系统。
+- [2025/5] OpenRLHF 0.8.0 支持通过 `--train.async_enable` 启用异步 RLHF 训练，并通过 `--train.agent_func_path` 启用异步 Agent RLHF。可运行示例见 [train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)。
+- [2025/4] 发布博客 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html)
+- [2025/4] Clean OpenRLHF：基于单控制器和统一打包样本重构了源代码
+- [2025/3] CMU [高级自然语言处理 2025 春季](https://cmu-l3.github.io/anlp-spring2025/)课程使用 OpenRLHF 作为 RLHF 框架教学案例。
+- [2025/2] [Logic-RL](https://arxiv.org/abs/2502.14768) 和 [PRIME](https://arxiv.org/abs/2502.01456) 证明 REINFORCE++ 相比 GRPO 更稳定，比 PPO 更快。
+- [2025/2] [LMM-R1](https://github.com/TideDra/lmm-r1) 是 OpenRLHF 的分支，旨在为多模态任务上的 DeepSeek-R1 复现提供高性能 RL 基础设施。
+- [2025/2] MIT 和微软使用 OpenRLHF 提出 [On the Emergence of Thinking in LLMs I: Searching for the Right Intuition](https://arxiv.org/pdf/2502.06773)
+- [2025/1] HKUST 使用 OpenRLHF 复现了[小模型上的 DeepSeek-R1-Zero 和 DeepSeek-R1 训练](https://github.com/hkust-nlp/simpleRL-reason)
 - [2024/12] 我们"提出"了😊 [REINFORCE++: A Simple and Efficient Approach for Aligning Large Language Models](https://www.researchgate.net/publication/387487679_REINFORCE_An_Efficient_RLHF_Algorithm_with_Robustnessto_Both_Prompt_and_Reward_Models)。
 - [2024/12] 我们在 [Notion 博文](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05)中分析了 PPO、REINFORCE++、GRPO 和 RLOO。
 - [2023/8] OpenRLHF 开源。

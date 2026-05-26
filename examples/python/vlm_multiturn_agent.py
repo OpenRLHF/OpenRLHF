@@ -18,10 +18,10 @@ Key points for customization:
 
 Usage:
     python3 -m openrlhf.cli.train_ppo_ray \\
-        --agent_func_path examples/python/vlm_multiturn_agent.py \\
-        --pretrain Qwen/Qwen3.5-0.8B \\
-        --image_key images \\
-        --max_images_per_prompt 4 \\
+        --train.agent_func_path examples/python/vlm_multiturn_agent.py \\
+        --actor.model_name_or_path Qwen/Qwen3.5-0.8B \\
+        --data.image_key images \\
+        --data.max_images_per_prompt 4 \\
         ...
 """
 
