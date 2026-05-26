@@ -664,13 +664,15 @@ if __name__ == "__main__":
         print("[Warning] Using --colocate_all_models in async RLHF only colocates DeepSpeed models.")
 
     if args.train.async_enable:
-        assert not args.vllm.enable_sleep, "Async RLHF is not supported with --vllm_enable_sleep."
+        assert not args.vllm.enable_sleep, "Async RLHF is not supported with --vllm.enable_sleep."
 
     if args.train.partial_rollout_enable:
-        assert args.train.async_enable, "--partial_rollout requires --async_train."
+        assert args.train.async_enable, "--train.partial_rollout_enable requires --train.async_enable."
 
     if args.eval.dataset:
-        assert args.reward.remote_url, "`--eval_dataset` is only supported with `--remote_rm_url`."
+        assert (
+            args.reward.remote_url or args.train.agent_func_path
+        ), "`--eval.dataset` requires `--reward.remote_url` or `--train.agent_func_path` (#1242)."
 
     if args.algo.kl.use_loss:
         if args.algo.kl.estimator not in ["k2", "k3"]:
@@ -685,7 +687,7 @@ if __name__ == "__main__":
 
     if args.rollout.vllm_generate_batch_size > args.rollout.batch_size:
         assert args.train.async_enable, (
-            "--vllm_generate_batch_size > --rollout_batch_size requires --async_train "
+            "--rollout.vllm_generate_batch_size > --rollout.batch_size requires --train.async_enable "
             "(over-sampling needs async queue to buffer extra batches)."
         )
 
