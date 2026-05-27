@@ -1,5 +1,6 @@
 from typing import Callable
 
+import torch
 from torch.utils.data import Dataset
 
 from openrlhf.datasets.utils import exist_and_not_none
@@ -97,6 +98,14 @@ class RewardDataset(Dataset):
         self.chosens = processed_dataset["chosen"]
         self.rejects = processed_dataset["reject"]
         self.extras = processed_dataset["extra"]
+        self.margins = processed_dataset["margin"]
+        
+        _model_args = getattr(self.strategy.args, "model", None)
+        self.rebel_enable = getattr(_model_args, "rebel_enable", False)
+        
+        if self.rebel_enable:
+            if torch.count_nonzero(torch.tensor(self.margins)) == 0:
+                raise ValueError("REBELLoss: All reward margins are zero across the dataset")
 
     def process_data(self, data):
         prompt, chosen, reject, margin = preprocess_data(
@@ -129,6 +138,7 @@ class RewardDataset(Dataset):
             "chosen": chosen,
             "reject": reject,
             "extra": prompt_ids_len if self.is_dpo else margin,
+            "margin": margin,
         }
 
     def __len__(self):
@@ -136,7 +146,7 @@ class RewardDataset(Dataset):
         return length
 
     def __getitem__(self, idx):
-        prompt, chosen, reject, extra = self.prompts[idx], self.chosens[idx], self.rejects[idx], self.extras[idx]
+        prompt, chosen, reject, extra, margin = self.prompts[idx], self.chosens[idx], self.rejects[idx], self.extras[idx], self.margins[idx]
 
         chosen = (prompt + chosen).rstrip("\n")
         if not chosen.endswith(self.tokenizer.eos_token):
@@ -168,6 +178,15 @@ class RewardDataset(Dataset):
         chosen_token["attention_mask"][0][-1] = True
         reject_token["attention_mask"][0][-1] = True
 
+        if self.is_dpo and self.rebel_enable:
+            return (
+                chosen_token["input_ids"],
+                chosen_token["attention_mask"],
+                reject_token["input_ids"],
+                reject_token["attention_mask"],
+                extra,
+                margin,
+        )
         return (
             chosen_token["input_ids"],
             chosen_token["attention_mask"],
@@ -182,7 +201,14 @@ class RewardDataset(Dataset):
         reject_ids = []
         rejects_masks = []
         extras = []
-        for chosen_id, chosen_mask, reject_id, rejects_mask, extra in item_list:
+        margins = []
+        
+        for item in item_list:
+            if self.is_dpo and self.rebel_enable:
+                chosen_id, chosen_mask, reject_id, rejects_mask, extra, margin = item
+                margins.append(margin)
+            else:
+                chosen_id, chosen_mask, reject_id, rejects_mask, extra = item
             chosen_ids.append(chosen_id)
             chosen_masks.append(chosen_mask)
             reject_ids.append(reject_id)
@@ -197,4 +223,6 @@ class RewardDataset(Dataset):
         chosen_masks = zero_pad_sequences(chosen_masks, side=padding_side)
         reject_ids = zero_pad_sequences(reject_ids, side=padding_side, value=self.tokenizer.pad_token_id)
         rejects_masks = zero_pad_sequences(rejects_masks, side=padding_side)
+        if self.is_dpo and self.rebel_enable:
+            return chosen_ids, chosen_masks, reject_ids, rejects_masks, extras, torch.tensor(margins)
         return chosen_ids, chosen_masks, reject_ids, rejects_masks, extras
