@@ -5,7 +5,7 @@ import torch
 from torch.optim import Optimizer
 from tqdm import tqdm
 
-from openrlhf.models import DPOLoss
+from openrlhf.models import DPOLoss, REBELLoss
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 
@@ -61,7 +61,12 @@ class DPOTrainer(ABC):
         self.disable_ds_ckpt = disable_ds_ckpt
 
         self.beta = beta
-        self.loss_fn = DPOLoss(self.beta, self.args.model.label_smoothing, self.args.model.ipo_enable)
+        self.rebel_enable = getattr(self.args.model, "rebel_enable", False)
+        
+        if self.rebel_enable:
+            self.loss_fn = REBELLoss(self.args.model.eta)
+        else:
+            self.loss_fn = DPOLoss(self.beta, self.args.model.label_smoothing, self.args.model.ipo_enable)
 
         # Mixtral 8*7b
         self.aux_loss = self.args.model.aux_loss_coef > 1e-8
@@ -148,7 +153,11 @@ class DPOTrainer(ABC):
             device = next(self.model.parameters()).device
             # train
             for data in self.train_dataloader:
-                chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens = data
+                if self.rebel_enable:
+                    chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens, margin = data
+                    margin = margin.to(device)
+                else:
+                    chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens = data
                 chosen_ids = chosen_ids.squeeze(1).to(device)
                 c_mask = c_mask.squeeze(1).to(device)
                 reject_ids = reject_ids.squeeze(1).to(device)
@@ -163,9 +172,14 @@ class DPOTrainer(ABC):
                     )
 
                 # loss function
-                preference_loss, chosen_reward, reject_reward = self.loss_fn(
-                    chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
-                )
+                if self.rebel_enable:
+                    preference_loss, chosen_reward, reject_reward = self.loss_fn(
+                        chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps, margin
+                    )
+                else:
+                    preference_loss, chosen_reward, reject_reward = self.loss_fn(
+                        chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
+                    )
                 # mixtral
                 if not self.aux_loss:
                     aux_loss = 0
@@ -195,6 +209,9 @@ class DPOTrainer(ABC):
                 }
                 if self.nll_loss:
                     logs_dict["nll_loss"] = nll_loss.item()
+                if self.rebel_enable:
+                    pred_gap = chosen_reward - reject_reward
+                    logs_dict["rebel_residual_mse"] = (pred_gap - self.args.model.eta * margin).pow(2).mean().item()
                 # step bar
                 logs_dict = self.strategy.all_reduce(logs_dict)
                 step_bar.set_postfix(logs_dict)
@@ -261,10 +278,15 @@ class DPOTrainer(ABC):
             )
             acc_sum = 0
             loss_sum = 0
+            rebel_residual_sum = 0
             times = 0
             device = next(self.model.parameters()).device
             for data in eval_dataloader:
-                chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens = data
+                if self.rebel_enable:
+                    chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens, margin = data
+                    margin = margin.to(device)
+                else:
+                    chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens = data
                 chosen_ids = chosen_ids.squeeze(1).to(device)
                 c_mask = c_mask.squeeze(1).to(device)
                 reject_ids = reject_ids.squeeze(1).to(device)
@@ -277,12 +299,19 @@ class DPOTrainer(ABC):
                     reference_chosen_logps, reference_rejected_logps, _, _ = self.concatenated_forward(
                         self.ref_model, chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens
                     )
-
-                loss, chosen_reward, reject_reward = self.loss_fn(
-                    chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
-                )
+                if self.rebel_enable:
+                    loss, chosen_reward, reject_reward = self.loss_fn(
+                        chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps, margin
+                    )
+                else:
+                    loss, chosen_reward, reject_reward = self.loss_fn(
+                        chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
+                    )
                 acc_sum += (chosen_reward > reject_reward).float().mean().item()
                 loss_sum += loss.item()
+                if self.rebel_enable:
+                    pred_gap = chosen_reward - reject_reward
+                    rebel_residual_sum += (pred_gap - self.args.model.eta * margin).pow(2).mean().item()
                 times += 1
                 step_bar.update()
 
@@ -290,6 +319,8 @@ class DPOTrainer(ABC):
                 "eval_loss": loss_sum / times,
                 "acc_mean": acc_sum / times,
             }
+            if self.rebel_enable:
+                logs["rebel_residual_mse"] = rebel_residual_sum / times
             logs = self.strategy.all_reduce(logs)
             step_bar.set_postfix(logs)
 
