@@ -1,15 +1,11 @@
-from typing import Optional
-
 import torch
-import torch.distributed as dist
 import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
-from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
-from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
-from .utils import compute_entropy, log_probs_from_logits, set_z3_leaf_modules
+from .utils import set_z3_leaf_modules
 
 
 # Fix https://github.com/OpenRLHF/OpenRLHF/issues/1232
@@ -68,8 +64,6 @@ class Actor(nn.Module):
         target_modules (list, optional): List of target modules for applying LoRA. Defaults to None.
         ds_config (dict, optional): Configuration for DeepSpeed, enabling model partitioning across multiple GPUs. Defaults to None.
         device_map (dict, optional): Device mapping for loading the model onto specific devices. Defaults to None.
-        packing_samples (bool, optional): Whether to pack samples during training. Defaults to False.
-        temperature (float, optional): Temperature for action selection. Defaults to 1.0.
         use_liger_kernel (bool, optional): Whether to use Liger Kernel for the model. Defaults to False.
     """
 
@@ -85,15 +79,11 @@ class Actor(nn.Module):
         target_modules=None,
         ds_config=None,
         device_map=None,
-        packing_samples=False,
-        temperature=1.0,
         use_liger_kernel=False,
-        freeze_visual_encoder=False,
         experts_implementation=None,
         **kwargs,
     ) -> None:
         super().__init__()
-        self.temperature = temperature
 
         if isinstance(pretrain_or_model, str):
             # Support multiple attention mechanism implementations
@@ -123,22 +113,10 @@ class Actor(nn.Module):
             else:
                 nf4_config = None
 
-            from openrlhf.utils.utils import is_vlm_model
-
-            self.is_vlm = is_vlm_model(pretrain_or_model)
-
-            if self.is_vlm and use_liger_kernel:
-                raise ValueError(
-                    "use_liger_kernel is not compatible with VLM models. "
-                    "Liger kernel only supports CausalLM, not ImageTextToText."
-                )
-
             if use_liger_kernel:
                 from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
                 model_class = AutoLigerKernelForCausalLM
-            elif self.is_vlm:
-                model_class = AutoModelForImageTextToText
             else:
                 model_class = AutoModelForCausalLM
 
@@ -163,15 +141,6 @@ class Actor(nn.Module):
             )
             if eff_experts_impl is not None:
                 print(f"[MoE] experts_implementation (resolved): {eff_experts_impl}")
-
-            # VLM: optionally freeze the vision encoder so only the language
-            # model backbone is trained.  Both Qwen3.5 and Gemma4 place
-            # language params under "language_model.*" / "lm_head.*";
-            # everything else (visual encoder, projector) gets frozen.
-            if self.is_vlm and freeze_visual_encoder:
-                for name, param in self.model.named_parameters():
-                    if "language_model" not in name and "lm_head" not in name:
-                        param.requires_grad = False
 
             # LoRA
             if lora_rank > 0:
@@ -209,91 +178,8 @@ class Actor(nn.Module):
             # Use `model.generate(use_cache=True)` instead.`
             self.model.config.use_cache = False
 
-            # Cache config before DeepSpeed wrapping (DS engine may expose .config as dict)
-            if self.is_vlm:
-                self._vlm_config = self.model.config
-
-            # packing samples using Flash Attention 2
-            self.packing_samples = packing_samples
         else:
             self.model = pretrain_or_model
-
-    def forward(
-        self,
-        sequences: torch.LongTensor,
-        action_mask: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        return_output=False,
-        allgather_logits=False,
-        return_logprobs=False,
-        ring_attn_group: Optional[dist.ProcessGroup] = None,
-        packed_seq_lens: Optional[list[int]] = None,
-        return_entropy=False,
-        **mm_inputs,
-    ) -> torch.Tensor:
-        """Returns action log probs"""
-        batch, seqlen = sequences.size()
-        if self.packing_samples:
-            sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices = unpad_and_slice_tensor(
-                sequences, attention_mask, ring_attn_group
-            )
-            foward_attention_mask = None
-        else:
-            # https://github.com/OpenRLHF/OpenRLHF/issues/217
-            rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
-            foward_attention_mask = attention_mask
-
-            if getattr(self, "is_vlm", False):
-                # VLM: let the model compute its own position_ids
-                # (Qwen3.5 uses M-RoPE 3D positions, Gemma4 uses standard positions).
-                position_ids = None
-                # Reconstruct token type mask (0=text, 1=image, 2=video) for
-                # the full sequence including the response.  The processor only
-                # produced this for the prompt.
-                if mm_inputs:
-                    cfg = self._vlm_config
-                    token_type_ids = (sequences == cfg.image_token_id).to(torch.int32)
-                    if getattr(cfg, "video_token_id", None) is not None:
-                        token_type_ids[sequences == cfg.video_token_id] = 2
-                    # Qwen: mm_token_type_ids (M-RoPE); Gemma: token_type_ids (bidir attn)
-                    key = "mm_token_type_ids" if "image_grid_thw" in mm_inputs else "token_type_ids"
-                    mm_inputs[key] = token_type_ids
-            else:
-                position_ids = attention_mask.long().cumsum(-1) - 1
-                position_ids.masked_fill_(attention_mask == 0, 1)
-
-        output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids, **mm_inputs)
-        # https://github.com/OpenRLHF/OpenRLHF/pull/634
-        output["logits"] = output["logits"].to(torch.float32)
-
-        if return_entropy:
-            assert return_output
-            entropy = compute_entropy(output["logits"])
-            if self.packing_samples:
-                entropy = gather_and_pad_tensor(entropy, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
-            setattr(output, "entropy", entropy[:, :-1])
-
-        return_action_log_probs = action_mask is not None
-        if not return_action_log_probs and not return_logprobs:
-            assert return_output
-            if allgather_logits and self.packing_samples:
-                output["logits"] = gather_and_pad_tensor(
-                    output["logits"], ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
-                )
-            return output
-
-        log_probs = log_probs_from_logits(output["logits"], rolled_sequences, temperature=self.temperature)
-
-        if self.packing_samples:
-            log_probs = gather_and_pad_tensor(log_probs, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
-
-        log_probs = log_probs[:, :-1]
-        if not return_action_log_probs and return_logprobs:
-            return (log_probs, output) if return_output else log_probs
-
-        action_log_probs = log_probs[:, -action_mask.shape[1] :] * action_mask.float()
-
-        return (action_log_probs, output) if return_output else action_log_probs
 
     def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs={"use_reentrant": False}):
         self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)

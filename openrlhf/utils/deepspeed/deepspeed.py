@@ -1,8 +1,6 @@
 import gc
-import json
 import math
 import os
-import shutil
 from abc import ABC
 from collections import defaultdict
 from datetime import timedelta
@@ -15,16 +13,12 @@ import torch.nn as nn
 import torch.optim as optim
 import transformers
 import transformers.modeling_flash_attention_utils
-from peft import PeftModel, get_peft_model_state_dict
 from torch import distributed as dist
 from torch.distributed.device_mesh import init_device_mesh
-from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers.trainer import get_scheduler
 
 from openrlhf.models import Actor
 from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
-from openrlhf.utils.distributed_sampler import DistributedSampler
-from openrlhf.utils.distributed_util import torch_dist_barrier_and_cuda_sync
 
 from .deepspeed_utils import (
     _z3_params_to_fetch,
@@ -38,8 +32,6 @@ class DeepspeedStrategy(ABC):
     """
     The strategy for training with Accelerator.
     """
-
-    CKPT_METRIC_FILENAME = "metric.json"
 
     def __init__(
         self,
@@ -179,70 +171,6 @@ class DeepspeedStrategy(ABC):
         if isinstance(model, Actor):
             model = model.model
         model.backward(loss)
-
-    def optimizer_step(
-        self,
-        _optimizer: optim.Optimizer,
-        model: nn.Module,
-        _scheduler,
-        name="model",
-        **kwargs,
-    ) -> None:
-        # Parameters are kept for strategy interface compatibility.
-        if isinstance(model, Actor):
-            model = model.model
-        model.step()
-
-    def get_grad_norm(self, model: nn.Module) -> float:
-        """Get the global gradient norm from DeepSpeed engine (pre-clipping)."""
-        if isinstance(model, Actor):
-            model = model.model
-        if hasattr(model, "get_global_grad_norm"):
-            grad_norm = model.get_global_grad_norm()
-            if grad_norm is None:
-                return 0.0
-            return grad_norm.item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm)
-        return 0.0
-
-    def setup_dataloader(
-        self,
-        replay_buffer,
-        batch_size: int,
-        pin_memory: bool = False,
-        shuffle=True,
-        collate_fn=None,
-        drop_last=True,
-        sampler=None,
-        consumed_samples=0,
-        num_workers: int = 0,
-    ):
-        # DDP only mode, replay buffers on each rank are different.
-        if sampler is None and dist.is_initialized():
-            dp_group = self.ds_device_mesh["dp"].get_group()
-            num_replicas = dist.get_world_size(group=dp_group)
-            rank = dist.get_rank(group=dp_group)
-
-            sampler = DistributedSampler(
-                replay_buffer,
-                num_replicas=num_replicas,
-                rank=rank,
-                shuffle=shuffle,
-                seed=self.seed,
-                drop_last=drop_last,
-                consumed_samples=consumed_samples,
-            )
-
-        return StatefulDataLoader(
-            replay_buffer,
-            batch_size=batch_size,
-            sampler=sampler,
-            drop_last=drop_last,
-            shuffle=shuffle if sampler is None else False,
-            collate_fn=collate_fn,
-            pin_memory=pin_memory,
-            num_workers=num_workers,
-            persistent_workers=num_workers > 0,
-        )
 
     def _unwrap_model(self, model) -> nn.Module:
         if isinstance(model, Actor):
@@ -494,96 +422,6 @@ class DeepspeedStrategy(ABC):
 
         return ds_config
 
-    def moving_average(self, model, model_ema, beta=0.992, device="cpu"):
-        self.time_steps["ema"] += 1
-        if self.time_steps["ema"] % self.accumulated_gradient == 0 or self.use_dynamic_batch:
-            with torch.no_grad():
-                for param, param_ema in zip(model.parameters(), model_ema.parameters()):
-                    if param.requires_grad:
-                        if self.stage != 3:
-                            data = param.data.to(device)
-                            param_ema.data.copy_((1 - beta) * data + beta * param_ema.data)
-                        else:
-                            # TODO: use prefiltering for efficiency
-                            params_to_fetch = _z3_params_to_fetch([param, param_ema])
-                            with deepspeed.zero.GatheredParameters(params_to_fetch, enabled=len(params_to_fetch) > 0):
-                                data = param.data.to(device)
-                                param_ema.data.copy_((1 - beta) * data + beta * param_ema.data)
-
-    def load_model(
-        self,
-        model: nn.Module,
-        path: str,
-        map_location="cpu",
-        strict: bool = False,
-        key_replace_fn=None,
-    ) -> None:
-        unwrapped_model = self._unwrap_model(model)
-        state_dict = torch.load(path, map_location=map_location)
-        if key_replace_fn:
-            state_dict = key_replace_fn(state_dict)
-        unwrapped_model.load_state_dict(state_dict, strict=strict)
-
-    def save_model(self, model: nn.Module, tokenizer, output_dir, **kwargs) -> None:
-        if self.is_rank_0():
-            os.makedirs(output_dir, exist_ok=True)
-
-        # save model weights for ZeRO2/3
-        model_to_save = self._unwrap_model(model)
-
-        # gather parameters
-        if self.args.ds.zero_stage > 2 or self.args.ds.tensor_parallel_size > 1:
-            output_state_dict = (
-                model.model._consolidated_16bit_state_dict()
-                if isinstance(model, Actor)
-                else model._consolidated_16bit_state_dict()
-            )
-        else:
-            from deepspeed.checkpoint.utils import clone_tensors_for_torch_save
-
-            output_state_dict = clone_tensors_for_torch_save(model_to_save.state_dict())
-
-        if self.is_rank_0():
-            state_dict_keys = set(model_to_save.state_dict().keys())
-            output_state_dict_keys = set(output_state_dict.keys())
-
-            # corner case for tie_word_embeddings, such as Qwen2-0.5B
-            if getattr(model_to_save.config, "tie_word_embeddings", False) and "lm_head.weight" in state_dict_keys:
-                state_dict_keys.remove("lm_head.weight")
-
-            assert state_dict_keys.issubset(
-                output_state_dict_keys
-            ), f"mismatch keys {output_state_dict_keys.symmetric_difference(state_dict_keys)}"
-
-            # only save peft weights https://github.com/microsoft/DeepSpeed/issues/4295
-            if isinstance(model_to_save, PeftModel):
-                model_to_save.save_pretrained(output_dir, **kwargs)
-                if self.ds_tensor_parallel_size > 1 or self.stage == 3:
-                    torch.save(
-                        get_peft_model_state_dict(model_to_save, output_state_dict),
-                        os.path.join(output_dir, "adapter_model.bin"),
-                    )
-                    filename = os.path.join(output_dir, "adapter_model.safetensors")
-                    if os.path.exists(filename):
-                        os.remove(filename)
-            else:
-                # save model
-                model_to_save.save_pretrained(output_dir, state_dict=output_state_dict, **kwargs)
-
-            # save config
-            output_config_file = os.path.join(output_dir, "config.json")
-            model_to_save.config.to_json_file(output_config_file)
-            # save tokenizer
-            tokenizer.save_pretrained(output_dir)
-
-        del output_state_dict
-        # Explicitly release memory
-        import gc
-
-        gc.collect()
-
-        torch_dist_barrier_and_cuda_sync()
-
     def all_reduce(self, data, op="mean"):
         assert op in ("mean", "max", "sum")
         if isinstance(data, dict):
@@ -635,121 +473,6 @@ class DeepspeedStrategy(ABC):
         if not dist.is_initialized():
             return 0
         return dist.get_rank()
-
-    def _get_ckpt_metric_path(self, ckpt_dir):
-        return os.path.join(ckpt_dir, self.CKPT_METRIC_FILENAME)
-
-    def _write_ckpt_metric(self, ckpt_dir, metric_value, metric_key=None):
-        os.makedirs(ckpt_dir, exist_ok=True)
-        metric_path = self._get_ckpt_metric_path(ckpt_dir)
-        with open(metric_path, "w") as f:
-            json.dump({"metric_key": metric_key, "metric_value": metric_value}, f, indent=2, sort_keys=True)
-
-    def _read_ckpt_metric(self, ckpt_dir):
-        metric_path = self._get_ckpt_metric_path(ckpt_dir)
-        if not os.path.exists(metric_path):
-            return None
-
-        try:
-            with open(metric_path, "r") as f:
-                payload = json.load(f)
-        except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
-            self.print(f"Warning: failed to read checkpoint metric from {metric_path}: {exc}")
-            return None
-
-        if not isinstance(payload, dict):
-            return None
-
-        metric_value = payload.get("metric_value")
-        if metric_value is None:
-            return None
-
-        try:
-            return float(metric_value)
-        except (TypeError, ValueError):
-            self.print(f"Warning: invalid checkpoint metric in {metric_path}: {metric_value}")
-            return None
-
-    def save_ckpt(
-        self,
-        model,
-        save_dir,
-        tag=None,
-        max_num=3,
-        max_mem=1000,
-        client_state=None,
-        save_latest=True,
-        metric_value=None,
-        metric_key=None,
-    ):
-        assert isinstance(model, deepspeed.DeepSpeedEngine)
-        client_state = client_state or {}
-        is_best = tag is not None and tag.startswith("best")
-
-        if self.is_rank_0():
-            os.makedirs(save_dir, exist_ok=True)
-
-            # Remove old best checkpoints when saving a new best.
-            if is_best:
-                for d in os.listdir(save_dir):
-                    if d.startswith("best") and d != tag and os.path.isdir(os.path.join(save_dir, d)):
-                        old_best = os.path.join(save_dir, d)
-                        shutil.rmtree(old_best)
-                        self.print(f"Removed old best checkpoint {old_best}")
-
-            # Rotate old checkpoints to stay within max_num / max_mem limits.
-            # Best checkpoints are protected from eviction and excluded from max_num counting.
-            max_size_bytes = max_mem * 1024**3
-            while True:
-                all_subdirs = [
-                    (os.path.join(save_dir, d), os.path.getmtime(os.path.join(save_dir, d)))
-                    for d in os.listdir(save_dir)
-                    if os.path.isdir(os.path.join(save_dir, d))
-                ]
-                regular_subdirs = [
-                    (path, mtime) for path, mtime in all_subdirs if not os.path.basename(path).startswith("best")
-                ]
-
-                total_size = sum(
-                    os.path.getsize(os.path.join(dirpath, f))
-                    for subdir, _ in all_subdirs
-                    for dirpath, _, filenames in os.walk(subdir)
-                    for f in filenames
-                )
-
-                # +1 accounts for the checkpoint about to be saved; best ckpts don't count toward max_num
-                overflow_num = max(0, len(regular_subdirs) - max_num + 1) if not is_best else 0
-                overflow_mem = total_size > max_size_bytes
-                if overflow_num == 0 and not overflow_mem:
-                    break
-
-                # Build eviction candidates from regular checkpoints only.
-                # Sort: no-metric first (least informative), then worst metric, then oldest.
-                candidates = sorted(
-                    [(path, self._read_ckpt_metric(path), mtime) for path, mtime in regular_subdirs],
-                    key=lambda item: (
-                        item[1] is not None,  # None-metric first (delete first)
-                        item[1] if item[1] is not None else float("-inf"),  # then worst metric
-                        item[2],  # then oldest
-                    ),
-                )
-                if not candidates:
-                    break
-
-                delete_dir, delete_metric, _ = candidates[0]
-                reason = f"metric={delete_metric}" if delete_metric is not None else "no metric (oldest)"
-                if os.path.exists(delete_dir):
-                    shutil.rmtree(delete_dir)
-                    self.print(f"Deleted checkpoint {delete_dir} ({reason})")
-
-        torch_dist_barrier_and_cuda_sync()
-        model.save_checkpoint(save_dir, tag=tag, client_state=client_state, save_latest=save_latest)
-
-        # Write metric after successful save to avoid orphaned metric files on crash.
-        if self.is_rank_0() and tag is not None:
-            self._write_ckpt_metric(os.path.join(save_dir, tag), metric_value, metric_key=metric_key)
-
-        gc.collect()
 
     def load_ckpt(
         self,

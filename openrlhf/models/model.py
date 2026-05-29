@@ -1,5 +1,3 @@
-from typing import Optional
-
 import deepspeed
 import torch
 import torch.nn as nn
@@ -10,7 +8,6 @@ from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from openrlhf.utils.logging_utils import init_logger
 
-from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
 from .utils import set_z3_leaf_modules
 
 logger = init_logger(__name__)
@@ -34,7 +31,6 @@ def get_llm_for_sequence_regression(
     init_value_head=False,
     value_head_prefix="score",
     device_map=None,
-    packing_samples=False,
     experts_implementation=None,
     **kwargs,
 ) -> nn.Module:
@@ -57,8 +53,6 @@ def get_llm_for_sequence_regression(
         init_value_head (bool, optional): Initialize the value head. Defaults to False.
         value_head_prefix (str, optional): Prefix for the value head. Defaults to "score".
         device_map (dict, optional): Map of devices for model loading. Defaults to None.
-        packing_samples (bool, optional): Whether to pack samples during training. Defaults to False.
-
     Returns:
         nn.Module: A pretrained transformer model with a sequence regression head.
     """
@@ -77,9 +71,9 @@ def get_llm_for_sequence_regression(
     base_class = AutoModel._model_mapping[type(config)]
     base_pretrained_class = base_class.__base__
     if model_type == "reward":
-        cls_class = _get_reward_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
+        cls_class = _get_reward_model(base_pretrained_class, base_class, value_head_prefix)
     else:
-        cls_class = _get_critic_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
+        cls_class = _get_critic_model(base_pretrained_class, base_class, value_head_prefix)
 
     # Note: dschf is defined in function scope to avoid global effects
     # https://huggingface.co/docs/transformers/main_classes/deepspeed#nontrainer-deepspeed-integration
@@ -174,7 +168,7 @@ def get_llm_for_sequence_regression(
     return model
 
 
-def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="score", packing_samples=False):
+def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="score"):
     class RewardModel(base_pretrained_model):
         supports_gradient_checkpointing = True
 
@@ -185,8 +179,6 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             self.value_head_prefix = value_head_prefix
             setattr(self, value_head_prefix, nn.Linear(config.hidden_size, 1, bias=False))
 
-            self.packing_samples = packing_samples
-
             # mean std
             self.normalize_reward = config.normalize_reward
             self.register_buffer("mean", torch.zeros(1), persistent=False)
@@ -201,48 +193,10 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             # all_tied_weights_keys before from_pretrained() finalizes loading.
             self.post_init()
 
-        def forward(
-            self,
-            input_ids: torch.LongTensor = None,
-            attention_mask: Optional[torch.Tensor] = None,
-            return_output=False,
-            ring_attn_group=None,
-            pad_sequence=False,
-            packed_seq_lens=None,
-        ) -> torch.Tensor:
-            batch, seqlen = input_ids.size()
-            eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
-            forward_attention_mask = attention_mask
-            if self.packing_samples:
-                input_ids, position_ids, _, ring_attn_pad_len, indices = unpad_and_slice_tensor(
-                    input_ids, attention_mask, ring_attn_group
-                )
-                forward_attention_mask = None
-            else:
-                # https://github.com/OpenRLHF/OpenRLHF/issues/217
-                position_ids = attention_mask.long().cumsum(-1) - 1
-                position_ids.masked_fill_(attention_mask == 0, 1)
-
-            outputs = getattr(self, self.base_model_prefix)(
-                input_ids, attention_mask=forward_attention_mask, position_ids=position_ids
-            )
-            last_hidden_states = outputs["last_hidden_state"]
-
-            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)
-
-            if self.packing_samples:
-                values = gather_and_pad_tensor(values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
-            reward = values.gather(dim=1, index=eos_indices).squeeze(1)
-
-            if not self.training and self.normalize_reward:
-                reward = (reward - self.mean) / self.std
-
-            return (reward, outputs) if return_output else reward
-
     return RewardModel
 
 
-def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="score", packing_samples=False):
+def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="score"):
     class CriticModel(base_pretrained_model):
         supports_gradient_checkpointing = True
 
@@ -253,8 +207,6 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             self.value_head_prefix = value_head_prefix
             setattr(self, value_head_prefix, nn.Linear(config.hidden_size, 1, bias=False))
 
-            self.packing_samples = packing_samples
-
             # mean std
             self.normalize_reward = config.normalize_reward
             self.register_buffer("mean", torch.zeros(1), persistent=False)
@@ -268,53 +220,5 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             # Required by Transformers v5 to register derived model metadata such as
             # all_tied_weights_keys before from_pretrained() finalizes loading.
             self.post_init()
-
-        def forward(
-            self,
-            input_ids: torch.LongTensor = None,
-            action_mask: Optional[torch.Tensor] = None,
-            attention_mask: Optional[torch.Tensor] = None,
-            return_output=False,
-            ring_attn_group=None,
-            values_allgather=False,
-            packed_seq_lens=None,
-        ) -> torch.Tensor:
-            batch, seqlen = input_ids.size()
-            forward_attention_mask = attention_mask
-            if self.packing_samples:
-                input_ids, position_ids, _, ring_attn_pad_len, indices = unpad_and_slice_tensor(
-                    input_ids, attention_mask, ring_attn_group
-                )
-                forward_attention_mask = None
-            else:
-                # https://github.com/OpenRLHF/OpenRLHF/issues/217
-                position_ids = attention_mask.long().cumsum(-1) - 1
-                position_ids.masked_fill_(attention_mask == 0, 1)
-
-            outputs = getattr(self, self.base_model_prefix)(
-                input_ids, attention_mask=forward_attention_mask, position_ids=position_ids
-            )
-
-            if action_mask is None:
-                assert return_output
-                return outputs
-
-            last_hidden_states = outputs["last_hidden_state"]
-            values = getattr(self, self.value_head_prefix)(last_hidden_states).squeeze(-1)  # (1, total_seqs)
-
-            if self.packing_samples:
-                values = gather_and_pad_tensor(values, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
-
-            values = values[:, :-1]
-            # normalize reward
-            if self.normalize_reward:
-                values = (values - self.mean) / self.std
-
-            action_values = values[:, -action_mask.shape[1] :] * action_mask.float()
-
-            if return_output:
-                return (action_values, outputs)
-            else:
-                return action_values
 
     return CriticModel

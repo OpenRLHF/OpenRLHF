@@ -187,25 +187,3 @@ def offload_deepspeed_states(model, pin_memory=True, non_blocking=True):
     torch.cuda.empty_cache()
     torch.distributed.barrier()
     torch.cuda.synchronize()
-
-
-def reload_deepspeed_states(model, non_blocking=True):
-    zero_stage = model.zero_optimization_stage()  # config['zero_optimization']['stage']
-    adam_offload = model.config["zero_optimization"]["offload_optimizer"]["device"] == "cpu"
-
-    # state offloading not required when using Adam optimizer offloading
-    if adam_offload:
-        return
-
-    if zero_stage != 3 and version.parse(deepspeed.__version__) <= version.parse("0.17.5"):
-        raise NotImplementedError(
-            "Only Zero stage 3 is currently supported when using DeepSpeed version 0.17.5 or lower"
-        )
-
-    # if zero_stage == 3 and not adam_offload:
-    import torch
-
-    model.reload_states(non_blocking=non_blocking)
-    torch.cuda.empty_cache()
-    torch.distributed.barrier()
-    torch.cuda.synchronize()

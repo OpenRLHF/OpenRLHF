@@ -1,6 +1,5 @@
 import argparse
 import os
-from datetime import datetime
 
 import ray
 from ray.util.placement_group import placement_group
@@ -78,7 +77,6 @@ def train(args):
             "processed_logprobs" if args.algo.advantage.is_correction_enable else None,
             agent_func_path=args.train.agent_func_path,
             remote_rm_url=args.reward.remote_url,
-            max_images_per_prompt=getattr(args.data, "max_images_per_prompt", 0),
         )
 
     actor_model = RayActorGroup(
@@ -105,17 +103,6 @@ def train(args):
     if not args.train.colocate_all:
         pg = None
 
-    # if colocated, create placement group for critic and reward model explicitly.
-    if args.critic.model_name_or_path and args.train.colocate_critic_reward:
-        assert (
-            args.critic.num_nodes == args.reward.num_nodes
-            and args.critic.num_gpus_per_node == args.reward.num_gpus_per_node
-        ), "num_nodes and num_gpus_per_node must be the same when colocate critic and reward model."
-
-        bundles = [{"GPU": 1, "CPU": 1} for _ in range(args.critic.num_nodes * args.critic.num_gpus_per_node)]
-        pg = placement_group(bundles, strategy="PACK")
-        ray.get(pg.ready())
-
     if args.critic.model_name_or_path:
         critic_model = RayActorGroup(
             args.critic.num_nodes,
@@ -141,11 +128,7 @@ def train(args):
     else:
         reward_model = None
 
-    # Select trainer by mode
-    if args.train.async_enable:
-        from openrlhf.trainer.ppo_trainer_async import PPOTrainerAsync as PPOTrainer
-    else:
-        from openrlhf.trainer.ppo_trainer import PPOTrainer
+    from openrlhf.trainer.ppo_trainer import PPOTrainer
 
     # init PPO trainer (Single controller)
     ppo_trainer = PPOTrainer.remote(
@@ -156,20 +139,14 @@ def train(args):
         reward_model,
         ref_model,
         vllm_engines,
-        # generate kwargs
-        do_sample=True,
-        max_len=max_len,
-        max_new_tokens=args.rollout.max_new_tokens,
-        temperature=args.rollout.temperature,
-        top_p=args.rollout.top_p,
     )
 
+    
     # training update steps
     max_steps = ray.get(ppo_trainer.get_max_steps.remote())
-
     # init actor/reference/reward model
-    print("inference model init form pretrained...")
     refs = []
+    print("init actor model")
     refs.extend(
         actor_model.async_init_model_from_pretrained(strategy, args.actor.model_name_or_path, max_steps, vllm_engines)
     )
@@ -177,18 +154,18 @@ def train(args):
         refs.extend(ref_model.async_init_model_from_pretrained(strategy, args.actor.model_name_or_path))
     if reward_model is not None and args.reward.model_name_or_path:
         refs.extend(reward_model.async_init_model_from_pretrained(strategy, args.reward.model_name_or_path))
-    
-    print("actor_ref_reward init before")
+    print("init actor_ref_reward model before")
     ray.get(refs)
-    print("actor_ref_reward init success")
+    print("init actor_ref_reward model success")
 
+    print("init critic model")
     if critic_model is not None and args.critic.model_name_or_path:
         # critic scheduler initialization depends on max_step, so we have to init critic after actor
         # TODO: use first reward model as critic model
         refs = critic_model.async_init_model_from_pretrained(strategy, args.critic.model_name_or_path, max_steps)
         ray.get(refs)
-    
-    print("init all model success.")
+
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -210,12 +187,6 @@ if __name__ == "__main__":
     parser.add_argument("--actor.num_gpus_per_node", type=int, default=8, help="number of gpus per node for actor")
     parser.add_argument("--critic.num_nodes", type=int, default=1, help="number of nodes for critic")
     parser.add_argument("--critic.num_gpus_per_node", type=int, default=8, help="number of gpus per node for critic")
-    parser.add_argument(
-        "--train.colocate_critic_reward",
-        action="store_true",
-        default=False,
-        help="whether to colocate critic and reward model, if true, they will share same gpus.",
-    )
     parser.add_argument(
         "--train.colocate_all",
         action="store_true",
@@ -279,22 +250,8 @@ if __name__ == "__main__":
     )
 
     # Checkpoints
-    parser.add_argument("--eval.steps", type=int, default=-1)
-    parser.add_argument("--ckpt.save_steps", type=int, default=-1)
-    parser.add_argument("--logger.logging_steps", type=int, default=1)
     parser.add_argument("--ckpt.path", type=str, default="./ckpt/checkpoints_ppo_ray")
-    parser.add_argument("--ckpt.save_hf", action="store_true", default=False)
-    parser.add_argument("--ckpt.disable_ds", action="store_true", default=False)
-    parser.add_argument("--ckpt.max_num", type=int, default=3)
-    parser.add_argument("--ckpt.max_mem", type=float, default=float("inf"))
     parser.add_argument("--ckpt.load_enable", action="store_true", default=False)
-    parser.add_argument(
-        "--ckpt.best_metric_key",
-        type=str,
-        default="",
-        help="Eval metric key for best checkpoint saving (e.g., eval_default_pass1). "
-        "Empty string auto-detects first pass1 metric. Set to 'none' to disable best checkpoint saving.",
-    )
     parser.add_argument(
         "--ds.use_universal_ckpt", action="store_true", help="Use deepspeed universal checkpoint", default=False
     )
@@ -311,9 +268,6 @@ if __name__ == "__main__":
         choices=["bf16", "fp16"],
         help="Model data type",
     )
-    ## Make EMA as an optional feature
-    parser.add_argument("--train.enable_ema", action="store_true", help="Enable EMA checkpoint for the model.")
-    parser.add_argument("--train.ema_beta", type=float, default=0.992, help="EMA beta coefficient")
     parser.add_argument("--ds.zpg", type=int, default=1, help="ZeRO++ max partition size")
     parser.add_argument("--ds.adam_offload", action="store_true", default=False, help="Offload Adam Optimizer")
     parser.add_argument(
@@ -364,7 +318,6 @@ if __name__ == "__main__":
     parser.add_argument("--ds.lora.dropout", type=float, default=0)
 
     # PPO
-    parser.add_argument("--ckpt.output_dir", type=str, default="./ckpt")
     parser.add_argument("--train.num_episodes", type=int, default=1)
     parser.add_argument("--rollout.batch_size", type=int, default=1024, help="Batch size for make experience")
     parser.add_argument(
@@ -409,7 +362,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--rollout.n_samples_per_prompt", type=int, default=1, help="number of responses for each prompt in generation"
     )
-    parser.add_argument("--critic.save_value_network", action="store_true", default=False, help="Save critic model")
     parser.add_argument("--algo.kl.target", type=float, default=None)
     parser.add_argument("--algo.kl.horizon", type=int, default=10000)
     parser.add_argument("--algo.kl.init_coef", type=float, default=0.01, help="KL penalty in PPO")
@@ -528,29 +480,12 @@ if __name__ == "__main__":
         help="sampling probs for datasets",
     )
     parser.add_argument("--data.prompt_split", type=str, default="train")
-    parser.add_argument("--eval.dataset", type=str, default=None, help="Path to the evaluation dataset")
-    parser.add_argument("--eval.split", type=str, default="train")
-    parser.add_argument("--eval.temperature", type=float, default=0.6, help="Temperature for evaluation")
-    parser.add_argument(
-        "--eval.n_samples_per_prompt", type=int, default=4, help="Number of samples per prompt for evaluation"
-    )
 
     parser.add_argument("--data.input_key", type=str, default="input", help="JSON dataset key")
     parser.add_argument("--data.label_key", type=str, default=None, help="JSON dataset key")
     parser.add_argument("--data.input_template", type=str, default=None)
     parser.add_argument(
         "--data.apply_chat_template", action="store_true", default=False, help="Use HF tokenizer chat template"
-    )
-
-    # wandb parameters
-    parser.add_argument("--logger.wandb.key", type=str, default=None)
-    parser.add_argument("--logger.wandb.org", type=str, default=None)
-    parser.add_argument("--logger.wandb.group", type=str, default=None)
-    parser.add_argument("--logger.wandb.project", type=str, default="openrlhf_train_ppo")
-    parser.add_argument(
-        "--logger.wandb.run_name",
-        type=str,
-        default="ppo_%s" % datetime.now().strftime("%m%dT%H:%M"),
     )
 
     # Dynamic filtering
@@ -560,23 +495,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--algo.dynamic_filtering_range", nargs=2, default=(0, 1), type=float, help="Dynamic filtering rewards range"
     )
-
-    # VLM (Vision-Language Model) parameters
-    parser.add_argument("--data.image_key", type=str, default="images", help="Dataset key for image paths/URLs")
-    parser.add_argument(
-        "--data.max_images_per_prompt", type=int, default=0, help="Max images per prompt for vLLM (0 = text-only)"
-    )
-    parser.add_argument(
-        "--actor.freeze_visual_encoder",
-        action="store_true",
-        default=False,
-        help="Freeze vision encoder weights (only train language model). Reduces memory and weight sync overhead.",
-    )
-
-    # TensorBoard parameters
-    parser.add_argument("--logger.tensorboard_dir", type=str, default=None, help="TensorBoard logging path")
-
-    # performance tuning
 
     # ModelScope parameters
     parser.add_argument("--use_ms", action="store_true", default=False)
@@ -605,18 +523,6 @@ if __name__ == "__main__":
         assert (
             args.rollout.n_samples_per_prompt > 1
         ), f"{args.algo.advantage.estimator} requires n_samples_per_prompt > 1"
-
-    # VLM constraints: critic and packing_samples are not supported
-    if args.data.max_images_per_prompt > 0:
-        assert args.critic.model_name_or_path is None, (
-            "VLM training does not support critic model. "
-            "Use --advantage_estimator other than 'gae' (e.g., reinforce_baseline, rloo, group_norm)."
-        )
-        assert not args.ds.packing_samples, (
-            "VLM training does not support --packing_samples. "
-            "Packing collapses the batch dimension, breaking alignment between image tokens and pixel_values. "
-            "VLM models also require model-computed position_ids (e.g., M-RoPE) which is incompatible with packing."
-        )
 
     if args.reward.remote_url:
         args.reward.remote_url = args.reward.remote_url.split(",")
@@ -664,9 +570,6 @@ if __name__ == "__main__":
 
     if args.train.partial_rollout_enable:
         assert args.train.async_enable, "--partial_rollout requires --async_train."
-
-    if args.eval.dataset:
-        assert args.reward.remote_url, "`--eval_dataset` is only supported with `--remote_rm_url`."
 
     if args.algo.kl.use_loss:
         if args.algo.kl.estimator not in ["k2", "k3"]:

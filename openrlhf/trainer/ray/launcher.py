@@ -7,7 +7,6 @@ import ray
 import torch
 from ray.util.placement_group import PlacementGroup, placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-from tqdm import tqdm
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
@@ -64,42 +63,6 @@ class BaseModelActor(BaseDistributedActor):
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
-    def execute_batch(self, method_name: str, all_data, start_idx, end_idx):
-        """Process input data by calling specified function for each item in the lists.
-
-        Args:
-            method_name (str): Name of the function to execute
-            kwargs: Reference to the chunk of data to process
-
-        Returns:
-            List[Any]: List of results from function execution
-        """
-
-        # Get the first parameter to determine list length
-        kwargs = {key: value[start_idx:end_idx] for key, value in all_data.items()}
-        first_param = next(iter(kwargs.values()))
-        list_length = len(first_param)
-
-        # Verify all parameters have same length
-        for param_name, param_value in kwargs.items():
-            if len(param_value) != list_length:
-                raise ValueError(f"Parameter {param_name} has length {len(param_value)}, expected {list_length}")
-
-        # Get the function to execute
-        func = getattr(self, method_name)
-        if not callable(func):
-            raise ValueError(f"Function {method_name} is not callable")
-
-        results = []
-        for i in tqdm(range(list_length), desc=f"{method_name}", disable=not self.strategy.is_rank_0()):
-            # Create kwargs for single item
-            sample_kwargs = {param_name: param_value[i] for param_name, param_value in kwargs.items()}
-
-            result = func(**sample_kwargs)
-            results.append(result)
-
-        return results
-
 
 @ray.remote(num_gpus=1)
 class ReferenceModelActor(BaseModelActor):
@@ -112,8 +75,6 @@ class ReferenceModelActor(BaseModelActor):
             param_dtype=strategy.args.ds.param_dtype,  # default: bf16
             load_in_4bit=strategy.args.ds.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref.offload),
-            packing_samples=strategy.args.ds.packing_samples,
-            temperature=strategy.args.rollout.temperature,
             use_liger_kernel=strategy.args.ds.use_liger_kernel,
         )
         strategy.print(model)
@@ -123,35 +84,6 @@ class ReferenceModelActor(BaseModelActor):
 
         self.model = self.strategy.prepare(model)
         self.model.eval()
-
-    def forward(
-        self,
-        sequences: torch.LongTensor,
-        action_mask: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        return_output=False,
-        packed_seq_lens: Optional[list[int]] = None,
-        mm_train_inputs_list=None,
-    ) -> torch.Tensor:
-        device = torch.cuda.current_device()
-
-        # VLM: merge pre-processed multimodal inputs from all samples in batch
-        mm_inputs = {}
-        if mm_train_inputs_list and getattr(self.model, "is_vlm", False):
-            from openrlhf.utils.vlm_utils import merge_mm_train_inputs
-
-            mm_inputs = merge_mm_train_inputs(mm_train_inputs_list, device)
-
-        with torch.no_grad():
-            log_probs = self.model(
-                sequences.to(device),
-                action_mask.to(device),
-                attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
-                packed_seq_lens=packed_seq_lens,
-                **mm_inputs,
-            )
-        return log_probs.to("cpu")
 
 
 @ray.remote(num_gpus=1)
@@ -168,7 +100,6 @@ class RewardModelActor(BaseModelActor):
             load_in_4bit=strategy.args.ds.load_in_4bit,
             ds_config=strategy.get_ds_eval_config(offload=strategy.args.reward.offload),
             value_head_prefix=strategy.args.ds.value_head_prefix,
-            packing_samples=strategy.args.ds.packing_samples,
         )
         strategy.print(model)
         strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize_enable))
@@ -179,24 +110,6 @@ class RewardModelActor(BaseModelActor):
 
         self.model = self.strategy.prepare(model)
         self.model.eval()
-
-    def forward(
-        self,
-        sequences: torch.LongTensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        packed_seq_lens=None,
-        pad_sequence=False,
-    ) -> torch.Tensor:
-        device = torch.cuda.current_device()
-        with torch.no_grad():
-            reward = self.model(
-                sequences.to(device),
-                attention_mask.to(device),
-                ring_attn_group=self.strategy.ring_attn_group,
-                pad_sequence=True,
-                packed_seq_lens=packed_seq_lens,
-            )
-        return reward.to("cpu")
 
 
 class RayActorGroup:
@@ -300,74 +213,3 @@ class RayActorGroup:
             List: list of remote object refs.
         """
         return [actor.init_model_from_pretrained.remote(*args, **kwargs) for actor in self._actor_handlers]
-
-    def async_save_model(self):
-        """Save actor model on rank 0.
-
-        Returns:
-            List: list of remote object refs.
-        """
-        return [actor.save_model.remote() for actor in self._actor_handlers]
-
-    def async_run_method(self, method_name, *args, **kwargs):
-        refs = []
-        for actor in self._actor_handlers:
-            method = getattr(actor, method_name)
-            refs.append(method.remote(*args, **kwargs))
-        return refs
-
-    def async_run_method_batch(self, method_name, **kwargs):
-        """Run method on all actors with batched input data asynchronously using round-robin scheduling.
-        Each actor processes one chunk of data at a time. Actors in the same ring / tensor parallel group process the same chunk.
-
-        Args:
-            method_name (str): Name of the method to run
-            **kwargs: Keyword arguments for the method. Each value should be a list/tensor of the same length.
-
-        Returns:
-            List[ray.ObjectRef]: List of remote object references to the results
-        """
-        # Check if all kwargs parameters are iterable
-        for key, value in kwargs.items():
-            if not hasattr(value, "__len__"):
-                raise ValueError(f"Parameter {key} must be iterable")
-
-        # Get the length of the first parameter as reference
-        first_param = next(iter(kwargs.values()))
-        total_length = len(first_param)
-
-        # Verify all parameters have the same length
-        for key, value in kwargs.items():
-            if len(value) != total_length:
-                raise ValueError(
-                    f"All parameters must have the same length. {key} has length {len(value)}, expected {total_length}"
-                )
-
-        # Calculate chunk size based on number of effective actors (considering ring groups)
-        num_actors = len(self._actor_handlers)
-        effective_actors = num_actors // self.duplicate_actors
-        if total_length == 0 or total_length < effective_actors:
-            raise ValueError(
-                f"Insufficient batch size for async_run_method_batch: total_length={total_length}, "
-                f"effective_actors={effective_actors}"
-            )
-        chunk_size = total_length // effective_actors
-        if total_length % effective_actors != 0:
-            chunk_size += 1
-
-        # Pre-slice data before ray.put so each worker only receives its chunk.
-        # This avoids transferring the full batch to every node (critical at scale).
-        refs = []
-        for chunk_idx in range(effective_actors):
-            start_idx = chunk_idx * chunk_size
-            end_idx = min((chunk_idx + 1) * chunk_size, total_length)
-
-            chunk_data = {key: value[start_idx:end_idx] for key, value in kwargs.items()}
-            chunk_ref = ray.put(chunk_data)
-
-            for j in range(self.duplicate_actors):
-                actor_idx = chunk_idx * self.duplicate_actors + j
-                actor = self._actor_handlers[actor_idx]
-                refs.append(actor.execute_batch.remote(method_name, chunk_ref, 0, end_idx - start_idx))
-
-        return refs
