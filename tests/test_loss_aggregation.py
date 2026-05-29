@@ -93,6 +93,18 @@ def test_loss_batch_info_excludes_fully_masked_sequences():
     assert torch.allclose(seq_loss, torch.tensor(2.0))
 
 
+def test_aggregate_loss_ignores_masked_nonfinite_values():
+    loss = torch.tensor([[1.0, float("nan")], [3.0, float("inf")]])
+    mask = torch.tensor([[1.0, 0.0], [1.0, 0.0]])
+
+    assert torch.allclose(aggregate_loss(loss, mask), torch.tensor(2.0))
+    assert torch.allclose(
+        aggregate_loss(loss, mask, dp_size=1, batch_num_tokens=mask.sum()),
+        torch.tensor(2.0),
+    )
+    assert torch.allclose(aggregate_loss(loss, mask, token_level_loss=False), torch.tensor(2.0))
+
+
 def test_policy_loss_token_mean_aggregation_matches_full_batch():
     log_probs = torch.tensor([[-0.20, -0.40, -0.10], [-0.70, -0.30, -0.20], [-0.60, -0.10, -0.50]])
     old_log_probs = log_probs.detach() - torch.tensor([[0.03, -0.04, 0.01], [0.02, 0.05, -0.03], [0.04, 0.0, -0.02]])
@@ -121,6 +133,37 @@ def test_policy_loss_token_mean_aggregation_matches_full_batch():
     )
 
     assert torch.allclose((rank0_loss + rank1_loss) / 2, full_loss)
+
+
+def test_policy_loss_ignores_masked_nonfinite_old_log_probs():
+    log_probs = torch.nn.Parameter(torch.tensor([[0.0, 0.0]], dtype=torch.float32))
+    old_log_probs = torch.tensor([[0.0, float("nan")]], dtype=torch.float32)
+    advantages = torch.ones_like(log_probs)
+    mask = torch.tensor([[1.0, 0.0]], dtype=torch.float32)
+
+    loss, clip_ratio, ppo_kl, vllm_kl = PolicyLoss()(log_probs, old_log_probs, advantages, action_mask=mask)
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert torch.isfinite(clip_ratio)
+    assert torch.isfinite(ppo_kl)
+    assert vllm_kl is None
+    assert torch.isfinite(log_probs.grad).all()
+    assert torch.allclose(log_probs.grad, torch.tensor([[-1.0, 0.0]]))
+
+
+def test_policy_loss_treats_missing_action_mask_as_all_actions():
+    log_probs = torch.tensor([[-0.2, -0.4]], dtype=torch.float32)
+    old_log_probs = torch.tensor([[-0.3, -0.1]], dtype=torch.float32)
+    advantages = torch.tensor([[1.0, -0.5]], dtype=torch.float32)
+    action_mask = torch.ones_like(log_probs)
+
+    loss_fn = PolicyLoss(policy_loss_type="gspo")
+    none_mask_outputs = loss_fn(log_probs, old_log_probs, advantages, action_mask=None)
+    explicit_mask_outputs = loss_fn(log_probs, old_log_probs, advantages, action_mask=action_mask)
+
+    for none_mask_value, explicit_mask_value in zip(none_mask_outputs[:3], explicit_mask_outputs[:3], strict=True):
+        assert torch.allclose(none_mask_value, explicit_mask_value)
 
 
 def test_policy_kl_metric_uses_policy_ratio_when_vllm_correction_is_enabled():
