@@ -13,6 +13,22 @@ from openrlhf.utils.logging_utils import init_logger
 logger = init_logger(__name__)
 
 
+def _get_overlong_response_lengths(experience):
+    action_mask = getattr(experience, "action_mask", None)
+    if action_mask is not None:
+        response_lengths = action_mask.sum(dim=-1)
+    else:
+        response_lengths = getattr(experience, "response_length", None)
+
+    if response_lengths is None:
+        raise ValueError("Experience must have either 'action_mask' or 'response_length' populated.")
+
+    if response_lengths.dim() == 0:
+        response_lengths = response_lengths.unsqueeze(0)
+
+    return response_lengths
+
+
 def apply_overlong_penalty(
     experiences: List,
     max_new_tokens: int,
@@ -23,6 +39,8 @@ def apply_overlong_penalty(
     DAPO-style overlong penalty based on response length.
 
     Penalizes responses that exceed (max_new_tokens - overlong_buffer_len).
+    Uses action_mask when available so non-action tokens such as tool responses
+    do not count toward the trainable response length.
     Formula: penalty = -min(exceed_len, buffer_len) / buffer_len * penalty_factor
 
     Args:
@@ -42,7 +60,7 @@ def apply_overlong_penalty(
     total_penalized = 0
 
     for experience in experiences:
-        response_lengths = experience.response_length
+        response_lengths = _get_overlong_response_lengths(experience)
         batch_size = len(response_lengths)
 
         for j in range(batch_size):
