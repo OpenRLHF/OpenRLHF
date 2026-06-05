@@ -325,10 +325,11 @@ class DPOLoss(nn.Module):
         rejected_rewards = self.beta * (policy_rejected_logps - reference_rejected_logps).detach()
 
         return loss, chosen_rewards, rejected_rewards
-    
+
+
 class REBELLoss(nn.Module):
     """
-    REBEL-inspired offline reward-gap regression loss. 
+    REBEL-inspired offline reward-gap regression loss.
     Note this is not the full online REBEL algorithm; it just applies the rewards diff regression loss idea
     Details: https://arxiv.org/abs/2404.16767
     """
@@ -338,14 +339,14 @@ class REBELLoss(nn.Module):
         if eta <= 0:
             raise ValueError(f"REBEL eta must be > 0, got {eta}")
         self.eta = eta
-        
+
     def forward(
         self,
         policy_chosen_logps: torch.Tensor,
         policy_rejected_logps: torch.Tensor,
         old_chosen_logps: torch.Tensor,
         old_rejected_logps: torch.Tensor,
-        reward_margin: torch.Tensor
+        reward_margin: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         pi_logratios = policy_chosen_logps - policy_rejected_logps
         old_logratios = old_chosen_logps - old_rejected_logps
@@ -353,8 +354,8 @@ class REBELLoss(nn.Module):
 
         losses = (logits - self.eta * reward_margin) ** 2
         loss = losses.mean()
-        
-        #Logprob-shift diagnostics, returned in the same slots as DPO's implicit rewards for logging 
+
+        # Logprob-shift diagnostics, returned in the same slots as DPO's implicit rewards for logging
         chosen_rewards = (policy_chosen_logps - old_chosen_logps).detach()
         rejected_rewards = (policy_rejected_logps - old_rejected_logps).detach()
 

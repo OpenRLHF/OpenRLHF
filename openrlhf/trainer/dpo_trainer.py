@@ -62,7 +62,7 @@ class DPOTrainer(ABC):
 
         self.beta = beta
         self.rebel_enable = getattr(self.args.model, "rebel_enable", False)
-        
+
         if self.rebel_enable:
             self.loss_fn = REBELLoss(self.args.model.eta)
         else:

@@ -245,17 +245,21 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model.nll_loss_coef", type=float, default=0, help="Regularization with NLL loss, see LLama 3.1 tech report."
     )
-    
+
     # REBEL-inspired offline reward-gap loss (https://arxiv.org/abs/2404.16767)
     parser.add_argument(
-        "--model.rebel_enable", action="store_true", default=False,
+        "--model.rebel_enable",
+        action="store_true",
+        default=False,
         help=(
             "Use REBEL-inspired reward-gap regression loss instead of DPO/IPO. "
             "Requires a `margin` column containing the reward gap r(chosen)-r(rejected)."
         ),
     )
     parser.add_argument(
-        "--model.eta", type=float, default=-1.0,
+        "--model.eta",
+        type=float,
+        default=-1.0,
         help="REBEL regression scale (only used with --model.rebel_enable). Must be > 0.",
     )
 
@@ -379,7 +383,7 @@ if __name__ == "__main__":
 
         # Patch hub to download models from modelscope to speed up.
         patch_hub()
-        
+
     if args.model.rebel_enable:
         assert args.model.eta > 0, "REBEL requires --model.eta > 0."
         assert not args.model.ipo_enable, "--model.rebel_enable and --model.ipo_enable cannot both be enabled."

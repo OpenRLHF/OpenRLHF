@@ -22,9 +22,7 @@ def _load_loss_module():
     pkg.__path__ = [str(_MODELS_DIR)]
     sys.modules[_TEST_PACKAGE] = pkg
     for name in ("utils", "loss"):
-        spec = importlib.util.spec_from_file_location(
-            f"{_TEST_PACKAGE}.{name}", _MODELS_DIR / f"{name}.py"
-        )
+        spec = importlib.util.spec_from_file_location(f"{_TEST_PACKAGE}.{name}", _MODELS_DIR / f"{name}.py")
         module = importlib.util.module_from_spec(spec)
         sys.modules[f"{_TEST_PACKAGE}.{name}"] = module
         spec.loader.exec_module(module)
@@ -58,7 +56,8 @@ def test_invalid_eta_raises():
         REBELLoss(0.0)
     with pytest.raises(ValueError, match="eta must be > 0"):
         REBELLoss(-1.0)
-    
+
+
 def test_zero_loss_at_target():
     """When logits == eta * reward_margin exactly, the loss is ~0.
 
@@ -69,11 +68,12 @@ def test_zero_loss_at_target():
     loss_fn = REBELLoss(eta)
     pi_c, pi_r, old_c, old_r = _make_logps([3.0, 3.0], [0.0, 0.0], [1.0, 1.0], [0.0, 0.0])
     logits = _logits(pi_c, pi_r, old_c, old_r)
-    reward_margin = logits / eta 
+    reward_margin = logits / eta
 
     loss, _, _ = loss_fn(pi_c, pi_r, old_c, old_r, reward_margin)
     assert torch.isclose(loss, torch.tensor(0.0), atol=1e-6), loss
-    
+
+
 def test_positive_loss_off_target():
     """When logits != eta * reward_margin, loss equals the squared residual."""
     eta = 1.0
@@ -82,7 +82,8 @@ def test_positive_loss_off_target():
     reward_margin = torch.tensor([1.0], dtype=torch.float32)
     loss, _, _ = loss_fn(pi_c, pi_r, old_c, old_r, reward_margin)
     assert torch.isclose(loss, torch.tensor(1.0), atol=1e-6), loss
-    
+
+
 def test_returned_rewards_difference_equals_logits():
     """(chosen_reward - rejected_reward) == logits exactly."""
     eta = 7.5
@@ -95,6 +96,7 @@ def test_returned_rewards_difference_equals_logits():
     logits = _logits(pi_c, pi_r, old_c, old_r)
     assert torch.allclose(pred_gap, logits, atol=1e-6), (pred_gap, logits)
 
+
 def test_acc_reduces_to_sign_of_logits():
     """chosen_reward > rejected_reward iff logits > 0, independent of eta."""
     for eta in (0.5, 3.0, 15.0):
@@ -104,6 +106,7 @@ def test_acc_reduces_to_sign_of_logits():
         _, chosen_reward, rejected_reward = loss_fn(pi_c, pi_r, old_c, old_r, reward_margin)
         logits = _logits(pi_c, pi_r, old_c, old_r)
         assert torch.equal(chosen_reward > rejected_reward, logits > 0)
+
 
 def test_gradient_step_moves_logits_toward_target():
     """One SGD step moves logits toward eta * reward_margin."""

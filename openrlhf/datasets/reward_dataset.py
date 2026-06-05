@@ -99,10 +99,10 @@ class RewardDataset(Dataset):
         self.rejects = processed_dataset["reject"]
         self.extras = processed_dataset["extra"]
         self.margins = processed_dataset["margin"]
-        
+
         _model_args = getattr(self.strategy.args, "model", None)
         self.rebel_enable = getattr(_model_args, "rebel_enable", False)
-        
+
         if self.rebel_enable:
             if torch.count_nonzero(torch.tensor(self.margins)) == 0:
                 raise ValueError("REBELLoss: All reward margins are zero across the dataset")
@@ -146,7 +146,13 @@ class RewardDataset(Dataset):
         return length
 
     def __getitem__(self, idx):
-        prompt, chosen, reject, extra, margin = self.prompts[idx], self.chosens[idx], self.rejects[idx], self.extras[idx], self.margins[idx]
+        prompt, chosen, reject, extra, margin = (
+            self.prompts[idx],
+            self.chosens[idx],
+            self.rejects[idx],
+            self.extras[idx],
+            self.margins[idx],
+        )
 
         chosen = (prompt + chosen).rstrip("\n")
         if not chosen.endswith(self.tokenizer.eos_token):
@@ -186,7 +192,7 @@ class RewardDataset(Dataset):
                 reject_token["attention_mask"],
                 extra,
                 margin,
-        )
+            )
         return (
             chosen_token["input_ids"],
             chosen_token["attention_mask"],
@@ -202,7 +208,7 @@ class RewardDataset(Dataset):
         rejects_masks = []
         extras = []
         margins = []
-        
+
         for item in item_list:
             if self.is_dpo and self.rebel_enable:
                 chosen_id, chosen_mask, reject_id, rejects_mask, extra, margin = item
