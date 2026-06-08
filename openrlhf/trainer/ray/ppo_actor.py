@@ -23,7 +23,7 @@ from openrlhf.utils.deepspeed.deepspeed_utils import (
 )
 from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.logging_utils import init_logger
-from openrlhf.utils.loss_utils import get_loss_batch_info
+from openrlhf.utils.loss_utils import get_loss_batch_info, iter_grad_accum_global_norm
 from openrlhf.utils.vlm_utils import merge_mm_train_inputs
 
 from ..ppo_utils import NaiveReplayBuffer
@@ -180,10 +180,19 @@ class ActorPPOTrainer(ABC):
                 desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
-            for step, experience in enumerate(pbar):
+            # Pair each experience with its loss normalization. Dynamic batching computes it
+            # from the replay buffer inside training_step (loss_batch_info=None); otherwise we
+            # normalize by the optimizer-step window's global action-token count.
+            if self.args.train.dynamic_batch_enable:
+                micro_batches = ((exp, None) for exp in pbar)
+            else:
+                micro_batches = iter_grad_accum_global_norm(
+                    pbar, self.strategy, self.strategy.accumulated_gradient, lambda e: e.action_mask
+                )
+            for step, (experience, loss_batch_info) in enumerate(micro_batches):
 
                 experience.to_device(device)
-                status = self.training_step(experience, kl_ctl, step)
+                status = self.training_step(experience, kl_ctl, step, loss_batch_info)
 
                 metrics = status["metrics"]
                 weights = status["weights"]
@@ -249,7 +258,9 @@ class ActorPPOTrainer(ABC):
                     status_mean[k] = sum(s.get(k, 0) * s["_num_samples"] for s in status_list) / total_samples
         return status_mean
 
-    def training_step(self, experience: Experience, kl_ctl: float, step: int) -> Dict[str, float]:
+    def training_step(
+        self, experience: Experience, kl_ctl: float, step: int, loss_batch_info: Optional[Dict] = None
+    ) -> Dict[str, float]:
         self.actor.train()
 
         sequences = experience.sequences
@@ -259,13 +270,16 @@ class ActorPPOTrainer(ABC):
         old_action_log_probs = experience.action_log_probs
         advantages = experience.advantages
         base_action_log_probs = experience.base_action_log_probs
-        loss_batch_info = get_loss_batch_info(
-            self.strategy,
-            action_mask,
-            replay_buffer=self.replay_buffer,
-            step=step,
-            dynamic_batch=self.args.train.dynamic_batch_enable,
-        )
+        # loss_batch_info is precomputed per optimizer-step window on the non-dynamic path
+        # (global token-mean over the step); the dynamic path computes it from the replay buffer.
+        if loss_batch_info is None:
+            loss_batch_info = get_loss_batch_info(
+                self.strategy,
+                action_mask,
+                replay_buffer=self.replay_buffer,
+                step=step,
+                dynamic_batch=self.args.train.dynamic_batch_enable,
+            )
 
         # VLM: merge pre-processed multimodal inputs for training forward
         mm_inputs = {}

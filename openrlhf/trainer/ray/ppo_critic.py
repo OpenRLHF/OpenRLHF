@@ -17,7 +17,7 @@ from openrlhf.utils.deepspeed.deepspeed_utils import (
     offload_deepspeed_states,
     reload_deepspeed_states,
 )
-from openrlhf.utils.loss_utils import get_loss_batch_info
+from openrlhf.utils.loss_utils import get_loss_batch_info, iter_grad_accum_global_norm
 
 from ..ppo_utils import NaiveReplayBuffer
 from .launcher import BaseModelActor
@@ -90,9 +90,18 @@ class CriticPPOTrainer(ABC):
                 desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
-            for step, experience in enumerate(pbar):
+            # Pair each experience with its loss normalization. Dynamic batching computes it
+            # from the replay buffer inside training_step (loss_batch_info=None); otherwise we
+            # normalize by the optimizer-step window's global token count.
+            if self.args.train.dynamic_batch_enable:
+                micro_batches = ((exp, None) for exp in pbar)
+            else:
+                micro_batches = iter_grad_accum_global_norm(
+                    pbar, self.strategy, self.strategy.accumulated_gradient, lambda e: e.action_mask
+                )
+            for step, (experience, loss_batch_info) in enumerate(micro_batches):
                 experience.to_device(device)
-                status = self.training_step(experience, step)
+                status = self.training_step(experience, step, loss_batch_info)
 
                 # for DP
                 status = self.strategy.all_reduce(status)
@@ -109,7 +118,9 @@ class CriticPPOTrainer(ABC):
                 status_mean[k] /= len(status_list)
         return status_mean
 
-    def training_step(self, experience: Experience, step: int) -> Dict[str, float]:
+    def training_step(
+        self, experience: Experience, step: int, loss_batch_info: Optional[Dict] = None
+    ) -> Dict[str, float]:
         self.critic.train()
 
         sequences = experience.sequences
@@ -118,13 +129,14 @@ class CriticPPOTrainer(ABC):
         action_mask = experience.action_mask
         packed_seq_lens = None
         attention_mask = experience.attention_mask
-        loss_batch_info = get_loss_batch_info(
-            self.strategy,
-            action_mask,
-            replay_buffer=self.replay_buffer,
-            step=step,
-            dynamic_batch=self.args.train.dynamic_batch_enable,
-        )
+        if loss_batch_info is None:
+            loss_batch_info = get_loss_batch_info(
+                self.strategy,
+                action_mask,
+                replay_buffer=self.replay_buffer,
+                step=step,
+                dynamic_batch=self.args.train.dynamic_batch_enable,
+            )
 
         # critic loss
         values, output = self.critic(

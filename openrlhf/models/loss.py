@@ -16,7 +16,16 @@ def aggregate_loss(
     batch_num_tokens: Optional[float] = None,
     global_batch_size: Optional[float] = None,
 ) -> torch.Tensor:
-    """Aggregate token losses using verl-compatible normalization."""
+    """Aggregate a per-token loss matrix into a scalar using one of two reduction modes:
+
+    - ``token_level_loss=True``  -> per-token: masked-sum / global token count.
+    - ``token_level_loss=False`` -> per-sample: sum of per-sequence token-means / global
+      sample count.
+
+    ``batch_num_tokens`` (token mode) and ``global_batch_size`` (sample mode) carry the
+    *global* batch totals so the loss is invariant to data-parallel sharding; ``dp_size``
+    compensates for the gradient averaging that DeepSpeed/DDP applies across DP ranks.
+    """
     if token_level_loss:
         if batch_num_tokens is None:
             return masked_mean(loss, loss_mask, dim=None)
@@ -24,7 +33,7 @@ def aggregate_loss(
 
     token_counts = loss_mask.sum(dim=-1)
     seq_loss = (loss * loss_mask).sum(dim=-1) / (token_counts + 1e-8)
-    seq_mask = (token_counts > 0).float()
+    seq_mask = (token_counts > 0).float()  # exclude fully masked sequences
     if global_batch_size is None:
         return masked_mean(seq_loss, seq_mask, dim=None)
     return (seq_loss * seq_mask).sum() / global_batch_size * dp_size
@@ -130,7 +139,7 @@ class PolicyLoss(nn.Module):
         self.vllm_is_truncated_threshold = vllm_is_truncated_threshold
         self.vllm_is_correction_type = vllm_is_correction_type
 
-        # GSPO requires sequence-level loss
+        # GSPO requires sequence-level loss (per-sample mean)
         if policy_loss_type == "gspo":
             self.token_level_loss = False
 

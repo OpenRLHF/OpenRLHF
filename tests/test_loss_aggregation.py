@@ -41,6 +41,7 @@ _loss_utils_module = _load_loss_utils_module()
 PolicyLoss = _loss_module.PolicyLoss
 aggregate_loss = _loss_module.aggregate_loss
 get_loss_batch_info = _loss_utils_module.get_loss_batch_info
+iter_grad_accum_global_norm = _loss_utils_module.iter_grad_accum_global_norm
 
 
 def test_token_mean_aggregation_matches_verl_dp_average():
@@ -145,6 +146,51 @@ def test_policy_kl_metric_uses_policy_ratio_when_vllm_correction_is_enabled():
 
     assert torch.allclose(ppo_kl, (old_log_probs - log_probs).mean())
     assert torch.allclose(vllm_kl, (rollout_log_probs - old_log_probs).mean())
+
+
+def test_grad_accum_global_norm_matches_global_token_mean_over_window():
+    # Two micro-batches in one optimizer-step window (gas=2) with UNEVEN token counts.
+    mb0 = torch.tensor([[1.0, 2.0, 0.0]])  # 2 tokens
+    mask0 = torch.tensor([[1.0, 1.0, 0.0]])
+    mb1 = torch.tensor([[3.0, 4.0, 5.0], [6.0, 7.0, 0.0]])  # 5 tokens
+    mask1 = torch.tensor([[1.0, 1.0, 1.0], [1.0, 1.0, 0.0]])
+    gas = 2
+
+    # Reference: a single per-token mean over the whole optimizer step (global token count).
+    n_global = mask0.sum() + mask1.sum()  # 7
+    expected = ((mb0 * mask0).sum() + (mb1 * mask1).sum()) / n_global
+
+    # Emulate the grad-accum path: each micro-batch is normalized by the SAME window-global
+    # count (folded by gas via the helper), and DeepSpeed scales each backward loss by 1/gas;
+    # the accumulated gradient is proportional to the sum of the scaled losses.
+    items = [(mb0, mask0), (mb1, mask1)]
+    masks = {id(mb0): mask0, id(mb1): mask1}
+    emitted = list(
+        iter_grad_accum_global_norm(
+            items, strategy=object(), accumulated_gradient=gas, mask_fn=lambda it: masks[id(it[0])]
+        )
+    )
+    assert len(emitted) == 2
+    accumulated = 0.0
+    for (loss_mat, loss_mask), info in emitted:
+        # window-global count, folded by gas
+        assert torch.allclose(info["batch_num_tokens"], n_global / gas)
+        per_mb = aggregate_loss(loss_mat, loss_mask, **{k: v for k, v in info.items() if k != "global_batch_size"})
+        accumulated = accumulated + per_mb / gas  # DeepSpeed _scale_loss_by_gas
+    assert torch.allclose(accumulated, expected)
+
+
+def test_grad_accum_global_norm_differs_from_per_microbatch_when_uneven():
+    # Sanity: the OLD per-micro-batch normalization (mean of per-mb token-means) does NOT
+    # equal the global token-mean when token counts are uneven -> confirms the fix matters.
+    mb0 = torch.tensor([[1.0, 2.0, 0.0]])
+    mask0 = torch.tensor([[1.0, 1.0, 0.0]])
+    mb1 = torch.tensor([[3.0, 4.0, 5.0], [6.0, 7.0, 0.0]])
+    mask1 = torch.tensor([[1.0, 1.0, 1.0], [1.0, 1.0, 0.0]])
+
+    global_mean = ((mb0 * mask0).sum() + (mb1 * mask1).sum()) / (mask0.sum() + mask1.sum())
+    per_mb = (aggregate_loss(mb0, mask0) + aggregate_loss(mb1, mask1)) / 2
+    assert not torch.allclose(per_mb, global_mean)
 
 
 def test_policy_kl_metric_is_not_clamped():
