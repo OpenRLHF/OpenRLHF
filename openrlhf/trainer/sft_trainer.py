@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 from openrlhf.models import SFTLoss
 from openrlhf.utils.distributed_sampler import DistributedSampler
-from openrlhf.utils.loss_utils import get_loss_batch_info
+from openrlhf.utils.loss_utils import iter_grad_accum_global_norm
 
 
 class SFTTrainer(ABC):
@@ -145,7 +145,16 @@ class SFTTrainer(ABC):
             # train
             self.model.train()
             device = next(self.model.parameters()).device
-            for inputs, attention_masks, loss_masks in self.train_dataloader:
+
+            # Normalize the loss by the global token count of the whole optimizer-step window
+            # (not per micro-batch). mask_fn extracts the shifted loss mask -- the same mask
+            # aggregate_loss reduces over -- from each (inputs, attention_masks, loss_masks) batch.
+            def sft_loss_mask(batch):
+                return batch[2].squeeze(1)[:, :-1]
+
+            for (inputs, attention_masks, loss_masks), loss_batch_info in iter_grad_accum_global_norm(
+                self.train_dataloader, self.strategy, self.strategy.accumulated_gradient, sft_loss_mask
+            ):
                 inputs = inputs.to(device).squeeze(1)
                 attention_mask = attention_masks.to(device).squeeze(1)
                 loss_mask = loss_masks.to(device).squeeze(1)
@@ -166,7 +175,7 @@ class SFTTrainer(ABC):
                 gpt_loss = self.loss_fn(
                     per_token_log_probs,
                     shifted_loss_mask,
-                    **get_loss_batch_info(self.strategy, shifted_loss_mask),
+                    **loss_batch_info,
                 )
                 loss = gpt_loss + aux_loss * self.args.model.aux_loss_coef
                 self.strategy.backward(loss, self.model, self.optimizer)
