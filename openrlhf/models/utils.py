@@ -154,10 +154,12 @@ def masked_mean(tensor: torch.Tensor, mask: Optional[torch.Tensor], dim: int = N
 
 
 def masked_normalize(tensor: torch.Tensor, mask: torch.Tensor, dim: int = 1, eps: float = 1e-8) -> torch.Tensor:
-    tensor = tensor * mask
-    mean = masked_mean(tensor, mask, dim=dim)
-    mean_centered = tensor - mean
-    var = masked_mean(mean_centered**2, mask, dim=dim)
+    # keepdim=True so the per-row mean/var broadcast back over `dim` correctly; masked_mean
+    # reduces `dim` without keepdim, so using it here would broadcast along the wrong axis.
+    mask_sum = mask.sum(dim=dim, keepdim=True).clamp(min=1)
+    mean = (tensor * mask).sum(dim=dim, keepdim=True) / mask_sum
+    mean_centered = (tensor - mean) * mask
+    var = (mean_centered**2).sum(dim=dim, keepdim=True) / mask_sum
     return mean_centered * var.clamp(min=eps).rsqrt()
 
 
