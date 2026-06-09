@@ -605,7 +605,11 @@ if __name__ == "__main__":
         else:
             args.critic.model_name_or_path = args.actor.model_name_or_path
 
-    if args.algo.advantage.estimator in ["rloo", "reinforce_baseline", "group_norm"]:
+    # These estimators compute a per-prompt-group baseline (mean / std / leave-one-out),
+    # so with n_samples_per_prompt == 1 every advantage collapses to 0 and training is a
+    # silent no-op. dr_grpo subtracts the group mean too (see experience_maker), so it
+    # belongs here as well.
+    if args.algo.advantage.estimator in ["rloo", "reinforce_baseline", "group_norm", "dr_grpo"]:
         assert (
             args.rollout.n_samples_per_prompt > 1
         ), f"{args.algo.advantage.estimator} requires n_samples_per_prompt > 1"
