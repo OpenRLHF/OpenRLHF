@@ -268,7 +268,12 @@ class Actor(nn.Module):
 
         if return_entropy:
             assert return_output
-            entropy = compute_entropy(output["logits"])
+            # Measure entropy on the temperature-scaled distribution that is actually
+            # sampled/optimized (softmax(logits / T)), matching log_probs_from_logits below;
+            # otherwise the entropy bonus regularizes the wrong distribution when T != 1.
+            # compute_entropy scales internally (out-of-place) so output["logits"] is untouched
+            # here and later div_'d in place by log_probs_from_logits.
+            entropy = compute_entropy(output["logits"], self.temperature)
             if self.packing_samples:
                 entropy = gather_and_pad_tensor(entropy, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
             setattr(output, "entropy", entropy[:, :-1])

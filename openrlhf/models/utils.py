@@ -162,7 +162,12 @@ def masked_normalize(tensor: torch.Tensor, mask: torch.Tensor, dim: int = 1, eps
 
 
 @torch.compile
-def compute_entropy(logits: torch.Tensor):
+def compute_entropy(logits: torch.Tensor, temperature: float = 1.0):
+    # Entropy of the temperature-scaled policy softmax(logits / T). The division is done here
+    # (fused by torch.compile, no extra full-logits copy) rather than scaling the caller's
+    # logits, so it stays out-of-place and memory-light.
+    if temperature != 1.0:
+        logits = logits / temperature
     pd = torch.nn.functional.softmax(logits, dim=-1)
     entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)
     return entropy
