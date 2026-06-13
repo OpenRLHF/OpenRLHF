@@ -674,9 +674,11 @@ if __name__ == "__main__":
         assert args.train.async_enable, "--train.partial_rollout_enable requires --train.async_enable."
 
     if args.eval.dataset:
-        assert (
-            args.reward.remote_url or args.train.agent_func_path
-        ), "`--eval.dataset` requires `--reward.remote_url` or `--train.agent_func_path` (#1242)."
+        assert args.reward.remote_url or args.train.agent_func_path, (
+            "`--eval_dataset` requires either `--remote_rm_url` "
+            "(for remote reward models) or `--agent_func_path` "
+            "(for MultiTurnAgentExecutor workflows)."
+        )
 
     if args.algo.kl.use_loss:
         if args.algo.kl.estimator not in ["k2", "k3"]:
