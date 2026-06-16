@@ -104,7 +104,7 @@ class RewardDataset(Dataset):
         self.rebel_enable = getattr(_model_args, "rebel_enable", False)
 
         if self.rebel_enable:
-            if torch.count_nonzero(torch.tensor(self.margins)) == 0:
+            if not any(float(margin) != 0.0 for margin in self.margins):
                 raise ValueError("REBELLoss: All reward margins are zero across the dataset")
 
     def process_data(self, data):
@@ -230,5 +230,5 @@ class RewardDataset(Dataset):
         reject_ids = zero_pad_sequences(reject_ids, side=padding_side, value=self.tokenizer.pad_token_id)
         rejects_masks = zero_pad_sequences(rejects_masks, side=padding_side)
         if self.is_dpo and self.rebel_enable:
-            return chosen_ids, chosen_masks, reject_ids, rejects_masks, extras, torch.tensor(margins)
+            return chosen_ids, chosen_masks, reject_ids, rejects_masks, extras, torch.tensor(margins, dtype=torch.float32)
         return chosen_ids, chosen_masks, reject_ids, rejects_masks, extras

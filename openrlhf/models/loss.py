@@ -352,6 +352,7 @@ class REBELLoss(nn.Module):
         old_logratios = old_chosen_logps - old_rejected_logps
         logits = pi_logratios - old_logratios
 
+        reward_margin = reward_margin.to(device=logits.device, dtype=logits.dtype).view_as(logits)
         losses = (logits - self.eta * reward_margin) ** 2
         loss = losses.mean()
 
