@@ -211,7 +211,9 @@ class DPOTrainer(ABC):
                     logs_dict["nll_loss"] = nll_loss.item()
                 if self.rebel_enable:
                     pred_gap = chosen_reward - reject_reward
-                    logs_dict["rebel_residual_mse"] = (pred_gap - self.args.model.eta * margin.view_as(pred_gap)).pow(2).mean().item()
+                    logs_dict["rebel_residual_mse"] = (
+                        (pred_gap - self.args.model.eta * margin.view_as(pred_gap)).pow(2).mean().item()
+                    )
                 # step bar
                 logs_dict = self.strategy.all_reduce(logs_dict)
                 step_bar.set_postfix(logs_dict)
@@ -311,7 +313,9 @@ class DPOTrainer(ABC):
                 loss_sum += loss.item()
                 if self.rebel_enable:
                     pred_gap = chosen_reward - reject_reward
-                    rebel_residual_sum += (pred_gap - self.args.model.eta * margin.view_as(pred_gap)).pow(2).mean().item()
+                    rebel_residual_sum += (
+                        (pred_gap - self.args.model.eta * margin.view_as(pred_gap)).pow(2).mean().item()
+                    )
                 times += 1
                 step_bar.update()
 
