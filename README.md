@@ -494,7 +494,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 # Advanced Options:
 # --algo.kl.init_coef 0                                    # No reference model
-# --reward.remote_url http://host:5000/get_reward         # HTTP reward model
+# --reward.remote_url http://host:5000/get_reward         # HTTP reward model; normalize on the server if needed
 # --rollout.n_samples_per_prompt 4                            # Multiple samples per prompt
 # --rollout.vllm_generate_batch_size 2048                     # Oversample at generation (> rollout_batch_size); requires --train.async_enable
 # --algo.advantage.is_correction_enable                         # vLLM importance sampling correction for off-policy rollouts
@@ -578,6 +578,15 @@ ray job submit --address="http://127.0.0.1:8265" \
 ```
 
 **Key Parameter**: `--data.label_key answer` passes the "answer" field from your dataset to `reward_func` as `labels`.
+
+> [!NOTE]
+> `--reward.normalize_enable` normalizes local reward-model and critic
+> value-head outputs. It does not normalize rewards returned by custom
+> `reward_func`, `agent_func`, or HTTP reward APIs in the PPO client. Return
+> custom training rewards on the scale you want PPO to use, and keep `scores`
+> on the scale you want for dynamic filtering. If you serve a reward model with
+> `openrlhf.cli.serve_rm`, pass `--reward.normalize_enable` to the server
+> command to normalize that server's outputs.
 
 > [!TIP]
 > **Use Cases**: Code generation (execute tests), Math (verify solutions), Formatting (check structure), Multi-objective (combine multiple signals)
