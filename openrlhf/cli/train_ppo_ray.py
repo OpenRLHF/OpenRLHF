@@ -63,23 +63,45 @@ def train(args):
                 f"and {args.vllm.num_engines * args.vllm.tensor_parallel_size}"
             )
 
-        vllm_engines = create_vllm_engines(
-            args.vllm.num_engines,
-            args.vllm.tensor_parallel_size,
-            args.actor.model_name_or_path,
-            args.train.seed,
-            args.train.full_determinism_enable,
-            args.vllm.enable_prefix_caching,
-            args.vllm.enforce_eager,
-            max_len,
-            pg if args.train.colocate_all and not args.train.async_enable else None,
-            args.vllm.gpu_memory_utilization,
-            args.vllm.enable_sleep,
-            "processed_logprobs" if args.algo.advantage.is_correction_enable else None,
-            agent_func_path=args.train.agent_func_path,
-            remote_rm_url=args.reward.remote_url,
-            max_images_per_prompt=getattr(args.data, "max_images_per_prompt", 0),
-        )
+        rollout_backend = getattr(args.vllm, "rollout_backend", "vllm")
+        if rollout_backend == "tokenspeed":
+            from openrlhf.trainer.ray.tokenspeed_engine import create_tokenspeed_engines
+
+            vllm_engines = create_tokenspeed_engines(
+                args.vllm.num_engines,
+                args.vllm.tensor_parallel_size,
+                args.actor.model_name_or_path,
+                args.train.seed,
+                args.train.full_determinism_enable,
+                args.vllm.enable_prefix_caching,
+                args.vllm.enforce_eager,
+                max_len,
+                pg if args.train.colocate_all and not args.train.async_enable else None,
+                args.vllm.gpu_memory_utilization,
+                args.vllm.enable_sleep,
+                "processed_logprobs" if args.algo.advantage.is_correction_enable else None,
+                agent_func_path=args.train.agent_func_path,
+                remote_rm_url=args.reward.remote_url,
+                max_images_per_prompt=getattr(args.data, "max_images_per_prompt", 0),
+            )
+        else:
+            vllm_engines = create_vllm_engines(
+                args.vllm.num_engines,
+                args.vllm.tensor_parallel_size,
+                args.actor.model_name_or_path,
+                args.train.seed,
+                args.train.full_determinism_enable,
+                args.vllm.enable_prefix_caching,
+                args.vllm.enforce_eager,
+                max_len,
+                pg if args.train.colocate_all and not args.train.async_enable else None,
+                args.vllm.gpu_memory_utilization,
+                args.vllm.enable_sleep,
+                "processed_logprobs" if args.algo.advantage.is_correction_enable else None,
+                agent_func_path=args.train.agent_func_path,
+                remote_rm_url=args.reward.remote_url,
+                max_images_per_prompt=getattr(args.data, "max_images_per_prompt", 0),
+            )
 
     actor_model = RayActorGroup(
         args.actor.num_nodes,
@@ -246,6 +268,13 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="Enable sleep mode for vLLM when using --colocate_all_models",
+    )
+    parser.add_argument(
+        "--vllm.rollout_backend",
+        type=str,
+        default="vllm",
+        choices=["vllm", "tokenspeed"],
+        help="Rollout engine backend: vllm (default) or tokenspeed",
     )
     parser.add_argument(
         "--vllm.gpu_memory_utilization",
