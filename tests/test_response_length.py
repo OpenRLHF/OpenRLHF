@@ -31,10 +31,10 @@ def test_multiturn_sum_excludes_tool_tokens():
     """Multi-turn agentic: tool tokens sit between turns, span overcounts them."""
     # [prompt(3)] [turn1(4)] [tool(3)] [turn2(5)]
     action_mask = torch.zeros(15, dtype=torch.long)
-    action_mask[3:7] = 1    # turn 1: 4 tokens
+    action_mask[3:7] = 1  # turn 1: 4 tokens
     action_mask[10:15] = 1  # turn 2: 5 tokens
 
-    assert _compute_response_length_sum(action_mask) == 9   # correct: 4+5
+    assert _compute_response_length_sum(action_mask) == 9  # correct: 4+5
     assert _compute_response_length_span(action_mask) == 12  # wrong: 14-3+1=12, includes 3 tool tokens
 
 
