@@ -141,7 +141,12 @@ def get_optimizer_grouped_parameters(
             "weight_decay": 0.0,
         },
     ]
-    return optimizer_grouped_parameters
+    # Filter empty groups: DeepSpeed removes empty param groups from the
+    # optimizer in-place, but the LR scheduler captures base_lrs before that.
+    # Torch 2.10+ uses strict=True in LRScheduler._update_lr, so the length
+    # mismatch crashes on the first step. LoRA hits this because adapter params
+    # never match no_decay_name_list, leaving the zero-weight-decay group empty.
+    return [g for g in optimizer_grouped_parameters if g["params"]]
 
 
 def _z3_params_to_fetch(param_list):
