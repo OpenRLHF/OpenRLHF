@@ -3,7 +3,6 @@ from pathlib import Path
 
 import torch
 
-
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _VLM_UTILS_PATH = _REPO_ROOT / "openrlhf" / "utils" / "vlm_utils.py"
 
