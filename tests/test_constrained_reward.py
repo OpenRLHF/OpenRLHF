@@ -62,11 +62,13 @@ def test_calibrated_reward_supports_temperature():
     expected = torch.sigmoid(torch.tensor([1.0]))
     assert torch.allclose(result, expected)
 
+
 def test_calibrated_reward_preserves_tensor_device():
     rewards = torch.tensor([3.0])
     baseline_rewards = torch.tensor([1.0])
     result = calibrated_reward(rewards, baseline_rewards)
     assert result.device == rewards.device
+
 
 def test_calibrated_reward_rejects_shape_mismatch():
     with pytest.raises(ValueError, match="same shape"):

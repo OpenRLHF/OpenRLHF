@@ -172,6 +172,7 @@ def shape_constrained_rewards(
         extra_logs=extra_logs,
     )
 
+
 def _as_float_tensor(values: Sequence[float] | torch.Tensor) -> torch.Tensor:
     if isinstance(values, torch.Tensor):
         return values.detach().float()
