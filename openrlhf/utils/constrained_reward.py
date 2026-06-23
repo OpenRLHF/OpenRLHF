@@ -6,7 +6,6 @@ from typing import Optional, Sequence
 
 import torch
 
-
 _VALID_BINARY_JUDGMENTS = {-1, 0, 1}
 
 
@@ -182,9 +181,7 @@ def _as_float_tensor(values: Sequence[float] | torch.Tensor) -> torch.Tensor:
 
 def _check_same_length(left_name: str, left, right_name: str, right) -> None:
     if len(left) != len(right):
-        raise ValueError(
-            f"{left_name} and {right_name} must have the same length, got {len(left)} and {len(right)}"
-        )
+        raise ValueError(f"{left_name} and {right_name} must have the same length, got {len(left)} and {len(right)}")
 
 
 def _validate_binary_judgments(judgments: Sequence[int]) -> None:
