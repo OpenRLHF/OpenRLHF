@@ -20,7 +20,7 @@ except ModuleNotFoundError:
 
 class NonEmptyJudge(BaseBinaryJudge):
     def judge(self, prompts, completions, gold_completions=None):
-        return [int(bool(str(completion).strip())) for completion in completions]
+        return [int(bool(completion and str(completion).strip())) for completion in completions]
 
 
 class ContainsGoldJudge(BaseBinaryJudge):
@@ -30,8 +30,8 @@ class ContainsGoldJudge(BaseBinaryJudge):
 
         judgments = []
         for completion, gold in zip(completions, gold_completions):
-            completion = str(completion).strip().lower()
-            gold = str(gold).strip().lower()
+            completion = str(completion).strip().lower() if completion is not None else ""
+            gold = str(gold).strip().lower() if gold is not None else ""
             judgments.append(int(bool(gold) and gold in completion))
 
         return judgments
@@ -49,6 +49,21 @@ def _completion_from_query(query: str, prompt: str) -> str:
     if query.startswith(prompt):
         return query[len(prompt) :]
     return query
+
+
+def _format_reward_output(result):
+    if len(result.rewards) == 1:
+        return {
+            "rewards": result.rewards[0],
+            "scores": result.scores[0] if result.scores is not None else None,
+            "extra_logs": {key: values[0] for key, values in result.extra_logs.items()},
+        }
+
+    return {
+        "rewards": result.rewards,
+        "scores": result.scores,
+        "extra_logs": result.extra_logs,
+    }
 
 
 def reward_func(queries, prompts, labels):
@@ -79,8 +94,4 @@ def reward_func(queries, prompts, labels):
         calibrate=True,
     )
 
-    return {
-        "rewards": result.rewards[0],
-        "scores": result.scores[0] if result.scores is not None else None,
-        "extra_logs": {key: values[0] for key, values in result.extra_logs.items()},
-    }
+    return _format_reward_output(result)

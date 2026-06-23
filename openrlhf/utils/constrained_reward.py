@@ -92,7 +92,7 @@ def calibrated_reward(
         raise ValueError(f"temperature must be positive, got {temperature}")
 
     rewards_tensor = _as_float_tensor(rewards)
-    baseline_tensor = _as_float_tensor(baseline_rewards)
+    baseline_tensor = _as_float_tensor(baseline_rewards).to(rewards_tensor.device)
 
     if rewards_tensor.shape != baseline_tensor.shape:
         raise ValueError(
@@ -136,12 +136,12 @@ def shape_constrained_rewards(
         shaped = _as_float_tensor(rewards)
 
     extra_logs: dict[str, list[float | int]] = {
-        "raw_reward": _as_float_tensor(rewards).tolist(),
+        "raw_reward": _as_float_tensor(rewards).detach().cpu().tolist(),
     }
 
     if calibrate:
-        extra_logs["baseline_reward"] = _as_float_tensor(baseline_rewards).tolist()
-        extra_logs["calibrated_reward"] = shaped.tolist()
+        extra_logs["baseline_reward"] = _as_float_tensor(baseline_rewards).detach().cpu().tolist()
+        extra_logs["calibrated_reward"] = shaped.detach().cpu().tolist()
 
     scores = None
     if judge is not None:
@@ -152,7 +152,7 @@ def shape_constrained_rewards(
         if judge_error_penalty is None:
             judge_error_penalty = constraint_penalty
 
-        judgment_tensor = torch.tensor(judgments, dtype=torch.long)
+        judgment_tensor = torch.tensor(judgments, dtype=torch.long, device=shaped.device)
         violation_mask = judgment_tensor == 0
         error_mask = judgment_tensor == -1
 
@@ -167,15 +167,14 @@ def shape_constrained_rewards(
         ).tolist()
 
     return ConstrainedRewardResult(
-        rewards=[float(value) for value in shaped.tolist()],
+        rewards=[float(value) for value in shaped.detach().cpu().tolist()],
         scores=scores,
         extra_logs=extra_logs,
     )
 
-
 def _as_float_tensor(values: Sequence[float] | torch.Tensor) -> torch.Tensor:
     if isinstance(values, torch.Tensor):
-        return values.detach().float().cpu()
+        return values.detach().float()
     return torch.tensor(list(values), dtype=torch.float32)
 
 
