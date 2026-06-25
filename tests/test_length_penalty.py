@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+import openrlhf.trainer.ppo_utils.length_penalty as length_penalty
 from openrlhf.trainer.ppo_utils.length_penalty import apply_overlong_penalty
 
 
@@ -47,6 +48,21 @@ def test_overlong_penalty_falls_back_to_response_length_without_action_mask():
 
     assert num_penalized == 1
     assert torch.allclose(experience.rewards, torch.tensor([1.0 - 2.0 / 3.0]))
+
+
+def test_overlong_penalty_warns_once_when_falling_back_without_action_mask(monkeypatch):
+    length_penalty._warned_missing_action_mask = False
+    warnings = []
+    monkeypatch.setattr(length_penalty.logger, "warning", lambda msg, *a, **k: warnings.append(msg))
+
+    experiences = [
+        _experience(reward=1.0, response_length=7, action_mask=None),
+        _experience(reward=1.0, response_length=7, action_mask=None),
+    ]
+    apply_overlong_penalty(experiences, max_new_tokens=8, overlong_buffer_len=3)
+
+    assert len(warnings) == 1
+    assert "action_mask is not set" in warnings[0]
 
 
 def test_overlong_penalty_requires_length_information():
