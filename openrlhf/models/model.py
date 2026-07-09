@@ -153,7 +153,7 @@ def get_llm_for_sequence_regression(
         print("[MoE] set output_router_logits as True")
         model.config.output_router_logits = True
 
-    set_z3_leaf_modules(model)
+    set_z3_leaf_modules(model, detect_hybrid=False)
 
     # https://github.com/huggingface/transformers/issues/26877
     model.config.use_cache = False

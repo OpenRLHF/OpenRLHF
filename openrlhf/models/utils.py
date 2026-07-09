@@ -1,3 +1,4 @@
+import os
 from typing import Optional, Tuple, Union
 
 import deepspeed
@@ -6,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-def set_z3_leaf_modules(model: nn.Module) -> None:
+def set_z3_leaf_modules(model: nn.Module, detect_hybrid: bool = True) -> None:
     """Auto-detect and set DeepSpeed ZeRO3 leaf modules.
 
     ZeRO3 prefetches submodule parameters assuming a fixed module traversal order.
@@ -17,8 +18,22 @@ def set_z3_leaf_modules(model: nn.Module) -> None:
         child submodules per instance (self_attn vs linear_attn).
 
     Marking these as z3 leaves forces whole-module allgather instead of per-submodule
-    prefetch, fixing the issue at the cost of slightly higher peak memory.
+    prefetch, at the cost of slightly higher peak memory.
+
+    For hybrid architectures (detect_hybrid=True), the leaf marking works by
+    registering a backwards hook that triggers allgather before backward. This
+    interacts poorly with Qwen3.5's hybrid decoder layers: the hook steals
+    gradient computation for ~390/417 inner parameters, leaving them frozen at
+    their initial values. DeepSpeed's native per-instance prefetch handles the
+    hybrid layout correctly on its own, so hybrid detection is disabled by
+    default for actor/reward model training.
+
+    Set OPENRLHF_Z3_LEAF_HYBRID=1 to re-enable hybrid detection for
+    architectures that genuinely need it.
     """
+    if os.environ.get("OPENRLHF_Z3_LEAF_HYBRID", "").strip().lower() in ("1", "true", "yes", "on"):
+        detect_hybrid = True
+
     z3_leaf_classes = set()
     child_sigs: dict[type, frozenset[str]] = {}
 
@@ -29,15 +44,16 @@ def set_z3_leaf_modules(model: nn.Module) -> None:
             continue
 
         # Hybrid: same class, different child submodules across instances
-        cls = m.__class__
-        children = frozenset(name for name, _ in m.named_children())
-        if not children:
-            continue
-        if cls in child_sigs:
-            if child_sigs[cls] != children:
-                z3_leaf_classes.add(cls)
-        else:
-            child_sigs[cls] = children
+        if detect_hybrid:
+            cls = m.__class__
+            children = frozenset(name for name, _ in m.named_children())
+            if not children:
+                continue
+            if cls in child_sigs:
+                if child_sigs[cls] != children:
+                    z3_leaf_classes.add(cls)
+            else:
+                child_sigs[cls] = children
 
     if z3_leaf_classes:
         deepspeed.utils.set_z3_leaf_modules(model, list(z3_leaf_classes))

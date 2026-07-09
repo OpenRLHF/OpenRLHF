@@ -203,7 +203,7 @@ class Actor(nn.Module):
                 print("[MoE] set output_router_logits as True")
                 self.model.config.output_router_logits = True
 
-            set_z3_leaf_modules(self.model)
+            set_z3_leaf_modules(self.model, detect_hybrid=False)
 
             # https://github.com/huggingface/transformers/issues/26877
             # Use `model.generate(use_cache=True)` instead.`
