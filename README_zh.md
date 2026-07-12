@@ -86,21 +86,21 @@ OpenRLHF 是**首个**基于 Ray + vLLM 分布式架构构建的 RLHF 框架，�
 
 ### 核心基础设施组件
 
-**Ray - 分布式调度器和控制器**  
+**Ray - 分布式调度器和控制器**
 OpenRLHF 利用 [Ray](https://github.com/ray-project/ray) 实现高效的分布式调度。它将 Actor、Reward、Reference 和 Critic 模型分布到不同的 GPU 上，支持训练高达 **70B+ 参数**的模型。
 
 **混合引擎调度**：所有模型和 vLLM 引擎可以共享 GPU 资源，最大限度地减少空闲时间并提高 GPU 利用率。这允许在有限的硬件上运行完整的 RLHF 流程。
 
-**vLLM - 高性能推理引擎**  
+**vLLM - 高性能推理引擎**
 RLHF 训练中 **80% 的时间**花在样本生成上。通过 [vLLM](https://github.com/vllm-project/vllm) 与自动张量并行（AutoTP）和流水线并行（PP），OpenRLHF 提供高吞吐量、内存高效的生成。
 
-**DeepSpeed - 内存高效训练**  
+**DeepSpeed - 内存高效训练**
 基于 [DeepSpeed](https://github.com/deepspeedai/DeepSpeed) ZeRO-3、[deepcompile](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/deepcompile/README.md)、[AutoTP](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/huggingface-tp/README.md) 和 RingAttention。支持大模型训练而无需重量级框架，直接与 HuggingFace 模型配合使用。
 
-**Transformers - 模型接口**  
+**Transformers - 模型接口**
 与 HuggingFace Transformers 原生集成，可无缝加载模型、状态管理和微调预训练模型。
 
-**NCCL / CUDA IPC - 高速通信**  
+**NCCL / CUDA IPC - 高速通信**
 高效的 GPU 间通信，用于分布式训练和推理。
 
 ---
@@ -194,7 +194,7 @@ OpenRLHF 实现了 **PPO、REINFORCE++、REINFORCE++-baseline、GRPO、RLOO**，
 参考：[知乎文章](https://zhuanlan.zhihu.com/p/622134699) | [Notion 最佳实践](https://hijkzzz.notion.site/rlhf-implementation-tricks?v=158d9a33ecc98132bf9e000c39227361)
 
 ---
- 
+
 
 <a id="全面特性"></a>
 ## 📋 全面特性
@@ -535,12 +535,12 @@ import torch
 def reward_func(queries, prompts, labels):
     """
     计算生成响应的自定义奖励。
-    
+
     参数：
         queries: List[str] - 完整文本（提示 + 响应）
         prompts: List[str] - 仅原始提示
         labels: List[str] - 真实标签（来自 --label_key）
-    
+
     返回：
         包含以下内容的字典：
             - rewards: 用于优势计算的张量
@@ -548,11 +548,11 @@ def reward_func(queries, prompts, labels):
             - extra_logs: 用于 wandb 日志的字典
     """
     batch_size = len(queries)
-    
+
     # 示例：随机奖励（替换为您的逻辑）
     # 真实示例：代码执行、数学验证、格式检查
     reward = torch.randint(0, 2, (batch_size,)).float()
-    
+
     return {
         "rewards": reward,           # 用于 RL 优势计算
         "scores": reward,            # 用于动态过滤（--dynamic_filtering）
@@ -673,7 +673,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 > [!NOTE]
 > 对于完全自定义的 token 级执行，继承 `AgentExecutorBase` 并实现 `execute()`。此设计强制执行 **token-in-token-out 原则**以保持采样和训练一致。
 
-> [!WARNING] 
+> [!WARNING]
 > 异步训练可能会影响训练稳定性。仅在吞吐量至关重要且收敛已验证时使用。
 
 📚 **示例**：

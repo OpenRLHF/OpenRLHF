@@ -86,21 +86,21 @@ OpenRLHF is **the first RLHF framework** built on Ray + vLLM distributed archite
 
 ### Core Infrastructure Components
 
-**Ray - Distributed Scheduler and Controller**  
+**Ray - Distributed Scheduler and Controller**
 OpenRLHF leverages [Ray](https://github.com/ray-project/ray) for efficient distributed scheduling. It separates the Actor, Reward, Reference, and Critic models across different GPUs, enabling scalable training for models up to **70B+ parameters**.
 
 **Hybrid Engine Scheduling**: All models and vLLM engines can share GPU resources—minimizing idle time and maximizing GPU utilization. This allows running full RLHF pipelines on limited hardware.
 
-**vLLM - High-Performance Inference Engine**  
+**vLLM - High-Performance Inference Engine**
 RLHF training spends **80% of the time on sample generation**. Powered by [vLLM](https://github.com/vllm-project/vllm) with Auto Tensor Parallelism (AutoTP) and Pipeline Parallelism (PP), OpenRLHF delivers high-throughput, memory-efficient generation.
 
-**DeepSpeed - Memory-Efficient Training**  
+**DeepSpeed - Memory-Efficient Training**
 Built on [DeepSpeed](https://github.com/deepspeedai/DeepSpeed) ZeRO-3, [deepcompile](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/deepcompile/README.md), [AutoTP](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/huggingface-tp/README.md), and RingAttention. Enables large model training without heavyweight frameworks while working directly with HuggingFace models.
 
-**Transformers - Model Interface**  
+**Transformers - Model Interface**
 Native integration with HuggingFace Transformers for seamless model loading, state management, and fine-tuning of pretrained models.
 
-**NCCL / CUDA IPC - High-Speed Communication**  
+**NCCL / CUDA IPC - High-Speed Communication**
 Efficient inter-GPU communication for distributed training and inference.
 
 ---
@@ -173,7 +173,7 @@ The agent execution mode is **independent** of the RL algorithm you choose. You 
 <a id="state-of-the-art-rl-algorithms"></a>
 ## 🚀 State-of-the-Art RL Algorithms
 
-OpenRLHF implements **PPO, REINFORCE++, REINFORCE++-baseline, GRPO, RLOO** with advanced optimization tricks inspired by practical guides and community best practices. 
+OpenRLHF implements **PPO, REINFORCE++, REINFORCE++-baseline, GRPO, RLOO** with advanced optimization tricks inspired by practical guides and community best practices.
 
 **Key Design**: RL algorithms are **decoupled from agent execution modes**. All algorithms work seamlessly with both single-turn and multi-turn agent executors, running through the unified token-in-token-out pipeline for consistent behavior.
 
@@ -536,12 +536,12 @@ import torch
 def reward_func(queries, prompts, labels):
     """
     Compute custom rewards for generated responses.
-    
+
     Args:
         queries: List[str] - Full text (prompt + response)
         prompts: List[str] - Original prompts only
         labels: List[str] - Ground truth labels (from --label_key)
-    
+
     Returns:
         dict with:
             - rewards: Tensor for advantage calculation
@@ -549,7 +549,7 @@ def reward_func(queries, prompts, labels):
             - extra_logs: Dict for wandb logging
     """
     batch_size = len(queries)
-    
+
     # Example: Random rewards (replace with your logic)
     # Real examples: code execution, math verification, format checking
     reward = torch.randint(0, 2, (batch_size,)).float()
@@ -675,7 +675,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 > [!NOTE]
 > For fully custom token-level execution, inherit `AgentExecutorBase` and implement `execute()`. This design enforces the **token-in-token-out principle** to keep sampling and training consistent.
 
-> [!WARNING] 
+> [!WARNING]
 > Asynchronous training may affect training stability. Use it only when throughput is critical and convergence is validated.
 
 📚 **Examples**:
@@ -826,7 +826,7 @@ We would like to express our gratitude to the following projects and organizatio
 - [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
 - [Ray ↗](https://github.com/ray-project/ray)
 
-Our project would also like to thank [ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/ColossalChat) and [DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat). In the early stages of the project, we referred to their code design. 
+Our project would also like to thank [ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/ColossalChat) and [DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat). In the early stages of the project, we referred to their code design.
 Our project would like to thank [Netmind.AI](https://www.netmind.ai/) for the GPU support of developing ring attention.
 
 (2024/7) Our GitHub organization has changed from OpenLLMAI to OpenRLHF.

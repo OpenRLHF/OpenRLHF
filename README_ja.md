@@ -84,21 +84,21 @@ OpenRLHFは、Ray + vLLM分散アーキテクチャをベースに構築され�
 
 ### コアインフラストラクチャコンポーネント
 
-**Ray - 分散スケジューラとコントローラ**  
+**Ray - 分散スケジューラとコントローラ**
 OpenRLHFは[Ray](https://github.com/ray-project/ray)を活用して効率的な分散スケジューリングを実現します。Actor、Reward、Reference、Criticモデルを異なるGPUに分散させ、最大**70B+パラメータ**のモデルのスケーラブルな学習を可能にします。
 
 **ハイブリッドエンジンスケジューリング**：すべてのモデルとvLLMエンジンがGPUリソースを共有でき、アイドル時間を最小化し、GPU使用率を最大化します。これにより、限られたハードウェアでフルRLHFパイプラインを実行できます。
 
-**vLLM - 高性能推論エンジン**  
+**vLLM - 高性能推論エンジン**
 RLHF学習では**時間の80%**がサンプル生成に費やされます。自動テンソル並列化（AutoTP）とパイプライン並列化（PP）を備えた[vLLM](https://github.com/vllm-project/vllm)により、OpenRLHFは高スループットでメモリ効率的な生成を提供します。
 
-**DeepSpeed - メモリ効率的な学習**  
+**DeepSpeed - メモリ効率的な学習**
 [DeepSpeed](https://github.com/deepspeedai/DeepSpeed) ZeRO-3、[deepcompile](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/deepcompile/README.md)、[AutoTP](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/huggingface-tp/README.md)、RingAttentionをベースに構築されています。重量級フレームワークなしで大規模モデルの学習を可能にし、HuggingFaceモデルと直接連携します。
 
-**Transformers - モデルインターフェース**  
+**Transformers - モデルインターフェース**
 HuggingFace Transformersとのネイティブ統合により、シームレスなモデル読み込み、状態管理、事前学習済みモデルのファインチューニングを実現します。
 
-**NCCL / CUDA IPC - 高速通信**  
+**NCCL / CUDA IPC - 高速通信**
 分散学習と推論のための効率的なGPU間通信。
 
 ---
@@ -195,7 +195,7 @@ OpenRLHFは、実践ガイドとコミュニティのベストプラクティス
 
 ---
 
- 
+
 
 <a id="包括的な機能"></a>
 ## 📋 包括的な機能
