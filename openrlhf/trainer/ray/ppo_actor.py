@@ -16,6 +16,7 @@ from openrlhf.models import Actor, PolicyLoss, aggregate_loss
 from openrlhf.models.utils import compute_approx_kl, masked_mean
 from openrlhf.trainer.ppo_utils.experience import Experience
 from openrlhf.utils import get_tokenizer
+from openrlhf.utils.ckpt_utils import rotate_hf_checkpoints
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.deepspeed.deepspeed_utils import (
     offload_deepspeed_states,
@@ -673,6 +674,9 @@ class PolicyModelActor(BaseModelActor):
             )
         if self.save_hf_ckpt:
             save_path = os.path.join(args.ckpt.path, f"{tag}_hf")
+            if self.strategy.is_rank_0():
+                for removed_dir in rotate_hf_checkpoints(args.ckpt.path, tag, args.ckpt.max_num):
+                    self.strategy.print(f"Deleted HF checkpoint export {removed_dir}")
             self.strategy.save_model(
                 self.ema_model if args.train.enable_ema else self.actor,
                 self.tokenizer,

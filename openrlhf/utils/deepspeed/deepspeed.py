@@ -23,6 +23,7 @@ from transformers.trainer import get_scheduler
 
 from openrlhf.models import Actor
 from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
+from openrlhf.utils.ckpt_utils import HF_CKPT_SUFFIX
 from openrlhf.utils.distributed_sampler import DistributedSampler
 from openrlhf.utils.distributed_util import torch_dist_barrier_and_cuda_sync
 
@@ -711,10 +712,12 @@ class DeepspeedStrategy(ABC):
             # Best checkpoints are protected from eviction and excluded from max_num counting.
             max_size_bytes = max_mem * 1024**3
             while True:
+                # `*_hf` exports are rotated separately (rotate_hf_checkpoints); they must not
+                # consume the DeepSpeed checkpoints' max_num / max_mem budget.
                 all_subdirs = [
                     (os.path.join(save_dir, d), os.path.getmtime(os.path.join(save_dir, d)))
                     for d in os.listdir(save_dir)
-                    if os.path.isdir(os.path.join(save_dir, d))
+                    if os.path.isdir(os.path.join(save_dir, d)) and not d.endswith(HF_CKPT_SUFFIX)
                 ]
                 regular_subdirs = [
                     (path, mtime) for path, mtime in all_subdirs if not os.path.basename(path).startswith("best")
