@@ -13,7 +13,8 @@ def rotate_hf_checkpoints(ckpt_path: str, tag: str, max_num: int) -> List[str]:
     - regular exports are kept to at most ``max_num`` (counting the export about to
       be written as ``{tag}_hf``), evicting the oldest by mtime first;
     - ``best*_hf`` exports do not count toward ``max_num``; saving a new best evicts
-      the previous best exports instead.
+      the previous best exports instead;
+    - ``max_num=None`` or ``max_num <= 0`` disables the count-based rotation.
 
     Must be called from a single rank only. Returns the list of removed directories.
     """
@@ -33,7 +34,7 @@ def rotate_hf_checkpoints(ckpt_path: str, tag: str, max_num: int) -> List[str]:
     if is_best:
         candidates = [d for d in exports if d.startswith(BEST_CKPT_PREFIX)]
     else:
-        if max_num is None:
+        if max_num is None or max_num <= 0:
             return removed
         regular = [d for d in exports if not d.startswith(BEST_CKPT_PREFIX)]
         regular.sort(key=lambda d: os.path.getmtime(os.path.join(ckpt_path, d)))

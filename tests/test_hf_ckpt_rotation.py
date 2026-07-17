@@ -116,6 +116,19 @@ def test_no_limit_when_max_num_is_none(ckpt_path):
     assert len(_names(ckpt_path)) == 3
 
 
+def test_no_limit_when_max_num_is_zero_or_negative(ckpt_path):
+    base = time.time() - 1000
+    for i, step in enumerate((20, 40, 60)):
+        _make_export(ckpt_path, f"global_step{step}_hf", base + i)
+
+    removed_zero = ckpt_utils.rotate_hf_checkpoints(str(ckpt_path), "global_step80", max_num=0)
+    removed_negative = ckpt_utils.rotate_hf_checkpoints(str(ckpt_path), "global_step80", max_num=-1)
+
+    assert removed_zero == []
+    assert removed_negative == []
+    assert len(_names(ckpt_path)) == 3
+
+
 def test_missing_ckpt_path_is_noop(tmp_path):
     removed = ckpt_utils.rotate_hf_checkpoints(str(tmp_path / "does-not-exist"), "global_step20", max_num=3)
 
