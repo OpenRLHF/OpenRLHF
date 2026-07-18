@@ -21,11 +21,15 @@ def train(args):
     if not ray.is_initialized():
         # Use os.environ.get() to respect user-set values (e.g. NCCL_DEBUG=INFO via
         # ray job submit --runtime-env-json), falling back to sensible defaults.
+        # NCCL_DEBUG and CCL_LOG_LEVEL are separate env vars read by separate libraries
+        # (NCCL for CUDA, oneCCL for XCCL/XPU) - each is set unconditionally so the right
+        # one applies regardless of which accelerator a given Ray worker ends up on.
         ray.init(
             runtime_env={
                 "env_vars": {
                     "TOKENIZERS_PARALLELISM": os.environ.get("TOKENIZERS_PARALLELISM", "true"),
                     "NCCL_DEBUG": os.environ.get("NCCL_DEBUG", "WARN"),
+                    "CCL_LOG_LEVEL": os.environ.get("CCL_LOG_LEVEL", "warn"),
                     "RAY_ENABLE_ZERO_COPY_TORCH_TENSORS": os.environ.get("RAY_ENABLE_ZERO_COPY_TORCH_TENSORS", "1"),
                 }
             }
