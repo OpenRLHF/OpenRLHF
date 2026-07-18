@@ -3,6 +3,7 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
 import torch
 
 _TEST_PACKAGE = "_openrlhf_loss_test"
@@ -44,26 +45,57 @@ get_loss_batch_info = _loss_utils_module.get_loss_batch_info
 iter_grad_accum_global_norm = _loss_utils_module.iter_grad_accum_global_norm
 
 
-def test_token_mean_aggregation_matches_verl_dp_average():
-    loss = torch.tensor([[1.0, 2.0, 0.0], [3.0, 4.0, 5.0], [7.0, 0.0, 0.0]])
-    mask = torch.tensor([[1.0, 1.0, 0.0], [1.0, 1.0, 1.0], [1.0, 0.0, 0.0]])
+def _discover_devices() -> list[str]:
+    """CPU plus whichever accelerator torch.accelerator reports as available, by name -
+    no hardcoded vendor list, so this picks up CUDA, XPU, ROCm, or any future backend
+    torch.accelerator recognizes without this file needing to change."""
+    devices = ["cpu"]
+    if torch.accelerator.is_available():
+        acc = torch.accelerator.current_accelerator(check_available=True)
+        if acc is not None:
+            devices.append(acc.type)
+    return devices
+
+
+DEVICES = _discover_devices()
+
+
+def _synchronize(device: str):
+    if device != "cpu":
+        torch.accelerator.synchronize()
+
+
+def _assert_on_device(device: str, *tensors):
+    if device == "cpu":
+        return
+    for t in tensors:
+        assert str(t.device).startswith(device), f"expected {device}, got {t.device}"
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_token_mean_aggregation_matches_verl_dp_average(device):
+    loss = torch.tensor([[1.0, 2.0, 0.0], [3.0, 4.0, 5.0], [7.0, 0.0, 0.0]], device=device)
+    mask = torch.tensor([[1.0, 1.0, 0.0], [1.0, 1.0, 1.0], [1.0, 0.0, 0.0]], device=device)
 
     global_token_mean = aggregate_loss(loss, mask)
     batch_num_tokens = mask.sum()
 
     rank0 = aggregate_loss(loss[:2], mask[:2], dp_size=2, batch_num_tokens=batch_num_tokens)
     rank1 = aggregate_loss(loss[2:], mask[2:], dp_size=2, batch_num_tokens=batch_num_tokens)
+    _synchronize(device)
 
     # DeepSpeed/DDP averages gradients across DP ranks; verl compensates by multiplying by dp_size.
+    _assert_on_device(device, global_token_mean, rank0, rank1)
     assert torch.allclose((rank0 + rank1) / 2, global_token_mean)
 
 
-def test_seq_mean_token_mean_aggregation_matches_verl_dp_average():
-    loss = torch.tensor([[1.0, 3.0, 9.0], [2.0, 4.0, 0.0], [8.0, 0.0, 0.0]])
-    mask = torch.tensor([[1.0, 1.0, 0.0], [1.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
+@pytest.mark.parametrize("device", DEVICES)
+def test_seq_mean_token_mean_aggregation_matches_verl_dp_average(device):
+    loss = torch.tensor([[1.0, 3.0, 9.0], [2.0, 4.0, 0.0], [8.0, 0.0, 0.0]], device=device)
+    mask = torch.tensor([[1.0, 1.0, 0.0], [1.0, 1.0, 0.0], [1.0, 0.0, 0.0]], device=device)
 
     global_seq_mean = aggregate_loss(loss, mask, token_level_loss=False)
-    global_batch_size = torch.tensor(3.0)
+    global_batch_size = torch.tensor(3.0, device=device)
 
     rank0 = aggregate_loss(
         loss[:2],
@@ -79,26 +111,34 @@ def test_seq_mean_token_mean_aggregation_matches_verl_dp_average():
         dp_size=2,
         global_batch_size=global_batch_size,
     )
+    _synchronize(device)
 
+    _assert_on_device(device, global_seq_mean, rank0, rank1)
     assert torch.allclose((rank0 + rank1) / 2, global_seq_mean)
 
 
-def test_loss_batch_info_excludes_fully_masked_sequences():
-    loss = torch.tensor([[1.0, 3.0], [5.0, 7.0]])
-    mask = torch.tensor([[1.0, 1.0], [0.0, 0.0]])
+@pytest.mark.parametrize("device", DEVICES)
+def test_loss_batch_info_excludes_fully_masked_sequences(device):
+    loss = torch.tensor([[1.0, 3.0], [5.0, 7.0]], device=device)
+    mask = torch.tensor([[1.0, 1.0], [0.0, 0.0]], device=device)
 
     info = get_loss_batch_info(strategy=object(), loss_mask=mask)
     seq_loss = aggregate_loss(loss, mask, token_level_loss=False, **info)
+    _synchronize(device)
 
+    _assert_on_device(device, seq_loss)
     assert info["global_batch_size"].item() == 1.0
-    assert torch.allclose(seq_loss, torch.tensor(2.0))
+    assert torch.allclose(seq_loss, torch.tensor(2.0, device=device))
 
 
-def test_policy_loss_token_mean_aggregation_matches_full_batch():
-    log_probs = torch.tensor([[-0.20, -0.40, -0.10], [-0.70, -0.30, -0.20], [-0.60, -0.10, -0.50]])
-    old_log_probs = log_probs.detach() - torch.tensor([[0.03, -0.04, 0.01], [0.02, 0.05, -0.03], [0.04, 0.0, -0.02]])
-    advantages = torch.tensor([[1.0, -0.5, 0.0], [0.3, -1.2, 0.5], [1.5, 0.0, -0.7]])
-    mask = torch.tensor([[1.0, 1.0, 0.0], [1.0, 1.0, 1.0], [1.0, 0.0, 1.0]])
+@pytest.mark.parametrize("device", DEVICES)
+def test_policy_loss_token_mean_aggregation_matches_full_batch(device):
+    log_probs = torch.tensor([[-0.20, -0.40, -0.10], [-0.70, -0.30, -0.20], [-0.60, -0.10, -0.50]], device=device)
+    old_log_probs = log_probs.detach() - torch.tensor(
+        [[0.03, -0.04, 0.01], [0.02, 0.05, -0.03], [0.04, 0.0, -0.02]], device=device
+    )
+    advantages = torch.tensor([[1.0, -0.5, 0.0], [0.3, -1.2, 0.5], [1.5, 0.0, -0.7]], device=device)
+    mask = torch.tensor([[1.0, 1.0, 0.0], [1.0, 1.0, 1.0], [1.0, 0.0, 1.0]], device=device)
 
     loss_fn = PolicyLoss(clip_eps_low=0.2, clip_eps_high=0.2)
     full_loss, *_ = loss_fn(log_probs, old_log_probs, advantages, action_mask=mask)
@@ -120,14 +160,17 @@ def test_policy_loss_token_mean_aggregation_matches_full_batch():
         dp_size=2,
         batch_num_tokens=batch_num_tokens,
     )
+    _synchronize(device)
 
+    _assert_on_device(device, full_loss, rank0_loss, rank1_loss)
     assert torch.allclose((rank0_loss + rank1_loss) / 2, full_loss)
 
 
-def test_policy_kl_metric_uses_policy_ratio_when_vllm_correction_is_enabled():
-    log_probs = torch.tensor([[-0.2, -0.4]])
-    old_log_probs = torch.tensor([[-0.3, -0.1]])
-    rollout_log_probs = torch.tensor([[-1.3, -1.1]])
+@pytest.mark.parametrize("device", DEVICES)
+def test_policy_kl_metric_uses_policy_ratio_when_vllm_correction_is_enabled(device):
+    log_probs = torch.tensor([[-0.2, -0.4]], device=device)
+    old_log_probs = torch.tensor([[-0.3, -0.1]], device=device)
+    rollout_log_probs = torch.tensor([[-1.3, -1.1]], device=device)
     advantages = torch.ones_like(log_probs)
     mask = torch.ones_like(log_probs)
 
@@ -143,17 +186,20 @@ def test_policy_kl_metric_uses_policy_ratio_when_vllm_correction_is_enabled():
         action_mask=mask,
         rollout_log_probs=rollout_log_probs,
     )
+    _synchronize(device)
 
+    _assert_on_device(device, ppo_kl, vllm_kl)
     assert torch.allclose(ppo_kl, (old_log_probs - log_probs).mean())
     assert torch.allclose(vllm_kl, (rollout_log_probs - old_log_probs).mean())
 
 
-def test_grad_accum_global_norm_matches_global_token_mean_over_window():
+@pytest.mark.parametrize("device", DEVICES)
+def test_grad_accum_global_norm_matches_global_token_mean_over_window(device):
     # Two micro-batches in one optimizer-step window (gas=2) with UNEVEN token counts.
-    mb0 = torch.tensor([[1.0, 2.0, 0.0]])  # 2 tokens
-    mask0 = torch.tensor([[1.0, 1.0, 0.0]])
-    mb1 = torch.tensor([[3.0, 4.0, 5.0], [6.0, 7.0, 0.0]])  # 5 tokens
-    mask1 = torch.tensor([[1.0, 1.0, 1.0], [1.0, 1.0, 0.0]])
+    mb0 = torch.tensor([[1.0, 2.0, 0.0]], device=device)  # 2 tokens
+    mask0 = torch.tensor([[1.0, 1.0, 0.0]], device=device)
+    mb1 = torch.tensor([[3.0, 4.0, 5.0], [6.0, 7.0, 0.0]], device=device)  # 5 tokens
+    mask1 = torch.tensor([[1.0, 1.0, 1.0], [1.0, 1.0, 0.0]], device=device)
     gas = 2
 
     # Reference: a single per-token mean over the whole optimizer step (global token count).
@@ -177,28 +223,34 @@ def test_grad_accum_global_norm_matches_global_token_mean_over_window():
         assert torch.allclose(info["batch_num_tokens"], n_global / gas)
         per_mb = aggregate_loss(loss_mat, loss_mask, **{k: v for k, v in info.items() if k != "global_batch_size"})
         accumulated = accumulated + per_mb / gas  # DeepSpeed _scale_loss_by_gas
+    _synchronize(device)
     assert torch.allclose(accumulated, expected)
 
 
-def test_grad_accum_global_norm_differs_from_per_microbatch_when_uneven():
+@pytest.mark.parametrize("device", DEVICES)
+def test_grad_accum_global_norm_differs_from_per_microbatch_when_uneven(device):
     # Sanity: the OLD per-micro-batch normalization (mean of per-mb token-means) does NOT
     # equal the global token-mean when token counts are uneven -> confirms the fix matters.
-    mb0 = torch.tensor([[1.0, 2.0, 0.0]])
-    mask0 = torch.tensor([[1.0, 1.0, 0.0]])
-    mb1 = torch.tensor([[3.0, 4.0, 5.0], [6.0, 7.0, 0.0]])
-    mask1 = torch.tensor([[1.0, 1.0, 1.0], [1.0, 1.0, 0.0]])
+    mb0 = torch.tensor([[1.0, 2.0, 0.0]], device=device)
+    mask0 = torch.tensor([[1.0, 1.0, 0.0]], device=device)
+    mb1 = torch.tensor([[3.0, 4.0, 5.0], [6.0, 7.0, 0.0]], device=device)
+    mask1 = torch.tensor([[1.0, 1.0, 1.0], [1.0, 1.0, 0.0]], device=device)
 
     global_mean = ((mb0 * mask0).sum() + (mb1 * mask1).sum()) / (mask0.sum() + mask1.sum())
     per_mb = (aggregate_loss(mb0, mask0) + aggregate_loss(mb1, mask1)) / 2
+    _synchronize(device)
     assert not torch.allclose(per_mb, global_mean)
 
 
-def test_policy_kl_metric_is_not_clamped():
-    log_probs = torch.tensor([[100.0]])
+@pytest.mark.parametrize("device", DEVICES)
+def test_policy_kl_metric_is_not_clamped(device):
+    log_probs = torch.tensor([[100.0]], device=device)
     old_log_probs = torch.zeros_like(log_probs)
     advantages = torch.ones_like(log_probs)
     mask = torch.ones_like(log_probs)
 
     _, _, ppo_kl, _ = PolicyLoss()(log_probs, old_log_probs, advantages, action_mask=mask)
+    _synchronize(device)
 
+    _assert_on_device(device, ppo_kl)
     assert torch.allclose(ppo_kl, (old_log_probs - log_probs).mean())
