@@ -247,6 +247,7 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
   - 🎲 Dynamic Sampling: for each prompt, generate multiple responses and **filter** them by your reward / agent **0–1 `scores`** signal
     - Enable: `--algo.dynamic_filtering_enable`
     - Score range: `--algo.dynamic_filtering_range 0.0 1.0`
+    - Zero-variance filtering: `--algo.dynamic_filtering_std_threshold 1e-6` drops groups whose rewards are (near) constant. Such groups have zero within-group variance, so the GRPO advantage `(r_i - mean) / std` collapses to `0` for every sample — no gradient, just wasted compute. The score-range check already removes constant *binary* groups (their mean sits at a range bound), but continuous rewards (e.g. token-level F1) can sit inside the range with zero variance; this threshold closes that gap. Default `0.0` keeps the original behavior.
     - Requires: `--rollout.n_samples_per_prompt > 1` and either `--reward.remote_url` or `--train.agent_func_path`
     - Example: `./examples/scripts/train_dapo_ray_hybrid_engine.sh`
 

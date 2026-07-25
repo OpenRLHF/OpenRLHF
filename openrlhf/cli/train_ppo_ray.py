@@ -564,6 +564,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--algo.dynamic_filtering_range", nargs=2, default=(0, 1), type=float, help="Dynamic filtering rewards range"
     )
+    parser.add_argument(
+        "--algo.dynamic_filtering_std_threshold",
+        type=float,
+        default=0.0,
+        help="Discard GRPO groups whose reward std is <= this value (zero-variance groups give no "
+        "gradient). Default 0.0 filters only exactly-constant groups; raise slightly (e.g. 1e-6) "
+        "to absorb floating-point noise with continuous rewards.",
+    )
 
     # VLM (Vision-Language Model) parameters
     parser.add_argument("--data.image_key", type=str, default="images", help="Dataset key for image paths/URLs")
