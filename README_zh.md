@@ -361,7 +361,7 @@ deepspeed --module openrlhf.cli.train_sft \
    --train.batch_size 256 \
    --train.micro_batch_size 2 \
    --data.max_samples 500000 \
-   --actor.model_name_or_path meta-llama/Meta-Llama-3-8B \
+   --model.model_name_or_path meta-llama/Meta-Llama-3-8B \
    --ckpt.output_dir ./checkpoint/llama3-8b-sft \
    --ckpt.save_steps -1 \
    --logger.logging_steps 1 \
@@ -371,14 +371,14 @@ deepspeed --module openrlhf.cli.train_sft \
    --ds.packing_samples \
    --ds.param_dtype bf16 \
    --adam.lr 5e-6 \
-   --actor.gradient_checkpointing_enable \
+   --model.gradient_checkpointing_enable \
    --logger.wandb.key {wandb_token}
 
 # 附加选项：
 # --data.apply_chat_template                # 使用 HF tokenizer 聊天模板
 # --ds.ring_attn_size 2                      # 启用 RingAttention（先安装 ring_flash_attn）
 # --data.multiturn                          # 多轮微调损失
-# --actor.pretrain_mode_enable                      # 继续预训练模式
+# --model.pretrain_mode_enable                      # 继续预训练模式
 ```
 
 </details>
@@ -396,7 +396,7 @@ deepspeed --module openrlhf.cli.train_rm \
    --eval.steps -1 \
    --train.batch_size 256 \
    --train.micro_batch_size 1 \
-   --actor.model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
+   --model.model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
    --ds.param_dtype bf16 \
    --train.max_epochs 1 \
    --data.max_len 8192 \
@@ -404,16 +404,16 @@ deepspeed --module openrlhf.cli.train_rm \
    --adam.lr 9e-6 \
    --data.dataset OpenRLHF/preference_dataset_mixture2_and_safe_pku \
    --data.apply_chat_template \
-   --chosen_key chosen \
-   --rejected_key rejected \
+   --data.chosen_key chosen \
+   --data.rejected_key rejected \
    --ds.packing_samples \
-   --actor.gradient_checkpointing_enable \
+   --model.gradient_checkpointing_enable \
    --logger.wandb.key {wandb_token}
 ```
 
 </details>
 
-建议将奖励模型的 `--value_prefix_head` 选项设置为 `score`，以便我们可以使用 `AutoModelForSequenceClassification` 加载模型：
+建议将奖励模型的 `--ds.value_head_prefix` 选项设置为 `score`，以便我们可以使用 `AutoModelForSequenceClassification` 加载模型：
 
 ```python
 reward_model = AutoModelForSequenceClassification.from_pretrained(
@@ -464,9 +464,9 @@ ray job submit --address="http://127.0.0.1:8265" \
    --train.dynamic_batch_enable \
    --rollout.n_samples_per_prompt 1 \
    --train.max_epochs 1 \
-   --prompt_max_len 1024 \
+   --data.max_len 1024 \
    --data.max_samples 100000 \
-   --generate_max_len 1024 \
+   --rollout.max_new_tokens 1024 \
    --ds.zero_stage 3 \
    --ds.param_dtype bf16 \
    --actor.adam.lr 5e-7 \
