@@ -99,7 +99,6 @@ def _strip_string(string: str) -> str:
     string = string.replace("\\$", "")
     string = _remove_right_units(string)
     string = string.replace("\\%", "")
-    string = string.replace("\%", "")
     string = string.replace(" .", " 0.")
     string = string.replace("{.", "{0.")
     if len(string) == 0:
