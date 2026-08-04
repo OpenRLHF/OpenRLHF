@@ -26,6 +26,7 @@ from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_g
 from openrlhf.utils.distributed_sampler import DistributedSampler
 from openrlhf.utils.distributed_util import torch_dist_barrier_and_cuda_sync
 
+from .batch import calculate_gradient_accumulation_steps
 from .deepspeed_utils import (
     _z3_params_to_fetch,
     get_eval_ds_config,
@@ -107,12 +108,13 @@ class DeepspeedStrategy(ABC):
         )
         self.setup_ring_attn(self.ds_device_mesh)
 
-        self.accumulated_gradient = (
-            self.train_batch_size
-            * self.ring_attn_size
-            * self.ds_tensor_parallel_size
-            // self.micro_train_batch_size
-            // self.world_size
+        self.accumulated_gradient = calculate_gradient_accumulation_steps(
+            self.train_batch_size,
+            self.micro_train_batch_size,
+            self.world_size,
+            self.ring_attn_size,
+            self.ds_tensor_parallel_size,
+            dynamic_batch=self.use_dynamic_batch,
         )
 
     def setup_ring_attn(self, ds_device_mesh):
