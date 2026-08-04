@@ -120,7 +120,10 @@ class SamplesGenerator:
                 batch_vllm_engine_call(self.vllm_engines, "sleep")
 
             if self.args.algo.dynamic_filtering_enable and prompts_consumed:
-                filter_pass_rate = len(experiences) / prompts_consumed * 100
+                n_samples_per_prompt = generate_kwargs.get(
+                    "n_samples_per_prompt", self.args.rollout.n_samples_per_prompt
+                )
+                filter_pass_rate = len(experiences) / n_samples_per_prompt / prompts_consumed * 100
 
             self._sample_buffer.extend(experiences)
 
