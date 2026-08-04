@@ -23,6 +23,21 @@ from openrlhf.utils.utils import get_tokenizer
 logger = init_logger(__name__)
 
 
+def normalize_checkpoint_states(checkpoint_states=None):
+    """Fill controller fields missing from legacy or model-only checkpoints."""
+    defaults = {
+        "episode": 0,
+        "global_step": 0,
+        "total_consumed_prompts": 0,
+        "data_loader_state_dict": {},
+    }
+    states = dict(checkpoint_states or {})
+    missing = [key for key in defaults if key not in states]
+    if checkpoint_states is not None and missing:
+        logger.warning(f"Checkpoint is missing controller state {missing}; using defaults.")
+    return {**defaults, **states}
+
+
 def prepare_datasets(strategy, tokenizer):
     args = strategy.args
 
@@ -433,13 +448,8 @@ class BasePPOTrainer(ABC):
                 0
             ]
             logger.info(f"checkpoint_states: {checkpoint_states}")
-            return checkpoint_states
-        return {
-            "episode": 0,
-            "global_step": 0,
-            "total_consumed_prompts": 0,
-            "data_loader_state_dict": {},
-        }
+            return normalize_checkpoint_states(checkpoint_states)
+        return normalize_checkpoint_states()
 
 
 @ray.remote

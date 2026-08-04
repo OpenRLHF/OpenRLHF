@@ -334,12 +334,11 @@ class PPOTrainerAsync:
         total_consumed_prompts = checkpoint_states.get("total_consumed_prompts", 0)
         # Keep vLLM weights and dataloader states in sync when resuming.
         if global_step > 0:
-            ray.get(
-                [
-                    self.generator_actor.load_state_dict.remote(checkpoint_states["data_loader_state_dict"]),
-                    self.trainer_actor.broadcast_to_vllm.remote(),
-                ]
-            )
+            refs = [self.trainer_actor.broadcast_to_vllm.remote()]
+            data_loader_state_dict = checkpoint_states.get("data_loader_state_dict")
+            if data_loader_state_dict:
+                refs.append(self.generator_actor.load_state_dict.remote(data_loader_state_dict))
+            ray.get(refs)
 
         # Launch async training
         ray.get(
