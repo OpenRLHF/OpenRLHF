@@ -38,6 +38,7 @@ def _load_loss_utils_module():
 
 _loss_module = _load_loss_module()
 _loss_utils_module = _load_loss_utils_module()
+LogExpLoss = _loss_module.LogExpLoss
 PolicyLoss = _loss_module.PolicyLoss
 aggregate_loss = _loss_module.aggregate_loss
 get_loss_batch_info = _loss_utils_module.get_loss_batch_info
@@ -202,3 +203,14 @@ def test_policy_kl_metric_is_not_clamped():
     _, _, ppo_kl, _ = PolicyLoss()(log_probs, old_log_probs, advantages, action_mask=mask)
 
     assert torch.allclose(ppo_kl, (old_log_probs - log_probs).mean())
+
+
+def test_log_exp_loss_stays_finite_for_large_reward_gap():
+    chosen_reward = torch.tensor([0.0], requires_grad=True)
+    reject_reward = torch.tensor([1000.0])
+
+    loss = LogExpLoss()(chosen_reward, reject_reward)
+    loss.backward()
+
+    assert torch.allclose(loss.detach(), torch.tensor(1000.0))
+    assert torch.isfinite(chosen_reward.grad).all()
