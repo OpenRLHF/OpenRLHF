@@ -8,6 +8,10 @@ class AdaptiveKLController:
     """
 
     def __init__(self, init_kl_coef, target, horizon):
+        if target <= 0:
+            raise ValueError(f"KL target must be positive, got {target}")
+        if horizon <= 0:
+            raise ValueError(f"KL horizon must be positive, got {horizon}")
         self.value = init_kl_coef
         self.target = target
         self.horizon = horizon
