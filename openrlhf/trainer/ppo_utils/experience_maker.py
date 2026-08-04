@@ -11,7 +11,11 @@ from openrlhf.trainer.ppo_utils.experience import Experience
 from openrlhf.trainer.ppo_utils.length_penalty import apply_length_penalties
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.logging_utils import init_logger
-from openrlhf.utils.seqlen_balancing import get_minimum_num_micro_batch_size, get_seqlen_balanced_partitions
+from openrlhf.utils.seqlen_balancing import (
+    align_num_micro_batches,
+    get_minimum_num_micro_batch_size,
+    get_seqlen_balanced_partitions,
+)
 
 logger = init_logger(__name__)
 
@@ -60,8 +64,7 @@ class RemoteExperienceMaker:
                 self.args.ds.ring_attn_size,
                 self.args.ds.tensor_parallel_size,
             )
-            minimum_batch_num = minimum_batch_num // effective_actor_num * effective_actor_num
-            num_batch = max(minimum_batch_num, effective_actor_num)
+            num_batch = align_num_micro_batches(minimum_batch_num, effective_actor_num, len(total_lengths))
             batch_indexes = get_seqlen_balanced_partitions(total_lengths, num_batch, False)
             for micro_index in batch_indexes:
                 micro_batch = [rollout_samples[idx] for idx in micro_index]

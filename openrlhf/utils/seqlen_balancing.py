@@ -222,6 +222,20 @@ def ceildiv(a, b):
     return -(a // -b)
 
 
+def align_num_micro_batches(minimum_batches: int, effective_actors: int, num_samples: int) -> int:
+    """Round a minimum batch count up for equal actor work without empty batches."""
+    if effective_actors <= 0:
+        raise ValueError(f"effective_actors must be positive, got {effective_actors}")
+
+    aligned_batches = max(ceildiv(minimum_batches, effective_actors) * effective_actors, effective_actors)
+    if aligned_batches > num_samples:
+        raise ValueError(
+            f"Cannot create {aligned_batches} non-empty micro-batches from {num_samples} samples "
+            f"(minimum_batches={minimum_batches}, effective_actors={effective_actors})"
+        )
+    return aligned_batches
+
+
 def get_reverse_idx(idx_map):
     reverse_idx_map = copy.deepcopy(idx_map)
 
