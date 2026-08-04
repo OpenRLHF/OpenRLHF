@@ -13,7 +13,7 @@ from openrlhf.trainer.ray.launcher import (
 )
 from openrlhf.trainer.ray.ppo_actor import PolicyModelActor
 from openrlhf.trainer.ray.ppo_critic import CriticModelActor
-from openrlhf.utils import get_strategy
+from openrlhf.utils import get_strategy, positive_int
 
 
 def train(args):
@@ -411,7 +411,10 @@ if __name__ == "__main__":
         help="Freeze the actor for the first N steps to let the critic warm up",
     )
     parser.add_argument(
-        "--rollout.n_samples_per_prompt", type=int, default=1, help="number of responses for each prompt in generation"
+        "--rollout.n_samples_per_prompt",
+        type=positive_int,
+        default=1,
+        help="number of responses for each prompt in generation",
     )
     parser.add_argument("--critic.save_value_network", action="store_true", default=False, help="Save critic model")
     parser.add_argument("--algo.kl.target", type=float, default=None)
@@ -536,7 +539,10 @@ if __name__ == "__main__":
     parser.add_argument("--eval.split", type=str, default="train")
     parser.add_argument("--eval.temperature", type=float, default=0.6, help="Temperature for evaluation")
     parser.add_argument(
-        "--eval.n_samples_per_prompt", type=int, default=4, help="Number of samples per prompt for evaluation"
+        "--eval.n_samples_per_prompt",
+        type=positive_int,
+        default=4,
+        help="Number of samples per prompt for evaluation",
     )
 
     parser.add_argument("--data.input_key", type=str, default="input", help="JSON dataset key")

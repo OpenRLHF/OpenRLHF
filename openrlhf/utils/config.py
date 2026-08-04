@@ -6,7 +6,19 @@ dots (e.g. ``"muon.lr"``) into a nested SimpleNamespace so callers can write
 at the top level.
 """
 
+import argparse
 from types import SimpleNamespace
+
+
+def positive_int(value):
+    """Parse a strictly positive integer for argparse options."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(f"expected a positive integer, got {value!r}") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(f"expected a positive integer, got {value!r}")
+    return parsed
 
 
 def hierarchize(args):
