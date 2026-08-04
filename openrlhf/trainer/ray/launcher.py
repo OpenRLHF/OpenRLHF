@@ -10,7 +10,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from tqdm import tqdm
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
-from openrlhf.trainer.ray.utils import ray_noset_visible_devices
+from openrlhf.trainer.ray.utils import get_balanced_batch_ranges, ray_noset_visible_devices
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 
 
@@ -346,22 +346,12 @@ class RayActorGroup:
         # Calculate chunk size based on number of effective actors (considering ring groups)
         num_actors = len(self._actor_handlers)
         effective_actors = num_actors // self.duplicate_actors
-        if total_length == 0 or total_length < effective_actors:
-            raise ValueError(
-                f"Insufficient batch size for async_run_method_batch: total_length={total_length}, "
-                f"effective_actors={effective_actors}"
-            )
-        chunk_size = total_length // effective_actors
-        if total_length % effective_actors != 0:
-            chunk_size += 1
+        chunk_ranges = get_balanced_batch_ranges(total_length, effective_actors)
 
         # Pre-slice data before ray.put so each worker only receives its chunk.
         # This avoids transferring the full batch to every node (critical at scale).
         refs = []
-        for chunk_idx in range(effective_actors):
-            start_idx = chunk_idx * chunk_size
-            end_idx = min((chunk_idx + 1) * chunk_size, total_length)
-
+        for chunk_idx, (start_idx, end_idx) in enumerate(chunk_ranges):
             chunk_data = {key: value[start_idx:end_idx] for key, value in kwargs.items()}
             chunk_ref = ray.put(chunk_data)
 

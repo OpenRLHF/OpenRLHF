@@ -1,6 +1,23 @@
 import os
 
 
+def get_balanced_batch_ranges(total_length, num_chunks):
+    """Split a batch into contiguous, non-empty ranges with near-equal sizes."""
+    if num_chunks <= 0:
+        raise ValueError(f"num_chunks must be positive, got {num_chunks}")
+    if total_length < num_chunks:
+        raise ValueError(f"total_length={total_length} must be at least num_chunks={num_chunks}")
+
+    chunk_size, remainder = divmod(total_length, num_chunks)
+    ranges = []
+    start = 0
+    for chunk_idx in range(num_chunks):
+        end = start + chunk_size + (1 if chunk_idx < remainder else 0)
+        ranges.append((start, end))
+        start = end
+    return ranges
+
+
 # Address https://github.com/ray-project/ray/issues/51117
 # This function is used to get the bundle indices of a placement group
 # and ensure that the bundles placed on the same node are grouped together.
