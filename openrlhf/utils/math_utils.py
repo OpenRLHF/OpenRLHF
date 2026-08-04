@@ -353,17 +353,14 @@ def last_boxed_only_string(string: str) -> str | None:
 
 
 def remove_boxed(value: str) -> str | None:
-    left = "\\boxed{"
-    try:
-        assert value[: len(left)] == left
-        assert value[-1] == "}"
-        return value[len(left) : -1]
-    except Exception:
-        return None
+    for left in ("\\boxed{", "\\fbox{"):
+        if value.startswith(left) and value.endswith("}"):
+            return value[len(left) : -1]
+    return None
 
 
 def extract_boxed_answer(solution: str) -> str | None:
-    """Extract the answer from inside a LaTeX \\boxed{} command."""
+    """Extract the answer from inside a LaTeX \\boxed{} or \\fbox{} command."""
     solution = last_boxed_only_string(solution)
     solution = remove_boxed(solution) if solution is not None else None
     return solution
