@@ -234,11 +234,17 @@ def get_reverse_idx(idx_map):
 def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu, ring_attn_size, ds_tensor_parallel_size):
     # use first fit to get the number of micro batches
     # eg: [5, 3, 7, 2, 6] 10 -> [10, 7, 6]
-    max_tokens_per_gpu *= ring_attn_size * ds_tensor_parallel_size
+    effective_max_tokens = max_tokens_per_gpu * ring_attn_size * ds_tensor_parallel_size
     batches = []
     for l in total_lengths:
+        if l > effective_max_tokens:
+            raise ValueError(
+                f"Sequence length {l} exceeds effective dynamic-batch capacity {effective_max_tokens} "
+                f"(max_tokens_per_gpu={max_tokens_per_gpu}, ring_attn_size={ring_attn_size}, "
+                f"ds_tensor_parallel_size={ds_tensor_parallel_size})"
+            )
         for i in range(len(batches)):
-            if batches[i] + l <= max_tokens_per_gpu:
+            if batches[i] + l <= effective_max_tokens:
                 batches[i] += l
                 break
         else:
