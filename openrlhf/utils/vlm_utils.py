@@ -27,6 +27,12 @@ def _is_base64_image(s: str) -> bool:
     return False
 
 
+def _open_image_copy(source) -> Image.Image:
+    """Open and materialize an image without retaining the source resource."""
+    with Image.open(source) as image:
+        return image.copy()
+
+
 def load_images(image_refs: Union[str, List[str], Image.Image, List[Any]]) -> List[Image.Image]:
     """Load PIL images from paths, URLs, base64 strings, raw bytes, or PIL objects.
 
@@ -44,20 +50,20 @@ def load_images(image_refs: Union[str, List[str], Image.Image, List[Any]]) -> Li
             if isinstance(img, Image.Image):
                 pil_images.append(img)
             elif isinstance(img, bytes):
-                pil_images.append(Image.open(io.BytesIO(img)))
+                pil_images.append(_open_image_copy(io.BytesIO(img)))
             elif isinstance(img, str):
                 if img.startswith(("http://", "https://")):
                     import requests
 
-                    pil_images.append(Image.open(io.BytesIO(requests.get(img, timeout=30).content)))
+                    pil_images.append(_open_image_copy(io.BytesIO(requests.get(img, timeout=30).content)))
                 elif _is_base64_image(img):
                     import base64
 
                     # Strip optional data-URI header: "data:image/png;base64,..."
                     raw = img.split(",", 1)[-1] if img.startswith("data:") else img
-                    pil_images.append(Image.open(io.BytesIO(base64.b64decode(raw))))
+                    pil_images.append(_open_image_copy(io.BytesIO(base64.b64decode(raw))))
                 else:
-                    pil_images.append(Image.open(img))
+                    pil_images.append(_open_image_copy(img))
             else:
                 logger.warning(f"Skipping unsupported image type: {type(img)}")
         except Exception as e:
