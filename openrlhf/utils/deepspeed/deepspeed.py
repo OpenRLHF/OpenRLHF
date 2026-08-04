@@ -24,7 +24,7 @@ from transformers.trainer import get_scheduler
 from openrlhf.models import Actor
 from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
 from openrlhf.utils.distributed_sampler import DistributedSampler
-from openrlhf.utils.distributed_util import torch_dist_barrier_and_cuda_sync
+from openrlhf.utils.distributed_util import torch_dist_barrier_and_accelerator_sync
 
 from .deepspeed_utils import (
     _z3_params_to_fetch,
@@ -94,7 +94,7 @@ class DeepspeedStrategy(ABC):
 
         local_rank = int(os.environ.get("LOCAL_RANK", "-1"))
         if local_rank != -1:
-            torch.cuda.set_device(local_rank)
+            torch.accelerator.set_device_index(local_rank)
 
         # Initializes the distributed backend which will take care of synchronizing nodes/GPUs
         deepspeed.init_distributed(timeout=timeout)
@@ -103,7 +103,9 @@ class DeepspeedStrategy(ABC):
         self.world_size = dist.get_world_size()
         dp_size = self.world_size // self.ring_attn_size // self.ds_tensor_parallel_size
         self.ds_device_mesh = init_device_mesh(
-            "cuda", (dp_size, self.ring_attn_size, self.ds_tensor_parallel_size), mesh_dim_names=("dp", "sp", "tp")
+            torch.accelerator.current_accelerator().type,
+            (dp_size, self.ring_attn_size, self.ds_tensor_parallel_size),
+            mesh_dim_names=("dp", "sp", "tp"),
         )
         self.setup_ring_attn(self.ds_device_mesh)
 
@@ -395,7 +397,7 @@ class DeepspeedStrategy(ABC):
             else:
                 model = tp_model
             gc.collect()
-            torch.cuda.empty_cache()
+            torch.accelerator.empty_cache()
 
         # Infer optim kind from the DS type so actor/critic can disagree.
         optim_kind = "muon" if optim_dict.get("type") == "Muon" else "adam"
@@ -592,7 +594,7 @@ class DeepspeedStrategy(ABC):
 
         gc.collect()
 
-        torch_dist_barrier_and_cuda_sync()
+        torch_dist_barrier_and_accelerator_sync()
 
     def all_reduce(self, data, op="mean"):
         assert op in ("mean", "max", "sum")
@@ -609,7 +611,7 @@ class DeepspeedStrategy(ABC):
             is_cpu_tensor = data.device.type == "cpu"
 
             if is_cpu_tensor:
-                data = data.to(torch.cuda.current_device())
+                data = data.to(torch.accelerator.current_device_index())
             if op == "mean":
                 data /= self.world_size
             dist.all_reduce(data, op=dist.ReduceOp.MAX if op == "max" else dist.ReduceOp.SUM)
@@ -628,8 +630,8 @@ class DeepspeedStrategy(ABC):
                 data = torch.Tensor([data])
             is_cpu_tensor = data.device.type == "cpu"
 
-            ret = [torch.zeros_like(data).to(torch.cuda.current_device()) for _ in range(self.world_size)]
-            dist.all_gather(ret, data.to(torch.cuda.current_device()))
+            ret = [torch.zeros_like(data).to(torch.accelerator.current_device_index()) for _ in range(self.world_size)]
+            dist.all_gather(ret, data.to(torch.accelerator.current_device_index()))
             return torch.cat(ret).cpu() if is_cpu_tensor else torch.cat(ret)
 
     def print(self, *msg):
@@ -752,7 +754,7 @@ class DeepspeedStrategy(ABC):
                     shutil.rmtree(delete_dir)
                     self.print(f"Deleted checkpoint {delete_dir} ({reason})")
 
-        torch_dist_barrier_and_cuda_sync()
+        torch_dist_barrier_and_accelerator_sync()
         model.save_checkpoint(save_dir, tag=tag, client_state=client_state, save_latest=save_latest)
 
         # Write metric after successful save to avoid orphaned metric files on crash.

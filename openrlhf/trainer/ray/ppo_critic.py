@@ -80,7 +80,7 @@ class CriticPPOTrainer(ABC):
             pin_memory=self.dataloader_pin_memory,
             collate_fn=self.replay_buffer.collate_fn,
         )
-        device = torch.cuda.current_device()
+        device = torch.accelerator.current_device_index()
 
         status_list = []
         status_mean = {}
@@ -266,7 +266,7 @@ class CriticModelActor(BaseModelActor):
         packed_seq_lens=None,
     ) -> torch.Tensor:
         """Generates critic values."""
-        device = torch.cuda.current_device()
+        device = torch.accelerator.current_device_index()
         self.critic.eval()
         with torch.no_grad():
             value = self.critic(
@@ -285,12 +285,12 @@ class CriticModelActor(BaseModelActor):
 
     def fit(self):
         """Train critic model with the replay buffer."""
-        torch.cuda.empty_cache()
+        torch.accelerator.empty_cache()
         self.critic.train()
         status = self.trainer.ppo_train()
         self.trainer.replay_buffer.clear()
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
+        torch.accelerator.empty_cache()
+        torch.accelerator.synchronize()
         return status
 
     def save_model(self):
