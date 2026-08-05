@@ -1,7 +1,6 @@
 import os
 from typing import Optional, Tuple, Union
 
-import deepspeed
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -56,6 +55,10 @@ def set_z3_leaf_modules(model: nn.Module, detect_hybrid: bool = True) -> None:
                 child_sigs[cls] = children
 
     if z3_leaf_classes:
+        # Imported here, not at module scope, so that the pure-torch helpers in this
+        # module stay importable without DeepSpeed installed.
+        import deepspeed
+
         deepspeed.utils.set_z3_leaf_modules(model, list(z3_leaf_classes))
         for cls in z3_leaf_classes:
             print(f"Setting zero3 leaf: {cls.__name__}")

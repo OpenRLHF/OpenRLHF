@@ -3,6 +3,7 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
 import torch
 
 _TEST_PACKAGE = "_openrlhf_loss_test"
@@ -202,3 +203,71 @@ def test_policy_kl_metric_is_not_clamped():
     _, _, ppo_kl, _ = PolicyLoss()(log_probs, old_log_probs, advantages, action_mask=mask)
 
     assert torch.allclose(ppo_kl, (old_log_probs - log_probs).mean())
+
+
+def _large_log_ratio_batch():
+    """One sequence with a huge log ratio, one ordinary sequence, in the same batch."""
+    log_probs = torch.tensor([[100.0, 100.0], [-0.2, -0.4]], requires_grad=True)
+    old_log_probs = torch.tensor([[0.0, 0.0], [-0.3, -0.1]])
+    advantages = torch.tensor([[1.0, 1.0], [0.5, -0.5]])
+    mask = torch.ones(2, 2)
+    return log_probs, old_log_probs, advantages, mask
+
+
+@pytest.mark.parametrize("policy_loss_type", ["ppo", "gspo"])
+def test_large_log_ratio_keeps_the_gradient_finite(policy_loss_type):
+    """exp() of the importance ratio must be bounded for every policy loss type.
+
+    gspo used to clamp a variable it then ignored and exponentiate the unclamped
+    sequence mean instead, so a sequence with a large log ratio produced an inf ratio.
+    torch.min in the clipped objective then turned that into 0 * inf = nan in the
+    backward pass.
+    """
+    log_probs, old_log_probs, advantages, mask = _large_log_ratio_batch()
+
+    loss, *_ = PolicyLoss(policy_loss_type=policy_loss_type)(log_probs, old_log_probs, advantages, action_mask=mask)
+    loss.backward()
+
+    assert torch.isfinite(loss), f"{policy_loss_type} loss is not finite"
+    assert torch.isfinite(log_probs.grad).all(), f"{policy_loss_type} gradient is not finite: {log_probs.grad}"
+
+
+@pytest.mark.parametrize("policy_loss_type", ["ppo", "gspo"])
+def test_large_log_ratio_does_not_poison_shared_parameters(policy_loss_type):
+    """One bad sequence must not nan the update for the whole batch.
+
+    Every sequence is produced by the same actor weights, so a nan confined to one
+    sequence's slice of ``log_probs`` still reaches every parameter gradient. This models
+    that with a single shared scalar.
+    """
+    weight = torch.ones(1, requires_grad=True)
+    base_log_probs, old_log_probs, advantages, mask = _large_log_ratio_batch()
+    log_probs = base_log_probs.detach() * weight
+
+    loss, *_ = PolicyLoss(policy_loss_type=policy_loss_type)(log_probs, old_log_probs, advantages, action_mask=mask)
+    loss.backward()
+
+    assert torch.isfinite(weight.grad).all(), f"{policy_loss_type} poisoned the shared gradient: {weight.grad}"
+
+
+def test_gspo_ratio_matches_the_unclamped_sequence_mean_in_normal_range():
+    """The bound must not perturb ratios that were already representable."""
+    log_probs = torch.tensor([[-0.2, -0.4], [-0.7, -0.3]])
+    old_log_probs = torch.tensor([[-0.3, -0.1], [-0.5, -0.2]])
+    advantages = torch.ones_like(log_probs)
+    mask = torch.tensor([[1.0, 1.0], [1.0, 0.0]])
+
+    loss, *_ = PolicyLoss(policy_loss_type="gspo", clip_eps_low=10.0, clip_eps_high=10.0)(
+        log_probs, old_log_probs, advantages, action_mask=mask
+    )
+
+    seq_log_ratio = ((log_probs - old_log_probs) * mask).sum(dim=-1) / mask.sum(dim=-1)
+    expected_ratio = seq_log_ratio.exp().unsqueeze(-1) * mask
+    # clip_eps is wide enough that neither surrogate is clipped here.
+    per_token_loss = -expected_ratio * advantages
+    # token_level_loss is forced off for gspo: per-sequence token mean, then mean over
+    # the sequences that have at least one token.
+    seq_loss = (per_token_loss * mask).sum(dim=-1) / (mask.sum(dim=-1) + 1e-8)
+    expected = seq_loss.mean()
+
+    assert torch.allclose(loss, expected)

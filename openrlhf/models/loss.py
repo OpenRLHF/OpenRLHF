@@ -173,9 +173,12 @@ class PolicyLoss(nn.Module):
                 log_ratio = log_probs - rollout_log_probs
             else:
                 log_ratio = raw_policy_log_ratio
-            policy_log_ratio = raw_policy_log_ratio.clamp(min=-20.0, max=20.0)
-            ratio = (log_ratio * action_mask).sum(dim=-1) / action_mask.sum(dim=-1).clamp(min=1)
-            ratio = ratio.exp().unsqueeze(-1) * action_mask
+            seq_log_ratio = (log_ratio * action_mask).sum(dim=-1) / action_mask.sum(dim=-1).clamp(min=1)
+            # Bound the exponent, as the ppo branch above does. Without this a sequence
+            # with a large log ratio makes ratio inf, and torch.min below then turns that
+            # into 0 * inf = nan in the backward pass. Since every sequence shares the
+            # actor weights, one such sequence is enough to nan the whole update.
+            ratio = seq_log_ratio.clamp(min=-20.0, max=20.0).exp().unsqueeze(-1) * action_mask
         else:
             raise ValueError(f"Invalid policy loss type: {self.policy_loss_type}")
 
