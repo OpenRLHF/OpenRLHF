@@ -299,5 +299,5 @@ def balance_experiences(experiences, args):
     if len(last_half) > len(first_half):
         interval_items.append(last_half[0])
 
-    interval_merged = list(zip(*interval_items))
-    return [make_experience_batch(items) for items in interval_merged]
+    interval_merged = itertools.zip_longest(*interval_items)
+    return [make_experience_batch([item for item in items if item is not None]) for items in interval_merged]
