@@ -210,7 +210,7 @@ class PolicyLoss(nn.Module):
                 seq_log_ratio = masked_mean(rollout_log_ratio, action_mask, dim=-1)
                 seq_is = torch.exp(seq_log_ratio)
                 seq_mask = (seq_is >= low_threshold) & (seq_is <= high_threshold)
-                vllm_is = torch.exp(rollout_log_ratio).detach()
+                vllm_is = torch.exp(rollout_log_ratio).clamp(min=low_threshold, max=high_threshold).detach()
                 loss = seq_mask.unsqueeze(-1) * vllm_is * loss
             else:
                 # TIS: token-level clamp with low and high thresholds

@@ -1,4 +1,5 @@
 import importlib.util
+import math
 import sys
 import types
 from pathlib import Path
@@ -146,6 +147,53 @@ def test_policy_kl_metric_uses_policy_ratio_when_vllm_correction_is_enabled():
 
     assert torch.allclose(ppo_kl, (old_log_probs - log_probs).mean())
     assert torch.allclose(vllm_kl, (rollout_log_probs - old_log_probs).mean())
+
+
+def _run_seq_mask_tis(old_log_probs, rollout_log_probs):
+    log_probs = old_log_probs.clone().requires_grad_()
+    advantages = torch.ones_like(log_probs)
+    mask = torch.ones_like(log_probs)
+    loss_fn = PolicyLoss(
+        policy_loss_type="ppo",
+        enable_vllm_is_correction=True,
+        vllm_is_truncated_threshold=[0.5, 5.0],
+        vllm_is_correction_type="seq-mask-tis",
+    )
+    loss, *_ = loss_fn(
+        log_probs,
+        old_log_probs,
+        advantages,
+        action_mask=mask,
+        rollout_log_probs=rollout_log_probs,
+    )
+    loss.backward()
+    return loss, log_probs.grad
+
+
+def test_seq_mask_tis_clamps_token_weights_after_sequence_filter():
+    delta = math.log(10.0)
+    old_log_probs = torch.tensor([[-0.1, -0.1 - delta]])
+    rollout_log_probs = torch.tensor([[-0.1 - delta, -0.1]])
+
+    loss, grad = _run_seq_mask_tis(old_log_probs, rollout_log_probs)
+
+    # The sequence IS is 1, so it passes; token IS [10, 0.1] must still
+    # be clamped to [5, 0.5].
+    assert torch.allclose(loss, torch.tensor(-2.75))
+    assert torch.isfinite(grad).all()
+
+
+def test_seq_mask_tis_rejects_extreme_sequence_without_nan():
+    # All values are valid log-probabilities (<= 0). The mean log-ratio is 2,
+    # so exp(2) exceeds the upper threshold and the sequence is rejected.
+    old_log_probs = torch.tensor([[0.0, -996.0]])
+    rollout_log_probs = torch.tensor([[-1000.0, 0.0]])
+
+    loss, grad = _run_seq_mask_tis(old_log_probs, rollout_log_probs)
+
+    assert torch.allclose(loss, torch.tensor(0.0))
+    assert torch.isfinite(grad).all()
+    assert torch.equal(grad, torch.zeros_like(grad))
 
 
 def test_grad_accum_global_norm_matches_global_token_mean_over_window():
