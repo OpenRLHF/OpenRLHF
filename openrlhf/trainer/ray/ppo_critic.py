@@ -145,7 +145,6 @@ class CriticPPOTrainer(ABC):
             attention_mask=attention_mask,
             return_output=True,
             ring_attn_group=self.strategy.ring_attn_group,
-            values_allgather=True,
             packed_seq_lens=packed_seq_lens,
         )
 
@@ -203,7 +202,7 @@ class CriticModelActor(BaseModelActor):
             lora_alpha=strategy.args.ds.lora.alpha,
             target_modules=strategy.args.ds.lora.target_modules,
             lora_dropout=strategy.args.ds.lora.dropout,
-            ds_config=strategy.get_ds_train_config(is_actor=False),
+            ds_config=strategy.get_ds_train_config(),
             value_head_prefix=strategy.args.ds.value_head_prefix,
             init_value_head=strategy.args.actor.model_name_or_path == strategy.args.critic.model_name_or_path,
             packing_samples=strategy.args.ds.packing_samples,
@@ -274,7 +273,6 @@ class CriticModelActor(BaseModelActor):
                 action_mask.to(device),
                 attention_mask.to(device),
                 ring_attn_group=self.strategy.ring_attn_group,
-                values_allgather=True,
             )
         self.critic.train()  # reset model state
         return value.to("cpu")

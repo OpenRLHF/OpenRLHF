@@ -276,7 +276,6 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             attention_mask: Optional[torch.Tensor] = None,
             return_output=False,
             ring_attn_group=None,
-            values_allgather=False,
             packed_seq_lens=None,
         ) -> torch.Tensor:
             batch, seqlen = input_ids.size()
