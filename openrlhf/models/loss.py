@@ -173,7 +173,6 @@ class PolicyLoss(nn.Module):
                 log_ratio = log_probs - rollout_log_probs
             else:
                 log_ratio = raw_policy_log_ratio
-            policy_log_ratio = raw_policy_log_ratio.clamp(min=-20.0, max=20.0)
             ratio = (log_ratio * action_mask).sum(dim=-1) / action_mask.sum(dim=-1).clamp(min=1)
             ratio = ratio.exp().unsqueeze(-1) * action_mask
         else:

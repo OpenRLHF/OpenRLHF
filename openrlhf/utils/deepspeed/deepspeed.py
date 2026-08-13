@@ -428,16 +428,12 @@ class DeepspeedStrategy(ABC):
 
         return model, optim, scheduler
 
-    def get_ds_train_config(
-        self, optim_dict: Optional[dict] = None, *, max_norm: Optional[float] = None, is_actor=None
-    ):
+    def get_ds_train_config(self, optim_dict: Optional[dict] = None, *, max_norm: Optional[float] = None):
         # ``optim_dict`` is None when called from HF model-loading paths (e.g.
         # ``Actor.from_pretrained``) that only need the ZeRO + bf16 parts — the
         # optimizer section is filled later at ``prepare()`` time.
         # ``max_norm`` is per-model (set by prepare's cfg); falls back to
         # ``self.max_norm`` if not provided (for legacy model-loading callers).
-        # ``is_actor`` is accepted for legacy call sites and unused here.
-        del is_actor
         ds_config = get_train_ds_config(
             offload=False,
             adam_offload=self.adam_offload,

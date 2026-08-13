@@ -7,7 +7,7 @@ from openrlhf.utils.utils import zero_pad_sequences
 
 
 def preprocess_data(
-    data, input_template=None, input_key="input", output_key=None, apply_chat_template=None, multiturn=False
+    data, input_template=None, input_key="input", output_key=None, apply_chat_template=None
 ):
     if apply_chat_template:
         if output_key:
@@ -140,7 +140,6 @@ class SFTDataset(Dataset):
             self.input_key,
             self.output_key,
             apply_chat_template=None if self.pretrain_mode else self.apply_chat_template,
-            multiturn=self.multiturn,
         )
 
         if not self.pretrain_mode:
