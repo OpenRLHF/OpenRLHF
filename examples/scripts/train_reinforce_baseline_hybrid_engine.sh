@@ -68,6 +68,11 @@ ENGINE_ARGS=(
    --vllm.gpu_memory_utilization 0.7
    --train.colocate_all
    --ds.enable_sleep
+   # Required with --train.colocate_all: let vLLM offload its weights/KV cache
+   # during the training phase so the actor's forward/backward has room.
+   # Without it vLLM keeps ~gpu_memory_utilization of each GPU resident and the
+   # actor training forward OOMs on the fp32 logits.
+   --vllm.enable_sleep
    --vllm.sync_backend nccl
    --vllm.enforce_eager
 
