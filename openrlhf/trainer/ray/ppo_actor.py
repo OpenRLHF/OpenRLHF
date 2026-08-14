@@ -321,7 +321,9 @@ class ActorPPOTrainer(ABC):
                 kl = compute_approx_kl(
                     action_log_probs,
                     base_action_log_probs,
+                    log_probs_old=old_action_log_probs,
                     kl_estimator=self.args.algo.kl.estimator,
+                    unbiased_gradient=self.args.algo.kl.unbiased_gradient,
                 )
                 logprobs_diff = action_log_probs.float() - base_action_log_probs.float()
             else:
