@@ -37,7 +37,9 @@ class NaiveReplayBuffer(ABC):
         self.limit = limit
         self.cpu_offload = cpu_offload
         self.packing_samples = packing_samples
-        self.target_device = torch.device(f"cuda:{torch.cuda.current_device()}")
+        self.target_device = (
+            f"{torch.accelerator.current_accelerator().type}:{torch.accelerator.current_device_index()}"
+        )
         self.items: List[Experience] = []
         self.dynamic_batch = dynamic_batch
         self.dynamic_indices: List[List[int]] = []
@@ -101,7 +103,7 @@ class NaiveReplayBuffer(ABC):
         # karmarkar_karp with num_mbs=0).
         expected_num_steps = args.rollout.batch_size * args.rollout.n_samples_per_prompt // args.train.batch_size
         num_steps = min(expected_num_steps, len(sample_lengths) // local_train_batch_size)
-        num_steps = torch.tensor(num_steps, dtype=torch.int, device=torch.cuda.current_device())
+        num_steps = torch.tensor(num_steps, dtype=torch.int, device=torch.accelerator.current_device_index())
         dist.all_reduce(num_steps, op=dist.ReduceOp.MIN, group=dp_group)
         num_steps = num_steps.item()
         if num_steps == 0:
@@ -126,7 +128,9 @@ class NaiveReplayBuffer(ABC):
                 )
             )
 
-        num_microbatches = torch.tensor(num_microbatches, dtype=torch.int, device=torch.cuda.current_device())
+        num_microbatches = torch.tensor(
+            num_microbatches, dtype=torch.int, device=torch.accelerator.current_device_index()
+        )
         num_microbatches = strategy.all_reduce(num_microbatches, op="max")
         num_microbatches = num_microbatches.tolist()
 
@@ -156,13 +160,13 @@ class NaiveReplayBuffer(ABC):
                 int(self.items[idx].action_mask.sum().item() > 0) for partition in partitions for idx in partition
             )
             global_valid_sample_num = torch.tensor(
-                valid_sample_num, dtype=torch.float, device=torch.cuda.current_device()
+                valid_sample_num, dtype=torch.float, device=torch.accelerator.current_device_index()
             )
             dist.all_reduce(global_valid_sample_num, op=dist.ReduceOp.SUM, group=dp_group)
             global_num_tokens = torch.tensor(
                 sum(int(self.items[idx].action_mask.sum().item()) for partition in partitions for idx in partition),
                 dtype=torch.float,
-                device=torch.cuda.current_device(),
+                device=torch.accelerator.current_device_index(),
             )
             dist.all_reduce(global_num_tokens, op=dist.ReduceOp.SUM, group=dp_group)
             sample_loss_scale = [len(partition) / sample_num for partition in partitions]
