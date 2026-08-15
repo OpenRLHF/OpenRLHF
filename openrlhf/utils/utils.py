@@ -42,7 +42,7 @@ def is_vlm_model(pretrain: str) -> bool:
     from transformers import AutoConfig
 
     try:
-        cfg = AutoConfig.from_pretrained(pretrain, trust_remote_code=True)
+        cfg = AutoConfig.from_pretrained(pretrain)
         return hasattr(cfg, "vision_config")
     except Exception:
         return False
@@ -56,7 +56,7 @@ def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=
 
         # AutoProcessor wraps tokenizer + image_processor; downstream code
         # detects VLM via hasattr(tokenizer, "image_processor").
-        tokenizer = AutoProcessor.from_pretrained(pretrain, trust_remote_code=True)
+        tokenizer = AutoProcessor.from_pretrained(pretrain)
         # AutoProcessor doesn't delegate tokenizer attributes, so set them on
         # the inner tokenizer and mirror the essentials back.
         inner = tokenizer.tokenizer
@@ -67,7 +67,7 @@ def get_tokenizer(pretrain, model, padding_side="left", strategy=None, use_fast=
         for attr in ("pad_token", "pad_token_id", "eos_token", "eos_token_id"):
             setattr(tokenizer, attr, getattr(inner, attr))
     else:
-        tokenizer = AutoTokenizer.from_pretrained(pretrain, trust_remote_code=True, use_fast=use_fast)
+        tokenizer = AutoTokenizer.from_pretrained(pretrain, use_fast=use_fast)
         tokenizer.padding_side = padding_side
         # NOTE: When enable vLLM, do not resize_token_embeddings, or the vocab size will mismatch with vLLM.
         # https://github.com/facebookresearch/llama-recipes/pull/196
