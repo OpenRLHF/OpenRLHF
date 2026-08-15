@@ -273,8 +273,8 @@ class SamplesGenerator:
             rollout_log_probs = None
 
         # Collect simple stats about lengths and clipping.
-        ones_indices = torch.where(action_mask)[0]
-        response_length = (ones_indices[-1] - ones_indices[0] + 1).item() if len(ones_indices) else 0
+        # Use sum() not span, so tool-call tokens between turns are excluded.
+        response_length = action_mask.sum().item()
         total_length = attention_mask.float().sum()
         is_clipped = total_length >= truncate_length
 
