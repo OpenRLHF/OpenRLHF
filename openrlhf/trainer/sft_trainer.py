@@ -6,6 +6,7 @@ from torch.optim import Optimizer
 from tqdm import tqdm
 
 from openrlhf.models import SFTLoss
+from openrlhf.utils.ckpt_utils import rotate_hf_checkpoints
 from openrlhf.utils.distributed_sampler import DistributedSampler
 from openrlhf.utils.loss_utils import iter_grad_accum_global_norm
 
@@ -241,6 +242,9 @@ class SFTTrainer(ABC):
                 )
             if self.save_hf_ckpt:
                 save_path = os.path.join(args.ckpt.path, f"{tag}_hf")
+                if self.strategy.is_rank_0():
+                    for removed_dir in rotate_hf_checkpoints(args.ckpt.path, tag, args.ckpt.max_num):
+                        self.strategy.print(f"Deleted HF checkpoint export {removed_dir}")
                 self.strategy.save_model(self.model, self.tokenizer, save_path)
 
     def evaluate(self, eval_dataloader, steps=0):
