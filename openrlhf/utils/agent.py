@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import aiohttp
 
+from openrlhf.cli.reward_normalization import as_reward_url_list
 from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
@@ -185,8 +186,7 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
     """Single-turn agent executor with optional reward post-processing."""
 
     def __init__(self, remote_rm_url=None):
-        reward_endpoints = [remote_rm_url] if isinstance(remote_rm_url, str) else remote_rm_url
-        self.reward_endpoints = reward_endpoints or []
+        self.reward_endpoints = as_reward_url_list(remote_rm_url)
 
         # Optional user-provided reward_func from a Python file.
         self.reward_func = None

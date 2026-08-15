@@ -7,6 +7,8 @@
 #     print(queries)
 #     return torch.randn(len(queries))
 
+# Custom reward_func outputs are used directly. Normalize inside reward_func if needed.
+
 set -x 
 
 ray job submit --address="http://127.0.0.1:8265" \
@@ -39,10 +41,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --data.prompt_dataset OpenRLHF/prompt-collection-v0.1 \
    --data.input_key context_messages \
    --data.apply_chat_template \
-   --reward.normalize_enable \
    --ds.packing_samples \
    --ds.adam_offload \
    --ds.attn_implementation flash_attention_2 \
    --actor.gradient_checkpointing_enable \
    --logger.wandb.key {wandb_token}
-
