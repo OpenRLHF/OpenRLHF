@@ -6,9 +6,7 @@ from torch.utils.data import Dataset
 from openrlhf.utils.utils import zero_pad_sequences
 
 
-def preprocess_data(
-    data, input_template=None, input_key="input", output_key=None, apply_chat_template=None
-):
+def preprocess_data(data, input_template=None, input_key="input", output_key=None, apply_chat_template=None):
     if apply_chat_template:
         if output_key:
             prompt_message = data[input_key]
