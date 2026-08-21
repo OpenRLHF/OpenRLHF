@@ -148,6 +148,27 @@ def test_policy_kl_metric_uses_policy_ratio_when_vllm_correction_is_enabled():
     assert torch.allclose(vllm_kl, (rollout_log_probs - old_log_probs).mean())
 
 
+def test_icepop_filters_overflowing_ratio_without_nan():
+    log_probs = torch.zeros((1, 2), requires_grad=True)
+    loss_fn = PolicyLoss(
+        enable_vllm_is_correction=True,
+        vllm_is_truncated_threshold=[0.5, 5.0],
+        vllm_is_correction_type="icepop",
+    )
+    loss, *_ = loss_fn(
+        log_probs,
+        torch.zeros_like(log_probs),
+        torch.ones_like(log_probs),
+        action_mask=torch.ones_like(log_probs),
+        rollout_log_probs=torch.tensor([[-1000.0, 0.0]]),
+    )
+    loss.backward()
+
+    assert torch.allclose(loss, torch.tensor(-0.5))
+    assert torch.isfinite(log_probs.grad).all()
+    assert log_probs.grad[0, 0] == 0
+
+
 def test_grad_accum_global_norm_matches_global_token_mean_over_window():
     # Two micro-batches in one optimizer-step window (gas=2) with UNEVEN token counts.
     mb0 = torch.tensor([[1.0, 2.0, 0.0]])  # 2 tokens
