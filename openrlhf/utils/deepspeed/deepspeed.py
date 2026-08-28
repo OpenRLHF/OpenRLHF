@@ -553,9 +553,15 @@ class DeepspeedStrategy(ABC):
             state_dict_keys = set(model_to_save.state_dict().keys())
             output_state_dict_keys = set(output_state_dict.keys())
 
-            # corner case for tie_word_embeddings, such as Qwen2-0.5B
-            if getattr(model_to_save.config, "tie_word_embeddings", False) and "lm_head.weight" in state_dict_keys:
-                state_dict_keys.remove("lm_head.weight")
+            # corner case for tie_word_embeddings, such as Qwen2-0.5B: ZeRO-3's
+            # consolidated state dict omits the tied lm_head weight (it shares
+            # storage with the embedding). PEFT prefixes every key with
+            # "base_model.model.", so a LoRA-wrapped save always tripped this
+            # assertion (#747) unless we match the key by suffix.
+            if getattr(model_to_save.config, "tie_word_embeddings", False):
+                state_dict_keys -= {
+                    k for k in state_dict_keys if k == "lm_head.weight" or k.endswith(".lm_head.weight")
+                }
 
             assert state_dict_keys.issubset(
                 output_state_dict_keys
